@@ -339,9 +339,10 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   updateNote: async (noteId, title, content) => {
-    await api.updateNote(noteId, title, content);
     const id = get().currentId;
-    if (id) set({ notes: await api.listNotes(id) });
+    if (!id) return;
+    await api.updateNote(noteId, id, title, content);
+    set({ notes: await api.listNotes(id) });
   },
 
   deleteNote: async (noteId) => {

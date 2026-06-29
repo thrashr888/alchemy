@@ -293,19 +293,30 @@ struct MigrateProgress {
 #[tauri::command]
 pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u32, String> {
     let sources = e(state.db.all_sources().await)?;
-    let total = sources.len() as u32;
+    let notes = e(state.db.all_notes().await)?;
+    // Notes with content also live in the chunk index.
+    let owners: Vec<(String, String, String, String)> = sources
+        .iter()
+        .map(|s| (s.notebook_id.clone(), s.id.clone(), s.content.clone(), s.title.clone()))
+        .chain(
+            notes
+                .iter()
+                .map(|n| (n.notebook_id.clone(), n.id.clone(), n.content.clone(), format!("Note: {}", n.title))),
+        )
+        .collect();
+    let total = owners.len() as u32;
 
     // Drop the old index first so the new (possibly differently-sized) vectors
     // can recreate the table cleanly.
     e(state.db.clear_all_chunks().await)?;
 
     let ai = state.ai.read().await;
-    for (i, source) in sources.iter().enumerate() {
+    for (i, (notebook_id, owner_id, content, title)) in owners.iter().enumerate() {
         let _ = app.emit(
             "migrate://progress",
-            MigrateProgress { done: i as u32, total, title: source.title.clone() },
+            MigrateProgress { done: i as u32, total, title: title.clone() },
         );
-        let chunks = ingest::chunk_text(&source.content);
+        let chunks = ingest::chunk_text(content);
         if chunks.is_empty() {
             continue;
         }
@@ -315,7 +326,7 @@ pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u
             .enumerate()
             .map(|(j, text)| (new_id(), j as i32, text.clone()))
             .collect();
-        e(state.db.add_chunks(&source.notebook_id, &source.id, &tuples, &embeddings).await)?;
+        e(state.db.add_chunks(notebook_id, owner_id, &tuples, &embeddings).await)?;
     }
 
     let _ = app.emit(
@@ -467,6 +478,34 @@ pub async fn list_notes(
     e(state.db.list_notes(&notebook_id).await)
 }
 
+/// Embed a note's content into the chunk index so chat retrieval can cite it.
+/// Best-effort: a failure here doesn't block the note operation.
+async fn index_note(state: &AppState, notebook_id: &str, note_id: &str, content: &str) {
+    let chunks = ingest::chunk_text(content);
+    if chunks.is_empty() {
+        let _ = state.db.set_chunks(notebook_id, note_id, &[], &[]).await;
+        return;
+    }
+    let embeddings = {
+        let ai = state.ai.read().await;
+        match ai.embed(&chunks).await {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("note index: embedding failed: {e}");
+                return;
+            }
+        }
+    };
+    let tuples: Vec<(String, i32, String)> = chunks
+        .iter()
+        .enumerate()
+        .map(|(i, text)| (new_id(), i as i32, text.clone()))
+        .collect();
+    if let Err(e) = state.db.set_chunks(notebook_id, note_id, &tuples, &embeddings).await {
+        eprintln!("note index: write failed: {e}");
+    }
+}
+
 #[tauri::command]
 pub async fn create_note(
     state: State<'_, AppState>,
@@ -486,6 +525,7 @@ pub async fn create_note(
         updated_at: ts,
     };
     e(state.db.add_note(&note).await)?;
+    index_note(&state, &note.notebook_id, &note.id, &note.content).await;
     Ok(note)
 }
 
@@ -493,15 +533,19 @@ pub async fn create_note(
 pub async fn update_note(
     state: State<'_, AppState>,
     id: String,
+    notebook_id: String,
     title: String,
     content: String,
 ) -> Result<(), String> {
-    e(state.db.update_note(&id, title.trim(), &content, now()).await)
+    e(state.db.update_note(&id, title.trim(), &content, now()).await)?;
+    index_note(&state, &notebook_id, &id, &content).await;
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn delete_note(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    e(state.db.delete_note(&id).await)
+    e(state.db.delete_note(&id).await)?;
+    e(state.db.delete_chunks_for(&id).await)
 }
 
 /// Generate artifact content for a kind (+ optional custom prompt) over all of
@@ -561,6 +605,7 @@ pub async fn generate_artifact(
         updated_at: ts,
     };
     e(state.db.add_note(&note).await)?;
+    index_note(&state, &note.notebook_id, &note.id, &note.content).await;
     let _ = app.emit("generate://done", &note);
     Ok(note)
 }
@@ -577,6 +622,7 @@ pub async fn rebuild_note(
     let (title, content) = e(generate_content(&state, &notebook_id, &kind, &prompt).await)?;
     let ts = now();
     e(state.db.update_note(&note_id, &title, &content, ts).await)?;
+    index_note(&state, &notebook_id, &note_id, &content).await;
 
     let note = Note {
         id: note_id,

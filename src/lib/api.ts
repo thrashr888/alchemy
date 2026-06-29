@@ -92,8 +92,8 @@ export const api = {
   listNotes: (notebookId: string) => run(query<Note[]>("list_notes", { notebookId })),
   createNote: (notebookId: string, title: string, content: string) =>
     run(cmd<Note>("create_note", { notebookId, title, content })),
-  updateNote: (id: string, title: string, content: string) =>
-    run(cmd<void>("update_note", { id, title, content })),
+  updateNote: (id: string, notebookId: string, title: string, content: string) =>
+    run(cmd<void>("update_note", { id, notebookId, title, content })),
   deleteNote: (id: string) => run(cmd<void>("delete_note", { id })),
   generateArtifact: (notebookId: string, kind: NoteKind, prompt?: string) =>
     run(ai<Note>("generate_artifact", { notebookId, kind, prompt: prompt ?? "" })),

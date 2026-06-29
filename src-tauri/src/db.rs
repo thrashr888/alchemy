@@ -370,6 +370,23 @@ impl Db {
         Ok(())
     }
 
+    /// Delete every chunk owned by a source or note id.
+    pub async fn delete_chunks_for(&self, owner_id: &str) -> Result<()> {
+        self.delete_where(T_CHUNKS, &format!("source_id = '{}'", esc(owner_id))).await
+    }
+
+    /// Replace all chunks for an owner (source or note) in place.
+    pub async fn set_chunks(
+        &self,
+        notebook_id: &str,
+        owner_id: &str,
+        chunks: &[(String, i32, String)],
+        embeddings: &[Vec<f32>],
+    ) -> Result<()> {
+        self.delete_chunks_for(owner_id).await?;
+        self.add_chunks(notebook_id, owner_id, chunks, embeddings).await
+    }
+
     /// All sources across every notebook, with full content (for re-embedding).
     pub async fn all_sources(&self) -> Result<Vec<Source>> {
         let batches = self.collect(T_SOURCES, None).await?;
@@ -485,10 +502,14 @@ impl Db {
         if !self.table_exists(T_CHUNKS).await? {
             return Ok(vec![]);
         }
-        // Map source_id -> title for citation labels.
+        // Map owner_id -> title for citation labels (sources and notes both
+        // live in the chunk index, keyed by their id in `source_id`).
         let mut titles: HashMap<String, String> = HashMap::new();
         for s in self.list_sources(notebook_id).await? {
             titles.insert(s.id, s.title);
+        }
+        for n in self.list_notes(notebook_id).await? {
+            titles.insert(n.id, format!("Note: {}", n.title));
         }
 
         let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
@@ -607,6 +628,35 @@ impl Db {
             }
         }
         notes.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        Ok(notes)
+    }
+
+    /// All notes across every notebook (for re-embedding into RAG).
+    pub async fn all_notes(&self) -> Result<Vec<Note>> {
+        let batches = self.collect(T_NOTES, None).await?;
+        let mut notes = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let nb = str_col(b, "notebook_id")?;
+            let title = str_col(b, "title")?;
+            let content = str_col(b, "content")?;
+            let kind = str_col(b, "kind")?;
+            let created = i64_col(b, "created_at")?;
+            let updated = i64_col(b, "updated_at")?;
+            let prompt = str_col(b, "prompt")?;
+            for i in 0..b.num_rows() {
+                notes.push(Note {
+                    id: id.value(i).to_string(),
+                    notebook_id: nb.value(i).to_string(),
+                    title: title.value(i).to_string(),
+                    content: content.value(i).to_string(),
+                    kind: kind.value(i).to_string(),
+                    prompt: prompt.value(i).to_string(),
+                    created_at: created.value(i),
+                    updated_at: updated.value(i),
+                });
+            }
+        }
         Ok(notes)
     }
 
