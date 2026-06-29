@@ -13,12 +13,17 @@ const normModel = (m: string) => m.replace(/:latest$/, "");
 export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const aiConfig = useStore((s) => s.aiConfig);
   const save = useStore((s) => s.saveAiConfig);
+  const reembedAll = useStore((s) => s.reembedAll);
+  const totalSources = useStore((s) =>
+    s.notebooks.reduce((sum, n) => sum + n.sourceCount, 0),
+  );
 
   const [draft, setDraft] = useState<AiConfig | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [connOk, setConnOk] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
+  const [confirmReembed, setConfirmReembed] = useState(false);
 
   useEffect(() => {
     if (open && aiConfig) {
@@ -42,12 +47,35 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     }
   }
 
+  const embedChanged = !!draft && normModel(draft.embedModel) !== normModel(aiConfig?.embedModel ?? "");
+
   async function onSave() {
     if (!draft) return;
+    // Switching the embedding model invalidates existing vectors — re-embed.
+    if (embedChanged && totalSources > 0) {
+      setConfirmReembed(true);
+      return;
+    }
     setSaving(true);
     await save(draft);
     setSaving(false);
     onClose();
+  }
+
+  async function confirmSwitch() {
+    if (!draft) return;
+    setConfirmReembed(false);
+    setSaving(true);
+    await save(draft);
+    setSaving(false);
+    onClose();
+    await reembedAll();
+  }
+
+  function cancelSwitch() {
+    // Keep the previous embedding model so we never leave a broken index.
+    setConfirmReembed(false);
+    if (draft && aiConfig) setDraft({ ...draft, embedModel: aiConfig.embedModel });
   }
 
   if (!draft) {
@@ -112,7 +140,11 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
 
         <Field
           label="Embedding model"
-          hint="Used to index sources for retrieval. nomic-embed-text is recommended."
+          hint={
+            embedChanged && totalSources > 0
+              ? `Saving will re-embed all ${totalSources} source${totalSources === 1 ? "" : "s"} with this model.`
+              : "Used to index sources for retrieval. nomic-embed-text is recommended."
+          }
         >
           <ModelPicker
             value={draft.embedModel}
@@ -130,6 +162,26 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           </Button>
         </div>
       </div>
+
+      <Modal open={confirmReembed} onClose={cancelSwitch} title="Switch embedding model?">
+        <div className="flex flex-col gap-4">
+          <p className="text-[13px] leading-relaxed text-muted-foreground">
+            Different embedding models produce incompatible vectors, so switching to{" "}
+            <span className="font-medium text-foreground">{draft.embedModel}</span> requires
+            re-embedding all{" "}
+            <span className="font-medium text-foreground">{totalSources}</span> source
+            {totalSources === 1 ? "" : "s"}. This runs locally and may take a moment.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={cancelSwitch}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={confirmSwitch}>
+              Switch & re-embed
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </Modal>
   );
 }

@@ -213,6 +213,51 @@ pub async fn delete_source(state: State<'_, AppState>, source_id: String) -> Res
     e(state.db.delete_source(&source_id).await)
 }
 
+#[derive(serde::Serialize, Clone)]
+struct MigrateProgress {
+    done: u32,
+    total: u32,
+    title: String,
+}
+
+/// Rebuild the entire chunk index using the currently-configured embedding
+/// model. Called after switching embedding models (the new model may have a
+/// different vector dimension). Emits `migrate://progress` per source.
+#[tauri::command]
+pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u32, String> {
+    let sources = e(state.db.all_sources().await)?;
+    let total = sources.len() as u32;
+
+    // Drop the old index first so the new (possibly differently-sized) vectors
+    // can recreate the table cleanly.
+    e(state.db.clear_all_chunks().await)?;
+
+    let ai = state.ai.read().await;
+    for (i, source) in sources.iter().enumerate() {
+        let _ = app.emit(
+            "migrate://progress",
+            MigrateProgress { done: i as u32, total, title: source.title.clone() },
+        );
+        let chunks = ingest::chunk_text(&source.content);
+        if chunks.is_empty() {
+            continue;
+        }
+        let embeddings = e(ai.embed(&chunks).await)?;
+        let tuples: Vec<(String, i32, String)> = chunks
+            .iter()
+            .enumerate()
+            .map(|(j, text)| (new_id(), j as i32, text.clone()))
+            .collect();
+        e(state.db.add_chunks(&source.notebook_id, &source.id, &tuples, &embeddings).await)?;
+    }
+
+    let _ = app.emit(
+        "migrate://progress",
+        MigrateProgress { done: total, total, title: "Done".into() },
+    );
+    Ok(total)
+}
+
 // ---- Chat ----------------------------------------------------------------
 
 #[tauri::command]

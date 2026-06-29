@@ -77,6 +77,7 @@ export const api = {
     run(ai<Source>("refresh_source_url", { sourceId })),
   getSourceContent: (sourceId: string) =>
     run(query<string>("get_source_content", { sourceId })),
+  reembedAll: () => run(ai<number>("reembed_all")),
   deleteSource: (sourceId: string) => run(cmd<void>("delete_source", { sourceId })),
 
   // Chat

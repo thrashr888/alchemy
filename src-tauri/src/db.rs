@@ -291,7 +291,18 @@ impl Db {
             ],
         )?;
         self.add_batch(T_SOURCES, schema, batch).await?;
+        self.add_chunks(&source.notebook_id, &source.id, chunks, embeddings).await
+    }
 
+    /// Append chunk rows (with embeddings) for a source. Creates the chunks
+    /// table on first use, sizing the vector column to the embedding dimension.
+    pub async fn add_chunks(
+        &self,
+        notebook_id: &str,
+        source_id: &str,
+        chunks: &[(String, i32, String)],
+        embeddings: &[Vec<f32>],
+    ) -> Result<()> {
         if chunks.is_empty() {
             return Ok(());
         }
@@ -303,8 +314,8 @@ impl Db {
 
         let schema = chunks_schema(dim);
         let ids: Vec<String> = chunks.iter().map(|c| c.0.clone()).collect();
-        let nbs: Vec<String> = chunks.iter().map(|_| source.notebook_id.clone()).collect();
-        let sids: Vec<String> = chunks.iter().map(|_| source.id.clone()).collect();
+        let nbs: Vec<String> = chunks.iter().map(|_| notebook_id.to_string()).collect();
+        let sids: Vec<String> = chunks.iter().map(|_| source_id.to_string()).collect();
         let ords: Vec<i32> = chunks.iter().map(|c| c.1).collect();
         let texts: Vec<String> = chunks.iter().map(|c| c.2.clone()).collect();
         let vectors = FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
@@ -325,6 +336,46 @@ impl Db {
             ],
         )?;
         self.add_batch(T_CHUNKS, schema, batch).await?;
+        Ok(())
+    }
+
+    /// All sources across every notebook, with full content (for re-embedding).
+    pub async fn all_sources(&self) -> Result<Vec<Source>> {
+        let batches = self.collect(T_SOURCES, None).await?;
+        let mut sources = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let nb = str_col(b, "notebook_id")?;
+            let title = str_col(b, "title")?;
+            let stype = str_col(b, "source_type")?;
+            let url = str_col(b, "url")?;
+            let content = str_col(b, "content")?;
+            let cc = i64_col(b, "char_count")?;
+            let ck = i64_col(b, "chunk_count")?;
+            let ca = i64_col(b, "created_at")?;
+            for i in 0..b.num_rows() {
+                sources.push(Source {
+                    id: id.value(i).to_string(),
+                    notebook_id: nb.value(i).to_string(),
+                    title: title.value(i).to_string(),
+                    source_type: stype.value(i).to_string(),
+                    url: url.value(i).to_string(),
+                    content: content.value(i).to_string(),
+                    char_count: cc.value(i),
+                    chunk_count: ck.value(i),
+                    created_at: ca.value(i),
+                });
+            }
+        }
+        Ok(sources)
+    }
+
+    /// Drop the entire chunk index. It is recreated (with the current embedding
+    /// dimension) on the next `add_chunks`.
+    pub async fn clear_all_chunks(&self) -> Result<()> {
+        if self.table_exists(T_CHUNKS).await? {
+            self.conn.drop_table(T_CHUNKS, &[]).await?;
+        }
         Ok(())
     }
 

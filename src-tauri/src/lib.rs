@@ -62,6 +62,7 @@ pub fn run() {
             commands::refresh_source_url,
             commands::get_source_content,
             commands::delete_source,
+            commands::reembed_all,
             commands::list_messages,
             commands::clear_chat,
             commands::send_message,

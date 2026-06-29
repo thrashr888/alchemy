@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import { applyTheme, DEFAULT_THEME } from "./themes";
 import type { AiConfig, Message, Note, NoteKind, Notebook, Source } from "./types";
@@ -8,6 +9,12 @@ export interface QueueItem {
   name: string;
   status: "pending" | "processing" | "done" | "error";
   error?: string;
+}
+
+export interface Migration {
+  done: number;
+  total: number;
+  title: string;
 }
 
 interface AppState {
@@ -26,6 +33,7 @@ interface AppState {
   agentMode: boolean;
   generatingKind: NoteKind | null;
   ingestQueue: QueueItem[];
+  migration: Migration | null;
   error: string | null;
 
   init: () => Promise<void>;
@@ -57,6 +65,7 @@ interface AppState {
   deleteNote: (id: string) => Promise<void>;
 
   saveAiConfig: (config: AiConfig) => Promise<void>;
+  reembedAll: () => Promise<void>;
   setError: (e: string | null) => void;
 }
 
@@ -98,6 +107,7 @@ export const useStore = create<AppState>((set, get) => ({
   agentMode: localStorage.getItem("agentMode") === "true",
   generatingKind: null,
   ingestQueue: [],
+  migration: null,
   error: null,
 
   init: async () => {
@@ -316,6 +326,23 @@ export const useStore = create<AppState>((set, get) => ({
     await api.setAiConfig(config);
     const ollamaOk = await api.checkOllama().catch(() => false);
     set({ aiConfig: config, ollamaOk });
+  },
+
+  reembedAll: async () => {
+    set({ migration: { done: 0, total: 0, title: "Starting…" }, error: null });
+    const unlisten = await listen<Migration>("migrate://progress", (e) => {
+      set({ migration: e.payload });
+    });
+    try {
+      await api.reembedAll();
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      unlisten();
+      set({ migration: null });
+      const id = get().currentId;
+      if (id) set({ sources: await api.listSources(id) });
+    }
   },
 
   setError: (e) => set({ error: e }),
