@@ -91,7 +91,22 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Settings" width="max-w-lg">
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Settings"
+      width="max-w-lg"
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={onSave} loading={saving}>
+            Save
+          </Button>
+        </div>
+      }
+    >
       <div className="flex flex-col gap-4">
         <div className="flex items-center gap-2 rounded-md border border-border bg-surface-2 px-3 py-2 text-[12px]">
           {connOk === null ? (
@@ -119,6 +134,8 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
             {!loadingModels && <RefreshCw className="h-3.5 w-3.5" />}
           </Button>
         </div>
+
+        <ModelHealthPanel />
 
         <Field label="Theme">
           <ThemePicker />
@@ -154,17 +171,6 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
             onChange={(v) => setDraft({ ...draft, embedModel: v })}
           />
         </Field>
-
-        <ModelHealthPanel />
-
-        <div className="flex justify-end gap-2 border-t border-border pt-3">
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button variant="primary" onClick={onSave} loading={saving}>
-            Save
-          </Button>
-        </div>
       </div>
 
       <Modal open={confirmReembed} onClose={cancelSwitch} title="Switch embedding model?">

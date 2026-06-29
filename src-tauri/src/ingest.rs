@@ -190,34 +190,58 @@ fn normalize(text: &str) -> String {
 }
 
 fn strip_html(html: &str) -> String {
-    // Drop script/style blocks, then remove all remaining tags.
+    // Drop script/style blocks, then remove all remaining tags. Operates on
+    // char boundaries throughout so Unicode pages can't trigger a slice panic.
+    // Tag names are ASCII, so case-insensitive comparison is done byte-wise
+    // (avoids `to_lowercase`, which can shift byte offsets).
     let mut cleaned = String::with_capacity(html.len());
-    let lower = html.to_lowercase();
-    let mut i = 0;
-    let bytes = html.as_bytes();
-    while i < bytes.len() {
-        if lower[i..].starts_with("<script") || lower[i..].starts_with("<style") {
-            let close = if lower[i..].starts_with("<script") { "</script>" } else { "</style>" };
-            if let Some(end) = lower[i..].find(close) {
-                i += end + close.len();
-                continue;
-            } else {
-                break;
+    let len = html.len();
+    let mut i = 0; // always a char boundary
+    while i < len {
+        let rest = &html[i..];
+        if starts_with_ci(rest, "<script") || starts_with_ci(rest, "<style") {
+            let close = if starts_with_ci(rest, "<script") { "</script>" } else { "</style>" };
+            match find_ci(rest, close) {
+                Some(end) => {
+                    i += end + close.len();
+                    continue;
+                }
+                None => break,
             }
         }
-        if bytes[i] == b'<' {
-            if let Some(end) = html[i..].find('>') {
-                i += end + 1;
-                cleaned.push(' ');
-                continue;
-            } else {
-                break;
+        let ch = rest.chars().next().unwrap();
+        if ch == '<' {
+            match rest.find('>') {
+                Some(end) => {
+                    i += end + 1;
+                    cleaned.push(' ');
+                    continue;
+                }
+                None => break,
             }
         }
-        cleaned.push(bytes[i] as char);
-        i += 1;
+        cleaned.push(ch);
+        i += ch.len_utf8();
     }
     decode_entities(&cleaned)
+}
+
+/// ASCII case-insensitive prefix check (safe on any UTF-8 input).
+fn starts_with_ci(haystack: &str, prefix: &str) -> bool {
+    let h = haystack.as_bytes();
+    let p = prefix.as_bytes();
+    h.len() >= p.len() && h[..p.len()].eq_ignore_ascii_case(p)
+}
+
+/// ASCII case-insensitive substring search; returns a byte offset (always a
+/// char boundary because the needle is ASCII).
+fn find_ci(haystack: &str, needle: &str) -> Option<usize> {
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    if n.is_empty() || h.len() < n.len() {
+        return None;
+    }
+    (0..=h.len() - n.len()).find(|&k| h[k..k + n.len()].eq_ignore_ascii_case(n))
 }
 
 fn decode_entities(s: &str) -> String {

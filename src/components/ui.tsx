@@ -93,12 +93,14 @@ export function Modal({
   onClose,
   title,
   children,
+  footer,
   width = "max-w-md",
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
   children: React.ReactNode;
+  footer?: React.ReactNode;
   width?: string;
 }) {
   React.useEffect(() => {
@@ -127,7 +129,10 @@ export function Modal({
             <X className="h-4 w-4" />
           </Button>
         </div>
-        <div className="overflow-y-auto p-4">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">{children}</div>
+        {footer && (
+          <div className="shrink-0 border-t border-border px-4 py-3">{footer}</div>
+        )}
       </div>
     </div>
   );
