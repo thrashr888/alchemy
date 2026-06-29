@@ -142,6 +142,44 @@ impl Ollama {
         resp.json().await.context("invalid embed response")
     }
 
+    /// OCR an image with the configured vision model. `image_base64` is the raw
+    /// image bytes, base64-encoded. Returns the transcribed text.
+    pub async fn ocr(&self, image_base64: &str) -> Result<String> {
+        if self.config.vision_model.trim().is_empty() {
+            return Err(anyhow!(
+                "no vision model configured for OCR — set one in Settings"
+            ));
+        }
+        let resp = self
+            .http
+            .post(self.url("/api/generate"))
+            .timeout(std::time::Duration::from_secs(180))
+            .json(&json!({
+                "model": self.config.vision_model,
+                "prompt": "Transcribe ALL text in this image exactly, preserving reading order \
+                           and line breaks. Output only the transcribed text with no commentary. \
+                           If the image contains no text, output nothing.",
+                "images": [image_base64],
+                "stream": false,
+            }))
+            .send()
+            .await
+            .with_context(|| {
+                format!(
+                    "OCR request to Ollama failed — is the vision model `{}` installed?",
+                    self.config.vision_model
+                )
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("ollama OCR {}: {}", status, body));
+        }
+        let value: serde_json::Value = resp.json().await?;
+        Ok(value["response"].as_str().unwrap_or_default().to_string())
+    }
+
     /// Quick liveness probe for the embedding model (short timeout). Returns the
     /// embedding dimension on success.
     pub async fn test_embed(&self) -> Result<usize> {

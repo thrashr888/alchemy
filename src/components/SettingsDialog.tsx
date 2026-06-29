@@ -10,15 +10,23 @@ import { RefreshCw, CheckCircle2, XCircle, Check, Zap } from "lucide-react";
 /** Treat `name` and `name:latest` as the same model for matching. */
 const normModel = (m: string) => m.replace(/:latest$/, "");
 
-// Lean-active MoE (and MLX-accelerated) chat models worth benchmarking locally.
+// MLX-accelerated and lean-active MoE chat models worth benchmarking locally.
 // Compare their recorded tok/s in the status box above against your current one.
 const SUGGESTED_CHAT = [
-  { name: "qwen3.5:35b-a3b-coding-nvfp4", note: "MLX/NVFP4 · 3B active · Apple-Silicon accelerated" },
+  { name: "qwen3.5:35b-a3b-coding-nvfp4", note: "MLX/NVFP4 · 3B active · fastest" },
+  { name: "gemma4:31b-mlx", note: "MLX · 31B · vision · 256K ctx" },
+  { name: "gemma4:12b-mlx", note: "MLX · 12B · vision · lighter" },
   { name: "gpt-oss:120b", note: "120B MoE · ~5B active · strong all-rounder" },
   { name: "nemotron-3-super", note: "120B MoE · only 12B active" },
   { name: "deepseek-v4-flash", note: "284B MoE · only 13B active" },
-  { name: "minimax-m3", note: "MoE · native vision · 1M context (also used for OCR)" },
-  { name: "qwen3.6:35b", note: "dense 35B · tools + thinking" },
+];
+
+// Vision models for OCR of image sources (MLX-accelerated first).
+const SUGGESTED_VISION = [
+  { name: "gemma4:12b-mlx", note: "MLX · vision · light + fast OCR" },
+  { name: "gemma4:31b-mlx", note: "MLX · vision · stronger OCR" },
+  { name: "minimax-m3", note: "MoE · native vision · 1M context" },
+  { name: "qwen3-vl:32b", note: "Qwen vision-language" },
 ];
 
 export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -166,6 +174,15 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
             value={draft.embedModel}
             models={models}
             onChange={(v) => setDraft({ ...draft, embedModel: v })}
+          />
+        </Field>
+
+        <Field label="Vision model" hint="Used to OCR text from image sources. Leave blank to disable.">
+          <ModelPicker
+            value={draft.visionModel ?? ""}
+            models={models}
+            onChange={(v) => setDraft({ ...draft, visionModel: v })}
+            suggestions={SUGGESTED_VISION}
           />
         </Field>
       </div>

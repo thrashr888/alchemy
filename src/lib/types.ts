@@ -12,7 +12,7 @@ export interface Source {
   id: string;
   notebookId: string;
   title: string;
-  sourceType: "pdf" | "text" | "markdown" | "url";
+  sourceType: "pdf" | "text" | "markdown" | "url" | "image";
   url: string;
   content: string;
   status: "ready" | "error";
@@ -87,4 +87,5 @@ export interface AiConfig {
   baseUrl: string;
   chatModel: string;
   embedModel: string;
+  visionModel: string;
 }

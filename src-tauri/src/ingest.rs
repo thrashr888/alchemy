@@ -17,6 +17,28 @@ pub struct Extracted {
     pub text: String,
 }
 
+/// Is this path an image we should OCR rather than read as text?
+pub fn is_image(path: &str) -> bool {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "tif" | "tiff" | "heic"
+    )
+}
+
+/// File stem as a display title.
+pub fn file_title(path: &str) -> String {
+    Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Untitled")
+        .to_string()
+}
+
 /// Extract text from a local file, inferring type from the extension.
 pub fn extract_file(path: &str) -> Result<Extracted> {
     let p = Path::new(path);
@@ -35,12 +57,21 @@ pub fn extract_file(path: &str) -> Result<Extracted> {
         "pdf" => {
             let text = pdf_extract::extract_text(path)
                 .with_context(|| format!("failed to extract text from PDF {path}"))?;
+            if normalize(&text).trim().is_empty() {
+                return Err(anyhow!(
+                    "no selectable text in {path} — it looks like a scanned/image PDF. \
+                     Export its pages as images to OCR them."
+                ));
+            }
             ("pdf".to_string(), text)
         }
         "md" | "markdown" => (
             "markdown".to_string(),
             std::fs::read_to_string(path).context("failed to read markdown file")?,
         ),
+        "xlsx" | "xls" | "xlsm" | "ods" => ("text".to_string(), extract_spreadsheet(path)?),
+        "docx" => ("text".to_string(), extract_docx(path)?),
+        "pptx" => ("text".to_string(), extract_pptx(path)?),
         "txt" | "text" | "" => (
             "text".to_string(),
             std::fs::read_to_string(path).context("failed to read text file")?,
@@ -58,6 +89,95 @@ pub fn extract_file(path: &str) -> Result<Extracted> {
         return Err(anyhow!("no extractable text found in {path}"));
     }
     Ok(Extracted { title, source_type, url: String::new(), text })
+}
+
+/// Extract text from a spreadsheet (xlsx/xls/ods) — sheet by sheet, row by row.
+fn extract_spreadsheet(path: &str) -> Result<String> {
+    use calamine::{open_workbook_auto, Data, Reader};
+    let mut workbook =
+        open_workbook_auto(path).with_context(|| format!("failed to open spreadsheet {path}"))?;
+    let mut out = String::new();
+    for name in workbook.sheet_names() {
+        let Ok(range) = workbook.worksheet_range(&name) else { continue };
+        if range.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("# Sheet: {name}\n"));
+        for row in range.rows() {
+            let cells: Vec<String> = row
+                .iter()
+                .map(|c| match c {
+                    Data::Empty => String::new(),
+                    other => other.to_string(),
+                })
+                .collect();
+            if cells.iter().any(|c| !c.trim().is_empty()) {
+                out.push_str(&cells.join(" | "));
+                out.push('\n');
+            }
+        }
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// Read a single entry from a zip (Office files are zip archives).
+fn read_zip_entry(path: &str, name: &str) -> Result<String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).with_context(|| format!("failed to open {path}"))?;
+    let mut zip = zip::ZipArchive::new(file).context("not a valid Office (zip) file")?;
+    let mut entry = zip
+        .by_name(name)
+        .with_context(|| format!("{name} not found in archive"))?;
+    let mut s = String::new();
+    entry.read_to_string(&mut s)?;
+    Ok(s)
+}
+
+/// Extract text from a .docx (WordprocessingML).
+fn extract_docx(path: &str) -> Result<String> {
+    let xml = read_zip_entry(path, "word/document.xml")?;
+    // Paragraph and break boundaries become newlines; then strip all tags.
+    let xml = xml
+        .replace("</w:p>", "\n")
+        .replace("<w:br/>", "\n")
+        .replace("<w:tab/>", "\t");
+    Ok(strip_html(&xml))
+}
+
+/// Extract text from a .pptx (PresentationML), one slide at a time, in order.
+fn extract_pptx(path: &str) -> Result<String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).with_context(|| format!("failed to open {path}"))?;
+    let mut zip = zip::ZipArchive::new(file).context("not a valid .pptx file")?;
+
+    // Collect slide entries with their numeric index for correct ordering.
+    let mut slides: Vec<(u32, String)> = Vec::new();
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i)?;
+        let name = entry.name().to_string();
+        if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {
+            let num: u32 = name
+                .trim_start_matches("ppt/slides/slide")
+                .trim_end_matches(".xml")
+                .parse()
+                .unwrap_or(0);
+            let mut xml = String::new();
+            entry.read_to_string(&mut xml)?;
+            slides.push((num, xml));
+        }
+    }
+    slides.sort_by_key(|(n, _)| *n);
+
+    let mut out = String::new();
+    for (n, xml) in slides {
+        let xml = xml.replace("</a:p>", "\n");
+        let text = strip_html(&xml);
+        if !text.trim().is_empty() {
+            out.push_str(&format!("# Slide {n}\n{}\n\n", text.trim()));
+        }
+    }
+    Ok(out)
 }
 
 /// Fetch a URL and strip it down to readable text (naive tag removal).

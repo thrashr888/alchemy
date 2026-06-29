@@ -21,6 +21,7 @@ async fn rag_round_trip() {
         // Small local model to keep the chat step fast.
         chat_model: "digitsflow/bonsai-8b:latest".into(),
         embed_model: "nomic-embed-text".into(),
+        vision_model: String::new(),
     });
     if ai.list_models().await.is_err() {
         eprintln!("SKIP: Ollama not reachable on localhost:11434");

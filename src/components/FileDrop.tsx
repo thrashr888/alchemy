@@ -3,7 +3,11 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useStore } from "@/lib/store";
 import { FileDown } from "lucide-react";
 
-const SUPPORTED = ["pdf", "txt", "text", "md", "markdown"];
+const SUPPORTED = [
+  "pdf", "txt", "text", "md", "markdown",
+  "docx", "pptx", "xlsx", "xls", "xlsm", "ods",
+  "png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff", "heic",
+];
 
 function ext(path: string): string {
   const i = path.lastIndexOf(".");
@@ -68,7 +72,9 @@ export function FileDrop() {
           <FileDown className="h-7 w-7" />
         </div>
         <div className="text-[15px] font-semibold text-foreground">Drop to add sources</div>
-        <div className="text-[12.5px] text-muted-foreground">PDF, text, or Markdown</div>
+        <div className="text-[12.5px] text-muted-foreground">
+          PDF · Office · images (OCR) · text
+        </div>
       </div>
     </div>
   );

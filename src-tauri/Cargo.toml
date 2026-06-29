@@ -32,6 +32,9 @@ chrono = { version = "0.4.45", features = ["serde"] }
 arrow-array = "58"
 arrow-schema = "58"
 pdf-extract = "0.12.0"
+calamine = "0.26"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+base64 = "0.22"
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 futures-util = "0.3.32"
@@ -41,4 +44,13 @@ tauri-plugin-debug-bridge = { version = "0.4", optional = true }
 [features]
 # Dev-only: exposes the debug bridge for CLI automation/inspection.
 debug = ["dep:tauri-plugin-debug-bridge"]
+
+# Faster dev builds: keep file:line for our own code (line-tables) but skip
+# debuginfo for the heavy dependency tree (lance/arrow/datafusion), which is
+# the bulk of compile + link time and target size.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
 

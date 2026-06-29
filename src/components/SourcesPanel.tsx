@@ -20,6 +20,7 @@ import {
   X,
   Pencil,
   RefreshCw,
+  Image as ImageIcon,
 } from "lucide-react";
 
 // Soft per-notebook capacity used for the "how full is this notebook" gauge.
@@ -34,6 +35,8 @@ function sourceIcon(t: Source["sourceType"]) {
       return <Globe className="h-3.5 w-3.5 text-[#5e9bd2]" />;
     case "markdown":
       return <Hash className="h-3.5 w-3.5 text-[#9b87f5]" />;
+    case "image":
+      return <ImageIcon className="h-3.5 w-3.5 text-[#4cb782]" />;
     default:
       return <FileText className="h-3.5 w-3.5 text-muted-foreground" />;
   }
@@ -81,7 +84,16 @@ export function SourcesPanel() {
     setMenuOpen(false);
     const selected = await open({
       multiple: true,
-      filters: [{ name: "Documents", extensions: ["pdf", "txt", "md", "markdown", "text"] }],
+      filters: [
+        {
+          name: "Documents",
+          extensions: [
+            "pdf", "txt", "md", "markdown", "text",
+            "docx", "pptx", "xlsx", "xls", "xlsm", "ods",
+            "png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff", "heic",
+          ],
+        },
+      ],
     });
     if (!selected) return;
     const paths = Array.isArray(selected) ? selected : [selected];

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use anyhow::Context;
 use chrono::Utc;
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
@@ -196,13 +197,37 @@ async fn store_failed_url(
     Ok(source)
 }
 
+/// OCR an image file into an Extracted source using the vision model.
+async fn extract_image(state: &AppState, path: &str) -> anyhow::Result<ingest::Extracted> {
+    use base64::Engine;
+    let bytes = std::fs::read(path).with_context(|| format!("failed to read {path}"))?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let text = {
+        let ai = state.ai.read().await;
+        ai.ocr(&b64).await?
+    };
+    if text.trim().is_empty() {
+        anyhow::bail!("no text found in image {path}");
+    }
+    Ok(ingest::Extracted {
+        title: ingest::file_title(path),
+        source_type: "image".to_string(),
+        url: String::new(),
+        text,
+    })
+}
+
 #[tauri::command]
 pub async fn add_source_file(
     state: State<'_, AppState>,
     notebook_id: String,
     path: String,
 ) -> Result<Source, String> {
-    let extracted = e(ingest::extract_file(&path))?;
+    let extracted = if ingest::is_image(&path) {
+        e(extract_image(&state, &path).await)?
+    } else {
+        e(ingest::extract_file(&path))?
+    };
     e(store_extracted(&state, &notebook_id, extracted).await)
 }
 

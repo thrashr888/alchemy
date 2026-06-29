@@ -14,6 +14,9 @@ pub struct AiConfig {
     pub base_url: String,
     pub chat_model: String,
     pub embed_model: String,
+    /// Vision model used to OCR image sources (empty disables OCR).
+    #[serde(default)]
+    pub vision_model: String,
 }
 
 impl Default for AiConfig {
@@ -22,6 +25,8 @@ impl Default for AiConfig {
             base_url: "http://localhost:11434".to_string(),
             chat_model: "gpt-oss:120b".to_string(),
             embed_model: "nomic-embed-text:latest".to_string(),
+            // OCR is opt-in: pick a vision model in Settings to enable it.
+            vision_model: String::new(),
         }
     }
 }
