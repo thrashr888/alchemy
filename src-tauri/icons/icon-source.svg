@@ -1,0 +1,36 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7c87f0"/>
+      <stop offset="0.5" stop-color="#5e6ad2"/>
+      <stop offset="1" stop-color="#4a4fc4"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#1a1d44" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <!-- App tile -->
+  <rect x="80" y="80" width="864" height="864" rx="200" fill="url(#tile)"/>
+  <rect x="80" y="80" width="864" height="864" rx="200" fill="url(#sheen)"/>
+
+  <!-- Open-book glyph (lucide book-open), centered and scaled -->
+  <g transform="translate(512,540) scale(17) translate(-12,-12)"
+     fill="none" stroke="#ffffff" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round" filter="url(#shadow)">
+    <path d="M12 7v14"/>
+    <path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>
+  </g>
+
+  <!-- AI sparkle accent -->
+  <g transform="translate(726,300)" fill="#ffffff">
+    <path d="M0,-60 C8,-22 22,-8 60,0 C22,8 8,22 0,60 C-8,22 -22,8 -60,0 C-22,-8 -8,-22 0,-60 Z"/>
+  </g>
+  <g transform="translate(648,236)" fill="#ffffff" opacity="0.85">
+    <path d="M0,-22 C3,-8 8,-3 22,0 C8,3 3,8 0,22 C-3,8 -8,3 -22,0 C-8,-3 -3,-8 0,-22 Z"/>
+  </g>
+</svg>

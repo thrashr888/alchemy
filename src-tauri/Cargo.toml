@@ -1,0 +1,43 @@
+[package]
+name = "alchemy"
+version = "0.1.0"
+description = "Local-first NotebookLM clone — RAG over your sources, powered by Ollama"
+authors = ["thrashr888"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "alchemy_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+lancedb = "0.30.0"
+tokio = { version = "1.52.3", features = ["full"] }
+anyhow = "1.0.103"
+thiserror = "2.0.18"
+futures = "0.3.32"
+uuid = { version = "1.23.4", features = ["v4"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+arrow-array = "58"
+arrow-schema = "58"
+pdf-extract = "0.12.0"
+tauri-plugin-dialog = "2"
+futures-util = "0.3.32"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+tauri-plugin-debug-bridge = { version = "0.4", optional = true }
+
+[features]
+# Dev-only: exposes the debug bridge for CLI automation/inspection.
+debug = ["dep:tauri-plugin-debug-bridge"]
+
