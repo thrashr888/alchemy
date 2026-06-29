@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::ai::{AiConfig, Ollama};
 use crate::db::Db;
-use crate::models::{Message, Note, Notebook, Source};
+use crate::models::{Message, ModelHealth, ModelStatus, Note, Notebook, Source};
 use crate::{ingest, rag};
 
 pub struct AppState {
@@ -593,6 +593,65 @@ pub async fn rebuild_note(
 }
 
 // ---- Settings / health ---------------------------------------------------
+
+/// Verify the configured chat + embedding models are installed and (for embed)
+/// actually responding. Used to surface a clear status instead of a hang.
+#[tauri::command]
+pub async fn check_models(state: State<'_, AppState>) -> Result<ModelHealth, String> {
+    let ai = state.ai.read().await;
+    let cfg = ai.config().clone();
+    let norm = |m: &str| m.trim_end_matches(":latest").to_string();
+
+    let installed = match ai.list_models().await {
+        Ok(list) => list,
+        Err(_) => {
+            // Ollama unreachable — report both as unknown.
+            let unknown = |name: String| ModelStatus {
+                name,
+                installed: false,
+                working: false,
+                detail: "Ollama not reachable".into(),
+            };
+            return Ok(ModelHealth {
+                reachable: false,
+                chat: unknown(cfg.chat_model.clone()),
+                embed: unknown(cfg.embed_model.clone()),
+            });
+        }
+    };
+    let has = |m: &str| installed.iter().any(|x| norm(x) == norm(m));
+
+    let chat_installed = has(&cfg.chat_model);
+    let chat = ModelStatus {
+        name: cfg.chat_model.clone(),
+        installed: chat_installed,
+        working: chat_installed,
+        detail: if chat_installed {
+            "Installed".into()
+        } else {
+            format!("Not installed — run `ollama pull {}`", cfg.chat_model)
+        },
+    };
+
+    let embed_installed = has(&cfg.embed_model);
+    // Embeddings are cheap, so actually probe them.
+    let (embed_working, embed_detail) = if !embed_installed {
+        (false, format!("Not installed — run `ollama pull {}`", cfg.embed_model))
+    } else {
+        match ai.test_embed().await {
+            Ok(dim) => (true, format!("Working ({dim}-dim)")),
+            Err(e) => (false, format!("Not responding: {e}")),
+        }
+    };
+    let embed = ModelStatus {
+        name: cfg.embed_model.clone(),
+        installed: embed_installed,
+        working: embed_working,
+        detail: embed_detail,
+    };
+
+    Ok(ModelHealth { reachable: true, chat, embed })
+}
 
 #[tauri::command]
 pub async fn get_ai_config(state: State<'_, AppState>) -> Result<AiConfig, String> {

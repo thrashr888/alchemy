@@ -45,6 +45,23 @@ fn default_status() -> String {
     "ready".to_string()
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelStatus {
+    pub name: String,
+    pub installed: bool,
+    pub working: bool,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelHealth {
+    pub reachable: bool,
+    pub chat: ModelStatus,
+    pub embed: ModelStatus,
+}
+
 /// Mirrors the `chunks` Lance table. Rows are written via tuples in `db.rs`;
 /// this type documents the schema and is used when reading chunks back.
 #[allow(dead_code)]

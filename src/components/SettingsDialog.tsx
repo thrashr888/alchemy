@@ -14,6 +14,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
   const aiConfig = useStore((s) => s.aiConfig);
   const save = useStore((s) => s.saveAiConfig);
   const reembedAll = useStore((s) => s.reembedAll);
+  const refreshModelHealth = useStore((s) => s.refreshModelHealth);
   const totalSources = useStore((s) =>
     s.notebooks.reduce((sum, n) => sum + n.sourceCount, 0),
   );
@@ -29,6 +30,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     if (open && aiConfig) {
       setDraft({ ...aiConfig });
       void refreshModels();
+      void refreshModelHealth();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, aiConfig]);
@@ -153,6 +155,8 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           />
         </Field>
 
+        <ModelHealthPanel />
+
         <div className="flex justify-end gap-2 border-t border-border pt-3">
           <Button variant="ghost" onClick={onClose}>
             Cancel
@@ -183,6 +187,53 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
         </div>
       </Modal>
     </Modal>
+  );
+}
+
+function ModelHealthPanel() {
+  const health = useStore((s) => s.modelHealth);
+  const refresh = useStore((s) => s.refreshModelHealth);
+  const [checking, setChecking] = useState(false);
+
+  async function recheck() {
+    setChecking(true);
+    await refresh();
+    setChecking(false);
+  }
+
+  const Row = ({ label, status }: { label: string; status?: { working: boolean; detail: string } }) => (
+    <div className="flex items-center gap-2 text-[12px]">
+      {status?.working ? (
+        <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />
+      ) : (
+        <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+      )}
+      <span className="w-12 shrink-0 text-muted-foreground">{label}</span>
+      <span className={cn("truncate", status?.working ? "text-foreground/80" : "text-destructive")}>
+        {status?.detail ?? "Unknown"}
+      </span>
+    </div>
+  );
+
+  return (
+    <div className="flex flex-col gap-1.5 rounded-md border border-border bg-surface-2 px-3 py-2.5">
+      <div className="mb-0.5 flex items-center justify-between">
+        <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+          Model status
+        </span>
+        <button
+          onClick={recheck}
+          className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {checking ? "Checking…" : "Recheck"}
+        </button>
+      </div>
+      {!health?.reachable && health !== null && (
+        <div className="text-[12px] text-destructive">Ollama is not reachable.</div>
+      )}
+      <Row label="Chat" status={health?.chat} />
+      <Row label="Embed" status={health?.embed} />
+    </div>
   );
 }
 

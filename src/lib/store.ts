@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import { applyTheme, DEFAULT_THEME } from "./themes";
-import type { AiConfig, Message, Note, NoteKind, Notebook, Source } from "./types";
+import type { AiConfig, Message, ModelHealth, Note, NoteKind, Notebook, Source } from "./types";
 
 export interface QueueItem {
   id: string;
@@ -25,6 +25,7 @@ interface AppState {
   notes: Note[];
   aiConfig: AiConfig | null;
   ollamaOk: boolean | null;
+  modelHealth: ModelHealth | null;
   theme: string;
 
   sending: boolean;
@@ -66,6 +67,7 @@ interface AppState {
   deleteNote: (id: string) => Promise<void>;
 
   saveAiConfig: (config: AiConfig) => Promise<void>;
+  refreshModelHealth: () => Promise<void>;
   reembedAll: () => Promise<void>;
   setError: (e: string | null) => void;
 }
@@ -100,6 +102,7 @@ export const useStore = create<AppState>((set, get) => ({
   notes: [],
   aiConfig: null,
   ollamaOk: null,
+  modelHealth: null,
   theme: localStorage.getItem("theme") ?? DEFAULT_THEME,
 
   sending: false,
@@ -119,10 +122,19 @@ export const useStore = create<AppState>((set, get) => ({
       api.checkOllama().catch(() => false),
     ]);
     set({ notebooks, aiConfig, ollamaOk });
+    void get().refreshModelHealth();
     // Reopen the last-used notebook if it still exists; otherwise show the picker.
     const last = localStorage.getItem("lastNotebookId");
     if (last && notebooks.some((n) => n.id === last)) {
       await get().selectNotebook(last);
+    }
+  },
+
+  refreshModelHealth: async () => {
+    try {
+      set({ modelHealth: await api.checkModels() });
+    } catch {
+      set({ modelHealth: null });
     }
   },
 
@@ -341,6 +353,7 @@ export const useStore = create<AppState>((set, get) => ({
     await api.setAiConfig(config);
     const ollamaOk = await api.checkOllama().catch(() => false);
     set({ aiConfig: config, ollamaOk });
+    void get().refreshModelHealth();
   },
 
   reembedAll: async () => {

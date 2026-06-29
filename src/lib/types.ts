@@ -63,6 +63,19 @@ export interface Note {
   updatedAt: number;
 }
 
+export interface ModelStatus {
+  name: string;
+  installed: boolean;
+  working: boolean;
+  detail: string;
+}
+
+export interface ModelHealth {
+  reachable: boolean;
+  chat: ModelStatus;
+  embed: ModelStatus;
+}
+
 export interface AiConfig {
   baseUrl: string;
   chatModel: string;

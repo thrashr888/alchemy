@@ -2,6 +2,7 @@ import { useStore } from "@/lib/store";
 import { SourcesPanel } from "./SourcesPanel";
 import { ChatPanel } from "./ChatPanel";
 import { StudioPanel } from "./StudioPanel";
+import { HealthBanner } from "./HealthBanner";
 import { Button } from "./ui";
 import { ChevronLeft, Settings, BookOpen } from "lucide-react";
 
@@ -32,6 +33,8 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
           </Button>
         </div>
       </header>
+
+      <HealthBanner onOpenSettings={onOpenSettings} />
 
       <div className="flex flex-1 overflow-hidden">
         <SourcesPanel />

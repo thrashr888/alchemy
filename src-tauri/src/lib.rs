@@ -77,6 +77,7 @@ pub fn run() {
             commands::set_ai_config,
             commands::list_models,
             commands::check_ollama,
+            commands::check_models,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

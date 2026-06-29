@@ -61,25 +61,58 @@ impl Ollama {
     }
 
     /// Embed a batch of texts. Returns one vector per input, in order.
+    ///
+    /// Texts are sent in bounded sub-batches with a per-request timeout so a
+    /// wedged/loading Ollama surfaces a clear error in seconds rather than
+    /// hanging on one giant request.
     pub async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(vec![]);
         }
+        const BATCH: usize = 64;
+        let mut out: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
+        for batch in texts.chunks(BATCH) {
+            let parsed = self.embed_request(batch, std::time::Duration::from_secs(120)).await?;
+            out.extend(parsed.embeddings);
+        }
+        Ok(out)
+    }
+
+    async fn embed_request(
+        &self,
+        inputs: &[String],
+        timeout: std::time::Duration,
+    ) -> Result<EmbedResponse> {
         let resp = self
             .http
             .post(self.url("/api/embed"))
-            .json(&json!({ "model": self.config.embed_model, "input": texts }))
+            .timeout(timeout)
+            .json(&json!({ "model": self.config.embed_model, "input": inputs }))
             .send()
             .await
-            .context("ollama embed request failed (is `ollama serve` running?)")?;
+            .with_context(|| {
+                format!(
+                    "embedding request to Ollama failed or timed out — is `ollama serve` running \
+                     and is the model `{}` available? (a large chat model loading can also stall this)",
+                    self.config.embed_model
+                )
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             return Err(anyhow!("ollama embed {}: {}", status, body));
         }
-        let parsed: EmbedResponse = resp.json().await.context("invalid embed response")?;
-        Ok(parsed.embeddings)
+        resp.json().await.context("invalid embed response")
+    }
+
+    /// Quick liveness probe for the embedding model (short timeout). Returns the
+    /// embedding dimension on success.
+    pub async fn test_embed(&self) -> Result<usize> {
+        let parsed = self
+            .embed_request(&["ok".to_string()], std::time::Duration::from_secs(20))
+            .await?;
+        Ok(parsed.embeddings.first().map(|v| v.len()).unwrap_or(0))
     }
 
     pub async fn embed_one(&self, text: &str) -> Result<Vec<f32>> {
