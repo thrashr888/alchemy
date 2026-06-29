@@ -108,34 +108,15 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
       }
     >
       <div className="flex flex-col gap-4">
-        <div className="flex items-center gap-2 rounded-md border border-border bg-surface-2 px-3 py-2 text-[12px]">
-          {connOk === null ? (
-            <Spinner className="h-3.5 w-3.5 text-muted-foreground" />
-          ) : connOk ? (
-            <CheckCircle2 className="h-4 w-4 text-success" />
-          ) : (
-            <XCircle className="h-4 w-4 text-destructive" />
-          )}
-          <span className="text-muted-foreground">
-            {connOk === null
-              ? "Checking Ollama…"
-              : connOk
-                ? `Connected · ${models.length} models available`
-                : "Cannot reach Ollama. Is `ollama serve` running?"}
-          </span>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="ml-auto"
-            onClick={refreshModels}
-            loading={loadingModels}
-            title="Refresh"
-          >
-            {!loadingModels && <RefreshCw className="h-3.5 w-3.5" />}
-          </Button>
-        </div>
-
-        <ModelHealthPanel />
+        <StatusBox
+          connOk={connOk}
+          modelCount={models.length}
+          loading={loadingModels}
+          onRefresh={() => {
+            void refreshModels();
+            void refreshModelHealth();
+          }}
+        />
 
         <Field label="Theme">
           <ThemePicker />
@@ -196,16 +177,18 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
   );
 }
 
-function ModelHealthPanel() {
+function StatusBox({
+  connOk,
+  modelCount,
+  loading,
+  onRefresh,
+}: {
+  connOk: boolean | null;
+  modelCount: number;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
   const health = useStore((s) => s.modelHealth);
-  const refresh = useStore((s) => s.refreshModelHealth);
-  const [checking, setChecking] = useState(false);
-
-  async function recheck() {
-    setChecking(true);
-    await refresh();
-    setChecking(false);
-  }
 
   const Row = ({ label, status }: { label: string; status?: { working: boolean; detail: string } }) => (
     <div className="flex items-center gap-2 text-[12px]">
@@ -222,23 +205,41 @@ function ModelHealthPanel() {
   );
 
   return (
-    <div className="flex flex-col gap-1.5 rounded-md border border-border bg-surface-2 px-3 py-2.5">
-      <div className="mb-0.5 flex items-center justify-between">
-        <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
-          Model status
+    <div className="flex flex-col gap-2 rounded-md border border-border bg-surface-2 px-3 py-2.5">
+      {/* Overall connection */}
+      <div className="flex items-center gap-2 text-[12px]">
+        {connOk === null ? (
+          <Spinner className="h-3.5 w-3.5 text-muted-foreground" />
+        ) : connOk ? (
+          <CheckCircle2 className="h-4 w-4 text-success" />
+        ) : (
+          <XCircle className="h-4 w-4 text-destructive" />
+        )}
+        <span className={cn(connOk === false ? "text-destructive" : "text-muted-foreground")}>
+          {connOk === null
+            ? "Checking Ollama…"
+            : connOk
+              ? `Connected · ${modelCount} models available`
+              : "Cannot reach Ollama. Is `ollama serve` running?"}
         </span>
-        <button
-          onClick={recheck}
-          className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+        <Button
+          variant="ghost"
+          size="icon"
+          className="ml-auto"
+          onClick={onRefresh}
+          loading={loading}
+          title="Recheck"
         >
-          {checking ? "Checking…" : "Recheck"}
-        </button>
+          {!loading && <RefreshCw className="h-3.5 w-3.5" />}
+        </Button>
       </div>
-      {!health?.reachable && health !== null && (
-        <div className="text-[12px] text-destructive">Ollama is not reachable.</div>
+
+      {connOk && (
+        <div className="flex flex-col gap-1.5 border-t border-border pt-2">
+          <Row label="Chat" status={health?.chat} />
+          <Row label="Embed" status={health?.embed} />
+        </div>
       )}
-      <Row label="Chat" status={health?.chat} />
-      <Row label="Embed" status={health?.embed} />
     </div>
   );
 }
