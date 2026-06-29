@@ -10,6 +10,16 @@ import { RefreshCw, CheckCircle2, XCircle, Check, Zap } from "lucide-react";
 /** Treat `name` and `name:latest` as the same model for matching. */
 const normModel = (m: string) => m.replace(/:latest$/, "");
 
+// Lean-active MoE (and one vision) chat models worth benchmarking locally.
+// Compare their recorded tok/s in the status box above against your current one.
+const SUGGESTED_CHAT = [
+  { name: "gpt-oss:120b", note: "120B MoE · ~5B active · fast + strong" },
+  { name: "nemotron-3-super", note: "120B MoE · only 12B active" },
+  { name: "deepseek-v4-flash", note: "284B MoE · only 13B active" },
+  { name: "minimax-m3", note: "MoE · native vision · 1M context (also used for OCR)" },
+  { name: "qwen3.6:35b", note: "dense 35B · tools + thinking" },
+];
+
 export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const aiConfig = useStore((s) => s.aiConfig);
   const save = useStore((s) => s.saveAiConfig);
@@ -136,6 +146,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
             value={draft.chatModel}
             models={models}
             onChange={(v) => setDraft({ ...draft, chatModel: v })}
+            suggestions={SUGGESTED_CHAT}
           />
         </Field>
 
@@ -322,12 +333,17 @@ function ModelPicker({
   value,
   models,
   onChange,
+  suggestions = [],
 }: {
   value: string;
   models: string[];
   onChange: (v: string) => void;
+  suggestions?: { name: string; note: string }[];
 }) {
-  // Free-text input with quick-pick chips of installed models.
+  // Suggestions the user hasn't pulled yet (installed ones already show below).
+  const notInstalled = suggestions.filter(
+    (s) => !models.some((m) => normModel(m) === normModel(s.name)),
+  );
   return (
     <div className="flex flex-col gap-1.5">
       <Input value={value} onChange={(e) => onChange(e.target.value)} />
@@ -347,6 +363,25 @@ function ModelPicker({
               {m}
             </button>
           ))}
+        </div>
+      )}
+      {notInstalled.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <span className="text-[10.5px] uppercase tracking-wide text-subtle-foreground">
+            Suggested · pull to use
+          </span>
+          <div className="flex flex-wrap gap-1">
+            {notInstalled.map((s) => (
+              <button
+                key={s.name}
+                onClick={() => onChange(s.name)}
+                title={`${s.note} — run: ollama pull ${s.name}`}
+                className="rounded border border-dashed border-border-strong bg-surface-2 px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {s.name}
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </div>
