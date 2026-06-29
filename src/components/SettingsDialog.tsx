@@ -10,10 +10,11 @@ import { RefreshCw, CheckCircle2, XCircle, Check, Zap } from "lucide-react";
 /** Treat `name` and `name:latest` as the same model for matching. */
 const normModel = (m: string) => m.replace(/:latest$/, "");
 
-// Lean-active MoE (and one vision) chat models worth benchmarking locally.
+// Lean-active MoE (and MLX-accelerated) chat models worth benchmarking locally.
 // Compare their recorded tok/s in the status box above against your current one.
 const SUGGESTED_CHAT = [
-  { name: "gpt-oss:120b", note: "120B MoE · ~5B active · fast + strong" },
+  { name: "qwen3.5:35b-a3b-coding-nvfp4", note: "MLX/NVFP4 · 3B active · Apple-Silicon accelerated" },
+  { name: "gpt-oss:120b", note: "120B MoE · ~5B active · strong all-rounder" },
   { name: "nemotron-3-super", note: "120B MoE · only 12B active" },
   { name: "deepseek-v4-flash", note: "284B MoE · only 13B active" },
   { name: "minimax-m3", note: "MoE · native vision · 1M context (also used for OCR)" },
@@ -141,7 +142,10 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           />
         </Field>
 
-        <Field label="Chat model" hint="Used to answer questions and generate documents.">
+        <Field
+          label="Chat model"
+          hint="Used to answer questions and generate documents. Models tagged nvfp4/mlx run on Ollama's MLX engine (Apple-Silicon accelerated)."
+        >
           <ModelPicker
             value={draft.chatModel}
             models={models}
