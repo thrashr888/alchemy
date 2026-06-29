@@ -481,6 +481,7 @@ pub async fn create_note(
         title: if title.trim().is_empty() { "Untitled note".into() } else { title.trim().to_string() },
         content,
         kind: "note".into(),
+        prompt: String::new(),
         created_at: ts,
         updated_at: ts,
     };
@@ -503,43 +504,91 @@ pub async fn delete_note(state: State<'_, AppState>, id: String) -> Result<(), S
     e(state.db.delete_note(&id).await)
 }
 
-#[tauri::command]
-pub async fn generate_artifact(
-    state: State<'_, AppState>,
-    notebook_id: String,
-    kind: String,
-) -> Result<Note, String> {
-    let (title, instruction) =
-        rag::artifact_spec(&kind).ok_or_else(|| format!("Unknown artifact kind: {kind}"))?;
+/// Generate artifact content for a kind (+ optional custom prompt) over all of
+/// a notebook's source text. Returns (title, content).
+async fn generate_content(
+    state: &AppState,
+    notebook_id: &str,
+    kind: &str,
+    prompt: &str,
+) -> anyhow::Result<(String, String)> {
+    let (title, base) = rag::artifact_spec(kind)
+        .ok_or_else(|| anyhow::anyhow!("Unknown artifact kind: {kind}"))?;
 
-    // Concatenate all source content for this notebook.
-    let sources = e(state.db.list_sources(&notebook_id).await)?;
+    let sources = state.db.list_sources(notebook_id).await?;
     if sources.is_empty() {
-        return Err("Add at least one source before generating.".into());
+        anyhow::bail!("Add at least one source before generating.");
     }
     let mut corpus = String::new();
     for s in &sources {
-        let full = e(state.db.source_content(&s.id).await)?;
+        let full = state.db.source_content(&s.id).await?;
         corpus.push_str(&format!("## {}\n\n{}\n\n", s.title, full));
     }
 
-    let messages = rag::build_artifact_messages(instruction, &corpus);
+    let instruction = if prompt.trim().is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}\n\nAdditional instructions from the user (follow these):\n{}", prompt.trim())
+    };
+    let messages = rag::build_artifact_messages(&instruction, &corpus);
     let content = {
         let ai = state.ai.read().await;
-        e(ai.chat(&messages).await)?
+        ai.chat(&messages).await?
     };
+    Ok((title.to_string(), content))
+}
+
+#[tauri::command]
+pub async fn generate_artifact(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    notebook_id: String,
+    kind: String,
+    prompt: Option<String>,
+) -> Result<Note, String> {
+    let prompt = prompt.unwrap_or_default();
+    let (title, content) = e(generate_content(&state, &notebook_id, &kind, &prompt).await)?;
 
     let ts = now();
     let note = Note {
         id: new_id(),
         notebook_id,
-        title: title.to_string(),
+        title,
         content,
         kind,
+        prompt,
         created_at: ts,
         updated_at: ts,
     };
     e(state.db.add_note(&note).await)?;
+    let _ = app.emit("generate://done", &note);
+    Ok(note)
+}
+
+#[tauri::command]
+pub async fn rebuild_note(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    note_id: String,
+    notebook_id: String,
+    kind: String,
+    prompt: String,
+) -> Result<Note, String> {
+    let (title, content) = e(generate_content(&state, &notebook_id, &kind, &prompt).await)?;
+    let ts = now();
+    e(state.db.update_note(&note_id, &title, &content, ts).await)?;
+
+    let note = Note {
+        id: note_id,
+        notebook_id,
+        title,
+        content,
+        kind,
+        prompt,
+        created_at: ts,
+        updated_at: ts,
+    };
+    let _ = app.emit("generate://done", &note);
     Ok(note)
 }
 

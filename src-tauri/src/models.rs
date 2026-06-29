@@ -90,9 +90,14 @@ pub struct Note {
     pub notebook_id: String,
     pub title: String,
     pub content: String,
-    /// "note" | "summary" | "faq" | "study_guide" | "briefing"
+    /// "note" | "summary" | "faq" | "study_guide" | "briefing" | "timeline" |
+    /// "prd" | "prfaq" | "rfc" | "skill"
     #[serde(default = "default_note_kind")]
     pub kind: String,
+    /// Optional custom instructions used to generate this note, retained so it
+    /// can be rebuilt with fresh context.
+    #[serde(default)]
+    pub prompt: String,
     pub created_at: i64,
     pub updated_at: i64,
 }

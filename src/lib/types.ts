@@ -40,7 +40,17 @@ export interface Message {
   createdAt: number;
 }
 
-export type NoteKind = "note" | "summary" | "faq" | "study_guide" | "briefing" | "timeline";
+export type NoteKind =
+  | "note"
+  | "summary"
+  | "faq"
+  | "study_guide"
+  | "briefing"
+  | "timeline"
+  | "prd"
+  | "prfaq"
+  | "rfc"
+  | "skill";
 
 export interface Note {
   id: string;
@@ -48,6 +58,7 @@ export interface Note {
   title: string;
   content: string;
   kind: NoteKind;
+  prompt: string;
   createdAt: number;
   updatedAt: number;
 }

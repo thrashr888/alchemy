@@ -72,6 +72,7 @@ pub fn run() {
             commands::update_note,
             commands::delete_note,
             commands::generate_artifact,
+            commands::rebuild_note,
             commands::get_ai_config,
             commands::set_ai_config,
             commands::list_models,

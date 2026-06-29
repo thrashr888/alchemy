@@ -45,7 +45,50 @@ impl Db {
         db.migrate_sources().await?;
         db.ensure_table(T_MESSAGES, messages_schema()).await?;
         db.ensure_table(T_NOTES, notes_schema()).await?;
+        db.migrate_notes().await?;
         Ok(db)
+    }
+
+    /// Backfill the `prompt` column on pre-existing `notes` tables.
+    async fn migrate_notes(&self) -> Result<()> {
+        if !self.table_exists(T_NOTES).await? {
+            return Ok(());
+        }
+        let schema = self.conn.open_table(T_NOTES).execute().await?.schema().await?;
+        if schema.field_with_name("prompt").is_ok() {
+            return Ok(());
+        }
+        let batches = self.collect(T_NOTES, None).await?;
+        let mut notes = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let nb = str_col(b, "notebook_id")?;
+            let title = str_col(b, "title")?;
+            let content = str_col(b, "content")?;
+            let kind = str_col(b, "kind")?;
+            let created = i64_col(b, "created_at")?;
+            let updated = i64_col(b, "updated_at")?;
+            for i in 0..b.num_rows() {
+                notes.push(Note {
+                    id: id.value(i).to_string(),
+                    notebook_id: nb.value(i).to_string(),
+                    title: title.value(i).to_string(),
+                    content: content.value(i).to_string(),
+                    kind: kind.value(i).to_string(),
+                    prompt: String::new(),
+                    created_at: created.value(i),
+                    updated_at: updated.value(i),
+                });
+            }
+        }
+        self.conn.drop_table(T_NOTES, &[]).await?;
+        self.ensure_table(T_NOTES, notes_schema()).await?;
+        if !notes.is_empty() {
+            let schema = notes_schema();
+            let batch = note_batch(&schema, &notes)?;
+            self.add_batch(T_NOTES, schema, batch).await?;
+        }
+        Ok(())
     }
 
     /// Bring a pre-existing `sources` table up to the current schema by
@@ -549,6 +592,7 @@ impl Db {
             let kind = str_col(b, "kind")?;
             let created = i64_col(b, "created_at")?;
             let updated = i64_col(b, "updated_at")?;
+            let prompt = str_col(b, "prompt")?;
             for i in 0..b.num_rows() {
                 notes.push(Note {
                     id: id.value(i).to_string(),
@@ -556,6 +600,7 @@ impl Db {
                     title: title.value(i).to_string(),
                     content: content.value(i).to_string(),
                     kind: kind.value(i).to_string(),
+                    prompt: prompt.value(i).to_string(),
                     created_at: created.value(i),
                     updated_at: updated.value(i),
                 });
@@ -567,18 +612,7 @@ impl Db {
 
     pub async fn add_note(&self, note: &Note) -> Result<()> {
         let schema = notes_schema();
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(StringArray::from(vec![note.id.clone()])),
-                Arc::new(StringArray::from(vec![note.notebook_id.clone()])),
-                Arc::new(StringArray::from(vec![note.title.clone()])),
-                Arc::new(StringArray::from(vec![note.content.clone()])),
-                Arc::new(StringArray::from(vec![note.kind.clone()])),
-                Arc::new(Int64Array::from(vec![note.created_at])),
-                Arc::new(Int64Array::from(vec![note.updated_at])),
-            ],
-        )?;
+        let batch = note_batch(&schema, std::slice::from_ref(note))?;
         self.add_batch(T_NOTES, schema, batch).await
     }
 
@@ -720,5 +754,28 @@ fn notes_schema() -> SchemaRef {
         Field::new("kind", DataType::Utf8, false),
         Field::new("created_at", DataType::Int64, false),
         Field::new("updated_at", DataType::Int64, false),
+        Field::new("prompt", DataType::Utf8, false),
     ]))
+}
+
+fn note_batch(schema: &SchemaRef, notes: &[Note]) -> Result<RecordBatch> {
+    let s = |f: fn(&Note) -> String| {
+        Arc::new(StringArray::from(notes.iter().map(f).collect::<Vec<_>>())) as ArrayRef
+    };
+    let i = |f: fn(&Note) -> i64| {
+        Arc::new(Int64Array::from(notes.iter().map(f).collect::<Vec<_>>())) as ArrayRef
+    };
+    Ok(RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            s(|x| x.id.clone()),
+            s(|x| x.notebook_id.clone()),
+            s(|x| x.title.clone()),
+            s(|x| x.content.clone()),
+            s(|x| x.kind.clone()),
+            i(|x| x.created_at),
+            i(|x| x.updated_at),
+            s(|x| x.prompt.clone()),
+        ],
+    )?)
 }

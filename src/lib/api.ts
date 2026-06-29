@@ -95,8 +95,10 @@ export const api = {
   updateNote: (id: string, title: string, content: string) =>
     run(cmd<void>("update_note", { id, title, content })),
   deleteNote: (id: string) => run(cmd<void>("delete_note", { id })),
-  generateArtifact: (notebookId: string, kind: NoteKind) =>
-    run(ai<Note>("generate_artifact", { notebookId, kind })),
+  generateArtifact: (notebookId: string, kind: NoteKind, prompt?: string) =>
+    run(ai<Note>("generate_artifact", { notebookId, kind, prompt: prompt ?? "" })),
+  rebuildNote: (noteId: string, notebookId: string, kind: NoteKind, prompt: string) =>
+    run(ai<Note>("rebuild_note", { noteId, notebookId, kind, prompt })),
 
   // Settings / health
   getAiConfig: () => run(query<AiConfig>("get_ai_config")),

@@ -59,7 +59,8 @@ interface AppState {
   toggleAgentMode: () => void;
   clearChat: () => Promise<void>;
 
-  generateArtifact: (kind: NoteKind) => Promise<void>;
+  generateArtifact: (kind: NoteKind, prompt?: string) => Promise<void>;
+  rebuildNote: (note: Note) => Promise<void>;
   createNote: (title: string, content: string) => Promise<void>;
   updateNote: (id: string, title: string, content: string) => Promise<void>;
   deleteNote: (id: string) => Promise<void>;
@@ -290,13 +291,27 @@ export const useStore = create<AppState>((set, get) => ({
     set({ messages: [] });
   },
 
-  generateArtifact: async (kind) => {
+  generateArtifact: async (kind, prompt) => {
     const id = get().currentId;
     if (!id || get().generatingKind) return;
     set({ generatingKind: kind, error: null });
     try {
-      const note = await api.generateArtifact(id, kind);
+      const note = await api.generateArtifact(id, kind, prompt);
       set({ notes: [note, ...get().notes] });
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      set({ generatingKind: null });
+    }
+  },
+
+  rebuildNote: async (note) => {
+    const id = get().currentId;
+    if (!id || get().generatingKind) return;
+    set({ generatingKind: note.kind, error: null });
+    try {
+      const updated = await api.rebuildNote(note.id, id, note.kind, note.prompt);
+      set({ notes: get().notes.map((n) => (n.id === updated.id ? updated : n)) });
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e) });
     } finally {

@@ -69,6 +69,34 @@ pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
             "Extract a chronological timeline of events, milestones, or developments mentioned in the sources below. \
              Format each entry as `- **<when>** — <what>`. If little temporal information exists, say so.",
         )),
+        "prd" => Some((
+            "PRD",
+            "Write a Product Requirements Document in the HashiCorp style, grounded in the sources below. \
+             Use these Markdown sections: ## Overview, ## Problem Statement, ## Goals, ## Non-Goals, \
+             ## User Stories, ## Requirements (functional and non-functional), ## Success Metrics, \
+             ## Open Questions. Be concrete and concise; infer reasonable detail from the sources but do not fabricate facts.",
+        )),
+        "prfaq" => Some((
+            "PR/FAQ",
+            "Write a PR/FAQ (press release + FAQ) in the Amazon/HashiCorp working-backwards style, grounded in the sources below. \
+             Start with a one-line **Headline** and **Subheadline**, then a press-release body written as if the product has shipped \
+             (dateline, summary paragraph, customer problem, the solution, a customer quote, how to get started). \
+             Then ## External FAQ (customer-facing) and ## Internal FAQ (team-facing: risks, dependencies, open questions). Do not invent quotes attributed to real people.",
+        )),
+        "rfc" => Some((
+            "RFC",
+            "Write an RFC (request for comments) in the HashiCorp engineering style, grounded in the sources below. \
+             Use these Markdown sections: ## Summary, ## Background, ## Proposal, ## Rationale & Alternatives Considered, \
+             ## Downsides & Risks, ## Open Questions, ## Decision. Write for an engineering audience; be specific and honest about trade-offs.",
+        )),
+        "skill" => Some((
+            "Skill",
+            "Produce a Claude Code SKILL.md that teaches how to perform the task described by the sources below. \
+             Begin with YAML frontmatter delimited by `---` containing `name:` (kebab-case) and `description:` \
+             (one sentence on when to use it). After the frontmatter, write Markdown with: a one-paragraph overview, \
+             a ## Steps section with numbered, actionable instructions, and a ## Notes section for gotchas and tips. \
+             Keep it practical and faithful to the sources.",
+        )),
         _ => None,
     }
 }
