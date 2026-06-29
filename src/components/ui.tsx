@@ -113,12 +113,12 @@ export function Modal({
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 backdrop-blur-[2px] pt-[12vh] animate-in fade-in duration-150"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 pt-[12vh] animate-in fade-in duration-150"
       onMouseDown={onClose}
     >
       <div
         className={cn(
-          "flex max-h-[80vh] w-full flex-col rounded-lg border border-border-strong bg-elevated shadow-2xl animate-in zoom-in-95 duration-150",
+          "flex max-h-[80vh] w-full flex-col rounded-lg border border-border-strong bg-elevated shadow-xl animate-in zoom-in-95 duration-150",
           width,
         )}
         onMouseDown={(e) => e.stopPropagation()}

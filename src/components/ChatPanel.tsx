@@ -96,7 +96,7 @@ export function ChatPanel() {
         <div className="mx-auto max-w-[720px]">
           <div
             className={cn(
-              "rounded-xl border border-border-strong bg-surface p-2.5 shadow-lg transition-colors",
+              "rounded-lg border border-border-strong bg-surface p-2.5 shadow-md transition-colors",
               "focus-within:border-ring/60",
             )}
           >
@@ -159,7 +159,7 @@ function ChatMessage({ message }: { message: Message }) {
   if (message.role === "user") {
     return (
       <div className="flex flex-col items-end gap-1">
-        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-surface-2 px-3.5 py-2 text-[13.5px] selectable border border-border">
+        <div className="max-w-[85%] rounded-lg rounded-br-sm bg-surface-2 px-3.5 py-2 text-[13.5px] selectable border border-border">
           {message.content}
         </div>
       </div>
@@ -262,7 +262,7 @@ function ThinkingDots() {
 function ChatEmpty({ hasNotebook, hasSources }: { hasNotebook: boolean; hasSources: boolean }) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
+      <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10 text-primary">
         <Sparkles className="h-6 w-6" />
       </div>
       <div className="text-[15px] font-semibold">

@@ -32,7 +32,7 @@ function App() {
       <MigrationOverlay />
 
       {error && (
-        <div className="fixed bottom-4 left-1/2 z-[70] flex max-w-[520px] -translate-x-1/2 items-start gap-2.5 rounded-lg border border-destructive/40 bg-elevated px-3.5 py-2.5 shadow-2xl">
+        <div className="fixed bottom-4 left-1/2 z-[70] flex max-w-[520px] -translate-x-1/2 items-start gap-2.5 rounded-lg border border-destructive/40 bg-elevated px-3.5 py-2.5 shadow-lg">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
           <div className="text-[12.5px] text-foreground/90 selectable">{error}</div>
           <button

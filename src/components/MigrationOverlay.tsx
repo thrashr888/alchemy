@@ -11,10 +11,10 @@ export function MigrationOverlay() {
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-background/80 backdrop-blur-sm">
-      <div className="w-[420px] rounded-2xl border border-border-strong bg-elevated p-6 shadow-2xl">
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-background/85">
+      <div className="w-[420px] rounded-lg border border-border-strong bg-elevated p-6 shadow-xl">
         <div className="mb-4 flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/15 text-primary">
+          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/15 text-primary">
             <Layers className="h-4.5 w-4.5" />
           </div>
           <div>

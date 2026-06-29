@@ -82,7 +82,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 setNewTitle("");
                 setCreating(true);
               }}
-              className="flex min-h-[132px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border-strong bg-surface/40 text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
+              className="flex min-h-[132px] flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border-strong bg-surface/40 text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
             >
               <Plus className="h-6 w-6" />
               <span className="text-[13px] font-medium">New notebook</span>
@@ -92,7 +92,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               <div
                 key={nb.id}
                 onClick={() => open(nb.id)}
-                className="group relative flex min-h-[132px] cursor-pointer flex-col rounded-xl border border-border bg-surface p-4 transition-colors hover:border-border-strong hover:bg-surface-2"
+                className="group relative flex min-h-[132px] cursor-pointer flex-col rounded-lg border border-border bg-surface p-4 transition-colors hover:border-border-strong hover:bg-surface-2"
               >
                 <div className="mb-auto flex h-8 w-8 items-center justify-center rounded-lg bg-primary/12 text-primary">
                   <BookOpen className="h-4 w-4" />

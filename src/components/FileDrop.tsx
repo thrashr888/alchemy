@@ -62,9 +62,9 @@ export function FileDrop() {
   if (!dragging) return null;
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-[60] flex items-center justify-center bg-background/70 backdrop-blur-sm">
-      <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-primary/60 bg-elevated/80 px-12 py-10 shadow-2xl">
-        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/15 text-primary">
+    <div className="pointer-events-none fixed inset-0 z-[60] flex items-center justify-center bg-background/85">
+      <div className="flex flex-col items-center gap-3 rounded-lg border-2 border-dashed border-primary/60 bg-elevated px-12 py-10 shadow-xl">
+        <div className="flex h-14 w-14 items-center justify-center rounded-md bg-primary/15 text-primary">
           <FileDown className="h-7 w-7" />
         </div>
         <div className="text-[15px] font-semibold text-foreground">Drop to add sources</div>
