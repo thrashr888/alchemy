@@ -15,6 +15,8 @@ export interface Source {
   sourceType: "pdf" | "text" | "markdown" | "url";
   url: string;
   content: string;
+  status: "ready" | "error";
+  error: string;
   charCount: number;
   chunkCount: number;
   createdAt: number;

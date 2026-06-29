@@ -70,6 +70,8 @@ async fn rag_round_trip() {
         char_count: extracted.text.chars().count() as i64,
         chunk_count: chunk_tuples.len() as i64,
         created_at: now(),
+        status: "ready".to_string(),
+        error: String::new(),
     };
     db.insert_source(&source, &chunk_tuples, &embeddings).await.expect("insert source");
     assert_eq!(db.list_sources(&nb.id).await.unwrap().len(), 1, "source persisted");

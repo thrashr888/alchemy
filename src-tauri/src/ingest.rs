@@ -95,6 +95,35 @@ pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
     Ok(Extracted { title, source_type: "url".to_string(), url, text })
 }
 
+/// Heuristic: does this extracted text look like a bot wall / login page /
+/// JS-only shell rather than real article content? Returns a reason if so.
+pub fn looks_blocked(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    let chars = trimmed.chars().count();
+    if chars < 200 {
+        return Some(format!(
+            "Only {chars} characters extracted — the page may require login, block bots, or render with JavaScript."
+        ));
+    }
+    let lower = trimmed.to_lowercase();
+    const MARKERS: &[&str] = &[
+        "enable javascript",
+        "verify you are human",
+        "are you a robot",
+        "checking your browser",
+        "just a moment",
+        "access denied",
+        "captcha",
+        "sign in to continue",
+        "log in to continue",
+        "please log in",
+    ];
+    if let Some(m) = MARKERS.iter().find(|m| lower.contains(**m)) {
+        return Some(format!("The page looks blocked or gated (\"{m}\")."));
+    }
+    None
+}
+
 /// Add a scheme if the user typed a bare host like "example.com/article".
 fn normalize_url(input: &str) -> String {
     let trimmed = input.trim();

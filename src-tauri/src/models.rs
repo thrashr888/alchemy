@@ -33,6 +33,16 @@ pub struct Source {
     pub char_count: i64,
     pub chunk_count: i64,
     pub created_at: i64,
+    /// "ready" | "error" — whether the import succeeded.
+    #[serde(default = "default_status")]
+    pub status: String,
+    /// Human-readable failure reason when `status == "error"`.
+    #[serde(default)]
+    pub error: String,
+}
+
+fn default_status() -> String {
+    "ready".to_string()
 }
 
 /// Mirrors the `chunks` Lance table. Rows are written via tuples in `db.rs`;

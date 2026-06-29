@@ -74,6 +74,16 @@ pub async fn list_sources(
     e(state.db.list_sources(&notebook_id).await)
 }
 
+/// Flag URL sources whose extracted text looks like a bot wall / login / JS shell.
+fn classify(source_type: &str, text: &str) -> (String, String) {
+    if source_type == "url" {
+        if let Some(reason) = ingest::looks_blocked(text) {
+            return ("error".to_string(), reason);
+        }
+    }
+    ("ready".to_string(), String::new())
+}
+
 async fn store_extracted(
     state: &AppState,
     notebook_id: &str,
@@ -91,6 +101,7 @@ async fn store_extracted(
         .map(|(i, text)| (new_id(), i as i32, text.clone()))
         .collect();
 
+    let (status, error) = classify(&extracted.source_type, &extracted.text);
     let source = Source {
         id: new_id(),
         notebook_id: notebook_id.to_string(),
@@ -101,12 +112,40 @@ async fn store_extracted(
         char_count: extracted.text.chars().count() as i64,
         chunk_count: chunk_tuples.len() as i64,
         created_at: now(),
+        status,
+        error,
     };
     state.db.insert_source(&source, &chunk_tuples, &embeddings).await?;
     state.db.touch_notebook(notebook_id, now()).await?;
 
     // Don't ship the full content back in the list payload.
     Ok(Source { content: String::new(), ..source })
+}
+
+/// Persist a URL source that failed to import so it shows with an error badge
+/// and can be retried (refreshed) later.
+async fn store_failed_url(
+    state: &AppState,
+    notebook_id: &str,
+    url: &str,
+    reason: String,
+) -> anyhow::Result<Source> {
+    let source = Source {
+        id: new_id(),
+        notebook_id: notebook_id.to_string(),
+        title: url.to_string(),
+        source_type: "url".to_string(),
+        url: url.to_string(),
+        content: String::new(),
+        char_count: 0,
+        chunk_count: 0,
+        created_at: now(),
+        status: "error".to_string(),
+        error: reason,
+    };
+    state.db.insert_source(&source, &[], &[]).await?;
+    state.db.touch_notebook(notebook_id, now()).await?;
+    Ok(source)
 }
 
 #[tauri::command]
@@ -125,8 +164,12 @@ pub async fn add_source_url(
     notebook_id: String,
     url: String,
 ) -> Result<Source, String> {
-    let extracted = e(ingest::extract_url(&url).await)?;
-    e(store_extracted(&state, &notebook_id, extracted).await)
+    // Hard failures (network / HTTP / empty) still produce a source row marked
+    // as errored, so the user sees it and can retry rather than it vanishing.
+    match ingest::extract_url(&url).await {
+        Ok(extracted) => e(store_extracted(&state, &notebook_id, extracted).await),
+        Err(err) => e(store_failed_url(&state, &notebook_id, url.trim(), err.to_string()).await),
+    }
 }
 
 #[tauri::command]
@@ -157,6 +200,7 @@ async fn reingest(
         .map(|(i, text)| (new_id(), i as i32, text.clone()))
         .collect();
 
+    let (status, error) = classify(&existing.source_type, &extracted.text);
     let updated = Source {
         id: existing.id.clone(),
         notebook_id: existing.notebook_id.clone(),
@@ -167,10 +211,31 @@ async fn reingest(
         char_count: extracted.text.chars().count() as i64,
         chunk_count: chunk_tuples.len() as i64,
         created_at: existing.created_at,
+        status,
+        error,
     };
     state.db.replace_source(&updated, &chunk_tuples, &embeddings).await?;
     state.db.touch_notebook(&existing.notebook_id, now()).await?;
     Ok(Source { content: String::new(), ..updated })
+}
+
+/// Mark an existing source as failed (used when a refresh/retry can't fetch).
+async fn mark_source_failed(
+    state: &AppState,
+    existing: &Source,
+    reason: String,
+) -> anyhow::Result<Source> {
+    let failed = Source {
+        content: String::new(),
+        char_count: 0,
+        chunk_count: 0,
+        status: "error".to_string(),
+        error: reason,
+        ..existing.clone()
+    };
+    state.db.replace_source(&failed, &[], &[]).await?;
+    state.db.touch_notebook(&existing.notebook_id, now()).await?;
+    Ok(failed)
 }
 
 #[tauri::command]
@@ -196,8 +261,10 @@ pub async fn refresh_source_url(
     if existing.url.is_empty() {
         return Err("This source has no URL to refresh".into());
     }
-    let extracted = e(ingest::extract_url(&existing.url).await)?;
-    e(reingest(&state, &existing, extracted).await)
+    match ingest::extract_url(&existing.url).await {
+        Ok(extracted) => e(reingest(&state, &existing, extracted).await),
+        Err(err) => e(mark_source_failed(&state, &existing, err.to_string()).await),
+    }
 }
 
 #[tauri::command]

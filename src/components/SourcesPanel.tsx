@@ -221,14 +221,27 @@ export function SourcesPanel() {
             {sources.map((s) => (
               <div
                 key={s.id}
-                className="group flex items-start gap-2 rounded-md px-2 py-2 hover:bg-surface-2"
+                className={cn(
+                  "group flex items-start gap-2 rounded-md px-2 py-2 hover:bg-surface-2",
+                  s.status === "error" && "bg-destructive/5",
+                )}
               >
-                <div className="mt-0.5">{sourceIcon(s.sourceType)}</div>
+                <div className="mt-0.5">
+                  {s.status === "error" ? (
+                    <AlertCircle className="h-3.5 w-3.5 text-destructive" />
+                  ) : (
+                    sourceIcon(s.sourceType)
+                  )}
+                </div>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[13px] text-foreground" title={s.title}>
                     {s.title}
                   </div>
-                  {s.sourceType === "url" && s.url ? (
+                  {s.status === "error" ? (
+                    <div className="text-[11px] leading-snug text-destructive" title={s.error}>
+                      {s.error || "Import failed"}
+                    </div>
+                  ) : s.sourceType === "url" && s.url ? (
                     <div className="truncate text-[11px] text-citation" title={s.url}>
                       {hostname(s.url)}
                     </div>

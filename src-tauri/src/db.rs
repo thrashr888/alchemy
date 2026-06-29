@@ -8,7 +8,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use arrow_array::types::Float32Type;
 use arrow_array::{
-    Array, FixedSizeListArray, Int32Array, Int64Array, RecordBatch, RecordBatchIterator,
+    Array, ArrayRef, FixedSizeListArray, Int32Array, Int64Array, RecordBatch, RecordBatchIterator,
     StringArray,
 };
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
@@ -42,24 +42,26 @@ impl Db {
         let db = Self { conn };
         db.ensure_table(T_NOTEBOOKS, notebooks_schema()).await?;
         db.ensure_table(T_SOURCES, sources_schema()).await?;
-        db.migrate_sources_url().await?;
+        db.migrate_sources().await?;
         db.ensure_table(T_MESSAGES, messages_schema()).await?;
         db.ensure_table(T_NOTES, notes_schema()).await?;
         Ok(db)
     }
 
-    /// Add the `url` column to pre-existing `sources` tables by rebuilding them.
-    /// No-op once the column is present. Keeps existing data.
-    async fn migrate_sources_url(&self) -> Result<()> {
+    /// Bring a pre-existing `sources` table up to the current schema by
+    /// rebuilding it, backfilling any missing columns (`url`, `status`,
+    /// `error`) with defaults. No-op once all columns are present.
+    async fn migrate_sources(&self) -> Result<()> {
         if !self.table_exists(T_SOURCES).await? {
             return Ok(());
         }
-        let tbl = self.conn.open_table(T_SOURCES).execute().await?;
-        if tbl.schema().await?.field_with_name("url").is_ok() {
+        let schema = self.conn.open_table(T_SOURCES).execute().await?.schema().await?;
+        let has = |n: &str| schema.field_with_name(n).is_ok();
+        if has("url") && has("status") && has("error") {
             return Ok(());
         }
 
-        // Read existing rows under the old (url-less) schema.
+        // Read whatever columns exist; optional ones get defaults.
         let batches = self.collect(T_SOURCES, None).await?;
         let mut sources = Vec::new();
         for b in &batches {
@@ -71,17 +73,25 @@ impl Db {
             let cc = i64_col(b, "char_count")?;
             let ck = i64_col(b, "chunk_count")?;
             let ca = i64_col(b, "created_at")?;
+            let url = opt_str_col(b, "url");
+            let status = opt_str_col(b, "status");
+            let error = opt_str_col(b, "error");
             for i in 0..b.num_rows() {
                 sources.push(Source {
                     id: id.value(i).to_string(),
                     notebook_id: nb.value(i).to_string(),
                     title: title.value(i).to_string(),
                     source_type: stype.value(i).to_string(),
-                    url: String::new(),
+                    url: url.map(|a| a.value(i).to_string()).unwrap_or_default(),
                     content: content.value(i).to_string(),
                     char_count: cc.value(i),
                     chunk_count: ck.value(i),
                     created_at: ca.value(i),
+                    status: status
+                        .map(|a| a.value(i).to_string())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| "ready".to_string()),
+                    error: error.map(|a| a.value(i).to_string()).unwrap_or_default(),
                 });
             }
         }
@@ -90,20 +100,7 @@ impl Db {
         self.ensure_table(T_SOURCES, sources_schema()).await?;
         if !sources.is_empty() {
             let schema = sources_schema();
-            let batch = RecordBatch::try_new(
-                schema.clone(),
-                vec![
-                    Arc::new(StringArray::from(sources.iter().map(|s| s.id.clone()).collect::<Vec<_>>())),
-                    Arc::new(StringArray::from(sources.iter().map(|s| s.notebook_id.clone()).collect::<Vec<_>>())),
-                    Arc::new(StringArray::from(sources.iter().map(|s| s.title.clone()).collect::<Vec<_>>())),
-                    Arc::new(StringArray::from(sources.iter().map(|s| s.source_type.clone()).collect::<Vec<_>>())),
-                    Arc::new(StringArray::from(sources.iter().map(|s| s.url.clone()).collect::<Vec<_>>())),
-                    Arc::new(StringArray::from(sources.iter().map(|s| s.content.clone()).collect::<Vec<_>>())),
-                    Arc::new(Int64Array::from(sources.iter().map(|s| s.char_count).collect::<Vec<_>>())),
-                    Arc::new(Int64Array::from(sources.iter().map(|s| s.chunk_count).collect::<Vec<_>>())),
-                    Arc::new(Int64Array::from(sources.iter().map(|s| s.created_at).collect::<Vec<_>>())),
-                ],
-            )?;
+            let batch = source_batch(&schema, &sources)?;
             self.add_batch(T_SOURCES, schema, batch).await?;
         }
         Ok(())
@@ -249,6 +246,8 @@ impl Db {
             let char_count = i64_col(b, "char_count")?;
             let chunk_count = i64_col(b, "chunk_count")?;
             let created = i64_col(b, "created_at")?;
+            let status = str_col(b, "status")?;
+            let error = str_col(b, "error")?;
             for i in 0..b.num_rows() {
                 sources.push(Source {
                     id: id.value(i).to_string(),
@@ -260,6 +259,8 @@ impl Db {
                     char_count: char_count.value(i),
                     chunk_count: chunk_count.value(i),
                     created_at: created.value(i),
+                    status: status.value(i).to_string(),
+                    error: error.value(i).to_string(),
                 });
             }
         }
@@ -276,20 +277,7 @@ impl Db {
     ) -> Result<()> {
         // Source row.
         let schema = sources_schema();
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(StringArray::from(vec![source.id.clone()])),
-                Arc::new(StringArray::from(vec![source.notebook_id.clone()])),
-                Arc::new(StringArray::from(vec![source.title.clone()])),
-                Arc::new(StringArray::from(vec![source.source_type.clone()])),
-                Arc::new(StringArray::from(vec![source.url.clone()])),
-                Arc::new(StringArray::from(vec![source.content.clone()])),
-                Arc::new(Int64Array::from(vec![source.char_count])),
-                Arc::new(Int64Array::from(vec![source.chunk_count])),
-                Arc::new(Int64Array::from(vec![source.created_at])),
-            ],
-        )?;
+        let batch = source_batch(&schema, std::slice::from_ref(source))?;
         self.add_batch(T_SOURCES, schema, batch).await?;
         self.add_chunks(&source.notebook_id, &source.id, chunks, embeddings).await
     }
@@ -353,6 +341,8 @@ impl Db {
             let cc = i64_col(b, "char_count")?;
             let ck = i64_col(b, "chunk_count")?;
             let ca = i64_col(b, "created_at")?;
+            let status = str_col(b, "status")?;
+            let error = str_col(b, "error")?;
             for i in 0..b.num_rows() {
                 sources.push(Source {
                     id: id.value(i).to_string(),
@@ -364,6 +354,8 @@ impl Db {
                     char_count: cc.value(i),
                     chunk_count: ck.value(i),
                     created_at: ca.value(i),
+                    status: status.value(i).to_string(),
+                    error: error.value(i).to_string(),
                 });
             }
         }
@@ -417,6 +409,8 @@ impl Db {
                 char_count: i64_col(b, "char_count")?.value(0),
                 chunk_count: i64_col(b, "chunk_count")?.value(0),
                 created_at: i64_col(b, "created_at")?.value(0),
+                status: str_col(b, "status")?.value(0).to_string(),
+                error: str_col(b, "error")?.value(0).to_string(),
             }));
         }
         Ok(None)
@@ -613,6 +607,39 @@ fn str_col<'a>(b: &'a RecordBatch, name: &str) -> Result<&'a StringArray> {
         .ok_or_else(|| anyhow!("missing/invalid string column `{name}`"))
 }
 
+/// Build a `sources` RecordBatch from rows (column order matches `sources_schema`).
+fn source_batch(schema: &SchemaRef, sources: &[Source]) -> Result<RecordBatch> {
+    let s = |f: fn(&Source) -> String| {
+        Arc::new(StringArray::from(sources.iter().map(f).collect::<Vec<_>>())) as ArrayRef
+    };
+    let i = |f: fn(&Source) -> i64| {
+        Arc::new(Int64Array::from(sources.iter().map(f).collect::<Vec<_>>())) as ArrayRef
+    };
+    Ok(RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            s(|x| x.id.clone()),
+            s(|x| x.notebook_id.clone()),
+            s(|x| x.title.clone()),
+            s(|x| x.source_type.clone()),
+            s(|x| x.url.clone()),
+            s(|x| x.content.clone()),
+            i(|x| x.char_count),
+            i(|x| x.chunk_count),
+            i(|x| x.created_at),
+            s(|x| x.status.clone()),
+            s(|x| x.error.clone()),
+        ],
+    )?)
+}
+
+/// Like `str_col` but returns None if the column is absent (used by migrations
+/// that read tables predating a column).
+fn opt_str_col<'a>(b: &'a RecordBatch, name: &str) -> Option<&'a StringArray> {
+    b.column_by_name(name)
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+}
+
 fn i64_col<'a>(b: &'a RecordBatch, name: &str) -> Result<&'a Int64Array> {
     b.column_by_name(name)
         .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
@@ -653,6 +680,8 @@ fn sources_schema() -> SchemaRef {
         Field::new("char_count", DataType::Int64, false),
         Field::new("chunk_count", DataType::Int64, false),
         Field::new("created_at", DataType::Int64, false),
+        Field::new("status", DataType::Utf8, false),
+        Field::new("error", DataType::Utf8, false),
     ]))
 }
 
