@@ -155,6 +155,19 @@ export const THEMES: Record<string, Theme> = {
       citation: "#19c37d", selection: "rgba(16,163,127,0.28)", ...darkBorder,
     },
   },
+  latte: {
+    id: "latte",
+    label: "Catppuccin Latte",
+    dark: false,
+    vars: {
+      background: "#eff1f5", surface: "#e6e9ef", "surface-2": "#dce0e8", elevated: "#ffffff",
+      foreground: "#4c4f69", muted: "#e6e9ef", "muted-foreground": "#6c6f85",
+      "subtle-foreground": "#9ca0b0", ring: "#8839ef", primary: "#8839ef",
+      "primary-hover": "#7a2fe0", "primary-foreground": "#ffffff", accent: "#dce0e8",
+      "accent-foreground": "#4c4f69", destructive: "#d20f39", success: "#40a02b",
+      citation: "#1e66f5", selection: "rgba(136,57,239,0.18)", ...lightBorder,
+    },
+  },
   sepia: {
     id: "sepia",
     label: "Sepia",
