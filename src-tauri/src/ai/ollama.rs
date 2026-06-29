@@ -34,6 +34,42 @@ struct ChatChunk {
     message: Option<ChatMessageDelta>,
     #[serde(default)]
     done: bool,
+    #[serde(default)]
+    eval_count: Option<u64>,
+    #[serde(default)]
+    eval_duration: Option<u64>,
+}
+
+/// Generation stats reported by Ollama at the end of a chat.
+#[derive(Clone, Copy, Default)]
+pub struct GenStats {
+    pub eval_count: u64,
+    pub eval_duration_ns: u64,
+}
+
+impl GenStats {
+    pub fn tokens_per_sec(&self) -> f64 {
+        if self.eval_duration_ns == 0 {
+            0.0
+        } else {
+            self.eval_count as f64 / (self.eval_duration_ns as f64 / 1e9)
+        }
+    }
+
+    fn from_parts(count: Option<u64>, duration: Option<u64>) -> Option<Self> {
+        match (count, duration) {
+            (Some(eval_count), Some(eval_duration_ns)) if eval_count > 0 && eval_duration_ns > 0 => {
+                Some(GenStats { eval_count, eval_duration_ns })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Result of a chat: the assistant text plus optional generation stats.
+pub struct ChatOutcome {
+    pub text: String,
+    pub stats: Option<GenStats>,
 }
 
 #[derive(Deserialize)]
@@ -121,7 +157,7 @@ impl Ollama {
     }
 
     /// Non-streaming chat completion; used for one-shot artifact generation.
-    pub async fn chat(&self, messages: &[ChatTurn]) -> Result<String> {
+    pub async fn chat(&self, messages: &[ChatTurn]) -> Result<ChatOutcome> {
         let resp = self
             .http
             .post(self.url("/api/chat"))
@@ -140,12 +176,17 @@ impl Ollama {
             return Err(anyhow!("ollama chat {}: {}", status, body));
         }
         let value: serde_json::Value = resp.json().await?;
-        Ok(value["message"]["content"].as_str().unwrap_or_default().to_string())
+        let text = value["message"]["content"].as_str().unwrap_or_default().to_string();
+        let stats = GenStats::from_parts(
+            value.get("eval_count").and_then(|v| v.as_u64()),
+            value.get("eval_duration").and_then(|v| v.as_u64()),
+        );
+        Ok(ChatOutcome { text, stats })
     }
 
     /// Streaming chat. `on_token` is called for each content delta as it arrives.
     /// Returns the full concatenated assistant message.
-    pub async fn chat_stream<F>(&self, messages: &[ChatTurn], mut on_token: F) -> Result<String>
+    pub async fn chat_stream<F>(&self, messages: &[ChatTurn], mut on_token: F) -> Result<ChatOutcome>
     where
         F: FnMut(&str),
     {
@@ -190,12 +231,13 @@ impl Ollama {
                         }
                     }
                     if parsed.done {
-                        return Ok(full);
+                        let stats = GenStats::from_parts(parsed.eval_count, parsed.eval_duration);
+                        return Ok(ChatOutcome { text: full, stats });
                     }
                 }
             }
         }
-        Ok(full)
+        Ok(ChatOutcome { text: full, stats: None })
     }
 
     /// List locally available model names (from `/api/tags`).

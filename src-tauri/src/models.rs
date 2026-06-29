@@ -62,6 +62,15 @@ pub struct ModelHealth {
     pub embed: ModelStatus,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelStat {
+    pub name: String,
+    pub last_tokens_per_sec: f64,
+    pub avg_tokens_per_sec: f64,
+    pub samples: u64,
+}
+
 /// Mirrors the `chunks` Lance table. Rows are written via tuples in `db.rs`;
 /// this type documents the schema and is used when reading chunks back.
 #[allow(dead_code)]

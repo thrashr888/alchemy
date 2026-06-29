@@ -1,7 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Cause, Duration, Effect, Schedule } from "effect";
 import { describe, IpcError, TimeoutError, type AppError } from "./errors";
-import type { AiConfig, Message, ModelHealth, Note, NoteKind, Notebook, Source } from "./types";
+import type {
+  AiConfig,
+  Message,
+  ModelHealth,
+  ModelStat,
+  Note,
+  NoteKind,
+  Notebook,
+  Source,
+} from "./types";
 
 /**
  * Effect powers the data layer: every IPC call is wrapped with a timeout and
@@ -106,4 +115,5 @@ export const api = {
   listModels: () => run(query<string[]>("list_models")),
   checkOllama: () => run(query<boolean>("check_ollama")),
   checkModels: () => run(query<ModelHealth>("check_models")),
+  getModelStats: () => run(query<ModelStat[]>("get_model_stats")),
 };

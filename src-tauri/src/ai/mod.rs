@@ -4,7 +4,7 @@
 
 mod ollama;
 
-pub use ollama::Ollama;
+pub use ollama::{GenStats, Ollama};
 
 use serde::{Deserialize, Serialize};
 

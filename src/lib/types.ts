@@ -76,6 +76,13 @@ export interface ModelHealth {
   embed: ModelStatus;
 }
 
+export interface ModelStat {
+  name: string;
+  lastTokensPerSec: number;
+  avgTokensPerSec: number;
+  samples: number;
+}
+
 export interface AiConfig {
   baseUrl: string;
   chatModel: string;

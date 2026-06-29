@@ -5,7 +5,7 @@ import { THEME_LIST } from "@/lib/themes";
 import { Button, Input, Modal, Spinner } from "./ui";
 import { cn } from "@/lib/utils";
 import type { AiConfig } from "@/lib/types";
-import { RefreshCw, CheckCircle2, XCircle, Check } from "lucide-react";
+import { RefreshCw, CheckCircle2, XCircle, Check, Zap } from "lucide-react";
 
 /** Treat `name` and `name:latest` as the same model for matching. */
 const normModel = (m: string) => m.replace(/:latest$/, "");
@@ -111,6 +111,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
         <StatusBox
           connOk={connOk}
           modelCount={models.length}
+          chatModel={draft.chatModel}
           loading={loadingModels}
           onRefresh={() => {
             void refreshModels();
@@ -180,15 +181,19 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
 function StatusBox({
   connOk,
   modelCount,
+  chatModel,
   loading,
   onRefresh,
 }: {
   connOk: boolean | null;
   modelCount: number;
+  chatModel: string;
   loading: boolean;
   onRefresh: () => void;
 }) {
   const health = useStore((s) => s.modelHealth);
+  const stats = useStore((s) => s.modelStats);
+  const chatStat = stats.find((s) => normModel(s.name) === normModel(chatModel));
 
   const Row = ({ label, status }: { label: string; status?: { working: boolean; detail: string } }) => (
     <div className="flex items-center gap-2 text-[12px]">
@@ -238,6 +243,20 @@ function StatusBox({
         <div className="flex flex-col gap-1.5 border-t border-border pt-2">
           <Row label="Chat" status={health?.chat} />
           <Row label="Embed" status={health?.embed} />
+          {chatStat && chatStat.samples > 0 && (
+            <div className="flex items-center gap-2 text-[12px]">
+              <Zap className="h-3.5 w-3.5 shrink-0 text-citation" />
+              <span className="w-12 shrink-0 text-muted-foreground">Speed</span>
+              <span className="text-foreground/80">
+                ~{chatStat.avgTokensPerSec.toFixed(1)} tok/s avg
+                <span className="text-subtle-foreground">
+                  {" "}
+                  · last {chatStat.lastTokensPerSec.toFixed(1)} · {chatStat.samples} run
+                  {chatStat.samples === 1 ? "" : "s"}
+                </span>
+              </span>
+            </div>
+          )}
         </div>
       )}
     </div>

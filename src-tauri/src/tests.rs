@@ -93,7 +93,7 @@ async fn rag_round_trip() {
 
     // 4. Grounded chat
     let messages = rag::build_chat_messages(&[], "Where do the light-dependent reactions occur?", &citations);
-    let answer = ai.chat(&messages).await.expect("chat");
+    let answer = ai.chat(&messages).await.expect("chat").text;
     eprintln!("answer: {answer}");
     assert!(!answer.trim().is_empty(), "model produced an answer");
 

@@ -41,7 +41,7 @@ pub async fn run(
     notebook_id: &str,
     question: &str,
     history: &[ChatTurn],
-) -> Result<(String, Vec<Citation>)> {
+) -> Result<(String, Vec<Citation>, Option<crate::ai::GenStats>)> {
     let sources = db.list_sources(notebook_id).await?;
     let source_list = sources
         .iter()
@@ -55,7 +55,7 @@ pub async fn run(
 
     for _ in 0..MAX_STEPS {
         let messages = rag::build_agent_decision(question, &source_list, &transcript, gathered.len());
-        let raw = ollama.chat(&messages).await?;
+        let raw = ollama.chat(&messages).await?.text;
         match parse_action(&raw) {
             Some(Action::Search(query)) => {
                 emit_step(app, format!("Searching: {query}"));
@@ -102,13 +102,13 @@ pub async fn run(
     emit_step(app, "Writing answer".into());
     let messages = rag::build_chat_messages(history, question, &gathered);
     let app_cb = app.clone();
-    let answer = ollama
+    let outcome = ollama
         .chat_stream(&messages, |tok| {
             let _ = app_cb.emit("chat://token", TokenEvent { content: tok.to_string() });
         })
         .await?;
 
-    Ok((answer, gathered))
+    Ok((outcome.text, gathered, outcome.stats))
 }
 
 fn emit_step(app: &AppHandle, label: String) {

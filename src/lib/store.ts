@@ -2,7 +2,17 @@ import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import { applyTheme, DEFAULT_THEME } from "./themes";
-import type { AiConfig, Message, ModelHealth, Note, NoteKind, Notebook, Source } from "./types";
+import { notify } from "./notify";
+import type {
+  AiConfig,
+  Message,
+  ModelHealth,
+  ModelStat,
+  Note,
+  NoteKind,
+  Notebook,
+  Source,
+} from "./types";
 
 export interface QueueItem {
   id: string;
@@ -26,6 +36,7 @@ interface AppState {
   aiConfig: AiConfig | null;
   ollamaOk: boolean | null;
   modelHealth: ModelHealth | null;
+  modelStats: ModelStat[];
   theme: string;
 
   sending: boolean;
@@ -68,6 +79,7 @@ interface AppState {
 
   saveAiConfig: (config: AiConfig) => Promise<void>;
   refreshModelHealth: () => Promise<void>;
+  refreshModelStats: () => Promise<void>;
   reembedAll: () => Promise<void>;
   setError: (e: string | null) => void;
 }
@@ -103,6 +115,7 @@ export const useStore = create<AppState>((set, get) => ({
   aiConfig: null,
   ollamaOk: null,
   modelHealth: null,
+  modelStats: [],
   theme: localStorage.getItem("theme") ?? DEFAULT_THEME,
 
   sending: false,
@@ -123,6 +136,7 @@ export const useStore = create<AppState>((set, get) => ({
     ]);
     set({ notebooks, aiConfig, ollamaOk });
     void get().refreshModelHealth();
+    void get().refreshModelStats();
     // Reopen the last-used notebook if it still exists; otherwise show the picker.
     const last = localStorage.getItem("lastNotebookId");
     if (last && notebooks.some((n) => n.id === last)) {
@@ -135,6 +149,14 @@ export const useStore = create<AppState>((set, get) => ({
       set({ modelHealth: await api.checkModels() });
     } catch {
       set({ modelHealth: null });
+    }
+  },
+
+  refreshModelStats: async () => {
+    try {
+      set({ modelStats: await api.getModelStats() });
+    } catch {
+      /* keep prior stats */
     }
   },
 
@@ -283,6 +305,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ error: e instanceof Error ? e.message : String(e) });
     } finally {
       set({ sending: false, streamingText: "", steps: [] });
+      void get().refreshModelStats();
     }
   },
 
@@ -310,6 +333,8 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const note = await api.generateArtifact(id, kind, prompt);
       set({ notes: [note, ...get().notes] });
+      void get().refreshModelStats();
+      void notify("Document ready", `“${note.title}” finished generating.`);
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -324,6 +349,7 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const updated = await api.rebuildNote(note.id, id, note.kind, note.prompt);
       set({ notes: get().notes.map((n) => (n.id === updated.id ? updated : n)) });
+      void notify("Rebuilt", `“${updated.title}” was regenerated.`);
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e) });
     } finally {

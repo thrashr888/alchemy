@@ -18,7 +18,8 @@ use tauri::Manager;
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init());
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init());
 
     #[cfg(feature = "debug")]
     let builder = builder.plugin(tauri_plugin_debug_bridge::init());
@@ -33,10 +34,16 @@ pub fn run() {
 
             let db_dir = data_dir.join("lancedb");
             let config_path = data_dir.join("ai_config.json");
+            let stats_path = data_dir.join("model_stats.json");
 
             let config = std::fs::read_to_string(&config_path)
                 .ok()
                 .and_then(|s| serde_json::from_str::<ai::AiConfig>(&s).ok())
+                .unwrap_or_default();
+
+            let model_stats = std::fs::read_to_string(&stats_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default();
 
             let db = tauri::async_runtime::block_on(db::Db::open(&db_dir))
@@ -46,6 +53,8 @@ pub fn run() {
                 db: Arc::new(db),
                 ai: tokio::sync::RwLock::new(ai::Ollama::new(config)),
                 config_path,
+                stats_path,
+                model_stats: std::sync::Mutex::new(model_stats),
             });
             Ok(())
         })
@@ -78,6 +87,7 @@ pub fn run() {
             commands::list_models,
             commands::check_ollama,
             commands::check_models,
+            commands::get_model_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

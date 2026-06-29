@@ -1,21 +1,69 @@
 //! Tauri command surface — the entire IPC API the React frontend calls.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
-use crate::ai::{AiConfig, Ollama};
+use crate::ai::{AiConfig, GenStats, Ollama};
 use crate::db::Db;
-use crate::models::{Message, ModelHealth, ModelStatus, Note, Notebook, Source};
+use crate::models::{Message, ModelHealth, ModelStat, ModelStatus, Note, Notebook, Source};
 use crate::{ingest, rag};
+
+/// Accumulated generation throughput for one model (persisted to disk).
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ModelStatAcc {
+    pub samples: u64,
+    pub total_tokens: u64,
+    pub total_seconds: f64,
+    pub last_tps: f64,
+}
 
 pub struct AppState {
     pub db: Arc<Db>,
     pub ai: tokio::sync::RwLock<Ollama>,
     pub config_path: PathBuf,
+    pub stats_path: PathBuf,
+    pub model_stats: Mutex<HashMap<String, ModelStatAcc>>,
+}
+
+impl AppState {
+    /// Fold a chat's throughput into the running per-model stats and persist.
+    pub fn record_chat_stats(&self, model: &str, stats: Option<GenStats>) {
+        let Some(s) = stats else { return };
+        let tps = s.tokens_per_sec();
+        if tps <= 0.0 {
+            return;
+        }
+        let mut map = self.model_stats.lock().unwrap();
+        let entry = map.entry(model.to_string()).or_default();
+        entry.samples += 1;
+        entry.total_tokens += s.eval_count;
+        entry.total_seconds += s.eval_duration_ns as f64 / 1e9;
+        entry.last_tps = tps;
+        if let Ok(json) = serde_json::to_string_pretty(&*map) {
+            let _ = std::fs::write(&self.stats_path, json);
+        }
+    }
+
+    pub fn model_stats_snapshot(&self) -> Vec<ModelStat> {
+        let map = self.model_stats.lock().unwrap();
+        map.iter()
+            .map(|(name, a)| ModelStat {
+                name: name.clone(),
+                last_tokens_per_sec: a.last_tps,
+                avg_tokens_per_sec: if a.total_seconds > 0.0 {
+                    a.total_tokens as f64 / a.total_seconds
+                } else {
+                    0.0
+                },
+                samples: a.samples,
+            })
+            .collect()
+    }
 }
 
 fn now() -> i64 {
@@ -397,14 +445,16 @@ pub async fn send_message(
 
     // Stream the answer, emitting tokens to the frontend.
     let app_for_cb = app.clone();
-    let answer = {
+    let (answer, stats, model) = {
         let ai = state.ai.read().await;
-        e(ai
+        let out = e(ai
             .chat_stream(&messages, |tok| {
                 let _ = app_for_cb.emit("chat://token", TokenEvent { content: tok.to_string() });
             })
-            .await)?
+            .await)?;
+        (out.text, out.stats, ai.config().chat_model.clone())
     };
+    state.record_chat_stats(&model, stats);
 
     let assistant_msg = Message {
         id: new_id(),
@@ -449,10 +499,13 @@ pub async fn send_message_agentic(
         .map(|m| crate::ai::ChatTurn { role: m.role.clone(), content: m.content.clone() })
         .collect();
 
-    let (answer, citations) = {
+    let (answer, citations, stats, model) = {
         let ai = state.ai.read().await;
-        e(crate::agent::run(&app, &state.db, &ai, &notebook_id, &content, &history_turns).await)?
+        let (answer, citations, stats) =
+            e(crate::agent::run(&app, &state.db, &ai, &notebook_id, &content, &history_turns).await)?;
+        (answer, citations, stats, ai.config().chat_model.clone())
     };
+    state.record_chat_stats(&model, stats);
 
     let assistant_msg = Message {
         id: new_id(),
@@ -575,10 +628,12 @@ async fn generate_content(
         format!("{base}\n\nAdditional instructions from the user (follow these):\n{}", prompt.trim())
     };
     let messages = rag::build_artifact_messages(&instruction, &corpus);
-    let content = {
+    let (content, stats, model) = {
         let ai = state.ai.read().await;
-        ai.chat(&messages).await?
+        let out = ai.chat(&messages).await?;
+        (out.text, out.stats, ai.config().chat_model.clone())
     };
+    state.record_chat_stats(&model, stats);
     Ok((title.to_string(), content))
 }
 
@@ -636,6 +691,11 @@ pub async fn rebuild_note(
     };
     let _ = app.emit("generate://done", &note);
     Ok(note)
+}
+
+#[tauri::command]
+pub fn get_model_stats(state: State<'_, AppState>) -> Vec<ModelStat> {
+    state.model_stats_snapshot()
 }
 
 // ---- Settings / health ---------------------------------------------------
