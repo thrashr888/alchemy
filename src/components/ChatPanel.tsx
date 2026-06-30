@@ -5,7 +5,17 @@ import { Button, Textarea } from "./ui";
 import { Markdown } from "./Markdown";
 import { cn } from "@/lib/utils";
 import type { Citation, Message } from "@/lib/types";
-import { ArrowUp, Eraser, Quote, Sparkles, MessageSquare, Telescope, Check } from "lucide-react";
+import {
+  ArrowUp,
+  Eraser,
+  Quote,
+  Sparkles,
+  MessageSquare,
+  Telescope,
+  Check,
+  Copy,
+  NotebookPen,
+} from "lucide-react";
 
 export function ChatPanel() {
   const currentId = useStore((s) => s.currentId);
@@ -166,10 +176,59 @@ function ChatMessage({ message }: { message: Message }) {
     );
   }
   return (
-    <div className="flex flex-col gap-2">
+    <div className="group flex flex-col gap-2">
       <RoleLabel role="assistant" />
       <Markdown>{message.content}</Markdown>
       {message.citations.length > 0 && <Citations citations={message.citations} />}
+      <MessageActions content={message.content} />
+    </div>
+  );
+}
+
+function noteTitleFrom(content: string): string {
+  const line = content.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+  const clean = line.replace(/^#+\s*/, "").replace(/[*_`>#]/g, "").trim();
+  return clean.slice(0, 60) || "Chat response";
+}
+
+function MessageActions({ content }: { content: string }) {
+  const createNote = useStore((s) => s.createNote);
+  const [copied, setCopied] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
+  async function save() {
+    await createNote(noteTitleFrom(content), content);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
+  }
+
+  return (
+    <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
+      <button
+        onClick={copy}
+        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-surface-2 hover:text-foreground"
+        title="Copy to clipboard"
+      >
+        {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
+        {copied ? "Copied" : "Copy"}
+      </button>
+      <button
+        onClick={save}
+        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-surface-2 hover:text-foreground"
+        title="Save this response as a note"
+      >
+        {saved ? <Check className="h-3 w-3 text-success" /> : <NotebookPen className="h-3 w-3" />}
+        {saved ? "Saved" : "Save as note"}
+      </button>
     </div>
   );
 }

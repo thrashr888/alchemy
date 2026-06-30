@@ -42,6 +42,26 @@ function sourceIcon(t: Source["sourceType"]) {
   }
 }
 
+/** Source-domain favicon with a Globe fallback (kept local — no third party). */
+function Favicon({ url }: { url: string }) {
+  const [failed, setFailed] = useState(false);
+  let origin = "";
+  try {
+    origin = new URL(url).origin;
+  } catch {
+    /* malformed */
+  }
+  if (failed || !origin) return <Globe className="h-3.5 w-3.5 text-[#5e9bd2]" />;
+  return (
+    <img
+      src={`${origin}/favicon.ico`}
+      alt=""
+      className="h-3.5 w-3.5 rounded-sm object-contain"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 function hostname(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -241,6 +261,8 @@ export function SourcesPanel() {
                 <div className="mt-0.5">
                   {s.status === "error" ? (
                     <AlertCircle className="h-3.5 w-3.5 text-destructive" />
+                  ) : s.sourceType === "url" && s.url ? (
+                    <Favicon url={s.url} />
                   ) : (
                     sourceIcon(s.sourceType)
                   )}
