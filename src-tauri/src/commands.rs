@@ -11,7 +11,9 @@ use uuid::Uuid;
 
 use crate::ai::{AiConfig, GenStats, Ollama};
 use crate::db::Db;
-use crate::models::{Message, ModelHealth, ModelStat, ModelStatus, Note, Notebook, Source};
+use crate::models::{
+    Message, ModelHealth, ModelStat, ModelStatus, Note, Notebook, ReportSchedule, Source,
+};
 use crate::{ingest, rag};
 
 /// Accumulated generation throughput for one model (persisted to disk).
@@ -673,8 +675,24 @@ async fn generate_content(
     kind: &str,
     prompt: &str,
 ) -> anyhow::Result<(String, String)> {
-    let (title, base) = rag::artifact_spec(kind)
-        .ok_or_else(|| anyhow::anyhow!("Unknown artifact kind: {kind}"))?;
+    // Known kinds use their spec (+ optional extra prompt); "custom"/unknown
+    // kinds use the prompt itself as the instruction.
+    let (title, instruction) = match rag::artifact_spec(kind) {
+        Some((t, base)) => {
+            let instr = if prompt.trim().is_empty() {
+                base.to_string()
+            } else {
+                format!("{base}\n\nAdditional instructions from the user (follow these):\n{}", prompt.trim())
+            };
+            (t.to_string(), instr)
+        }
+        None => {
+            if prompt.trim().is_empty() {
+                anyhow::bail!("No instructions provided for this generation.");
+            }
+            ("Report".to_string(), prompt.trim().to_string())
+        }
+    };
 
     let sources = state.db.list_sources(notebook_id).await?;
     if sources.is_empty() {
@@ -685,12 +703,6 @@ async fn generate_content(
         let full = state.db.source_content(&s.id).await?;
         corpus.push_str(&format!("## {}\n\n{}\n\n", s.title, full));
     }
-
-    let instruction = if prompt.trim().is_empty() {
-        base.to_string()
-    } else {
-        format!("{base}\n\nAdditional instructions from the user (follow these):\n{}", prompt.trim())
-    };
     let messages = rag::build_artifact_messages(&instruction, &corpus);
     let (content, stats, model) = {
         let ai = state.ai.read().await;
@@ -760,6 +772,117 @@ pub async fn rebuild_note(
 #[tauri::command]
 pub fn get_model_stats(state: State<'_, AppState>) -> Vec<ModelStat> {
     state.model_stats_snapshot()
+}
+
+// ---- Periodic reports ----------------------------------------------------
+
+#[tauri::command]
+pub async fn list_report_schedules(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<Vec<ReportSchedule>, String> {
+    e(state.db.list_report_schedules(&notebook_id).await)
+}
+
+#[tauri::command]
+pub async fn list_all_report_schedules(
+    state: State<'_, AppState>,
+) -> Result<Vec<ReportSchedule>, String> {
+    e(state.db.all_report_schedules().await)
+}
+
+#[tauri::command]
+pub async fn create_report_schedule(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    name: String,
+    kind: String,
+    prompt: String,
+    interval_secs: i64,
+) -> Result<ReportSchedule, String> {
+    let schedule = ReportSchedule {
+        id: new_id(),
+        notebook_id,
+        name: name.trim().to_string(),
+        kind,
+        prompt,
+        interval_secs,
+        enabled: true,
+        last_run_at: 0,
+        created_at: now(),
+    };
+    e(state.db.add_report_schedule(&schedule).await)?;
+    Ok(schedule)
+}
+
+#[tauri::command]
+pub async fn update_report_schedule(
+    state: State<'_, AppState>,
+    id: String,
+    name: String,
+    kind: String,
+    prompt: String,
+    interval_secs: i64,
+    enabled: bool,
+) -> Result<(), String> {
+    e(state
+        .db
+        .update_report_schedule(&id, name.trim(), &kind, &prompt, interval_secs, enabled)
+        .await)
+}
+
+#[tauri::command]
+pub async fn delete_report_schedule(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    e(state.db.delete_report_schedule(&id).await)
+}
+
+/// Refresh every URL source in a notebook (best-effort), emitting progress.
+async fn refresh_notebook_urls(app: &AppHandle, state: &AppState, notebook_id: &str) {
+    let sources = state.db.list_sources(notebook_id).await.unwrap_or_default();
+    for s in sources.iter().filter(|s| s.source_type == "url" && !s.url.is_empty()) {
+        let _ = app.emit("report://step", format!("Refreshing: {}", s.title));
+        if let Ok(Some(existing)) = state.db.get_source(&s.id).await {
+            if let Ok(extracted) = ingest::extract_url(&existing.url).await {
+                let _ = reingest(state, &existing, extracted).await;
+            }
+        }
+    }
+}
+
+/// Run a report now: refresh URL sources, generate, save a timestamped note.
+#[tauri::command]
+pub async fn run_report(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    schedule_id: String,
+) -> Result<Note, String> {
+    let schedule = e(state.db.get_report_schedule(&schedule_id).await)?
+        .ok_or_else(|| "Report schedule not found".to_string())?;
+
+    refresh_notebook_urls(&app, &state, &schedule.notebook_id).await;
+
+    let _ = app.emit("report://step", "Generating report".to_string());
+    let (_t, content) =
+        e(generate_content(&state, &schedule.notebook_id, &schedule.kind, &schedule.prompt).await)?;
+
+    let ts = now();
+    let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+    let note = Note {
+        id: new_id(),
+        notebook_id: schedule.notebook_id.clone(),
+        title: format!("{} — {stamp}", schedule.name),
+        content,
+        kind: "report".into(),
+        prompt: schedule.prompt.clone(),
+        created_at: ts,
+        updated_at: ts,
+    };
+    e(state.db.add_note(&note).await)?;
+    index_note(&state, &note.notebook_id, &note.id, &note.content).await;
+    e(state.db.set_report_last_run(&schedule_id, ts).await)?;
+    e(state.db.touch_notebook(&schedule.notebook_id, ts).await)?;
+    let _ = app.emit("generate://done", &note);
+    Ok(note)
 }
 
 // ---- Settings / health ---------------------------------------------------

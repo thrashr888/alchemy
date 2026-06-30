@@ -71,6 +71,26 @@ pub struct ModelStat {
     pub samples: u64,
 }
 
+/// A periodic report definition. On its interval, the app refreshes the
+/// notebook's URL sources, then generates a timestamped note.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportSchedule {
+    pub id: String,
+    pub notebook_id: String,
+    pub name: String,
+    /// Generator kind (e.g. "briefing") or "custom".
+    pub kind: String,
+    /// Custom instruction when `kind == "custom"`.
+    #[serde(default)]
+    pub prompt: String,
+    pub interval_secs: i64,
+    pub enabled: bool,
+    /// Unix millis of the last successful run; 0 = never run.
+    pub last_run_at: i64,
+    pub created_at: i64,
+}
+
 /// Mirrors the `chunks` Lance table. Rows are written via tuples in `db.rs`;
 /// this type documents the schema and is used when reading chunks back.
 #[allow(dead_code)]

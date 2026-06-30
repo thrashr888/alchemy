@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import { Button, Input, Textarea, Modal, EmptyState, Badge, Spinner } from "./ui";
 import { Markdown } from "./Markdown";
+import { Reports } from "./Reports";
 import { relativeTime } from "@/lib/utils";
 import type { Note, NoteKind } from "@/lib/types";
 import {
@@ -52,6 +53,7 @@ const KIND_LABEL: Record<NoteKind, string> = {
   prfaq: "PR/FAQ",
   rfc: "RFC",
   skill: "Skill",
+  report: "Report",
 };
 
 export function StudioPanel() {
@@ -126,6 +128,8 @@ export function StudioPanel() {
           </p>
         )}
       </div>
+
+      {currentId && <Reports />}
 
       <div className="flex items-center justify-between px-4 pt-3 pb-1">
         <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">

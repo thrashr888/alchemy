@@ -16,13 +16,14 @@ use futures::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::Connection;
 
-use crate::models::{Citation, Message, Note, Notebook, Source};
+use crate::models::{Citation, Message, Note, Notebook, ReportSchedule, Source};
 
 const T_NOTEBOOKS: &str = "notebooks";
 const T_SOURCES: &str = "sources";
 const T_CHUNKS: &str = "chunks";
 const T_MESSAGES: &str = "messages";
 const T_NOTES: &str = "notes";
+const T_REPORTS: &str = "report_schedules";
 
 pub struct Db {
     conn: Connection,
@@ -46,6 +47,7 @@ impl Db {
         db.ensure_table(T_MESSAGES, messages_schema()).await?;
         db.ensure_table(T_NOTES, notes_schema()).await?;
         db.migrate_notes().await?;
+        db.ensure_table(T_REPORTS, reports_schema()).await?;
         Ok(db)
     }
 
@@ -681,6 +683,96 @@ impl Db {
     pub async fn delete_note(&self, id: &str) -> Result<()> {
         self.delete_where(T_NOTES, &format!("id = '{}'", esc(id))).await
     }
+
+    // ---- Report schedules -------------------------------------------------
+
+    async fn query_reports(&self, filter: Option<&str>) -> Result<Vec<ReportSchedule>> {
+        let batches = self.collect(T_REPORTS, filter).await?;
+        let mut out = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let nb = str_col(b, "notebook_id")?;
+            let name = str_col(b, "name")?;
+            let kind = str_col(b, "kind")?;
+            let prompt = str_col(b, "prompt")?;
+            let interval = i64_col(b, "interval_secs")?;
+            let enabled = i64_col(b, "enabled")?;
+            let last = i64_col(b, "last_run_at")?;
+            let created = i64_col(b, "created_at")?;
+            for i in 0..b.num_rows() {
+                out.push(ReportSchedule {
+                    id: id.value(i).to_string(),
+                    notebook_id: nb.value(i).to_string(),
+                    name: name.value(i).to_string(),
+                    kind: kind.value(i).to_string(),
+                    prompt: prompt.value(i).to_string(),
+                    interval_secs: interval.value(i),
+                    enabled: enabled.value(i) != 0,
+                    last_run_at: last.value(i),
+                    created_at: created.value(i),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    pub async fn list_report_schedules(&self, notebook_id: &str) -> Result<Vec<ReportSchedule>> {
+        self.query_reports(Some(&format!("notebook_id = '{}'", esc(notebook_id)))).await
+    }
+
+    pub async fn all_report_schedules(&self) -> Result<Vec<ReportSchedule>> {
+        self.query_reports(None).await
+    }
+
+    pub async fn get_report_schedule(&self, id: &str) -> Result<Option<ReportSchedule>> {
+        Ok(self
+            .query_reports(Some(&format!("id = '{}'", esc(id))))
+            .await?
+            .into_iter()
+            .next())
+    }
+
+    pub async fn add_report_schedule(&self, r: &ReportSchedule) -> Result<()> {
+        let schema = reports_schema();
+        let batch = report_batch(&schema, r)?;
+        self.add_batch(T_REPORTS, schema, batch).await
+    }
+
+    pub async fn update_report_schedule(
+        &self,
+        id: &str,
+        name: &str,
+        kind: &str,
+        prompt: &str,
+        interval_secs: i64,
+        enabled: bool,
+    ) -> Result<()> {
+        let tbl = self.conn.open_table(T_REPORTS).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(id)))
+            .column("name", format!("'{}'", esc(name)))
+            .column("kind", format!("'{}'", esc(kind)))
+            .column("prompt", format!("'{}'", esc(prompt)))
+            .column("interval_secs", interval_secs.to_string())
+            .column("enabled", i64::from(enabled).to_string())
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_report_last_run(&self, id: &str, ts: i64) -> Result<()> {
+        let tbl = self.conn.open_table(T_REPORTS).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(id)))
+            .column("last_run_at", ts.to_string())
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn delete_report_schedule(&self, id: &str) -> Result<()> {
+        self.delete_where(T_REPORTS, &format!("id = '{}'", esc(id))).await
+    }
 }
 
 // ---- Arrow column helpers ------------------------------------------------
@@ -806,6 +898,37 @@ fn notes_schema() -> SchemaRef {
         Field::new("updated_at", DataType::Int64, false),
         Field::new("prompt", DataType::Utf8, false),
     ]))
+}
+
+fn reports_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("notebook_id", DataType::Utf8, false),
+        Field::new("name", DataType::Utf8, false),
+        Field::new("kind", DataType::Utf8, false),
+        Field::new("prompt", DataType::Utf8, false),
+        Field::new("interval_secs", DataType::Int64, false),
+        Field::new("enabled", DataType::Int64, false),
+        Field::new("last_run_at", DataType::Int64, false),
+        Field::new("created_at", DataType::Int64, false),
+    ]))
+}
+
+fn report_batch(schema: &SchemaRef, r: &ReportSchedule) -> Result<RecordBatch> {
+    Ok(RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from(vec![r.id.clone()])),
+            Arc::new(StringArray::from(vec![r.notebook_id.clone()])),
+            Arc::new(StringArray::from(vec![r.name.clone()])),
+            Arc::new(StringArray::from(vec![r.kind.clone()])),
+            Arc::new(StringArray::from(vec![r.prompt.clone()])),
+            Arc::new(Int64Array::from(vec![r.interval_secs])),
+            Arc::new(Int64Array::from(vec![i64::from(r.enabled)])),
+            Arc::new(Int64Array::from(vec![r.last_run_at])),
+            Arc::new(Int64Array::from(vec![r.created_at])),
+        ],
+    )?)
 }
 
 fn note_batch(schema: &SchemaRef, notes: &[Note]) -> Result<RecordBatch> {

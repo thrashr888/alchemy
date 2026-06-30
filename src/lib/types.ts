@@ -50,7 +50,8 @@ export type NoteKind =
   | "prd"
   | "prfaq"
   | "rfc"
-  | "skill";
+  | "skill"
+  | "report";
 
 export interface Note {
   id: string;
@@ -81,6 +82,18 @@ export interface ModelStat {
   lastTokensPerSec: number;
   avgTokensPerSec: number;
   samples: number;
+}
+
+export interface ReportSchedule {
+  id: string;
+  notebookId: string;
+  name: string;
+  kind: string;
+  prompt: string;
+  intervalSecs: number;
+  enabled: boolean;
+  lastRunAt: number;
+  createdAt: number;
 }
 
 export interface AiConfig {

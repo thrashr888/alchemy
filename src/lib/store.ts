@@ -11,6 +11,7 @@ import type {
   Note,
   NoteKind,
   Notebook,
+  ReportSchedule,
   Source,
 } from "./types";
 
@@ -33,6 +34,7 @@ interface AppState {
   sources: Source[];
   messages: Message[];
   notes: Note[];
+  reportSchedules: ReportSchedule[];
   aiConfig: AiConfig | null;
   ollamaOk: boolean | null;
   modelHealth: ModelHealth | null;
@@ -57,6 +59,11 @@ interface AppState {
   deleteNotebook: (id: string) => Promise<void>;
   setTheme: (theme: string) => void;
   clearQueueItem: (id: string) => void;
+  createReport: (name: string, kind: string, prompt: string, intervalSecs: number) => Promise<void>;
+  updateReport: (r: ReportSchedule) => Promise<void>;
+  deleteReport: (id: string) => Promise<void>;
+  runReportNow: (id: string) => Promise<void>;
+  startReportScheduler: () => void;
 
   addSourceFiles: (paths: string[]) => Promise<void>;
   addSourceUrl: (url: string) => Promise<void>;
@@ -83,6 +90,9 @@ interface AppState {
   reembedAll: () => Promise<void>;
   setError: (e: string | null) => void;
 }
+
+// Module-level guard so the report scheduler is only started once.
+let schedulerStarted = false;
 
 type Getter = () => AppState;
 type Setter = (partial: Partial<AppState>) => void;
@@ -112,6 +122,7 @@ export const useStore = create<AppState>((set, get) => ({
   sources: [],
   messages: [],
   notes: [],
+  reportSchedules: [],
   aiConfig: null,
   ollamaOk: null,
   modelHealth: null,
@@ -142,6 +153,7 @@ export const useStore = create<AppState>((set, get) => ({
     if (last && notebooks.some((n) => n.id === last)) {
       await get().selectNotebook(last);
     }
+    get().startReportScheduler();
   },
 
   refreshModelHealth: async () => {
@@ -164,17 +176,18 @@ export const useStore = create<AppState>((set, get) => ({
 
   selectNotebook: async (id) => {
     localStorage.setItem("lastNotebookId", id);
-    set({ currentId: id, sources: [], messages: [], notes: [], streamingText: "", steps: [] });
-    const [sources, messages, notes] = await Promise.all([
+    set({ currentId: id, sources: [], messages: [], notes: [], reportSchedules: [], streamingText: "", steps: [] });
+    const [sources, messages, notes, reportSchedules] = await Promise.all([
       api.listSources(id),
       api.listMessages(id),
       api.listNotes(id),
+      api.listReportSchedules(id),
     ]);
-    if (get().currentId === id) set({ sources, messages, notes });
+    if (get().currentId === id) set({ sources, messages, notes, reportSchedules });
   },
 
   closeNotebook: () =>
-    set({ currentId: null, sources: [], messages: [], notes: [], ingestQueue: [], steps: [] }),
+    set({ currentId: null, sources: [], messages: [], notes: [], reportSchedules: [], ingestQueue: [], steps: [] }),
 
   setTheme: (theme) => {
     localStorage.setItem("theme", theme);
@@ -398,6 +411,70 @@ export const useStore = create<AppState>((set, get) => ({
       const id = get().currentId;
       if (id) set({ sources: await api.listSources(id) });
     }
+  },
+
+  createReport: async (name, kind, prompt, intervalSecs) => {
+    const id = get().currentId;
+    if (!id) return;
+    await api.createReportSchedule(id, name, kind, prompt, intervalSecs);
+    set({ reportSchedules: await api.listReportSchedules(id) });
+  },
+
+  updateReport: async (r) => {
+    await api.updateReportSchedule(r.id, r.name, r.kind, r.prompt, r.intervalSecs, r.enabled);
+    const id = get().currentId;
+    if (id) set({ reportSchedules: await api.listReportSchedules(id) });
+  },
+
+  deleteReport: async (rid) => {
+    await api.deleteReportSchedule(rid);
+    set({ reportSchedules: get().reportSchedules.filter((r) => r.id !== rid) });
+  },
+
+  runReportNow: async (rid) => {
+    const schedule = get().reportSchedules.find((r) => r.id === rid);
+    set({ generatingKind: "report" });
+    try {
+      await api.runReport(rid);
+      void notify("Report ready", schedule ? `“${schedule.name}” was generated.` : "Report generated.");
+      const id = get().currentId;
+      if (id) {
+        set({ notes: await api.listNotes(id), reportSchedules: await api.listReportSchedules(id) });
+      }
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      set({ generatingKind: null });
+    }
+  },
+
+  startReportScheduler: () => {
+    if (schedulerStarted) return;
+    schedulerStarted = true;
+    const tick = async () => {
+      let due: ReportSchedule[];
+      try {
+        const all = await api.listAllReportSchedules();
+        const now = Date.now();
+        due = all.filter((s) => s.enabled && now - s.lastRunAt >= s.intervalSecs * 1000);
+      } catch {
+        return;
+      }
+      for (const s of due) {
+        try {
+          await api.runReport(s.id);
+          void notify("Report ready", `“${s.name}” was generated.`);
+          const cur = get().currentId;
+          if (cur === s.notebookId) {
+            set({ notes: await api.listNotes(cur), reportSchedules: await api.listReportSchedules(cur) });
+          }
+        } catch {
+          /* try again next tick */
+        }
+      }
+    };
+    void tick();
+    setInterval(() => void tick(), 60_000);
   },
 
   setError: (e) => set({ error: e }),

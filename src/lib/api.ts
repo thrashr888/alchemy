@@ -9,6 +9,7 @@ import type {
   Note,
   NoteKind,
   Notebook,
+  ReportSchedule,
   Source,
 } from "./types";
 
@@ -108,6 +109,17 @@ export const api = {
     run(ai<Note>("generate_artifact", { notebookId, kind, prompt: prompt ?? "" })),
   rebuildNote: (noteId: string, notebookId: string, kind: NoteKind, prompt: string) =>
     run(ai<Note>("rebuild_note", { noteId, notebookId, kind, prompt })),
+
+  // Reports
+  listReportSchedules: (notebookId: string) =>
+    run(query<ReportSchedule[]>("list_report_schedules", { notebookId })),
+  listAllReportSchedules: () => run(query<ReportSchedule[]>("list_all_report_schedules")),
+  createReportSchedule: (notebookId: string, name: string, kind: string, prompt: string, intervalSecs: number) =>
+    run(cmd<ReportSchedule>("create_report_schedule", { notebookId, name, kind, prompt, intervalSecs })),
+  updateReportSchedule: (id: string, name: string, kind: string, prompt: string, intervalSecs: number, enabled: boolean) =>
+    run(cmd<void>("update_report_schedule", { id, name, kind, prompt, intervalSecs, enabled })),
+  deleteReportSchedule: (id: string) => run(cmd<void>("delete_report_schedule", { id })),
+  runReport: (scheduleId: string) => run(ai<Note>("run_report", { scheduleId })),
 
   // Settings / health
   getAiConfig: () => run(query<AiConfig>("get_ai_config")),
