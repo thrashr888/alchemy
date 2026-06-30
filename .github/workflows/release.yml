@@ -28,6 +28,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install protoc (required by lance build scripts)
+        run: brew install protobuf
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
