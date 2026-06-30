@@ -21,12 +21,13 @@ const SUGGESTED_CHAT = [
   { name: "deepseek-v4-flash", note: "284B MoE · only 13B active" },
 ];
 
-// Vision models for OCR of image sources (MLX-accelerated first).
+// Vision models for OCR — dedicated OCR models first (best for documents),
+// then general vision models.
 const SUGGESTED_VISION = [
-  { name: "gemma4:12b-mlx", note: "MLX · vision · light + fast OCR" },
-  { name: "gemma4:31b-mlx", note: "MLX · vision · stronger OCR" },
-  { name: "minimax-m3", note: "MoE · native vision · 1M context" },
-  { name: "qwen3-vl:32b", note: "Qwen vision-language" },
+  { name: "glm-ocr", note: "dedicated OCR · tiny 0.9B · fast" },
+  { name: "deepseek-ocr", note: "dedicated OCR · markdown output · 3B" },
+  { name: "gemma4:12b-mlx", note: "MLX · general vision" },
+  { name: "minimax-m3", note: "vision · 1M context (general)" },
 ];
 
 export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -177,7 +178,10 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           />
         </Field>
 
-        <Field label="Vision model" hint="Used to OCR text from image sources. Leave blank to disable.">
+        <Field
+          label="Vision model"
+          hint="OCR for image & scanned-PDF sources. Dedicated OCR models (glm-ocr, deepseek-ocr) work best; leave blank to disable."
+        >
           <ModelPicker
             value={draft.visionModel ?? ""}
             models={models}

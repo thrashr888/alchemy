@@ -4,6 +4,7 @@ mod commands;
 mod db;
 mod ingest;
 mod models;
+mod pdf;
 mod rag;
 
 #[cfg(test)]

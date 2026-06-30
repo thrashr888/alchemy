@@ -30,6 +30,15 @@ pub fn is_image(path: &str) -> bool {
     )
 }
 
+/// Is this path a PDF?
+pub fn is_pdf(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("pdf"))
+        .unwrap_or(false)
+}
+
 /// File stem as a display title.
 pub fn file_title(path: &str) -> String {
     Path::new(path)

@@ -217,6 +217,37 @@ async fn extract_image(state: &AppState, path: &str) -> anyhow::Result<ingest::E
     })
 }
 
+/// OCR a scanned/image-only PDF by rasterizing each page and transcribing it.
+async fn extract_pdf_ocr(state: &AppState, path: &str) -> anyhow::Result<ingest::Extracted> {
+    use base64::Engine;
+    const MAX_PAGES: usize = 30;
+    let pages = crate::pdf::render_pdf_pages(path, MAX_PAGES, 1600)?;
+    if pages.is_empty() {
+        anyhow::bail!("no pages to OCR in {path}");
+    }
+    let mut text = String::new();
+    for (i, png) in pages.iter().enumerate() {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(png);
+        let page_text = {
+            let ai = state.ai.read().await;
+            ai.ocr(&b64).await?
+        };
+        let page_text = page_text.trim();
+        if !page_text.is_empty() {
+            text.push_str(&format!("## Page {}\n{}\n\n", i + 1, page_text));
+        }
+    }
+    if text.trim().is_empty() {
+        anyhow::bail!("OCR produced no text from {path}");
+    }
+    Ok(ingest::Extracted {
+        title: ingest::file_title(path),
+        source_type: "pdf".to_string(),
+        url: String::new(),
+        text,
+    })
+}
+
 #[tauri::command]
 pub async fn add_source_file(
     state: State<'_, AppState>,
@@ -225,6 +256,14 @@ pub async fn add_source_file(
 ) -> Result<Source, String> {
     let extracted = if ingest::is_image(&path) {
         e(extract_image(&state, &path).await)?
+    } else if ingest::is_pdf(&path) {
+        // Try fast text extraction; fall back to per-page OCR for scanned PDFs.
+        match ingest::extract_file(&path) {
+            Ok(ex) => ex,
+            Err(text_err) => e(extract_pdf_ocr(&state, &path).await.map_err(|ocr_err| {
+                anyhow::anyhow!("{text_err} OCR fallback failed: {ocr_err}")
+            }))?,
+        }
     } else {
         e(ingest::extract_file(&path))?
     };

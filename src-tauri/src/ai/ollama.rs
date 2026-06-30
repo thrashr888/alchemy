@@ -72,6 +72,21 @@ pub struct ChatOutcome {
     pub stats: Option<GenStats>,
 }
 
+/// Dedicated OCR models want specific, terse prompts; general vision models do
+/// better with an explicit instruction.
+fn ocr_prompt(model: &str) -> &'static str {
+    let m = model.to_lowercase();
+    if m.contains("deepseek-ocr") {
+        // Grounding token yields structured markdown (headings, tables).
+        "<|grounding|>Convert the document to markdown."
+    } else if m.contains("glm-ocr") {
+        "Text Recognition:"
+    } else {
+        "Transcribe ALL text in this image exactly, preserving reading order and line breaks. \
+         Output only the transcribed text with no commentary. If there is no text, output nothing."
+    }
+}
+
 #[derive(Deserialize)]
 struct ChatMessageDelta {
     #[serde(default)]
@@ -142,33 +157,31 @@ impl Ollama {
         resp.json().await.context("invalid embed response")
     }
 
-    /// OCR an image with the configured vision model. `image_base64` is the raw
-    /// image bytes, base64-encoded. Returns the transcribed text.
+    /// OCR an image with the configured vision model via `/api/chat` (the path
+    /// the dedicated OCR models document). `image_base64` is the raw image
+    /// bytes, base64-encoded. Returns the transcribed text.
     pub async fn ocr(&self, image_base64: &str) -> Result<String> {
-        if self.config.vision_model.trim().is_empty() {
-            return Err(anyhow!(
-                "no vision model configured for OCR — set one in Settings"
-            ));
+        let model = self.config.vision_model.trim();
+        if model.is_empty() {
+            return Err(anyhow!("no vision model configured for OCR — set one in Settings"));
         }
         let resp = self
             .http
-            .post(self.url("/api/generate"))
+            .post(self.url("/api/chat"))
             .timeout(std::time::Duration::from_secs(180))
             .json(&json!({
-                "model": self.config.vision_model,
-                "prompt": "Transcribe ALL text in this image exactly, preserving reading order \
-                           and line breaks. Output only the transcribed text with no commentary. \
-                           If the image contains no text, output nothing.",
-                "images": [image_base64],
+                "model": model,
+                "messages": [{
+                    "role": "user",
+                    "content": ocr_prompt(model),
+                    "images": [image_base64],
+                }],
                 "stream": false,
             }))
             .send()
             .await
             .with_context(|| {
-                format!(
-                    "OCR request to Ollama failed — is the vision model `{}` installed?",
-                    self.config.vision_model
-                )
+                format!("OCR request to Ollama failed — is the vision model `{model}` installed?")
             })?;
 
         if !resp.status().is_success() {
@@ -177,7 +190,7 @@ impl Ollama {
             return Err(anyhow!("ollama OCR {}: {}", status, body));
         }
         let value: serde_json::Value = resp.json().await?;
-        Ok(value["response"].as_str().unwrap_or_default().to_string())
+        Ok(value["message"]["content"].as_str().unwrap_or_default().to_string())
     }
 
     /// Quick liveness probe for the embedding model (short timeout). Returns the
