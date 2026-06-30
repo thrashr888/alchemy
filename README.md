@@ -82,11 +82,12 @@ pnpm tauri build
 Open **Settings** (gear icon) to set the Ollama URL and choose models from the
 list of installed models. Defaults:
 
-| Setting          | Default                  |
-| ---------------- | ------------------------ |
-| Ollama URL       | `http://localhost:11434` |
-| Chat model       | `llama4:latest`          |
-| Embedding model  | `nomic-embed-text`       |
+| Setting          | Default                    |
+| ---------------- | -------------------------- |
+| Ollama URL       | `http://localhost:11434`   |
+| Chat model       | `gpt-oss:120b`             |
+| Embedding model  | `nomic-embed-text:latest`  |
+| Vision model     | _(unset — OCR disabled)_   |
 
 Data is stored in the OS app-data directory under `lancedb/`.
 
@@ -97,3 +98,29 @@ Data is stored in the OS app-data directory under `lancedb/`.
   won't match — clear sources or start a fresh notebook if you change it.
 - URL import does naive HTML-to-text extraction (good enough for articles).
 - Audio Overview / slideshow generation are intentionally out of scope.
+
+## Building & releases
+
+```bash
+pnpm install
+pnpm tauri dev      # run locally
+pnpm tauri build    # produce a .app + .dmg in src-tauri/target/release/bundle
+```
+
+Releases are built by GitHub Actions ([.github/workflows/release.yml](.github/workflows/release.yml))
+on any `v*` tag (or manual dispatch). It builds **macOS arm64 + x86_64** `.dmg`s
+and opens a **draft** GitHub Release with the assets. Cut a release with:
+
+```bash
+# bump version in package.json + src-tauri/tauri.conf.json first
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Code signing/notarization is optional — set the `APPLE_CERTIFICATE`,
+`APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
+`APPLE_PASSWORD`, and `APPLE_TEAM_ID` repo secrets to produce a signed build;
+without them the app is unsigned (open it the first time via right-click → Open).
+
+The app bundles a per-architecture [PDFium](https://github.com/bblanchon/pdfium-binaries)
+library for scanned-PDF OCR (downloaded per target in CI). Linux/Windows
+releases would each need their own PDFium binary and are not yet wired up.
