@@ -92,11 +92,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Real Developer ID when the secret is set; otherwise ad-hoc sign ("-")
-          # so the bundle step succeeds (unsigned/un-notarized build).
+          # so the bundle step succeeds (unsigned, un-notarized build).
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # To notarize, add APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID here — but
+          # only when those secrets exist (empty values make tauri attempt and
+          # fail notarization).
         with:
           tagName: v__VERSION__
           releaseName: 'Alchemy v__VERSION__'
