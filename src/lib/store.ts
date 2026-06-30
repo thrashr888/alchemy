@@ -48,6 +48,7 @@ interface AppState {
   generatingKind: NoteKind | null;
   ingestQueue: QueueItem[];
   migration: Migration | null;
+  draggingFiles: boolean;
   error: string | null;
 
   init: () => Promise<void>;
@@ -59,6 +60,7 @@ interface AppState {
   deleteNotebook: (id: string) => Promise<void>;
   setTheme: (theme: string) => void;
   clearQueueItem: (id: string) => void;
+  setDraggingFiles: (v: boolean) => void;
   createReport: (name: string, kind: string, prompt: string, intervalSecs: number) => Promise<void>;
   updateReport: (r: ReportSchedule) => Promise<void>;
   deleteReport: (id: string) => Promise<void>;
@@ -136,6 +138,7 @@ export const useStore = create<AppState>((set, get) => ({
   generatingKind: null,
   ingestQueue: [],
   migration: null,
+  draggingFiles: false,
   error: null,
 
   init: async () => {
@@ -196,6 +199,8 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   clearQueueItem: (id) => set({ ingestQueue: get().ingestQueue.filter((q) => q.id !== id) }),
+
+  setDraggingFiles: (v) => set({ draggingFiles: v }),
 
   createNotebook: async (title) => {
     const nb = await api.createNotebook(title);

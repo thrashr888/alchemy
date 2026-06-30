@@ -83,6 +83,7 @@ export function SourcesPanel() {
   const editSourceText = useStore((s) => s.editSourceText);
   const refreshSource = useStore((s) => s.refreshSource);
   const deleteSource = useStore((s) => s.deleteSource);
+  const draggingFiles = useStore((s) => s.draggingFiles);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [mode, setMode] = useState<AddMode>(null);
@@ -121,7 +122,14 @@ export function SourcesPanel() {
   }
 
   return (
-    <div className="flex h-full w-[280px] shrink-0 flex-col border-r border-border bg-surface">
+    <div className="relative flex h-full w-[280px] shrink-0 flex-col border-r border-border bg-surface">
+      {draggingFiles && currentId && (
+        <div className="pointer-events-none absolute inset-1.5 z-30 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary/60 bg-primary/10">
+          <Upload className="h-6 w-6 text-primary" />
+          <span className="text-[13px] font-semibold text-foreground">Drop to add sources</span>
+          <span className="text-[11px] text-muted-foreground">PDF · Office · images · text</span>
+        </div>
+      )}
       <div className="flex items-center px-4 h-12 border-b border-border">
         <span className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
           Sources
