@@ -81,6 +81,7 @@ pub fn run() {
             commands::create_note,
             commands::update_note,
             commands::delete_note,
+            commands::convert_note_to_source,
             commands::generate_artifact,
             commands::rebuild_note,
             commands::get_ai_config,

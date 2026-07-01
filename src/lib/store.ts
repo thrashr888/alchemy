@@ -85,6 +85,7 @@ interface AppState {
   createNote: (title: string, content: string) => Promise<void>;
   updateNote: (id: string, title: string, content: string) => Promise<void>;
   deleteNote: (id: string) => Promise<void>;
+  convertNoteToSource: (id: string) => Promise<void>;
 
   saveAiConfig: (config: AiConfig) => Promise<void>;
   refreshModelHealth: () => Promise<void>;
@@ -392,6 +393,21 @@ export const useStore = create<AppState>((set, get) => ({
   deleteNote: async (noteId) => {
     await api.deleteNote(noteId);
     set({ notes: get().notes.filter((n) => n.id !== noteId) });
+  },
+
+  convertNoteToSource: async (noteId) => {
+    const id = get().currentId;
+    if (!id) return;
+    try {
+      await api.convertNoteToSource(noteId);
+      set({
+        notes: get().notes.filter((n) => n.id !== noteId),
+        sources: await api.listSources(id),
+      });
+      await get().refreshNotebooks();
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : String(e) });
+    }
   },
 
   saveAiConfig: async (config) => {

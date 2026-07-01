@@ -667,6 +667,27 @@ pub async fn delete_note(state: State<'_, AppState>, id: String) -> Result<(), S
     e(state.db.delete_chunks_for(&id).await)
 }
 
+/// Turn a note into a standalone source (chunked/embedded), then remove the note.
+#[tauri::command]
+pub async fn convert_note_to_source(
+    state: State<'_, AppState>,
+    note_id: String,
+) -> Result<Source, String> {
+    let note = e(state.db.get_note(&note_id).await)?
+        .ok_or_else(|| "Note not found".to_string())?;
+    let extracted = ingest::Extracted {
+        title: note.title.clone(),
+        source_type: "text".to_string(),
+        url: String::new(),
+        text: note.content.clone(),
+    };
+    let source = e(store_extracted(&state, &note.notebook_id, extracted).await)?;
+    // Remove the original note (and its note-chunks) now that it's a source.
+    e(state.db.delete_note(&note_id).await)?;
+    e(state.db.delete_chunks_for(&note_id).await)?;
+    Ok(source)
+}
+
 /// Generate artifact content for a kind (+ optional custom prompt) over all of
 /// a notebook's source text. Returns (title, content).
 async fn generate_content(

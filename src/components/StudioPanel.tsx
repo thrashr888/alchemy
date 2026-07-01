@@ -3,6 +3,7 @@ import { useStore } from "@/lib/store";
 import { Button, Input, Textarea, Modal, EmptyState, Badge, Spinner } from "./ui";
 import { Markdown } from "./Markdown";
 import { Reports } from "./Reports";
+import { RichEditor } from "./RichEditor";
 import { relativeTime } from "@/lib/utils";
 import type { Note, NoteKind } from "@/lib/types";
 import {
@@ -23,6 +24,7 @@ import {
   FileCode2,
   Sparkles,
   RefreshCw,
+  FileInput,
 } from "lucide-react";
 
 type Artifact = { kind: NoteKind; label: string; icon: ReactNode };
@@ -216,12 +218,7 @@ export function StudioPanel() {
             value={draftTitle}
             onChange={(e) => setDraftTitle(e.target.value)}
           />
-          <Textarea
-            rows={10}
-            placeholder="Write your note in Markdown…"
-            value={draftBody}
-            onChange={(e) => setDraftBody(e.target.value)}
-          />
+          <RichEditor value={draftBody} onChange={setDraftBody} />
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={() => setComposing(false)}>
               Cancel
@@ -309,6 +306,7 @@ function CopyButton({
 function NoteViewer({ note, onClose }: { note: Note | null; onClose: () => void }) {
   const updateNote = useStore((s) => s.updateNote);
   const rebuildNote = useStore((s) => s.rebuildNote);
+  const convertNoteToSource = useStore((s) => s.convertNoteToSource);
   const generatingKind = useStore((s) => s.generatingKind);
   // Track the live note so a rebuild's new content shows without reopening.
   const live = useStore((s) => (note ? s.notes.find((n) => n.id === note.id) ?? note : null));
@@ -347,12 +345,7 @@ function NoteViewer({ note, onClose }: { note: Note | null; onClose: () => void 
             key={live.id}
           >
             <Input value={title} onChange={(e) => setTitle(e.target.value)} />
-            <Textarea
-              rows={16}
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              className="font-mono text-[12.5px]"
-            />
+            <RichEditor value={body} onChange={setBody} />
             <div className="flex justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setEditing(false)}>
                 Cancel
@@ -384,6 +377,17 @@ function NoteViewer({ note, onClose }: { note: Note | null; onClose: () => void 
                 </Button>
               )}
               <CopyButton text={live.content} variant="secondary" label="Copy" />
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  convertNoteToSource(live.id);
+                  onClose();
+                }}
+                title="Turn this note into a source (embedded & searchable)"
+              >
+                <FileInput className="h-3.5 w-3.5" />
+                Convert to source
+              </Button>
               <Button variant="secondary" onClick={startEdit}>
                 <Pencil className="h-3.5 w-3.5" />
                 Edit

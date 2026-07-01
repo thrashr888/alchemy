@@ -662,6 +662,28 @@ impl Db {
         Ok(notes)
     }
 
+    /// Fetch a single note by id (None if not found).
+    pub async fn get_note(&self, id: &str) -> Result<Option<Note>> {
+        let filter = format!("id = '{}'", esc(id));
+        let batches = self.collect(T_NOTES, Some(&filter)).await?;
+        for b in &batches {
+            if b.num_rows() == 0 {
+                continue;
+            }
+            return Ok(Some(Note {
+                id: str_col(b, "id")?.value(0).to_string(),
+                notebook_id: str_col(b, "notebook_id")?.value(0).to_string(),
+                title: str_col(b, "title")?.value(0).to_string(),
+                content: str_col(b, "content")?.value(0).to_string(),
+                kind: str_col(b, "kind")?.value(0).to_string(),
+                prompt: str_col(b, "prompt")?.value(0).to_string(),
+                created_at: i64_col(b, "created_at")?.value(0),
+                updated_at: i64_col(b, "updated_at")?.value(0),
+            }));
+        }
+        Ok(None)
+    }
+
     pub async fn add_note(&self, note: &Note) -> Result<()> {
         let schema = notes_schema();
         let batch = note_batch(&schema, std::slice::from_ref(note))?;

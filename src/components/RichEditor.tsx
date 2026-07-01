@@ -1,0 +1,160 @@
+import { useEffect, useState } from "react";
+import { useEditor, EditorContent, type Editor } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import { Markdown } from "tiptap-markdown";
+import { cn } from "@/lib/utils";
+import {
+  Bold,
+  Italic,
+  Heading1,
+  Heading2,
+  List,
+  ListOrdered,
+  Quote,
+  Code,
+  Link2,
+  Undo2,
+  Redo2,
+} from "lucide-react";
+
+// tiptap-markdown augments editor.storage with a `markdown` helper it doesn't type.
+function getMarkdown(editor: Editor): string {
+  const storage = editor.storage as unknown as Record<string, { getMarkdown?: () => string }>;
+  return storage.markdown?.getMarkdown?.() ?? "";
+}
+
+/** WYSIWYG note editor. Value in/out is Markdown (via tiptap-markdown). */
+export function RichEditor({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (markdown: string) => void;
+}) {
+  const editor = useEditor({
+    extensions: [
+      StarterKit.configure({ link: { openOnClick: false } }),
+      Markdown.configure({ html: false, transformPastedText: true }),
+    ],
+    content: value,
+    onUpdate: ({ editor }) => onChange(getMarkdown(editor)),
+    editorProps: {
+      attributes: {
+        class:
+          "prose max-w-none min-h-[240px] max-h-[52vh] overflow-y-auto px-3 py-2.5 focus:outline-none",
+      },
+    },
+  });
+
+  if (!editor) return null;
+  return (
+    <div className="overflow-hidden rounded-md border border-input bg-surface-2">
+      <Toolbar editor={editor} />
+      <EditorContent editor={editor} />
+    </div>
+  );
+}
+
+function Toolbar({ editor }: { editor: Editor }) {
+  // Force re-render on each transaction so active states stay in sync.
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const update = () => bump((n) => n + 1);
+    editor.on("transaction", update);
+    return () => {
+      editor.off("transaction", update);
+    };
+  }, [editor]);
+
+  const setLink = () => {
+    const prev = editor.getAttributes("link").href as string | undefined;
+    const url = window.prompt("Link URL", prev ?? "https://");
+    if (url === null) return;
+    if (url === "") {
+      editor.chain().focus().unsetLink().run();
+    } else {
+      editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-0.5 border-b border-border bg-surface px-1.5 py-1">
+      <Btn on={editor.isActive("bold")} onClick={() => editor.chain().focus().toggleBold().run()} title="Bold">
+        <Bold className="h-3.5 w-3.5" />
+      </Btn>
+      <Btn on={editor.isActive("italic")} onClick={() => editor.chain().focus().toggleItalic().run()} title="Italic">
+        <Italic className="h-3.5 w-3.5" />
+      </Btn>
+      <Sep />
+      <Btn
+        on={editor.isActive("heading", { level: 1 })}
+        onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
+        title="Heading 1"
+      >
+        <Heading1 className="h-3.5 w-3.5" />
+      </Btn>
+      <Btn
+        on={editor.isActive("heading", { level: 2 })}
+        onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
+        title="Heading 2"
+      >
+        <Heading2 className="h-3.5 w-3.5" />
+      </Btn>
+      <Sep />
+      <Btn on={editor.isActive("bulletList")} onClick={() => editor.chain().focus().toggleBulletList().run()} title="Bullet list">
+        <List className="h-3.5 w-3.5" />
+      </Btn>
+      <Btn on={editor.isActive("orderedList")} onClick={() => editor.chain().focus().toggleOrderedList().run()} title="Numbered list">
+        <ListOrdered className="h-3.5 w-3.5" />
+      </Btn>
+      <Btn on={editor.isActive("blockquote")} onClick={() => editor.chain().focus().toggleBlockquote().run()} title="Quote">
+        <Quote className="h-3.5 w-3.5" />
+      </Btn>
+      <Btn on={editor.isActive("code")} onClick={() => editor.chain().focus().toggleCode().run()} title="Inline code">
+        <Code className="h-3.5 w-3.5" />
+      </Btn>
+      <Btn on={editor.isActive("link")} onClick={setLink} title="Link">
+        <Link2 className="h-3.5 w-3.5" />
+      </Btn>
+      <Sep />
+      <Btn onClick={() => editor.chain().focus().undo().run()} title="Undo">
+        <Undo2 className="h-3.5 w-3.5" />
+      </Btn>
+      <Btn onClick={() => editor.chain().focus().redo().run()} title="Redo">
+        <Redo2 className="h-3.5 w-3.5" />
+      </Btn>
+    </div>
+  );
+}
+
+function Btn({
+  on,
+  onClick,
+  title,
+  children,
+}: {
+  on?: boolean;
+  onClick: () => void;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={cn(
+        "flex h-7 w-7 items-center justify-center rounded transition-colors",
+        on
+          ? "bg-primary/15 text-citation"
+          : "text-muted-foreground hover:bg-surface-2 hover:text-foreground",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Sep() {
+  return <div className="mx-0.5 h-4 w-px bg-border" />;
+}

@@ -105,6 +105,8 @@ export const api = {
   updateNote: (id: string, notebookId: string, title: string, content: string) =>
     run(cmd<void>("update_note", { id, notebookId, title, content })),
   deleteNote: (id: string) => run(cmd<void>("delete_note", { id })),
+  convertNoteToSource: (noteId: string) =>
+    run(ai<Source>("convert_note_to_source", { noteId })),
   generateArtifact: (notebookId: string, kind: NoteKind, prompt?: string) =>
     run(ai<Note>("generate_artifact", { notebookId, kind, prompt: prompt ?? "" })),
   rebuildNote: (noteId: string, notebookId: string, kind: NoteKind, prompt: string) =>
