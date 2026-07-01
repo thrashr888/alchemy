@@ -1,18 +1,86 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { DitherBackground } from "./DitherBackground";
+import { cn } from "@/lib/utils";
 
-/** The alchemical "squared circle" (philosopher's stone): circle · triangle · square · point. */
-function AlchemySymbol({ className }: { className?: string }) {
+// Five minimalist transmutation circles. One is chosen at random per mount and
+// they slowly cross-fade (morph) while rotating — Full-Metal-Alchemist-ish.
+const SYMBOLS: ReactNode[] = [
+  // Squared circle (philosopher's stone)
+  <g key="0">
+    <circle cx="50" cy="50" r="44" />
+    <rect x="19" y="19" width="62" height="62" />
+    <path d="M50 12 L84 74 H16 Z" />
+    <circle cx="50" cy="50" r="15" />
+    <circle cx="50" cy="50" r="2.2" fill="currentColor" stroke="none" />
+  </g>,
+  // Hexagram
+  <g key="1">
+    <circle cx="50" cy="50" r="44" />
+    <path d="M50 14 L82 68 H18 Z" />
+    <path d="M50 86 L18 32 H82 Z" />
+    <circle cx="50" cy="50" r="10" />
+  </g>,
+  // Pentagram
+  <g key="2">
+    <circle cx="50" cy="50" r="44" />
+    <path d="M50 10 L26.5 82.4 L88 37.6 L12 37.6 L73.5 82.4 Z" />
+    <circle cx="50" cy="50" r="9" />
+  </g>,
+  // Transmutation array
+  <g key="3">
+    <circle cx="50" cy="50" r="44" />
+    <circle cx="50" cy="50" r="30" />
+    <path d="M50 20 V80 M20 50 H80" />
+    <circle cx="50" cy="20" r="5" />
+    <circle cx="50" cy="80" r="5" />
+    <circle cx="20" cy="50" r="5" />
+    <circle cx="80" cy="50" r="5" />
+  </g>,
+  // Celestial descent
+  <g key="4">
+    <circle cx="50" cy="50" r="44" />
+    <path d="M16 30 H84 L50 88 Z" />
+    <circle cx="50" cy="44" r="13" />
+    <circle cx="50" cy="26" r="4" />
+    <circle cx="50" cy="44" r="2.2" fill="currentColor" stroke="none" />
+  </g>,
+];
+
+function shuffled<T>(a: T[]): T[] {
+  const b = a.slice();
+  for (let i = b.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [b[i], b[j]] = [b[j], b[i]];
+  }
+  return b;
+}
+
+export function AlchemySymbol({ className }: { className?: string }) {
+  const [order] = useState(() => shuffled(SYMBOLS.map((_, i) => i)));
+  const [step, setStep] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setStep((s) => (s + 1) % order.length), 9000);
+    return () => clearInterval(t);
+  }, [order.length]);
+  const active = order[step];
   return (
-    <svg viewBox="0 0 100 100" className={className} fill="none" aria-hidden>
-      <g stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round">
-        <circle cx="50" cy="50" r="46" opacity="0.55" />
-        <rect x="20.5" y="20.5" width="59" height="59" opacity="0.4" />
-        <path d="M50 12 L84 74 H16 Z" opacity="0.7" />
-        <circle cx="50" cy="56" r="16" opacity="0.85" />
-        <circle cx="50" cy="56" r="2.2" fill="currentColor" stroke="none" />
-      </g>
-    </svg>
+    <div className={cn("relative", className)}>
+      {SYMBOLS.map((s, idx) => (
+        <svg
+          key={idx}
+          viewBox="0 0 100 100"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1"
+          strokeLinejoin="round"
+          className="absolute inset-0 h-full w-full transition-opacity duration-[1800ms] ease-in-out"
+          style={{ opacity: idx === active ? 1 : 0, animation: "alchemy-spin 90s linear infinite" }}
+          aria-hidden
+        >
+          {s}
+        </svg>
+      ))}
+    </div>
   );
 }
 
@@ -22,37 +90,22 @@ export function AlchemyHero({
   subtitle,
   themeKey,
   children,
-  compact,
 }: {
   title: string;
   subtitle?: string;
   themeKey?: string;
   children?: ReactNode;
-  compact?: boolean;
 }) {
   return (
     <div className="relative isolate flex h-full w-full items-center justify-center overflow-hidden">
       <div className="absolute inset-0">
         <DitherBackground themeKey={themeKey} />
       </div>
-      {/* Vignette so text stays legible over the dither. */}
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_30%,var(--background)_90%)]" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_45%,var(--background)_100%)]" />
 
       <div className="relative z-10 flex flex-col items-center px-6 text-center">
-        <AlchemySymbol
-          className={
-            compact
-              ? "mb-5 h-14 w-14 text-citation"
-              : "mb-7 h-24 w-24 text-citation drop-shadow-[0_0_24px_var(--selection)]"
-          }
-        />
-        <h1
-          className={
-            compact
-              ? "font-serif text-[26px] font-medium tracking-[0.14em] text-foreground"
-              : "font-serif text-5xl font-medium uppercase tracking-[0.2em] text-foreground sm:text-6xl"
-          }
-        >
+        <AlchemySymbol className="mb-7 h-24 w-24 text-citation/70" />
+        <h1 className="font-serif text-5xl font-medium uppercase tracking-[0.22em] text-foreground/90 sm:text-6xl">
           {title}
         </h1>
         {subtitle && (
@@ -60,7 +113,7 @@ export function AlchemyHero({
             {subtitle}
           </p>
         )}
-        {children && <div className="mt-7">{children}</div>}
+        {children && <div className="mt-8">{children}</div>}
       </div>
     </div>
   );

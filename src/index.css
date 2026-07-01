@@ -210,3 +210,7 @@ button {
     opacity: 1;
   }
 }
+
+@keyframes alchemy-spin {
+  to { transform: rotate(360deg); }
+}

@@ -132,13 +132,13 @@ void main(){
   float t = u_time * 0.03;
   float m = fbm(uv*2.4 + vec2(t, -t*0.6)) + 0.35*fbm(uv*5.0 - vec2(t*0.5, t));
   float r = length(uv);
-  float glow = smoothstep(0.95, 0.0, r);
-  float L = clamp(glow*0.85 + m*0.5 - 0.08, 0.0, 1.0);
-  float ring = smoothstep(0.008, 0.0, abs(r - 0.34)) * glow * 0.7;
+  float glow = smoothstep(1.15, 0.05, r);
+  float L = clamp(glow*0.6 + m*0.55 - 0.16, 0.0, 1.0);
+  float ring = smoothstep(0.006, 0.0, abs(r - 0.36)) * glow * 0.4;
   L = max(L, ring);
   float d = bayer4(gl_FragCoord.xy) - 0.5;
   float q = floor(L * 5.0 + d + 0.5) / 5.0;
-  vec3 col = mix(u_bg, u_tint * 1.1, q);
+  vec3 col = mix(u_bg, u_tint, q * 0.22);
   gl_FragColor = vec4(col, 1.0);
 }`;
 

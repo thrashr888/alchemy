@@ -5,6 +5,7 @@ import { Button, Textarea } from "./ui";
 import { Markdown } from "./Markdown";
 import { cn } from "@/lib/utils";
 import { DitherBackground } from "./DitherBackground";
+import { AlchemySymbol } from "./AlchemyHero";
 import type { Citation, Message } from "@/lib/types";
 import {
   ArrowUp,
@@ -31,6 +32,7 @@ export function ChatPanel() {
   const clearChat = useStore((s) => s.clearChat);
   const appendToken = useStore((s) => s.appendToken);
   const appendStep = useStore((s) => s.appendStep);
+  const theme = useStore((s) => s.theme);
 
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -55,6 +57,7 @@ export function ChatPanel() {
   }, [messages, streamingText, steps]);
 
   const canChat = !!currentId && sources.length > 0;
+  const isBlank = messages.length === 0 && !sending;
 
   function submit() {
     const text = draft.trim();
@@ -64,8 +67,16 @@ export function ChatPanel() {
   }
 
   return (
-    <div className="flex h-full flex-1 flex-col bg-background min-w-0">
-      <div className="flex items-center px-5 h-12 border-b border-border">
+    <div className="relative flex h-full flex-1 flex-col bg-background min-w-0">
+      {isBlank && (
+        <>
+          <div className="pointer-events-none absolute inset-0 z-0">
+            <DitherBackground themeKey={theme} />
+          </div>
+          <div className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(ellipse_at_center,transparent_45%,var(--background)_100%)]" />
+        </>
+      )}
+      <div className="relative z-10 flex items-center px-5 h-12 border-b border-border">
         <MessageSquare className="h-4 w-4 text-muted-foreground" />
         <span className="ml-2 text-[13px] font-semibold">Chat</span>
         {messages.length > 0 && (
@@ -81,7 +92,7 @@ export function ChatPanel() {
         )}
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+      <div ref={scrollRef} className="relative z-10 flex-1 overflow-y-auto">
         <div className="mx-auto flex max-w-[720px] flex-col gap-6 px-5 py-6">
           {messages.length === 0 && !sending ? (
             <ChatEmpty hasNotebook={!!currentId} hasSources={sources.length > 0} />
@@ -103,7 +114,7 @@ export function ChatPanel() {
         </div>
       </div>
 
-      <div className="px-5 pb-5 pt-2">
+      <div className="relative z-10 px-5 pb-5 pt-2">
         <div className="mx-auto max-w-[720px]">
           <div
             className={cn(
@@ -320,24 +331,17 @@ function ThinkingDots() {
 }
 
 function ChatEmpty({ hasNotebook, hasSources }: { hasNotebook: boolean; hasSources: boolean }) {
-  const theme = useStore((s) => s.theme);
   return (
-    <div className="relative flex min-h-[440px] flex-col items-center justify-center gap-3 overflow-hidden py-24 text-center">
-      <div className="absolute inset-0">
-        <DitherBackground themeKey={theme} />
-      </div>
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_35%,var(--background)_92%)]" />
-      <div className="relative z-10 flex h-12 w-12 items-center justify-center rounded-lg bg-primary/15 text-primary">
-        <Sparkles className="h-6 w-6" />
-      </div>
-      <div className="relative z-10 text-[15px] font-semibold">
+    <div className="flex min-h-[62vh] flex-col items-center justify-center gap-4 text-center">
+      <AlchemySymbol className="h-16 w-16 text-citation/60" />
+      <div className="text-[15px] font-semibold text-foreground/90">
         {!hasNotebook
           ? "Create a notebook to begin"
           : !hasSources
             ? "Add sources to start a grounded chat"
             : "Ask anything about your sources"}
       </div>
-      <p className="relative z-10 max-w-[360px] text-[13px] text-muted-foreground">
+      <p className="max-w-[360px] text-[13px] text-muted-foreground">
         Answers are generated locally with Ollama and cite the exact passages they draw from.
       </p>
     </div>
