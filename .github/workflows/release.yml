@@ -14,17 +14,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS only for now: the app bundles a per-arch PDFium library
-          # (for scanned-PDF OCR) and resolves it via the macOS .app layout.
-          # Linux/Windows would each need their own PDFium binary + path logic.
+          # Apple Silicon only. The app bundles a per-arch PDFium library (for
+          # scanned-PDF OCR) resolved via the macOS .app layout. An Intel
+          # (x86_64) build is possible on a macos-13 runner but those runners
+          # queue for hours; add it back if Intel support is needed.
           - platform: 'macos-latest'
             args: '--target aarch64-apple-darwin'
             pdfium: 'pdfium-mac-arm64'
-          # Intel runner so x86_64 builds natively (cross-compiling lance's
-          # AVX512 SIMD kernels from an arm64 host fails to link).
-          - platform: 'macos-13'
-            args: '--target x86_64-apple-darwin'
-            pdfium: 'pdfium-mac-x64'
 
     runs-on: ${{ matrix.platform }}
     steps:
