@@ -4,6 +4,7 @@ import { useStore } from "@/lib/store";
 import { Button, Textarea } from "./ui";
 import { Markdown } from "./Markdown";
 import { cn } from "@/lib/utils";
+import { DitherBackground } from "./DitherBackground";
 import type { Citation, Message } from "@/lib/types";
 import {
   ArrowUp,
@@ -319,19 +320,24 @@ function ThinkingDots() {
 }
 
 function ChatEmpty({ hasNotebook, hasSources }: { hasNotebook: boolean; hasSources: boolean }) {
+  const theme = useStore((s) => s.theme);
   return (
-    <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10 text-primary">
+    <div className="relative flex min-h-[440px] flex-col items-center justify-center gap-3 overflow-hidden py-24 text-center">
+      <div className="absolute inset-0">
+        <DitherBackground themeKey={theme} />
+      </div>
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_35%,var(--background)_92%)]" />
+      <div className="relative z-10 flex h-12 w-12 items-center justify-center rounded-lg bg-primary/15 text-primary">
         <Sparkles className="h-6 w-6" />
       </div>
-      <div className="text-[15px] font-semibold">
+      <div className="relative z-10 text-[15px] font-semibold">
         {!hasNotebook
           ? "Create a notebook to begin"
           : !hasSources
             ? "Add sources to start a grounded chat"
             : "Ask anything about your sources"}
       </div>
-      <p className="max-w-[360px] text-[13px] text-muted-foreground">
+      <p className="relative z-10 max-w-[360px] text-[13px] text-muted-foreground">
         Answers are generated locally with Ollama and cite the exact passages they draw from.
       </p>
     </div>

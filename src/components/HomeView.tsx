@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useStore } from "@/lib/store";
 import { Button, Input, Modal, Badge } from "./ui";
+import { AlchemyHero } from "./AlchemyHero";
 import { cn, relativeTime } from "@/lib/utils";
 import {
   BookOpen,
@@ -20,6 +21,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const create = useStore((s) => s.createNotebook);
   const rename = useStore((s) => s.renameNotebook);
   const remove = useStore((s) => s.deleteNotebook);
+  const theme = useStore((s) => s.theme);
 
   const [creating, setCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
@@ -52,7 +54,27 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto">
+      {notebooks.length === 0 ? (
+        <div className="flex-1">
+          <AlchemyHero
+            title="Alchemy"
+            subtitle="Local-first research notebooks — chat with your own sources, grounded in citations, running entirely on your machine."
+            themeKey={theme}
+          >
+            <Button
+              variant="primary"
+              onClick={() => {
+                setNewTitle("");
+                setCreating(true);
+              }}
+            >
+              <Plus className="h-4 w-4" />
+              New notebook
+            </Button>
+          </AlchemyHero>
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[960px] px-6 py-10">
           <div className="mb-6 flex items-end justify-between">
             <div>
@@ -135,7 +157,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             ))}
           </div>
         </div>
-      </div>
+        </div>
+      )}
 
       <Modal open={creating} onClose={() => setCreating(false)} title="New notebook">
         <form
