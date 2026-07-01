@@ -49,7 +49,12 @@ fn bind_pdfium() -> Result<Box<dyn PdfiumLibraryBindings>> {
             dirs.push(parent.join("libs").to_string_lossy().into_owned());
             // macOS .app: Contents/MacOS/<bin> -> Contents/Resources/libs
             if let Some(contents) = parent.parent() {
-                dirs.push(contents.join("Resources/libs").to_string_lossy().into_owned());
+                dirs.push(
+                    contents
+                        .join("Resources/libs")
+                        .to_string_lossy()
+                        .into_owned(),
+                );
             }
         }
     }

@@ -56,7 +56,13 @@ impl Db {
         if !self.table_exists(T_NOTES).await? {
             return Ok(());
         }
-        let schema = self.conn.open_table(T_NOTES).execute().await?.schema().await?;
+        let schema = self
+            .conn
+            .open_table(T_NOTES)
+            .execute()
+            .await?
+            .schema()
+            .await?;
         if schema.field_with_name("prompt").is_ok() {
             return Ok(());
         }
@@ -100,7 +106,13 @@ impl Db {
         if !self.table_exists(T_SOURCES).await? {
             return Ok(());
         }
-        let schema = self.conn.open_table(T_SOURCES).execute().await?.schema().await?;
+        let schema = self
+            .conn
+            .open_table(T_SOURCES)
+            .execute()
+            .await?
+            .schema()
+            .await?;
         let has = |n: &str| schema.field_with_name(n).is_ok();
         if has("url") && has("status") && has("error") {
             return Ok(());
@@ -152,7 +164,13 @@ impl Db {
     }
 
     async fn table_exists(&self, name: &str) -> Result<bool> {
-        Ok(self.conn.table_names().execute().await?.iter().any(|t| t == name))
+        Ok(self
+            .conn
+            .table_names()
+            .execute()
+            .await?
+            .iter()
+            .any(|t| t == name))
     }
 
     async fn ensure_table(&self, name: &str, schema: SchemaRef) -> Result<()> {
@@ -227,7 +245,7 @@ impl Db {
         for n in &mut notebooks {
             n.source_count = counts.get(&n.id).copied().unwrap_or(0);
         }
-        notebooks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        notebooks.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
         Ok(notebooks)
     }
 
@@ -272,7 +290,8 @@ impl Db {
         self.delete_where(T_CHUNKS, &pred).await?;
         self.delete_where(T_MESSAGES, &pred).await?;
         self.delete_where(T_NOTES, &pred).await?;
-        self.delete_where(T_NOTEBOOKS, &format!("id = '{}'", esc(id))).await?;
+        self.delete_where(T_NOTEBOOKS, &format!("id = '{}'", esc(id)))
+            .await?;
         Ok(())
     }
 
@@ -309,7 +328,7 @@ impl Db {
                 });
             }
         }
-        sources.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        sources.sort_by_key(|s| s.created_at);
         Ok(sources)
     }
 
@@ -324,7 +343,8 @@ impl Db {
         let schema = sources_schema();
         let batch = source_batch(&schema, std::slice::from_ref(source))?;
         self.add_batch(T_SOURCES, schema, batch).await?;
-        self.add_chunks(&source.notebook_id, &source.id, chunks, embeddings).await
+        self.add_chunks(&source.notebook_id, &source.id, chunks, embeddings)
+            .await
     }
 
     /// Append chunk rows (with embeddings) for a source. Creates the chunks
@@ -370,23 +390,6 @@ impl Db {
         )?;
         self.add_batch(T_CHUNKS, schema, batch).await?;
         Ok(())
-    }
-
-    /// Delete every chunk owned by a source or note id.
-    pub async fn delete_chunks_for(&self, owner_id: &str) -> Result<()> {
-        self.delete_where(T_CHUNKS, &format!("source_id = '{}'", esc(owner_id))).await
-    }
-
-    /// Replace all chunks for an owner (source or note) in place.
-    pub async fn set_chunks(
-        &self,
-        notebook_id: &str,
-        owner_id: &str,
-        chunks: &[(String, i32, String)],
-        embeddings: &[Vec<f32>],
-    ) -> Result<()> {
-        self.delete_chunks_for(owner_id).await?;
-        self.add_chunks(notebook_id, owner_id, chunks, embeddings).await
     }
 
     /// All sources across every notebook, with full content (for re-embedding).
@@ -449,7 +452,8 @@ impl Db {
     pub async fn delete_source(&self, source_id: &str) -> Result<()> {
         let pred = format!("source_id = '{}'", esc(source_id));
         self.delete_where(T_CHUNKS, &pred).await?;
-        self.delete_where(T_SOURCES, &format!("id = '{}'", esc(source_id))).await?;
+        self.delete_where(T_SOURCES, &format!("id = '{}'", esc(source_id)))
+            .await?;
         Ok(())
     }
 
@@ -504,14 +508,10 @@ impl Db {
         if !self.table_exists(T_CHUNKS).await? {
             return Ok(vec![]);
         }
-        // Map owner_id -> title for citation labels (sources and notes both
-        // live in the chunk index, keyed by their id in `source_id`).
+        // Map source_id -> title for citation labels.
         let mut titles: HashMap<String, String> = HashMap::new();
         for s in self.list_sources(notebook_id).await? {
             titles.insert(s.id, s.title);
-        }
-        for n in self.list_notes(notebook_id).await? {
-            titles.insert(n.id, format!("Note: {}", n.title));
         }
 
         let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
@@ -531,9 +531,11 @@ impl Db {
             let sid = str_col(b, "source_id")?;
             let ord = i32_col(b, "ordinal")?;
             let text = str_col(b, "text")?;
-            let dist = b
-                .column_by_name("_distance")
-                .and_then(|c| c.as_any().downcast_ref::<arrow_array::Float32Array>().cloned());
+            let dist = b.column_by_name("_distance").and_then(|c| {
+                c.as_any()
+                    .downcast_ref::<arrow_array::Float32Array>()
+                    .cloned()
+            });
             for i in 0..b.num_rows() {
                 let source_id = sid.value(i).to_string();
                 citations.push(Citation {
@@ -546,7 +548,11 @@ impl Db {
                 });
             }
         }
-        citations.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(std::cmp::Ordering::Equal));
+        citations.sort_by(|a, b| {
+            a.distance
+                .partial_cmp(&b.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         Ok(citations)
     }
 
@@ -576,7 +582,7 @@ impl Db {
                 });
             }
         }
-        messages.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        messages.sort_by_key(|m| m.created_at);
         Ok(messages)
     }
 
@@ -598,7 +604,8 @@ impl Db {
     }
 
     pub async fn clear_messages(&self, notebook_id: &str) -> Result<()> {
-        self.delete_where(T_MESSAGES, &format!("notebook_id = '{}'", esc(notebook_id))).await
+        self.delete_where(T_MESSAGES, &format!("notebook_id = '{}'", esc(notebook_id)))
+            .await
     }
 
     // ---- Notes -----------------------------------------------------------
@@ -629,36 +636,7 @@ impl Db {
                 });
             }
         }
-        notes.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-        Ok(notes)
-    }
-
-    /// All notes across every notebook (for re-embedding into RAG).
-    pub async fn all_notes(&self) -> Result<Vec<Note>> {
-        let batches = self.collect(T_NOTES, None).await?;
-        let mut notes = Vec::new();
-        for b in &batches {
-            let id = str_col(b, "id")?;
-            let nb = str_col(b, "notebook_id")?;
-            let title = str_col(b, "title")?;
-            let content = str_col(b, "content")?;
-            let kind = str_col(b, "kind")?;
-            let created = i64_col(b, "created_at")?;
-            let updated = i64_col(b, "updated_at")?;
-            let prompt = str_col(b, "prompt")?;
-            for i in 0..b.num_rows() {
-                notes.push(Note {
-                    id: id.value(i).to_string(),
-                    notebook_id: nb.value(i).to_string(),
-                    title: title.value(i).to_string(),
-                    content: content.value(i).to_string(),
-                    kind: kind.value(i).to_string(),
-                    prompt: prompt.value(i).to_string(),
-                    created_at: created.value(i),
-                    updated_at: updated.value(i),
-                });
-            }
-        }
+        notes.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
         Ok(notes)
     }
 
@@ -690,7 +668,13 @@ impl Db {
         self.add_batch(T_NOTES, schema, batch).await
     }
 
-    pub async fn update_note(&self, id: &str, title: &str, content: &str, updated_at: i64) -> Result<()> {
+    pub async fn update_note(
+        &self,
+        id: &str,
+        title: &str,
+        content: &str,
+        updated_at: i64,
+    ) -> Result<()> {
         let tbl = self.conn.open_table(T_NOTES).execute().await?;
         tbl.update()
             .only_if(format!("id = '{}'", esc(id)))
@@ -703,7 +687,8 @@ impl Db {
     }
 
     pub async fn delete_note(&self, id: &str) -> Result<()> {
-        self.delete_where(T_NOTES, &format!("id = '{}'", esc(id))).await
+        self.delete_where(T_NOTES, &format!("id = '{}'", esc(id)))
+            .await
     }
 
     // ---- Report schedules -------------------------------------------------
@@ -739,7 +724,8 @@ impl Db {
     }
 
     pub async fn list_report_schedules(&self, notebook_id: &str) -> Result<Vec<ReportSchedule>> {
-        self.query_reports(Some(&format!("notebook_id = '{}'", esc(notebook_id)))).await
+        self.query_reports(Some(&format!("notebook_id = '{}'", esc(notebook_id))))
+            .await
     }
 
     pub async fn all_report_schedules(&self) -> Result<Vec<ReportSchedule>> {
@@ -793,7 +779,8 @@ impl Db {
     }
 
     pub async fn delete_report_schedule(&self, id: &str) -> Result<()> {
-        self.delete_where(T_REPORTS, &format!("id = '{}'", esc(id))).await
+        self.delete_where(T_REPORTS, &format!("id = '{}'", esc(id)))
+            .await
     }
 }
 

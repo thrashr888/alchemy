@@ -54,7 +54,8 @@ pub async fn run(
     let mut transcript = String::new();
 
     for _ in 0..MAX_STEPS {
-        let messages = rag::build_agent_decision(question, &source_list, &transcript, gathered.len());
+        let messages =
+            rag::build_agent_decision(question, &source_list, &transcript, gathered.len());
         let raw = ollama.chat(&messages).await?.text;
         match parse_action(&raw) {
             Some(Action::Search(query)) => {
@@ -104,7 +105,12 @@ pub async fn run(
     let app_cb = app.clone();
     let outcome = ollama
         .chat_stream(&messages, |tok| {
-            let _ = app_cb.emit("chat://token", TokenEvent { content: tok.to_string() });
+            let _ = app_cb.emit(
+                "chat://token",
+                TokenEvent {
+                    content: tok.to_string(),
+                },
+            );
         })
         .await?;
 
@@ -181,7 +187,10 @@ mod tests {
     #[test]
     fn extracts_json_from_fenced_prose() {
         let raw = "Plan:\n```json\n{\"action\":\"search\",\"query\":\"x\"}\n```";
-        assert_eq!(extract_json(raw).as_deref(), Some("{\"action\":\"search\",\"query\":\"x\"}"));
+        assert_eq!(
+            extract_json(raw).as_deref(),
+            Some("{\"action\":\"search\",\"query\":\"x\"}")
+        );
     }
 
     #[test]
@@ -205,7 +214,10 @@ mod tests {
             parse_action("```{\"action\":\"read\",\"sourceId\":\"abc\"}```"),
             Some(Action::Read(id)) if id == "abc"
         ));
-        assert!(matches!(parse_action("{\"action\":\"answer\"}"), Some(Action::Stop)));
+        assert!(matches!(
+            parse_action("{\"action\":\"answer\"}"),
+            Some(Action::Stop)
+        ));
         assert!(parse_action("garbage").is_none());
         assert!(parse_action("{\"action\":\"search\",\"query\":\"\"}").is_none());
     }

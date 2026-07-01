@@ -47,6 +47,7 @@ export type NoteKind =
   | "study_guide"
   | "briefing"
   | "timeline"
+  | "problems"
   | "prd"
   | "prfaq"
   | "rfc"

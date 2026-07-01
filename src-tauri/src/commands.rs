@@ -95,8 +95,18 @@ pub async fn create_notebook(
     title: String,
 ) -> Result<Notebook, String> {
     let ts = now();
-    let title = if title.trim().is_empty() { "Untitled notebook".into() } else { title.trim().to_string() };
-    let nb = Notebook { id: new_id(), title, created_at: ts, updated_at: ts, source_count: 0 };
+    let title = if title.trim().is_empty() {
+        "Untitled notebook".into()
+    } else {
+        title.trim().to_string()
+    };
+    let nb = Notebook {
+        id: new_id(),
+        title,
+        created_at: ts,
+        updated_at: ts,
+        source_count: 0,
+    };
     e(state.db.create_notebook(&nb).await)?;
     Ok(nb)
 }
@@ -166,11 +176,17 @@ async fn store_extracted(
         status,
         error,
     };
-    state.db.insert_source(&source, &chunk_tuples, &embeddings).await?;
+    state
+        .db
+        .insert_source(&source, &chunk_tuples, &embeddings)
+        .await?;
     state.db.touch_notebook(notebook_id, now()).await?;
 
     // Don't ship the full content back in the list payload.
-    Ok(Source { content: String::new(), ..source })
+    Ok(Source {
+        content: String::new(),
+        ..source
+    })
 }
 
 /// Persist a URL source that failed to import so it shows with an error badge
@@ -262,9 +278,9 @@ pub async fn add_source_file(
         // Try fast text extraction; fall back to per-page OCR for scanned PDFs.
         match ingest::extract_file(&path) {
             Ok(ex) => ex,
-            Err(text_err) => e(extract_pdf_ocr(&state, &path).await.map_err(|ocr_err| {
-                anyhow::anyhow!("{text_err} OCR fallback failed: {ocr_err}")
-            }))?,
+            Err(text_err) => e(extract_pdf_ocr(&state, &path)
+                .await
+                .map_err(|ocr_err| anyhow::anyhow!("{text_err} OCR fallback failed: {ocr_err}")))?,
         }
     } else {
         e(ingest::extract_file(&path))?
@@ -328,9 +344,18 @@ async fn reingest(
         status,
         error,
     };
-    state.db.replace_source(&updated, &chunk_tuples, &embeddings).await?;
-    state.db.touch_notebook(&existing.notebook_id, now()).await?;
-    Ok(Source { content: String::new(), ..updated })
+    state
+        .db
+        .replace_source(&updated, &chunk_tuples, &embeddings)
+        .await?;
+    state
+        .db
+        .touch_notebook(&existing.notebook_id, now())
+        .await?;
+    Ok(Source {
+        content: String::new(),
+        ..updated
+    })
 }
 
 /// Mark an existing source as failed (used when a refresh/retry can't fetch).
@@ -348,7 +373,10 @@ async fn mark_source_failed(
         ..existing.clone()
     };
     state.db.replace_source(&failed, &[], &[]).await?;
-    state.db.touch_notebook(&existing.notebook_id, now()).await?;
+    state
+        .db
+        .touch_notebook(&existing.notebook_id, now())
+        .await?;
     Ok(failed)
 }
 
@@ -359,8 +387,8 @@ pub async fn update_source_text(
     title: String,
     text: String,
 ) -> Result<Source, String> {
-    let existing = e(state.db.get_source(&source_id).await)?
-        .ok_or_else(|| "Source not found".to_string())?;
+    let existing =
+        e(state.db.get_source(&source_id).await)?.ok_or_else(|| "Source not found".to_string())?;
     let extracted = e(ingest::extract_pasted(&title, &text))?;
     e(reingest(&state, &existing, extracted).await)
 }
@@ -370,8 +398,8 @@ pub async fn refresh_source_url(
     state: State<'_, AppState>,
     source_id: String,
 ) -> Result<Source, String> {
-    let existing = e(state.db.get_source(&source_id).await)?
-        .ok_or_else(|| "Source not found".to_string())?;
+    let existing =
+        e(state.db.get_source(&source_id).await)?.ok_or_else(|| "Source not found".to_string())?;
     if existing.url.is_empty() {
         return Err("This source has no URL to refresh".into());
     }
@@ -407,16 +435,16 @@ struct MigrateProgress {
 #[tauri::command]
 pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u32, String> {
     let sources = e(state.db.all_sources().await)?;
-    let notes = e(state.db.all_notes().await)?;
-    // Notes with content also live in the chunk index.
     let owners: Vec<(String, String, String, String)> = sources
         .iter()
-        .map(|s| (s.notebook_id.clone(), s.id.clone(), s.content.clone(), s.title.clone()))
-        .chain(
-            notes
-                .iter()
-                .map(|n| (n.notebook_id.clone(), n.id.clone(), n.content.clone(), format!("Note: {}", n.title))),
-        )
+        .map(|s| {
+            (
+                s.notebook_id.clone(),
+                s.id.clone(),
+                s.content.clone(),
+                s.title.clone(),
+            )
+        })
         .collect();
     let total = owners.len() as u32;
 
@@ -428,7 +456,11 @@ pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u
     for (i, (notebook_id, owner_id, content, title)) in owners.iter().enumerate() {
         let _ = app.emit(
             "migrate://progress",
-            MigrateProgress { done: i as u32, total, title: title.clone() },
+            MigrateProgress {
+                done: i as u32,
+                total,
+                title: title.clone(),
+            },
         );
         let chunks = ingest::chunk_text(content);
         if chunks.is_empty() {
@@ -440,12 +472,19 @@ pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u
             .enumerate()
             .map(|(j, text)| (new_id(), j as i32, text.clone()))
             .collect();
-        e(state.db.add_chunks(notebook_id, owner_id, &tuples, &embeddings).await)?;
+        e(state
+            .db
+            .add_chunks(notebook_id, owner_id, &tuples, &embeddings)
+            .await)?;
     }
 
     let _ = app.emit(
         "migrate://progress",
-        MigrateProgress { done: total, total, title: "Done".into() },
+        MigrateProgress {
+            done: total,
+            total,
+            title: "Done".into(),
+        },
     );
     Ok(total)
 }
@@ -505,7 +544,10 @@ pub async fn send_message(
     let history_turns: Vec<crate::ai::ChatTurn> = history
         .iter()
         .filter(|m| m.id != user_msg.id)
-        .map(|m| crate::ai::ChatTurn { role: m.role.clone(), content: m.content.clone() })
+        .map(|m| crate::ai::ChatTurn {
+            role: m.role.clone(),
+            content: m.content.clone(),
+        })
         .collect();
     let messages = rag::build_chat_messages(&history_turns, &content, &citations);
 
@@ -515,7 +557,12 @@ pub async fn send_message(
         let ai = state.ai.read().await;
         let out = e(ai
             .chat_stream(&messages, |tok| {
-                let _ = app_for_cb.emit("chat://token", TokenEvent { content: tok.to_string() });
+                let _ = app_for_cb.emit(
+                    "chat://token",
+                    TokenEvent {
+                        content: tok.to_string(),
+                    },
+                );
             })
             .await)?;
         (out.text, out.stats, ai.config().chat_model.clone())
@@ -562,13 +609,19 @@ pub async fn send_message_agentic(
     let history_turns: Vec<crate::ai::ChatTurn> = history
         .iter()
         .filter(|m| m.id != user_msg.id)
-        .map(|m| crate::ai::ChatTurn { role: m.role.clone(), content: m.content.clone() })
+        .map(|m| crate::ai::ChatTurn {
+            role: m.role.clone(),
+            content: m.content.clone(),
+        })
         .collect();
 
     let (answer, citations, stats, model) = {
         let ai = state.ai.read().await;
         let (answer, citations, stats) =
-            e(crate::agent::run(&app, &state.db, &ai, &notebook_id, &content, &history_turns).await)?;
+            e(
+                crate::agent::run(&app, &state.db, &ai, &notebook_id, &content, &history_turns)
+                    .await,
+            )?;
         (answer, citations, stats, ai.config().chat_model.clone())
     };
     state.record_chat_stats(&model, stats);
@@ -597,34 +650,6 @@ pub async fn list_notes(
     e(state.db.list_notes(&notebook_id).await)
 }
 
-/// Embed a note's content into the chunk index so chat retrieval can cite it.
-/// Best-effort: a failure here doesn't block the note operation.
-async fn index_note(state: &AppState, notebook_id: &str, note_id: &str, content: &str) {
-    let chunks = ingest::chunk_text(content);
-    if chunks.is_empty() {
-        let _ = state.db.set_chunks(notebook_id, note_id, &[], &[]).await;
-        return;
-    }
-    let embeddings = {
-        let ai = state.ai.read().await;
-        match ai.embed(&chunks).await {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("note index: embedding failed: {e}");
-                return;
-            }
-        }
-    };
-    let tuples: Vec<(String, i32, String)> = chunks
-        .iter()
-        .enumerate()
-        .map(|(i, text)| (new_id(), i as i32, text.clone()))
-        .collect();
-    if let Err(e) = state.db.set_chunks(notebook_id, note_id, &tuples, &embeddings).await {
-        eprintln!("note index: write failed: {e}");
-    }
-}
-
 #[tauri::command]
 pub async fn create_note(
     state: State<'_, AppState>,
@@ -636,7 +661,11 @@ pub async fn create_note(
     let note = Note {
         id: new_id(),
         notebook_id,
-        title: if title.trim().is_empty() { "Untitled note".into() } else { title.trim().to_string() },
+        title: if title.trim().is_empty() {
+            "Untitled note".into()
+        } else {
+            title.trim().to_string()
+        },
         content,
         kind: "note".into(),
         prompt: String::new(),
@@ -644,7 +673,6 @@ pub async fn create_note(
         updated_at: ts,
     };
     e(state.db.add_note(&note).await)?;
-    index_note(&state, &note.notebook_id, &note.id, &note.content).await;
     Ok(note)
 }
 
@@ -652,19 +680,18 @@ pub async fn create_note(
 pub async fn update_note(
     state: State<'_, AppState>,
     id: String,
-    notebook_id: String,
     title: String,
     content: String,
 ) -> Result<(), String> {
-    e(state.db.update_note(&id, title.trim(), &content, now()).await)?;
-    index_note(&state, &notebook_id, &id, &content).await;
-    Ok(())
+    e(state
+        .db
+        .update_note(&id, title.trim(), &content, now())
+        .await)
 }
 
 #[tauri::command]
 pub async fn delete_note(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    e(state.db.delete_note(&id).await)?;
-    e(state.db.delete_chunks_for(&id).await)
+    e(state.db.delete_note(&id).await)
 }
 
 /// Turn a note into a standalone source (chunked/embedded), then remove the note.
@@ -673,8 +700,7 @@ pub async fn convert_note_to_source(
     state: State<'_, AppState>,
     note_id: String,
 ) -> Result<Source, String> {
-    let note = e(state.db.get_note(&note_id).await)?
-        .ok_or_else(|| "Note not found".to_string())?;
+    let note = e(state.db.get_note(&note_id).await)?.ok_or_else(|| "Note not found".to_string())?;
     let extracted = ingest::Extracted {
         title: note.title.clone(),
         source_type: "text".to_string(),
@@ -682,9 +708,8 @@ pub async fn convert_note_to_source(
         text: note.content.clone(),
     };
     let source = e(store_extracted(&state, &note.notebook_id, extracted).await)?;
-    // Remove the original note (and its note-chunks) now that it's a source.
+    // Remove the original note now that it lives as a source.
     e(state.db.delete_note(&note_id).await)?;
-    e(state.db.delete_chunks_for(&note_id).await)?;
     Ok(source)
 }
 
@@ -703,7 +728,10 @@ async fn generate_content(
             let instr = if prompt.trim().is_empty() {
                 base.to_string()
             } else {
-                format!("{base}\n\nAdditional instructions from the user (follow these):\n{}", prompt.trim())
+                format!(
+                    "{base}\n\nAdditional instructions from the user (follow these):\n{}",
+                    prompt.trim()
+                )
             };
             (t.to_string(), instr)
         }
@@ -757,7 +785,6 @@ pub async fn generate_artifact(
         updated_at: ts,
     };
     e(state.db.add_note(&note).await)?;
-    index_note(&state, &note.notebook_id, &note.id, &note.content).await;
     let _ = app.emit("generate://done", &note);
     Ok(note)
 }
@@ -774,7 +801,6 @@ pub async fn rebuild_note(
     let (title, content) = e(generate_content(&state, &notebook_id, &kind, &prompt).await)?;
     let ts = now();
     e(state.db.update_note(&note_id, &title, &content, ts).await)?;
-    index_note(&state, &notebook_id, &note_id, &content).await;
 
     let note = Note {
         id: note_id,
@@ -860,7 +886,10 @@ pub async fn delete_report_schedule(state: State<'_, AppState>, id: String) -> R
 /// Refresh every URL source in a notebook (best-effort), emitting progress.
 async fn refresh_notebook_urls(app: &AppHandle, state: &AppState, notebook_id: &str) {
     let sources = state.db.list_sources(notebook_id).await.unwrap_or_default();
-    for s in sources.iter().filter(|s| s.source_type == "url" && !s.url.is_empty()) {
+    for s in sources
+        .iter()
+        .filter(|s| s.source_type == "url" && !s.url.is_empty())
+    {
         let _ = app.emit("report://step", format!("Refreshing: {}", s.title));
         if let Ok(Some(existing)) = state.db.get_source(&s.id).await {
             if let Ok(extracted) = ingest::extract_url(&existing.url).await {
@@ -883,8 +912,13 @@ pub async fn run_report(
     refresh_notebook_urls(&app, &state, &schedule.notebook_id).await;
 
     let _ = app.emit("report://step", "Generating report".to_string());
-    let (_t, content) =
-        e(generate_content(&state, &schedule.notebook_id, &schedule.kind, &schedule.prompt).await)?;
+    let (_t, content) = e(generate_content(
+        &state,
+        &schedule.notebook_id,
+        &schedule.kind,
+        &schedule.prompt,
+    )
+    .await)?;
 
     let ts = now();
     let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
@@ -899,7 +933,6 @@ pub async fn run_report(
         updated_at: ts,
     };
     e(state.db.add_note(&note).await)?;
-    index_note(&state, &note.notebook_id, &note.id, &note.content).await;
     e(state.db.set_report_last_run(&schedule_id, ts).await)?;
     e(state.db.touch_notebook(&schedule.notebook_id, ts).await)?;
     let _ = app.emit("generate://done", &note);
@@ -950,7 +983,10 @@ pub async fn check_models(state: State<'_, AppState>) -> Result<ModelHealth, Str
     let embed_installed = has(&cfg.embed_model);
     // Embeddings are cheap, so actually probe them.
     let (embed_working, embed_detail) = if !embed_installed {
-        (false, format!("Not installed — run `ollama pull {}`", cfg.embed_model))
+        (
+            false,
+            format!("Not installed — run `ollama pull {}`", cfg.embed_model),
+        )
     } else {
         match ai.test_embed().await {
             Ok(dim) => (true, format!("Working ({dim}-dim)")),
@@ -964,7 +1000,11 @@ pub async fn check_models(state: State<'_, AppState>) -> Result<ModelHealth, Str
         detail: embed_detail,
     };
 
-    Ok(ModelHealth { reachable: true, chat, embed })
+    Ok(ModelHealth {
+        reachable: true,
+        chat,
+        embed,
+    })
 }
 
 #[tauri::command]
@@ -974,10 +1014,7 @@ pub async fn get_ai_config(state: State<'_, AppState>) -> Result<AiConfig, Strin
 }
 
 #[tauri::command]
-pub async fn set_ai_config(
-    state: State<'_, AppState>,
-    config: AiConfig,
-) -> Result<(), String> {
+pub async fn set_ai_config(state: State<'_, AppState>, config: AiConfig) -> Result<(), String> {
     let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     std::fs::write(&state.config_path, json).map_err(|e| e.to_string())?;
     let mut ai = state.ai.write().await;

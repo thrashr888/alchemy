@@ -69,6 +69,14 @@ pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
             "Extract a chronological timeline of events, milestones, or developments mentioned in the sources below. \
              Format each entry as `- **<when>** — <what>`. If little temporal information exists, say so.",
         )),
+        "problems" => Some((
+            "Problems",
+            "Critically analyze the sources below and identify the problems in them: factual errors, unsupported \
+             claims, internal contradictions, gaps or missing information, risks, weak arguments, and open \
+             questions. For each, use a `### <short problem title>` heading followed by: what the problem is, \
+             where it appears (quote or reference the source), and why it matters. Be specific and grounded in \
+             the sources — do not invent issues. If the sources are sound, say so and note only minor caveats.",
+        )),
         "prd" => Some((
             "PRD",
             "Write a Product Requirements Document in the HashiCorp style, grounded in the sources below. \

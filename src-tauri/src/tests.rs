@@ -40,7 +40,11 @@ async fn rag_round_trip() {
         source_count: 0,
     };
     db.create_notebook(&nb).await.expect("create notebook");
-    assert_eq!(db.list_notebooks().await.unwrap().len(), 1, "notebook persisted");
+    assert_eq!(
+        db.list_notebooks().await.unwrap().len(),
+        1,
+        "notebook persisted"
+    );
 
     // 2. Ingest + chunk + embed + write
     let text = "Photosynthesis is the process by which green plants and some bacteria \
@@ -54,7 +58,11 @@ async fn rag_round_trip() {
     assert!(!chunks.is_empty(), "produced chunks");
     let embeddings = ai.embed(&chunks).await.expect("embed");
     assert_eq!(embeddings.len(), chunks.len(), "one vector per chunk");
-    eprintln!("embedded {} chunks, dim={}", chunks.len(), embeddings[0].len());
+    eprintln!(
+        "embedded {} chunks, dim={}",
+        chunks.len(),
+        embeddings[0].len()
+    );
 
     let chunk_tuples: Vec<(String, i32, String)> = chunks
         .iter()
@@ -74,11 +82,20 @@ async fn rag_round_trip() {
         status: "ready".to_string(),
         error: String::new(),
     };
-    db.insert_source(&source, &chunk_tuples, &embeddings).await.expect("insert source");
-    assert_eq!(db.list_sources(&nb.id).await.unwrap().len(), 1, "source persisted");
+    db.insert_source(&source, &chunk_tuples, &embeddings)
+        .await
+        .expect("insert source");
+    assert_eq!(
+        db.list_sources(&nb.id).await.unwrap().len(),
+        1,
+        "source persisted"
+    );
 
     // 3. Vector search
-    let qvec = ai.embed_one("Where do the light-dependent reactions happen?").await.unwrap();
+    let qvec = ai
+        .embed_one("Where do the light-dependent reactions happen?")
+        .await
+        .unwrap();
     let citations = db.search_chunks(&nb.id, qvec, 4).await.expect("search");
     assert!(!citations.is_empty(), "retrieved at least one chunk");
     eprintln!(
@@ -93,7 +110,11 @@ async fn rag_round_trip() {
     );
 
     // 4. Grounded chat
-    let messages = rag::build_chat_messages(&[], "Where do the light-dependent reactions occur?", &citations);
+    let messages = rag::build_chat_messages(
+        &[],
+        "Where do the light-dependent reactions occur?",
+        &citations,
+    );
     let answer = ai.chat(&messages).await.expect("chat").text;
     eprintln!("answer: {answer}");
     assert!(!answer.trim().is_empty(), "model produced an answer");

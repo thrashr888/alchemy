@@ -58,8 +58,13 @@ impl GenStats {
 
     fn from_parts(count: Option<u64>, duration: Option<u64>) -> Option<Self> {
         match (count, duration) {
-            (Some(eval_count), Some(eval_duration_ns)) if eval_count > 0 && eval_duration_ns > 0 => {
-                Some(GenStats { eval_count, eval_duration_ns })
+            (Some(eval_count), Some(eval_duration_ns))
+                if eval_count > 0 && eval_duration_ns > 0 =>
+            {
+                Some(GenStats {
+                    eval_count,
+                    eval_duration_ns,
+                })
             }
             _ => None,
         }
@@ -123,7 +128,9 @@ impl Ollama {
         const BATCH: usize = 64;
         let mut out: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
         for batch in texts.chunks(BATCH) {
-            let parsed = self.embed_request(batch, std::time::Duration::from_secs(120)).await?;
+            let parsed = self
+                .embed_request(batch, std::time::Duration::from_secs(120))
+                .await?;
             out.extend(parsed.embeddings);
         }
         Ok(out)
@@ -163,7 +170,9 @@ impl Ollama {
     pub async fn ocr(&self, image_base64: &str) -> Result<String> {
         let model = self.config.vision_model.trim();
         if model.is_empty() {
-            return Err(anyhow!("no vision model configured for OCR — set one in Settings"));
+            return Err(anyhow!(
+                "no vision model configured for OCR — set one in Settings"
+            ));
         }
         let resp = self
             .http
@@ -190,7 +199,10 @@ impl Ollama {
             return Err(anyhow!("ollama OCR {}: {}", status, body));
         }
         let value: serde_json::Value = resp.json().await?;
-        Ok(value["message"]["content"].as_str().unwrap_or_default().to_string())
+        Ok(value["message"]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string())
     }
 
     /// Quick liveness probe for the embedding model (short timeout). Returns the
@@ -204,7 +216,8 @@ impl Ollama {
 
     pub async fn embed_one(&self, text: &str) -> Result<Vec<f32>> {
         let mut v = self.embed(&[text.to_string()]).await?;
-        v.pop().ok_or_else(|| anyhow!("embedding model returned no vector"))
+        v.pop()
+            .ok_or_else(|| anyhow!("embedding model returned no vector"))
     }
 
     /// Non-streaming chat completion; used for one-shot artifact generation.
@@ -227,7 +240,10 @@ impl Ollama {
             return Err(anyhow!("ollama chat {}: {}", status, body));
         }
         let value: serde_json::Value = resp.json().await?;
-        let text = value["message"]["content"].as_str().unwrap_or_default().to_string();
+        let text = value["message"]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
         let stats = GenStats::from_parts(
             value.get("eval_count").and_then(|v| v.as_u64()),
             value.get("eval_duration").and_then(|v| v.as_u64()),
@@ -237,7 +253,11 @@ impl Ollama {
 
     /// Streaming chat. `on_token` is called for each content delta as it arrives.
     /// Returns the full concatenated assistant message.
-    pub async fn chat_stream<F>(&self, messages: &[ChatTurn], mut on_token: F) -> Result<ChatOutcome>
+    pub async fn chat_stream<F>(
+        &self,
+        messages: &[ChatTurn],
+        mut on_token: F,
+    ) -> Result<ChatOutcome>
     where
         F: FnMut(&str),
     {
@@ -288,7 +308,10 @@ impl Ollama {
                 }
             }
         }
-        Ok(ChatOutcome { text: full, stats: None })
+        Ok(ChatOutcome {
+            text: full,
+            stats: None,
+        })
     }
 
     /// List locally available model names (from `/api/tags`).

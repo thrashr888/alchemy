@@ -25,6 +25,7 @@ import {
   Sparkles,
   RefreshCw,
   FileInput,
+  TriangleAlert,
 } from "lucide-react";
 
 type Artifact = { kind: NoteKind; label: string; icon: ReactNode };
@@ -35,6 +36,7 @@ const SUMMARIES: Artifact[] = [
   { kind: "study_guide", label: "Study guide", icon: <GraduationCap className="h-3.5 w-3.5" /> },
   { kind: "briefing", label: "Briefing", icon: <Newspaper className="h-3.5 w-3.5" /> },
   { kind: "timeline", label: "Timeline", icon: <Clock className="h-3.5 w-3.5" /> },
+  { kind: "problems", label: "Problems", icon: <TriangleAlert className="h-3.5 w-3.5" /> },
 ];
 
 const DOCUMENTS: Artifact[] = [
@@ -51,6 +53,7 @@ const KIND_LABEL: Record<NoteKind, string> = {
   study_guide: "Study guide",
   briefing: "Briefing",
   timeline: "Timeline",
+  problems: "Problems",
   prd: "PRD",
   prfaq: "PR/FAQ",
   rfc: "RFC",

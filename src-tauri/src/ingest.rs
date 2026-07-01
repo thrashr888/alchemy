@@ -97,7 +97,12 @@ pub fn extract_file(path: &str) -> Result<Extracted> {
     if text.trim().is_empty() {
         return Err(anyhow!("no extractable text found in {path}"));
     }
-    Ok(Extracted { title, source_type, url: String::new(), text })
+    Ok(Extracted {
+        title,
+        source_type,
+        url: String::new(),
+        text,
+    })
 }
 
 /// Extract text from a spreadsheet (xlsx/xls/ods) — sheet by sheet, row by row.
@@ -107,7 +112,9 @@ fn extract_spreadsheet(path: &str) -> Result<String> {
         open_workbook_auto(path).with_context(|| format!("failed to open spreadsheet {path}"))?;
     let mut out = String::new();
     for name in workbook.sheet_names() {
-        let Ok(range) = workbook.worksheet_range(&name) else { continue };
+        let Ok(range) = workbook.worksheet_range(&name) else {
+            continue;
+        };
         if range.is_empty() {
             continue;
         }
@@ -221,7 +228,12 @@ pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
         ));
     }
     let title = extract_title(&body).unwrap_or_else(|| url.clone());
-    Ok(Extracted { title, source_type: "url".to_string(), url, text })
+    Ok(Extracted {
+        title,
+        source_type: "url".to_string(),
+        url,
+        text,
+    })
 }
 
 /// Heuristic: does this extracted text look like a bot wall / login page /
@@ -274,7 +286,12 @@ pub fn extract_pasted(title: &str, text: &str) -> Result<Extracted> {
     } else {
         title.trim().to_string()
     };
-    Ok(Extracted { title, source_type: "text".to_string(), url: String::new(), text })
+    Ok(Extracted {
+        title,
+        source_type: "text".to_string(),
+        url: String::new(),
+        text,
+    })
 }
 
 /// Split normalized text into overlapping word-window chunks.
@@ -329,7 +346,11 @@ fn strip_html(html: &str) -> String {
     while i < len {
         let rest = &html[i..];
         if starts_with_ci(rest, "<script") || starts_with_ci(rest, "<style") {
-            let close = if starts_with_ci(rest, "<script") { "</script>" } else { "</style>" };
+            let close = if starts_with_ci(rest, "<script") {
+                "</script>"
+            } else {
+                "</style>"
+            };
             match find_ci(rest, close) {
                 Some(end) => {
                     i += end + close.len();
@@ -392,5 +413,70 @@ fn extract_title(html: &str) -> Option<String> {
         None
     } else {
         Some(title)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunk_text_splits_and_overlaps() {
+        assert!(chunk_text("").is_empty());
+        let short = chunk_text("one two three");
+        assert_eq!(short.len(), 1);
+
+        let words = (0..900)
+            .map(|i| format!("w{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let chunks = chunk_text(&words);
+        assert!(chunks.len() >= 3, "long text splits into multiple chunks");
+        // Consecutive chunks overlap (last words of one appear in the next).
+        let tail: Vec<&str> = chunks[0].split_whitespace().rev().take(5).collect();
+        assert!(
+            tail.iter().any(|w| chunks[1].contains(*w)),
+            "chunks overlap"
+        );
+    }
+
+    #[test]
+    fn strip_html_is_unicode_safe_and_clean() {
+        // Multi-byte content must not panic (regression: byte-index slicing).
+        let html = "<p>Café ☕ — <b>büro</b> 日本語</p><script>var x = {a:1};</script>";
+        let text = strip_html(html);
+        assert!(text.contains("Café"));
+        assert!(text.contains("日本語"));
+        assert!(!text.contains("var x"), "script contents removed");
+        assert!(!text.contains('<'), "tags removed");
+    }
+
+    #[test]
+    fn strip_html_decodes_entities() {
+        assert_eq!(strip_html("a &amp; b &lt;c&gt;").trim(), "a & b <c>");
+    }
+
+    #[test]
+    fn normalize_url_adds_scheme() {
+        assert_eq!(normalize_url("example.com/x"), "https://example.com/x");
+        assert_eq!(normalize_url("http://a.com"), "http://a.com");
+        assert_eq!(normalize_url("  https://b.com  "), "https://b.com");
+    }
+
+    #[test]
+    fn file_type_detection() {
+        assert!(is_pdf("/a/b.PDF"));
+        assert!(!is_pdf("/a/b.txt"));
+        assert!(is_image("photo.JPEG"));
+        assert!(is_image("scan.png"));
+        assert!(!is_image("notes.md"));
+    }
+
+    #[test]
+    fn extract_pasted_titles_and_rejects_empty() {
+        assert!(extract_pasted("", "   ").is_err());
+        let ex = extract_pasted("", "hello world").unwrap();
+        assert_eq!(ex.title, "Pasted text");
+        assert_eq!(ex.source_type, "text");
     }
 }
