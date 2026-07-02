@@ -1,6 +1,6 @@
 [package]
 name = "alchemy"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local-first NotebookLM clone — RAG over your sources, powered by Ollama"
 authors = ["thrashr888"]
 edition = "2021"
