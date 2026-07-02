@@ -562,9 +562,11 @@ fn extract_urls(text: &str) -> Vec<String> {
 /// mentioning one in a question)?
 fn wants_add_sources(content: &str, urls: &[String]) -> bool {
     let l = content.to_lowercase();
-    let has_kw = ["add", "import", "ingest", "save", "include", "load", "grab", "attach", "pull in"]
-        .iter()
-        .any(|k| l.contains(k));
+    let has_kw = [
+        "add", "import", "ingest", "save", "include", "load", "grab", "attach", "pull in",
+    ]
+    .iter()
+    .any(|k| l.contains(k));
     // Or the message is essentially just the URL(s).
     let mut rest = l.clone();
     for u in urls {
@@ -597,6 +599,7 @@ async fn finish_tool_reply(
         role: "assistant".into(),
         content,
         citations: vec![],
+        kind: "tool".into(),
         created_at: now(),
     };
     e(state.db.add_message(&msg).await)?;
@@ -605,23 +608,515 @@ async fn finish_tool_reply(
     Ok(msg)
 }
 
-/// If the message is an "add these URLs" request, ingest them and return a
-/// summary reply. Returns None to fall through to the normal chat flow.
-async fn try_add_url_sources(
+// ---- Chat tools ------------------------------------------------------------
+//
+// Imperative chat messages ("add this url", "make a study guide", "delete the
+// spec pdf") route to tools instead of RAG. A cheap keyword gate keeps normal
+// questions on the zero-overhead path; gated messages get one small JSON
+// routing call to the chat model, then dispatch to existing commands.
+
+/// Cheap pre-filter: only messages with a URL or an imperative verb + tool
+/// noun ever reach the LLM router.
+fn tool_gate(content: &str) -> bool {
+    if !extract_urls(content).is_empty() {
+        return true;
+    }
+    let l = content.to_lowercase();
+    let verb = [
+        "add", "import", "ingest", "attach", "load", "grab", "pull in", "paste", "make", "create",
+        "generate", "write", "build", "remove", "delete", "drop", "get rid", "refresh", "re-fetch",
+        "refetch", "update", "save", "schedule",
+    ]
+    .iter()
+    .any(|k| l.contains(k));
+    let noun = [
+        "source",
+        "url",
+        "link",
+        "summary",
+        "faq",
+        "study guide",
+        "briefing",
+        "timeline",
+        "problems",
+        "prd",
+        "prfaq",
+        "pr/faq",
+        "rfc",
+        "skill",
+        "note",
+        "report",
+        "document",
+        "doc",
+    ]
+    .iter()
+    .any(|k| l.contains(k));
+    verb && noun
+}
+
+enum ToolAction {
+    AddUrls(Vec<String>),
+    AddText {
+        title: String,
+        text: String,
+    },
+    Generate {
+        kind: String,
+        prompt: String,
+    },
+    RemoveSource(String),
+    RefreshSources(String),
+    SaveNote(String),
+    ScheduleReport {
+        kind: String,
+        interval: String,
+        name: String,
+    },
+    Chat,
+}
+
+const TOOL_ROUTER_SYSTEM: &str = "You route a user's chat message in a research-notebook app. \
+Decide if the message is a COMMAND to perform one of the tools below, or an ordinary question. \
+Respond with EXACTLY ONE JSON object, nothing else.\n\n\
+Tools:\n\
+- {\"action\":\"add_urls\",\"urls\":[\"https://…\"]} — add the given URL(s) as sources.\n\
+- {\"action\":\"add_text\",\"title\":\"<short title>\",\"text\":\"<the text to add>\"} — save text from the message as a source.\n\
+- {\"action\":\"generate\",\"kind\":\"summary|faq|study_guide|briefing|timeline|problems|prd|prfaq|rfc|skill|custom\",\"prompt\":\"<extra instructions or empty>\"} — generate a document from the sources.\n\
+- {\"action\":\"remove_source\",\"name\":\"<source name fragment>\"} — remove a source.\n\
+- {\"action\":\"refresh_sources\",\"name\":\"<name fragment, or empty for all URL sources>\"} — re-fetch URL sources.\n\
+- {\"action\":\"save_note\",\"title\":\"<title or empty>\"} — save the assistant's previous answer as a note.\n\
+- {\"action\":\"schedule_report\",\"kind\":\"summary|briefing\",\"interval\":\"hourly|daily|weekly\",\"name\":\"<report name>\"} — create a recurring report (echo the user's cadence word in \"interval\" even if unsupported).\n\
+- {\"action\":\"chat\"} — not a command; answer normally.\n\n\
+Prefer {\"action\":\"chat\"} when unsure. Questions ABOUT sources (\"what does the spec say\") are chat, \
+not tools.";
+
+/// Neutralize a source title before interpolating it into the router prompt:
+/// strip braces/newlines (JSON-shaped injection) and cap the length so a
+/// hostile ingested page can't smuggle instructions into the classifier.
+fn sanitize_title(t: &str) -> String {
+    let cleaned: String = t
+        .chars()
+        .filter(|c| !matches!(c, '{' | '}' | '\n' | '\r' | '"'))
+        .collect();
+    cleaned.trim().chars().take(80).collect()
+}
+
+/// One small LLM call to classify a gated message into a ToolAction.
+async fn route_tool(state: &AppState, sources: &[Source], content: &str) -> ToolAction {
+    let source_list = if sources.is_empty() {
+        "(none)".to_string()
+    } else {
+        sources
+            .iter()
+            .map(|s| format!("- {} [{}]", sanitize_title(&s.title), s.source_type))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let messages = vec![
+        crate::ai::ChatTurn::system(TOOL_ROUTER_SYSTEM),
+        crate::ai::ChatTurn::user(format!(
+            "Current sources:\n{source_list}\n\nUser message:\n{content}\n\nOne JSON object:"
+        )),
+    ];
+    let raw = {
+        let ai = state.ai.read().await;
+        match ai.chat(&messages).await {
+            Ok(o) => o.text,
+            Err(_) => return ToolAction::Chat,
+        }
+    };
+    parse_tool_action(&raw)
+}
+
+fn parse_tool_action(raw: &str) -> ToolAction {
+    let Some(json) = crate::agent::extract_json(raw) else {
+        return ToolAction::Chat;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) else {
+        return ToolAction::Chat;
+    };
+    let s = |k: &str| {
+        v.get(k)
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    match v.get("action").and_then(|a| a.as_str()).unwrap_or("chat") {
+        "add_urls" => {
+            let urls: Vec<String> = v
+                .get("urls")
+                .and_then(|u| u.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str())
+                        .map(str::trim)
+                        .filter_map(|u| {
+                            if u.starts_with("http://") || u.starts_with("https://") {
+                                Some(u.to_string())
+                            } else if u.contains('.') && !u.contains(char::is_whitespace) {
+                                // Scheme-less host like "example.com/page".
+                                Some(format!("https://{u}"))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if urls.is_empty() {
+                ToolAction::Chat
+            } else {
+                ToolAction::AddUrls(urls)
+            }
+        }
+        "add_text" => {
+            let text = s("text");
+            if text.is_empty() {
+                ToolAction::Chat
+            } else {
+                ToolAction::AddText {
+                    title: s("title"),
+                    text,
+                }
+            }
+        }
+        "generate" => {
+            let kind = s("kind");
+            if kind.is_empty() {
+                ToolAction::Chat
+            } else {
+                ToolAction::Generate {
+                    kind,
+                    prompt: s("prompt"),
+                }
+            }
+        }
+        "remove_source" => {
+            let name = s("name");
+            if name.is_empty() {
+                ToolAction::Chat
+            } else {
+                ToolAction::RemoveSource(name)
+            }
+        }
+        "refresh_sources" => ToolAction::RefreshSources(s("name")),
+        "save_note" => ToolAction::SaveNote(s("title")),
+        "schedule_report" => {
+            // Keep the raw interval; dispatch validates it and refuses politely
+            // on unsupported cadences instead of silently coercing.
+            let kind = match s("kind").as_str() {
+                k @ ("summary" | "briefing") => k.to_string(),
+                _ => "briefing".to_string(),
+            };
+            let name = {
+                let n = s("name");
+                if n.is_empty() {
+                    "Scheduled report".into()
+                } else {
+                    n
+                }
+            };
+            ToolAction::ScheduleReport {
+                kind,
+                interval: s("interval"),
+                name,
+            }
+        }
+        _ => ToolAction::Chat,
+    }
+}
+
+/// Verbs that mean the URL in a message is a *target*, not something to add.
+fn has_non_add_verb(content: &str) -> bool {
+    let l = content.to_lowercase();
+    [
+        "remove", "delete", "drop", "get rid", "refresh", "re-fetch", "refetch",
+    ]
+    .iter()
+    .any(|k| l.contains(k))
+}
+
+/// Gate → route → dispatch. Returns Some(reply markdown) if a tool handled the
+/// message; None falls through to normal chat. With `allow_router` false only
+/// the deterministic add-URL fast path runs (used in deep-research mode so
+/// imperative research prompts still reach the agent loop).
+async fn try_tool_route(
     app: &AppHandle,
     state: &AppState,
     notebook_id: &str,
     content: &str,
+    allow_router: bool,
 ) -> Option<String> {
-    let urls = extract_urls(content);
-    if urls.is_empty() || !wants_add_sources(content, &urls) {
+    if !tool_gate(content) {
         return None;
     }
 
+    // Deterministic fast path: message with URLs that clearly asks to add them
+    // skips the router entirely (previous behavior, zero extra latency).
+    // A destructive/refresh verb disqualifies it — "delete https://x" must
+    // reach the router, not re-ingest the URL.
+    let urls = extract_urls(content);
+    if !urls.is_empty() && wants_add_sources(content, &urls) && !has_non_add_verb(content) {
+        return Some(add_url_sources(app, state, notebook_id, &urls).await);
+    }
+    if !allow_router {
+        return None;
+    }
+
+    let _ = app.emit(
+        "chat://step",
+        StepEvent {
+            label: "Checking for commands".into(),
+        },
+    );
+    // Fetched once: the router prompt and the remove/refresh arms all use it.
+    let sources = state.db.list_sources(notebook_id).await.ok()?;
+    match route_tool(state, &sources, content).await {
+        ToolAction::Chat => None,
+        ToolAction::AddUrls(urls) => {
+            // Trust boundary: only ingest URLs whose host actually appears in
+            // the user's message — the router must not invent or rewrite them.
+            let l = content.to_lowercase();
+            let urls: Vec<String> = urls
+                .into_iter()
+                .filter(|u| l.contains(&host_of(u).to_lowercase()))
+                .collect();
+            if urls.is_empty() {
+                Some("I couldn't find that URL in your message — paste the full address (e.g. https://example.com/page) and I'll add it.".to_string())
+            } else {
+                Some(add_url_sources(app, state, notebook_id, &urls).await)
+            }
+        }
+        ToolAction::AddText { title, text } => {
+            let title = if title.is_empty() {
+                "Pasted from chat".into()
+            } else {
+                title
+            };
+            match ingest::extract_pasted(&title, &text) {
+                Ok(ex) => match store_extracted(state, notebook_id, ex).await {
+                    Ok(src) => Some(format!(
+                        "Added **{}** as a source ({} chars).",
+                        src.title, src.char_count
+                    )),
+                    Err(err) => Some(format!("Couldn't add that as a source: {err:#}")),
+                },
+                Err(err) => Some(format!("Couldn't add that as a source: {err:#}")),
+            }
+        }
+        ToolAction::Generate { kind, prompt } => {
+            let label = rag::artifact_spec(&kind)
+                .map(|(t, _)| t.to_string())
+                .unwrap_or_else(|| "document".into());
+            let _ = app.emit(
+                "chat://step",
+                StepEvent {
+                    label: format!("Generating {label}"),
+                },
+            );
+            match generate_content(state, notebook_id, &kind, &prompt).await {
+                Ok((title, body)) => {
+                    let ts = now();
+                    let note = Note {
+                        id: new_id(),
+                        notebook_id: notebook_id.to_string(),
+                        title: title.clone(),
+                        content: body,
+                        kind,
+                        prompt,
+                        created_at: ts,
+                        updated_at: ts,
+                    };
+                    if let Err(err) = state.db.add_note(&note).await {
+                        return Some(format!("Generation succeeded but saving failed: {err:#}"));
+                    }
+                    let _ = app.emit("generate://done", &note);
+                    Some(format!(
+                        "Generated **{title}** — it's in your Studio notes."
+                    ))
+                }
+                Err(err) => Some(format!("Couldn't generate that: {err:#}")),
+            }
+        }
+        ToolAction::RemoveSource(name) => {
+            let needle = name.to_lowercase();
+            let matches: Vec<&Source> = sources
+                .iter()
+                .filter(|s| {
+                    s.title.to_lowercase().contains(&needle)
+                        || (!s.url.is_empty() && host_of(&s.url).to_lowercase().contains(&needle))
+                })
+                .collect();
+            match matches.as_slice() {
+                [] => Some(format!("No source matches “{name}”.")),
+                [one] => {
+                    let title = one.title.clone();
+                    match state.db.delete_source(&one.id).await {
+                        Ok(()) => Some(format!("Removed **{title}** from this notebook.")),
+                        Err(err) => Some(format!("Couldn't remove {title}: {err:#}")),
+                    }
+                }
+                many => {
+                    let list = many
+                        .iter()
+                        .map(|s| format!("- {}", s.title))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    Some(format!(
+                        "“{name}” matches {} sources — be more specific:\n{list}",
+                        many.len()
+                    ))
+                }
+            }
+        }
+        ToolAction::RefreshSources(name) => {
+            let needle = name.to_lowercase();
+            let targets: Vec<&Source> = sources
+                .iter()
+                .filter(|s| !s.url.is_empty())
+                .filter(|s| {
+                    needle.is_empty()
+                        || s.title.to_lowercase().contains(&needle)
+                        || host_of(&s.url).to_lowercase().contains(&needle)
+                })
+                .collect();
+            if targets.is_empty() {
+                return Some("No matching URL sources to refresh.".into());
+            }
+            let mut ok = 0u32;
+            let mut failed: Vec<String> = Vec::new();
+            for src in &targets {
+                let _ = app.emit(
+                    "chat://step",
+                    StepEvent {
+                        label: format!("Refreshing: {}", src.title),
+                    },
+                );
+                let result = async {
+                    let existing = state
+                        .db
+                        .get_source(&src.id)
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("source vanished"))?;
+                    let extracted = ingest::extract_url(&existing.url).await?;
+                    reingest(state, &existing, extracted).await
+                }
+                .await;
+                match result {
+                    Ok(_) => ok += 1,
+                    Err(err) => failed.push(format!("- {} — {err:#}", src.title)),
+                }
+            }
+            let mut out = format!(
+                "Refreshed {ok} of {} URL source{}.",
+                targets.len(),
+                if targets.len() == 1 { "" } else { "s" }
+            );
+            if !failed.is_empty() {
+                out.push_str(&format!("\n\nFailed:\n{}", failed.join("\n")));
+            }
+            Some(out)
+        }
+        ToolAction::SaveNote(title) => {
+            let history = match state.db.list_messages(notebook_id).await {
+                Ok(h) => h,
+                Err(err) => return Some(format!("Couldn't read the chat history: {err:#}")),
+            };
+            // Skip tool confirmations — "that" means the last real answer.
+            let Some(last) = history
+                .iter()
+                .rev()
+                .find(|m| m.role == "assistant" && m.kind != "tool")
+            else {
+                return Some(
+                    "There's no previous answer to save yet — ask something first.".to_string(),
+                );
+            };
+            let title = if title.is_empty() {
+                last.content
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .map(|l| {
+                        l.trim_start_matches('#')
+                            .replace(['*', '`'], "")
+                            .trim()
+                            .chars()
+                            .take(60)
+                            .collect()
+                    })
+                    .unwrap_or_else(|| "Chat answer".to_string())
+            } else {
+                title
+            };
+            let ts = now();
+            let note = Note {
+                id: new_id(),
+                notebook_id: notebook_id.to_string(),
+                title: title.clone(),
+                content: last.content.clone(),
+                kind: "note".into(),
+                prompt: String::new(),
+                created_at: ts,
+                updated_at: ts,
+            };
+            match state.db.add_note(&note).await {
+                Ok(()) => Some(format!("Saved the previous answer as note **{title}**.")),
+                Err(err) => Some(format!("Couldn't save the note: {err:#}")),
+            }
+        }
+        ToolAction::ScheduleReport {
+            kind,
+            interval,
+            name,
+        } => {
+            let interval_secs = match interval.as_str() {
+                "hourly" => 3_600,
+                "daily" => 86_400,
+                "weekly" => 604_800,
+                other => {
+                    return Some(format!(
+                        "I can schedule reports **hourly**, **daily**, or **weekly** — “{other}” isn't supported yet, so I haven't created anything. Rephrase with one of those cadences?"
+                    ));
+                }
+            };
+            let schedule = ReportSchedule {
+                id: new_id(),
+                notebook_id: notebook_id.to_string(),
+                name: name.trim().to_string(),
+                kind,
+                prompt: String::new(),
+                interval_secs,
+                enabled: true,
+                last_run_at: 0,
+                created_at: now(),
+            };
+            match state.db.add_report_schedule(&schedule).await {
+                Ok(()) => Some(format!(
+                    "Scheduled **{name}** to run {interval} — it refreshes your URL sources, then writes a timestamped note (first run starts shortly). Manage it under Studio → Reports."
+                )),
+                Err(err) => Some(format!("Couldn't create the schedule: {err:#}")),
+            }
+        }
+    }
+}
+
+/// Ingest a list of URLs as sources, returning a markdown summary reply.
+async fn add_url_sources(
+    app: &AppHandle,
+    state: &AppState,
+    notebook_id: &str,
+    urls: &[String],
+) -> String {
     let mut added: Vec<Source> = Vec::new();
     let mut failed: Vec<(String, String)> = Vec::new();
-    for url in &urls {
-        let _ = app.emit("chat://step", StepEvent { label: format!("Adding source: {}", host_of(url)) });
+    for url in urls {
+        let _ = app.emit(
+            "chat://step",
+            StepEvent {
+                label: format!("Adding source: {}", host_of(url)),
+            },
+        );
         match ingest_url(state, notebook_id, url).await {
             Ok(src) if src.status != "error" => added.push(src),
             Ok(src) => failed.push((url.clone(), src.error)),
@@ -644,15 +1139,12 @@ async fn try_add_url_sources(
         if !out.is_empty() {
             out.push('\n');
         }
-        out.push_str(&format!(
-            "{} couldn't be added:\n",
-            failed.len()
-        ));
+        out.push_str(&format!("{} couldn't be added:\n", failed.len()));
         for (url, err) in &failed {
             out.push_str(&format!("- {} — {}\n", host_of(url), err));
         }
     }
-    Some(out)
+    out
 }
 
 #[tauri::command]
@@ -676,12 +1168,13 @@ pub async fn send_message(
         role: "user".into(),
         content: content.clone(),
         citations: vec![],
+        kind: "chat".into(),
         created_at: now(),
     };
     e(state.db.add_message(&user_msg).await)?;
 
     // Tool: if the user asked to add URLs as sources, do that instead of chat.
-    if let Some(reply) = try_add_url_sources(&app, &state, &notebook_id, &content).await {
+    if let Some(reply) = try_tool_route(&app, &state, &notebook_id, &content, true).await {
         return finish_tool_reply(&app, &state, &notebook_id, reply).await;
     }
 
@@ -696,7 +1189,7 @@ pub async fn send_message(
     let history = e(state.db.list_messages(&notebook_id).await)?;
     let history_turns: Vec<crate::ai::ChatTurn> = history
         .iter()
-        .filter(|m| m.id != user_msg.id)
+        .filter(|m| m.id != user_msg.id && m.kind != "tool")
         .map(|m| crate::ai::ChatTurn {
             role: m.role.clone(),
             content: m.content.clone(),
@@ -728,6 +1221,7 @@ pub async fn send_message(
         role: "assistant".into(),
         content: answer,
         citations,
+        kind: "chat".into(),
         created_at: now(),
     };
     e(state.db.add_message(&assistant_msg).await)?;
@@ -756,19 +1250,20 @@ pub async fn send_message_agentic(
         role: "user".into(),
         content: content.clone(),
         citations: vec![],
+        kind: "chat".into(),
         created_at: now(),
     };
     e(state.db.add_message(&user_msg).await)?;
 
     // Tool: add-URL requests are handled the same in deep-research mode.
-    if let Some(reply) = try_add_url_sources(&app, &state, &notebook_id, &content).await {
+    if let Some(reply) = try_tool_route(&app, &state, &notebook_id, &content, false).await {
         return finish_tool_reply(&app, &state, &notebook_id, reply).await;
     }
 
     let history = e(state.db.list_messages(&notebook_id).await)?;
     let history_turns: Vec<crate::ai::ChatTurn> = history
         .iter()
-        .filter(|m| m.id != user_msg.id)
+        .filter(|m| m.id != user_msg.id && m.kind != "tool")
         .map(|m| crate::ai::ChatTurn {
             role: m.role.clone(),
             content: m.content.clone(),
@@ -777,17 +1272,16 @@ pub async fn send_message_agentic(
 
     let (answer, citations, stats, model) = {
         let ai = state.ai.read().await;
-        let (answer, citations, stats) =
-            e(crate::agent::run(
-                &app,
-                &state.db,
-                &ai,
-                &notebook_id,
-                &content,
-                &history_turns,
-                &extra,
-            )
-            .await)?;
+        let (answer, citations, stats) = e(crate::agent::run(
+            &app,
+            &state.db,
+            &ai,
+            &notebook_id,
+            &content,
+            &history_turns,
+            &extra,
+        )
+        .await)?;
         (answer, citations, stats, ai.config().chat_model.clone())
     };
     state.record_chat_stats(&model, stats);
@@ -798,6 +1292,7 @@ pub async fn send_message_agentic(
         role: "assistant".into(),
         content: answer,
         citations,
+        kind: "chat".into(),
         created_at: now(),
     };
     e(state.db.add_message(&assistant_msg).await)?;
@@ -1008,9 +1503,10 @@ pub async fn suggest_followups(
     if history.is_empty() {
         return Ok(vec![]);
     }
-    let start = history.len().saturating_sub(4);
+    let chat_only: Vec<&Message> = history.iter().filter(|m| m.kind != "tool").collect();
+    let start = chat_only.len().saturating_sub(4);
     let mut convo = String::new();
-    for m in &history[start..] {
+    for m in &chat_only[start..] {
         let c: String = m.content.chars().take(500).collect();
         convo.push_str(&format!("{}: {}\n", m.role, c));
     }
@@ -1258,4 +1754,111 @@ pub async fn list_models(state: State<'_, AppState>) -> Result<Vec<String>, Stri
 pub async fn check_ollama(state: State<'_, AppState>) -> Result<bool, String> {
     let ai = state.ai.read().await;
     Ok(ai.list_models().await.is_ok())
+}
+
+#[cfg(test)]
+mod tool_tests {
+    use super::*;
+
+    #[test]
+    fn gate_passes_commands_and_blocks_questions() {
+        assert!(tool_gate("add https://example.com please"));
+        assert!(tool_gate("make a study guide"));
+        assert!(tool_gate("delete the ferrari source"));
+        assert!(tool_gate("refresh my urls and sources"));
+        assert!(!tool_gate("what does the spec say about pricing?"));
+        assert!(!tool_gate("compare the two cars"));
+    }
+
+    #[test]
+    fn parses_generate() {
+        match parse_tool_action(
+            r#"{"action":"generate","kind":"study_guide","prompt":"focus on ch 2"}"#,
+        ) {
+            ToolAction::Generate { kind, prompt } => {
+                assert_eq!(kind, "study_guide");
+                assert_eq!(prompt, "focus on ch 2");
+            }
+            _ => panic!("expected generate"),
+        }
+    }
+
+    #[test]
+    fn parses_remove_and_refresh() {
+        assert!(matches!(
+            parse_tool_action(r#"{"action":"remove_source","name":"ferrari"}"#),
+            ToolAction::RemoveSource(n) if n == "ferrari"
+        ));
+        assert!(matches!(
+            parse_tool_action(r#"{"action":"refresh_sources","name":""}"#),
+            ToolAction::RefreshSources(n) if n.is_empty()
+        ));
+    }
+
+    #[test]
+    fn parses_schedule_intervals() {
+        match parse_tool_action(
+            r#"{"action":"schedule_report","kind":"briefing","interval":"weekly","name":"News"}"#,
+        ) {
+            ToolAction::ScheduleReport { interval, name, .. } => {
+                assert_eq!(interval, "weekly");
+                assert_eq!(name, "News");
+            }
+            _ => panic!("expected schedule"),
+        }
+        // Unsupported cadence survives parsing; dispatch refuses it politely.
+        match parse_tool_action(
+            r#"{"action":"schedule_report","kind":"custom","interval":"monthly","name":"X"}"#,
+        ) {
+            ToolAction::ScheduleReport { kind, interval, .. } => {
+                assert_eq!(kind, "briefing"); // unknown kinds coerce to a known one
+                assert_eq!(interval, "monthly"); // preserved for the refusal reply
+            }
+            _ => panic!("expected schedule"),
+        }
+    }
+
+    #[test]
+    fn fast_path_never_adds_on_destructive_verbs() {
+        assert!(has_non_add_verb("delete https://example.com"));
+        assert!(has_non_add_verb("refresh https://example.com"));
+        assert!(!has_non_add_verb("add https://example.com"));
+    }
+
+    #[test]
+    fn normalizes_schemeless_urls() {
+        match parse_tool_action(
+            r#"{"action":"add_urls","urls":["example.com/page","https://a.io"]}"#,
+        ) {
+            ToolAction::AddUrls(urls) => {
+                assert_eq!(urls, vec!["https://example.com/page", "https://a.io"]);
+            }
+            _ => panic!("expected add_urls"),
+        }
+        // Junk without a dot is dropped; empty list collapses to Chat.
+        assert!(matches!(
+            parse_tool_action(r#"{"action":"add_urls","urls":["httpfoo"]}"#),
+            ToolAction::Chat
+        ));
+    }
+
+    #[test]
+    fn falls_back_to_chat() {
+        assert!(matches!(
+            parse_tool_action("no json at all"),
+            ToolAction::Chat
+        ));
+        assert!(matches!(
+            parse_tool_action(r#"{"action":"chat"}"#),
+            ToolAction::Chat
+        ));
+        assert!(matches!(
+            parse_tool_action(r#"{"action":"add_urls","urls":[]}"#),
+            ToolAction::Chat
+        ));
+        assert!(matches!(
+            parse_tool_action(r#"{"action":"generate","kind":""}"#),
+            ToolAction::Chat
+        ));
+    }
 }

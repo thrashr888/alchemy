@@ -145,7 +145,7 @@ fn parse_action(raw: &str) -> Option<Action> {
 }
 
 /// Extract the first balanced `{...}` object from arbitrary model output.
-fn extract_json(raw: &str) -> Option<String> {
+pub(crate) fn extract_json(raw: &str) -> Option<String> {
     let start = raw.find('{')?;
     let mut depth = 0usize;
     let mut in_str = false;

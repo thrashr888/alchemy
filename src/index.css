@@ -126,7 +126,7 @@ button {
 
 /* Markdown rendering inside chat + notes. */
 .prose {
-  font-size: 13.5px;
+  font-size: 13px;
   line-height: 1.65;
   color: var(--foreground);
 }

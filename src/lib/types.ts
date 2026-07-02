@@ -37,6 +37,8 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   citations: Citation[];
+  /** "chat" for real answers, "tool" for tool confirmations. */
+  kind: "chat" | "tool";
   createdAt: number;
 }
 

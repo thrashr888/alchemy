@@ -116,7 +116,7 @@ function Pill({
     <button
       onClick={onClick}
       className={cn(
-        "rounded-md border px-3 py-1.5 text-[12.5px] transition-colors",
+        "rounded-md border px-3 py-1.5 text-[12px] transition-colors",
         active
           ? "border-primary/60 bg-primary/15 text-citation"
           : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",

@@ -126,7 +126,15 @@ pub struct Message {
     pub content: String,
     #[serde(default)]
     pub citations: Vec<Citation>,
+    /// "chat" (an LLM answer / user turn) | "tool" (a tool confirmation).
+    /// Tool messages are excluded from model context windows.
+    #[serde(default = "default_message_kind")]
+    pub kind: String,
     pub created_at: i64,
+}
+
+fn default_message_kind() -> String {
+    "chat".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

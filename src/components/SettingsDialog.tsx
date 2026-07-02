@@ -392,7 +392,7 @@ function ModelPicker({
       )}
       {notInstalled.length > 0 && (
         <div className="flex flex-col gap-1">
-          <span className="text-[10.5px] uppercase tracking-wide text-subtle-foreground">
+          <span className="text-[11px] uppercase tracking-wide text-subtle-foreground">
             Suggested · pull to use
           </span>
           <div className="flex flex-wrap gap-1">

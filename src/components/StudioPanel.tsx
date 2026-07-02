@@ -254,7 +254,7 @@ function ArtifactGrid({
           key={a.kind}
           disabled={disabled}
           onClick={() => onPick(a.kind)}
-          className="flex items-center gap-2 rounded-md border border-border bg-surface-2 px-2.5 py-2 text-[12.5px] text-foreground/90 transition-colors hover:border-border-strong hover:bg-elevated disabled:opacity-40 disabled:pointer-events-none"
+          className="flex items-center gap-2 rounded-md border border-border bg-surface-2 px-2.5 py-2 text-[12px] text-foreground/90 transition-colors hover:border-border-strong hover:bg-elevated disabled:opacity-40 disabled:pointer-events-none"
         >
           <span className="text-muted-foreground">
             {generatingKind === a.kind ? <Spinner className="h-3.5 w-3.5" /> : a.icon}

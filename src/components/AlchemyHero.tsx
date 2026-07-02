@@ -109,7 +109,7 @@ export function AlchemyHero({
           {title}
         </h1>
         {subtitle && (
-          <p className="mt-4 max-w-md text-[13.5px] leading-relaxed text-muted-foreground">
+          <p className="mt-4 max-w-md text-[13px] leading-relaxed text-muted-foreground">
             {subtitle}
           </p>
         )}

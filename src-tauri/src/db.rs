@@ -45,10 +45,55 @@ impl Db {
         db.ensure_table(T_SOURCES, sources_schema()).await?;
         db.migrate_sources().await?;
         db.ensure_table(T_MESSAGES, messages_schema()).await?;
+        db.migrate_messages().await?;
         db.ensure_table(T_NOTES, notes_schema()).await?;
         db.migrate_notes().await?;
         db.ensure_table(T_REPORTS, reports_schema()).await?;
         Ok(db)
+    }
+
+    /// Backfill the `kind` column ("chat") on pre-existing `messages` tables.
+    async fn migrate_messages(&self) -> Result<()> {
+        if !self.table_exists(T_MESSAGES).await? {
+            return Ok(());
+        }
+        let schema = self
+            .conn
+            .open_table(T_MESSAGES)
+            .execute()
+            .await?
+            .schema()
+            .await?;
+        if schema.field_with_name("kind").is_ok() {
+            return Ok(());
+        }
+        let batches = self.collect(T_MESSAGES, None).await?;
+        let mut messages = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let nb = str_col(b, "notebook_id")?;
+            let role = str_col(b, "role")?;
+            let content = str_col(b, "content")?;
+            let citations = str_col(b, "citations")?;
+            let created = i64_col(b, "created_at")?;
+            for i in 0..b.num_rows() {
+                messages.push(Message {
+                    id: id.value(i).to_string(),
+                    notebook_id: nb.value(i).to_string(),
+                    role: role.value(i).to_string(),
+                    content: content.value(i).to_string(),
+                    citations: serde_json::from_str(citations.value(i)).unwrap_or_default(),
+                    kind: "chat".to_string(),
+                    created_at: created.value(i),
+                });
+            }
+        }
+        self.conn.drop_table(T_MESSAGES, &[]).await?;
+        self.ensure_table(T_MESSAGES, messages_schema()).await?;
+        for msg in &messages {
+            self.add_message(msg).await?;
+        }
+        Ok(())
     }
 
     /// Backfill the `prompt` column on pre-existing `notes` tables.
@@ -568,6 +613,7 @@ impl Db {
             let role = str_col(b, "role")?;
             let content = str_col(b, "content")?;
             let citations = str_col(b, "citations")?;
+            let kind = str_col(b, "kind")?;
             let created = i64_col(b, "created_at")?;
             for i in 0..b.num_rows() {
                 let cites: Vec<Citation> =
@@ -578,6 +624,7 @@ impl Db {
                     role: role.value(i).to_string(),
                     content: content.value(i).to_string(),
                     citations: cites,
+                    kind: kind.value(i).to_string(),
                     created_at: created.value(i),
                 });
             }
@@ -597,6 +644,7 @@ impl Db {
                 Arc::new(StringArray::from(vec![msg.role.clone()])),
                 Arc::new(StringArray::from(vec![msg.content.clone()])),
                 Arc::new(StringArray::from(vec![citations])),
+                Arc::new(StringArray::from(vec![msg.kind.clone()])),
                 Arc::new(Int64Array::from(vec![msg.created_at])),
             ],
         )?;
@@ -892,6 +940,7 @@ fn messages_schema() -> SchemaRef {
         Field::new("role", DataType::Utf8, false),
         Field::new("content", DataType::Utf8, false),
         Field::new("citations", DataType::Utf8, false),
+        Field::new("kind", DataType::Utf8, false),
         Field::new("created_at", DataType::Int64, false),
     ]))
 }

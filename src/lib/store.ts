@@ -350,6 +350,7 @@ export const useStore = create<AppState>((set, get) => ({
       role: "user",
       content,
       citations: [],
+      kind: "chat",
       createdAt: Date.now(),
     };
     set({
@@ -367,17 +368,28 @@ export const useStore = create<AppState>((set, get) => ({
       } else {
         await api.sendMessage(id, content, cfg);
       }
-      // Reload messages; also refresh sources in case a chat tool added some.
-      set({
-        messages: await api.listMessages(id),
-        streamingText: "",
-        sources: await api.listSources(id),
-      });
+      // Reload in parallel; chat tools can touch sources, notes, and report
+      // schedules, so refresh them all alongside the transcript.
+      const [messages, sources, notes, reportSchedules] = await Promise.all([
+        api.listMessages(id),
+        api.listSources(id),
+        api.listNotes(id),
+        api.listReportSchedules(id),
+      ]);
+      // The user may have switched notebooks while a slow tool ran — never
+      // write another notebook's data over the current one.
+      if (get().currentId === id) {
+        set({ messages, sources, notes, reportSchedules, streamingText: "" });
+        void get().loadFollowups();
+      }
       await get().refreshNotebooks();
-      void get().loadFollowups();
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : String(e) });
+      if (get().currentId === id) {
+        set({ error: e instanceof Error ? e.message : String(e) });
+      }
     } finally {
+      // sending/steps are global in-flight flags — always clear them, even if
+      // the user switched notebooks while the request ran.
       set({ sending: false, streamingText: "", steps: [] });
       void get().refreshModelStats();
     }

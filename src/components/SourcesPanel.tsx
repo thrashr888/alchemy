@@ -217,7 +217,7 @@ export function SourcesPanel() {
                   )}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-[12.5px]" title={q.name}>
+                  <div className="truncate text-[12px]" title={q.name}>
                     {q.name}
                   </div>
                   <div

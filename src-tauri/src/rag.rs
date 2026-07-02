@@ -35,7 +35,10 @@ pub fn build_chat_messages(
     let system = if extra_system.trim().is_empty() {
         CHAT_SYSTEM.to_string()
     } else {
-        format!("{CHAT_SYSTEM}\n\nAdditional style guidance: {}", extra_system.trim())
+        format!(
+            "{CHAT_SYSTEM}\n\nAdditional style guidance: {}",
+            extra_system.trim()
+        )
     };
     let mut messages = vec![ChatTurn::system(system)];
     // Keep a short rolling window of prior turns for conversational context.

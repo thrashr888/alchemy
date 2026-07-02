@@ -47,7 +47,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             ) : (
               <Circle className="h-2.5 w-2.5 fill-destructive text-destructive" />
             )}
-            <span className="text-[11.5px] text-muted-foreground">
+            <span className="text-[11px] text-muted-foreground">
               {ollamaOk === null ? "Checking…" : ollamaOk ? "Ollama connected" : "Ollama offline"}
             </span>
           </div>
@@ -125,7 +125,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 <div className="mt-3 truncate text-[14px] font-medium" title={nb.title}>
                   {nb.title}
                 </div>
-                <div className="mt-1 flex items-center gap-1.5 text-[11.5px] text-subtle-foreground">
+                <div className="mt-1 flex items-center gap-1.5 text-[11px] text-subtle-foreground">
                   <Badge className="gap-1">
                     <FileText className="h-2.5 w-2.5" />
                     {nb.sourceCount}

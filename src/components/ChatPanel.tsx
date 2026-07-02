@@ -269,7 +269,7 @@ function ChatMessage({ message }: { message: Message }) {
   if (message.role === "user") {
     return (
       <div className="flex flex-col items-end gap-1">
-        <div className="max-w-[85%] rounded-lg rounded-br-sm bg-surface-2 px-3.5 py-2 text-[13.5px] selectable border border-border">
+        <div className="max-w-[85%] rounded-lg rounded-br-sm bg-surface-2 px-3.5 py-2 text-[13px] selectable border border-border">
           {message.content}
         </div>
       </div>
@@ -335,7 +335,7 @@ function MessageActions({ content }: { content: string }) {
 
 function RoleLabel({ role }: { role: "assistant" | "user" }) {
   return (
-    <div className="flex items-center gap-1.5 text-[11.5px] font-medium text-muted-foreground">
+    <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
       <Sparkles className="h-3 w-3 text-primary" />
       {role === "assistant" ? "Assistant" : "You"}
     </div>

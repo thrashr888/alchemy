@@ -58,7 +58,7 @@ export function Reports() {
       </div>
 
       {schedules.length === 0 ? (
-        <p className="text-[11.5px] text-subtle-foreground">
+        <p className="text-[11px] text-subtle-foreground">
           Schedule recurring reports that refresh your URL sources, then generate a timestamped note.
         </p>
       ) : (

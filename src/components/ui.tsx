@@ -15,7 +15,7 @@ const variants: Record<ButtonVariant, string> = {
 };
 
 const sizes: Record<ButtonSize, string> = {
-  sm: "h-7 px-2.5 text-[12.5px] gap-1.5 rounded-md",
+  sm: "h-7 px-2.5 text-[12px] gap-1.5 rounded-md",
   md: "h-8 px-3 text-[13px] gap-2 rounded-md",
   icon: "h-7 w-7 rounded-md justify-center",
 };
@@ -148,7 +148,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded px-1.5 h-[18px] text-[10.5px] font-medium",
+        "inline-flex items-center rounded px-1.5 h-[18px] text-[11px] font-medium",
         "bg-surface-2 text-muted-foreground border border-border",
         className,
       )}
