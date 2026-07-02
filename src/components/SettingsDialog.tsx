@@ -5,7 +5,7 @@ import { THEME_LIST } from "@/lib/themes";
 import { Button, Input, Modal, Spinner } from "./ui";
 import { cn } from "@/lib/utils";
 import type { AiConfig } from "@/lib/types";
-import { RefreshCw, CheckCircle2, XCircle, Check, Zap } from "lucide-react";
+import { RefreshCw, CheckCircle2, XCircle, Check, Circle, Zap } from "lucide-react";
 
 /** Treat `name` and `name:latest` as the same model for matching. */
 const normModel = (m: string) => m.replace(/:latest$/, "");
@@ -231,15 +231,34 @@ function StatusBox({
   const stats = useStore((s) => s.modelStats);
   const chatStat = stats.find((s) => normModel(s.name) === normModel(chatModel));
 
-  const Row = ({ label, status }: { label: string; status?: { working: boolean; detail: string } }) => (
+  const Row = ({
+    label,
+    status,
+    optional,
+  }: {
+    label: string;
+    status?: { working: boolean; detail: string };
+    optional?: boolean;
+  }) => (
     <div className="flex items-center gap-2 text-[12px]">
       {status?.working ? (
         <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />
+      ) : optional ? (
+        <Circle className="h-3.5 w-3.5 shrink-0 text-subtle-foreground" />
       ) : (
         <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
       )}
       <span className="w-12 shrink-0 text-muted-foreground">{label}</span>
-      <span className={cn("truncate", status?.working ? "text-foreground/80" : "text-destructive")}>
+      <span
+        className={cn(
+          "truncate",
+          status?.working
+            ? "text-foreground/80"
+            : optional
+              ? "text-muted-foreground"
+              : "text-destructive",
+        )}
+      >
         {status?.detail ?? "Unknown"}
       </span>
     </div>
@@ -279,6 +298,7 @@ function StatusBox({
         <div className="flex flex-col gap-1.5 border-t border-border pt-2">
           <Row label="Chat" status={health?.chat} />
           <Row label="Embed" status={health?.embed} />
+          <Row label="Vision" status={health?.vision} optional />
           {chatStat && chatStat.samples > 0 && (
             <div className="flex items-center gap-2 text-[12px]">
               <Zap className="h-3.5 w-3.5 shrink-0 text-citation" />
