@@ -103,3 +103,15 @@ export interface AiConfig {
   embedModel: string;
   visionModel: string;
 }
+
+export interface ChatConfig {
+  style: "default" | "learning" | "custom";
+  customPrompt: string;
+  length: "default" | "longer" | "shorter";
+}
+
+export const DEFAULT_CHAT_CONFIG: ChatConfig = {
+  style: "default",
+  customPrompt: "",
+  length: "default",
+};

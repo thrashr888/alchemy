@@ -30,7 +30,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   // Backend already returns notebooks sorted by most-recently-updated.
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
-      <header className="flex items-center gap-2.5 px-6 h-14 border-b border-border">
+      <header
+        data-tauri-drag-region
+        className="flex items-center gap-2.5 h-14 border-b border-border pl-[84px] pr-5"
+      >
         <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/15 text-primary">
           <BookOpen className="h-4 w-4" />
         </div>

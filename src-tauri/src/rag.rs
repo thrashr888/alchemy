@@ -16,6 +16,7 @@ pub fn build_chat_messages(
     history: &[ChatTurn],
     question: &str,
     citations: &[Citation],
+    extra_system: &str,
 ) -> Vec<ChatTurn> {
     let mut context = String::new();
     if citations.is_empty() {
@@ -31,7 +32,12 @@ pub fn build_chat_messages(
         }
     }
 
-    let mut messages = vec![ChatTurn::system(CHAT_SYSTEM)];
+    let system = if extra_system.trim().is_empty() {
+        CHAT_SYSTEM.to_string()
+    } else {
+        format!("{CHAT_SYSTEM}\n\nAdditional style guidance: {}", extra_system.trim())
+    };
+    let mut messages = vec![ChatTurn::system(system)];
     // Keep a short rolling window of prior turns for conversational context.
     let start = history.len().saturating_sub(6);
     messages.extend(history[start..].iter().cloned());

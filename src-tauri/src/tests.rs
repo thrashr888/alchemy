@@ -114,6 +114,7 @@ async fn rag_round_trip() {
         &[],
         "Where do the light-dependent reactions occur?",
         &citations,
+        "",
     );
     let answer = ai.chat(&messages).await.expect("chat").text;
     eprintln!("answer: {answer}");

@@ -3,8 +3,10 @@ import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import { applyTheme, DEFAULT_THEME } from "./themes";
 import { notify } from "./notify";
+import { DEFAULT_CHAT_CONFIG } from "./types";
 import type {
   AiConfig,
+  ChatConfig,
   Message,
   ModelHealth,
   ModelStat,
@@ -45,10 +47,16 @@ interface AppState {
   streamingText: string;
   steps: string[];
   agentMode: boolean;
+  chatConfig: ChatConfig;
+  followups: string[];
+  summary: string;
+  summaryLoading: boolean;
   generatingKind: NoteKind | null;
   ingestQueue: QueueItem[];
   migration: Migration | null;
   draggingFiles: boolean;
+  sourcesOpen: boolean;
+  studioOpen: boolean;
   error: string | null;
 
   init: () => Promise<void>;
@@ -61,6 +69,8 @@ interface AppState {
   setTheme: (theme: string) => void;
   clearQueueItem: (id: string) => void;
   setDraggingFiles: (v: boolean) => void;
+  toggleSources: () => void;
+  toggleStudio: () => void;
   createReport: (name: string, kind: string, prompt: string, intervalSecs: number) => Promise<void>;
   updateReport: (r: ReportSchedule) => Promise<void>;
   deleteReport: (id: string) => Promise<void>;
@@ -78,6 +88,9 @@ interface AppState {
   appendToken: (t: string) => void;
   appendStep: (label: string) => void;
   toggleAgentMode: () => void;
+  setChatConfig: (config: ChatConfig) => void;
+  loadFollowups: () => Promise<void>;
+  refreshSummary: () => Promise<void>;
   clearChat: () => Promise<void>;
 
   generateArtifact: (kind: NoteKind, prompt?: string) => Promise<void>;
@@ -136,10 +149,16 @@ export const useStore = create<AppState>((set, get) => ({
   streamingText: "",
   steps: [],
   agentMode: localStorage.getItem("agentMode") === "true",
+  chatConfig: DEFAULT_CHAT_CONFIG,
+  followups: [],
+  summary: "",
+  summaryLoading: false,
   generatingKind: null,
   ingestQueue: [],
   migration: null,
   draggingFiles: false,
+  sourcesOpen: localStorage.getItem("sourcesOpen") !== "false",
+  studioOpen: localStorage.getItem("studioOpen") !== "false",
   error: null,
 
   init: async () => {
@@ -180,7 +199,25 @@ export const useStore = create<AppState>((set, get) => ({
 
   selectNotebook: async (id) => {
     localStorage.setItem("lastNotebookId", id);
-    set({ currentId: id, sources: [], messages: [], notes: [], reportSchedules: [], streamingText: "", steps: [] });
+    let chatConfig: ChatConfig = DEFAULT_CHAT_CONFIG;
+    try {
+      const raw = localStorage.getItem(`chatConfig:${id}`);
+      if (raw) chatConfig = { ...DEFAULT_CHAT_CONFIG, ...JSON.parse(raw) };
+    } catch {
+      /* ignore */
+    }
+    set({
+      currentId: id,
+      sources: [],
+      messages: [],
+      notes: [],
+      reportSchedules: [],
+      streamingText: "",
+      steps: [],
+      followups: [],
+      chatConfig,
+      summary: localStorage.getItem(`summary:${id}`) ?? "",
+    });
     const [sources, messages, notes, reportSchedules] = await Promise.all([
       api.listSources(id),
       api.listMessages(id),
@@ -202,6 +239,17 @@ export const useStore = create<AppState>((set, get) => ({
   clearQueueItem: (id) => set({ ingestQueue: get().ingestQueue.filter((q) => q.id !== id) }),
 
   setDraggingFiles: (v) => set({ draggingFiles: v }),
+
+  toggleSources: () => {
+    const v = !get().sourcesOpen;
+    localStorage.setItem("sourcesOpen", String(v));
+    set({ sourcesOpen: v });
+  },
+  toggleStudio: () => {
+    const v = !get().studioOpen;
+    localStorage.setItem("studioOpen", String(v));
+    set({ studioOpen: v });
+  },
 
   createNotebook: async (title) => {
     const nb = await api.createNotebook(title);
@@ -309,17 +357,24 @@ export const useStore = create<AppState>((set, get) => ({
       sending: true,
       streamingText: "",
       steps: [],
+      followups: [],
       error: null,
     });
     try {
+      const cfg = get().chatConfig;
       if (get().agentMode) {
-        await api.sendMessageAgentic(id, content);
+        await api.sendMessageAgentic(id, content, cfg);
       } else {
-        await api.sendMessage(id, content);
+        await api.sendMessage(id, content, cfg);
       }
-      // Reload to get canonical user + assistant rows with citations.
-      set({ messages: await api.listMessages(id), streamingText: "" });
+      // Reload messages; also refresh sources in case a chat tool added some.
+      set({
+        messages: await api.listMessages(id),
+        streamingText: "",
+        sources: await api.listSources(id),
+      });
       await get().refreshNotebooks();
+      void get().loadFollowups();
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -336,6 +391,38 @@ export const useStore = create<AppState>((set, get) => ({
     const next = !get().agentMode;
     localStorage.setItem("agentMode", String(next));
     set({ agentMode: next });
+  },
+
+  setChatConfig: (config) => {
+    const id = get().currentId;
+    if (id) localStorage.setItem(`chatConfig:${id}`, JSON.stringify(config));
+    set({ chatConfig: config });
+  },
+
+  loadFollowups: async () => {
+    const id = get().currentId;
+    if (!id) return;
+    try {
+      const followups = await api.suggestFollowups(id);
+      if (get().currentId === id) set({ followups });
+    } catch {
+      /* best-effort */
+    }
+  },
+
+  refreshSummary: async () => {
+    const id = get().currentId;
+    if (!id) return;
+    set({ summaryLoading: true });
+    try {
+      const summary = await api.generateNotebookSummary(id);
+      localStorage.setItem(`summary:${id}`, summary);
+      if (get().currentId === id) set({ summary });
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      set({ summaryLoading: false });
+    }
   },
 
   clearChat: async () => {

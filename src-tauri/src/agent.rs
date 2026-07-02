@@ -41,6 +41,7 @@ pub async fn run(
     notebook_id: &str,
     question: &str,
     history: &[ChatTurn],
+    extra_system: &str,
 ) -> Result<(String, Vec<Citation>, Option<crate::ai::GenStats>)> {
     let sources = db.list_sources(notebook_id).await?;
     let source_list = sources
@@ -101,7 +102,7 @@ pub async fn run(
     }
 
     emit_step(app, "Writing answer".into());
-    let messages = rag::build_chat_messages(history, question, &gathered);
+    let messages = rag::build_chat_messages(history, question, &gathered, extra_system);
     let app_cb = app.clone();
     let outcome = ollama
         .chat_stream(&messages, |tok| {

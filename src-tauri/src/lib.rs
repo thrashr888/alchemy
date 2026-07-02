@@ -90,6 +90,8 @@ pub fn run() {
             commands::check_ollama,
             commands::check_models,
             commands::get_model_stats,
+            commands::suggest_followups,
+            commands::generate_notebook_summary,
             commands::list_report_schedules,
             commands::list_all_report_schedules,
             commands::create_report_schedule,

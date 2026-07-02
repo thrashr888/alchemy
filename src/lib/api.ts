@@ -3,6 +3,7 @@ import { Cause, Duration, Effect, Schedule } from "effect";
 import { describe, IpcError, TimeoutError, type AppError } from "./errors";
 import type {
   AiConfig,
+  ChatConfig,
   Message,
   ModelHealth,
   ModelStat,
@@ -92,10 +93,14 @@ export const api = {
 
   // Chat
   listMessages: (notebookId: string) => run(query<Message[]>("list_messages", { notebookId })),
-  sendMessage: (notebookId: string, content: string) =>
-    run(ai<Message>("send_message", { notebookId, content })),
-  sendMessageAgentic: (notebookId: string, content: string) =>
-    run(ai<Message>("send_message_agentic", { notebookId, content })),
+  sendMessage: (notebookId: string, content: string, config: ChatConfig) =>
+    run(ai<Message>("send_message", { notebookId, content, config })),
+  sendMessageAgentic: (notebookId: string, content: string, config: ChatConfig) =>
+    run(ai<Message>("send_message_agentic", { notebookId, content, config })),
+  suggestFollowups: (notebookId: string) =>
+    run(query<string[]>("suggest_followups", { notebookId })),
+  generateNotebookSummary: (notebookId: string) =>
+    run(ai<string>("generate_notebook_summary", { notebookId })),
   clearChat: (notebookId: string) => run(cmd<void>("clear_chat", { notebookId })),
 
   // Notes & artifacts

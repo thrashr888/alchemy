@@ -17,7 +17,11 @@ import {
   Check,
   Copy,
   NotebookPen,
+  SlidersHorizontal,
+  RefreshCw,
+  CornerDownRight,
 } from "lucide-react";
+import { ConfigureChatModal } from "./ConfigureChatModal";
 
 export function ChatPanel() {
   const currentId = useStore((s) => s.currentId);
@@ -33,8 +37,13 @@ export function ChatPanel() {
   const appendToken = useStore((s) => s.appendToken);
   const appendStep = useStore((s) => s.appendStep);
   const theme = useStore((s) => s.theme);
+  const followups = useStore((s) => s.followups);
+  const summary = useStore((s) => s.summary);
+  const summaryLoading = useStore((s) => s.summaryLoading);
+  const refreshSummary = useStore((s) => s.refreshSummary);
 
   const [draft, setDraft] = useState("");
+  const [configOpen, setConfigOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Subscribe once to streaming tokens + agent progress steps from the backend.
@@ -79,21 +88,34 @@ export function ChatPanel() {
       <div className="relative z-10 flex items-center px-5 h-12 border-b border-border">
         <MessageSquare className="h-4 w-4 text-muted-foreground" />
         <span className="ml-2 text-[13px] font-semibold">Chat</span>
-        {messages.length > 0 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="ml-auto"
-            onClick={() => confirm("Clear this conversation?") && clearChat()}
-          >
-            <Eraser className="h-3.5 w-3.5" />
-            Clear
+        <div className="ml-auto flex items-center gap-1">
+          <Button variant="ghost" size="sm" onClick={() => setConfigOpen(true)} title="Configure chat">
+            <SlidersHorizontal className="h-3.5 w-3.5" />
+            Configure
           </Button>
-        )}
+          {messages.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => confirm("Clear this conversation?") && clearChat()}
+            >
+              <Eraser className="h-3.5 w-3.5" />
+              Clear
+            </Button>
+          )}
+        </div>
       </div>
 
       <div ref={scrollRef} className="relative z-10 flex-1 overflow-y-auto">
         <div className="mx-auto flex max-w-[720px] flex-col gap-6 px-5 py-6">
+          {canChat && (
+            <SummaryBanner
+              summary={summary}
+              loading={summaryLoading}
+              onRefresh={refreshSummary}
+            />
+          )}
+
           {messages.length === 0 && !sending ? (
             <ChatEmpty hasNotebook={!!currentId} hasSources={sources.length > 0} />
           ) : (
@@ -109,6 +131,27 @@ export function ChatPanel() {
               ) : (
                 steps.length === 0 && <ThinkingDots />
               )}
+            </div>
+          )}
+
+          {!sending && followups.length > 0 && messages.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+                Suggested follow-ups
+              </span>
+              {followups.map((q, i) => (
+                <button
+                  key={i}
+                  onClick={() => {
+                    setDraft("");
+                    void send(q);
+                  }}
+                  className="flex items-start gap-2 rounded-lg border border-border bg-surface/60 px-3 py-2 text-left text-[13px] text-foreground/90 transition-colors hover:border-border-strong hover:bg-surface-2"
+                >
+                  <CornerDownRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  {q}
+                </button>
+              ))}
             </div>
           )}
         </div>
@@ -173,6 +216,51 @@ export function ChatPanel() {
           </div>
         </div>
       </div>
+
+      <ConfigureChatModal open={configOpen} onClose={() => setConfigOpen(false)} />
+    </div>
+  );
+}
+
+function SummaryBanner({
+  summary,
+  loading,
+  onRefresh,
+}: {
+  summary: string;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  if (!summary && !loading) {
+    return (
+      <button
+        onClick={onRefresh}
+        className="self-start rounded-lg border border-dashed border-border-strong bg-surface/50 px-3 py-1.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <Sparkles className="mr-1.5 inline h-3 w-3" />
+        Generate notebook summary
+      </button>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-border bg-surface/60 p-3.5">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+          Notebook summary
+        </span>
+        <button
+          onClick={onRefresh}
+          className="text-muted-foreground transition-colors hover:text-foreground"
+          title="Regenerate summary"
+        >
+          <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+        </button>
+      </div>
+      {loading && !summary ? (
+        <div className="text-[13px] text-muted-foreground">Summarizing sources…</div>
+      ) : (
+        <p className="text-[13px] leading-relaxed text-foreground/90 selectable">{summary}</p>
+      )}
     </div>
   );
 }

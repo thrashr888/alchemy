@@ -294,11 +294,15 @@ pub async fn add_source_url(
     notebook_id: String,
     url: String,
 ) -> Result<Source, String> {
-    // Hard failures (network / HTTP / empty) still produce a source row marked
-    // as errored, so the user sees it and can retry rather than it vanishing.
-    match ingest::extract_url(&url).await {
-        Ok(extracted) => e(store_extracted(&state, &notebook_id, extracted).await),
-        Err(err) => e(store_failed_url(&state, &notebook_id, url.trim(), err.to_string()).await),
+    e(ingest_url(&state, &notebook_id, &url).await)
+}
+
+/// Fetch a URL into a source. Hard failures (network / HTTP / empty) still
+/// produce an errored source row so the user sees it and can retry.
+async fn ingest_url(state: &AppState, notebook_id: &str, url: &str) -> anyhow::Result<Source> {
+    match ingest::extract_url(url).await {
+        Ok(extracted) => store_extracted(state, notebook_id, extracted).await,
+        Err(err) => store_failed_url(state, notebook_id, url.trim(), err.to_string()).await,
     }
 }
 
@@ -509,17 +513,161 @@ struct TokenEvent {
     content: String,
 }
 
+#[derive(serde::Serialize, Clone)]
+struct StepEvent {
+    label: String,
+}
+
+/// Per-notebook chat configuration sent from the frontend.
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ChatConfig {
+    pub style: String,
+    pub custom_prompt: String,
+    pub length: String,
+}
+
+/// Turn the chat config into extra system-prompt guidance.
+fn chat_style_instruction(cfg: &ChatConfig) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    match cfg.style.as_str() {
+        "learning" => parts.push(
+            "Act as a patient learning guide: explain step by step, define key terms, and build intuition.".into(),
+        ),
+        "custom" if !cfg.custom_prompt.trim().is_empty() => parts.push(cfg.custom_prompt.trim().into()),
+        _ => {}
+    }
+    match cfg.length.as_str() {
+        "longer" => parts.push("Give thorough, detailed answers with examples.".into()),
+        "shorter" => parts.push("Be concise — answer in just a few sentences.".into()),
+        _ => {}
+    }
+    parts.join(" ")
+}
+
+/// Extract bare http(s) URLs from free text (no regex dependency).
+fn extract_urls(text: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    for token in text.split_whitespace() {
+        let t = token.trim_matches(|c: char| "()[]{}<>,\"'`|".contains(c));
+        if (t.starts_with("http://") || t.starts_with("https://")) && t.len() > 10 {
+            urls.push(t.to_string());
+        }
+    }
+    urls.dedup();
+    urls
+}
+
+/// Heuristic: does this message want the URLs added as sources (vs. just
+/// mentioning one in a question)?
+fn wants_add_sources(content: &str, urls: &[String]) -> bool {
+    let l = content.to_lowercase();
+    let has_kw = ["add", "import", "ingest", "save", "include", "load", "grab", "attach", "pull in"]
+        .iter()
+        .any(|k| l.contains(k));
+    // Or the message is essentially just the URL(s).
+    let mut rest = l.clone();
+    for u in urls {
+        rest = rest.replace(&u.to_lowercase(), " ");
+    }
+    let rest_words = rest.split_whitespace().count();
+    has_kw || rest_words <= 2
+}
+
+fn host_of(url: &str) -> String {
+    url.trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap_or(url)
+        .trim_start_matches("www.")
+        .to_string()
+}
+
+/// Persist a tool-produced assistant reply and finish the chat turn.
+async fn finish_tool_reply(
+    app: &AppHandle,
+    state: &AppState,
+    notebook_id: &str,
+    content: String,
+) -> Result<Message, String> {
+    let msg = Message {
+        id: new_id(),
+        notebook_id: notebook_id.to_string(),
+        role: "assistant".into(),
+        content,
+        citations: vec![],
+        created_at: now(),
+    };
+    e(state.db.add_message(&msg).await)?;
+    e(state.db.touch_notebook(notebook_id, now()).await)?;
+    let _ = app.emit("chat://done", &msg);
+    Ok(msg)
+}
+
+/// If the message is an "add these URLs" request, ingest them and return a
+/// summary reply. Returns None to fall through to the normal chat flow.
+async fn try_add_url_sources(
+    app: &AppHandle,
+    state: &AppState,
+    notebook_id: &str,
+    content: &str,
+) -> Option<String> {
+    let urls = extract_urls(content);
+    if urls.is_empty() || !wants_add_sources(content, &urls) {
+        return None;
+    }
+
+    let mut added: Vec<Source> = Vec::new();
+    let mut failed: Vec<(String, String)> = Vec::new();
+    for url in &urls {
+        let _ = app.emit("chat://step", StepEvent { label: format!("Adding source: {}", host_of(url)) });
+        match ingest_url(state, notebook_id, url).await {
+            Ok(src) if src.status != "error" => added.push(src),
+            Ok(src) => failed.push((url.clone(), src.error)),
+            Err(err) => failed.push((url.clone(), format!("{err:#}"))),
+        }
+    }
+
+    let mut out = String::new();
+    if !added.is_empty() {
+        out.push_str(&format!(
+            "Added {} source{} to this notebook:\n",
+            added.len(),
+            if added.len() == 1 { "" } else { "s" }
+        ));
+        for src in &added {
+            out.push_str(&format!("- **{}** — {}\n", src.title, host_of(&src.url)));
+        }
+    }
+    if !failed.is_empty() {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&format!(
+            "{} couldn't be added:\n",
+            failed.len()
+        ));
+        for (url, err) in &failed {
+            out.push_str(&format!("- {} — {}\n", host_of(url), err));
+        }
+    }
+    Some(out)
+}
+
 #[tauri::command]
 pub async fn send_message(
     app: AppHandle,
     state: State<'_, AppState>,
     notebook_id: String,
     content: String,
+    config: Option<ChatConfig>,
 ) -> Result<Message, String> {
     let content = content.trim().to_string();
     if content.is_empty() {
         return Err("Message is empty".into());
     }
+    let extra = chat_style_instruction(&config.unwrap_or_default());
 
     // Persist the user's turn first.
     let user_msg = Message {
@@ -531,6 +679,11 @@ pub async fn send_message(
         created_at: now(),
     };
     e(state.db.add_message(&user_msg).await)?;
+
+    // Tool: if the user asked to add URLs as sources, do that instead of chat.
+    if let Some(reply) = try_add_url_sources(&app, &state, &notebook_id, &content).await {
+        return finish_tool_reply(&app, &state, &notebook_id, reply).await;
+    }
 
     // Retrieve relevant chunks.
     let query_vec = {
@@ -549,7 +702,7 @@ pub async fn send_message(
             content: m.content.clone(),
         })
         .collect();
-    let messages = rag::build_chat_messages(&history_turns, &content, &citations);
+    let messages = rag::build_chat_messages(&history_turns, &content, &citations, &extra);
 
     // Stream the answer, emitting tokens to the frontend.
     let app_for_cb = app.clone();
@@ -589,11 +742,13 @@ pub async fn send_message_agentic(
     state: State<'_, AppState>,
     notebook_id: String,
     content: String,
+    config: Option<ChatConfig>,
 ) -> Result<Message, String> {
     let content = content.trim().to_string();
     if content.is_empty() {
         return Err("Message is empty".into());
     }
+    let extra = chat_style_instruction(&config.unwrap_or_default());
 
     let user_msg = Message {
         id: new_id(),
@@ -604,6 +759,11 @@ pub async fn send_message_agentic(
         created_at: now(),
     };
     e(state.db.add_message(&user_msg).await)?;
+
+    // Tool: add-URL requests are handled the same in deep-research mode.
+    if let Some(reply) = try_add_url_sources(&app, &state, &notebook_id, &content).await {
+        return finish_tool_reply(&app, &state, &notebook_id, reply).await;
+    }
 
     let history = e(state.db.list_messages(&notebook_id).await)?;
     let history_turns: Vec<crate::ai::ChatTurn> = history
@@ -618,10 +778,16 @@ pub async fn send_message_agentic(
     let (answer, citations, stats, model) = {
         let ai = state.ai.read().await;
         let (answer, citations, stats) =
-            e(
-                crate::agent::run(&app, &state.db, &ai, &notebook_id, &content, &history_turns)
-                    .await,
-            )?;
+            e(crate::agent::run(
+                &app,
+                &state.db,
+                &ai,
+                &notebook_id,
+                &content,
+                &history_turns,
+                &extra,
+            )
+            .await)?;
         (answer, citations, stats, ai.config().chat_model.clone())
     };
     state.record_chat_stats(&model, stats);
@@ -819,6 +985,66 @@ pub async fn rebuild_note(
 #[tauri::command]
 pub fn get_model_stats(state: State<'_, AppState>) -> Vec<ModelStat> {
     state.model_stats_snapshot()
+}
+
+/// Extract a JSON array of strings from model output (tolerant of surrounding text).
+fn parse_string_array(raw: &str) -> Vec<String> {
+    let (Some(start), Some(end)) = (raw.find('['), raw.rfind(']')) else {
+        return vec![];
+    };
+    if end <= start {
+        return vec![];
+    }
+    serde_json::from_str::<Vec<String>>(&raw[start..=end]).unwrap_or_default()
+}
+
+/// Suggest a few follow-up questions based on the recent conversation.
+#[tauri::command]
+pub async fn suggest_followups(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<Vec<String>, String> {
+    let history = e(state.db.list_messages(&notebook_id).await)?;
+    if history.is_empty() {
+        return Ok(vec![]);
+    }
+    let start = history.len().saturating_sub(4);
+    let mut convo = String::new();
+    for m in &history[start..] {
+        let c: String = m.content.chars().take(500).collect();
+        convo.push_str(&format!("{}: {}\n", m.role, c));
+    }
+    let messages = vec![
+        crate::ai::ChatTurn::system(
+            "Suggest follow-up questions. Respond with ONLY a JSON array of exactly 3 short, \
+             distinct questions the user might naturally ask next, as strings. No other text.",
+        ),
+        crate::ai::ChatTurn::user(format!("Conversation so far:\n{convo}\nJSON array:")),
+    ];
+    let out = {
+        let ai = state.ai.read().await;
+        e(ai.chat(&messages).await)?.text
+    };
+    let mut qs = parse_string_array(&out);
+    qs.truncate(3);
+    Ok(qs)
+}
+
+/// A short prose overview of what the notebook's sources cover (not persisted).
+#[tauri::command]
+pub async fn generate_notebook_summary(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<String, String> {
+    let (_t, content) = e(generate_content(
+        &state,
+        &notebook_id,
+        "custom",
+        "Write a 2-4 sentence plain-prose overview of what these sources collectively cover. \
+         No lists, headings, or preamble — just the overview.",
+    )
+    .await)?;
+    Ok(content)
 }
 
 // ---- Periodic reports ----------------------------------------------------
