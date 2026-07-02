@@ -60,6 +60,8 @@ pub struct ModelHealth {
     pub reachable: bool,
     pub chat: ModelStatus,
     pub embed: ModelStatus,
+    /// Optional — only needed for image / scanned-PDF OCR.
+    pub vision: ModelStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -78,6 +78,7 @@ export interface ModelHealth {
   reachable: boolean;
   chat: ModelStatus;
   embed: ModelStatus;
+  vision: ModelStatus;
 }
 
 export interface ModelStat {

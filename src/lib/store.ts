@@ -57,6 +57,7 @@ interface AppState {
   draggingFiles: boolean;
   sourcesOpen: boolean;
   studioOpen: boolean;
+  onboardingDismissed: boolean;
   error: string | null;
 
   init: () => Promise<void>;
@@ -71,6 +72,7 @@ interface AppState {
   setDraggingFiles: (v: boolean) => void;
   toggleSources: () => void;
   toggleStudio: () => void;
+  dismissOnboarding: () => void;
   createReport: (name: string, kind: string, prompt: string, intervalSecs: number) => Promise<void>;
   updateReport: (r: ReportSchedule) => Promise<void>;
   deleteReport: (id: string) => Promise<void>;
@@ -159,6 +161,7 @@ export const useStore = create<AppState>((set, get) => ({
   draggingFiles: false,
   sourcesOpen: localStorage.getItem("sourcesOpen") !== "false",
   studioOpen: localStorage.getItem("studioOpen") !== "false",
+  onboardingDismissed: false,
   error: null,
 
   init: async () => {
@@ -239,6 +242,8 @@ export const useStore = create<AppState>((set, get) => ({
   clearQueueItem: (id) => set({ ingestQueue: get().ingestQueue.filter((q) => q.id !== id) }),
 
   setDraggingFiles: (v) => set({ draggingFiles: v }),
+
+  dismissOnboarding: () => set({ onboardingDismissed: true }),
 
   toggleSources: () => {
     const v = !get().sourcesOpen;

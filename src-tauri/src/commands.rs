@@ -1788,6 +1788,7 @@ pub async fn check_models(state: State<'_, AppState>) -> Result<ModelHealth, Str
                 reachable: false,
                 chat: unknown(cfg.chat_model.clone()),
                 embed: unknown(cfg.embed_model.clone()),
+                vision: unknown(cfg.vision_model.clone()),
             });
         }
     };
@@ -1825,10 +1826,32 @@ pub async fn check_models(state: State<'_, AppState>) -> Result<ModelHealth, Str
         detail: embed_detail,
     };
 
+    let vision = if cfg.vision_model.trim().is_empty() {
+        ModelStatus {
+            name: String::new(),
+            installed: false,
+            working: false,
+            detail: "Not configured (optional — enables image & scanned-PDF OCR)".into(),
+        }
+    } else {
+        let vision_installed = has(&cfg.vision_model);
+        ModelStatus {
+            name: cfg.vision_model.clone(),
+            installed: vision_installed,
+            working: vision_installed,
+            detail: if vision_installed {
+                "Installed".into()
+            } else {
+                format!("Not installed — run `ollama pull {}`", cfg.vision_model)
+            },
+        }
+    };
+
     Ok(ModelHealth {
         reachable: true,
         chat,
         embed,
+        vision,
     })
 }
 
