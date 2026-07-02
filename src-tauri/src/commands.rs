@@ -1,6 +1,6 @@
 //! Tauri command surface — the entire IPC API the React frontend calls.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -549,7 +549,18 @@ fn chat_style_instruction(cfg: &ChatConfig) -> String {
 fn extract_urls(text: &str) -> Vec<String> {
     let mut urls = Vec::new();
     for token in text.split_whitespace() {
-        let t = token.trim_matches(|c: char| "()[]{}<>,\"'`|".contains(c));
+        // Trim wrapper punctuation until stable — handles nesting like
+        // "(`https://x.com`)," where brackets and sentence marks interleave.
+        let mut t = token;
+        loop {
+            let trimmed = t
+                .trim_matches(|c: char| "()[]{}<>,\"'`|".contains(c))
+                .trim_end_matches(|c: char| ".,;:!?".contains(c));
+            if trimmed == t {
+                break;
+            }
+            t = trimmed;
+        }
         if (t.starts_with("http://") || t.starts_with("https://")) && t.len() > 10 {
             urls.push(t.to_string());
         }
@@ -574,6 +585,73 @@ fn wants_add_sources(content: &str, urls: &[String]) -> bool {
     }
     let rest_words = rest.split_whitespace().count();
     has_kw || rest_words <= 2
+}
+
+/// "Add those/these URLs" — an add request whose URLs live in conversation
+/// context (a previous answer or its citations) rather than in this message.
+fn wants_add_context_urls(content: &str) -> bool {
+    let l = content.to_lowercase();
+    let verb = [
+        "add", "import", "ingest", "save", "include", "grab", "attach",
+    ]
+    .iter()
+    .any(|k| l.contains(k));
+    let noun = [
+        "url", "link", "source", "site", "page", "website", "address",
+    ]
+    .iter()
+    .any(|k| l.contains(k));
+    let anaphor = [
+        "those",
+        "these",
+        "them",
+        "that one",
+        "above",
+        "mentioned",
+        "cited",
+        "from the answer",
+        "you found",
+        "you listed",
+    ]
+    .iter()
+    .any(|k| l.contains(k));
+    verb && noun && anaphor
+}
+
+/// URLs mentioned in recent conversation — message text and citation snippets,
+/// newest first — excluding ones already present as sources.
+async fn recent_context_urls(state: &AppState, notebook_id: &str) -> Vec<String> {
+    let Ok(history) = state.db.list_messages(notebook_id).await else {
+        return vec![];
+    };
+    let existing: HashSet<String> = state
+        .db
+        .list_sources(notebook_id)
+        .await
+        .map(|sources| {
+            sources
+                .iter()
+                .filter(|s| !s.url.is_empty())
+                .map(|s| s.url.trim_end_matches('/').to_lowercase())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut seen = HashSet::new();
+    let mut urls = Vec::new();
+    for m in history.iter().rev().filter(|m| m.kind != "tool").take(6) {
+        let texts = std::iter::once(m.content.as_str())
+            .chain(m.citations.iter().map(|c| c.snippet.as_str()));
+        for text in texts {
+            for url in extract_urls(text) {
+                let key = url.trim_end_matches('/').to_lowercase();
+                if !existing.contains(&key) && seen.insert(key) {
+                    urls.push(url);
+                }
+            }
+        }
+    }
+    urls
 }
 
 fn host_of(url: &str) -> String {
@@ -860,6 +938,18 @@ async fn try_tool_route(
     if !urls.is_empty() && wants_add_sources(content, &urls) && !has_non_add_verb(content) {
         return Some(add_url_sources(app, state, notebook_id, &urls).await);
     }
+    // "Add those URLs" — resolve the referent from recent messages and
+    // citation snippets. Deterministic, so it also works in deep-research mode.
+    if urls.is_empty() && wants_add_context_urls(content) && !has_non_add_verb(content) {
+        let ctx = recent_context_urls(state, notebook_id).await;
+        if ctx.is_empty() {
+            return Some(
+                "I couldn't find any new URLs in the recent conversation to add — paste the addresses and I'll add them."
+                    .to_string(),
+            );
+        }
+        return Some(add_url_sources(app, state, notebook_id, &ctx).await);
+    }
     if !allow_router {
         return None;
     }
@@ -878,10 +968,23 @@ async fn try_tool_route(
             // Trust boundary: only ingest URLs whose host actually appears in
             // the user's message — the router must not invent or rewrite them.
             let l = content.to_lowercase();
-            let urls: Vec<String> = urls
+            let (mut urls, rejected): (Vec<String>, Vec<String>) = urls
                 .into_iter()
-                .filter(|u| l.contains(&host_of(u).to_lowercase()))
-                .collect();
+                .partition(|u| l.contains(&host_of(u).to_lowercase()));
+            if urls.is_empty() && !rejected.is_empty() {
+                // The router may be echoing a URL the conversation mentioned
+                // ("add the dealer site") — trust it only if that host really
+                // appears in recent context.
+                let ctx_hosts: HashSet<String> = recent_context_urls(state, notebook_id)
+                    .await
+                    .iter()
+                    .map(|u| host_of(u).to_lowercase())
+                    .collect();
+                urls = rejected
+                    .into_iter()
+                    .filter(|u| ctx_hosts.contains(&host_of(u).to_lowercase()))
+                    .collect();
+            }
             if urls.is_empty() {
                 Some("I couldn't find that URL in your message — paste the full address (e.g. https://example.com/page) and I'll add it.".to_string())
             } else {
@@ -1759,6 +1862,30 @@ pub async fn check_ollama(state: State<'_, AppState>) -> Result<bool, String> {
 #[cfg(test)]
 mod tool_tests {
     use super::*;
+
+    #[test]
+    fn context_url_requests_are_detected() {
+        assert!(wants_add_context_urls("please add those urls as sources"));
+        assert!(wants_add_context_urls(
+            "save the links you listed as sources"
+        ));
+        assert!(wants_add_context_urls("add the cited pages"));
+        // No anaphor — plain add with explicit URL goes through the normal path.
+        assert!(!wants_add_context_urls(
+            "add https://example.com as a source"
+        ));
+        // No add verb — a question about links is not a command.
+        assert!(!wants_add_context_urls("what are those links about?"));
+    }
+
+    #[test]
+    fn urls_extracted_from_prose_and_markdown() {
+        assert_eq!(
+            extract_urls("see https://a.com/x. Also (https://b.com/y), and `https://c.com`!"),
+            vec!["https://a.com/x", "https://b.com/y", "https://c.com"]
+        );
+        assert!(extract_urls("no links here").is_empty());
+    }
 
     #[test]
     fn gate_passes_commands_and_blocks_questions() {
