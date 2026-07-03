@@ -1,13 +1,13 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import type { AiConfig, ChatConfig, ModelHealth } from "./types";
+import type { AiConfig, ModelHealth, ReadingPrefs } from "./types";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
 /** Reading-preference classes for the chat message container (see index.css). */
-export function chatReadingClass(cfg: ChatConfig): string {
+export function chatReadingClass(cfg: ReadingPrefs): string {
   const font =
     cfg.font === "serif"
       ? "chat-serif"

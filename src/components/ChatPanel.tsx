@@ -19,7 +19,6 @@ import {
   Check,
   Copy,
   NotebookPen,
-  SlidersHorizontal,
   RefreshCw,
   CornerDownRight,
   ExternalLink,
@@ -27,7 +26,6 @@ import {
 
 export function ChatPanel() {
   const currentId = useStore((s) => s.currentId);
-  const openSettings = useStore((s) => s.openSettings);
   const messages = useStore((s) => s.messages);
   const sources = useStore((s) => s.sources);
   const sending = useStore((s) => s.sending);
@@ -37,7 +35,7 @@ export function ChatPanel() {
   const toggleAgentMode = useStore((s) => s.toggleAgentMode);
   const send = useStore((s) => s.sendMessage);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
-  const chatConfig = useStore((s) => s.chatConfig);
+  const reading = useStore((s) => s.reading);
   const clearChat = useStore((s) => s.clearChat);
   const appendToken = useStore((s) => s.appendToken);
   const appendStep = useStore((s) => s.appendStep);
@@ -108,10 +106,6 @@ export function ChatPanel() {
         <MessageSquare className="h-4 w-4 text-muted-foreground" />
         <span className="ml-2 text-[13px] font-semibold">Chat</span>
         <div className="ml-auto flex items-center gap-1">
-          <Button variant="ghost" size="sm" onClick={() => openSettings("chat")} title="Configure chat">
-            <SlidersHorizontal className="h-3.5 w-3.5" />
-            Configure
-          </Button>
           {messages.length > 0 && (
             <Button
               variant="ghost"
@@ -129,7 +123,7 @@ export function ChatPanel() {
       </div>
 
       <div ref={scrollRef} className="relative z-10 flex-1 overflow-y-auto">
-        <div className={cn("mx-auto flex max-w-[720px] flex-col gap-6 px-5 py-6", chatReadingClass(chatConfig))}>
+        <div className={cn("mx-auto flex max-w-[720px] flex-col gap-6 px-5 py-6", chatReadingClass(reading))}>
           {canChat && (
             <SummaryBanner
               summary={summary}

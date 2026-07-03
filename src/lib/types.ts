@@ -126,16 +126,22 @@ export interface ChatConfig {
   style: "default" | "learning" | "custom";
   customPrompt: string;
   length: "default" | "longer" | "shorter";
-  // Reading preferences (display-only; the backend ignores these).
-  font: "sans" | "serif" | "mono" | "system";
-  fontSize: "small" | "medium" | "large";
-  textAlign: "natural" | "justified";
 }
 
 export const DEFAULT_CHAT_CONFIG: ChatConfig = {
   style: "default",
   customPrompt: "",
   length: "default",
+};
+
+/** Global chat reading preferences (display-only; set in Appearance). */
+export interface ReadingPrefs {
+  font: "sans" | "serif" | "mono" | "system";
+  fontSize: "small" | "medium" | "large";
+  textAlign: "natural" | "justified";
+}
+
+export const DEFAULT_READING_PREFS: ReadingPrefs = {
   font: "sans",
   fontSize: "medium",
   textAlign: "natural",

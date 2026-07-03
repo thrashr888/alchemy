@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import { applyTheme, DEFAULT_THEME } from "./themes";
 import { notify } from "./notify";
-import { DEFAULT_CHAT_CONFIG } from "./types";
+import { DEFAULT_CHAT_CONFIG, DEFAULT_READING_PREFS } from "./types";
 import type {
   AiConfig,
   ChatConfig,
@@ -13,6 +13,7 @@ import type {
   Note,
   NoteKind,
   Notebook,
+  ReadingPrefs,
   ReportSchedule,
   Source,
   Toast,
@@ -44,6 +45,7 @@ interface AppState {
   modelHealth: ModelHealth | null;
   modelStats: ModelStat[];
   theme: string;
+  reading: ReadingPrefs;
 
   sending: boolean;
   streamingText: string;
@@ -79,6 +81,7 @@ interface AppState {
   renameNotebook: (id: string, title: string) => Promise<void>;
   deleteNotebook: (id: string) => Promise<void>;
   setTheme: (theme: string) => void;
+  setReading: (patch: Partial<ReadingPrefs>) => void;
   clearQueueItem: (id: string) => void;
   setDraggingFiles: (v: boolean) => void;
   toggleSources: () => void;
@@ -123,6 +126,15 @@ interface AppState {
   setError: (e: string | null) => void;
   pushToast: (kind: ToastKind, message: string) => void;
   dismissToast: (id: string) => void;
+}
+
+function loadReadingPrefs(): ReadingPrefs {
+  try {
+    const raw = localStorage.getItem("readingPrefs");
+    return raw ? { ...DEFAULT_READING_PREFS, ...JSON.parse(raw) } : DEFAULT_READING_PREFS;
+  } catch {
+    return DEFAULT_READING_PREFS;
+  }
 }
 
 // Module-level guard so the report scheduler is only started once.
@@ -175,6 +187,7 @@ export const useStore = create<AppState>((set, get) => {
   modelHealth: null,
   modelStats: [],
   theme: localStorage.getItem("theme") ?? DEFAULT_THEME,
+  reading: loadReadingPrefs(),
 
   sending: false,
   streamingText: "",
@@ -282,6 +295,12 @@ export const useStore = create<AppState>((set, get) => {
     localStorage.setItem("theme", theme);
     applyTheme(theme);
     set({ theme });
+  },
+
+  setReading: (patch) => {
+    const reading = { ...get().reading, ...patch };
+    localStorage.setItem("readingPrefs", JSON.stringify(reading));
+    set({ reading });
   },
 
   clearQueueItem: (id) => set({ ingestQueue: get().ingestQueue.filter((q) => q.id !== id) }),

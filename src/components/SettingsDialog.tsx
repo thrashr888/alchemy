@@ -424,11 +424,7 @@ export function SettingsDialog({
 
           {tab === "chat" && <ChatTab />}
 
-          {tab === "appearance" && (
-            <Field label="Theme" hint="Applies immediately.">
-              <ThemePicker />
-            </Field>
-          )}
+          {tab === "appearance" && <AppearanceTab />}
         </div>
       </div>
 
@@ -549,13 +545,26 @@ function ChatTab() {
           ))}
         </div>
       </Field>
+    </div>
+  );
+}
+
+/** Appearance: theme + chat reading preferences (font, size, alignment). */
+function AppearanceTab() {
+  const reading = useStore((s) => s.reading);
+  const setReading = useStore((s) => s.setReading);
+  return (
+    <div className="flex flex-col gap-4">
+      <Field label="Theme" hint="Applies immediately.">
+        <ThemePicker />
+      </Field>
 
       <div className="h-px bg-border" />
 
-      <Field label="Reading font" hint="How chat responses are displayed. Doesn't change the model.">
+      <Field label="Chat font" hint="How chat responses are displayed. Doesn't change the model.">
         <div className="flex flex-wrap gap-1.5">
           {CHAT_FONTS.map((f) => (
-            <Pill key={f.id} active={chatConfig.font === f.id} onClick={() => apply({ font: f.id })}>
+            <Pill key={f.id} active={reading.font === f.id} onClick={() => setReading({ font: f.id })}>
               <span className={f.className}>{f.label}</span>
             </Pill>
           ))}
@@ -565,7 +574,7 @@ function ChatTab() {
       <Field label="Text size">
         <div className="flex flex-wrap gap-1.5">
           {CHAT_SIZES.map((s) => (
-            <Pill key={s.id} active={chatConfig.fontSize === s.id} onClick={() => apply({ fontSize: s.id })}>
+            <Pill key={s.id} active={reading.fontSize === s.id} onClick={() => setReading({ fontSize: s.id })}>
               {s.label}
             </Pill>
           ))}
@@ -575,7 +584,7 @@ function ChatTab() {
       <Field label="Alignment">
         <div className="flex flex-wrap gap-1.5">
           {CHAT_ALIGNS.map((a) => (
-            <Pill key={a.id} active={chatConfig.textAlign === a.id} onClick={() => apply({ textAlign: a.id })}>
+            <Pill key={a.id} active={reading.textAlign === a.id} onClick={() => setReading({ textAlign: a.id })}>
               {a.label}
             </Pill>
           ))}
