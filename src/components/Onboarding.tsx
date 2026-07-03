@@ -174,13 +174,13 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
             <Input
               value={gwUrl}
               onChange={(e) => setGwUrl(e.target.value)}
-              placeholder="Gateway URL — e.g. https://bob.ibm.com/api/v1"
+              placeholder="Gateway URL (empty = Bob default)"
             />
             <Input
               type="password"
               value={gwKey}
               onChange={(e) => setGwKey(e.target.value)}
-              placeholder="API key"
+              placeholder="API key — bob_prod_…"
             />
             <div className="flex gap-1.5">
               <Input
@@ -193,13 +193,15 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
                 size="sm"
                 onClick={() => void saveGateway()}
                 loading={gwSaving}
-                disabled={!gwUrl.trim()}
+                disabled={!gwKey.trim() && !gwUrl.trim()}
               >
                 Save & check
               </Button>
             </div>
             <span className="text-[11px] text-subtle-foreground">
-              Stored locally; sent only to the gateway. Usage is billed to your Bob account.
+              {gwKey.trim() && !gwKey.trim().startsWith("bob_") && (!gwUrl.trim() || gwUrl.includes("bob.ibm.com"))
+                ? "Heads up: Bob keys start with bob_ — double-check you pasted the whole key."
+                : "Stored locally; sent only to the gateway. Usage is billed to your Bob account."}
             </span>
           </div>
         )}

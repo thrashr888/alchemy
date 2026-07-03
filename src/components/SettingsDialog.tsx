@@ -40,6 +40,13 @@ const SUGGESTED_VISION = [
   { name: "minimax-m3", note: "vision · 1M context (general)" },
 ];
 
+/** Targeting Bob (default or explicit) with a key that doesn't look like one. */
+function keyLooksOff(draft: { openaiBaseUrl: string; openaiApiKey: string }): boolean {
+  const bobTarget = !draft.openaiBaseUrl.trim() || draft.openaiBaseUrl.includes("bob.ibm.com");
+  const key = draft.openaiApiKey.trim();
+  return bobTarget && key.length > 0 && !key.startsWith("bob_");
+}
+
 const TABS = [
   { id: "models", label: "Models", icon: Cpu },
   { id: "chat", label: "Chat", icon: MessageSquare },
@@ -234,20 +241,27 @@ export function SettingsDialog({
                 <>
                   <Field
                     label="Gateway URL"
-                    hint="The OpenAI-compatible base URL, usually ending in /v1. For IBM Bob, find it in Bob's developer settings."
+                    hint="Leave empty to use IBM Bob's default gateway. Any OpenAI-compatible base URL works (usually ends in /v1)."
                   >
                     <Input
                       value={draft.openaiBaseUrl}
                       onChange={(e) => setDraft({ ...draft, openaiBaseUrl: e.target.value })}
-                      placeholder="https://bob.ibm.com/api/v1"
+                      placeholder="https://bob.ibm.com/api/v1 (default)"
                     />
                   </Field>
-                  <Field label="API key" hint="Stored locally in your config file; sent only to the gateway.">
+                  <Field
+                    label="API key"
+                    hint={
+                      keyLooksOff(draft)
+                        ? "Heads up: Bob keys start with bob_ — double-check you pasted the whole key."
+                        : "Stored locally in your config file; sent only to the gateway."
+                    }
+                  >
                     <Input
                       type="password"
                       value={draft.openaiApiKey}
                       onChange={(e) => setDraft({ ...draft, openaiApiKey: e.target.value })}
-                      placeholder="bob-…"
+                      placeholder="bob_prod_…"
                     />
                   </Field>
                   <Field

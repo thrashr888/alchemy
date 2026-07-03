@@ -12,6 +12,9 @@ pub use openai::OpenAiClient;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+/// IBM Bob's OpenAI-compatible gateway; used whenever the URL field is empty.
+pub const DEFAULT_GATEWAY_URL: &str = "https://bob.ibm.com/api/v1";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiConfig {
@@ -131,11 +134,12 @@ pub struct Ai {
 impl Ai {
     pub fn new(config: AiConfig) -> Self {
         let openai = (config.provider == "openai").then(|| {
-            OpenAiClient::new(
-                &config.openai_base_url,
-                &config.openai_api_key,
-                &config.openai_chat_model,
-            )
+            let base = if config.openai_base_url.trim().is_empty() {
+                DEFAULT_GATEWAY_URL
+            } else {
+                config.openai_base_url.trim()
+            };
+            OpenAiClient::new(base, &config.openai_api_key, &config.openai_chat_model)
         });
         let ollama = Ollama::new(config.clone());
         Self {
