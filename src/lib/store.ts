@@ -60,6 +60,7 @@ interface AppState {
   onboardingDismissed: boolean;
   settingsOpen: boolean;
   settingsTab: string;
+  embedderDownload: { label: string; done: number; total: number } | null;
   error: string | null;
 
   init: () => Promise<void>;
@@ -168,10 +169,21 @@ export const useStore = create<AppState>((set, get) => ({
   onboardingDismissed: false,
   settingsOpen: false,
   settingsTab: "models",
+  embedderDownload: null,
   error: null,
 
   init: async () => {
     applyTheme(get().theme);
+    // Built-in embedder first-use download progress (one-time ~30 MB).
+    void listen<{ label: string; done: number; total: number }>(
+      "embedder://progress",
+      (e) => {
+        const p = e.payload;
+        const finished = p.total > 0 && p.done >= p.total && p.label === "model.safetensors";
+        set({ embedderDownload: finished ? null : p });
+        if (finished) setTimeout(() => set({ embedderDownload: null }), 1500);
+      },
+    );
     const [notebooks, aiConfig, ollamaOk] = await Promise.all([
       api.listNotebooks(),
       api.getAiConfig(),

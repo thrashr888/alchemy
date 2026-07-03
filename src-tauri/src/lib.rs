@@ -50,9 +50,10 @@ pub fn run() {
             let db = tauri::async_runtime::block_on(db::Db::open(&db_dir))
                 .expect("failed to open LanceDB");
 
+            let runtime = commands::ai_runtime(app.handle().clone(), data_dir.clone());
             app.manage(AppState {
                 db: Arc::new(db),
-                ai: tokio::sync::RwLock::new(ai::Ai::new(config)),
+                ai: tokio::sync::RwLock::new(ai::Ai::new(config, runtime)),
                 config_path,
                 stats_path,
                 model_stats: std::sync::Mutex::new(model_stats),

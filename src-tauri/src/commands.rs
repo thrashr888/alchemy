@@ -69,6 +69,31 @@ impl AppState {
     }
 }
 
+/// Build the Ai runtime: app data dir + embedder download progress events
+/// (`embedder://progress` with {label, done, total}).
+pub fn ai_runtime(app: AppHandle, data_dir: std::path::PathBuf) -> crate::ai::AiRuntime {
+    #[derive(serde::Serialize, Clone)]
+    struct EmbedderProgressEvent {
+        label: String,
+        done: u64,
+        total: u64,
+    }
+    let progress: crate::ai::EmbedderProgress = std::sync::Arc::new(move |label, done, total| {
+        let _ = app.emit(
+            "embedder://progress",
+            EmbedderProgressEvent {
+                label: label.to_string(),
+                done,
+                total,
+            },
+        );
+    });
+    crate::ai::AiRuntime {
+        data_dir,
+        embedder_progress: Some(progress),
+    }
+}
+
 fn now() -> i64 {
     Utc::now().timestamp_millis()
 }
@@ -1954,11 +1979,20 @@ pub async fn get_ai_config(state: State<'_, AppState>) -> Result<AiConfig, Strin
 }
 
 #[tauri::command]
-pub async fn set_ai_config(state: State<'_, AppState>, config: AiConfig) -> Result<(), String> {
+pub async fn set_ai_config(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    config: AiConfig,
+) -> Result<(), String> {
     let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     std::fs::write(&state.config_path, json).map_err(|e| e.to_string())?;
     let mut ai = state.ai.write().await;
-    *ai = Ai::new(config);
+    let data_dir = state
+        .config_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
+    *ai = Ai::new(config, ai_runtime(app, data_dir));
     Ok(())
 }
 

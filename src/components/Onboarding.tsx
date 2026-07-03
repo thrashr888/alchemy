@@ -209,11 +209,28 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
               placeholder="API key — bob_prod_…"
             />
             <div className="flex gap-1.5">
-              <Input
-                value={gwModel}
-                onChange={(e) => setGwModel(e.target.value)}
-                placeholder="Model id"
-              />
+              {gwModels.length > 0 ? (
+                <select
+                  value={gwModel}
+                  onChange={(e) => setGwModel(e.target.value)}
+                  className="h-8 w-full appearance-none rounded-md border border-input bg-surface-2 px-2.5 text-[13px] text-foreground outline-none transition-colors focus:border-ring/60"
+                >
+                  {!gwModel && <option value="">Choose a model…</option>}
+                  {(gwModels.includes(gwModel) || !gwModel ? gwModels : [gwModel, ...gwModels]).map(
+                    (m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ),
+                  )}
+                </select>
+              ) : (
+                <Input
+                  value={gwModel}
+                  onChange={(e) => setGwModel(e.target.value)}
+                  placeholder="Model id"
+                />
+              )}
               <Button
                 variant="primary"
                 size="sm"
@@ -224,24 +241,6 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
                 Save & check
               </Button>
             </div>
-            {gwModels.length > 0 && (
-              <div className="flex flex-wrap gap-1">
-                {gwModels.map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => setGwModel(m)}
-                    className={cn(
-                      "rounded border px-1.5 py-0.5 text-[11px] transition-colors",
-                      m === gwModel
-                        ? "border-primary/50 bg-primary/15 text-citation"
-                        : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {m}
-                  </button>
-                ))}
-              </div>
-            )}
             <span
               className={cn(
                 "text-[11px]",

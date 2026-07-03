@@ -181,10 +181,13 @@ async fn openai_gateway_round_trip() {
 async fn builtin_embedder_round_trip() {
     use crate::ai::{Ai, AiConfig};
 
-    let ai = Ai::new(AiConfig {
-        embedder: "builtin".into(),
-        ..Default::default()
-    });
+    let ai = Ai::new(
+        AiConfig {
+            embedder: "builtin".into(),
+            ..Default::default()
+        },
+        crate::ai::AiRuntime::default(),
+    );
     let Ok(dim) = ai.test_embed().await else {
         eprintln!("SKIP: built-in embedder unavailable (no network for first download?)");
         return;

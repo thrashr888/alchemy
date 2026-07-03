@@ -17,6 +17,7 @@ function App() {
   const onboardingDismissed = useStore((s) => s.onboardingDismissed);
   const needsSetup = !!health && (!health.chat.working || !health.embed.working);
   const settingsOpen = useStore((s) => s.settingsOpen);
+  const embedderDownload = useStore((s) => s.embedderDownload);
   const settingsTab = useStore((s) => s.settingsTab);
   const openSettings = useStore((s) => s.openSettings);
   const closeSettings = useStore((s) => s.closeSettings);
@@ -39,6 +40,23 @@ function App() {
       <MigrationOverlay />
       {needsSetup && !onboardingDismissed && !settingsOpen && (
         <Onboarding onOpenSettings={() => openSettings()} />
+      )}
+
+      {embedderDownload && (
+        <div className="fixed bottom-4 right-4 z-[70] flex items-center gap-2.5 rounded-lg border border-border-strong bg-elevated px-3.5 py-2.5 shadow-lg">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-primary" />
+          <div className="flex flex-col">
+            <span className="text-[12px] font-medium text-foreground">
+              Setting up the built-in embedder
+            </span>
+            <span className="text-[11px] text-muted-foreground">
+              One-time download ·{" "}
+              {embedderDownload.total > 0
+                ? `${Math.round((embedderDownload.done / embedderDownload.total) * 100)}% of ${(embedderDownload.total / 1e6).toFixed(0)} MB`
+                : `${(embedderDownload.done / 1e6).toFixed(1)} MB…`}
+            </span>
+          </div>
+        </div>
       )}
 
       {error && (

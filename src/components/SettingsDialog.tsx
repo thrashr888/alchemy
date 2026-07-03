@@ -88,6 +88,9 @@ export function SettingsDialog({
       setDraft({ ...aiConfig });
       void refreshModels();
       void refreshModelHealth();
+      if (aiConfig.provider === "openai" && aiConfig.openaiApiKey) {
+        void loadGatewayModels(aiConfig.openaiBaseUrl, aiConfig.openaiApiKey);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, aiConfig]);
@@ -106,12 +109,13 @@ export function SettingsDialog({
     }
   }
 
-  async function loadGatewayModels() {
-    if (!draft?.openaiBaseUrl) return;
+  async function loadGatewayModels(baseUrl?: string, apiKey?: string) {
+    const url = baseUrl ?? draft?.openaiBaseUrl ?? "";
+    const key = apiKey ?? draft?.openaiApiKey ?? "";
     setLoadingGateway(true);
     setGatewayError(null);
     try {
-      setGatewayModels(await api.listGatewayModels(draft.openaiBaseUrl, draft.openaiApiKey));
+      setGatewayModels(await api.listGatewayModels(url, key));
     } catch (e) {
       setGatewayModels([]);
       setGatewayError(e instanceof Error ? e.message : String(e));
@@ -288,40 +292,28 @@ export function SettingsDialog({
                         : "The model id billed to your account (bobcoins on Bob)."
                     }
                   >
-                    <div className="flex flex-col gap-1.5">
-                      <div className="flex gap-1.5">
+                    <div className="flex gap-1.5">
+                      {gatewayModels.length > 0 ? (
+                        <Select
+                          value={draft.openaiChatModel}
+                          onChange={(v) => setDraft({ ...draft, openaiChatModel: v })}
+                          options={gatewayModels}
+                        />
+                      ) : (
                         <Input
                           value={draft.openaiChatModel}
                           onChange={(e) => setDraft({ ...draft, openaiChatModel: e.target.value })}
                           placeholder="model id"
                         />
-                        <Button
-                          variant="secondary"
-                          onClick={() => void loadGatewayModels()}
-                          loading={loadingGateway}
-                          title="List the gateway's models"
-                        >
-                          Load
-                        </Button>
-                      </div>
-                      {gatewayModels.length > 0 && (
-                        <div className="flex flex-wrap gap-1">
-                          {gatewayModels.slice(0, 20).map((m) => (
-                            <button
-                              key={m}
-                              onClick={() => setDraft({ ...draft, openaiChatModel: m })}
-                              className={cn(
-                                "rounded border px-1.5 py-0.5 text-[11px] transition-colors",
-                                m === draft.openaiChatModel
-                                  ? "border-primary/50 bg-primary/15 text-citation"
-                                  : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
-                              )}
-                            >
-                              {m}
-                            </button>
-                          ))}
-                        </div>
                       )}
+                      <Button
+                        variant="secondary"
+                        onClick={() => void loadGatewayModels()}
+                        loading={loadingGateway}
+                        title="Refresh the gateway's model list"
+                      >
+                        {gatewayModels.length > 0 ? "Refresh" : "Load"}
+                      </Button>
                     </div>
                   </Field>
                 </>
@@ -694,6 +686,32 @@ function ThemePicker() {
         );
       })}
     </div>
+  );
+}
+
+function Select({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: string[];
+}) {
+  const list = options.includes(value) || !value ? options : [value, ...options];
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="h-8 w-full appearance-none rounded-md border border-input bg-surface-2 px-2.5 text-[13px] text-foreground outline-none transition-colors focus:border-ring/60"
+    >
+      {!value && <option value="">Choose a model…</option>}
+      {list.map((m) => (
+        <option key={m} value={m}>
+          {m}
+        </option>
+      ))}
+    </select>
   );
 }
 

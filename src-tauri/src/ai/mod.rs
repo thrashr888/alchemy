@@ -7,7 +7,7 @@ mod local_embed;
 mod ollama;
 mod openai;
 
-pub use local_embed::LocalEmbedder;
+pub use local_embed::{EmbedderProgress, LocalEmbedder};
 pub use ollama::Ollama;
 pub use openai::OpenAiClient;
 
@@ -134,6 +134,14 @@ pub struct ChatOutcome {
     pub stats: Option<GenStats>,
 }
 
+/// Host context for Ai: where to keep downloaded assets and how to report
+/// embedder download progress to the UI.
+#[derive(Default, Clone)]
+pub struct AiRuntime {
+    pub data_dir: std::path::PathBuf,
+    pub embedder_progress: Option<EmbedderProgress>,
+}
+
 /// Capability router. One instance lives in AppState behind a RwLock and is
 /// rebuilt whenever the config is saved.
 pub struct Ai {
@@ -144,7 +152,7 @@ pub struct Ai {
 }
 
 impl Ai {
-    pub fn new(config: AiConfig) -> Self {
+    pub fn new(config: AiConfig, runtime: AiRuntime) -> Self {
         let openai = (config.provider == "openai").then(|| {
             let base = if config.openai_base_url.trim().is_empty() {
                 DEFAULT_GATEWAY_URL
@@ -154,7 +162,13 @@ impl Ai {
             OpenAiClient::new(base, &config.openai_api_key, &config.openai_chat_model)
         });
         let ollama = Ollama::new(config.clone());
-        let local_embed = (config.embedder == "builtin").then(LocalEmbedder::new);
+        let data_dir = if runtime.data_dir.as_os_str().is_empty() {
+            std::env::temp_dir().join("alchemy")
+        } else {
+            runtime.data_dir.clone()
+        };
+        let local_embed = (config.embedder == "builtin")
+            .then(|| LocalEmbedder::new(data_dir, runtime.embedder_progress.clone()));
         Self {
             config,
             ollama,
