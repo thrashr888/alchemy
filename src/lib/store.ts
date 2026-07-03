@@ -189,7 +189,7 @@ export const useStore = create<AppState>((set, get) => {
   draggingFiles: false,
   sourcesOpen: localStorage.getItem("sourcesOpen") !== "false",
   studioOpen: localStorage.getItem("studioOpen") !== "false",
-  onboardingDismissed: false,
+  onboardingDismissed: localStorage.getItem("onboardingDismissed") === "true",
   settingsOpen: false,
   settingsTab: "models",
   embedderDownload: null,
@@ -287,7 +287,10 @@ export const useStore = create<AppState>((set, get) => {
 
   setDraggingFiles: (v) => set({ draggingFiles: v }),
 
-  dismissOnboarding: () => set({ onboardingDismissed: true }),
+  dismissOnboarding: () => {
+    localStorage.setItem("onboardingDismissed", "true");
+    set({ onboardingDismissed: true });
+  },
 
   openSettings: (tab = "models") => set({ settingsOpen: true, settingsTab: tab }),
   closeSettings: () => set({ settingsOpen: false }),

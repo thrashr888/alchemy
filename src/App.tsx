@@ -29,6 +29,18 @@ function App() {
     void init();
   }, [init]);
 
+  // Cmd/Ctrl+, opens Settings (standard desktop convention).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+        e.preventDefault();
+        openSettings();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [openSettings]);
+
   // Bridge the legacy `error` field into the toast stack so every error path
   // (many still `set({ error })` directly) surfaces consistently and dismisses.
   useEffect(() => {

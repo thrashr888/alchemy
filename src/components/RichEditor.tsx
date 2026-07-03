@@ -3,6 +3,7 @@ import { useEditor, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
 import { cn } from "@/lib/utils";
+import { Modal, Button, Input } from "./ui";
 import {
   Bold,
   Italic,
@@ -58,6 +59,8 @@ export function RichEditor({
 function Toolbar({ editor }: { editor: Editor }) {
   // Force re-render on each transaction so active states stay in sync.
   const [, bump] = useState(0);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkUrl, setLinkUrl] = useState("");
   useEffect(() => {
     const update = () => bump((n) => n + 1);
     editor.on("transaction", update);
@@ -66,18 +69,23 @@ function Toolbar({ editor }: { editor: Editor }) {
     };
   }, [editor]);
 
-  const setLink = () => {
+  const openLink = () => {
     const prev = editor.getAttributes("link").href as string | undefined;
-    const url = window.prompt("Link URL", prev ?? "https://");
-    if (url === null) return;
+    setLinkUrl(prev ?? "https://");
+    setLinkOpen(true);
+  };
+  const applyLink = () => {
+    const url = linkUrl.trim();
     if (url === "") {
       editor.chain().focus().unsetLink().run();
     } else {
       editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
     }
+    setLinkOpen(false);
   };
 
   return (
+    <>
     <div className="flex flex-wrap items-center gap-0.5 border-b border-border bg-surface px-1.5 py-1">
       <Btn on={editor.isActive("bold")} onClick={() => editor.chain().focus().toggleBold().run()} title="Bold">
         <Bold className="h-3.5 w-3.5" />
@@ -113,7 +121,7 @@ function Toolbar({ editor }: { editor: Editor }) {
       <Btn on={editor.isActive("code")} onClick={() => editor.chain().focus().toggleCode().run()} title="Inline code">
         <Code className="h-3.5 w-3.5" />
       </Btn>
-      <Btn on={editor.isActive("link")} onClick={setLink} title="Link">
+      <Btn on={editor.isActive("link")} onClick={openLink} title="Link">
         <Link2 className="h-3.5 w-3.5" />
       </Btn>
       <Sep />
@@ -124,6 +132,31 @@ function Toolbar({ editor }: { editor: Editor }) {
         <Redo2 className="h-3.5 w-3.5" />
       </Btn>
     </div>
+
+    <Modal
+      open={linkOpen}
+      onClose={() => setLinkOpen(false)}
+      title="Add link"
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => setLinkOpen(false)}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={applyLink}>
+            {linkUrl.trim() ? "Apply" : "Remove link"}
+          </Button>
+        </div>
+      }
+    >
+      <Input
+        autoFocus
+        value={linkUrl}
+        onChange={(e) => setLinkUrl(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && applyLink()}
+        placeholder="https://example.com"
+      />
+    </Modal>
+    </>
   );
 }
 

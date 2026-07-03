@@ -89,6 +89,8 @@ export function Spinner({ className }: { className?: string }) {
   return <Loader2 className={cn("animate-spin", className)} />;
 }
 
+let modalSeq = 0;
+
 export function Modal({
   open,
   onClose,
@@ -104,11 +106,48 @@ export function Modal({
   footer?: React.ReactNode;
   width?: string;
 }) {
+  const panelRef = React.useRef<HTMLDivElement>(null);
+  const titleId = React.useMemo(() => `modal-title-${++modalSeq}`, []);
+
   React.useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const trigger = document.activeElement as HTMLElement | null;
+    // Focus the panel (or its first focusable) so keyboard/SR users land inside.
+    const panel = panelRef.current;
+    const focusable = panel?.querySelector<HTMLElement>(
+      'input,textarea,select,button,[tabindex]:not([tabindex="-1"])',
+    );
+    (focusable ?? panel)?.focus();
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      // Trap Tab within the dialog.
+      if (e.key === "Tab" && panel) {
+        const items = Array.from(
+          panel.querySelectorAll<HTMLElement>(
+            'input,textarea,select,button,a[href],[tabindex]:not([tabindex="-1"])',
+          ),
+        ).filter((el) => !el.hasAttribute("disabled"));
+        if (items.length === 0) return;
+        const first = items[0];
+        const last = items[items.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      trigger?.focus?.(); // restore focus to whatever opened the dialog
+    };
   }, [open, onClose]);
 
   if (!open) return null;
@@ -118,15 +157,22 @@ export function Modal({
       onMouseDown={onClose}
     >
       <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         className={cn(
-          "flex max-h-[80vh] w-full flex-col rounded-lg border border-border-strong bg-elevated shadow-xl animate-in zoom-in-95 duration-150",
+          "flex max-h-[80vh] w-full flex-col rounded-lg border border-border-strong bg-elevated shadow-xl outline-none animate-in zoom-in-95 duration-150",
           width,
         )}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between border-b border-border px-4 h-11">
-          <h2 className="text-[13px] font-semibold text-foreground">{title}</h2>
-          <Button variant="ghost" size="icon" onClick={onClose}>
+          <h2 id={titleId} className="text-[13px] font-semibold text-foreground">
+            {title}
+          </h2>
+          <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close dialog">
             <X className="h-4 w-4" />
           </Button>
         </div>
