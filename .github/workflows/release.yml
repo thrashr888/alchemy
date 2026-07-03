@@ -99,26 +99,6 @@ jobs:
             --sign "$IDENTITY" src-tauri/libs/libpdfium.dylib
           codesign -dvv src-tauri/libs/libpdfium.dylib 2>&1 | grep -E 'Authority|Timestamp' | head -3
 
-      # Tauri only skips notarization when the APPLE_ID/PASSWORD/TEAM_ID env
-      # vars are absent (empty strings still trigger an attempt), so export
-      # them conditionally. GitHub masks the values in logs.
-      - name: Enable notarization (if configured)
-        env:
-          A_ID: ${{ secrets.APPLE_ID }}
-          A_PW: ${{ secrets.APPLE_PASSWORD }}
-          A_TEAM: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          if [ -n "$A_ID" ] && [ -n "$A_PW" ] && [ -n "$A_TEAM" ]; then
-            {
-              echo "APPLE_ID=$A_ID"
-              echo "APPLE_PASSWORD=$A_PW"
-              echo "APPLE_TEAM_ID=$A_TEAM"
-            } >> "$GITHUB_ENV"
-            echo "Notarization enabled."
-          else
-            echo "Notarization secrets not set — building without notarization."
-          fi
-
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -132,3 +112,31 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      # Notarization runs as its own step (not inside tauri) so the GitHub UI
+      # shows its duration and notarytool's live output isn't swallowed.
+      # Tauri signs (identity above); we submit, staple, and re-upload here.
+      - name: Notarize DMG (if configured)
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
+            echo "Notarization secrets not set — skipping."
+            exit 0
+          fi
+          DMG=$(ls src-tauri/target/*/release/bundle/dmg/*.dmg | head -1)
+          TAG="v$(jq -r .version src-tauri/tauri.conf.json)"
+          echo "==> notarize start: $(date -u +%FT%TZ)  ($DMG)"
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            --wait
+          echo "==> notarize done:  $(date -u +%FT%TZ)"
+          xcrun stapler staple "$DMG"
+          spctl -a -t open --context context:primary-signature -vv "$DMG"
+          echo "==> stapled + verified: $(date -u +%FT%TZ)"
+          # tauri-action uploaded the pre-staple DMG; replace with the stapled one.
+          gh release upload "$TAG" "$DMG" --clobber
+          echo "==> re-uploaded stapled DMG to $TAG"
