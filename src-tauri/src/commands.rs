@@ -1536,10 +1536,42 @@ async fn generate_content(
     if sources.is_empty() {
         anyhow::bail!("Add at least one source before generating.");
     }
-    let mut corpus = String::new();
+    // Budget the corpus fairly across sources (waterfill): every source is
+    // represented, small ones donate unused budget to large ones. A blunt
+    // head-truncation previously dropped later sources entirely.
+    let provider = { state.ai.read().await.config().provider.clone() };
+    let budget: usize = if provider == "openai" {
+        150_000
+    } else {
+        24_000
+    };
+
+    let mut contents = Vec::with_capacity(sources.len());
     for s in &sources {
         let full = state.db.source_content(&s.id).await?;
-        corpus.push_str(&format!("## {}\n\n{}\n\n", s.title, full));
+        contents.push((s.title.clone(), full));
+    }
+    // Waterfill: allocate smallest-first so leftovers flow to bigger sources.
+    let mut order: Vec<usize> = (0..contents.len()).collect();
+    order.sort_by_key(|&i| contents[i].1.chars().count());
+    let mut remaining = budget;
+    let mut alloc = vec![0usize; contents.len()];
+    for (pos, &i) in order.iter().enumerate() {
+        let share = remaining / (order.len() - pos);
+        let want = contents[i].1.chars().count();
+        alloc[i] = want.min(share);
+        remaining -= alloc[i];
+    }
+
+    let mut corpus = String::new();
+    for (i, (title, full)) in contents.iter().enumerate() {
+        let clipped: String = full.chars().take(alloc[i]).collect();
+        let marker = if full.chars().count() > alloc[i] {
+            "\n…[source truncated to fit context]"
+        } else {
+            ""
+        };
+        corpus.push_str(&format!("## {title}\n\n{clipped}{marker}\n\n"));
     }
     let messages = rag::build_artifact_messages(&instruction, &corpus);
     let (content, stats, model) = {

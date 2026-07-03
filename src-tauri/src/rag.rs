@@ -151,9 +151,9 @@ pub fn build_agent_decision(
 
 /// Build the message list for a one-shot artifact over concatenated source text.
 pub fn build_artifact_messages(instruction: &str, corpus: &str) -> Vec<ChatTurn> {
-    // Guard against blowing the context window on very large notebooks.
+    // Safety net only — callers budget the corpus per-source upstream.
     // Truncate on a char boundary (byte slicing can panic on Unicode).
-    const MAX_CHARS: usize = 24_000;
+    const MAX_CHARS: usize = 200_000;
     let corpus: String = corpus.chars().take(MAX_CHARS).collect();
     let corpus = corpus.as_str();
     vec![
