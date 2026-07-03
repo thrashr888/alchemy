@@ -62,6 +62,8 @@ interface AppState {
   settingsTab: string;
   embedderDownload: { label: string; done: number; total: number } | null;
   error: string | null;
+  /** Text of a chat send that failed, handed back to the composer so it isn't lost. */
+  failedInput: string | null;
 
   init: () => Promise<void>;
   refreshNotebooks: () => Promise<void>;
@@ -139,7 +141,18 @@ async function runQueued(
   }
 }
 
-export const useStore = create<AppState>((set, get) => ({
+export const useStore = create<AppState>((set, get) => {
+  /** Run an async action, surfacing any failure as the global error instead of
+   *  swallowing it (unhandled rejection = the UI silently does nothing). */
+  const guard = async (fn: () => Promise<void>) => {
+    try {
+      await fn();
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  return {
   notebooks: [],
   currentId: null,
   sources: [],
@@ -170,6 +183,7 @@ export const useStore = create<AppState>((set, get) => ({
   settingsOpen: false,
   settingsTab: "models",
   embedderDownload: null,
+  failedInput: null,
   error: null,
 
   init: async () => {
@@ -283,20 +297,22 @@ export const useStore = create<AppState>((set, get) => ({
     await get().selectNotebook(nb.id);
   },
 
-  renameNotebook: async (id, title) => {
-    await api.renameNotebook(id, title);
-    await get().refreshNotebooks();
-  },
+  renameNotebook: (id, title) =>
+    guard(async () => {
+      await api.renameNotebook(id, title);
+      await get().refreshNotebooks();
+    }),
 
-  deleteNotebook: async (id) => {
-    await api.deleteNotebook(id);
-    const remaining = get().notebooks.filter((n) => n.id !== id);
-    set({ notebooks: remaining });
-    if (get().currentId === id) {
-      if (remaining.length > 0) await get().selectNotebook(remaining[0].id);
-      else set({ currentId: null, sources: [], messages: [], notes: [] });
-    }
-  },
+  deleteNotebook: (id) =>
+    guard(async () => {
+      await api.deleteNotebook(id);
+      const remaining = get().notebooks.filter((n) => n.id !== id);
+      set({ notebooks: remaining });
+      if (get().currentId === id) {
+        if (remaining.length > 0) await get().selectNotebook(remaining[0].id);
+        else set({ currentId: null, sources: [], messages: [], notes: [] });
+      }
+    }),
 
   addSourceFiles: async (paths) => {
     const id = get().currentId;
@@ -361,11 +377,12 @@ export const useStore = create<AppState>((set, get) => ({
     if (get().currentId === id) set({ sources: await api.listSources(id) });
   },
 
-  deleteSource: async (id) => {
-    await api.deleteSource(id);
-    const nb = get().currentId;
-    if (nb) set({ sources: await api.listSources(nb) });
-  },
+  deleteSource: (id) =>
+    guard(async () => {
+      await api.deleteSource(id);
+      const nb = get().currentId;
+      if (nb) set({ sources: await api.listSources(nb) });
+    }),
 
   sendMessage: async (content) => {
     const id = get().currentId;
@@ -386,6 +403,7 @@ export const useStore = create<AppState>((set, get) => ({
       steps: [],
       followups: [],
       error: null,
+      failedInput: null,
     });
     try {
       const cfg = get().chatConfig;
@@ -411,7 +429,13 @@ export const useStore = create<AppState>((set, get) => ({
       await get().refreshNotebooks();
     } catch (e) {
       if (get().currentId === id) {
-        set({ error: e instanceof Error ? e.message : String(e) });
+        // Drop the optimistic user turn and hand the text back to the composer
+        // so a failed send never silently eats what the user typed.
+        set({
+          messages: get().messages.filter((m) => m.id !== optimistic.id),
+          error: e instanceof Error ? e.message : String(e),
+          failedInput: content,
+        });
       }
     } finally {
       // sending/steps are global in-flight flags — always clear them, even if
@@ -501,24 +525,27 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  createNote: async (title, content) => {
-    const id = get().currentId;
-    if (!id) return;
-    const note = await api.createNote(id, title, content);
-    set({ notes: [note, ...get().notes] });
-  },
+  createNote: (title, content) =>
+    guard(async () => {
+      const id = get().currentId;
+      if (!id) return;
+      const note = await api.createNote(id, title, content);
+      set({ notes: [note, ...get().notes] });
+    }),
 
-  updateNote: async (noteId, title, content) => {
-    const id = get().currentId;
-    if (!id) return;
-    await api.updateNote(noteId, title, content);
-    set({ notes: await api.listNotes(id) });
-  },
+  updateNote: (noteId, title, content) =>
+    guard(async () => {
+      const id = get().currentId;
+      if (!id) return;
+      await api.updateNote(noteId, title, content);
+      set({ notes: await api.listNotes(id) });
+    }),
 
-  deleteNote: async (noteId) => {
-    await api.deleteNote(noteId);
-    set({ notes: get().notes.filter((n) => n.id !== noteId) });
-  },
+  deleteNote: (noteId) =>
+    guard(async () => {
+      await api.deleteNote(noteId);
+      set({ notes: get().notes.filter((n) => n.id !== noteId) });
+    }),
 
   convertNoteToSource: async (noteId) => {
     const id = get().currentId;
@@ -559,23 +586,26 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  createReport: async (name, kind, prompt, intervalSecs) => {
-    const id = get().currentId;
-    if (!id) return;
-    await api.createReportSchedule(id, name, kind, prompt, intervalSecs);
-    set({ reportSchedules: await api.listReportSchedules(id) });
-  },
+  createReport: (name, kind, prompt, intervalSecs) =>
+    guard(async () => {
+      const id = get().currentId;
+      if (!id) return;
+      await api.createReportSchedule(id, name, kind, prompt, intervalSecs);
+      set({ reportSchedules: await api.listReportSchedules(id) });
+    }),
 
-  updateReport: async (r) => {
-    await api.updateReportSchedule(r.id, r.name, r.kind, r.prompt, r.intervalSecs, r.enabled);
-    const id = get().currentId;
-    if (id) set({ reportSchedules: await api.listReportSchedules(id) });
-  },
+  updateReport: (r) =>
+    guard(async () => {
+      await api.updateReportSchedule(r.id, r.name, r.kind, r.prompt, r.intervalSecs, r.enabled);
+      const id = get().currentId;
+      if (id) set({ reportSchedules: await api.listReportSchedules(id) });
+    }),
 
-  deleteReport: async (rid) => {
-    await api.deleteReportSchedule(rid);
-    set({ reportSchedules: get().reportSchedules.filter((r) => r.id !== rid) });
-  },
+  deleteReport: (rid) =>
+    guard(async () => {
+      await api.deleteReportSchedule(rid);
+      set({ reportSchedules: get().reportSchedules.filter((r) => r.id !== rid) });
+    }),
 
   runReportNow: async (rid) => {
     const schedule = get().reportSchedules.find((r) => r.id === rid);
@@ -624,4 +654,5 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   setError: (e) => set({ error: e }),
-}));
+  };
+});

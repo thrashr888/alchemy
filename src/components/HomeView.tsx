@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useStore } from "@/lib/store";
-import { Button, Input, Modal, Badge } from "./ui";
+import { Button, Input, Modal, Badge, useConfirm } from "./ui";
 import { AlchemyHero } from "./AlchemyHero";
 import { cn, relativeTime, providerStatus } from "@/lib/utils";
 import {
@@ -29,6 +29,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [creating, setCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   // Backend already returns notebooks sorted by most-recently-updated.
   return (
@@ -154,9 +155,17 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   </button>
                   <button
                     className="rounded p-1 text-muted-foreground hover:bg-elevated hover:text-destructive"
-                    onClick={(e) => {
+                    onClick={async (e) => {
                       e.stopPropagation();
-                      if (confirm(`Delete "${nb.title}" and all its sources?`)) remove(nb.id);
+                      if (
+                        await confirm({
+                          title: `Delete "${nb.title}"?`,
+                          message: "This permanently deletes the notebook and all of its sources.",
+                          confirmLabel: "Delete",
+                          danger: true,
+                        })
+                      )
+                        remove(nb.id);
                     }}
                     title="Delete"
                   >
@@ -195,6 +204,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           </div>
         </form>
       </Modal>
+
+      {confirmDialog}
 
       <Modal open={!!renaming} onClose={() => setRenaming(null)} title="Rename notebook">
         <form

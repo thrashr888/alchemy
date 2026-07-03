@@ -138,6 +138,62 @@ export function Modal({
   );
 }
 
+/**
+ * Promise-based confirmation using the app's Modal (not the native, un-themed
+ * window.confirm). Returns `confirm(opts) => Promise<boolean>` plus a `dialog`
+ * node to render once in the component.
+ */
+export function useConfirm() {
+  const [state, setState] = React.useState<{
+    title: string;
+    message: string;
+    confirmLabel: string;
+    danger: boolean;
+    resolve: (ok: boolean) => void;
+  } | null>(null);
+
+  const confirm = React.useCallback(
+    (opts: { title: string; message?: string; confirmLabel?: string; danger?: boolean }) =>
+      new Promise<boolean>((resolve) => {
+        setState({
+          title: opts.title,
+          message: opts.message ?? "",
+          confirmLabel: opts.confirmLabel ?? "Confirm",
+          danger: opts.danger ?? false,
+          resolve,
+        });
+      }),
+    [],
+  );
+
+  const settle = (ok: boolean) => {
+    state?.resolve(ok);
+    setState(null);
+  };
+
+  const dialog = state ? (
+    <Modal
+      open
+      onClose={() => settle(false)}
+      title={state.title}
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => settle(false)}>
+            Cancel
+          </Button>
+          <Button variant={state.danger ? "danger" : "primary"} onClick={() => settle(true)} autoFocus>
+            {state.confirmLabel}
+          </Button>
+        </div>
+      }
+    >
+      {state.message && <p className="text-[13px] leading-relaxed text-muted-foreground">{state.message}</p>}
+    </Modal>
+  ) : null;
+
+  return { confirm, dialog };
+}
+
 export function Badge({
   children,
   className,

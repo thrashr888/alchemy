@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import { Button, Input, Textarea, Modal, EmptyState, Spinner } from "./ui";
+import { Button, Input, Textarea, Modal, EmptyState, Spinner, useConfirm } from "./ui";
 import { cn } from "@/lib/utils";
 import type { Source } from "@/lib/types";
 import {
@@ -84,6 +84,7 @@ export function SourcesPanel() {
   const refreshSource = useStore((s) => s.refreshSource);
   const deleteSource = useStore((s) => s.deleteSource);
   const draggingFiles = useStore((s) => s.draggingFiles);
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [mode, setMode] = useState<AddMode>(null);
@@ -313,7 +314,17 @@ export function SourcesPanel() {
                   )}
                   <button
                     className="rounded p-1 text-muted-foreground hover:text-destructive"
-                    onClick={() => deleteSource(s.id)}
+                    onClick={async () => {
+                      if (
+                        await confirm({
+                          title: `Remove "${s.title}"?`,
+                          message: "This deletes the source and its embedded chunks from the notebook.",
+                          confirmLabel: "Remove",
+                          danger: true,
+                        })
+                      )
+                        deleteSource(s.id);
+                    }}
                     title="Remove source"
                   >
                     <Trash2 className="h-3 w-3" />
@@ -421,6 +432,8 @@ export function SourcesPanel() {
           </div>
         </form>
       </Modal>
+
+      {confirmDialog}
     </div>
   );
 }

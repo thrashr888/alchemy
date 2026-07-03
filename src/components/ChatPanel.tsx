@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
-import { Button, Textarea } from "./ui";
+import { Button, Textarea, useConfirm } from "./ui";
 import { Markdown } from "./Markdown";
 import { cn } from "@/lib/utils";
 import { DitherBackground } from "./DitherBackground";
@@ -45,7 +45,18 @@ export function ChatPanel() {
   const refreshSummary = useStore((s) => s.refreshSummary);
 
   const [draft, setDraft] = useState("");
+  const failedInput = useStore((s) => s.failedInput);
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // A failed send hands its text back — restore it into the composer so the
+  // user can retry without retyping.
+  useEffect(() => {
+    if (failedInput) {
+      setDraft((d) => d || failedInput);
+      useStore.setState({ failedInput: null });
+    }
+  }, [failedInput]);
 
   // Subscribe once to streaming tokens + agent progress steps from the backend.
   useEffect(() => {
@@ -98,7 +109,10 @@ export function ChatPanel() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => confirm("Clear this conversation?") && clearChat()}
+              onClick={async () => {
+                if (await confirm({ title: "Clear this conversation?", confirmLabel: "Clear", danger: true }))
+                  clearChat();
+              }}
             >
               <Eraser className="h-3.5 w-3.5" />
               Clear
@@ -218,7 +232,8 @@ export function ChatPanel() {
         </div>
       </div>
 
-          </div>
+      {confirmDialog}
+    </div>
   );
 }
 

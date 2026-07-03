@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
-import { Button, Input, Textarea, Modal, EmptyState, Badge, Spinner } from "./ui";
+import { Button, Input, Textarea, Modal, EmptyState, Badge, Spinner, useConfirm } from "./ui";
 import { Markdown } from "./Markdown";
 import { Reports } from "./Reports";
 import { RichEditor } from "./RichEditor";
@@ -69,6 +69,7 @@ export function StudioPanel() {
   const generate = useStore((s) => s.generateArtifact);
   const createNote = useStore((s) => s.createNote);
   const deleteNote = useStore((s) => s.deleteNote);
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [viewing, setViewing] = useState<Note | null>(null);
   const [composing, setComposing] = useState(false);
@@ -180,9 +181,17 @@ export function StudioPanel() {
                     </span>
                     <button
                       className="rounded p-1 text-muted-foreground hover:text-destructive"
-                      onClick={(e) => {
+                      onClick={async (e) => {
                         e.stopPropagation();
-                        deleteNote(n.id);
+                        if (
+                          await confirm({
+                            title: `Delete "${n.title}"?`,
+                            message: "This note will be permanently removed.",
+                            confirmLabel: "Delete",
+                            danger: true,
+                          })
+                        )
+                          deleteNote(n.id);
                       }}
                     >
                       <Trash2 className="h-3 w-3" />
@@ -232,6 +241,8 @@ export function StudioPanel() {
           </div>
         </form>
       </Modal>
+
+      {confirmDialog}
     </div>
   );
 }
