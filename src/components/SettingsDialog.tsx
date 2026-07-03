@@ -45,6 +45,23 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
   const [connOk, setConnOk] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmReembed, setConfirmReembed] = useState(false);
+  const [gatewayModels, setGatewayModels] = useState<string[]>([]);
+  const [gatewayError, setGatewayError] = useState<string | null>(null);
+  const [loadingGateway, setLoadingGateway] = useState(false);
+
+  async function loadGatewayModels() {
+    if (!draft?.openaiBaseUrl) return;
+    setLoadingGateway(true);
+    setGatewayError(null);
+    try {
+      setGatewayModels(await api.listGatewayModels(draft.openaiBaseUrl, draft.openaiApiKey));
+    } catch (e) {
+      setGatewayModels([]);
+      setGatewayError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingGateway(false);
+    }
+  }
 
   useEffect(() => {
     if (open && aiConfig) {
@@ -139,11 +156,100 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           }}
         />
 
+        <Field label="AI provider" hint="Where chat and document generation run.">
+          <div className="grid grid-cols-2 gap-1.5">
+            {[
+              { id: "ollama", label: "Ollama", note: "Local & private" },
+              { id: "openai", label: "IBM Bob / OpenAI-compatible", note: "Enterprise gateway" },
+            ].map((pv) => (
+              <button
+                key={pv.id}
+                onClick={() => setDraft({ ...draft, provider: pv.id })}
+                className={cn(
+                  "flex flex-col items-start gap-0.5 rounded-md border px-3 py-2 text-left transition-colors",
+                  draft.provider === pv.id
+                    ? "border-primary/60 bg-primary/10 text-foreground"
+                    : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <span className="text-[12.5px] font-medium">{pv.label}</span>
+                <span className="text-[11px] text-subtle-foreground">{pv.note}</span>
+              </button>
+            ))}
+          </div>
+        </Field>
+
+        {draft.provider === "openai" && (
+          <>
+            <Field
+              label="Gateway URL"
+              hint="The OpenAI-compatible base URL, usually ending in /v1. For IBM Bob, find it in Bob's developer settings."
+            >
+              <Input
+                value={draft.openaiBaseUrl}
+                onChange={(e) => setDraft({ ...draft, openaiBaseUrl: e.target.value })}
+                placeholder="https://bob.ibm.com/api/v1"
+              />
+            </Field>
+            <Field label="API key" hint="Stored locally in your config file; sent only to the gateway.">
+              <Input
+                type="password"
+                value={draft.openaiApiKey}
+                onChange={(e) => setDraft({ ...draft, openaiApiKey: e.target.value })}
+                placeholder="bob-…"
+              />
+            </Field>
+            <Field
+              label="Gateway chat model"
+              hint={gatewayError ? `Couldn't list models: ${gatewayError}` : "The model id billed to your account (bobcoins on Bob)."}
+            >
+              <div className="flex flex-col gap-1.5">
+                <div className="flex gap-1.5">
+                  <Input
+                    value={draft.openaiChatModel}
+                    onChange={(e) => setDraft({ ...draft, openaiChatModel: e.target.value })}
+                    placeholder="model id"
+                  />
+                  <Button
+                    variant="secondary"
+                    onClick={() => void loadGatewayModels()}
+                    loading={loadingGateway}
+                    title="List the gateway's models"
+                  >
+                    Load
+                  </Button>
+                </div>
+                {gatewayModels.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {gatewayModels.slice(0, 20).map((m) => (
+                      <button
+                        key={m}
+                        onClick={() => setDraft({ ...draft, openaiChatModel: m })}
+                        className={cn(
+                          "rounded border px-1.5 py-0.5 text-[11px] transition-colors",
+                          m === draft.openaiChatModel
+                            ? "border-primary/50 bg-primary/15 text-citation"
+                            : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
+                        )}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </Field>
+          </>
+        )}
+
         <Field label="Theme">
           <ThemePicker />
         </Field>
 
-        <Field label="Ollama URL">
+        <Field
+          label="Ollama URL"
+          hint={draft.provider === "openai" ? "Ollama is still used for embeddings and OCR." : undefined}
+        >
           <Input
             value={draft.baseUrl}
             onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })}
@@ -151,6 +257,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           />
         </Field>
 
+        {draft.provider !== "openai" && (
         <Field
           label="Chat model"
           hint="Used to answer questions and generate documents. Models tagged nvfp4/mlx run on Ollama's MLX engine (Apple-Silicon accelerated)."
@@ -162,6 +269,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
             suggestions={SUGGESTED_CHAT}
           />
         </Field>
+        )}
 
         <Field
           label="Embedding model"

@@ -9,7 +9,7 @@ use anyhow::Result;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use crate::ai::{ChatTurn, Ollama};
+use crate::ai::{Ai, ChatTurn};
 use crate::db::Db;
 use crate::models::Citation;
 use crate::rag;
@@ -37,7 +37,7 @@ enum Action {
 pub async fn run(
     app: &AppHandle,
     db: &Db,
-    ollama: &Ollama,
+    ollama: &Ai,
     notebook_id: &str,
     question: &str,
     history: &[ChatTurn],

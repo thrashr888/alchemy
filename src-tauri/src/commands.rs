@@ -9,7 +9,7 @@ use chrono::Utc;
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
-use crate::ai::{AiConfig, GenStats, Ollama};
+use crate::ai::{Ai, AiConfig, GenStats};
 use crate::db::Db;
 use crate::models::{
     Message, ModelHealth, ModelStat, ModelStatus, Note, Notebook, ReportSchedule, Source,
@@ -27,7 +27,7 @@ pub struct ModelStatAcc {
 
 pub struct AppState {
     pub db: Arc<Db>,
-    pub ai: tokio::sync::RwLock<Ollama>,
+    pub ai: tokio::sync::RwLock<Ai>,
     pub config_path: PathBuf,
     pub stats_path: PathBuf,
     pub model_stats: Mutex<HashMap<String, ModelStatAcc>>,
@@ -1314,7 +1314,7 @@ pub async fn send_message(
                 );
             })
             .await)?;
-        (out.text, out.stats, ai.config().chat_model.clone())
+        (out.text, out.stats, ai.active_chat_model())
     };
     state.record_chat_stats(&model, stats);
 
@@ -1385,7 +1385,7 @@ pub async fn send_message_agentic(
             &extra,
         )
         .await)?;
-        (answer, citations, stats, ai.config().chat_model.clone())
+        (answer, citations, stats, ai.active_chat_model())
     };
     state.record_chat_stats(&model, stats);
 
@@ -1520,7 +1520,7 @@ async fn generate_content(
     let (content, stats, model) = {
         let ai = state.ai.read().await;
         let out = ai.chat(&messages).await?;
-        (out.text, out.stats, ai.config().chat_model.clone())
+        (out.text, out.stats, ai.active_chat_model())
     };
     state.record_chat_stats(&model, stats);
     Ok((title.to_string(), content))
@@ -1768,43 +1768,95 @@ pub async fn run_report(
 
 /// Verify the configured chat + embedding models are installed and (for embed)
 /// actually responding. Used to surface a clear status instead of a hang.
+/// List models from an OpenAI-compatible gateway using draft credentials
+/// (before they're saved), so Settings can offer model chips.
+#[tauri::command]
+pub async fn list_gateway_models(base_url: String, api_key: String) -> Result<Vec<String>, String> {
+    let client = crate::ai::OpenAiClient::new(&base_url, &api_key, "");
+    e(client.list_models().await)
+}
+
 #[tauri::command]
 pub async fn check_models(state: State<'_, AppState>) -> Result<ModelHealth, String> {
     let ai = state.ai.read().await;
     let cfg = ai.config().clone();
     let norm = |m: &str| m.trim_end_matches(":latest").to_string();
 
-    let installed = match ai.list_models().await {
-        Ok(list) => list,
-        Err(_) => {
-            // Ollama unreachable — report both as unknown.
-            let unknown = |name: String| ModelStatus {
+    // Chat status comes from the configured provider; embeddings and vision
+    // remain Ollama-backed below.
+    let gateway_chat = if cfg.provider == "openai" {
+        let name = cfg.openai_chat_model.clone();
+        Some(if name.trim().is_empty() {
+            ModelStatus {
                 name,
                 installed: false,
                 working: false,
-                detail: "Ollama not reachable".into(),
+                detail: "No gateway model set — enter one in Settings".into(),
+            }
+        } else {
+            match ai.list_gateway_models().await {
+                Ok(list) if list.is_empty() || list.iter().any(|m| m == &name) => ModelStatus {
+                    name,
+                    installed: true,
+                    working: true,
+                    detail: "Gateway connected".into(),
+                },
+                Ok(_) => ModelStatus {
+                    name: name.clone(),
+                    installed: false,
+                    working: false,
+                    detail: format!("`{name}` isn't in the gateway's model list"),
+                },
+                Err(e) => ModelStatus {
+                    name,
+                    installed: false,
+                    working: false,
+                    detail: format!("Gateway: {e:#}"),
+                },
+            }
+        })
+    } else {
+        None
+    };
+
+    let installed = match ai.list_models().await {
+        Ok(list) => list,
+        Err(_) => {
+            // Ollama unreachable — report Ollama-backed rows as unknown.
+            let unknown = |name: String, detail: &str| ModelStatus {
+                name,
+                installed: false,
+                working: false,
+                detail: detail.into(),
             };
+            let chat = gateway_chat
+                .unwrap_or_else(|| unknown(cfg.chat_model.clone(), "Ollama not reachable"));
             return Ok(ModelHealth {
                 reachable: false,
-                chat: unknown(cfg.chat_model.clone()),
-                embed: unknown(cfg.embed_model.clone()),
-                vision: unknown(cfg.vision_model.clone()),
+                chat,
+                embed: unknown(
+                    cfg.embed_model.clone(),
+                    "Ollama not reachable (still required for embeddings)",
+                ),
+                vision: unknown(cfg.vision_model.clone(), "Ollama not reachable"),
             });
         }
     };
     let has = |m: &str| installed.iter().any(|x| norm(x) == norm(m));
 
-    let chat_installed = has(&cfg.chat_model);
-    let chat = ModelStatus {
-        name: cfg.chat_model.clone(),
-        installed: chat_installed,
-        working: chat_installed,
-        detail: if chat_installed {
-            "Installed".into()
-        } else {
-            format!("Not installed — run `ollama pull {}`", cfg.chat_model)
-        },
-    };
+    let chat = gateway_chat.unwrap_or_else(|| {
+        let chat_installed = has(&cfg.chat_model);
+        ModelStatus {
+            name: cfg.chat_model.clone(),
+            installed: chat_installed,
+            working: chat_installed,
+            detail: if chat_installed {
+                "Installed".into()
+            } else {
+                format!("Not installed — run `ollama pull {}`", cfg.chat_model)
+            },
+        }
+    });
 
     let embed_installed = has(&cfg.embed_model);
     // Embeddings are cheap, so actually probe them.
@@ -1866,7 +1918,7 @@ pub async fn set_ai_config(state: State<'_, AppState>, config: AiConfig) -> Resu
     let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     std::fs::write(&state.config_path, json).map_err(|e| e.to_string())?;
     let mut ai = state.ai.write().await;
-    *ai = Ollama::new(config);
+    *ai = Ai::new(config);
     Ok(())
 }
 

@@ -132,6 +132,8 @@ export const api = {
   getAiConfig: () => run(query<AiConfig>("get_ai_config")),
   setAiConfig: (config: AiConfig) => run(cmd<void>("set_ai_config", { config })),
   listModels: () => run(query<string[]>("list_models")),
+  listGatewayModels: (baseUrl: string, apiKey: string) =>
+    run(query<string[]>("list_gateway_models", { baseUrl, apiKey })),
   checkOllama: () => run(query<boolean>("check_ollama")),
   checkModels: () => run(query<ModelHealth>("check_models")),
   getModelStats: () => run(query<ModelStat[]>("get_model_stats")),

@@ -1,32 +1,54 @@
-//! AI provider abstraction. Today this is Ollama-only, but `AiConfig` plus the
-//! `Ollama` client are deliberately kept narrow so a cloud/MLX provider can be
-//! swapped in behind the same `embed` / `chat` surface later.
+//! AI provider abstraction. `Ai` routes each capability to a backend:
+//! chat/generation goes to Ollama or an OpenAI-compatible gateway (IBM Bob,
+//! LM Studio, vLLM, Ollama's own /v1); embeddings, OCR, and model listing stay
+//! on Ollama for now.
 
 mod ollama;
+mod openai;
 
-pub use ollama::{GenStats, Ollama};
+pub use ollama::Ollama;
+pub use openai::OpenAiClient;
 
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiConfig {
+    /// Chat/generation backend: "ollama" | "openai".
+    #[serde(default = "default_provider")]
+    pub provider: String,
     pub base_url: String,
     pub chat_model: String,
     pub embed_model: String,
     /// Vision model used to OCR image sources (empty disables OCR).
     #[serde(default)]
     pub vision_model: String,
+    /// OpenAI-compatible gateway settings (provider == "openai").
+    #[serde(default)]
+    pub openai_base_url: String,
+    #[serde(default)]
+    pub openai_api_key: String,
+    #[serde(default)]
+    pub openai_chat_model: String,
+}
+
+fn default_provider() -> String {
+    "ollama".to_string()
 }
 
 impl Default for AiConfig {
     fn default() -> Self {
         Self {
+            provider: default_provider(),
             base_url: "http://localhost:11434".to_string(),
             chat_model: "gpt-oss:120b".to_string(),
             embed_model: "nomic-embed-text:latest".to_string(),
             // OCR is opt-in: pick a vision model in Settings to enable it.
             vision_model: String::new(),
+            openai_base_url: String::new(),
+            openai_api_key: String::new(),
+            openai_chat_model: String::new(),
         }
     }
 }
@@ -57,5 +79,123 @@ impl ChatTurn {
             role: "assistant".into(),
             content: content.into(),
         }
+    }
+}
+
+/// Generation stats for one completion. Ollama reports true decode duration;
+/// OpenAI-style gateways report token counts, timed by wall clock instead.
+#[derive(Clone, Copy, Default)]
+pub struct GenStats {
+    pub eval_count: u64,
+    pub eval_duration_ns: u64,
+}
+
+impl GenStats {
+    pub fn tokens_per_sec(&self) -> f64 {
+        if self.eval_duration_ns == 0 {
+            0.0
+        } else {
+            self.eval_count as f64 / (self.eval_duration_ns as f64 / 1e9)
+        }
+    }
+
+    pub(crate) fn from_parts(count: Option<u64>, duration: Option<u64>) -> Option<Self> {
+        match (count, duration) {
+            (Some(eval_count), Some(eval_duration_ns))
+                if eval_count > 0 && eval_duration_ns > 0 =>
+            {
+                Some(GenStats {
+                    eval_count,
+                    eval_duration_ns,
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Result of a chat: the assistant text plus optional generation stats.
+pub struct ChatOutcome {
+    pub text: String,
+    pub stats: Option<GenStats>,
+}
+
+/// Capability router. One instance lives in AppState behind a RwLock and is
+/// rebuilt whenever the config is saved.
+pub struct Ai {
+    config: AiConfig,
+    ollama: Ollama,
+    openai: Option<OpenAiClient>,
+}
+
+impl Ai {
+    pub fn new(config: AiConfig) -> Self {
+        let openai = (config.provider == "openai").then(|| {
+            OpenAiClient::new(
+                &config.openai_base_url,
+                &config.openai_api_key,
+                &config.openai_chat_model,
+            )
+        });
+        let ollama = Ollama::new(config.clone());
+        Self {
+            config,
+            ollama,
+            openai,
+        }
+    }
+
+    pub fn config(&self) -> &AiConfig {
+        &self.config
+    }
+
+    /// The model name answering chats right now (stats keying, health display).
+    pub fn active_chat_model(&self) -> String {
+        match &self.openai {
+            Some(_) => self.config.openai_chat_model.clone(),
+            None => self.config.chat_model.clone(),
+        }
+    }
+
+    pub async fn chat(&self, messages: &[ChatTurn]) -> Result<ChatOutcome> {
+        match &self.openai {
+            Some(gw) => gw.chat(messages).await,
+            None => self.ollama.chat(messages).await,
+        }
+    }
+
+    pub async fn chat_stream<F>(&self, messages: &[ChatTurn], on_token: F) -> Result<ChatOutcome>
+    where
+        F: FnMut(&str),
+    {
+        match &self.openai {
+            Some(gw) => gw.chat_stream(messages, on_token).await,
+            None => self.ollama.chat_stream(messages, on_token).await,
+        }
+    }
+
+    /// Gateway model listing (provider == "openai"); Err when not applicable.
+    pub async fn list_gateway_models(&self) -> Result<Vec<String>> {
+        match &self.openai {
+            Some(gw) => gw.list_models().await,
+            None => Err(anyhow::anyhow!("no gateway configured")),
+        }
+    }
+
+    // Embeddings, OCR, and local model listing remain Ollama-backed.
+    pub async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.ollama.embed(texts).await
+    }
+    pub async fn embed_one(&self, text: &str) -> Result<Vec<f32>> {
+        self.ollama.embed_one(text).await
+    }
+    pub async fn test_embed(&self) -> Result<usize> {
+        self.ollama.test_embed().await
+    }
+    pub async fn ocr(&self, image_base64: &str) -> Result<String> {
+        self.ollama.ocr(image_base64).await
+    }
+    pub async fn list_models(&self) -> Result<Vec<String>> {
+        self.ollama.list_models().await
     }
 }

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { AlchemySymbol } from "./AlchemyHero";
-import { Button } from "./ui";
+import { Button, Input } from "./ui";
 import { cn } from "@/lib/utils";
 import type { ModelStatus } from "@/lib/types";
 import { Check, Copy, CheckCircle2, XCircle, Circle, RefreshCw } from "lucide-react";
@@ -78,9 +78,46 @@ function Step({
 /** First-run / broken-setup guide: Ollama + required models, with live rechecks. */
 export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
   const health = useStore((s) => s.modelHealth);
+  const aiConfig = useStore((s) => s.aiConfig);
+  const save = useStore((s) => s.saveAiConfig);
   const dismiss = useStore((s) => s.dismissOnboarding);
   const refresh = useStore((s) => s.refreshModelHealth);
   const [checking, setChecking] = useState(false);
+  const [gwUrl, setGwUrl] = useState("");
+  const [gwKey, setGwKey] = useState("");
+  const [gwModel, setGwModel] = useState("");
+  const [gwSaving, setGwSaving] = useState(false);
+
+  // Seed gateway drafts from config once it loads.
+  useEffect(() => {
+    if (aiConfig) {
+      setGwUrl((v) => v || aiConfig.openaiBaseUrl);
+      setGwKey((v) => v || aiConfig.openaiApiKey);
+      setGwModel((v) => v || aiConfig.openaiChatModel);
+    }
+  }, [aiConfig]);
+
+  const provider = aiConfig?.provider ?? "ollama";
+
+  async function setProvider(p: string) {
+    if (!aiConfig) return;
+    await save({ ...aiConfig, provider: p });
+    await refresh();
+  }
+
+  async function saveGateway() {
+    if (!aiConfig) return;
+    setGwSaving(true);
+    await save({
+      ...aiConfig,
+      provider: "openai",
+      openaiBaseUrl: gwUrl.trim(),
+      openaiApiKey: gwKey.trim(),
+      openaiChatModel: gwModel.trim(),
+    });
+    await refresh();
+    setGwSaving(false);
+  }
 
   // Live-poll while visible so finishing a step ticks it off automatically.
   useEffect(() => {
@@ -110,10 +147,67 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
           </p>
         </div>
 
+        <div className="grid grid-cols-2 gap-1.5">
+          {[
+            { id: "ollama", label: "Ollama", note: "Local & private" },
+            { id: "openai", label: "IBM Bob", note: "Enterprise gateway" },
+          ].map((pv) => (
+            <button
+              key={pv.id}
+              onClick={() => void setProvider(pv.id)}
+              className={cn(
+                "flex flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors",
+                provider === pv.id
+                  ? "border-primary/60 bg-primary/10 text-foreground"
+                  : "border-border bg-surface text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <span className="text-[13px] font-medium">{pv.label}</span>
+              <span className="text-[11px] text-subtle-foreground">{pv.note}</span>
+            </button>
+          ))}
+        </div>
+
+        {provider === "openai" && (
+          <div className="flex flex-col gap-1.5 rounded-lg border border-border-strong bg-surface px-4 py-3">
+            <span className="text-[13px] font-medium text-foreground">Bob gateway</span>
+            <Input
+              value={gwUrl}
+              onChange={(e) => setGwUrl(e.target.value)}
+              placeholder="Gateway URL — e.g. https://bob.ibm.com/api/v1"
+            />
+            <Input
+              type="password"
+              value={gwKey}
+              onChange={(e) => setGwKey(e.target.value)}
+              placeholder="API key"
+            />
+            <div className="flex gap-1.5">
+              <Input
+                value={gwModel}
+                onChange={(e) => setGwModel(e.target.value)}
+                placeholder="Model id"
+              />
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => void saveGateway()}
+                loading={gwSaving}
+                disabled={!gwUrl.trim()}
+              >
+                Save & check
+              </Button>
+            </div>
+            <span className="text-[11px] text-subtle-foreground">
+              Stored locally; sent only to the gateway. Usage is billed to your Bob account.
+            </span>
+          </div>
+        )}
+
         <div className="flex flex-col gap-2">
           <Step
             ok={health.reachable}
-            title="Ollama is running"
+            title={provider === "openai" ? "Ollama is running (for source indexing)" : "Ollama is running"}
             detail="Install Ollama, then start it. Alchemy connects to it locally."
           >
             <CommandChip command="brew install ollama" />
@@ -127,16 +221,20 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
           </Step>
 
           <Step
-            ok={health.reachable && chat.working}
-            title="Chat model"
+            ok={provider === "openai" ? chat.working : health.reachable && chat.working}
+            title={provider === "openai" ? "IBM Bob connected" : "Chat model"}
             detail={
-              health.reachable
-                ? `Answers questions and generates documents. ${chat.detail}`
-                : "Waiting for Ollama."
+              provider === "openai"
+                ? chat.detail
+                : health.reachable
+                  ? `Answers questions and generates documents. ${chat.detail}`
+                  : "Waiting for Ollama."
             }
           >
-            {health.reachable && <CommandChip command={`ollama pull ${chat.name}`} />}
-            {health.reachable && (
+            {provider !== "openai" && health.reachable && (
+              <CommandChip command={`ollama pull ${chat.name}`} />
+            )}
+            {provider !== "openai" && health.reachable && (
               <button className="text-[12px] text-citation hover:underline" onClick={onOpenSettings}>
                 or pick a smaller model
               </button>

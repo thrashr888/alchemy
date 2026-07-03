@@ -52,7 +52,7 @@ pub fn run() {
 
             app.manage(AppState {
                 db: Arc::new(db),
-                ai: tokio::sync::RwLock::new(ai::Ollama::new(config)),
+                ai: tokio::sync::RwLock::new(ai::Ai::new(config)),
                 config_path,
                 stats_path,
                 model_stats: std::sync::Mutex::new(model_stats),
@@ -89,6 +89,7 @@ pub fn run() {
             commands::list_models,
             commands::check_ollama,
             commands::check_models,
+            commands::list_gateway_models,
             commands::get_model_stats,
             commands::suggest_followups,
             commands::generate_notebook_summary,

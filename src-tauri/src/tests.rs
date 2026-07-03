@@ -22,6 +22,7 @@ async fn rag_round_trip() {
         chat_model: "digitsflow/bonsai-8b:latest".into(),
         embed_model: "nomic-embed-text".into(),
         vision_model: String::new(),
+        ..Default::default()
     });
     if ai.list_models().await.is_err() {
         eprintln!("SKIP: Ollama not reachable on localhost:11434");
@@ -121,4 +122,52 @@ async fn rag_round_trip() {
     assert!(!answer.trim().is_empty(), "model produced an answer");
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The OpenAI-compatible client (IBM Bob path) verified against Ollama's own
+/// /v1 gateway — same wire protocol, zero mocks. Skips when Ollama is down.
+#[tokio::test]
+async fn openai_gateway_round_trip() {
+    use crate::ai::{ChatTurn, OpenAiClient};
+
+    let probe = Ollama::new(AiConfig::default());
+    let Ok(models) = probe.list_models().await else {
+        eprintln!("SKIP: Ollama not reachable on localhost:11434");
+        return;
+    };
+    let small = models
+        .iter()
+        .find(|m| m.contains("bonsai") || m.contains("12b-mlx"))
+        .cloned()
+        .unwrap_or_else(|| models[0].clone());
+
+    let gw = OpenAiClient::new("http://localhost:11434/v1", "test-key", &small);
+
+    // Non-streaming
+    let out = gw
+        .chat(&[ChatTurn::user("Reply with exactly: alchemy works")])
+        .await
+        .expect("gateway chat");
+    eprintln!("gateway non-stream ({small}): {}", out.text.trim());
+    assert!(!out.text.trim().is_empty(), "gateway returned text");
+
+    // Streaming
+    let mut streamed = String::new();
+    let out = gw
+        .chat_stream(&[ChatTurn::user("Count: 1 2 3")], |tok| {
+            streamed.push_str(tok);
+        })
+        .await
+        .expect("gateway stream");
+    eprintln!(
+        "gateway stream: {} chars, stats: {:?} tok",
+        streamed.len(),
+        out.stats.map(|s| s.eval_count)
+    );
+    assert!(!streamed.is_empty(), "tokens streamed via SSE");
+    assert_eq!(streamed, out.text, "streamed text matches outcome");
+
+    // Model listing through the gateway
+    let listed = gw.list_models().await.expect("gateway /models");
+    assert!(!listed.is_empty(), "gateway listed models");
 }

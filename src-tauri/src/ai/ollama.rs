@@ -5,7 +5,7 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{AiConfig, ChatTurn};
+use super::{AiConfig, ChatOutcome, ChatTurn, GenStats};
 
 #[derive(Clone)]
 pub struct Ollama {
@@ -40,43 +40,6 @@ struct ChatChunk {
     eval_duration: Option<u64>,
 }
 
-/// Generation stats reported by Ollama at the end of a chat.
-#[derive(Clone, Copy, Default)]
-pub struct GenStats {
-    pub eval_count: u64,
-    pub eval_duration_ns: u64,
-}
-
-impl GenStats {
-    pub fn tokens_per_sec(&self) -> f64 {
-        if self.eval_duration_ns == 0 {
-            0.0
-        } else {
-            self.eval_count as f64 / (self.eval_duration_ns as f64 / 1e9)
-        }
-    }
-
-    fn from_parts(count: Option<u64>, duration: Option<u64>) -> Option<Self> {
-        match (count, duration) {
-            (Some(eval_count), Some(eval_duration_ns))
-                if eval_count > 0 && eval_duration_ns > 0 =>
-            {
-                Some(GenStats {
-                    eval_count,
-                    eval_duration_ns,
-                })
-            }
-            _ => None,
-        }
-    }
-}
-
-/// Result of a chat: the assistant text plus optional generation stats.
-pub struct ChatOutcome {
-    pub text: String,
-    pub stats: Option<GenStats>,
-}
-
 /// Dedicated OCR models want specific, terse prompts; general vision models do
 /// better with an explicit instruction.
 fn ocr_prompt(model: &str) -> &'static str {
@@ -106,10 +69,6 @@ impl Ollama {
             .build()
             .expect("failed to build reqwest client");
         Self { http, config }
-    }
-
-    pub fn config(&self) -> &AiConfig {
-        &self.config
     }
 
     fn url(&self, path: &str) -> String {
