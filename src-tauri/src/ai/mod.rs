@@ -35,6 +35,9 @@ pub struct AiConfig {
     pub openai_api_key: String,
     #[serde(default)]
     pub openai_chat_model: String,
+    /// Vision-capable gateway model for OCR (empty = sonnet-4.6 on Bob).
+    #[serde(default)]
+    pub openai_vision_model: String,
 }
 
 fn default_provider() -> String {
@@ -53,6 +56,7 @@ impl Default for AiConfig {
             openai_base_url: String::new(),
             openai_api_key: String::new(),
             openai_chat_model: String::new(),
+            openai_vision_model: String::new(),
         }
     }
 }
@@ -198,7 +202,17 @@ impl Ai {
         self.ollama.test_embed().await
     }
     pub async fn ocr(&self, image_base64: &str) -> Result<String> {
-        self.ollama.ocr(image_base64).await
+        match &self.openai {
+            Some(gw) => {
+                let model = if self.config.openai_vision_model.trim().is_empty() {
+                    "sonnet-4.6"
+                } else {
+                    self.config.openai_vision_model.trim()
+                };
+                gw.ocr(image_base64, model).await
+            }
+            None => self.ollama.ocr(image_base64).await,
+        }
     }
     pub async fn list_models(&self) -> Result<Vec<String>> {
         self.ollama.list_models().await

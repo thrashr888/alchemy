@@ -110,6 +110,7 @@ export interface AiConfig {
   openaiBaseUrl: string;
   openaiApiKey: string;
   openaiChatModel: string;
+  openaiVisionModel: string;
 }
 
 export interface ChatConfig {

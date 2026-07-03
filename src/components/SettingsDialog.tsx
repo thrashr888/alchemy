@@ -365,17 +365,30 @@ export function SettingsDialog({
                 />
               </Field>
 
-              <Field
-                label="Vision model"
-                hint="OCR for image & scanned-PDF sources. Dedicated OCR models (glm-ocr, deepseek-ocr) work best; leave blank to disable."
-              >
-                <ModelPicker
-                  value={draft.visionModel ?? ""}
-                  models={models}
-                  onChange={(v) => setDraft({ ...draft, visionModel: v })}
-                  suggestions={SUGGESTED_VISION}
-                />
-              </Field>
+              {draft.provider === "openai" ? (
+                <Field
+                  label="Vision model"
+                  hint="OCR for images & scanned PDFs runs through Bob's vision-capable models. Empty = sonnet-4.6."
+                >
+                  <Input
+                    value={draft.openaiVisionModel ?? ""}
+                    onChange={(e) => setDraft({ ...draft, openaiVisionModel: e.target.value })}
+                    placeholder="sonnet-4.6 (default)"
+                  />
+                </Field>
+              ) : (
+                <Field
+                  label="Vision model"
+                  hint="OCR for image & scanned-PDF sources. Dedicated OCR models (glm-ocr, deepseek-ocr) work best; leave blank to disable."
+                >
+                  <ModelPicker
+                    value={draft.visionModel ?? ""}
+                    models={models}
+                    onChange={(v) => setDraft({ ...draft, visionModel: v })}
+                    suggestions={SUGGESTED_VISION}
+                  />
+                </Field>
+              )}
             </>
           )}
 

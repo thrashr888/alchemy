@@ -219,6 +219,45 @@ impl OpenAiClient {
         Ok(ChatOutcome { text: full, stats })
     }
 
+    /// OCR an image via a vision-capable chat model (OpenAI image_url parts;
+    /// LiteLLM translates for Anthropic/Google backends). Verified live against
+    /// Bob's sonnet models.
+    pub async fn ocr(&self, image_base64: &str, model: &str) -> Result<String> {
+        use base64::Engine;
+        let mime = base64::engine::general_purpose::STANDARD
+            .decode(&image_base64.as_bytes()[..image_base64.len().min(24)])
+            .ok()
+            .map(|head| sniff_mime(&head))
+            .unwrap_or("image/png");
+        let started = std::time::Instant::now();
+        let _ = started;
+        let resp = self
+            .with_bob_headers(self.request("/chat/completions"))
+            .await
+            .timeout(std::time::Duration::from_secs(180))
+            .json(&json!({
+                "model": model,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Transcribe ALL text in this image exactly, preserving reading order and line breaks. Output only the transcribed text with no commentary. If there is no text, output nothing."},
+                        {"type": "image_url", "image_url": {"url": format!("data:{mime};base64,{image_base64}")}}
+                    ]
+                }],
+            }))
+            .send()
+            .await
+            .context("gateway OCR request failed")?;
+        if !resp.status().is_success() {
+            return Err(gateway_error(resp).await);
+        }
+        let value: serde_json::Value = resp.json().await.context("invalid OCR response")?;
+        Ok(value["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string())
+    }
+
     /// Model ids from the gateway. Tries OpenAI's GET /models, then falls back
     /// to LiteLLM's GET /model/info (IBM Bob's shape: data[].model_name).
     pub async fn list_models(&self) -> Result<Vec<String>> {
@@ -292,6 +331,19 @@ fn wall_clock_stats(value: &serde_json::Value, started: std::time::Instant) -> O
         eval_count: tokens,
         eval_duration_ns: started.elapsed().as_nanos() as u64,
     })
+}
+
+/// Sniff an image mime type from magic bytes (default png).
+fn sniff_mime(head: &[u8]) -> &'static str {
+    if head.starts_with(&[0xFF, 0xD8]) {
+        "image/jpeg"
+    } else if head.starts_with(b"GIF8") {
+        "image/gif"
+    } else if head.len() >= 12 && &head[..4] == b"RIFF" && &head[8..12] == b"WEBP" {
+        "image/webp"
+    } else {
+        "image/png"
+    }
 }
 
 /// Three dot-separated non-empty segments — the shape of a JWT.

@@ -1878,7 +1878,19 @@ pub async fn check_models(state: State<'_, AppState>) -> Result<ModelHealth, Str
         detail: embed_detail,
     };
 
-    let vision = if cfg.vision_model.trim().is_empty() {
+    let vision = if cfg.provider == "openai" {
+        let name = if cfg.openai_vision_model.trim().is_empty() {
+            "sonnet-4.6".to_string()
+        } else {
+            cfg.openai_vision_model.trim().to_string()
+        };
+        ModelStatus {
+            name: name.clone(),
+            installed: true,
+            working: true,
+            detail: format!("Via IBM Bob ({name})"),
+        }
+    } else if cfg.vision_model.trim().is_empty() {
         ModelStatus {
             name: String::new(),
             installed: false,
