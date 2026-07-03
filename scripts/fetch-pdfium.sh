@@ -27,7 +27,7 @@ case "$ARCH" in
     ;;
 esac
 
-echo "fetch-pdfium: downloading $PKG…"
+echo "fetch-pdfium: downloading $PKG..."
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 curl -fsSL -o "$TMP/pdfium.tgz" \

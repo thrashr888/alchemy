@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Cut a release from this machine: gate → build → sign → notarize → publish.
+# Cut a release from this machine: gate -> build -> sign -> notarize -> publish.
 #
-# On Apple Silicon this is faster and far more reliable than the CI path — the
+# On Apple Silicon this is faster and far more reliable than the CI path -- the
 # signing identity and notary profile live in your Keychain, so the whole class
 # of CI signing bugs (locked keychains, secret drift) simply can't happen. CI
 # (.github/workflows/release.yml) remains as a manual fallback. See RELEASE.md.
@@ -35,12 +35,12 @@ cd "$(dirname "$0")/.."
 # --- Preconditions -----------------------------------------------------------
 [ -n "$SIGNING_IDENTITY" ] || { echo "No 'Developer ID Application' identity in your Keychain." >&2; exit 1; }
 [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] || { echo "Not on main." >&2; exit 1; }
-[ -z "$(git status --porcelain)" ] || { echo "Working tree not clean — commit or stash first." >&2; exit 1; }
+[ -z "$(git status --porcelain)" ] || { echo "Working tree not clean -- commit or stash first." >&2; exit 1; }
 git rev-parse "$TAG" >/dev/null 2>&1 && { echo "Tag $TAG already exists." >&2; exit 1; }
 xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 \
   || { echo "Notary profile '$NOTARY_PROFILE' not found. See RELEASE.md (one-time setup)." >&2; exit 1; }
 
-echo "==> Releasing $TAG  (identity: ${SIGNING_IDENTITY%% (*}…, profile: $NOTARY_PROFILE)"
+echo "==> Releasing $TAG  (identity: ${SIGNING_IDENTITY%% (*}..., profile: $NOTARY_PROFILE)"
 
 # --- Version bump ------------------------------------------------------------
 node -e "for (const f of ['package.json','src-tauri/tauri.conf.json']) {
@@ -84,5 +84,5 @@ git tag "$TAG"
 git push origin main "$TAG"
 gh release create "$TAG" "$DMG" --title "Alchemy $TAG" --generate-notes
 
-echo "==> Done. Released $TAG — https://github.com/thrashr888/alchemy/releases/tag/$TAG"
+echo "==> Done. Released $TAG -- https://github.com/thrashr888/alchemy/releases/tag/$TAG"
 echo "    (edit the notes on GitHub if you want more than the auto-generated changelog.)"
