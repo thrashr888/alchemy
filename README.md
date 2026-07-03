@@ -182,19 +182,18 @@ linked from Settings → Models). Alchemy does no in-app accounting.
 
 Releases are built by GitHub Actions
 ([.github/workflows/release.yml](.github/workflows/release.yml)) on any `v*` tag
-(or manual dispatch), producing a **macOS arm64** `.dmg` in a **draft** GitHub
-Release. Cut one with:
+Releases are cut **locally** on Apple Silicon — one command builds, signs,
+notarizes, and publishes:
 
 ```bash
-# bump version in package.json + src-tauri/tauri.conf.json first
-git tag v0.1.0 && git push origin v0.1.0
+scripts/release.sh 0.4.2
 ```
 
-Code signing/notarization is optional — set the `APPLE_CERTIFICATE`,
-`APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
-`APPLE_PASSWORD`, and `APPLE_TEAM_ID` repo secrets to produce a signed, notarized
-build; without them the app is ad-hoc signed (open it the first time via
-right-click → Open).
+See **[RELEASE.md](RELEASE.md)** for what it does, one-time setup (Developer ID
+cert + notary profile), and the manual CI fallback
+([`.github/workflows/release.yml`](.github/workflows/release.yml), triggered from
+the Actions tab). Builds are signed with a Developer ID and notarized, so the
+`.dmg` opens with a normal double-click.
 
 The app bundles the [PDFium](https://github.com/bblanchon/pdfium-binaries) library
 (for scanned-PDF OCR). An Intel (x86_64) build is possible on a `macos-13` runner

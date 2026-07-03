@@ -1,9 +1,10 @@
 name: 'Release'
 
+# Manual fallback only. The primary release path is scripts/release.sh, run from
+# an Apple Silicon machine (faster, and no CI signing-keychain fragility). Use
+# this when you can't release locally: trigger it from the Actions tab against a
+# tag ref. Requires the APPLE_* repo secrets (see RELEASE.md).
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 jobs:
