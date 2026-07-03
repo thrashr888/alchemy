@@ -11,11 +11,15 @@ Rules:\n\
 - Be concise and well-structured. Prefer short paragraphs and bullet lists.";
 
 /// Build the chat message list from the retrieved citations and the question.
-/// The citation list passed in becomes excerpts [1..n] in order.
+/// The citation list passed in becomes excerpts [1..n] in order. `source_titles`
+/// is the full list of sources in the notebook, so the model can answer
+/// corpus-level questions ("what documents do we have?") even when top-k
+/// retrieval only surfaced chunks from a few of them.
 pub fn build_chat_messages(
     history: &[ChatTurn],
     question: &str,
     citations: &[Citation],
+    source_titles: &[String],
     extra_system: &str,
 ) -> Vec<ChatTurn> {
     let mut context = String::new();
@@ -44,8 +48,25 @@ pub fn build_chat_messages(
     // Keep a short rolling window of prior turns for conversational context.
     let start = history.len().saturating_sub(6);
     messages.extend(history[start..].iter().cloned());
+
+    // A manifest of every source in the notebook. The excerpts below are only
+    // the top matches for THIS question; this list is the whole corpus, so
+    // "which documents are here?" is answerable without relying on retrieval.
+    let manifest = if source_titles.is_empty() {
+        "(none)".to_string()
+    } else {
+        source_titles
+            .iter()
+            .map(|t| format!("- {t}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
     messages.push(ChatTurn::user(format!(
-        "Source excerpts:\n\n{context}\n---\n\nQuestion: {question}"
+        "Sources in this notebook ({} total):\n{manifest}\n\n\
+         Source excerpts (top matches for this question only):\n\n{context}\n---\n\n\
+         Question: {question}",
+        source_titles.len()
     )));
     messages
 }

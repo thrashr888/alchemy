@@ -102,7 +102,14 @@ pub async fn run(
     }
 
     emit_step(app, "Writing answer".into());
-    let messages = rag::build_chat_messages(history, question, &gathered, extra_system);
+    let source_titles: Vec<String> = db
+        .list_sources(notebook_id)
+        .await?
+        .into_iter()
+        .map(|s| s.title)
+        .collect();
+    let messages =
+        rag::build_chat_messages(history, question, &gathered, &source_titles, extra_system);
     let app_cb = app.clone();
     let outcome = ollama
         .chat_stream(&messages, |tok| {

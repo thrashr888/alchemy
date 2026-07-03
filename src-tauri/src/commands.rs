@@ -1328,6 +1328,13 @@ pub async fn send_message(
     };
     let citations = e(state.db.search_chunks(&notebook_id, query_vec, 8).await)?;
 
+    // Full source manifest so corpus-level questions are answerable regardless
+    // of which chunks the top-k search happened to surface.
+    let source_titles: Vec<String> = e(state.db.list_sources(&notebook_id).await)?
+        .into_iter()
+        .map(|s| s.title)
+        .collect();
+
     // Build prompt with short history (exclude the just-added user msg from window).
     let history = e(state.db.list_messages(&notebook_id).await)?;
     let history_turns: Vec<crate::ai::ChatTurn> = history
@@ -1338,7 +1345,8 @@ pub async fn send_message(
             content: m.content.clone(),
         })
         .collect();
-    let messages = rag::build_chat_messages(&history_turns, &content, &citations, &extra);
+    let messages =
+        rag::build_chat_messages(&history_turns, &content, &citations, &source_titles, &extra);
 
     // Stream the answer, emitting tokens to the frontend. Race against the
     // cancellation token so a Stop click aborts the request; on cancel we keep
