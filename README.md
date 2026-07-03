@@ -166,7 +166,9 @@ During **onboarding** (or later in **Settings → Models**):
 
 Keys are stored only in the local `ai_config.json` and sent solely as an auth header
 to the gateway you configure — never anywhere else. Usage is billed to your Bob
-account (silently; Alchemy does no in-app accounting).
+account; check it any time at
+[bob.ibm.com/admin/subscription](https://bob.ibm.com/admin/subscription) (also
+linked from Settings → Models). Alchemy does no in-app accounting.
 
 | Setting          | Default                                       |
 | ---------------- | --------------------------------------------- |

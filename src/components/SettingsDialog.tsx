@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { THEME_LIST } from "@/lib/themes";
 import { Button, Input, Modal, Spinner, Textarea } from "./ui";
 import { cn } from "@/lib/utils";
@@ -314,6 +315,15 @@ export function SettingsDialog({
                       >
                         {gatewayModels.length > 0 ? "Refresh" : "Load"}
                       </Button>
+                    </div>
+                    <div className="mt-1 text-[11px] text-subtle-foreground">
+                      Usage is billed to your Bob account ·{" "}
+                      <button
+                        className="text-citation hover:underline"
+                        onClick={() => void openUrl("https://bob.ibm.com/admin/subscription")}
+                      >
+                        view usage on bob.ibm.com
+                      </button>
                     </div>
                   </Field>
                 </>

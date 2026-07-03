@@ -251,11 +251,22 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
                     : "text-subtle-foreground",
               )}
             >
-              {gwStatus
-                ? gwStatus
-                : gwKey.trim() && !gwKey.trim().startsWith("bob_") && (!gwUrl.trim() || gwUrl.includes("bob.ibm.com"))
-                  ? "Heads up: Bob keys start with bob_ — double-check you pasted the whole key."
-                  : "Stored locally; sent only to the gateway. Usage is billed to your Bob account."}
+              {gwStatus ? (
+                gwStatus
+              ) : gwKey.trim() && !gwKey.trim().startsWith("bob_") && (!gwUrl.trim() || gwUrl.includes("bob.ibm.com")) ? (
+                "Heads up: Bob keys start with bob_ — double-check you pasted the whole key."
+              ) : (
+                <>
+                  Stored locally; sent only to the gateway. Usage is billed to{" "}
+                  <button
+                    className="text-citation hover:underline"
+                    onClick={() => void openUrl("https://bob.ibm.com/admin/subscription")}
+                  >
+                    your Bob account
+                  </button>
+                  .
+                </>
+              )}
             </span>
           </div>
         )}
