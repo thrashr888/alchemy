@@ -73,8 +73,8 @@ retrieved chunks shown in the UI. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.m
 
 Download the latest `Alchemy_x.y.z_aarch64.dmg` from
 [Releases](https://github.com/thrashr888/alchemy/releases), open it, and drag
-**Alchemy** to Applications. The build is ad-hoc signed (not notarized), so on
-first launch **right-click → Open** (or run `xattr -cr /Applications/Alchemy.app`).
+**Alchemy** to Applications. Builds are **signed with a Developer ID and
+notarized by Apple**, so they open with a normal double-click.
 
 Requires [Ollama](https://ollama.com) running locally.
 
