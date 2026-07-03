@@ -84,15 +84,32 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
           rm certificate.p12
 
+      # Tauri only skips notarization when the APPLE_ID/PASSWORD/TEAM_ID env
+      # vars are absent (empty strings still trigger an attempt), so export
+      # them conditionally. GitHub masks the values in logs.
+      - name: Enable notarization (if configured)
+        env:
+          A_ID: ${{ secrets.APPLE_ID }}
+          A_PW: ${{ secrets.APPLE_PASSWORD }}
+          A_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$A_ID" ] && [ -n "$A_PW" ] && [ -n "$A_TEAM" ]; then
+            {
+              echo "APPLE_ID=$A_ID"
+              echo "APPLE_PASSWORD=$A_PW"
+              echo "APPLE_TEAM_ID=$A_TEAM"
+            } >> "$GITHUB_ENV"
+            echo "Notarization enabled."
+          else
+            echo "Notarization secrets not set — building without notarization."
+          fi
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Real Developer ID when the secret is set; otherwise ad-hoc sign ("-")
           # so the bundle step succeeds (unsigned, un-notarized build).
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
-          # To notarize, add APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID here — but
-          # only when those secrets exist (empty values make tauri attempt and
-          # fail notarization).
         with:
           tagName: v__VERSION__
           releaseName: 'Alchemy v__VERSION__'
