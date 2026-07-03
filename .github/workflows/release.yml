@@ -88,10 +88,13 @@ jobs:
       # every nested Mach-O to carry our Developer ID + secure timestamp +
       # hardened runtime. Sign it here so tauri seals a valid signature.
       - name: Sign bundled PDFium dylib (if signing configured)
-        if: ${{ secrets.APPLE_SIGNING_IDENTITY != '' }}
         env:
           IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
+          if [ -z "$IDENTITY" ]; then
+            echo "No signing identity — leaving PDFium dylib as-is (unsigned build)."
+            exit 0
+          fi
           codesign --force --timestamp --options runtime \
             --sign "$IDENTITY" src-tauri/libs/libpdfium.dylib
           codesign -dvv src-tauri/libs/libpdfium.dylib 2>&1 | grep -E 'Authority|Timestamp' | head -3
