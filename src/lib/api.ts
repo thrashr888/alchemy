@@ -51,6 +51,15 @@ const cmd = <T>(command: string, args?: Record<string, unknown>) =>
     }),
   );
 
+/** Fast probe (gateway checks): one attempt, short timeout, no retry. */
+const probe = <T>(command: string, args?: Record<string, unknown>) =>
+  invokeRaw<T>(command, args).pipe(
+    Effect.timeoutFail({
+      duration: Duration.seconds(15),
+      onTimeout: () => new TimeoutError({ command }),
+    }),
+  );
+
 /** Long-running AI op (embed / generate / chat): generous timeout, no retry. */
 const ai = <T>(command: string, args?: Record<string, unknown>) =>
   invokeRaw<T>(command, args).pipe(
@@ -133,7 +142,7 @@ export const api = {
   setAiConfig: (config: AiConfig) => run(cmd<void>("set_ai_config", { config })),
   listModels: () => run(query<string[]>("list_models")),
   listGatewayModels: (baseUrl: string, apiKey: string) =>
-    run(query<string[]>("list_gateway_models", { baseUrl, apiKey })),
+    run(probe<string[]>("list_gateway_models", { baseUrl, apiKey })),
   checkOllama: () => run(query<boolean>("check_ollama")),
   checkModels: () => run(query<ModelHealth>("check_models")),
   getModelStats: () => run(query<ModelStat[]>("get_model_stats")),

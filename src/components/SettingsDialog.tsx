@@ -259,7 +259,7 @@ export function SettingsDialog({
                     <Input
                       value={draft.openaiBaseUrl}
                       onChange={(e) => setDraft({ ...draft, openaiBaseUrl: e.target.value })}
-                      placeholder="https://bob.ibm.com/api/v1 (default)"
+                      placeholder="https://api.us-east.bob.ibm.com/inference/v1 (default)"
                     />
                   </Field>
                   <Field

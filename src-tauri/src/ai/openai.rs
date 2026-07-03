@@ -21,9 +21,17 @@ impl OpenAiClient {
             .timeout(std::time::Duration::from_secs(600))
             .build()
             .expect("failed to build reqwest client");
+        // Empty base falls back to Bob's gateway here too, so no caller can
+        // construct a client that builds relative (schemeless) request URLs.
+        let base = base_url.trim().trim_end_matches('/');
+        let base = if base.is_empty() {
+            super::DEFAULT_GATEWAY_URL
+        } else {
+            base
+        };
         Self {
             http,
-            base_url: base_url.trim_end_matches('/').to_string(),
+            base_url: base.to_string(),
             api_key: api_key.to_string(),
             model: model.to_string(),
         }
@@ -135,27 +143,64 @@ impl OpenAiClient {
         Ok(ChatOutcome { text: full, stats })
     }
 
-    /// Model ids from GET /models. Many gateways gate or omit this — callers
-    /// should tolerate an Err.
+    /// Model ids from the gateway. Tries OpenAI's GET /models, then falls back
+    /// to LiteLLM's GET /model/info (IBM Bob's shape: data[].model_name).
     pub async fn list_models(&self) -> Result<Vec<String>> {
-        let mut req = self.http.get(self.url("/models"));
-        if !self.api_key.is_empty() {
-            req = req.bearer_auth(&self.api_key);
+        match self.get_json("/models").await {
+            Ok(value) => {
+                let models: Vec<String> = value["data"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|m| m["id"].as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if !models.is_empty() {
+                    return Ok(models);
+                }
+            }
+            Err(e) => {
+                // Fall through to /model/info; keep this error if both fail.
+                let fallback = self.model_info_names().await;
+                return fallback.map_err(|_| e);
+            }
         }
-        let resp = req.send().await.context("gateway /models request failed")?;
-        if !resp.status().is_success() {
-            return Err(gateway_error(resp).await);
-        }
-        let value: serde_json::Value = resp.json().await.context("invalid /models response")?;
-        let models = value["data"]
+        self.model_info_names().await
+    }
+
+    /// LiteLLM's /model/info listing.
+    async fn model_info_names(&self) -> Result<Vec<String>> {
+        let value = self.get_json("/model/info").await?;
+        let models: Vec<String> = value["data"]
             .as_array()
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|m| m["id"].as_str().map(str::to_string))
+                    .filter_map(|m| m["model_name"].as_str().map(str::to_string))
                     .collect()
             })
             .unwrap_or_default();
         Ok(models)
+    }
+
+    async fn get_json(&self, path: &str) -> Result<serde_json::Value> {
+        let mut req = self
+            .http
+            .get(self.url(path))
+            .timeout(std::time::Duration::from_secs(10));
+        if !self.api_key.is_empty() {
+            req = req.bearer_auth(&self.api_key);
+        }
+        let resp = req
+            .send()
+            .await
+            .with_context(|| format!("gateway {path} request failed"))?;
+        if !resp.status().is_success() {
+            return Err(gateway_error(resp).await);
+        }
+        resp.json()
+            .await
+            .with_context(|| format!("invalid {path} response"))
     }
 }
 

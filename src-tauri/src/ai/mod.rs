@@ -12,8 +12,9 @@ pub use openai::OpenAiClient;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-/// IBM Bob's OpenAI-compatible gateway; used whenever the URL field is empty.
-pub const DEFAULT_GATEWAY_URL: &str = "https://bob.ibm.com/api/v1";
+/// IBM Bob's OpenAI-compatible gateway (LiteLLM behind /inference/v1, per the
+/// Bob Shell bundle's DEFAULT_BACKEND_URL); used whenever the URL field is empty.
+pub const DEFAULT_GATEWAY_URL: &str = "https://api.us-east.bob.ibm.com/inference/v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
