@@ -432,6 +432,8 @@ function ThinkingDots() {
 }
 
 function ChatEmpty({ hasNotebook, hasSources }: { hasNotebook: boolean; hasSources: boolean }) {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const via = aiConfig?.provider === "openai" ? "via IBM Bob" : "locally with Ollama";
   return (
     <div className="flex min-h-[62vh] flex-col items-center justify-center gap-4 text-center">
       <AlchemySymbol className="h-16 w-16 text-citation/60" />
@@ -443,7 +445,7 @@ function ChatEmpty({ hasNotebook, hasSources }: { hasNotebook: boolean; hasSourc
             : "Ask anything about your sources"}
       </div>
       <p className="max-w-[360px] text-[13px] text-muted-foreground">
-        Answers are generated locally with Ollama and cite the exact passages they draw from.
+        Answers are generated {via} and cite the exact passages they draw from.
       </p>
     </div>
   );

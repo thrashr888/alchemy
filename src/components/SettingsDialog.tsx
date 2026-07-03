@@ -4,7 +4,7 @@ import { api } from "@/lib/api";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { THEME_LIST } from "@/lib/themes";
 import { Button, Input, Modal, Spinner, Textarea } from "./ui";
-import { cn } from "@/lib/utils";
+import { cn, bobKeyLooksOff } from "@/lib/utils";
 import type { AiConfig, ChatConfig } from "@/lib/types";
 import {
   RefreshCw,
@@ -43,9 +43,7 @@ const SUGGESTED_VISION = [
 
 /** Targeting Bob (default or explicit) with a key that doesn't look like one. */
 function keyLooksOff(draft: { openaiBaseUrl: string; openaiApiKey: string }): boolean {
-  const bobTarget = !draft.openaiBaseUrl.trim() || draft.openaiBaseUrl.includes("bob.ibm.com");
-  const key = draft.openaiApiKey.trim();
-  return bobTarget && key.length > 0 && !key.startsWith("bob_");
+  return bobKeyLooksOff(draft.openaiBaseUrl, draft.openaiApiKey);
 }
 
 const TABS = [
@@ -226,6 +224,7 @@ export function SettingsDialog({
             <>
               <StatusBox
                 connOk={connOk}
+                provider={draft.provider}
                 modelCount={models.length}
                 chatModel={draft.provider === "openai" ? draft.openaiChatModel : draft.chatModel}
                 loading={loadingModels}
@@ -562,12 +561,14 @@ function Pill({
 
 function StatusBox({
   connOk,
+  provider,
   modelCount,
   chatModel,
   loading,
   onRefresh,
 }: {
   connOk: boolean | null;
+  provider: string;
   modelCount: number;
   chatModel: string;
   loading: boolean;
@@ -610,23 +611,31 @@ function StatusBox({
     </div>
   );
 
+  // For the gateway provider, connection state comes from the gateway's chat
+  // health, not the Ollama probe — a Bob user may not run Ollama at all.
+  const isGateway = provider === "openai";
+  const ok: boolean | null = isGateway ? (health ? health.chat.working : null) : connOk;
+  const okText = isGateway
+    ? `Connected to IBM Bob · ${modelCount} models available`
+    : `Connected · ${modelCount} models available`;
+  const failText = isGateway
+    ? "Cannot reach the Bob gateway — check the URL and API key below."
+    : "Cannot reach Ollama. Is `ollama serve` running?";
+  const checkingText = isGateway ? "Checking IBM Bob…" : "Checking Ollama…";
+
   return (
     <div className="flex flex-col gap-2 rounded-md border border-border bg-surface-2 px-3 py-2.5">
       {/* Overall connection */}
       <div className="flex items-center gap-2 text-[12px]">
-        {connOk === null ? (
+        {ok === null ? (
           <Spinner className="h-3.5 w-3.5 text-muted-foreground" />
-        ) : connOk ? (
+        ) : ok ? (
           <CheckCircle2 className="h-4 w-4 text-success" />
         ) : (
           <XCircle className="h-4 w-4 text-destructive" />
         )}
-        <span className={cn(connOk === false ? "text-destructive" : "text-muted-foreground")}>
-          {connOk === null
-            ? "Checking Ollama…"
-            : connOk
-              ? `Connected · ${modelCount} models available`
-              : "Cannot reach Ollama. Is `ollama serve` running?"}
+        <span className={cn(ok === false ? "text-destructive" : "text-muted-foreground")}>
+          {ok === null ? checkingText : ok ? okText : failText}
         </span>
         <Button
           variant="ghost"
@@ -640,7 +649,7 @@ function StatusBox({
         </Button>
       </div>
 
-      {connOk && (
+      {ok && (
         <div className="flex flex-col gap-1.5 border-t border-border pt-2">
           <Row label="Chat" status={health?.chat} />
           <Row label="Embed" status={health?.embed} />

@@ -4,7 +4,7 @@ import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { AlchemySymbol } from "./AlchemyHero";
 import { Button, Input } from "./ui";
-import { cn } from "@/lib/utils";
+import { cn, bobKeyLooksOff } from "@/lib/utils";
 import type { ModelStatus } from "@/lib/types";
 import { Check, Copy, CheckCircle2, XCircle, Circle, RefreshCw } from "lucide-react";
 
@@ -165,11 +165,23 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
             Set up Alchemy
           </h1>
           <p className="max-w-sm text-[13px] leading-relaxed text-muted-foreground">
-            Alchemy runs entirely on your machine. It needs{" "}
-            <button className="text-citation hover:underline" onClick={() => void openUrl("https://ollama.com")}>
-              Ollama
-            </button>{" "}
-            and two local models — nothing leaves your computer.
+            {provider === "openai" ? (
+              <>
+                Connect your IBM Bob gateway. Your sources are indexed locally — only
+                your chat prompts are sent to Bob.
+              </>
+            ) : (
+              <>
+                Alchemy runs entirely on your machine. It needs{" "}
+                <button
+                  className="text-citation hover:underline"
+                  onClick={() => void openUrl("https://ollama.com")}
+                >
+                  Ollama
+                </button>{" "}
+                and two local models — nothing leaves your computer.
+              </>
+            )}
           </p>
         </div>
 
@@ -253,7 +265,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
             >
               {gwStatus ? (
                 gwStatus
-              ) : gwKey.trim() && !gwKey.trim().startsWith("bob_") && (!gwUrl.trim() || gwUrl.includes("bob.ibm.com")) ? (
+              ) : bobKeyLooksOff(gwUrl, gwKey) ? (
                 "Heads up: Bob keys start with bob_ — double-check you pasted the whole key."
               ) : (
                 <>

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useStore } from "@/lib/store";
 import { Button, Input, Modal, Badge } from "./ui";
 import { AlchemyHero } from "./AlchemyHero";
-import { cn, relativeTime } from "@/lib/utils";
+import { cn, relativeTime, providerStatus } from "@/lib/utils";
 import {
   BookOpen,
   Plus,
@@ -17,6 +17,9 @@ import {
 export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const notebooks = useStore((s) => s.notebooks);
   const ollamaOk = useStore((s) => s.ollamaOk);
+  const aiConfig = useStore((s) => s.aiConfig);
+  const modelHealth = useStore((s) => s.modelHealth);
+  const provider = providerStatus(aiConfig, ollamaOk, modelHealth);
   const open = useStore((s) => s.selectNotebook);
   const create = useStore((s) => s.createNotebook);
   const rename = useStore((s) => s.renameNotebook);
@@ -40,15 +43,19 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         <span className="text-[15px] font-semibold tracking-tight">Alchemy</span>
         <div className="ml-auto flex items-center gap-3">
           <div className="flex items-center gap-1.5">
-            {ollamaOk === null ? (
+            {provider.ok === null ? (
               <Circle className="h-2.5 w-2.5 text-subtle-foreground" />
-            ) : ollamaOk ? (
+            ) : provider.ok ? (
               <CheckCircle2 className="h-3.5 w-3.5 text-success" />
             ) : (
               <Circle className="h-2.5 w-2.5 fill-destructive text-destructive" />
             )}
             <span className="text-[11px] text-muted-foreground">
-              {ollamaOk === null ? "Checking…" : ollamaOk ? "Ollama connected" : "Ollama offline"}
+              {provider.ok === null
+                ? "Checking…"
+                : provider.ok
+                  ? `${provider.label} connected`
+                  : `${provider.label} offline`}
             </span>
           </div>
           <Button variant="ghost" size="icon" onClick={onOpenSettings} title="Settings">

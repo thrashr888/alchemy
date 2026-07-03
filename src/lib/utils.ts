@@ -1,8 +1,38 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import type { AiConfig, ModelHealth } from "./types";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+/** Human label for the active chat provider. */
+export function providerLabel(config: AiConfig | null): string {
+  return config?.provider === "openai" ? "IBM Bob" : "Ollama";
+}
+
+/**
+ * Connection status for the active provider — so UI never reports "Ollama
+ * offline" to a gateway user who doesn't run Ollama. `ok` is null while unknown.
+ */
+export function providerStatus(
+  config: AiConfig | null,
+  ollamaOk: boolean | null,
+  health: ModelHealth | null,
+): { label: string; ok: boolean | null } {
+  if (config?.provider === "openai") {
+    return { label: "IBM Bob", ok: health ? health.chat.working : null };
+  }
+  return { label: "Ollama", ok: ollamaOk };
+}
+
+/** True when targeting Bob's gateway with a key that doesn't look like a Bob key. */
+export function bobKeyLooksOff(baseUrl: string, apiKey: string): boolean {
+  const key = apiKey.trim();
+  if (!key) return false;
+  const url = baseUrl.trim();
+  const targetsBob = url === "" || url.includes("bob.ibm.com");
+  return targetsBob && !key.startsWith("bob_");
 }
 
 export function relativeTime(ms: number): string {
