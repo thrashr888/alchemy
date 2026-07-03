@@ -58,6 +58,8 @@ interface AppState {
   sourcesOpen: boolean;
   studioOpen: boolean;
   onboardingDismissed: boolean;
+  settingsOpen: boolean;
+  settingsTab: string;
   error: string | null;
 
   init: () => Promise<void>;
@@ -73,6 +75,8 @@ interface AppState {
   toggleSources: () => void;
   toggleStudio: () => void;
   dismissOnboarding: () => void;
+  openSettings: (tab?: string) => void;
+  closeSettings: () => void;
   createReport: (name: string, kind: string, prompt: string, intervalSecs: number) => Promise<void>;
   updateReport: (r: ReportSchedule) => Promise<void>;
   deleteReport: (id: string) => Promise<void>;
@@ -162,6 +166,8 @@ export const useStore = create<AppState>((set, get) => ({
   sourcesOpen: localStorage.getItem("sourcesOpen") !== "false",
   studioOpen: localStorage.getItem("studioOpen") !== "false",
   onboardingDismissed: false,
+  settingsOpen: false,
+  settingsTab: "models",
   error: null,
 
   init: async () => {
@@ -244,6 +250,9 @@ export const useStore = create<AppState>((set, get) => ({
   setDraggingFiles: (v) => set({ draggingFiles: v }),
 
   dismissOnboarding: () => set({ onboardingDismissed: true }),
+
+  openSettings: (tab = "models") => set({ settingsOpen: true, settingsTab: tab }),
+  closeSettings: () => set({ settingsOpen: false }),
 
   toggleSources: () => {
     const v = !get().sourcesOpen;

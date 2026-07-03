@@ -21,10 +21,10 @@ import {
   RefreshCw,
   CornerDownRight,
 } from "lucide-react";
-import { ConfigureChatModal } from "./ConfigureChatModal";
 
 export function ChatPanel() {
   const currentId = useStore((s) => s.currentId);
+  const openSettings = useStore((s) => s.openSettings);
   const messages = useStore((s) => s.messages);
   const sources = useStore((s) => s.sources);
   const sending = useStore((s) => s.sending);
@@ -43,7 +43,6 @@ export function ChatPanel() {
   const refreshSummary = useStore((s) => s.refreshSummary);
 
   const [draft, setDraft] = useState("");
-  const [configOpen, setConfigOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Subscribe once to streaming tokens + agent progress steps from the backend.
@@ -89,7 +88,7 @@ export function ChatPanel() {
         <MessageSquare className="h-4 w-4 text-muted-foreground" />
         <span className="ml-2 text-[13px] font-semibold">Chat</span>
         <div className="ml-auto flex items-center gap-1">
-          <Button variant="ghost" size="sm" onClick={() => setConfigOpen(true)} title="Configure chat">
+          <Button variant="ghost" size="sm" onClick={() => openSettings("chat")} title="Configure chat">
             <SlidersHorizontal className="h-3.5 w-3.5" />
             Configure
           </Button>
@@ -217,8 +216,7 @@ export function ChatPanel() {
         </div>
       </div>
 
-      <ConfigureChatModal open={configOpen} onClose={() => setConfigOpen(false)} />
-    </div>
+          </div>
   );
 }
 

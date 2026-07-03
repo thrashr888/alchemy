@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useStore } from "@/lib/store";
 import { HomeView } from "@/components/HomeView";
 import { Workspace } from "@/components/Workspace";
@@ -17,7 +17,10 @@ function App() {
   const onboardingDismissed = useStore((s) => s.onboardingDismissed);
   const needsSetup =
     !!health && (!health.reachable || !health.chat.working || !health.embed.working);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsOpen = useStore((s) => s.settingsOpen);
+  const settingsTab = useStore((s) => s.settingsTab);
+  const openSettings = useStore((s) => s.openSettings);
+  const closeSettings = useStore((s) => s.closeSettings);
 
   useEffect(() => {
     void init();
@@ -26,17 +29,17 @@ function App() {
   return (
     <>
       {currentId ? (
-        <Workspace onOpenSettings={() => setSettingsOpen(true)} />
+        <Workspace onOpenSettings={() => openSettings()} />
       ) : (
-        <HomeView onOpenSettings={() => setSettingsOpen(true)} />
+        <HomeView onOpenSettings={() => openSettings()} />
       )}
 
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsDialog open={settingsOpen} onClose={closeSettings} initialTab={settingsTab} />
       {/* Drag-drop only routes into a notebook when one is open. */}
       {currentId && <FileDrop />}
       <MigrationOverlay />
       {needsSetup && !onboardingDismissed && (
-        <Onboarding onOpenSettings={() => setSettingsOpen(true)} />
+        <Onboarding onOpenSettings={() => openSettings()} />
       )}
 
       {error && (
