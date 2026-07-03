@@ -38,7 +38,7 @@ function App() {
       {/* Drag-drop only routes into a notebook when one is open. */}
       {currentId && <FileDrop />}
       <MigrationOverlay />
-      {needsSetup && !onboardingDismissed && (
+      {needsSetup && !onboardingDismissed && !settingsOpen && (
         <Onboarding onOpenSettings={() => openSettings()} />
       )}
 

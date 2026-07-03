@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
+import { api } from "@/lib/api";
 import { AlchemySymbol } from "./AlchemyHero";
 import { Button, Input } from "./ui";
 import { cn } from "@/lib/utils";
@@ -87,6 +88,8 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [gwKey, setGwKey] = useState("");
   const [gwModel, setGwModel] = useState("");
   const [gwSaving, setGwSaving] = useState(false);
+  const [gwModels, setGwModels] = useState<string[]>([]);
+  const [gwStatus, setGwStatus] = useState<string | null>(null);
 
   // Seed gateway drafts from config once it loads.
   useEffect(() => {
@@ -108,14 +111,29 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
   async function saveGateway() {
     if (!aiConfig) return;
     setGwSaving(true);
+    setGwStatus(null);
+    let model = gwModel.trim();
+    // No model chosen? Ask the gateway and auto-pick the first one.
+    try {
+      const models = await api.listGatewayModels(gwUrl.trim(), gwKey.trim());
+      setGwModels(models.slice(0, 8));
+      if (!model && models.length > 0) {
+        model = models[0];
+        setGwModel(model);
+      }
+    } catch (e) {
+      setGwModels([]);
+      setGwStatus(e instanceof Error ? e.message : String(e));
+    }
     await save({
       ...aiConfig,
       provider: "openai",
       openaiBaseUrl: gwUrl.trim(),
       openaiApiKey: gwKey.trim(),
-      openaiChatModel: gwModel.trim(),
+      openaiChatModel: model,
     });
     await refresh();
+    if (model) setGwStatus(`Connected — using ${model}`);
     setGwSaving(false);
   }
 
@@ -198,10 +216,39 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
                 Save & check
               </Button>
             </div>
-            <span className="text-[11px] text-subtle-foreground">
-              {gwKey.trim() && !gwKey.trim().startsWith("bob_") && (!gwUrl.trim() || gwUrl.includes("bob.ibm.com"))
-                ? "Heads up: Bob keys start with bob_ — double-check you pasted the whole key."
-                : "Stored locally; sent only to the gateway. Usage is billed to your Bob account."}
+            {gwModels.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {gwModels.map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setGwModel(m)}
+                    className={cn(
+                      "rounded border px-1.5 py-0.5 text-[11px] transition-colors",
+                      m === gwModel
+                        ? "border-primary/50 bg-primary/15 text-citation"
+                        : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            )}
+            <span
+              className={cn(
+                "text-[11px]",
+                gwStatus && !gwStatus.startsWith("Connected")
+                  ? "text-destructive"
+                  : gwStatus
+                    ? "text-success"
+                    : "text-subtle-foreground",
+              )}
+            >
+              {gwStatus
+                ? gwStatus
+                : gwKey.trim() && !gwKey.trim().startsWith("bob_") && (!gwUrl.trim() || gwUrl.includes("bob.ibm.com"))
+                  ? "Heads up: Bob keys start with bob_ — double-check you pasted the whole key."
+                  : "Stored locally; sent only to the gateway. Usage is billed to your Bob account."}
             </span>
           </div>
         )}

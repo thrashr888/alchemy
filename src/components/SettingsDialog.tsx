@@ -131,7 +131,20 @@ export function SettingsDialog({
       return;
     }
     setSaving(true);
-    await save(draft);
+    let toSave = draft;
+    // Gateway provider with no model picked: ask the gateway and take the first.
+    if (draft.provider === "openai" && !draft.openaiChatModel.trim()) {
+      try {
+        const models = await api.listGatewayModels(draft.openaiBaseUrl, draft.openaiApiKey);
+        if (models.length > 0) {
+          toSave = { ...draft, openaiChatModel: models[0] };
+          setDraft(toSave);
+        }
+      } catch {
+        /* health will surface the gateway error */
+      }
+    }
+    await save(toSave);
     setSaving(false);
     onClose();
   }
