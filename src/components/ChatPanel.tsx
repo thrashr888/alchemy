@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { Button, Textarea } from "./ui";
 import { Markdown } from "./Markdown";
@@ -20,6 +21,7 @@ import {
   SlidersHorizontal,
   RefreshCw,
   CornerDownRight,
+  ExternalLink,
 } from "lucide-react";
 
 export function ChatPanel() {
@@ -342,6 +344,8 @@ function RoleLabel({ role }: { role: "assistant" | "user" }) {
 
 function Citations({ citations }: { citations: Citation[] }) {
   const [open, setOpen] = useState(false);
+  const sources = useStore((s) => s.sources);
+  const urlOf = (sourceId: string) => sources.find((x) => x.id === sourceId)?.url || "";
   return (
     <div className="mt-1">
       <button
@@ -362,7 +366,18 @@ function Citations({ citations }: { citations: Citation[] }) {
                 <span className="flex h-4 min-w-4 items-center justify-center rounded bg-primary/15 px-1 font-semibold text-citation">
                   {i + 1}
                 </span>
-                <span className="font-medium text-foreground/90 truncate">{c.sourceTitle}</span>
+                {urlOf(c.sourceId) ? (
+                  <button
+                    className="truncate font-medium text-citation hover:underline"
+                    title={`Open ${urlOf(c.sourceId)}`}
+                    onClick={() => void openUrl(urlOf(c.sourceId))}
+                  >
+                    {c.sourceTitle}
+                    <ExternalLink className="ml-1 inline h-3 w-3 align-[-1px]" />
+                  </button>
+                ) : (
+                  <span className="font-medium text-foreground/90 truncate">{c.sourceTitle}</span>
+                )}
                 <span className="ml-auto text-subtle-foreground">
                   {(1 - c.distance).toFixed(2)}
                 </span>
