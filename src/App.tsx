@@ -15,8 +15,7 @@ function App() {
   const setError = useStore((s) => s.setError);
   const health = useStore((s) => s.modelHealth);
   const onboardingDismissed = useStore((s) => s.onboardingDismissed);
-  const needsSetup =
-    !!health && (!health.reachable || !health.chat.working || !health.embed.working);
+  const needsSetup = !!health && (!health.chat.working || !health.embed.working);
   const settingsOpen = useStore((s) => s.settingsOpen);
   const settingsTab = useStore((s) => s.settingsTab);
   const openSettings = useStore((s) => s.openSettings);

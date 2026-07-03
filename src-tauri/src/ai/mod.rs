@@ -3,9 +3,11 @@
 //! LM Studio, vLLM, Ollama's own /v1); embeddings, OCR, and model listing stay
 //! on Ollama for now.
 
+mod local_embed;
 mod ollama;
 mod openai;
 
+pub use local_embed::LocalEmbedder;
 pub use ollama::Ollama;
 pub use openai::OpenAiClient;
 
@@ -22,6 +24,9 @@ pub struct AiConfig {
     /// Chat/generation backend: "ollama" | "openai".
     #[serde(default = "default_provider")]
     pub provider: String,
+    /// Embedding backend: "ollama" | "builtin" (bundled Model2Vec, no Ollama).
+    #[serde(default = "default_provider")]
+    pub embedder: String,
     pub base_url: String,
     pub chat_model: String,
     pub embed_model: String,
@@ -48,6 +53,7 @@ impl Default for AiConfig {
     fn default() -> Self {
         Self {
             provider: default_provider(),
+            embedder: default_provider(),
             base_url: "http://localhost:11434".to_string(),
             chat_model: "gpt-oss:120b".to_string(),
             embed_model: "nomic-embed-text:latest".to_string(),
@@ -134,6 +140,7 @@ pub struct Ai {
     config: AiConfig,
     ollama: Ollama,
     openai: Option<OpenAiClient>,
+    local_embed: Option<LocalEmbedder>,
 }
 
 impl Ai {
@@ -147,10 +154,12 @@ impl Ai {
             OpenAiClient::new(base, &config.openai_api_key, &config.openai_chat_model)
         });
         let ollama = Ollama::new(config.clone());
+        let local_embed = (config.embedder == "builtin").then(LocalEmbedder::new);
         Self {
             config,
             ollama,
             openai,
+            local_embed,
         }
     }
 
@@ -191,15 +200,23 @@ impl Ai {
         }
     }
 
-    // Embeddings, OCR, and local model listing remain Ollama-backed.
+    // Embeddings route to the built-in Model2Vec embedder or Ollama.
     pub async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        self.ollama.embed(texts).await
+        match &self.local_embed {
+            Some(le) => le.embed(texts).await,
+            None => self.ollama.embed(texts).await,
+        }
     }
     pub async fn embed_one(&self, text: &str) -> Result<Vec<f32>> {
-        self.ollama.embed_one(text).await
+        let mut v = self.embed(std::slice::from_ref(&text.to_string())).await?;
+        v.pop()
+            .ok_or_else(|| anyhow::anyhow!("embedder returned no vector"))
     }
     pub async fn test_embed(&self) -> Result<usize> {
-        self.ollama.test_embed().await
+        match &self.local_embed {
+            Some(le) => le.test_embed().await,
+            None => self.ollama.test_embed().await,
+        }
     }
     pub async fn ocr(&self, image_base64: &str) -> Result<String> {
         match &self.openai {

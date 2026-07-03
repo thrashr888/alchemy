@@ -171,3 +171,56 @@ async fn openai_gateway_round_trip() {
     let listed = gw.list_models().await.expect("gateway /models");
     assert!(!listed.is_empty(), "gateway listed models");
 }
+
+/// Zero-Ollama data path: built-in Model2Vec embedder → LanceDB → search.
+/// First run downloads ~30 MB from HF (cached afterwards); requires network
+/// only for that. No Ollama involved anywhere.
+#[tokio::test]
+async fn builtin_embedder_round_trip() {
+    use crate::ai::{Ai, AiConfig};
+
+    let ai = Ai::new(AiConfig {
+        embedder: "builtin".into(),
+        ..Default::default()
+    });
+    let Ok(dim) = ai.test_embed().await else {
+        eprintln!("SKIP: built-in embedder unavailable (no network for first download?)");
+        return;
+    };
+    assert!(dim > 0, "built-in embedder produced vectors");
+    eprintln!("builtin dim: {dim}");
+
+    let dir = std::env::temp_dir().join(format!("nbl-builtin-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb_id = uuid::Uuid::new_v4().to_string();
+
+    let text = "The light-dependent reactions occur in the thylakoid membranes. \
+        The Calvin cycle occurs in the stroma. Ferrari builds sports cars in Maranello.";
+    let chunks = ingest::chunk_text(text);
+    let embeddings = ai.embed(&chunks).await.expect("embed");
+    let tuples: Vec<(String, i32, String)> = chunks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (uuid::Uuid::new_v4().to_string(), i as i32, t.clone()))
+        .collect();
+    db.add_chunks(&nb_id, "src-1", &tuples, &embeddings)
+        .await
+        .expect("write chunks");
+
+    let qvec = ai
+        .embed_one("Where do light-dependent reactions happen?")
+        .await
+        .expect("embed query");
+    let hits = db.search_chunks(&nb_id, qvec, 2).await.expect("search");
+    assert!(!hits.is_empty(), "retrieved chunks with builtin embeddings");
+    assert!(
+        hits[0].snippet.to_lowercase().contains("thylakoid"),
+        "top hit mentions thylakoid; got: {}",
+        hits[0].snippet
+    );
+    eprintln!(
+        "builtin round trip OK: top hit dist={:.3}",
+        hits[0].distance
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

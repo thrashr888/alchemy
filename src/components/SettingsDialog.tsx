@@ -121,7 +121,10 @@ export function SettingsDialog({
   }
 
   const embedChanged =
-    !!draft && normModel(draft.embedModel) !== normModel(aiConfig?.embedModel ?? "");
+    !!draft &&
+    (draft.embedder !== (aiConfig?.embedder ?? "ollama") ||
+      (draft.embedder === "ollama" &&
+        normModel(draft.embedModel) !== normModel(aiConfig?.embedModel ?? "")));
 
   async function onSave() {
     if (!draft) return;
@@ -349,21 +352,47 @@ export function SettingsDialog({
               )}
 
               <Field
-                label="Embedding model"
+                label="Embeddings"
                 hint={
                   embedChanged && totalSources > 0
-                    ? `Saving will re-embed all ${totalSources} source${totalSources === 1 ? "" : "s"} with this model.`
-                    : draft.provider === "openai"
-                      ? "Runs on local Ollama (localhost:11434) until the built-in embedder ships."
-                      : "Used to index sources for retrieval. nomic-embed-text is recommended."
+                    ? `Saving will re-embed all ${totalSources} source${totalSources === 1 ? "" : "s"}.`
+                    : "How sources are indexed for retrieval. Built-in needs no Ollama and runs instantly on CPU."
                 }
               >
-                <ModelPicker
-                  value={draft.embedModel}
-                  models={models}
-                  onChange={(v) => setDraft({ ...draft, embedModel: v })}
-                />
+                <div className="grid grid-cols-2 gap-1.5">
+                  {[
+                    { id: "builtin", label: "Built-in", note: "potion-base-8M · no Ollama · instant" },
+                    { id: "ollama", label: "Ollama model", note: "e.g. nomic-embed-text" },
+                  ].map((ev) => (
+                    <button
+                      key={ev.id}
+                      onClick={() => setDraft({ ...draft, embedder: ev.id })}
+                      className={cn(
+                        "flex flex-col items-start gap-0.5 rounded-md border px-3 py-2 text-left transition-colors",
+                        draft.embedder === ev.id
+                          ? "border-primary/60 bg-primary/10 text-foreground"
+                          : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      <span className="text-[12.5px] font-medium">{ev.label}</span>
+                      <span className="text-[11px] text-subtle-foreground">{ev.note}</span>
+                    </button>
+                  ))}
+                </div>
               </Field>
+
+              {draft.embedder === "ollama" && (
+                <Field
+                  label="Embedding model"
+                  hint="Used to index sources for retrieval. nomic-embed-text is recommended."
+                >
+                  <ModelPicker
+                    value={draft.embedModel}
+                    models={models}
+                    onChange={(v) => setDraft({ ...draft, embedModel: v })}
+                  />
+                </Field>
+              )}
 
               {draft.provider === "openai" ? (
                 <Field
@@ -405,8 +434,11 @@ export function SettingsDialog({
       <Modal open={confirmReembed} onClose={cancelSwitch} title="Switch embedding model?">
         <div className="flex flex-col gap-4">
           <p className="text-[13px] leading-relaxed text-muted-foreground">
-            Different embedding models produce incompatible vectors, so switching to{" "}
-            <span className="font-medium text-foreground">{draft.embedModel}</span> requires
+            Different embedders produce incompatible vectors, so switching to{" "}
+            <span className="font-medium text-foreground">
+              {draft.embedder === "builtin" ? "the built-in embedder" : draft.embedModel}
+            </span>{" "}
+            requires
             re-embedding all{" "}
             <span className="font-medium text-foreground">{totalSources}</span> source
             {totalSources === 1 ? "" : "s"}. This runs locally and may take a moment.

@@ -7,12 +7,8 @@ export function HealthBanner({ onOpenSettings }: { onOpenSettings: () => void })
   if (!health) return null;
 
   const issues: string[] = [];
-  if (!health.reachable) {
-    issues.push("Ollama is not reachable — is `ollama serve` running?");
-  } else {
-    if (!health.embed.working) issues.push(`Embedding model: ${health.embed.detail}`);
-    if (!health.chat.working) issues.push(`Chat model: ${health.chat.detail}`);
-  }
+  if (!health.embed.working) issues.push(`Embeddings: ${health.embed.detail}`);
+  if (!health.chat.working) issues.push(`Chat model: ${health.chat.detail}`);
   if (issues.length === 0) return null;
 
   return (

@@ -42,6 +42,7 @@ tauri-plugin-notification = "2"
 futures-util = "0.3.32"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 tauri-plugin-debug-bridge = { version = "0.4", optional = true }
+model2vec-rs = "0.2.1"
 
 [features]
 # Dev-only: exposes the debug bridge for CLI automation/inspection.

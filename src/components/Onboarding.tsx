@@ -128,6 +128,8 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
     await save({
       ...aiConfig,
       provider: "openai",
+      // Fully Bob mode: without Ollama, index sources with the built-in embedder.
+      embedder: health?.reachable ? aiConfig.embedder : "builtin",
       openaiBaseUrl: gwUrl.trim(),
       openaiApiKey: gwKey.trim(),
       openaiChatModel: model,
@@ -260,6 +262,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
         )}
 
         <div className="flex flex-col gap-2">
+          {!(provider === "openai" && aiConfig?.embedder === "builtin") && (
           <Step
             ok={health.reachable}
             title={provider === "openai" ? "Ollama is running (for source indexing)" : "Ollama is running"}
@@ -274,6 +277,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
               or download the app
             </button>
           </Step>
+          )}
 
           <Step
             ok={provider === "openai" ? chat.working : health.reachable && chat.working}
@@ -297,15 +301,19 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
           </Step>
 
           <Step
-            ok={health.reachable && embed.working}
-            title="Embedding model"
+            ok={embed.working}
+            title={aiConfig?.embedder === "builtin" ? "Built-in embedder" : "Embedding model"}
             detail={
-              health.reachable
-                ? `Indexes your sources for retrieval (274 MB). ${embed.detail}`
-                : "Waiting for Ollama."
+              aiConfig?.embedder === "builtin"
+                ? embed.detail
+                : health.reachable
+                  ? `Indexes your sources for retrieval (274 MB). ${embed.detail}`
+                  : "Waiting for Ollama."
             }
           >
-            {health.reachable && <CommandChip command={`ollama pull ${embed.name}`} />}
+            {aiConfig?.embedder !== "builtin" && health.reachable && (
+              <CommandChip command={`ollama pull ${embed.name}`} />
+            )}
           </Step>
 
           <Step

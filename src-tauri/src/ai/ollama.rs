@@ -173,12 +173,6 @@ impl Ollama {
         Ok(parsed.embeddings.first().map(|v| v.len()).unwrap_or(0))
     }
 
-    pub async fn embed_one(&self, text: &str) -> Result<Vec<f32>> {
-        let mut v = self.embed(&[text.to_string()]).await?;
-        v.pop()
-            .ok_or_else(|| anyhow!("embedding model returned no vector"))
-    }
-
     /// Non-streaming chat completion; used for one-shot artifact generation.
     pub async fn chat(&self, messages: &[ChatTurn]) -> Result<ChatOutcome> {
         let resp = self

@@ -1819,6 +1819,26 @@ pub async fn check_models(state: State<'_, AppState>) -> Result<ModelHealth, Str
         None
     };
 
+    // Built-in embedder works with no Ollama at all — probe it directly.
+    let builtin_embed = if cfg.embedder == "builtin" {
+        Some(match ai.test_embed().await {
+            Ok(dim) => ModelStatus {
+                name: "potion-base-8M".into(),
+                installed: true,
+                working: true,
+                detail: format!("Built-in · {dim}-dim · runs on CPU"),
+            },
+            Err(e) => ModelStatus {
+                name: "potion-base-8M".into(),
+                installed: false,
+                working: false,
+                detail: format!("Built-in embedder: {e:#}"),
+            },
+        })
+    } else {
+        None
+    };
+
     let installed = match ai.list_models().await {
         Ok(list) => list,
         Err(_) => {
@@ -1831,13 +1851,16 @@ pub async fn check_models(state: State<'_, AppState>) -> Result<ModelHealth, Str
             };
             let chat = gateway_chat
                 .unwrap_or_else(|| unknown(cfg.chat_model.clone(), "Ollama not reachable"));
+            let embed = builtin_embed.unwrap_or_else(|| {
+                unknown(
+                    cfg.embed_model.clone(),
+                    "Ollama not reachable (required for the Ollama embedder)",
+                )
+            });
             return Ok(ModelHealth {
                 reachable: false,
                 chat,
-                embed: unknown(
-                    cfg.embed_model.clone(),
-                    "Ollama not reachable (still required for embeddings)",
-                ),
+                embed,
                 vision: unknown(cfg.vision_model.clone(), "Ollama not reachable"),
             });
         }
@@ -1858,24 +1881,29 @@ pub async fn check_models(state: State<'_, AppState>) -> Result<ModelHealth, Str
         }
     });
 
-    let embed_installed = has(&cfg.embed_model);
-    // Embeddings are cheap, so actually probe them.
-    let (embed_working, embed_detail) = if !embed_installed {
-        (
-            false,
-            format!("Not installed — run `ollama pull {}`", cfg.embed_model),
-        )
-    } else {
-        match ai.test_embed().await {
-            Ok(dim) => (true, format!("Working ({dim}-dim)")),
-            Err(e) => (false, format!("Not responding: {e}")),
+    let embed = match builtin_embed {
+        Some(b) => b,
+        None => {
+            let embed_installed = has(&cfg.embed_model);
+            // Embeddings are cheap, so actually probe them.
+            let (embed_working, embed_detail) = if !embed_installed {
+                (
+                    false,
+                    format!("Not installed — run `ollama pull {}`", cfg.embed_model),
+                )
+            } else {
+                match ai.test_embed().await {
+                    Ok(dim) => (true, format!("Working ({dim}-dim)")),
+                    Err(e) => (false, format!("Not responding: {e}")),
+                }
+            };
+            ModelStatus {
+                name: cfg.embed_model.clone(),
+                installed: embed_installed,
+                working: embed_working,
+                detail: embed_detail,
+            }
         }
-    };
-    let embed = ModelStatus {
-        name: cfg.embed_model.clone(),
-        installed: embed_installed,
-        working: embed_working,
-        detail: embed_detail,
     };
 
     let vision = if cfg.provider == "openai" {
