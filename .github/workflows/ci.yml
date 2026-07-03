@@ -39,6 +39,9 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
+      - name: Fetch PDFium (scanned-PDF OCR)
+        run: scripts/fetch-pdfium.sh
+
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 

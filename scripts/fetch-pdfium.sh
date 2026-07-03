@@ -8,6 +8,10 @@
 #
 set -euo pipefail
 
+# macOS-only asset; a no-op elsewhere so it's safe as a cross-platform
+# postinstall hook.
+[ "$(uname -s)" = "Darwin" ] || exit 0
+
 cd "$(dirname "$0")/.."
 DEST="src-tauri/libs/libpdfium.dylib"
 
