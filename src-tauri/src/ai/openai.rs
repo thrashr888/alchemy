@@ -42,11 +42,22 @@ impl OpenAiClient {
     }
 
     fn request(&self, path: &str) -> reqwest::RequestBuilder {
-        let mut req = self.http.post(self.url(path));
-        if !self.api_key.is_empty() {
-            req = req.bearer_auth(&self.api_key);
+        self.apply_auth(self.http.post(self.url(path)))
+    }
+
+    /// Bob Shell's auth scheme: JWT-shaped tokens use `Bearer`; static keys
+    /// (bob_…) use `Apikey` plus `X-API-KEY` on Bob hosts. Non-Bob gateways
+    /// keep the standard Bearer scheme.
+    fn apply_auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let key = self.api_key.trim();
+        if key.is_empty() {
+            return req;
         }
-        req
+        if looks_like_jwt(key) || !self.base_url.contains("bob.ibm.com") {
+            return req.bearer_auth(key);
+        }
+        req.header("Authorization", format!("Apikey {key}"))
+            .header("X-API-KEY", key)
     }
 
     /// Non-streaming completion. Token throughput is wall-clock based since
@@ -184,13 +195,11 @@ impl OpenAiClient {
     }
 
     async fn get_json(&self, path: &str) -> Result<serde_json::Value> {
-        let mut req = self
-            .http
-            .get(self.url(path))
-            .timeout(std::time::Duration::from_secs(10));
-        if !self.api_key.is_empty() {
-            req = req.bearer_auth(&self.api_key);
-        }
+        let req = self.apply_auth(
+            self.http
+                .get(self.url(path))
+                .timeout(std::time::Duration::from_secs(10)),
+        );
         let resp = req
             .send()
             .await
@@ -216,11 +225,17 @@ fn wall_clock_stats(value: &serde_json::Value, started: std::time::Instant) -> O
     })
 }
 
+/// Three dot-separated non-empty segments — the shape of a JWT.
+fn looks_like_jwt(key: &str) -> bool {
+    let parts: Vec<&str> = key.split('.').collect();
+    parts.len() == 3 && parts.iter().all(|p| !p.is_empty())
+}
+
 async fn gateway_error(resp: reqwest::Response) -> anyhow::Error {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     let hint = match status.as_u16() {
-        401 | 403 => " (check your API key)",
+        401 | 403 => " (check the API key and that it has the Inference scope)",
         404 => " (check the base URL — it usually ends in /v1)",
         _ => "",
     };
