@@ -17,6 +17,7 @@ import {
   Pencil,
   StickyNote,
   Wand2,
+  Square,
   Copy,
   Check,
   ClipboardList,
@@ -67,6 +68,7 @@ export function StudioPanel() {
   const notes = useStore((s) => s.notes);
   const generatingKind = useStore((s) => s.generatingKind);
   const generate = useStore((s) => s.generateArtifact);
+  const cancelGeneration = useStore((s) => s.cancelGeneration);
   const createNote = useStore((s) => s.createNote);
   const deleteNote = useStore((s) => s.deleteNote);
   const justCreatedNoteId = useStore((s) => s.justCreatedNoteId);
@@ -102,8 +104,18 @@ export function StudioPanel() {
       </div>
 
       <div className="border-b border-border p-3">
-        <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
-          Generate
+        <div className="mb-2 flex items-center justify-between text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+          <span>Generate</span>
+          {generatingKind && (
+            <button
+              onClick={() => cancelGeneration()}
+              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-destructive hover:bg-destructive/10"
+              title="Stop generating"
+            >
+              <Square className="h-3 w-3" />
+              Stop
+            </button>
+          )}
         </div>
         <ArtifactGrid
           artifacts={SUMMARIES}

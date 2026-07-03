@@ -100,6 +100,7 @@ interface AppState {
   deleteSource: (id: string) => Promise<void>;
 
   sendMessage: (content: string) => Promise<void>;
+  cancelGeneration: () => void;
   appendToken: (t: string) => void;
   appendStep: (label: string) => void;
   toggleAgentMode: () => void;
@@ -461,6 +462,10 @@ export const useStore = create<AppState>((set, get) => {
     }
   },
 
+  cancelGeneration: () => {
+    void api.cancelGeneration();
+  },
+
   appendToken: (t) => set({ streamingText: get().streamingText + t }),
 
   appendStep: (label) => set({ steps: [...get().steps, label] }),
@@ -523,7 +528,10 @@ export const useStore = create<AppState>((set, get) => {
       get().pushToast("success", `${note.title} ready`);
       void notify("Document ready", `“${note.title}” finished generating.`);
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : String(e) });
+      const msg = e instanceof Error ? e.message : String(e);
+      // A user-initiated Stop isn't an error — surface it quietly.
+      if (msg.includes("Generation stopped")) get().pushToast("info", "Generation stopped");
+      else set({ error: msg });
     } finally {
       set({ generatingKind: null });
     }

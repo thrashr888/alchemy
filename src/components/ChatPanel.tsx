@@ -10,6 +10,7 @@ import { AlchemySymbol } from "./AlchemyHero";
 import type { Citation, Message } from "@/lib/types";
 import {
   ArrowUp,
+  Square,
   Eraser,
   Quote,
   Sparkles,
@@ -35,6 +36,7 @@ export function ChatPanel() {
   const agentMode = useStore((s) => s.agentMode);
   const toggleAgentMode = useStore((s) => s.toggleAgentMode);
   const send = useStore((s) => s.sendMessage);
+  const cancelGeneration = useStore((s) => s.cancelGeneration);
   const clearChat = useStore((s) => s.clearChat);
   const appendToken = useStore((s) => s.appendToken);
   const appendStep = useStore((s) => s.appendStep);
@@ -222,15 +224,21 @@ export function ChatPanel() {
                 <Telescope className="h-3 w-3" />
                 {agentMode ? "Deep research: on" : "Deep research: off"}
               </button>
-              <Button
-                variant="primary"
-                size="icon"
-                onClick={submit}
-                disabled={!draft.trim() || sending || !canChat}
-                title="Send"
-              >
-                <ArrowUp className="h-4 w-4" />
-              </Button>
+              {sending ? (
+                <Button variant="secondary" size="icon" onClick={cancelGeneration} title="Stop">
+                  <Square className="h-3.5 w-3.5" />
+                </Button>
+              ) : (
+                <Button
+                  variant="primary"
+                  size="icon"
+                  onClick={submit}
+                  disabled={!draft.trim() || !canChat}
+                  title="Send"
+                >
+                  <ArrowUp className="h-4 w-4" />
+                </Button>
+              )}
             </div>
           </div>
         </div>

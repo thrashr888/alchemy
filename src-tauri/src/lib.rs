@@ -57,6 +57,7 @@ pub fn run() {
                 config_path,
                 stats_path,
                 model_stats: std::sync::Mutex::new(model_stats),
+                cancel: std::sync::Mutex::new(tokio_util::sync::CancellationToken::new()),
             });
             Ok(())
         })
@@ -78,6 +79,7 @@ pub fn run() {
             commands::clear_chat,
             commands::send_message,
             commands::send_message_agentic,
+            commands::cancel_generation,
             commands::list_notes,
             commands::create_note,
             commands::update_note,

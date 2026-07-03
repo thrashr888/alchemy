@@ -106,6 +106,7 @@ export const api = {
     run(ai<Message>("send_message", { notebookId, content, config })),
   sendMessageAgentic: (notebookId: string, content: string, config: ChatConfig) =>
     run(ai<Message>("send_message_agentic", { notebookId, content, config })),
+  cancelGeneration: () => run(cmd<void>("cancel_generation")),
   suggestFollowups: (notebookId: string) =>
     run(query<string[]>("suggest_followups", { notebookId })),
   generateNotebookSummary: (notebookId: string) =>

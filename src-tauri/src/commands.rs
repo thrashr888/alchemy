@@ -31,9 +31,24 @@ pub struct AppState {
     pub config_path: PathBuf,
     pub stats_path: PathBuf,
     pub model_stats: Mutex<HashMap<String, ModelStatAcc>>,
+    /// Cancellation for the in-flight chat/generation, replaced per request.
+    pub cancel: Mutex<tokio_util::sync::CancellationToken>,
 }
 
 impl AppState {
+    /// Start a fresh cancellation scope for a new generation, returning its
+    /// token. Supersedes any previous token.
+    pub fn begin_generation(&self) -> tokio_util::sync::CancellationToken {
+        let token = tokio_util::sync::CancellationToken::new();
+        *self.cancel.lock().unwrap() = token.clone();
+        token
+    }
+
+    /// Cancel the current in-flight generation, if any.
+    pub fn cancel_current(&self) {
+        self.cancel.lock().unwrap().cancel();
+    }
+
     /// Fold a chat's throughput into the running per-model stats and persist.
     pub fn record_chat_stats(&self, model: &str, stats: Option<GenStats>) {
         let Some(s) = stats else { return };
@@ -1325,21 +1340,30 @@ pub async fn send_message(
         .collect();
     let messages = rag::build_chat_messages(&history_turns, &content, &citations, &extra);
 
-    // Stream the answer, emitting tokens to the frontend.
+    // Stream the answer, emitting tokens to the frontend. Race against the
+    // cancellation token so a Stop click aborts the request; on cancel we keep
+    // whatever partial text streamed so far.
     let app_for_cb = app.clone();
+    let cancel = state.begin_generation();
+    let partial = Arc::new(Mutex::new(String::new()));
+    let partial_cb = partial.clone();
     let (answer, stats, model) = {
         let ai = state.ai.read().await;
-        let out = e(ai
-            .chat_stream(&messages, |tok| {
+        let model = ai.active_chat_model();
+        let streamed = tokio::select! {
+            out = ai.chat_stream(&messages, |tok| {
+                partial_cb.lock().unwrap().push_str(tok);
                 let _ = app_for_cb.emit(
                     "chat://token",
-                    TokenEvent {
-                        content: tok.to_string(),
-                    },
+                    TokenEvent { content: tok.to_string() },
                 );
-            })
-            .await)?;
-        (out.text, out.stats, ai.active_chat_model())
+            }) => Some(e(out)?),
+            _ = cancel.cancelled() => None,
+        };
+        match streamed {
+            Some(out) => (out.text, out.stats, model),
+            None => (partial.lock().unwrap().clone(), None, model),
+        }
     };
     state.record_chat_stats(&model, stats);
 
@@ -1398,19 +1422,26 @@ pub async fn send_message_agentic(
         })
         .collect();
 
+    let cancel = state.begin_generation();
     let (answer, citations, stats, model) = {
         let ai = state.ai.read().await;
-        let (answer, citations, stats) = e(crate::agent::run(
-            &app,
-            &state.db,
-            &ai,
-            &notebook_id,
-            &content,
-            &history_turns,
-            &extra,
-        )
-        .await)?;
-        (answer, citations, stats, ai.active_chat_model())
+        let model = ai.active_chat_model();
+        let out = tokio::select! {
+            r = crate::agent::run(
+                &app,
+                &state.db,
+                &ai,
+                &notebook_id,
+                &content,
+                &history_turns,
+                &extra,
+            ) => Some(e(r)?),
+            _ = cancel.cancelled() => None,
+        };
+        match out {
+            Some((answer, citations, stats)) => (answer, citations, stats, model),
+            None => ("_(Stopped.)_".to_string(), vec![], None, model),
+        }
     };
     state.record_chat_stats(&model, stats);
 
@@ -1427,6 +1458,12 @@ pub async fn send_message_agentic(
     e(state.db.touch_notebook(&notebook_id, now()).await)?;
     let _ = app.emit("chat://done", &assistant_msg);
     Ok(assistant_msg)
+}
+
+/// Stop the in-flight chat or document generation.
+#[tauri::command]
+pub fn cancel_generation(state: State<'_, AppState>) {
+    state.cancel_current();
 }
 
 // ---- Notes & artifacts ---------------------------------------------------
@@ -1592,7 +1629,15 @@ pub async fn generate_artifact(
     prompt: Option<String>,
 ) -> Result<Note, String> {
     let prompt = prompt.unwrap_or_default();
-    let (title, content) = e(generate_content(&state, &notebook_id, &kind, &prompt).await)?;
+    let cancel = state.begin_generation();
+    let produced = tokio::select! {
+        r = generate_content(&state, &notebook_id, &kind, &prompt) => Some(e(r)?),
+        _ = cancel.cancelled() => None,
+    };
+    let (title, content) = match produced {
+        Some(t) => t,
+        None => return Err("Generation stopped.".into()),
+    };
 
     let ts = now();
     let note = Note {
