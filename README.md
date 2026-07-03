@@ -5,6 +5,11 @@ built as a native desktop app. Import your sources, chat with them grounded in
 citations, and generate documents — all running **100% on your machine**
 via [Ollama](https://ollama.com). No API keys, no cloud, nothing leaves your laptop.
 
+Prefer a cloud LLM (or can't run local models)? Alchemy also routes chat through any
+OpenAI-compatible gateway, including **[IBM Bob](https://bob.ibm.com)** — while
+keeping your sources on-device via a built-in embedder. See
+[Using a cloud LLM](#using-a-cloud-llm-ibm-bob-or-any-openai-compatible-gateway).
+
 > Built with **Tauri 2 + React** front-end, a **Rust** backend, **LanceDB** for
 > embedded vector + relational storage, and a **Linear-inspired** UI with 12 themes.
 
@@ -122,6 +127,54 @@ Open **Settings** (gear icon) to set the Ollama URL and choose models. Defaults:
 Switching the embedding model prompts to **re-embed all sources** (models produce
 incompatible vectors), so retrieval never silently breaks. Data is stored in the OS
 app-data directory under `lancedb/`.
+
+## Using a cloud LLM (IBM Bob or any OpenAI-compatible gateway)
+
+Ollama stays the default, but Alchemy can route **chat, generation, deep research,
+and OCR** through any OpenAI-compatible gateway instead — useful on machines that
+can't run local models (e.g. a 16 GB laptop). **[IBM Bob](https://bob.ibm.com)** is
+supported out of the box, and the same path works for LM Studio, vLLM, LiteLLM, or
+Ollama's own `/v1` endpoint.
+
+With a gateway selected, **sources still stay local**: embeddings run on the
+**built-in CPU embedder** (a ~30 MB model downloaded on first use, no Ollama
+required), so nothing but your chat turns leaves the machine.
+
+### Getting an IBM Bob API key
+
+Bob is IBM's internal AI gateway (LiteLLM under the hood). If you have Bob access:
+
+1. Sign in to the **[Bob web portal](https://bob.ibm.com/login)** with your IBMid.
+2. Open **API Keys** and create a key with the **Inference** scope.
+3. Copy the key — it starts with `bob_` (e.g. `bob_prod_…`). Copy the whole string.
+
+You can also confirm access from the CLI — the same key works there:
+
+```bash
+export BOBSHELL_API_KEY="bob_prod_…"
+```
+
+### Configuring it in Alchemy
+
+During **onboarding** (or later in **Settings → Models**):
+
+1. Switch the provider to **IBM Bob**.
+2. Paste your `bob_…` key. Leave **Gateway URL** empty to use the default
+   (`https://api.us-east.bob.ibm.com/inference/v1`).
+3. Click **Save & check** — Alchemy lists Bob's models, auto-selects one, and shows
+   **Connected**. Pick a different model from the dropdown any time.
+
+Keys are stored only in the local `ai_config.json` and sent solely as an auth header
+to the gateway you configure — never anywhere else. Usage is billed to your Bob
+account (silently; Alchemy does no in-app accounting).
+
+| Setting          | Default                                       |
+| ---------------- | --------------------------------------------- |
+| Provider         | IBM Bob                                        |
+| Gateway URL      | `https://api.us-east.bob.ibm.com/inference/v1`|
+| Chat model       | _(pick from the gateway's list)_              |
+| Vision model     | `sonnet-4.6` (OCR for images / scanned PDFs)  |
+| Embeddings       | Built-in (`potion-base-8M`, on-device CPU)    |
 
 ## Releases
 
