@@ -201,6 +201,31 @@ button {
   text-align: left;
 }
 
+/* Chat reading preferences (per-notebook), applied to the message container.
+   Font-family cascades to prose text; code/pre keep their own monospace. */
+.chat-serif {
+  font-family: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+}
+.chat-mono {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.chat-system {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.chat-size-small .prose {
+  font-size: 12px;
+}
+.chat-size-medium .prose {
+  font-size: 13px;
+}
+.chat-size-large .prose {
+  font-size: 15px;
+}
+.chat-justify .prose p,
+.chat-justify .prose li {
+  text-align: justify;
+}
+
 @keyframes pulse-dot {
   0%,
   100% {

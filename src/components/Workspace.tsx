@@ -2,6 +2,7 @@ import { useStore } from "@/lib/store";
 import { SourcesPanel } from "./SourcesPanel";
 import { ChatPanel } from "./ChatPanel";
 import { StudioPanel } from "./StudioPanel";
+import { SourcesRail, StudioRail } from "./SidebarRails";
 import { HealthBanner } from "./HealthBanner";
 import { Button } from "./ui";
 import { cn } from "@/lib/utils";
@@ -65,9 +66,9 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
       <HealthBanner onOpenSettings={onOpenSettings} />
 
       <div className="flex flex-1 overflow-hidden">
-        {sourcesOpen && <SourcesPanel />}
+        {sourcesOpen ? <SourcesPanel /> : <SourcesRail />}
         <ChatPanel />
-        {studioOpen && <StudioPanel />}
+        {studioOpen ? <StudioPanel /> : <StudioRail />}
       </div>
     </div>
   );

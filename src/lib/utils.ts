@@ -1,9 +1,23 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import type { AiConfig, ModelHealth } from "./types";
+import type { AiConfig, ChatConfig, ModelHealth } from "./types";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+/** Reading-preference classes for the chat message container (see index.css). */
+export function chatReadingClass(cfg: ChatConfig): string {
+  const font =
+    cfg.font === "serif"
+      ? "chat-serif"
+      : cfg.font === "mono"
+        ? "chat-mono"
+        : cfg.font === "system"
+          ? "chat-system"
+          : "";
+  const align = cfg.textAlign === "justified" ? "chat-justify" : "";
+  return cn(font, `chat-size-${cfg.fontSize}`, align);
 }
 
 /** Human label for the active chat provider. */

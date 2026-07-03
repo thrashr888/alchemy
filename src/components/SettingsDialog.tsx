@@ -478,6 +478,24 @@ const CHAT_LENGTHS = [
   { id: "shorter", label: "Shorter" },
 ] as const;
 
+const CHAT_FONTS = [
+  { id: "sans", label: "Sans", className: "font-sans" },
+  { id: "serif", label: "Serif", className: "font-serif" },
+  { id: "mono", label: "Mono", className: "font-mono" },
+  { id: "system", label: "System", className: "chat-system" },
+] as const;
+
+const CHAT_SIZES = [
+  { id: "small", label: "Small" },
+  { id: "medium", label: "Medium" },
+  { id: "large", label: "Large" },
+] as const;
+
+const CHAT_ALIGNS = [
+  { id: "natural", label: "Natural" },
+  { id: "justified", label: "Justified" },
+] as const;
+
 /** Chat style & length for the current notebook; applies as you click. */
 function ChatTab() {
   const chatConfig = useStore((s) => s.chatConfig);
@@ -527,6 +545,38 @@ function ChatTab() {
           {CHAT_LENGTHS.map((l) => (
             <Pill key={l.id} active={chatConfig.length === l.id} onClick={() => apply({ length: l.id })}>
               {l.label}
+            </Pill>
+          ))}
+        </div>
+      </Field>
+
+      <div className="h-px bg-border" />
+
+      <Field label="Reading font" hint="How chat responses are displayed. Doesn't change the model.">
+        <div className="flex flex-wrap gap-1.5">
+          {CHAT_FONTS.map((f) => (
+            <Pill key={f.id} active={chatConfig.font === f.id} onClick={() => apply({ font: f.id })}>
+              <span className={f.className}>{f.label}</span>
+            </Pill>
+          ))}
+        </div>
+      </Field>
+
+      <Field label="Text size">
+        <div className="flex flex-wrap gap-1.5">
+          {CHAT_SIZES.map((s) => (
+            <Pill key={s.id} active={chatConfig.fontSize === s.id} onClick={() => apply({ fontSize: s.id })}>
+              {s.label}
+            </Pill>
+          ))}
+        </div>
+      </Field>
+
+      <Field label="Alignment">
+        <div className="flex flex-wrap gap-1.5">
+          {CHAT_ALIGNS.map((a) => (
+            <Pill key={a.id} active={chatConfig.textAlign === a.id} onClick={() => apply({ textAlign: a.id })}>
+              {a.label}
             </Pill>
           ))}
         </div>

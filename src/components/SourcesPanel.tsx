@@ -27,7 +27,7 @@ import {
 // ~1M chars ≈ ~250k tokens — generous for local RAG over many documents.
 const MAX_NOTEBOOK_CHARS = 1_000_000;
 
-function sourceIcon(t: Source["sourceType"]) {
+export function sourceIcon(t: Source["sourceType"]) {
   switch (t) {
     case "pdf":
       return <FileType className="h-3.5 w-3.5 text-[#eb5757]" />;

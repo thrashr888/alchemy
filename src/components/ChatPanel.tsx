@@ -4,7 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { Button, Textarea, useConfirm } from "./ui";
 import { Markdown } from "./Markdown";
-import { cn } from "@/lib/utils";
+import { cn, chatReadingClass } from "@/lib/utils";
 import { DitherBackground } from "./DitherBackground";
 import { AlchemySymbol } from "./AlchemyHero";
 import type { Citation, Message } from "@/lib/types";
@@ -37,6 +37,7 @@ export function ChatPanel() {
   const toggleAgentMode = useStore((s) => s.toggleAgentMode);
   const send = useStore((s) => s.sendMessage);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
+  const chatConfig = useStore((s) => s.chatConfig);
   const clearChat = useStore((s) => s.clearChat);
   const appendToken = useStore((s) => s.appendToken);
   const appendStep = useStore((s) => s.appendStep);
@@ -128,7 +129,7 @@ export function ChatPanel() {
       </div>
 
       <div ref={scrollRef} className="relative z-10 flex-1 overflow-y-auto">
-        <div className="mx-auto flex max-w-[720px] flex-col gap-6 px-5 py-6">
+        <div className={cn("mx-auto flex max-w-[720px] flex-col gap-6 px-5 py-6", chatReadingClass(chatConfig))}>
           {canChat && (
             <SummaryBanner
               summary={summary}
