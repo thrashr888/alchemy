@@ -132,9 +132,15 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
       openaiApiKey: gwKey.trim(),
       openaiChatModel: model,
     });
+    if (model) {
+      // Let the success state land before health flips the overlay away.
+      setGwStatus(`Connected — using ${model}`);
+      setGwSaving(false);
+      await new Promise((r) => setTimeout(r, 1400));
+    } else {
+      setGwSaving(false);
+    }
     await refresh();
-    if (model) setGwStatus(`Connected — using ${model}`);
-    setGwSaving(false);
   }
 
   // Live-poll while visible so finishing a step ticks it off automatically.

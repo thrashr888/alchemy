@@ -324,20 +324,15 @@ export function SettingsDialog({
                 </>
               )}
 
-              <Field
-                label="Ollama URL"
-                hint={
-                  draft.provider === "openai"
-                    ? "Ollama is still used for embeddings and OCR."
-                    : undefined
-                }
-              >
-                <Input
-                  value={draft.baseUrl}
-                  onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })}
-                  placeholder="http://localhost:11434"
-                />
-              </Field>
+              {draft.provider !== "openai" && (
+                <Field label="Ollama URL">
+                  <Input
+                    value={draft.baseUrl}
+                    onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })}
+                    placeholder="http://localhost:11434"
+                  />
+                </Field>
+              )}
 
               {draft.provider !== "openai" && (
                 <Field
@@ -358,7 +353,9 @@ export function SettingsDialog({
                 hint={
                   embedChanged && totalSources > 0
                     ? `Saving will re-embed all ${totalSources} source${totalSources === 1 ? "" : "s"} with this model.`
-                    : "Used to index sources for retrieval. nomic-embed-text is recommended."
+                    : draft.provider === "openai"
+                      ? "Runs on local Ollama (localhost:11434) until the built-in embedder ships."
+                      : "Used to index sources for retrieval. nomic-embed-text is recommended."
                 }
               >
                 <ModelPicker

@@ -13,6 +13,14 @@ pub struct OpenAiClient {
     base_url: String,
     api_key: String,
     model: String,
+    /// Bob instance/team headers, fetched once from /admin/v1/profile.
+    bob_ctx: std::sync::Arc<tokio::sync::OnceCell<Option<BobContext>>>,
+}
+
+#[derive(Clone)]
+struct BobContext {
+    instance_id: String,
+    team_id: String,
 }
 
 impl OpenAiClient {
@@ -34,7 +42,62 @@ impl OpenAiClient {
             base_url: base.to_string(),
             api_key: api_key.to_string(),
             model: model.to_string(),
+            bob_ctx: std::sync::Arc::new(tokio::sync::OnceCell::new()),
         }
+    }
+
+    /// Bob's chat backend resolves the caller's "team user" from
+    /// x-instance-id / x-team-id headers. Fetch the first instance+team from
+    /// the profile endpoint once per client; None for non-Bob gateways.
+    async fn bob_context(&self) -> Option<BobContext> {
+        if !self.base_url.contains("bob.ibm.com") || self.api_key.is_empty() {
+            return None;
+        }
+        self.bob_ctx
+            .get_or_init(|| async {
+                let url = reqwest::Url::parse(&self.base_url).ok()?;
+                let origin = format!(
+                    "{}://{}{}",
+                    url.scheme(),
+                    url.host_str()?,
+                    url.port().map(|p| format!(":{p}")).unwrap_or_default()
+                );
+                let req = self.apply_auth(
+                    self.http
+                        .get(format!("{origin}/admin/v1/profile"))
+                        .timeout(std::time::Duration::from_secs(10)),
+                );
+                let resp = req.send().await.ok()?;
+                if !resp.status().is_success() {
+                    return None;
+                }
+                let v: serde_json::Value = resp.json().await.ok()?;
+                let inst = v["instances"].as_array()?.first()?;
+                let instance_id = inst["instance_id"].as_str()?.to_string();
+                let team_id = inst["teams"]
+                    .as_array()
+                    .and_then(|t| t.first())
+                    .and_then(|t| t["id"].as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                Some(BobContext {
+                    instance_id,
+                    team_id,
+                })
+            })
+            .await
+            .clone()
+    }
+
+    /// Attach Bob team headers when applicable.
+    async fn with_bob_headers(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(ctx) = self.bob_context().await {
+            req = req.header("x-instance-id", &ctx.instance_id);
+            if !ctx.team_id.is_empty() {
+                req = req.header("x-team-id", &ctx.team_id);
+            }
+        }
+        req
     }
 
     fn url(&self, path: &str) -> String {
@@ -65,7 +128,8 @@ impl OpenAiClient {
     pub async fn chat(&self, messages: &[ChatTurn]) -> Result<ChatOutcome> {
         let started = std::time::Instant::now();
         let resp = self
-            .request("/chat/completions")
+            .with_bob_headers(self.request("/chat/completions"))
+            .await
             .json(&json!({ "model": self.model, "messages": messages, "stream": false }))
             .send()
             .await
@@ -94,7 +158,8 @@ impl OpenAiClient {
     {
         let started = std::time::Instant::now();
         let resp = self
-            .request("/chat/completions")
+            .with_bob_headers(self.request("/chat/completions"))
+            .await
             .json(&json!({
                 "model": self.model,
                 "messages": messages,
@@ -195,11 +260,15 @@ impl OpenAiClient {
     }
 
     async fn get_json(&self, path: &str) -> Result<serde_json::Value> {
-        let req = self.apply_auth(
-            self.http
-                .get(self.url(path))
-                .timeout(std::time::Duration::from_secs(10)),
-        );
+        let req = self
+            .with_bob_headers(
+                self.apply_auth(
+                    self.http
+                        .get(self.url(path))
+                        .timeout(std::time::Duration::from_secs(10)),
+                ),
+            )
+            .await;
         let resp = req
             .send()
             .await
