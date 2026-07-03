@@ -21,7 +21,6 @@ jobs:
           # queue for hours; add it back if Intel support is needed.
           - platform: 'macos-latest'
             args: '--target aarch64-apple-darwin'
-            pdfium: 'pdfium-mac-arm64'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -51,16 +50,8 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
-      - name: Fetch PDFium for target arch
-        env:
-          PDFIUM: ${{ matrix.pdfium }}
-        run: |
-          curl -sL -o pdfium.tgz \
-            "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/${PDFIUM}.tgz"
-          tar xzf pdfium.tgz lib/libpdfium.dylib
-          mkdir -p src-tauri/libs
-          mv lib/libpdfium.dylib src-tauri/libs/libpdfium.dylib
-          rm pdfium.tgz
+      - name: Fetch PDFium (scanned-PDF OCR)
+        run: scripts/fetch-pdfium.sh
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile

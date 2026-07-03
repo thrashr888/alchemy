@@ -60,13 +60,13 @@ pnpm exec tsc --noEmit
 )
 
 # --- Build + sign ------------------------------------------------------------
-# The bundled PDFium dylib ships ad-hoc-signed; give it our Developer ID (with a
-# secure timestamp) so notarization accepts it. Restored afterwards so its
-# signature never churns into a release commit.
+# The bundled PDFium dylib ships ad-hoc-signed; fetch it (idempotent) then give
+# it our Developer ID + secure timestamp so notarization accepts it. It's
+# gitignored, so signing it never touches the working tree.
 echo "==> Signing PDFium dylib + building"
+scripts/fetch-pdfium.sh
 codesign --force --timestamp --options runtime --sign "$SIGNING_IDENTITY" "$DYLIB"
 APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY" pnpm tauri build --target "$TARGET"
-git checkout -- "$DYLIB"
 [ -f "$DMG" ] || { echo "DMG not produced: $DMG" >&2; exit 1; }
 
 # --- Notarize + staple + verify ---------------------------------------------

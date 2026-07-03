@@ -91,6 +91,9 @@ Requires [Ollama](https://ollama.com) running locally.
 
 - **Rust** (stable) and **Node** with **pnpm**. `protoc` is required to build
   LanceDB (`brew install protobuf`).
+- The PDFium library (for scanned-PDF OCR) is **fetched automatically on first
+  build** by [`scripts/fetch-pdfium.sh`](scripts/fetch-pdfium.sh) (via `build.rs`);
+  no manual step needed.
 
 ## Develop
 

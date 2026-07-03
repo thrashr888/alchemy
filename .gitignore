@@ -24,3 +24,6 @@ dist-ssr
 *.sw?
 
 src/target
+
+# Fetched on first build by scripts/fetch-pdfium.sh (see build.rs)
+src-tauri/libs/*.dylib
