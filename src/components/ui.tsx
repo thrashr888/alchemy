@@ -1,6 +1,7 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
-import { Loader2, X } from "lucide-react";
+import { Loader2, X, CheckCircle2, AlertTriangle, Info } from "lucide-react";
+import type { Toast } from "@/lib/types";
 
 type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 type ButtonSize = "sm" | "md" | "icon";
@@ -192,6 +193,39 @@ export function useConfirm() {
   ) : null;
 
   return { confirm, dialog };
+}
+
+/** Bottom-center stack of ephemeral toasts. */
+export function Toaster({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: string) => void }) {
+  if (toasts.length === 0) return null;
+  const icon = {
+    success: <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />,
+    error: <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />,
+    info: <Info className="mt-0.5 h-4 w-4 shrink-0 text-citation" />,
+  };
+  const border = { success: "border-success/40", error: "border-destructive/40", info: "border-border-strong" };
+  return (
+    <div className="pointer-events-none fixed bottom-4 left-1/2 z-[70] flex -translate-x-1/2 flex-col items-center gap-2">
+      {toasts.map((t) => (
+        <div
+          key={t.id}
+          className={cn(
+            "pointer-events-auto flex max-w-[520px] items-start gap-2.5 rounded-lg border bg-elevated px-3.5 py-2.5 shadow-lg animate-in slide-in-from-bottom-2 fade-in duration-150",
+            border[t.kind],
+          )}
+        >
+          {icon[t.kind]}
+          <div className="text-[12px] text-foreground/90 selectable">{t.message}</div>
+          <button
+            className="ml-1 rounded p-0.5 text-muted-foreground hover:text-foreground"
+            onClick={() => onDismiss(t.id)}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export function Badge({

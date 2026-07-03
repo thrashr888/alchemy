@@ -6,13 +6,16 @@ import { SettingsDialog } from "@/components/SettingsDialog";
 import { FileDrop } from "@/components/FileDrop";
 import { MigrationOverlay } from "@/components/MigrationOverlay";
 import { Onboarding } from "@/components/Onboarding";
-import { AlertTriangle, X } from "lucide-react";
+import { Toaster } from "@/components/ui";
 
 function App() {
   const init = useStore((s) => s.init);
   const currentId = useStore((s) => s.currentId);
   const error = useStore((s) => s.error);
   const setError = useStore((s) => s.setError);
+  const toasts = useStore((s) => s.toasts);
+  const pushToast = useStore((s) => s.pushToast);
+  const dismissToast = useStore((s) => s.dismissToast);
   const health = useStore((s) => s.modelHealth);
   const onboardingDismissed = useStore((s) => s.onboardingDismissed);
   const needsSetup = !!health && (!health.chat.working || !health.embed.working);
@@ -25,6 +28,15 @@ function App() {
   useEffect(() => {
     void init();
   }, [init]);
+
+  // Bridge the legacy `error` field into the toast stack so every error path
+  // (many still `set({ error })` directly) surfaces consistently and dismisses.
+  useEffect(() => {
+    if (error) {
+      pushToast("error", error);
+      setError(null);
+    }
+  }, [error, pushToast, setError]);
 
   return (
     <>
@@ -59,18 +71,7 @@ function App() {
         </div>
       )}
 
-      {error && (
-        <div className="fixed bottom-4 left-1/2 z-[70] flex max-w-[520px] -translate-x-1/2 items-start gap-2.5 rounded-lg border border-destructive/40 bg-elevated px-3.5 py-2.5 shadow-lg">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-          <div className="text-[12px] text-foreground/90 selectable">{error}</div>
-          <button
-            className="ml-1 rounded p-0.5 text-muted-foreground hover:text-foreground"
-            onClick={() => setError(null)}
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
+      <Toaster toasts={toasts} onDismiss={dismissToast} />
     </>
   );
 }

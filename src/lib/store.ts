@@ -15,6 +15,8 @@ import type {
   Notebook,
   ReportSchedule,
   Source,
+  Toast,
+  ToastKind,
 } from "./types";
 
 export interface QueueItem {
@@ -64,6 +66,10 @@ interface AppState {
   error: string | null;
   /** Text of a chat send that failed, handed back to the composer so it isn't lost. */
   failedInput: string | null;
+  /** Ephemeral toasts (success/info auto-dismiss; errors linger a bit longer). */
+  toasts: Toast[];
+  /** Id of a just-generated note, so the Studio panel can auto-open it. */
+  justCreatedNoteId: string | null;
 
   init: () => Promise<void>;
   refreshNotebooks: () => Promise<void>;
@@ -114,10 +120,14 @@ interface AppState {
   refreshModelStats: () => Promise<void>;
   reembedAll: () => Promise<void>;
   setError: (e: string | null) => void;
+  pushToast: (kind: ToastKind, message: string) => void;
+  dismissToast: (id: string) => void;
 }
 
 // Module-level guard so the report scheduler is only started once.
 let schedulerStarted = false;
+// Monotonic toast ids (avoids Date.now collisions on rapid toasts).
+let toastSeq = 0;
 
 type Getter = () => AppState;
 type Setter = (partial: Partial<AppState>) => void;
@@ -185,6 +195,8 @@ export const useStore = create<AppState>((set, get) => {
   embedderDownload: null,
   failedInput: null,
   error: null,
+  toasts: [],
+  justCreatedNoteId: null,
 
   init: async () => {
     applyTheme(get().theme);
@@ -382,6 +394,7 @@ export const useStore = create<AppState>((set, get) => {
       await api.deleteSource(id);
       const nb = get().currentId;
       if (nb) set({ sources: await api.listSources(nb) });
+      get().pushToast("success", "Source removed");
     }),
 
   sendMessage: async (content) => {
@@ -500,8 +513,11 @@ export const useStore = create<AppState>((set, get) => {
     set({ generatingKind: kind, error: null });
     try {
       const note = await api.generateArtifact(id, kind, prompt);
-      set({ notes: [note, ...get().notes] });
+      // Auto-open the new note so the outcome is visible where the user acted,
+      // not just appended to the Notes list below the fold.
+      set({ notes: [note, ...get().notes], justCreatedNoteId: note.id });
       void get().refreshModelStats();
+      get().pushToast("success", `${note.title} ready`);
       void notify("Document ready", `“${note.title}” finished generating.`);
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e) });
@@ -545,6 +561,7 @@ export const useStore = create<AppState>((set, get) => {
     guard(async () => {
       await api.deleteNote(noteId);
       set({ notes: get().notes.filter((n) => n.id !== noteId) });
+      get().pushToast("success", "Note deleted");
     }),
 
   convertNoteToSource: async (noteId) => {
@@ -557,6 +574,7 @@ export const useStore = create<AppState>((set, get) => {
         sources: await api.listSources(id),
       });
       await get().refreshNotebooks();
+      get().pushToast("success", "Note added as a source");
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e) });
     }
@@ -592,6 +610,7 @@ export const useStore = create<AppState>((set, get) => {
       if (!id) return;
       await api.createReportSchedule(id, name, kind, prompt, intervalSecs);
       set({ reportSchedules: await api.listReportSchedules(id) });
+      get().pushToast("success", `Scheduled “${name}”`);
     }),
 
   updateReport: (r) =>
@@ -654,5 +673,14 @@ export const useStore = create<AppState>((set, get) => {
   },
 
   setError: (e) => set({ error: e }),
+
+  pushToast: (kind, message) => {
+    const id = `toast-${++toastSeq}`;
+    set({ toasts: [...get().toasts, { id, kind, message }] });
+    const ttl = kind === "error" ? 7000 : 3500;
+    setTimeout(() => get().dismissToast(id), ttl);
+  },
+
+  dismissToast: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),
   };
 });

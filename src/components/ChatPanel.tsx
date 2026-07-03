@@ -72,9 +72,13 @@ export function ChatPanel() {
     };
   }, [appendToken, appendStep]);
 
-  // Autoscroll on new content.
+  // Autoscroll on new content — but only when the user is already near the
+  // bottom, so scrolling up to re-read mid-stream isn't yanked back down.
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    const el = scrollRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (nearBottom) el.scrollTo({ top: el.scrollHeight });
   }, [messages, streamingText, steps]);
 
   const canChat = !!currentId && sources.length > 0;

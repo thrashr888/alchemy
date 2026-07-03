@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import { Button, Input, Textarea, Modal, EmptyState, Badge, Spinner, useConfirm } from "./ui";
 import { Markdown } from "./Markdown";
@@ -69,9 +69,21 @@ export function StudioPanel() {
   const generate = useStore((s) => s.generateArtifact);
   const createNote = useStore((s) => s.createNote);
   const deleteNote = useStore((s) => s.deleteNote);
+  const justCreatedNoteId = useStore((s) => s.justCreatedNoteId);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [viewing, setViewing] = useState<Note | null>(null);
+
+  // A freshly generated note opens automatically so the result is visible where
+  // the user clicked, not just appended to the list below.
+  useEffect(() => {
+    if (!justCreatedNoteId) return;
+    const note = notes.find((n) => n.id === justCreatedNoteId);
+    if (note) {
+      setViewing(note);
+      useStore.setState({ justCreatedNoteId: null });
+    }
+  }, [justCreatedNoteId, notes]);
   const [composing, setComposing] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [draftBody, setDraftBody] = useState("");

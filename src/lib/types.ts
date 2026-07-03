@@ -1,5 +1,12 @@
 // Mirrors the serde models in src-tauri/src/models.rs (camelCase).
 
+export type ToastKind = "success" | "error" | "info";
+export interface Toast {
+  id: string;
+  kind: ToastKind;
+  message: string;
+}
+
 export interface Notebook {
   id: string;
   title: string;
