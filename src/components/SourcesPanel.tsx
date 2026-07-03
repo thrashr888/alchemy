@@ -11,6 +11,7 @@ import {
   Globe,
   Hash,
   Plus,
+  PanelLeftClose,
   Trash2,
   Upload,
   Link2,
@@ -84,6 +85,7 @@ export function SourcesPanel() {
   const refreshSource = useStore((s) => s.refreshSource);
   const deleteSource = useStore((s) => s.deleteSource);
   const draggingFiles = useStore((s) => s.draggingFiles);
+  const toggleSources = useStore((s) => s.toggleSources);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -136,7 +138,8 @@ export function SourcesPanel() {
           Sources
         </span>
         <span className="ml-2 text-[11px] text-subtle-foreground">{sources.length}</span>
-        <div className="relative ml-auto">
+        <div className="ml-auto flex items-center gap-0.5">
+        <div className="relative">
           <Button
             variant="ghost"
             size="icon"
@@ -173,6 +176,10 @@ export function SourcesPanel() {
               </div>
             </>
           )}
+        </div>
+        <Button variant="ghost" size="icon" onClick={toggleSources} title="Collapse sources">
+          <PanelLeftClose className="h-4 w-4" />
+        </Button>
         </div>
       </div>
 

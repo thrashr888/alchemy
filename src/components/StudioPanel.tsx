@@ -18,6 +18,7 @@ import {
   StickyNote,
   Wand2,
   Square,
+  PanelRightClose,
   Copy,
   Check,
   ClipboardList,
@@ -69,6 +70,7 @@ export function StudioPanel() {
   const generatingKind = useStore((s) => s.generatingKind);
   const generate = useStore((s) => s.generateArtifact);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
+  const toggleStudio = useStore((s) => s.toggleStudio);
   const createNote = useStore((s) => s.createNote);
   const deleteNote = useStore((s) => s.deleteNote);
   const justCreatedNoteId = useStore((s) => s.justCreatedNoteId);
@@ -101,6 +103,15 @@ export function StudioPanel() {
         <span className="ml-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
           Studio
         </span>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="ml-auto"
+          onClick={toggleStudio}
+          title="Collapse studio"
+        >
+          <PanelRightClose className="h-4 w-4" />
+        </Button>
       </div>
 
       <div className="border-b border-border p-3">
