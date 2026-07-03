@@ -84,6 +84,18 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
           rm certificate.p12
 
+      # The sideloaded PDFium dylib ships ad-hoc-signed; notarization requires
+      # every nested Mach-O to carry our Developer ID + secure timestamp +
+      # hardened runtime. Sign it here so tauri seals a valid signature.
+      - name: Sign bundled PDFium dylib (if signing configured)
+        if: ${{ secrets.APPLE_SIGNING_IDENTITY != '' }}
+        env:
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          codesign --force --timestamp --options runtime \
+            --sign "$IDENTITY" src-tauri/libs/libpdfium.dylib
+          codesign -dvv src-tauri/libs/libpdfium.dylib 2>&1 | grep -E 'Authority|Timestamp' | head -3
+
       # Tauri only skips notarization when the APPLE_ID/PASSWORD/TEAM_ID env
       # vars are absent (empty strings still trigger an attempt), so export
       # them conditionally. GitHub masks the values in logs.
