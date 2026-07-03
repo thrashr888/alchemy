@@ -94,8 +94,10 @@ async fn rag_round_trip() {
 
     // 3. Vector search
     let qvec = ai
-        .embed_one("Where do the light-dependent reactions happen?")
+        .embed(&["Where do the light-dependent reactions happen?".to_string()])
         .await
+        .unwrap()
+        .pop()
         .unwrap();
     let citations = db.search_chunks(&nb.id, qvec, 4).await.expect("search");
     assert!(!citations.is_empty(), "retrieved at least one chunk");
