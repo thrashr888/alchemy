@@ -1,6 +1,32 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Citation } from "@/lib/types";
+
+/** External links must open in the system browser, not navigate the webview. */
+function ExternalLink({
+  href,
+  children,
+  ...props
+}: React.AnchorHTMLAttributes<HTMLAnchorElement>) {
+  const external = /^(https?|mailto):/.test(href ?? "");
+  return (
+    <a
+      href={href}
+      {...props}
+      onClick={
+        external
+          ? (e) => {
+              e.preventDefault();
+              void openUrl(href!);
+            }
+          : undefined
+      }
+    >
+      {children}
+    </a>
+  );
+}
 
 /**
  * Turn `[n]` citation markers in text nodes into `#cite-n` links so the `a`
@@ -67,7 +93,12 @@ export function Markdown({
                 a: ({ href, children: linkChildren, ...props }) => {
                   const n = href?.startsWith("#cite-") ? Number(href.slice(6)) : NaN;
                   const cite = Number.isInteger(n) ? citations[n - 1] : undefined;
-                  if (!cite) return <a href={href} {...props}>{linkChildren}</a>;
+                  if (!cite)
+                    return (
+                      <ExternalLink href={href} {...props}>
+                        {linkChildren}
+                      </ExternalLink>
+                    );
                   return (
                     <button
                       onClick={() => onCitation(cite)}
@@ -79,7 +110,7 @@ export function Markdown({
                   );
                 },
               }
-            : undefined
+            : { a: ExternalLink }
         }
       >
         {children}
