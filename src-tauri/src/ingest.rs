@@ -506,9 +506,9 @@ fn is_void_element(name: &str) -> bool {
 /// boundary check so `<div` doesn't match `<divx` and `<my-element` doesn't
 /// match `<my-element-extra`.
 fn next_is_alnum(s: &str, idx: usize) -> bool {
-    s.as_bytes().get(idx).is_some_and(|b| {
-        b.is_ascii_alphanumeric() || matches!(b, b'-' | b':' | b'_')
-    })
+    s.as_bytes()
+        .get(idx)
+        .is_some_and(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b':' | b'_'))
 }
 
 /// Collapse runs of blank (or whitespace-only) lines down to one blank line.
