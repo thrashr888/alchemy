@@ -44,6 +44,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 tauri-plugin-debug-bridge = { version = "0.4", optional = true }
 model2vec-rs = "0.2.1"
 tokio-util = { version = "0.7.18", default-features = false }
+# Readability-style article extraction for URL sources. Built on dom_query,
+# which is already in the tree via tauri-utils.
+dom_smoothie = "0.18"
 
 [features]
 # Dev-only: exposes the debug bridge for CLI automation/inspection.
