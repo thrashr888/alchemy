@@ -41,7 +41,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 futures-util = "0.3.32"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
-tauri-plugin-debug-bridge = { version = "0.4", optional = true }
+tauri-plugin-debug-bridge = { version = "0.4.1", optional = true }
 model2vec-rs = "0.2.1"
 tokio-util = { version = "0.7.18", default-features = false }
 # Readability-style article extraction for URL sources. Built on dom_query,
@@ -60,4 +60,5 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
+
 
