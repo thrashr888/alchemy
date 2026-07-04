@@ -1697,7 +1697,14 @@ async fn generate_content(
     let mut contents = Vec::with_capacity(sources.len());
     for s in &sources {
         let full = state.db.source_content(&s.id).await?;
-        contents.push((s.title.clone(), full));
+        // URL sources get a "Source URL:" line under their heading so
+        // generated notes can cite where each finding can be viewed.
+        let heading = if s.url.is_empty() {
+            format!("## {}", s.title)
+        } else {
+            format!("## {}\nSource URL: {}", s.title, s.url)
+        };
+        contents.push((heading, full));
     }
     // Waterfill: allocate smallest-first so leftovers flow to bigger sources.
     let mut order: Vec<usize> = (0..contents.len()).collect();
@@ -1712,14 +1719,14 @@ async fn generate_content(
     }
 
     let mut corpus = String::new();
-    for (i, (title, full)) in contents.iter().enumerate() {
+    for (i, (heading, full)) in contents.iter().enumerate() {
         let clipped: String = full.chars().take(alloc[i]).collect();
         let marker = if full.chars().count() > alloc[i] {
             "\n…[source truncated to fit context]"
         } else {
             ""
         };
-        corpus.push_str(&format!("## {title}\n\n{clipped}{marker}\n\n"));
+        corpus.push_str(&format!("{heading}\n\n{clipped}{marker}\n\n"));
     }
     let messages = rag::build_artifact_messages(&instruction, &corpus);
     let (content, stats, model) = {
