@@ -57,7 +57,7 @@ pub fn run() {
                 config_path,
                 stats_path,
                 model_stats: std::sync::Mutex::new(model_stats),
-                cancel: std::sync::Mutex::new(tokio_util::sync::CancellationToken::new()),
+                cancel: std::sync::Mutex::new(std::collections::HashMap::new()),
             });
             Ok(())
         })

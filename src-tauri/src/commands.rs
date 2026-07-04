@@ -31,22 +31,34 @@ pub struct AppState {
     pub config_path: PathBuf,
     pub stats_path: PathBuf,
     pub model_stats: Mutex<HashMap<String, ModelStatAcc>>,
-    /// Cancellation for the in-flight chat/generation, replaced per request.
-    pub cancel: Mutex<tokio_util::sync::CancellationToken>,
+    /// Cancellation tokens for in-flight generations, one per scope ("chat",
+    /// "artifact", …) so stopping a chat doesn't kill a running document.
+    pub cancel: Mutex<HashMap<String, tokio_util::sync::CancellationToken>>,
 }
 
 impl AppState {
     /// Start a fresh cancellation scope for a new generation, returning its
-    /// token. Supersedes any previous token.
-    pub fn begin_generation(&self) -> tokio_util::sync::CancellationToken {
+    /// token. Supersedes any previous token in the same scope.
+    pub fn begin_generation(&self, scope: &str) -> tokio_util::sync::CancellationToken {
         let token = tokio_util::sync::CancellationToken::new();
-        *self.cancel.lock().unwrap() = token.clone();
+        self.cancel
+            .lock()
+            .unwrap()
+            .insert(scope.to_string(), token.clone());
         token
     }
 
-    /// Cancel the current in-flight generation, if any.
-    pub fn cancel_current(&self) {
-        self.cancel.lock().unwrap().cancel();
+    /// Cancel an in-flight generation. `None` cancels every scope.
+    pub fn cancel_current(&self, scope: Option<&str>) {
+        let map = self.cancel.lock().unwrap();
+        match scope {
+            Some(s) => {
+                if let Some(t) = map.get(s) {
+                    t.cancel();
+                }
+            }
+            None => map.values().for_each(|t| t.cancel()),
+        }
     }
 
     /// Fold a chat's throughput into the running per-model stats and persist.
@@ -185,11 +197,34 @@ fn classify(source_type: &str, text: &str) -> (String, String) {
     ("ready".to_string(), String::new())
 }
 
+/// Return the title of an existing source in the notebook with identical
+/// content, if any. `char_count` prefilters so only same-length candidates
+/// pay for a full-content read.
+async fn find_duplicate(
+    state: &AppState,
+    notebook_id: &str,
+    text: &str,
+) -> anyhow::Result<Option<String>> {
+    let char_count = text.chars().count() as i64;
+    for s in state.db.list_sources(notebook_id).await? {
+        if s.char_count == char_count
+            && s.status != "error"
+            && state.db.source_content(&s.id).await? == text
+        {
+            return Ok(Some(s.title));
+        }
+    }
+    Ok(None)
+}
+
 async fn store_extracted(
     state: &AppState,
     notebook_id: &str,
     extracted: ingest::Extracted,
 ) -> anyhow::Result<Source> {
+    if let Some(title) = find_duplicate(state, notebook_id, &extracted.text).await? {
+        anyhow::bail!("Already in this notebook as \"{title}\" — skipped duplicate");
+    }
     let chunks = ingest::chunk_text(&extracted.text);
     let embeddings = {
         let ai = state.ai.read().await;
@@ -306,13 +341,66 @@ async fn extract_pdf_ocr(state: &AppState, path: &str) -> anyhow::Result<ingest:
     })
 }
 
+/// Filenames, slugs, and arXiv-style IDs make poor display titles. Markdown
+/// gets its first heading; everything else asks the chat model for a short
+/// title. Best-effort — any failure keeps the filename, titling must never
+/// break an import.
+async fn friendly_title(state: &AppState, extracted: &mut ingest::Extracted) {
+    // A title containing spaces is usually already human-written.
+    if extracted.title.contains(char::is_whitespace) {
+        return;
+    }
+    if extracted.source_type == "markdown" {
+        let heading = extracted
+            .text
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .map(str::trim)
+            .filter(|l| l.starts_with('#'))
+            .map(|l| l.trim_start_matches('#').trim().to_string());
+        if let Some(h) = heading.filter(|h| !h.is_empty()) {
+            extracted.title = h.chars().take(80).collect();
+            return;
+        }
+    }
+    let excerpt: String = extracted.text.chars().take(1500).collect();
+    let messages = vec![
+        crate::ai::ChatTurn::system(
+            "You title documents. Reply with ONLY a short descriptive title (3-8 words) for the \
+             document excerpt — no quotes, no trailing punctuation, nothing else.",
+        ),
+        crate::ai::ChatTurn::user(format!(
+            "Filename: {}\n\nExcerpt:\n{excerpt}\n\nTitle:",
+            extracted.title
+        )),
+    ];
+    let out = {
+        let ai = state.ai.read().await;
+        ai.chat(&messages).await
+    };
+    if let Ok(out) = out {
+        let t = out
+            .text
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("")
+            .trim()
+            .trim_matches(['"', '“', '”', '*', '#'])
+            .trim();
+        if !t.is_empty() && t.chars().count() <= 100 {
+            extracted.title = t.to_string();
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn add_source_file(
     state: State<'_, AppState>,
     notebook_id: String,
     path: String,
 ) -> Result<Source, String> {
-    let extracted = if ingest::is_image(&path) {
+    let mut extracted = if ingest::is_image(&path) {
         e(extract_image(&state, &path).await)?
     } else if ingest::is_pdf(&path) {
         // Try fast text extraction; fall back to per-page OCR for scanned PDFs.
@@ -325,6 +413,7 @@ pub async fn add_source_file(
     } else {
         e(ingest::extract_file(&path))?
     };
+    friendly_title(&state, &mut extracted).await;
     e(store_extracted(&state, &notebook_id, extracted).await)
 }
 
@@ -340,6 +429,17 @@ pub async fn add_source_url(
 /// Fetch a URL into a source. Hard failures (network / HTTP / empty) still
 /// produce an errored source row so the user sees it and can retry.
 async fn ingest_url(state: &AppState, notebook_id: &str, url: &str) -> anyhow::Result<Source> {
+    // Same URL twice is always a mistake — fail fast before fetching.
+    let normalized = ingest::normalize_url(url);
+    let normalized = normalized.trim_end_matches('/');
+    for s in state.db.list_sources(notebook_id).await? {
+        if !s.url.is_empty() && s.url.trim_end_matches('/') == normalized && s.status != "error" {
+            anyhow::bail!(
+                "Already in this notebook as \"{}\" — use Refresh to re-fetch it",
+                s.title
+            );
+        }
+    }
     match ingest::extract_url(url).await {
         Ok(extracted) => store_extracted(state, notebook_id, extracted).await,
         Err(err) => store_failed_url(state, notebook_id, url.trim(), err.to_string()).await,
@@ -1058,7 +1158,7 @@ async fn try_tool_route(
                     label: format!("Generating {label}"),
                 },
             );
-            match generate_content(state, notebook_id, &kind, &prompt).await {
+            match generate_content(state, None, notebook_id, &kind, &prompt).await {
                 Ok((title, body)) => {
                     let ts = now();
                     let note = Note {
@@ -1352,7 +1452,7 @@ pub async fn send_message(
     // cancellation token so a Stop click aborts the request; on cancel we keep
     // whatever partial text streamed so far.
     let app_for_cb = app.clone();
-    let cancel = state.begin_generation();
+    let cancel = state.begin_generation("chat");
     let partial = Arc::new(Mutex::new(String::new()));
     let partial_cb = partial.clone();
     let (answer, stats, model) = {
@@ -1430,7 +1530,7 @@ pub async fn send_message_agentic(
         })
         .collect();
 
-    let cancel = state.begin_generation();
+    let cancel = state.begin_generation("chat");
     let (answer, citations, stats, model) = {
         let ai = state.ai.read().await;
         let model = ai.active_chat_model();
@@ -1468,10 +1568,11 @@ pub async fn send_message_agentic(
     Ok(assistant_msg)
 }
 
-/// Stop the in-flight chat or document generation.
+/// Stop an in-flight generation. `scope` is "chat" or "artifact"; omitted
+/// cancels everything (legacy behavior).
 #[tauri::command]
-pub fn cancel_generation(state: State<'_, AppState>) {
-    state.cancel_current();
+pub fn cancel_generation(state: State<'_, AppState>, scope: Option<String>) {
+    state.cancel_current(scope.as_deref());
 }
 
 // ---- Notes & artifacts ---------------------------------------------------
@@ -1548,9 +1649,11 @@ pub async fn convert_note_to_source(
 }
 
 /// Generate artifact content for a kind (+ optional custom prompt) over all of
-/// a notebook's source text. Returns (title, content).
+/// a notebook's source text. Returns (title, content). When `app` is given,
+/// tokens stream to the UI as `artifact://token` events.
 async fn generate_content(
     state: &AppState,
+    app: Option<&AppHandle>,
     notebook_id: &str,
     kind: &str,
     prompt: &str,
@@ -1621,7 +1724,21 @@ async fn generate_content(
     let messages = rag::build_artifact_messages(&instruction, &corpus);
     let (content, stats, model) = {
         let ai = state.ai.read().await;
-        let out = ai.chat(&messages).await?;
+        let out = match app {
+            Some(app) => {
+                let app = app.clone();
+                ai.chat_stream(&messages, move |tok| {
+                    let _ = app.emit(
+                        "artifact://token",
+                        TokenEvent {
+                            content: tok.to_string(),
+                        },
+                    );
+                })
+                .await?
+            }
+            None => ai.chat(&messages).await?,
+        };
         (out.text, out.stats, ai.active_chat_model())
     };
     state.record_chat_stats(&model, stats);
@@ -1637,9 +1754,9 @@ pub async fn generate_artifact(
     prompt: Option<String>,
 ) -> Result<Note, String> {
     let prompt = prompt.unwrap_or_default();
-    let cancel = state.begin_generation();
+    let cancel = state.begin_generation("artifact");
     let produced = tokio::select! {
-        r = generate_content(&state, &notebook_id, &kind, &prompt) => Some(e(r)?),
+        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt) => Some(e(r)?),
         _ = cancel.cancelled() => None,
     };
     let (title, content) = match produced {
@@ -1672,7 +1789,15 @@ pub async fn rebuild_note(
     kind: String,
     prompt: String,
 ) -> Result<Note, String> {
-    let (title, content) = e(generate_content(&state, &notebook_id, &kind, &prompt).await)?;
+    let cancel = state.begin_generation("artifact");
+    let produced = tokio::select! {
+        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt) => Some(e(r)?),
+        _ = cancel.cancelled() => None,
+    };
+    let (title, content) = match produced {
+        Some(t) => t,
+        None => return Err("Generation stopped.".into()),
+    };
     let ts = now();
     e(state.db.update_note(&note_id, &title, &content, ts).await)?;
 
@@ -1747,6 +1872,7 @@ pub async fn generate_notebook_summary(
 ) -> Result<String, String> {
     let (_t, content) = e(generate_content(
         &state,
+        None,
         &notebook_id,
         "custom",
         "Write a 2-4 sentence plain-prose overview of what these sources collectively cover. \
@@ -1849,6 +1975,7 @@ pub async fn run_report(
     let _ = app.emit("report://step", "Generating report".to_string());
     let (_t, content) = e(generate_content(
         &state,
+        None,
         &schedule.notebook_id,
         &schedule.kind,
         &schedule.prompt,

@@ -86,6 +86,7 @@ export function SourcesPanel() {
   const deleteSource = useStore((s) => s.deleteSource);
   const draggingFiles = useStore((s) => s.draggingFiles);
   const toggleSources = useStore((s) => s.toggleSources);
+  const openSourceViewer = useStore((s) => s.openSourceViewer);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -269,9 +270,13 @@ export function SourcesPanel() {
             {sources.map((s) => (
               <div
                 key={s.id}
+                onClick={() => {
+                  if (s.status !== "error") openSourceViewer(s.id, s.title);
+                }}
+                title={s.status !== "error" ? "Read source" : undefined}
                 className={cn(
                   "group flex items-start gap-2 rounded-md px-2 py-2 hover:bg-surface-2",
-                  s.status === "error" && "bg-destructive/5",
+                  s.status === "error" ? "bg-destructive/5" : "cursor-pointer",
                 )}
               >
                 <div className="mt-0.5">
@@ -305,7 +310,10 @@ export function SourcesPanel() {
                   {s.sourceType === "url" ? (
                     <button
                       className="rounded p-1 text-muted-foreground hover:text-foreground"
-                      onClick={() => refreshSource(s.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        refreshSource(s.id);
+                      }}
                       title="Refresh from URL (re-fetch & re-embed)"
                     >
                       <RefreshCw className="h-3 w-3" />
@@ -313,7 +321,10 @@ export function SourcesPanel() {
                   ) : (
                     <button
                       className="rounded p-1 text-muted-foreground hover:text-foreground"
-                      onClick={() => startEdit(s)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void startEdit(s);
+                      }}
                       title="Edit text (re-embed)"
                     >
                       <Pencil className="h-3 w-3" />
@@ -321,7 +332,8 @@ export function SourcesPanel() {
                   )}
                   <button
                     className="rounded p-1 text-muted-foreground hover:text-destructive"
-                    onClick={async () => {
+                    onClick={async (e) => {
+                      e.stopPropagation();
                       if (
                         await confirm({
                           title: `Remove "${s.title}"?`,
