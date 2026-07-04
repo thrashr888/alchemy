@@ -174,19 +174,26 @@ export function Modal({
   const panelRef = React.useRef<HTMLDivElement>(null);
   const titleId = React.useMemo(() => `modal-title-${++modalSeq}`, []);
 
+  // Callers pass inline closures; keep the latest in a ref so the focus effect
+  // below runs only on open/close, not on every parent re-render (which would
+  // steal focus mid-typing).
+  const onCloseRef = React.useRef(onClose);
+  onCloseRef.current = onClose;
+
   React.useEffect(() => {
     if (!open) return;
     const trigger = document.activeElement as HTMLElement | null;
-    // Focus the panel (or its first focusable) so keyboard/SR users land inside.
+    // Focus the first form field if there is one (the header close button is
+    // first in DOM order), else the first focusable, else the panel itself.
     const panel = panelRef.current;
-    const focusable = panel?.querySelector<HTMLElement>(
-      'input,textarea,select,button,[tabindex]:not([tabindex="-1"])',
-    );
+    const focusable =
+      panel?.querySelector<HTMLElement>("input,textarea,select") ??
+      panel?.querySelector<HTMLElement>('button,[tabindex]:not([tabindex="-1"])');
     (focusable ?? panel)?.focus();
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        onClose();
+        onCloseRef.current();
         return;
       }
       // Trap Tab within the dialog.
@@ -213,7 +220,7 @@ export function Modal({
       window.removeEventListener("keydown", onKey);
       trigger?.focus?.(); // restore focus to whatever opened the dialog
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
   return (
