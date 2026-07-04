@@ -129,6 +129,7 @@ interface AppState {
   createNote: (title: string, content: string) => Promise<void>;
   updateNote: (id: string, title: string, content: string) => Promise<void>;
   deleteNote: (id: string) => Promise<void>;
+  discussNoteInChat: (id: string) => Promise<void>;
   convertNoteToSource: (id: string) => Promise<void>;
 
   saveAiConfig: (config: AiConfig) => Promise<void>;
@@ -644,6 +645,12 @@ export const useStore = create<AppState>((set, get) => {
       await api.deleteNote(noteId);
       set({ notes: get().notes.filter((n) => n.id !== noteId) });
       get().pushToast("success", "Note deleted");
+    }),
+
+  discussNoteInChat: (noteId) =>
+    guard(async () => {
+      const msg = await api.addNoteToChat(noteId);
+      set({ messages: [...get().messages, msg] });
     }),
 
   convertNoteToSource: async (noteId) => {

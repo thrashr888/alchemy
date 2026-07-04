@@ -108,8 +108,15 @@ pub async fn run(
         .into_iter()
         .map(|s| s.title)
         .collect();
-    let messages =
-        rag::build_chat_messages(history, question, &gathered, &source_titles, extra_system);
+    let persona = rag::persona_block(&ollama.config().profile);
+    let messages = rag::build_chat_messages(
+        history,
+        question,
+        &gathered,
+        &source_titles,
+        extra_system,
+        &persona,
+    );
     let app_cb = app.clone();
     let outcome = ollama
         .chat_stream(&messages, |tok| {

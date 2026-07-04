@@ -28,6 +28,7 @@ import {
   RefreshCw,
   FileInput,
   TriangleAlert,
+  MessageSquare,
 } from "lucide-react";
 
 type Artifact = { kind: NoteKind; label: string; icon: ReactNode };
@@ -460,6 +461,7 @@ function NoteViewer({ note, onClose }: { note: Note | null; onClose: () => void 
   const updateNote = useStore((s) => s.updateNote);
   const rebuildNote = useStore((s) => s.rebuildNote);
   const convertNoteToSource = useStore((s) => s.convertNoteToSource);
+  const discussNoteInChat = useStore((s) => s.discussNoteInChat);
   const generatingKind = useStore((s) => s.generatingKind);
   const artifactStreamText = useStore((s) => s.artifactStreamText);
   // Track the live note so a rebuild's new content shows without reopening.
@@ -535,6 +537,17 @@ function NoteViewer({ note, onClose }: { note: Note | null; onClose: () => void 
                 </Button>
               )}
               <CopyButton text={live.content} variant="secondary" label="Copy" />
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  discussNoteInChat(live.id);
+                  onClose();
+                }}
+                title="Add this note to the chat so you can discuss it"
+              >
+                <MessageSquare className="h-3.5 w-3.5" />
+                Discuss in chat
+              </Button>
               <Button
                 variant="secondary"
                 onClick={() => {

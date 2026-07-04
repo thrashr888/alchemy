@@ -113,6 +113,7 @@ export const api = {
   generateNotebookSummary: (notebookId: string) =>
     run(ai<string>("generate_notebook_summary", { notebookId })),
   clearChat: (notebookId: string) => run(cmd<void>("clear_chat", { notebookId })),
+  addNoteToChat: (noteId: string) => run(cmd<Message>("add_note_to_chat", { noteId })),
 
   // Notes & artifacts
   listNotes: (notebookId: string) => run(query<Note[]>("list_notes", { notebookId })),

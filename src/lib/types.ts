@@ -120,6 +120,15 @@ export interface AiConfig {
   openaiApiKey: string;
   openaiChatModel: string;
   openaiVisionModel: string;
+  /** Who the user is; woven into system prompts so answers fit them. */
+  profile: UserProfile;
+}
+
+export interface UserProfile {
+  name: string;
+  profession: string;
+  /** Standing instructions, kept in mind across chats and generations. */
+  instructions: string;
 }
 
 export interface ChatConfig {

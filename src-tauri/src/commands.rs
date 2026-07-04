@@ -648,6 +648,27 @@ pub async fn clear_chat(state: State<'_, AppState>, notebook_id: String) -> Resu
     e(state.db.clear_messages(&notebook_id).await)
 }
 
+/// Copy a note into the chat as an assistant turn so the user can respond to
+/// it and discuss it with the model (history turns reach the model context).
+#[tauri::command]
+pub async fn add_note_to_chat(
+    state: State<'_, AppState>,
+    note_id: String,
+) -> Result<Message, String> {
+    let note = e(state.db.get_note(&note_id).await)?.ok_or_else(|| "Note not found".to_string())?;
+    let msg = Message {
+        id: new_id(),
+        notebook_id: note.notebook_id.clone(),
+        role: "assistant".to_string(),
+        content: format!("**{}**\n\n{}", note.title, note.content),
+        citations: Vec::new(),
+        kind: "chat".to_string(),
+        created_at: now(),
+    };
+    e(state.db.add_message(&msg).await)?;
+    Ok(msg)
+}
+
 #[derive(serde::Serialize, Clone)]
 struct TokenEvent {
     content: String,
@@ -843,7 +864,8 @@ fn tool_gate(content: &str) -> bool {
     let verb = [
         "add", "import", "ingest", "attach", "load", "grab", "pull in", "paste", "make", "create",
         "generate", "write", "build", "remove", "delete", "drop", "get rid", "refresh", "re-fetch",
-        "refetch", "update", "save", "schedule",
+        "refetch", "update", "save", "schedule", "edit", "rename", "change", "pause", "enable",
+        "disable", "resume",
     ]
     .iter()
     .any(|k| l.contains(k));
@@ -889,6 +911,17 @@ enum ToolAction {
         kind: String,
         interval: String,
         name: String,
+        prompt: String,
+    },
+    UpdateReport {
+        /// Name fragment identifying the existing schedule.
+        name: String,
+        /// Empty fields below mean "leave unchanged".
+        new_name: String,
+        kind: String,
+        interval: String,
+        prompt: String,
+        enabled: String,
     },
     Chat,
 }
@@ -903,7 +936,8 @@ Tools:\n\
 - {\"action\":\"remove_source\",\"name\":\"<source name fragment>\"} — remove a source.\n\
 - {\"action\":\"refresh_sources\",\"name\":\"<name fragment, or empty for all URL sources>\"} — re-fetch URL sources.\n\
 - {\"action\":\"save_note\",\"title\":\"<title or empty>\"} — save the assistant's previous answer as a note.\n\
-- {\"action\":\"schedule_report\",\"kind\":\"summary|briefing\",\"interval\":\"hourly|daily|weekly\",\"name\":\"<report name>\"} — create a recurring report (echo the user's cadence word in \"interval\" even if unsupported).\n\
+- {\"action\":\"schedule_report\",\"kind\":\"summary|briefing|timeline|faq|custom\",\"interval\":\"hourly|daily|weekly\",\"name\":\"<report name>\",\"prompt\":\"<what the report should cover, for kind custom; else empty>\"} — create a recurring report (echo the user's cadence word in \"interval\" even if unsupported).\n\
+- {\"action\":\"update_report\",\"name\":\"<existing report name fragment>\",\"new_name\":\"\",\"kind\":\"\",\"interval\":\"\",\"prompt\":\"\",\"enabled\":\"true|false or empty\"} — change an existing recurring report; leave fields empty to keep them.\n\
 - {\"action\":\"chat\"} — not a command; answer normally.\n\n\
 Prefer {\"action\":\"chat\"} when unsure. Questions ABOUT sources (\"what does the spec say\") are chat, \
 not tools.";
@@ -1024,7 +1058,7 @@ fn parse_tool_action(raw: &str) -> ToolAction {
             // Keep the raw interval; dispatch validates it and refuses politely
             // on unsupported cadences instead of silently coercing.
             let kind = match s("kind").as_str() {
-                k @ ("summary" | "briefing") => k.to_string(),
+                k @ ("summary" | "briefing" | "timeline" | "faq" | "custom") => k.to_string(),
                 _ => "briefing".to_string(),
             };
             let name = {
@@ -1039,6 +1073,22 @@ fn parse_tool_action(raw: &str) -> ToolAction {
                 kind,
                 interval: s("interval"),
                 name,
+                prompt: s("prompt"),
+            }
+        }
+        "update_report" => {
+            let name = s("name");
+            if name.is_empty() {
+                ToolAction::Chat
+            } else {
+                ToolAction::UpdateReport {
+                    name,
+                    new_name: s("new_name"),
+                    kind: s("kind"),
+                    interval: s("interval"),
+                    prompt: s("prompt"),
+                    enabled: s("enabled"),
+                }
             }
         }
         _ => ToolAction::Chat,
@@ -1312,6 +1362,7 @@ async fn try_tool_route(
             kind,
             interval,
             name,
+            prompt,
         } => {
             let interval_secs = match interval.as_str() {
                 "hourly" => 3_600,
@@ -1328,7 +1379,7 @@ async fn try_tool_route(
                 notebook_id: notebook_id.to_string(),
                 name: name.trim().to_string(),
                 kind,
-                prompt: String::new(),
+                prompt,
                 interval_secs,
                 enabled: true,
                 last_run_at: 0,
@@ -1339,6 +1390,127 @@ async fn try_tool_route(
                     "Scheduled **{name}** to run {interval} — it refreshes your URL sources, then writes a timestamped note (first run starts shortly). Manage it under Studio → Reports."
                 )),
                 Err(err) => Some(format!("Couldn't create the schedule: {err:#}")),
+            }
+        }
+        ToolAction::UpdateReport {
+            name,
+            new_name,
+            kind,
+            interval,
+            prompt,
+            enabled,
+        } => {
+            let schedules = match state.db.list_report_schedules(notebook_id).await {
+                Ok(s) => s,
+                Err(err) => return Some(format!("Couldn't read report schedules: {err:#}")),
+            };
+            if schedules.is_empty() {
+                return Some(
+                    "There are no scheduled reports in this notebook yet — ask me to create one."
+                        .to_string(),
+                );
+            }
+            let needle = name.to_lowercase();
+            let matches: Vec<_> = schedules
+                .iter()
+                .filter(|r| r.name.to_lowercase().contains(&needle))
+                .collect();
+            let mut schedule = match matches.as_slice() {
+                [one] => (*one).clone(),
+                [] => {
+                    let names = schedules
+                        .iter()
+                        .map(|r| format!("- {}", r.name))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    return Some(format!(
+                        "No report named “{name}” here. The notebook has:\n{names}"
+                    ));
+                }
+                many => {
+                    let names = many
+                        .iter()
+                        .map(|r| format!("- {}", r.name))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    return Some(format!(
+                        "“{name}” matches more than one report:\n{names}\nWhich one did you mean?"
+                    ));
+                }
+            };
+            let mut changes = Vec::new();
+            if !new_name.trim().is_empty() {
+                schedule.name = new_name.trim().to_string();
+                changes.push(format!("renamed to “{}”", schedule.name));
+            }
+            match kind.as_str() {
+                "" => {}
+                k @ ("summary" | "briefing" | "timeline" | "faq" | "custom") => {
+                    schedule.kind = k.to_string();
+                    changes.push(format!("generator → {k}"));
+                }
+                other => return Some(format!("“{other}” isn't a report kind I know — use summary, briefing, timeline, faq, or custom.")),
+            }
+            match interval.as_str() {
+                "" => {}
+                "hourly" => {
+                    schedule.interval_secs = 3_600;
+                    changes.push("cadence → hourly".into());
+                }
+                "daily" => {
+                    schedule.interval_secs = 86_400;
+                    changes.push("cadence → daily".into());
+                }
+                "weekly" => {
+                    schedule.interval_secs = 604_800;
+                    changes.push("cadence → weekly".into());
+                }
+                other => {
+                    return Some(format!(
+                        "I can run reports **hourly**, **daily**, or **weekly** — “{other}” isn't supported, so I haven't changed anything."
+                    ));
+                }
+            }
+            if !prompt.trim().is_empty() {
+                schedule.prompt = prompt.trim().to_string();
+                changes.push("prompt updated".into());
+            }
+            match enabled.as_str() {
+                "" => {}
+                "true" => {
+                    schedule.enabled = true;
+                    changes.push("enabled".into());
+                }
+                "false" => {
+                    schedule.enabled = false;
+                    changes.push("paused".into());
+                }
+                _ => {}
+            }
+            if changes.is_empty() {
+                return Some(format!(
+                    "I found **{}** but you didn't say what to change — its name, generator, cadence, prompt, or paused state.",
+                    schedule.name
+                ));
+            }
+            match state
+                .db
+                .update_report_schedule(
+                    &schedule.id,
+                    &schedule.name,
+                    &schedule.kind,
+                    &schedule.prompt,
+                    schedule.interval_secs,
+                    schedule.enabled,
+                )
+                .await
+            {
+                Ok(()) => Some(format!(
+                    "Updated **{}**: {}.",
+                    schedule.name,
+                    changes.join(", ")
+                )),
+                Err(err) => Some(format!("Couldn't update the schedule: {err:#}")),
             }
         }
     }
@@ -1445,8 +1617,18 @@ pub async fn send_message(
             content: m.content.clone(),
         })
         .collect();
-    let messages =
-        rag::build_chat_messages(&history_turns, &content, &citations, &source_titles, &extra);
+    let persona = {
+        let ai = state.ai.read().await;
+        rag::persona_block(&ai.config().profile)
+    };
+    let messages = rag::build_chat_messages(
+        &history_turns,
+        &content,
+        &citations,
+        &source_titles,
+        &extra,
+        &persona,
+    );
 
     // Stream the answer, emitting tokens to the frontend. Race against the
     // cancellation token so a Stop click aborts the request; on cancel we keep
@@ -1728,7 +1910,11 @@ async fn generate_content(
         };
         corpus.push_str(&format!("{heading}\n\n{clipped}{marker}\n\n"));
     }
-    let messages = rag::build_artifact_messages(&instruction, &corpus);
+    let persona = {
+        let ai = state.ai.read().await;
+        rag::persona_block(&ai.config().profile)
+    };
+    let messages = rag::build_artifact_messages(&instruction, &corpus, &persona);
     let (content, stats, model) = {
         let ai = state.ai.read().await;
         let out = match app {
@@ -2303,7 +2489,7 @@ mod tool_tests {
         }
         // Unsupported cadence survives parsing; dispatch refuses it politely.
         match parse_tool_action(
-            r#"{"action":"schedule_report","kind":"custom","interval":"monthly","name":"X"}"#,
+            r#"{"action":"schedule_report","kind":"podcast","interval":"monthly","name":"X"}"#,
         ) {
             ToolAction::ScheduleReport { kind, interval, .. } => {
                 assert_eq!(kind, "briefing"); // unknown kinds coerce to a known one
@@ -2311,6 +2497,42 @@ mod tool_tests {
             }
             _ => panic!("expected schedule"),
         }
+        // Custom reports carry their prompt through.
+        match parse_tool_action(
+            r#"{"action":"schedule_report","kind":"custom","interval":"daily","name":"X","prompt":"track prices"}"#,
+        ) {
+            ToolAction::ScheduleReport { kind, prompt, .. } => {
+                assert_eq!(kind, "custom");
+                assert_eq!(prompt, "track prices");
+            }
+            _ => panic!("expected schedule"),
+        }
+    }
+
+    #[test]
+    fn parses_update_report() {
+        match parse_tool_action(
+            r#"{"action":"update_report","name":"price check","interval":"weekly","enabled":"false"}"#,
+        ) {
+            ToolAction::UpdateReport {
+                name,
+                interval,
+                enabled,
+                new_name,
+                ..
+            } => {
+                assert_eq!(name, "price check");
+                assert_eq!(interval, "weekly");
+                assert_eq!(enabled, "false");
+                assert!(new_name.is_empty());
+            }
+            _ => panic!("expected update"),
+        }
+        // A nameless update can't identify a schedule — falls through to chat.
+        assert!(matches!(
+            parse_tool_action(r#"{"action":"update_report","name":""}"#),
+            ToolAction::Chat
+        ));
     }
 
     #[test]

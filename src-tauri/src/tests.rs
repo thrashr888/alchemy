@@ -119,6 +119,7 @@ async fn rag_round_trip() {
         &citations,
         &["src-1".to_string()],
         "",
+        "",
     );
     let answer = ai.chat(&messages).await.expect("chat").text;
     eprintln!("answer: {answer}");
