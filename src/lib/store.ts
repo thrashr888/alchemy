@@ -61,6 +61,9 @@ interface AppState {
   draggingFiles: boolean;
   sourcesOpen: boolean;
   studioOpen: boolean;
+  /** Draggable side-panel widths (px), persisted. */
+  sourcesWidth: number;
+  studioWidth: number;
   onboardingDismissed: boolean;
   settingsOpen: boolean;
   settingsTab: string;
@@ -72,6 +75,8 @@ interface AppState {
   toasts: Toast[];
   /** Id of a just-generated note, so the Studio panel can auto-open it. */
   justCreatedNoteId: string | null;
+  /** Cmd+N pressed while Studio was collapsed — open the composer on mount. */
+  pendingNewNote: boolean;
   /** Streaming buffer for the in-flight Studio generation (artifact://token). */
   artifactStreamText: string;
   /** Source open in the reader, optionally scrolled to a cited passage. */
@@ -90,6 +95,7 @@ interface AppState {
   setDraggingFiles: (v: boolean) => void;
   toggleSources: () => void;
   toggleStudio: () => void;
+  setPanelWidth: (panel: "sources" | "studio", width: number) => void;
   dismissOnboarding: () => void;
   openSettings: (tab?: string) => void;
   closeSettings: () => void;
@@ -132,6 +138,15 @@ interface AppState {
   setError: (e: string | null) => void;
   pushToast: (kind: ToastKind, message: string) => void;
   dismissToast: (id: string) => void;
+}
+
+// Side panels stay usable at any drag position: wide enough for content,
+// narrow enough to leave the chat column room at the 1040px minimum window.
+const PANEL_BOUNDS = { sources: [220, 400], studio: [260, 460] } as const;
+
+function clampPanel(panel: "sources" | "studio", width: number): number {
+  const [min, max] = PANEL_BOUNDS[panel];
+  return Math.round(Math.min(max, Math.max(min, width)));
 }
 
 function loadReadingPrefs(): ReadingPrefs {
@@ -209,6 +224,8 @@ export const useStore = create<AppState>((set, get) => {
   draggingFiles: false,
   sourcesOpen: localStorage.getItem("sourcesOpen") !== "false",
   studioOpen: localStorage.getItem("studioOpen") !== "false",
+  sourcesWidth: clampPanel("sources", Number(localStorage.getItem("sourcesWidth")) || 280),
+  studioWidth: clampPanel("studio", Number(localStorage.getItem("studioWidth")) || 320),
   onboardingDismissed: localStorage.getItem("onboardingDismissed") === "true",
   settingsOpen: false,
   settingsTab: "models",
@@ -217,6 +234,7 @@ export const useStore = create<AppState>((set, get) => {
   error: null,
   toasts: [],
   justCreatedNoteId: null,
+  pendingNewNote: false,
   artifactStreamText: "",
   viewingSource: null,
 
@@ -347,6 +365,11 @@ export const useStore = create<AppState>((set, get) => {
     const v = !get().studioOpen;
     localStorage.setItem("studioOpen", String(v));
     set({ studioOpen: v });
+  },
+  setPanelWidth: (panel, width) => {
+    const w = clampPanel(panel, width);
+    localStorage.setItem(panel === "sources" ? "sourcesWidth" : "studioWidth", String(w));
+    set(panel === "sources" ? { sourcesWidth: w } : { studioWidth: w });
   },
 
   createNotebook: async (title) => {

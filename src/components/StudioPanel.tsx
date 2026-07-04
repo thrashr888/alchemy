@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
-import { Button, Input, Textarea, Modal, EmptyState, Badge, Spinner, useConfirm } from "./ui";
+import { Button, Input, Textarea, Modal, EmptyState, Badge, ResizeHandle, Spinner, useConfirm } from "./ui";
 import { Markdown } from "./Markdown";
 import { Reports } from "./Reports";
 import { RichEditor } from "./RichEditor";
-import { relativeTime } from "@/lib/utils";
+import { cardButtonProps, relativeTime, shortcutBlocked } from "@/lib/utils";
 import type { Note, NoteKind } from "@/lib/types";
 import {
   FileText,
@@ -115,13 +115,50 @@ export function StudioPanel() {
   const [composing, setComposing] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [draftBody, setDraftBody] = useState("");
+
+  // Cmd/Ctrl+N: new note. When the panel was collapsed, Workspace opens it
+  // and sets pendingNewNote so the composer opens on mount.
+  const pendingNewNote = useStore((s) => s.pendingNewNote);
+  useEffect(() => {
+    if (!pendingNewNote) return;
+    useStore.setState({ pendingNewNote: false });
+    if (currentId) {
+      setDraftTitle("");
+      setDraftBody("");
+      setComposing(true);
+    }
+  }, [pendingNewNote, currentId]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "n" && !shortcutBlocked(e) && currentId) {
+        e.preventDefault();
+        setDraftTitle("");
+        setDraftBody("");
+        setComposing(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [currentId]);
   const [instructions, setInstructions] = useState("");
   const [showInstructions, setShowInstructions] = useState(false);
 
   const hasSources = sources.length > 0;
+  const width = useStore((s) => s.studioWidth);
+  const setPanelWidth = useStore((s) => s.setPanelWidth);
 
   return (
-    <div className="flex h-full w-[320px] shrink-0 flex-col border-l border-border bg-surface">
+    <div
+      style={{ width }}
+      className="relative flex h-full shrink-0 flex-col border-l border-border bg-surface"
+    >
+      <ResizeHandle
+        edge="left"
+        width={width}
+        defaultWidth={320}
+        onResize={(w) => setPanelWidth("studio", w)}
+        label="Resize studio panel"
+      />
       <div className="flex items-center px-4 h-12 border-b border-border">
         <Wand2 className="h-4 w-4 text-muted-foreground" />
         <span className="ml-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -228,18 +265,21 @@ export function StudioPanel() {
               <div
                 key={n.id}
                 onClick={() => setViewing(n)}
+                {...cardButtonProps(() => setViewing(n))}
                 className="group cursor-pointer rounded-md border border-border bg-surface-2/40 px-3 py-2.5 transition-colors hover:border-border-strong hover:bg-surface-2"
               >
                 <div className="flex items-center gap-2">
                   <span className="truncate text-[13px] font-medium text-foreground">
                     {n.title}
                   </span>
-                  <div className="ml-auto flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
+                  <div className="ml-auto flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
                     <span onClick={(e) => e.stopPropagation()}>
                       <CopyButton text={n.content} iconOnly />
                     </span>
                     <button
                       className="rounded p-1 text-muted-foreground hover:text-destructive"
+                      title="Delete note"
+                      aria-label={`Delete "${n.title}"`}
                       onClick={async (e) => {
                         e.stopPropagation();
                         if (
@@ -253,7 +293,7 @@ export function StudioPanel() {
                           deleteNote(n.id);
                       }}
                     >
-                      <Trash2 className="h-3 w-3" />
+                      <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   </div>
                 </div>

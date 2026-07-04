@@ -71,7 +71,7 @@ export function StudioRail() {
       >
         <StickyNote className="h-4 w-4" />
         {notes.length > 0 && (
-          <span className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary/20 px-0.5 text-[9px] font-medium text-citation">
+          <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary/20 px-0.5 text-[10px] font-medium text-citation">
             {notes.length}
           </span>
         )}

@@ -1,9 +1,9 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import { Button, Input, Textarea, Modal, EmptyState, Spinner, useConfirm } from "./ui";
-import { cn } from "@/lib/utils";
+import { Button, Input, Textarea, Modal, EmptyState, ResizeHandle, Spinner, useConfirm } from "./ui";
+import { cn, cardButtonProps } from "@/lib/utils";
 import type { Source } from "@/lib/types";
 import {
   FileText,
@@ -90,7 +90,30 @@ export function SourcesPanel() {
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const [mode, setMode] = useState<AddMode>(null);
+
+  // Menu keyboard behavior: focus first item on open, arrows cycle, Escape closes.
+  useEffect(() => {
+    if (menuOpen) menuRef.current?.querySelector<HTMLElement>("button")?.focus();
+  }, [menuOpen]);
+
+  function onMenuKey(e: React.KeyboardEvent) {
+    const items = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? []);
+    const idx = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      setMenuOpen(false);
+      menuTriggerRef.current?.focus();
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      items[(idx + 1) % items.length]?.focus();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      items[(idx - 1 + items.length) % items.length]?.focus();
+    }
+  }
   const [url, setUrl] = useState("");
   const [pasteTitle, setPasteTitle] = useState("");
   const [pasteText, setPasteText] = useState("");
@@ -125,8 +148,21 @@ export function SourcesPanel() {
     await addFiles(paths);
   }
 
+  const width = useStore((s) => s.sourcesWidth);
+  const setPanelWidth = useStore((s) => s.setPanelWidth);
+
   return (
-    <div className="relative flex h-full w-[280px] shrink-0 flex-col border-r border-border bg-surface">
+    <div
+      style={{ width }}
+      className="relative flex h-full shrink-0 flex-col border-r border-border bg-surface"
+    >
+      <ResizeHandle
+        edge="right"
+        width={width}
+        defaultWidth={280}
+        onResize={(w) => setPanelWidth("sources", w)}
+        label="Resize sources panel"
+      />
       {draggingFiles && currentId && (
         <div className="pointer-events-none absolute inset-1.5 z-30 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary/60 bg-primary/10">
           <Upload className="h-6 w-6 text-primary" />
@@ -142,18 +178,28 @@ export function SourcesPanel() {
         <div className="ml-auto flex items-center gap-0.5">
         <div className="relative">
           <Button
+            ref={menuTriggerRef}
             variant="ghost"
             size="icon"
             onClick={() => setMenuOpen((o) => !o)}
             disabled={!currentId}
             title="Add source"
+            aria-label="Add source"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
           >
             <Plus className="h-4 w-4" />
           </Button>
           {menuOpen && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-              <div className="absolute right-0 top-8 z-20 w-44 overflow-hidden rounded-md border border-border-strong bg-elevated py-1 shadow-xl">
+              <div
+                ref={menuRef}
+                role="menu"
+                aria-label="Add source"
+                onKeyDown={onMenuKey}
+                className="absolute right-0 top-8 z-20 w-44 overflow-hidden rounded-md bg-elevated py-1 shadow-[0_0_0_0.5px_var(--border-strong),0_8px_24px_-6px_rgba(0,0,0,0.4)]"
+              >
                 <MenuItem icon={<Upload className="h-3.5 w-3.5" />} label="Upload files" onClick={pickFiles} />
                 <MenuItem
                   icon={<Link2 className="h-3.5 w-3.5" />}
@@ -248,8 +294,10 @@ export function SourcesPanel() {
                   <button
                     className="rounded p-0.5 text-muted-foreground hover:text-foreground"
                     onClick={() => clearQueueItem(q.id)}
+                    title="Dismiss"
+                    aria-label={`Dismiss failed import "${q.name}"`}
                   >
-                    <X className="h-3 w-3" />
+                    <X className="h-3.5 w-3.5" />
                   </button>
                 )}
               </div>
@@ -273,6 +321,9 @@ export function SourcesPanel() {
                 onClick={() => {
                   if (s.status !== "error") openSourceViewer(s.id, s.title);
                 }}
+                {...(s.status !== "error"
+                  ? cardButtonProps(() => openSourceViewer(s.id, s.title))
+                  : {})}
                 title={s.status !== "error" ? "Read source" : undefined}
                 className={cn(
                   "group flex items-start gap-2 rounded-md px-2 py-2 hover:bg-surface-2",
@@ -306,7 +357,7 @@ export function SourcesPanel() {
                     </div>
                   )}
                 </div>
-                <div className="flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
+                <div className="flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
                   {s.sourceType === "url" ? (
                     <button
                       className="rounded p-1 text-muted-foreground hover:text-foreground"
@@ -315,8 +366,9 @@ export function SourcesPanel() {
                         refreshSource(s.id);
                       }}
                       title="Refresh from URL (re-fetch & re-embed)"
+                      aria-label={`Refresh "${s.title}" from URL`}
                     >
-                      <RefreshCw className="h-3 w-3" />
+                      <RefreshCw className="h-3.5 w-3.5" />
                     </button>
                   ) : (
                     <button
@@ -326,8 +378,9 @@ export function SourcesPanel() {
                         void startEdit(s);
                       }}
                       title="Edit text (re-embed)"
+                      aria-label={`Edit "${s.title}"`}
                     >
-                      <Pencil className="h-3 w-3" />
+                      <Pencil className="h-3.5 w-3.5" />
                     </button>
                   )}
                   <button
@@ -345,8 +398,9 @@ export function SourcesPanel() {
                         deleteSource(s.id);
                     }}
                     title="Remove source"
+                    aria-label={`Remove "${s.title}"`}
                   >
-                    <Trash2 className="h-3 w-3" />
+                    <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 </div>
               </div>
@@ -468,9 +522,10 @@ function MenuItem({
 }) {
   return (
     <button
+      role="menuitem"
       className={cn(
         "flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] text-foreground/90",
-        "hover:bg-surface-2 hover:text-foreground",
+        "hover:bg-surface-2 hover:text-foreground focus-visible:bg-surface-2",
       )}
       onClick={onClick}
     >

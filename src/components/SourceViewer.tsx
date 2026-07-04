@@ -55,6 +55,21 @@ export function SourceViewer() {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const markRef = useRef<HTMLElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // Cmd/Ctrl+F focuses the find field while the reader is open.
+  useEffect(() => {
+    if (!viewing) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [viewing]);
 
   const source = sources.find((s) => s.id === viewing?.sourceId);
 
@@ -145,6 +160,7 @@ export function SourceViewer() {
               <div className="relative">
                 <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-subtle-foreground" />
                 <Input
+                  ref={searchRef}
                   value={query}
                   onChange={(e) => {
                     setQuery(e.target.value);
@@ -210,7 +226,9 @@ export function SourceViewer() {
                       ref={seg.current ? markRef : undefined}
                       className={cn(
                         "rounded-sm px-0.5 text-foreground",
-                        seg.current ? "bg-primary/40" : "bg-primary/20",
+                        // Strong highlight only for the active search match; a
+                        // cited passage can span paragraphs, so keep it soft.
+                        seg.current && query.trim() ? "bg-primary/40" : "bg-primary/15",
                       )}
                     >
                       {seg.text}

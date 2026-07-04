@@ -1,9 +1,37 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import type { KeyboardEvent } from "react";
 import type { AiConfig, ModelHealth, ReadingPrefs } from "./types";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+/**
+ * Make a clickable non-button element (card, list row) keyboard-operable:
+ * focusable, announced as a button, activated with Enter or Space.
+ * Spread alongside the element's onClick.
+ */
+/** True when a global shortcut should be ignored: typing in a field or inside an open dialog. */
+export function shortcutBlocked(e: { target: EventTarget | null }): boolean {
+  const t = e.target as HTMLElement | null;
+  if (!t?.closest) return false;
+  return !!t.closest('[role="dialog"], input, textarea, select, [contenteditable="true"]');
+}
+
+export function cardButtonProps(onActivate: () => void) {
+  return {
+    role: "button" as const,
+    tabIndex: 0,
+    onKeyDown: (e: KeyboardEvent) => {
+      // Only when the card itself is focused — not a button inside it.
+      if (e.target !== e.currentTarget) return;
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onActivate();
+      }
+    },
+  };
 }
 
 /** Reading-preference classes for the chat message container (see index.css). */

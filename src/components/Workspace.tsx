@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useStore } from "@/lib/store";
 import { SourcesPanel } from "./SourcesPanel";
 import { ChatPanel } from "./ChatPanel";
@@ -6,6 +7,7 @@ import { SourceViewer } from "./SourceViewer";
 import { SourcesRail, StudioRail } from "./SidebarRails";
 import { HealthBanner } from "./HealthBanner";
 import { Button } from "./ui";
+import { shortcutBlocked } from "@/lib/utils";
 import { ChevronLeft, Settings, BookOpen } from "lucide-react";
 
 export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
@@ -16,6 +18,29 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   const studioOpen = useStore((s) => s.studioOpen);
 
   const notebook = notebooks.find((n) => n.id === currentId);
+
+  // Panel + note shortcuts: Cmd+1 sources, Cmd+2 studio, Cmd+N new note
+  // (opening the studio panel first when it's collapsed).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || shortcutBlocked(e)) return;
+      const { studioOpen, toggleSources, toggleStudio } = useStore.getState();
+      if (e.key === "1") {
+        e.preventDefault();
+        toggleSources();
+      } else if (e.key === "2") {
+        e.preventDefault();
+        toggleStudio();
+      } else if (e.key === "n" && !studioOpen) {
+        e.preventDefault();
+        // Open the panel; StudioPanel opens the composer when it mounts.
+        useStore.setState({ pendingNewNote: true });
+        toggleStudio();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">

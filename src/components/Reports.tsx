@@ -81,21 +81,23 @@ export function Reports() {
                   {r.lastRunAt > 0 && <span>· last {new Date(r.lastRunAt).toLocaleDateString()}</span>}
                 </div>
               </div>
-              <div className="flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
+              <div className="flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
                 <button
                   className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
                   onClick={() => runNow(r.id)}
                   disabled={generating}
                   title="Run now"
+                  aria-label={`Run "${r.name}" now`}
                 >
-                  {generating ? <Spinner className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+                  {generating ? <Spinner className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
                 </button>
                 <button
                   className="rounded p-1 text-muted-foreground hover:text-destructive"
                   onClick={() => remove(r.id)}
                   title="Delete"
+                  aria-label={`Delete "${r.name}"`}
                 >
-                  <Trash2 className="h-3 w-3" />
+                  <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </div>
             </div>

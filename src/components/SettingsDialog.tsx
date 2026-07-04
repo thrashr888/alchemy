@@ -2,9 +2,11 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { getVersion } from "@tauri-apps/api/app";
 import { THEME_LIST } from "@/lib/themes";
 import { Button, Input, Modal, Spinner, Textarea } from "./ui";
 import { cn, bobKeyLooksOff } from "@/lib/utils";
+import { AlchemySymbol } from "./AlchemyHero";
 import type { AiConfig, ChatConfig } from "@/lib/types";
 import {
   RefreshCw,
@@ -16,6 +18,9 @@ import {
   Cpu,
   MessageSquare,
   Palette,
+  Keyboard,
+  Info,
+  Globe,
 } from "lucide-react";
 
 /** Treat `name` and `name:latest` as the same model for matching. */
@@ -50,6 +55,8 @@ const TABS = [
   { id: "models", label: "Models", icon: Cpu },
   { id: "chat", label: "Chat", icon: MessageSquare },
   { id: "appearance", label: "Appearance", icon: Palette },
+  { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
+  { id: "about", label: "About", icon: Info },
 ];
 
 export function SettingsDialog({
@@ -425,6 +432,10 @@ export function SettingsDialog({
           {tab === "chat" && <ChatTab />}
 
           {tab === "appearance" && <AppearanceTab />}
+
+          {tab === "shortcuts" && <ShortcutsTab />}
+
+          {tab === "about" && <AboutTab />}
         </div>
       </div>
 
@@ -590,6 +601,81 @@ function AppearanceTab() {
           ))}
         </div>
       </Field>
+    </div>
+  );
+}
+
+const SHORTCUTS: { keys: string[]; label: string; context?: string }[] = [
+  { keys: ["⌘", "N"], label: "New notebook", context: "Home" },
+  { keys: ["⌘", "N"], label: "New note", context: "Notebook" },
+  { keys: ["⌘", "K"], label: "Focus the chat composer", context: "Notebook" },
+  { keys: ["⌘", "F"], label: "Find in source", context: "Reader" },
+  { keys: ["⌘", "1"], label: "Show or hide Sources", context: "Notebook" },
+  { keys: ["⌘", "2"], label: "Show or hide Studio", context: "Notebook" },
+  { keys: ["⌘", ","], label: "Open Settings" },
+  { keys: ["↩"], label: "Send message · next find match" },
+  { keys: ["⇧", "↩"], label: "New line in the composer" },
+  { keys: ["esc"], label: "Close dialog or menu" },
+];
+
+function Kbd({ children }: { children: ReactNode }) {
+  return (
+    <kbd className="inline-flex h-[22px] min-w-[22px] items-center justify-center rounded-md border border-border-strong bg-surface-2 px-1.5 font-sans text-[12px] text-foreground/85 shadow-[0_1px_0_var(--border)]">
+      {children}
+    </kbd>
+  );
+}
+
+/** Read-only reference of the app's keyboard commands. */
+function ShortcutsTab() {
+  return (
+    <div className="flex flex-col gap-1">
+      {SHORTCUTS.map((s, i) => (
+        <div key={i} className="flex items-center gap-3 rounded-md px-1 py-1.5">
+          <div className="flex w-20 shrink-0 items-center gap-1">
+            {s.keys.map((k) => (
+              <Kbd key={k}>{k}</Kbd>
+            ))}
+          </div>
+          <span className="text-[13px] text-foreground/90">{s.label}</span>
+          {s.context && (
+            <span className="ml-auto text-[11px] text-subtle-foreground">{s.context}</span>
+          )}
+        </div>
+      ))}
+      <p className="mt-2 text-[11px] leading-relaxed text-subtle-foreground">
+        On Windows and Linux, use Ctrl in place of ⌘.
+      </p>
+    </div>
+  );
+}
+
+/** App identity, version, and links. */
+function AboutTab() {
+  const [version, setVersion] = useState("");
+  useEffect(() => {
+    getVersion().then(setVersion).catch(() => setVersion(""));
+  }, []);
+  return (
+    <div className="flex flex-col items-center gap-1 py-6 text-center">
+      <AlchemySymbol className="h-16 w-16 text-citation/70" />
+      <div className="mt-3 text-[17px] font-semibold tracking-tight">Alchemy</div>
+      <div className="text-[13px] text-muted-foreground">
+        Local-first research notebooks
+      </div>
+      {version && (
+        <div className="mt-2 text-[12px] text-subtle-foreground">Version {version}</div>
+      )}
+      <button
+        className="mt-4 inline-flex items-center gap-1.5 text-[12px] text-citation hover:underline"
+        onClick={() => void openUrl("https://github.com/thrashr888/alchemy")}
+      >
+        <Globe className="h-3.5 w-3.5" />
+        github.com/thrashr888/alchemy
+      </button>
+      <div className="mt-4 text-[12px] text-subtle-foreground">
+        © {new Date().getFullYear()} Paul Thrasher
+      </div>
     </div>
   );
 }
