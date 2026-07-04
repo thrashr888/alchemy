@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useStore } from "@/lib/store";
 import { Button, Input, Textarea, Modal, Spinner } from "./ui";
 import { cn } from "@/lib/utils";
-import { Clock, Plus, Play, Trash2, Power } from "lucide-react";
+import { Clock, Plus, Play, Trash2, Power, Pencil } from "lucide-react";
+import type { ReportSchedule } from "@/lib/types";
 
 const INTERVALS = [
   { label: "Hourly", secs: 3600 },
@@ -33,16 +34,28 @@ export function Reports() {
   const generating = useStore((s) => s.generatingKind === "report");
 
   const [editing, setEditing] = useState(false);
+  // The schedule being edited; null means the modal creates a new one.
+  const [editTarget, setEditTarget] = useState<ReportSchedule | null>(null);
   const [name, setName] = useState("");
   const [kind, setKind] = useState("briefing");
   const [prompt, setPrompt] = useState("");
   const [intervalSecs, setIntervalSecs] = useState(86400);
 
   function openEditor() {
+    setEditTarget(null);
     setName("");
     setKind("briefing");
     setPrompt("");
     setIntervalSecs(86400);
+    setEditing(true);
+  }
+
+  function openEdit(r: ReportSchedule) {
+    setEditTarget(r);
+    setName(r.name);
+    setKind(r.kind);
+    setPrompt(r.prompt);
+    setIntervalSecs(r.intervalSecs);
     setEditing(true);
   }
 
@@ -92,6 +105,14 @@ export function Reports() {
                   {generating ? <Spinner className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
                 </button>
                 <button
+                  className="rounded p-1 text-muted-foreground hover:text-foreground"
+                  onClick={() => openEdit(r)}
+                  title="Edit"
+                  aria-label={`Edit "${r.name}"`}
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+                <button
                   className="rounded p-1 text-muted-foreground hover:text-destructive"
                   onClick={() => remove(r.id)}
                   title="Delete"
@@ -105,12 +126,19 @@ export function Reports() {
         </div>
       )}
 
-      <Modal open={editing} onClose={() => setEditing(false)} title="Schedule a report" width="max-w-md">
+      <Modal
+        open={editing}
+        onClose={() => setEditing(false)}
+        title={editTarget ? "Edit report" : "Schedule a report"}
+        width="max-w-md"
+      >
         <form
           onSubmit={(e) => {
             e.preventDefault();
             setEditing(false);
-            void create(name, kind, kind === "custom" ? prompt : "", intervalSecs);
+            const p = kind === "custom" ? prompt : "";
+            if (editTarget) void update({ ...editTarget, name, kind, prompt: p, intervalSecs });
+            else void create(name, kind, p, intervalSecs);
           }}
           className="flex flex-col gap-3"
         >
@@ -141,7 +169,7 @@ export function Reports() {
               variant="primary"
               disabled={!name.trim() || (kind === "custom" && !prompt.trim())}
             >
-              Schedule
+              {editTarget ? "Save" : "Schedule"}
             </Button>
           </div>
         </form>

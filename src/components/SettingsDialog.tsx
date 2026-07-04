@@ -21,6 +21,7 @@ import {
   Keyboard,
   Info,
   Globe,
+  UserRound,
 } from "lucide-react";
 
 /** Treat `name` and `name:latest` as the same model for matching. */
@@ -54,6 +55,7 @@ function keyLooksOff(draft: { openaiBaseUrl: string; openaiApiKey: string }): bo
 const TABS = [
   { id: "models", label: "Models", icon: Cpu },
   { id: "chat", label: "Chat", icon: MessageSquare },
+  { id: "personalization", label: "Personalization", icon: UserRound },
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
   { id: "about", label: "About", icon: Info },
@@ -431,6 +433,8 @@ export function SettingsDialog({
 
           {tab === "chat" && <ChatTab />}
 
+          {tab === "personalization" && <PersonalizationTab />}
+
           {tab === "appearance" && <AppearanceTab />}
 
           {tab === "shortcuts" && <ShortcutsTab />}
@@ -555,6 +559,73 @@ function ChatTab() {
             </Pill>
           ))}
         </div>
+      </Field>
+    </div>
+  );
+}
+
+/** Who the user is — woven into system prompts across chat and generations. */
+function PersonalizationTab() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const save = useStore((s) => s.saveAiConfig);
+  const [draft, setDraft] = useState({ name: "", profession: "", instructions: "" });
+
+  useEffect(() => {
+    if (aiConfig?.profile) setDraft(aiConfig.profile);
+    // Load once per dialog open — refreshing on every aiConfig change would
+    // clobber in-progress typing when a blur-save round-trips.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Fields save when you leave them (blur) — no Save button to remember.
+  const saveOnBlur = () => {
+    if (!aiConfig) return;
+    const p = aiConfig.profile ?? { name: "", profession: "", instructions: "" };
+    const changed =
+      draft.name !== p.name ||
+      draft.profession !== p.profession ||
+      draft.instructions !== p.instructions;
+    if (changed) void save({ ...aiConfig, profile: { ...draft } });
+  };
+
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-[13px] leading-relaxed text-muted-foreground">
+        Tell the assistant who you are. This is added to every chat and generated
+        document's system prompt so answers fit you — it is never sent anywhere
+        except your configured model. Changes save automatically.
+      </p>
+
+      <Field label="What should the assistant call you?">
+        <Input
+          placeholder="e.g. Paul"
+          value={draft.name}
+          onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+          onBlur={saveOnBlur}
+        />
+      </Field>
+
+      <Field label="What best describes your work?">
+        <Input
+          placeholder="e.g. Product management"
+          value={draft.profession}
+          onChange={(e) => setDraft({ ...draft, profession: e.target.value })}
+          onBlur={saveOnBlur}
+        />
+      </Field>
+
+      <Field label="Instructions for the assistant">
+        <Textarea
+          rows={8}
+          placeholder={
+            "Preferences it should keep in mind across all notebooks, e.g.\n" +
+            "- I prefer concise answers with tables for comparisons\n" +
+            "- Prices in USD; I'm in the San Francisco Bay Area"
+          }
+          value={draft.instructions}
+          onChange={(e) => setDraft({ ...draft, instructions: e.target.value })}
+          onBlur={saveOnBlur}
+        />
       </Field>
     </div>
   );

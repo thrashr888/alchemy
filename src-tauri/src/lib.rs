@@ -77,6 +77,7 @@ pub fn run() {
             commands::reembed_all,
             commands::list_messages,
             commands::clear_chat,
+            commands::add_note_to_chat,
             commands::send_message,
             commands::send_message_agentic,
             commands::cancel_generation,

@@ -1,7 +1,32 @@
 //! Prompt construction for grounded chat and one-shot artifact generation.
 
-use crate::ai::ChatTurn;
+use crate::ai::{ChatTurn, UserProfile};
 use crate::models::Citation;
+
+/// Format the user's profile into a system-prompt block; empty when unset.
+pub fn persona_block(profile: &UserProfile) -> String {
+    let mut parts = Vec::new();
+    if !profile.name.trim().is_empty() {
+        parts.push(format!("Their name is {}.", profile.name.trim()));
+    }
+    if !profile.profession.trim().is_empty() {
+        parts.push(format!("They work as: {}.", profile.profession.trim()));
+    }
+    if !profile.instructions.trim().is_empty() {
+        parts.push(format!(
+            "Standing instructions from them:\n{}",
+            profile.instructions.trim()
+        ));
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "About the user:\n{}\nKeep this in mind when relevant; the source material remains authoritative.",
+            parts.join("\n")
+        )
+    }
+}
 
 const CHAT_SYSTEM: &str = "You are a research assistant that answers questions strictly from the provided source excerpts. \
 Rules:\n\
@@ -21,6 +46,7 @@ pub fn build_chat_messages(
     citations: &[Citation],
     source_titles: &[String],
     extra_system: &str,
+    persona: &str,
 ) -> Vec<ChatTurn> {
     let mut context = String::new();
     if citations.is_empty() {
@@ -36,7 +62,7 @@ pub fn build_chat_messages(
         }
     }
 
-    let system = if extra_system.trim().is_empty() {
+    let mut system = if extra_system.trim().is_empty() {
         CHAT_SYSTEM.to_string()
     } else {
         format!(
@@ -44,6 +70,9 @@ pub fn build_chat_messages(
             extra_system.trim()
         )
     };
+    if !persona.is_empty() {
+        system.push_str(&format!("\n\n{persona}"));
+    }
     let mut messages = vec![ChatTurn::system(system)];
     // Keep a short rolling window of prior turns for conversational context.
     let start = history.len().saturating_sub(6);
@@ -171,17 +200,20 @@ pub fn build_agent_decision(
 }
 
 /// Build the message list for a one-shot artifact over concatenated source text.
-pub fn build_artifact_messages(instruction: &str, corpus: &str) -> Vec<ChatTurn> {
+pub fn build_artifact_messages(instruction: &str, corpus: &str, persona: &str) -> Vec<ChatTurn> {
     // Safety net only — callers budget the corpus per-source upstream.
     // Truncate on a char boundary (byte slicing can panic on Unicode).
     const MAX_CHARS: usize = 200_000;
     let corpus: String = corpus.chars().take(MAX_CHARS).collect();
     let corpus = corpus.as_str();
+    let mut system = "You generate well-structured Markdown documents from provided source \
+                      material. Stay faithful to the sources and never invent facts."
+        .to_string();
+    if !persona.is_empty() {
+        system.push_str(&format!("\n\n{persona}"));
+    }
     vec![
-        ChatTurn::system(
-            "You generate well-structured Markdown documents from provided source material. \
-             Stay faithful to the sources and never invent facts.",
-        ),
+        ChatTurn::system(system),
         ChatTurn::user(format!("{instruction}\n\n--- SOURCES ---\n\n{corpus}")),
     ]
 }

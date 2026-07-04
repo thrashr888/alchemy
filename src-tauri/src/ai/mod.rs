@@ -43,6 +43,18 @@ pub struct AiConfig {
     /// Vision-capable gateway model for OCR (empty = sonnet-4.6 on Bob).
     #[serde(default)]
     pub openai_vision_model: String,
+    /// Who the user is; woven into system prompts so answers fit them.
+    #[serde(default)]
+    pub profile: UserProfile,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UserProfile {
+    pub name: String,
+    pub profession: String,
+    /// Standing instructions, kept in mind across chats and generations.
+    pub instructions: String,
 }
 
 fn default_provider() -> String {
@@ -63,6 +75,7 @@ impl Default for AiConfig {
             openai_api_key: String::new(),
             openai_chat_model: String::new(),
             openai_vision_model: String::new(),
+            profile: UserProfile::default(),
         }
     }
 }
