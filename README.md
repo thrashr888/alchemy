@@ -15,6 +15,15 @@ keeping your sources on-device via a built-in embedder. See
 
 [![CI](https://github.com/thrashr888/alchemy/actions/workflows/ci.yml/badge.svg)](https://github.com/thrashr888/alchemy/actions/workflows/ci.yml)
 
+![Grounded chat over your sources — streamed answers with inline citations, an AI notebook summary, and one-click document generators](docs/screenshot-chat.png)
+
+<details>
+<summary>Click a citation to open the source, scrolled to the exact passage</summary>
+
+![The source reader with the cited passage highlighted and find-in-source](docs/screenshot-citation-reader.png)
+
+</details>
+
 ---
 
 ## Features
