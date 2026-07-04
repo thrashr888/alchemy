@@ -200,11 +200,41 @@ fn extract_pptx(path: &str) -> Result<String> {
 pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
     let url = normalize_url(raw_url);
 
+    // A complete, self-consistent Chrome header set. Several listing sites
+    // (e.g. carfax.com) reject requests whose headers don't look like a real
+    // browser navigation; a bare or branded UA is the usual giveaway.
+    // TLS-fingerprinting walls (Cloudflare et al.) still block regardless.
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::ACCEPT,
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+            .parse()
+            .unwrap(),
+    );
+    headers.insert(
+        reqwest::header::ACCEPT_LANGUAGE,
+        "en-US,en;q=0.9".parse().unwrap(),
+    );
+    headers.insert(
+        "sec-ch-ua",
+        "\"Google Chrome\";v=\"137\", \"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\""
+            .parse()
+            .unwrap(),
+    );
+    headers.insert("sec-ch-ua-mobile", "?0".parse().unwrap());
+    headers.insert("sec-ch-ua-platform", "\"macOS\"".parse().unwrap());
+    headers.insert("Sec-Fetch-Dest", "document".parse().unwrap());
+    headers.insert("Sec-Fetch-Mode", "navigate".parse().unwrap());
+    headers.insert("Sec-Fetch-Site", "none".parse().unwrap());
+    headers.insert("Sec-Fetch-User", "?1".parse().unwrap());
+    headers.insert("Upgrade-Insecure-Requests", "1".parse().unwrap());
+
     let client = reqwest::Client::builder()
         .user_agent(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
-             (KHTML, like Gecko) Alchemy/0.1 Safari/537.36",
+             (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
         )
+        .default_headers(headers)
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .context("failed to build HTTP client")?;
