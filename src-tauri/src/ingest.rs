@@ -221,19 +221,46 @@ pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
     }
     let body = resp.text().await.context("failed to read response body")?;
 
-    let text = normalize(&strip_html(&body));
+    let (article_title, text) = readable_text(&body, &url);
     if text.trim().is_empty() {
         return Err(anyhow!(
             "no readable text found at {url} (the page may be JavaScript-rendered)"
         ));
     }
-    let title = extract_title(&body).unwrap_or_else(|| url.clone());
+    let title = article_title
+        .or_else(|| extract_title(&body))
+        .unwrap_or_else(|| url.clone());
     Ok(Extracted {
         title,
         source_type: "url".to_string(),
         url,
         text,
     })
+}
+
+/// Readability-style article extraction (drops nav, footers, comments, hidden
+/// elements) with a plain tag-strip fallback for pages that don't look like
+/// articles (dashboards, listings, bot walls). Returns the article title, if
+/// one was found, alongside the text.
+fn readable_text(body: &str, url: &str) -> (Option<String>, String) {
+    let cfg = dom_smoothie::Config {
+        text_mode: dom_smoothie::TextMode::Formatted,
+        ..Default::default()
+    };
+    let article = dom_smoothie::Readability::new(body, Some(url), Some(cfg))
+        .ok()
+        .and_then(|mut r| r.parse().ok());
+    if let Some(article) = article {
+        let text = normalize(&article.text_content);
+        // Same threshold as looks_blocked: shorter than this means the
+        // article extraction probably picked the wrong (or no) node, so
+        // whole-page extraction is the safer bet.
+        if text.chars().count() >= 200 {
+            let title = Some(article.title.trim().to_string()).filter(|t| !t.is_empty());
+            return (title, text);
+        }
+    }
+    (None, normalize(&strip_html(body)))
 }
 
 /// Heuristic: does this extracted text look like a bot wall / login page /
@@ -336,15 +363,26 @@ fn normalize(text: &str) -> String {
 }
 
 fn strip_html(html: &str) -> String {
-    // Drop script/style blocks, then remove all remaining tags. Operates on
-    // char boundaries throughout so Unicode pages can't trigger a slice panic.
-    // Tag names are ASCII, so case-insensitive comparison is done byte-wise
-    // (avoids `to_lowercase`, which can shift byte offsets).
+    // Drop comments, script/style blocks, and elements marked hidden, then
+    // remove all remaining tags. Operates on char boundaries throughout so
+    // Unicode pages can't trigger a slice panic. Tag names are ASCII, so
+    // case-insensitive comparison is done byte-wise (avoids `to_lowercase`,
+    // which can shift byte offsets).
     let mut cleaned = String::with_capacity(html.len());
     let len = html.len();
     let mut i = 0; // always a char boundary
     while i < len {
         let rest = &html[i..];
+        if rest.starts_with("<!--") {
+            match rest.find("-->") {
+                Some(end) => {
+                    i += end + 3;
+                    cleaned.push(' ');
+                    continue;
+                }
+                None => break,
+            }
+        }
         if starts_with_ci(rest, "<script") || starts_with_ci(rest, "<style") {
             let close = if starts_with_ci(rest, "<script") {
                 "</script>"
@@ -363,7 +401,11 @@ fn strip_html(html: &str) -> String {
         if ch == '<' {
             match rest.find('>') {
                 Some(end) => {
-                    i += end + 1;
+                    if let Some(skip) = hidden_element_end(rest, &rest[1..end], end + 1) {
+                        i += skip;
+                    } else {
+                        i += end + 1;
+                    }
                     cleaned.push(' ');
                     continue;
                 }
@@ -373,7 +415,119 @@ fn strip_html(html: &str) -> String {
         cleaned.push(ch);
         i += ch.len_utf8();
     }
-    decode_entities(&cleaned)
+    collapse_blank_lines(&decode_entities(&cleaned))
+}
+
+/// If `tag` (the text between '<' and '>') opens an element marked hidden,
+/// return the offset in `rest` just past its matching close tag. `rest` starts
+/// at the element's '<'; `after_open` is the offset just past its opening '>'.
+/// Returns None for visible, self-closing, void, or unclosed elements (the
+/// caller then drops only the tag itself).
+fn hidden_element_end(rest: &str, tag: &str, after_open: usize) -> Option<usize> {
+    if tag.starts_with('/') || tag.ends_with('/') || !tag_is_hidden(tag) {
+        return None;
+    }
+    let name: String = tag
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || matches!(*c, '-' | ':' | '_'))
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if name.is_empty() || is_void_element(&name) {
+        return None;
+    }
+    let open = format!("<{name}");
+    let close = format!("</{name}");
+    let mut depth = 1usize;
+    let mut i = after_open;
+    while i < rest.len() {
+        let lt = rest[i..].find('<')? + i;
+        let at = &rest[lt..];
+        if starts_with_ci(at, &close) && !next_is_alnum(at, close.len()) {
+            let gt = at.find('>')? + lt + 1;
+            depth -= 1;
+            if depth == 0 {
+                return Some(gt);
+            }
+            i = gt;
+        } else if starts_with_ci(at, &open) && !next_is_alnum(at, open.len()) {
+            let gt = at.find('>')? + lt + 1;
+            if !rest[lt..gt - 1].ends_with('/') {
+                depth += 1;
+            }
+            i = gt;
+        } else {
+            i = lt + 1;
+        }
+    }
+    None
+}
+
+/// Cheap check for markup that hides an element: inline display/visibility,
+/// the bare `hidden` attribute, or aria-hidden="true".
+fn tag_is_hidden(tag: &str) -> bool {
+    let squished: String = tag
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if squished.contains("display:none")
+        || squished.contains("visibility:hidden")
+        || squished.contains("aria-hidden=\"true\"")
+        || squished.contains("aria-hidden='true'")
+    {
+        return true;
+    }
+    tag.split_whitespace()
+        .skip(1)
+        .any(|t| t.eq_ignore_ascii_case("hidden") || t.to_ascii_lowercase().starts_with("hidden="))
+}
+
+fn is_void_element(name: &str) -> bool {
+    matches!(
+        name,
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
+    )
+}
+
+/// Is the byte at `idx` a valid ASCII tag-name character? Used as a tag-name
+/// boundary check so `<div` doesn't match `<divx` and `<my-element` doesn't
+/// match `<my-element-extra`.
+fn next_is_alnum(s: &str, idx: usize) -> bool {
+    s.as_bytes().get(idx).is_some_and(|b| {
+        b.is_ascii_alphanumeric() || matches!(b, b'-' | b':' | b'_')
+    })
+}
+
+/// Collapse runs of blank (or whitespace-only) lines down to one blank line.
+fn collapse_blank_lines(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut pending_blank = false;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            pending_blank = !out.is_empty();
+        } else {
+            if pending_blank {
+                out.push('\n');
+                pending_blank = false;
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// ASCII case-insensitive prefix check (safe on any UTF-8 input).
@@ -454,6 +608,89 @@ mod tests {
     #[test]
     fn strip_html_decodes_entities() {
         assert_eq!(strip_html("a &amp; b &lt;c&gt;").trim(), "a & b <c>");
+    }
+
+    #[test]
+    fn strip_html_drops_comments_hidden_elements_and_extra_blanks() {
+        let html = r#"<html><head><title>Dealer</title></head>
+<body>
+<!-- OFFICIAL FERRARI DEALER / Ferrari Silicon Valley -->
+<p>Visible paragraph.</p>
+<!--
+<div class="save-bar"><span>Saved</span></div>
+-->
+<div style="display: none">Hidden inline style.</div>
+<div hidden><p>Hidden attr block.</p></div>
+<span aria-hidden="true">Decorative</span>
+<input type="hidden" value="csrf-token">
+
+
+
+<p>After many blank lines.</p>
+<!-- unterminated comment swallows the rest
+</body></html>"#;
+        let text = strip_html(html);
+        assert!(text.contains("Visible paragraph."));
+        assert!(text.contains("After many blank lines."));
+        assert!(!text.contains("-->"), "no comment delimiters: {text}");
+        assert!(!text.contains("OFFICIAL FERRARI DEALER"));
+        assert!(!text.contains("Saved"), "commented-out markup dropped");
+        assert!(!text.contains("Hidden inline style."));
+        assert!(!text.contains("Hidden attr block."));
+        assert!(!text.contains("Decorative"), "aria-hidden dropped");
+        assert!(!text.contains("csrf-token"));
+        assert!(!text.contains("unterminated"));
+        assert!(!text.contains("\n\n\n"), "blank runs collapsed: {text:?}");
+    }
+
+    #[test]
+    fn readable_text_extracts_article_and_drops_boilerplate() {
+        let para = "The quick brown fox jumps over the lazy dog near the riverbank at dawn, \
+                    watching the water drift slowly past the old stone bridge into town.";
+        let html = format!(
+            r#"<html><head><title>Fox Story — Example News</title></head>
+<body>
+<nav><a href="/">Home</a> <a href="/about">About</a> <a href="/contact">Contact</a></nav>
+<!-- OFFICIAL FERRARI DEALER / Ferrari Silicon Valley -->
+<div hidden><span>Saved</span></div>
+<article><h1>Fox Story</h1>
+<p>{para}</p><p>{para}</p><p>{para}</p><p>{para}</p><p>{para}</p>
+</article>
+<footer>Copyright 2026 Example News. Privacy Policy. Terms of Service.</footer>
+</body></html>"#
+        );
+        let (title, text) = readable_text(&html, "https://example.com/fox");
+        assert!(text.contains("quick brown fox"));
+        assert!(!text.contains("Privacy Policy"), "footer dropped: {text}");
+        assert!(!text.contains("OFFICIAL FERRARI DEALER"));
+        assert!(!text.contains("Saved"));
+        assert!(!text.contains("-->"));
+        assert!(title.is_some(), "article title extracted");
+    }
+
+    #[test]
+    fn readable_text_falls_back_to_full_page_on_non_articles() {
+        // Too little content for readability — the tag-strip fallback must
+        // keep the page's text rather than returning nothing.
+        let html = "<html><body><h1>Dashboard</h1><p>3 sources indexed.</p></body></html>";
+        let (title, text) = readable_text(html, "https://example.com/app");
+        assert!(text.contains("3 sources indexed."));
+        assert!(title.is_none(), "fallback leaves title to extract_title");
+    }
+
+    #[test]
+    fn strip_html_keeps_content_after_hidden_and_nested_hidden() {
+        // Nested same-name tags inside a hidden element must not truncate
+        // the visible content that follows it.
+        let html = r#"<div hidden><div><span>inner</span></div></div><p>still here</p>"#;
+        let text = strip_html(html);
+        assert!(!text.contains("inner"));
+        assert!(text.contains("still here"));
+
+        // A hidden element that never closes falls back to dropping only the
+        // tag, keeping the document readable.
+        let text = strip_html("<div hidden>orphan <p>tail</p>");
+        assert!(text.contains("tail"));
     }
 
     #[test]
