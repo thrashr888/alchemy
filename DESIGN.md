@@ -1,0 +1,173 @@
+# Alchemy — DESIGN.md
+
+Design system for Alchemy, a local-first research notebook app for macOS
+(Tauri + React + Tailwind v4). This file follows the Stitch DESIGN.md format;
+agents and humans should treat it as the source of truth for visual and
+interaction decisions. Tokens live in [src/index.css](src/index.css) and
+[src/lib/themes.ts](src/lib/themes.ts); shared primitives in
+[src/components/ui.tsx](src/components/ui.tsx).
+
+## 1. Visual Theme & Atmosphere
+
+Linear-inspired, macOS-native density. Near-black canvas, faint hairline
+borders, one restrained indigo accent, tight 13px type. Calm and utilitarian:
+the user's sources and the model's answers are the interface; chrome recedes.
+Motion is minimal and fast (150ms), never springy. Empty states may use the
+animated dithered "aetheric mist" WebGL background (`DitherBackground`) — it is
+the only decorative element in the app and must stay behind content, tinted
+from theme tokens, and static under `prefers-reduced-motion`.
+
+The app is themeable (11 schemes, dark and light) — never hardcode a hex in a
+component; always go through the semantic tokens below.
+
+## 2. Color Palette & Roles
+
+Tokens are CSS custom properties set per-theme. Defaults shown are the
+"Midnight" theme.
+
+| Token | Midnight value | Role |
+|---|---|---|
+| `--background` | `#08090a` | App canvas |
+| `--surface` | `#0d0e10` | Side panels, cards at rest |
+| `--surface-2` | `#141517` | Inputs, hover fills, nested surfaces |
+| `--elevated` | `#18191c` | Menus, modals, toasts (highest surface) |
+| `--foreground` | `#eceef1` | Primary text |
+| `--muted-foreground` | `#8a8f98` | Secondary text, labels |
+| `--subtle-foreground` | `#62666d` | Captions, tertiary metadata |
+| `--border` | `rgba(255,255,255,0.07)` | Hairline dividers |
+| `--border-strong` | `rgba(255,255,255,0.12)` | Interactive/hover borders, elevated edges |
+| `--primary` | `#5e6ad2` | Accent: primary buttons, active states |
+| `--citation` | `#8b95f5` | Citation chips, links, accent text on dark |
+| `--destructive` | `#eb5757` | Errors, delete affordances |
+| `--success` | `#4cb782` | Confirmation states |
+| `--ring` | `#5e6ad2` | Focus rings (always visible on keyboard focus) |
+
+Rules: dark themes spread surface steps apart for depth; light themes keep
+them close. Accent text on tinted fills uses `--citation`, never gray. Errors
+tint their container (`bg-destructive/10`) rather than sitting on plain gray.
+
+## 3. Typography Rules
+
+System font first — SF Pro on macOS:
+`-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", sans-serif`.
+Monospace: `"SF Mono", ui-monospace, monospace`.
+
+| Style | Size / weight | Usage |
+|---|---|---|
+| Page title | 22px / 600, tight tracking | Home "Your notebooks" |
+| Section title | 15px / 600 | Hero headings, app name |
+| Body / controls | 13px / 400–500 | Default UI text, buttons, inputs, prose |
+| Card title | 13–14px / 500 | Notebook and note cards |
+| Caption | 12px / 400 | Toasts, metadata, hints |
+| Micro-label | 11px / 500, uppercase + tracking-wide | Panel headers ("SOURCES", "NOTES") |
+
+Floors: 11px is the minimum text size anywhere; 10px only for numeric count
+badges. Chat prose is 13px at line-height 1.65 (user-adjustable 12/13/15px).
+Never introduce a webfont; the system stack is deliberate.
+
+## 4. Component Stylings
+
+- **Buttons** (`ui.Button`): heights 28px (`sm`, icon) / 32px (`md`); radius 6px.
+  Variants: `primary` (accent fill, subtle 1px shadow), `secondary`
+  (surface-2 fill + strong border), `ghost` (text-only, surface-2 on hover),
+  `danger` (10% destructive tint). Focus: 2px ring in `--ring`. Disabled: 50%
+  opacity, no pointer events.
+- **Inputs / Textareas**: 32px tall, `surface-2` fill, 1px `--input` border,
+  radius 6px; focus swaps border to `ring/70` plus a 1px ring — no glow.
+- **Cards / list rows**: `surface` fill, 1px `--border`, radius 6–10px; hover
+  raises to `surface-2` and `--border-strong`. Clickable cards are
+  keyboard-operable (`role="button"`, `tabIndex=0`, Enter/Space — use
+  `cardButtonProps` from `lib/utils`). Row actions hidden until
+  hover **or focus-within**, never hover-only.
+- **Menus**: `elevated` fill, hairline edge (see §6), radius 6px, 13px items;
+  open focuses the first item, arrows cycle, Escape closes and restores focus,
+  `role="menu"`/`menuitem`.
+- **Modals**: `elevated`, radius 10px, hairline + soft shadow, 44px header
+  with 13px semibold title; scrim `black/40` with 2px backdrop blur. Escape
+  closes; focus is trapped and restored. Confirmations use the app modal,
+  never `window.confirm`.
+- **Toasts**: bottom-center, `elevated/90` with backdrop blur, status-tinted
+  border, 12px text.
+- **Icons**: lucide, 16px (`h-4`) in headers/toolbars, 14px (`h-3.5`) in dense
+  rows and inline actions. Nothing interactive below 14px. Icon-only buttons
+  always carry `aria-label` (and usually `title`).
+
+## 5. Layout Principles
+
+8px grid with 4px half-steps. Key measures:
+
+- Header bar: 48px (`h-12`) on every view, `data-tauri-drag-region`, left
+  padding 84px clears macOS traffic lights (centered via
+  `trafficLightPosition` in `tauri.conf.json`).
+- Side panels: Sources 280px default (drag 220–400), Studio 320px default
+  (drag 260–460); resizable via `ResizeHandle` (double-click resets).
+  Collapsed panels become 48px icon rails.
+- Chat column: content max-width 720px, 20px horizontal padding.
+- Panel padding: 16px (`px-4`) headers, 8px (`p-2`) list containers.
+- Progressive disclosure everywhere: hover/focus-revealed actions, collapsed
+  citations, "+ Add instructions" style inline expanders.
+
+## 6. Depth & Elevation
+
+Three surface steps (surface → surface-2 → elevated) do most of the work;
+shadows are reserved for true overlays.
+
+- Hairline edge for overlays (menus, modals): prefer
+  `box-shadow: 0 0 0 0.5px var(--border-strong), <soft ambient shadow>` over a
+  1px border — crisper on retina.
+- Primary buttons: `0 1px 2px rgba(0,0,0,0.3)` only.
+- No glows, no colored shadows, no inner shadows.
+- Overlay scrims: `black/40` + slight backdrop blur; overlays themselves may
+  use translucency + `backdrop-blur` (toasts) for a vibrancy feel.
+
+## 7. Do's and Don'ts
+
+Do:
+- Use semantic tokens for every color; test dark and light themes.
+- Make every action reachable by keyboard; keep focus visible (global
+  `:focus-visible` outline is on — don't suppress it without replacing it).
+- Guard global shortcuts with `shortcutBlocked()` and respect IME composition
+  (`isComposing`) in Enter handlers.
+- Keep text selectable only where content lives (`.selectable`, prose, inputs).
+- Respect `prefers-reduced-motion` for any animation beyond a fade.
+
+Don't:
+- Don't hardcode hex values, add webfonts, or use pure black/white fills.
+- Don't use bounce/elastic easing, animations >250ms, or decorative gradients.
+- Don't nest interactive elements (no buttons inside buttons).
+- Don't reveal actions on hover only — pair with `focus-within`.
+- Don't use text under 11px, interactive icons under 14px, or gray text on
+  colored fills.
+- Don't add new UI chrome when a surface step or hairline would do.
+
+## 8. Responsive Behavior
+
+Desktop-only Tauri window: min 1040×640, default 1280×820. The layout must
+stay usable at 1040px with both panels open at max width — the chat column
+flexes and its content column caps at 720px. Panels collapse to 48px rails
+rather than disappearing. No mobile breakpoints; instead, guarantee that
+every panel width within its drag bounds truncates gracefully (single-line
+truncation with `title` tooltips).
+
+## 9. Agent Prompt Guide
+
+Quick reference for agents building UI here:
+
+- "Use the app's design tokens" means Tailwind classes bound to the theme:
+  `bg-surface`, `bg-surface-2`, `bg-elevated`, `text-foreground`,
+  `text-muted-foreground`, `text-subtle-foreground`, `border-border`,
+  `border-border-strong`, `bg-primary`, `text-citation`, `text-destructive`,
+  `text-success`, `ring-ring`.
+- New buttons/inputs/modals/toasts/resize handles come from
+  `src/components/ui.tsx` — extend those, don't fork styles inline.
+- Clickable non-button elements: spread `cardButtonProps(onActivate)` and add
+  `cursor-pointer`; reveal row actions with
+  `opacity-0 group-hover:opacity-100 group-focus-within:opacity-100`.
+- New keyboard shortcuts: add the listener at the owning component, guard with
+  `shortcutBlocked(e)`, and register the shortcut in `SHORTCUTS` in
+  `SettingsDialog.tsx` so the Shortcuts tab stays truthful.
+- Text sizes: pick from 11/12/13/15/22px. Radii: `rounded-md` (6px) controls,
+  `rounded-lg` (10px) overlays/cards. Icons: `h-4` toolbar, `h-3.5` dense.
+- Example prompt: "Add a 'pin source' action to each source row: h-3.5 lucide
+  Pin icon button, hidden until hover/focus-within, aria-label with the source
+  title, confirm nothing, toast on success."

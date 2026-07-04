@@ -32,6 +32,7 @@ export function Button({
   variant?: ButtonVariant;
   size?: ButtonSize;
   loading?: boolean;
+  ref?: React.Ref<HTMLButtonElement>;
 }) {
   return (
     <button
@@ -54,7 +55,9 @@ export function Button({
 export function Input({
   className,
   ...props
-}: React.InputHTMLAttributes<HTMLInputElement>) {
+}: React.InputHTMLAttributes<HTMLInputElement> & {
+  ref?: React.Ref<HTMLInputElement>;
+}) {
   return (
     <input
       className={cn(
@@ -89,6 +92,66 @@ export function Textarea({
 
 export function Spinner({ className }: { className?: string }) {
   return <Loader2 className={cn("animate-spin", className)} />;
+}
+
+/**
+ * Drag strip on a side panel's inner edge for resizing. The panel must be
+ * `position: relative`. Reports the desired panel width on every pointer
+ * move; arrow keys nudge, double-click resets to the default width.
+ */
+export function ResizeHandle({
+  edge,
+  width,
+  defaultWidth,
+  onResize,
+  label,
+}: {
+  /** Which edge of the panel the handle sits on. */
+  edge: "right" | "left";
+  width: number;
+  defaultWidth: number;
+  onResize: (width: number) => void;
+  label: string;
+}) {
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const panel = e.currentTarget.parentElement;
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    const move = (ev: PointerEvent) => {
+      onResize(edge === "right" ? ev.clientX - rect.left : rect.right - ev.clientX);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.style.cursor = "";
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    document.body.style.cursor = "col-resize";
+  };
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={label}
+      tabIndex={0}
+      onPointerDown={onPointerDown}
+      onDoubleClick={() => onResize(defaultWidth)}
+      onKeyDown={(e) => {
+        const grow = edge === "right" ? "ArrowRight" : "ArrowLeft";
+        const shrink = edge === "right" ? "ArrowLeft" : "ArrowRight";
+        if (e.key === grow) onResize(width + 16);
+        else if (e.key === shrink) onResize(width - 16);
+        else return;
+        e.preventDefault();
+      }}
+      className={cn(
+        "absolute inset-y-0 z-20 w-1.5 cursor-col-resize transition-colors hover:bg-ring/30 active:bg-ring/40 focus-visible:bg-ring/30",
+        edge === "right" ? "-right-[3px]" : "-left-[3px]",
+      )}
+    />
+  );
 }
 
 let modalSeq = 0;
@@ -155,7 +218,7 @@ export function Modal({
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 pt-[12vh] animate-in fade-in duration-150"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 backdrop-blur-[2px] pt-[12vh] animate-in fade-in duration-150"
       onMouseDown={onClose}
     >
       <div
@@ -165,12 +228,13 @@ export function Modal({
         aria-labelledby={titleId}
         tabIndex={-1}
         className={cn(
-          "flex max-h-[80vh] w-full flex-col rounded-lg border border-border-strong bg-elevated shadow-xl outline-none animate-in zoom-in-95 duration-150",
+          "flex max-h-[80vh] w-full flex-col rounded-lg bg-elevated outline-none animate-in zoom-in-95 duration-150",
+          "shadow-[0_0_0_0.5px_var(--border-strong),0_16px_48px_-8px_rgba(0,0,0,0.45)]",
           width,
         )}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="flex shrink-0 items-center justify-between border-b border-border px-4 h-11">
+        <div className="flex min-h-11 shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-2">
           <h2 id={titleId} className="text-[13px] font-semibold text-foreground">
             {title}
           </h2>
@@ -258,7 +322,7 @@ export function Toaster({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
         <div
           key={t.id}
           className={cn(
-            "pointer-events-auto flex max-w-[520px] items-start gap-2.5 rounded-lg border bg-elevated px-3.5 py-2.5 shadow-lg animate-in slide-in-from-bottom-2 fade-in duration-150",
+            "pointer-events-auto flex max-w-[520px] items-start gap-2.5 rounded-lg border bg-elevated/90 backdrop-blur-md px-3.5 py-2.5 shadow-lg animate-in slide-in-from-bottom-2 fade-in duration-150",
             border[t.kind],
           )}
         >

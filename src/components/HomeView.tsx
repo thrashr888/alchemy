@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useStore } from "@/lib/store";
 import { Button, Input, Modal, Badge, useConfirm } from "./ui";
 import { AlchemyHero } from "./AlchemyHero";
-import { cn, relativeTime, providerStatus } from "@/lib/utils";
+import { cn, relativeTime, providerStatus, cardButtonProps, shortcutBlocked } from "@/lib/utils";
 import {
   BookOpen,
   Plus,
@@ -31,12 +31,25 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
+  // Cmd/Ctrl+N: new notebook.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "n" && !shortcutBlocked(e)) {
+        e.preventDefault();
+        setNewTitle("");
+        setCreating(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // Backend already returns notebooks sorted by most-recently-updated.
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
       <header
         data-tauri-drag-region
-        className="flex items-center gap-2.5 h-14 border-b border-border pl-[84px] pr-5"
+        className="flex items-center gap-2.5 h-12 border-b border-border pl-[84px] pr-5"
       >
         <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/15 text-primary">
           <BookOpen className="h-4 w-4" />
@@ -125,6 +138,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               <div
                 key={nb.id}
                 onClick={() => open(nb.id)}
+                {...cardButtonProps(() => open(nb.id))}
                 className="group relative flex min-h-[132px] cursor-pointer flex-col rounded-lg border border-border bg-surface p-4 transition-colors hover:border-border-strong hover:bg-surface-2"
               >
                 <div className="mb-auto flex h-8 w-8 items-center justify-center rounded-lg bg-primary/12 text-primary">
@@ -142,7 +156,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   <span>{relativeTime(nb.updatedAt)}</span>
                 </div>
 
-                <div className="absolute right-2 top-2 flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
+                <div className="absolute right-2 top-2 flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
                   <button
                     className="rounded p-1 text-muted-foreground hover:bg-elevated hover:text-foreground"
                     onClick={(e) => {
@@ -150,8 +164,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                       setRenaming({ id: nb.id, title: nb.title });
                     }}
                     title="Rename"
+                    aria-label={`Rename "${nb.title}"`}
                   >
-                    <Pencil className="h-3 w-3" />
+                    <Pencil className="h-3.5 w-3.5" />
                   </button>
                   <button
                     className="rounded p-1 text-muted-foreground hover:bg-elevated hover:text-destructive"
@@ -168,8 +183,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                         remove(nb.id);
                     }}
                     title="Delete"
+                    aria-label={`Delete "${nb.title}"`}
                   >
-                    <Trash2 className="h-3 w-3" />
+                    <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 </div>
               </div>

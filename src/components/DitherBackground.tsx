@@ -60,12 +60,14 @@ export function DitherBackground({ themeKey, className }: { themeKey?: string; c
     let raf = 0;
     let last = 0;
     const startT = performance.now();
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const render = (now: number) => {
-      raf = requestAnimationFrame(render);
+      // Reduced motion: draw a single static frame instead of animating.
+      if (!reducedMotion) raf = requestAnimationFrame(render);
       if (now - last < 33) return;
       last = now;
       resize();
-      gl.uniform1f(uTime, (now - startT) / 1000);
+      gl.uniform1f(uTime, reducedMotion ? 0 : (now - startT) / 1000);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     };
     raf = requestAnimationFrame(render);

@@ -4,7 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { Button, Textarea, useConfirm } from "./ui";
 import { Markdown } from "./Markdown";
-import { cn, chatReadingClass } from "@/lib/utils";
+import { cn, chatReadingClass, cardButtonProps, shortcutBlocked } from "@/lib/utils";
 import { DitherBackground } from "./DitherBackground";
 import { AlchemySymbol } from "./AlchemyHero";
 import type { Citation, Message } from "@/lib/types";
@@ -73,6 +73,31 @@ export function ChatPanel() {
       unStep.then((fn) => fn());
     };
   }, [appendToken, appendStep]);
+
+  // Cmd/Ctrl+K: jump to the composer.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k" && !shortcutBlocked(e)) {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Jump straight to the latest message when a notebook's chat first loads —
+  // the near-bottom guard below would otherwise leave us stuck at the top.
+  const initialScrollDone = useRef(false);
+  useEffect(() => {
+    initialScrollDone.current = false;
+  }, [currentId]);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || initialScrollDone.current || messages.length === 0) return;
+    el.scrollTop = el.scrollHeight;
+    initialScrollDone.current = true;
+  }, [messages, currentId]);
 
   // Autoscroll on new content — but only when the user is already near the
   // bottom, so scrolling up to re-read mid-stream isn't yanked back down.
@@ -350,13 +375,13 @@ function MessageActions({ content }: { content: string }) {
   }
 
   return (
-    <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
+    <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
       <button
         onClick={copy}
         className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-surface-2 hover:text-foreground"
         title="Copy to clipboard"
       >
-        {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
+        {copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
         {copied ? "Copied" : "Copy"}
       </button>
       <button
@@ -364,7 +389,7 @@ function MessageActions({ content }: { content: string }) {
         className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-surface-2 hover:text-foreground"
         title="Save this response as a note"
       >
-        {saved ? <Check className="h-3 w-3 text-success" /> : <NotebookPen className="h-3 w-3" />}
+        {saved ? <Check className="h-3.5 w-3.5 text-success" /> : <NotebookPen className="h-3.5 w-3.5" />}
         {saved ? "Saved" : "Save as note"}
       </button>
     </div>
@@ -397,11 +422,12 @@ function Citations({ citations }: { citations: Citation[] }) {
       {open && (
         <div className="mt-2 flex flex-col gap-2">
           {citations.map((c, i) => (
-            <button
+            <div
               key={c.chunkId}
               onClick={() => openSourceViewer(c.sourceId, c.sourceTitle, c.snippet)}
+              {...cardButtonProps(() => openSourceViewer(c.sourceId, c.sourceTitle, c.snippet))}
               title="Open in the source, highlighted"
-              className="rounded-md border border-border bg-surface px-3 py-2 text-left transition-colors hover:border-border-strong hover:bg-surface-2"
+              className="cursor-pointer rounded-md border border-border bg-surface px-3 py-2 text-left transition-colors hover:border-border-strong hover:bg-surface-2"
             >
               <div className="mb-1 flex items-center gap-2 text-[11px]">
                 <span className="flex h-4 min-w-4 items-center justify-center rounded bg-primary/15 px-1 font-semibold text-citation">
@@ -409,23 +435,23 @@ function Citations({ citations }: { citations: Citation[] }) {
                 </span>
                 <span className="font-medium text-foreground/90 truncate">{c.sourceTitle}</span>
                 {urlOf(c.sourceId) && (
-                  <span
-                    role="link"
-                    className="ml-auto shrink-0 text-citation hover:underline"
+                  <button
+                    className="ml-auto shrink-0 rounded p-0.5 text-citation hover:underline"
                     title={`Open ${urlOf(c.sourceId)}`}
+                    aria-label={`Open ${urlOf(c.sourceId)} in browser`}
                     onClick={(e) => {
                       e.stopPropagation();
                       void openUrl(urlOf(c.sourceId));
                     }}
                   >
-                    <ExternalLink className="h-3 w-3" />
-                  </span>
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </button>
                 )}
               </div>
               <p className="text-[12px] leading-relaxed text-muted-foreground line-clamp-4 selectable">
                 {c.snippet}
               </p>
-            </button>
+            </div>
           ))}
         </div>
       )}
