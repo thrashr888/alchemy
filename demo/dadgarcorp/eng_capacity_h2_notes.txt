@@ -1,0 +1,19 @@
+H2 2026 ENGINEERING CAPACITY — PLANNING NOTES
+Elena Sokolov (VP Eng), drafted after July 3 leads sync. Rough numbers, do not circulate outside planning group.
+
+Headcount: 96 engineers total. Platform product eng 58, infra/SRE 17, security 6, data 9, internal tools 6.
+
+Q3 committed allocation (product eng, 58):
+- Environment Blueprints: 22 engineers (3 teams). This is the bet. No descoping without exec sign-off.
+- Enterprise identity (SSO/SCIM + role mapping): 11 engineers. Security review support included.
+- Audit/compliance (log export + evidence bundle): 8 engineers.
+- Keep-the-lights-on + escalations rotation: 9 engineers.
+- Migration tooling for 340 legacy-template accounts: 5 engineers. STAFFED LATE — started June 30, six weeks behind original plan. This is the schedule risk nobody is talking about. If migration tooling slips past Sept 1, GA either ships with a split experience or slips.
+- Unallocated/slack: 3 engineers (absorbed by interview load, honestly).
+
+Notes and concerns:
+1. SSO security review: internal review booked Aug 11-22. External pentest Aug 4. If pentest findings are worse than "medium", the Aug 18 GA-quality date for identity does not hold. I put the odds at 70/30 we hold.
+2. The Sept 15 GA date has NO buffer between RC (Sept 2) and GA. Last two releases each burned 2+ weeks between RC and GA on partner-found bugs. Flagged to Maya and Priya in the July 1 review; decision was to hold the date for the Meridian October deadline and accept the risk.
+3. Self-hosted (Northwind ask): zero engineers allocated in Q3. If we say yes for Q4, seed work (packaging spike, license server) needs 2 engineers by mid-August or Q4 becomes a planning fiction. Need a product decision by Aug 15.
+4. Hiring: 6 open reqs, offer-accept rate is decent (71%) but onboarding-to-productive is ~10 weeks. Nobody hired now helps Q3. Stop asking.
+5. On-call health: pages per shift down 30% since March. Protect this; it is why attrition is low (2 regretted departures in 12 months).
