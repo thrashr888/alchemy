@@ -71,7 +71,9 @@ export function Input({
 export function Textarea({
   className,
   ...props
-}: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+}: React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
+  ref?: React.Ref<HTMLTextAreaElement>;
+}) {
   return (
     <textarea
       className={cn(

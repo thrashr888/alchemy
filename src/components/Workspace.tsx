@@ -2,6 +2,7 @@ import { useStore } from "@/lib/store";
 import { SourcesPanel } from "./SourcesPanel";
 import { ChatPanel } from "./ChatPanel";
 import { StudioPanel } from "./StudioPanel";
+import { SourceViewer } from "./SourceViewer";
 import { SourcesRail, StudioRail } from "./SidebarRails";
 import { HealthBanner } from "./HealthBanner";
 import { Button } from "./ui";
@@ -47,6 +48,8 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
         <ChatPanel />
         {studioOpen ? <StudioPanel /> : <StudioRail />}
       </div>
+
+      <SourceViewer />
     </div>
   );
 }

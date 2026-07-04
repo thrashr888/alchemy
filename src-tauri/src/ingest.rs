@@ -266,7 +266,7 @@ pub fn looks_blocked(text: &str) -> Option<String> {
 }
 
 /// Add a scheme if the user typed a bare host like "example.com/article".
-fn normalize_url(input: &str) -> String {
+pub fn normalize_url(input: &str) -> String {
     let trimmed = input.trim();
     if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
         trimmed.to_string()

@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode } from "react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import { Button, Input, Textarea, Modal, EmptyState, Badge, Spinner, useConfirm } from "./ui";
 import { Markdown } from "./Markdown";
@@ -48,6 +48,26 @@ const DOCUMENTS: Artifact[] = [
   { kind: "skill", label: "Skill", icon: <Sparkles className="h-3.5 w-3.5" /> },
 ];
 
+/**
+ * Card preview text: skip a leading markdown heading (or a first line equal to
+ * the title) so the card doesn't repeat its own title, then flatten markdown.
+ */
+function notePreview(n: Note): string {
+  const lines = n.content.split("\n");
+  let i = 0;
+  while (i < lines.length && !lines[i].trim()) i++;
+  const first = (lines[i] ?? "").trim();
+  const firstText = first.replace(/^#+\s*/, "").replace(/[*_`]/g, "").trim();
+  if (first.startsWith("#") || firstText.toLowerCase() === n.title.trim().toLowerCase()) i++;
+  return lines
+    .slice(i)
+    .join(" ")
+    .replace(/[#*`>_]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 160);
+}
+
 const KIND_LABEL: Record<NoteKind, string> = {
   note: "Note",
   summary: "Summary",
@@ -68,6 +88,7 @@ export function StudioPanel() {
   const sources = useStore((s) => s.sources);
   const notes = useStore((s) => s.notes);
   const generatingKind = useStore((s) => s.generatingKind);
+  const artifactStreamText = useStore((s) => s.artifactStreamText);
   const generate = useStore((s) => s.generateArtifact);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
   const toggleStudio = useStore((s) => s.toggleStudio);
@@ -77,6 +98,9 @@ export function StudioPanel() {
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [viewing, setViewing] = useState<Note | null>(null);
+  // The user can hide the live preview without stopping the generation.
+  const [previewHidden, setPreviewHidden] = useState(false);
+  useEffect(() => setPreviewHidden(false), [generatingKind]);
 
   // A freshly generated note opens automatically so the result is visible where
   // the user clicked, not just appended to the list below.
@@ -119,7 +143,7 @@ export function StudioPanel() {
           <span>Generate</span>
           {generatingKind && (
             <button
-              onClick={() => cancelGeneration()}
+              onClick={() => cancelGeneration("artifact")}
               className="flex items-center gap-1 rounded px-1.5 py-0.5 text-destructive hover:bg-destructive/10"
               title="Stop generating"
             >
@@ -234,13 +258,16 @@ export function StudioPanel() {
                   </div>
                 </div>
                 <div className="mt-1 flex items-center gap-1.5">
-                  {n.kind !== "note" && <Badge>{KIND_LABEL[n.kind]}</Badge>}
+                  {n.kind !== "note" &&
+                    n.title.trim().toLowerCase() !== KIND_LABEL[n.kind].toLowerCase() && (
+                      <Badge>{KIND_LABEL[n.kind]}</Badge>
+                    )}
                   <span className="text-[11px] text-subtle-foreground">
                     {relativeTime(n.updatedAt)}
                   </span>
                 </div>
                 <p className="mt-1.5 line-clamp-2 text-[12px] leading-relaxed text-muted-foreground">
-                  {n.content.replace(/[#*`>_-]/g, "").slice(0, 160)}
+                  {notePreview(n)}
                 </p>
               </div>
             ))}
@@ -249,6 +276,29 @@ export function StudioPanel() {
       </div>
 
       <NoteViewer note={viewing} onClose={() => setViewing(null)} />
+
+      {/* Live preview of the in-flight generation (rebuilds stream inside the
+          note viewer instead, so only show this when no note is open). */}
+      <Modal
+        open={!!generatingKind && !viewing && !!artifactStreamText && !previewHidden}
+        onClose={() => setPreviewHidden(true)}
+        title={generatingKind ? `Generating ${KIND_LABEL[generatingKind]}…` : ""}
+        width="max-w-2xl"
+        footer={
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-2 text-[12px] text-muted-foreground">
+              <Spinner className="h-3.5 w-3.5" />
+              Streaming — closing this keeps generating
+            </span>
+            <Button variant="danger" onClick={() => cancelGeneration("artifact")}>
+              <Square className="h-3.5 w-3.5" />
+              Stop
+            </Button>
+          </div>
+        }
+      >
+        <StreamingBody text={artifactStreamText} />
+      </Modal>
 
       <Modal open={composing} onClose={() => setComposing(false)} title="New note" width="max-w-lg">
         <form
@@ -352,11 +402,26 @@ function CopyButton({
   );
 }
 
+/** Markdown that follows its own tail while tokens stream in. */
+function StreamingBody({ text }: { text: string }) {
+  const endRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: "end" });
+  }, [text]);
+  return (
+    <div>
+      <Markdown>{text}</Markdown>
+      <div ref={endRef} />
+    </div>
+  );
+}
+
 function NoteViewer({ note, onClose }: { note: Note | null; onClose: () => void }) {
   const updateNote = useStore((s) => s.updateNote);
   const rebuildNote = useStore((s) => s.rebuildNote);
   const convertNoteToSource = useStore((s) => s.convertNoteToSource);
   const generatingKind = useStore((s) => s.generatingKind);
+  const artifactStreamText = useStore((s) => s.artifactStreamText);
   // Track the live note so a rebuild's new content shows without reopening.
   const live = useStore((s) => (note ? s.notes.find((n) => n.id === note.id) ?? note : null));
   const [editing, setEditing] = useState(false);
@@ -407,7 +472,11 @@ function NoteViewer({ note, onClose }: { note: Note | null; onClose: () => void 
         ) : (
           <div className="flex flex-col gap-3">
             <div className="max-h-[60vh] overflow-y-auto pr-1">
-              <Markdown>{live.content}</Markdown>
+              {rebuilding && artifactStreamText ? (
+                <StreamingBody text={artifactStreamText} />
+              ) : (
+                <Markdown>{live.content}</Markdown>
+              )}
             </div>
             <div className="flex justify-end gap-2 border-t border-border pt-3">
               {live.kind !== "note" && (

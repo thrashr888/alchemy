@@ -72,6 +72,10 @@ interface AppState {
   toasts: Toast[];
   /** Id of a just-generated note, so the Studio panel can auto-open it. */
   justCreatedNoteId: string | null;
+  /** Streaming buffer for the in-flight Studio generation (artifact://token). */
+  artifactStreamText: string;
+  /** Source open in the reader, optionally scrolled to a cited passage. */
+  viewingSource: { sourceId: string; title: string; highlight?: string } | null;
 
   init: () => Promise<void>;
   refreshNotebooks: () => Promise<void>;
@@ -103,7 +107,9 @@ interface AppState {
   deleteSource: (id: string) => Promise<void>;
 
   sendMessage: (content: string) => Promise<void>;
-  cancelGeneration: () => void;
+  cancelGeneration: (scope?: "chat" | "artifact") => void;
+  openSourceViewer: (sourceId: string, title: string, highlight?: string) => void;
+  closeSourceViewer: () => void;
   appendToken: (t: string) => void;
   appendStep: (label: string) => void;
   toggleAgentMode: () => void;
@@ -211,6 +217,8 @@ export const useStore = create<AppState>((set, get) => {
   error: null,
   toasts: [],
   justCreatedNoteId: null,
+  artifactStreamText: "",
+  viewingSource: null,
 
   init: async () => {
     applyTheme(get().theme);
@@ -224,6 +232,11 @@ export const useStore = create<AppState>((set, get) => {
         if (finished) setTimeout(() => set({ embedderDownload: null }), 1500);
       },
     );
+    // Studio generations stream their tokens; buffer them for the live preview.
+    void listen<{ content: string }>("artifact://token", (e) => {
+      if (get().generatingKind)
+        set({ artifactStreamText: get().artifactStreamText + e.payload.content });
+    });
     const [notebooks, aiConfig, ollamaOk] = await Promise.all([
       api.listNotebooks(),
       api.getAiConfig(),
@@ -278,6 +291,7 @@ export const useStore = create<AppState>((set, get) => {
       followups: [],
       chatConfig,
       summary: localStorage.getItem(`summary:${id}`) ?? "",
+      viewingSource: null,
     });
     const [sources, messages, notes, reportSchedules] = await Promise.all([
       api.listSources(id),
@@ -289,7 +303,16 @@ export const useStore = create<AppState>((set, get) => {
   },
 
   closeNotebook: () =>
-    set({ currentId: null, sources: [], messages: [], notes: [], reportSchedules: [], ingestQueue: [], steps: [] }),
+    set({
+      currentId: null,
+      sources: [],
+      messages: [],
+      notes: [],
+      reportSchedules: [],
+      ingestQueue: [],
+      steps: [],
+      viewingSource: null,
+    }),
 
   setTheme: (theme) => {
     localStorage.setItem("theme", theme);
@@ -481,9 +504,13 @@ export const useStore = create<AppState>((set, get) => {
     }
   },
 
-  cancelGeneration: () => {
-    void api.cancelGeneration();
+  cancelGeneration: (scope) => {
+    void api.cancelGeneration(scope);
   },
+
+  openSourceViewer: (sourceId, title, highlight) =>
+    set({ viewingSource: { sourceId, title, highlight } }),
+  closeSourceViewer: () => set({ viewingSource: null }),
 
   appendToken: (t) => set({ streamingText: get().streamingText + t }),
 
@@ -537,7 +564,7 @@ export const useStore = create<AppState>((set, get) => {
   generateArtifact: async (kind, prompt) => {
     const id = get().currentId;
     if (!id || get().generatingKind) return;
-    set({ generatingKind: kind, error: null });
+    set({ generatingKind: kind, artifactStreamText: "", error: null });
     try {
       const note = await api.generateArtifact(id, kind, prompt);
       // Auto-open the new note so the outcome is visible where the user acted,
@@ -552,22 +579,24 @@ export const useStore = create<AppState>((set, get) => {
       if (msg.includes("Generation stopped")) get().pushToast("info", "Generation stopped");
       else set({ error: msg });
     } finally {
-      set({ generatingKind: null });
+      set({ generatingKind: null, artifactStreamText: "" });
     }
   },
 
   rebuildNote: async (note) => {
     const id = get().currentId;
     if (!id || get().generatingKind) return;
-    set({ generatingKind: note.kind, error: null });
+    set({ generatingKind: note.kind, artifactStreamText: "", error: null });
     try {
       const updated = await api.rebuildNote(note.id, id, note.kind, note.prompt);
       set({ notes: get().notes.map((n) => (n.id === updated.id ? updated : n)) });
       void notify("Rebuilt", `“${updated.title}” was regenerated.`);
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : String(e) });
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("Generation stopped")) get().pushToast("info", "Rebuild stopped");
+      else set({ error: msg });
     } finally {
-      set({ generatingKind: null });
+      set({ generatingKind: null, artifactStreamText: "" });
     }
   },
 

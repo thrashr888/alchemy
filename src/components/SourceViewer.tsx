@@ -1,0 +1,229 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { useStore } from "@/lib/store";
+import { api } from "@/lib/api";
+import { Modal, Input, Spinner } from "./ui";
+import { sourceIcon } from "./SourcesPanel";
+import { cn } from "@/lib/utils";
+import { ChevronDown, ChevronUp, ExternalLink, Search, X } from "lucide-react";
+
+const esc = (w: string) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Locate a chunk's text inside the full source content. Chunks are
+ * space-joined word windows while content keeps its newlines, so the match is
+ * whitespace-tolerant: find the first ~12 words, then the last ~12 words
+ * within the expected span.
+ */
+function locatePassage(content: string, snippet: string): [number, number] | null {
+  const words = snippet.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return null;
+  const head = new RegExp(words.slice(0, 12).map(esc).join("\\s+"));
+  const hm = head.exec(content);
+  if (!hm) return null;
+  const start = hm.index;
+  const fallbackEnd = Math.min(content.length, start + Math.round(snippet.length * 1.1));
+  if (words.length <= 12) return [start, Math.min(fallbackEnd, start + hm[0].length)];
+  // Look for the tail only within the window the chunk could occupy.
+  const window = content.slice(start, fallbackEnd + 200);
+  const tail = new RegExp(words.slice(-12).map(esc).join("\\s+"));
+  const tm = tail.exec(window);
+  const end = tm ? start + tm.index + tm[0].length : fallbackEnd;
+  return [start, end];
+}
+
+/** All case-insensitive occurrences of `query` in `content`. */
+function findMatches(content: string, query: string): [number, number][] {
+  if (query.trim().length < 2) return [];
+  const out: [number, number][] = [];
+  const hay = content.toLowerCase();
+  const needle = query.toLowerCase();
+  let i = hay.indexOf(needle);
+  while (i !== -1 && out.length < 500) {
+    out.push([i, i + needle.length]);
+    i = hay.indexOf(needle, i + needle.length);
+  }
+  return out;
+}
+
+/** Full-text reader for a source, scrolled to a cited passage or search hit. */
+export function SourceViewer() {
+  const viewing = useStore((s) => s.viewingSource);
+  const close = useStore((s) => s.closeSourceViewer);
+  const sources = useStore((s) => s.sources);
+  const [content, setContent] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(0);
+  const markRef = useRef<HTMLElement>(null);
+
+  const source = sources.find((s) => s.id === viewing?.sourceId);
+
+  useEffect(() => {
+    setContent(null);
+    setQuery("");
+    setActive(0);
+    if (!viewing) return;
+    let stale = false;
+    api
+      .getSourceContent(viewing.sourceId)
+      .then((text) => {
+        if (!stale) setContent(text);
+      })
+      .catch(() => {
+        if (!stale) setContent("");
+      });
+    return () => {
+      stale = true;
+    };
+  }, [viewing]);
+
+  const matches = useMemo(
+    () => (content ? findMatches(content, query) : []),
+    [content, query],
+  );
+  const passage = useMemo(
+    () =>
+      content && viewing?.highlight && !query.trim()
+        ? locatePassage(content, viewing.highlight)
+        : null,
+    [content, viewing, query],
+  );
+
+  // Highlight search matches when searching, else the cited passage.
+  const ranges: [number, number][] = query.trim() ? matches : passage ? [passage] : [];
+  const activeIdx = query.trim() ? Math.min(active, Math.max(0, matches.length - 1)) : 0;
+
+  // Bring the active highlight into view once content and ranges settle.
+  useEffect(() => {
+    markRef.current?.scrollIntoView({ block: "center" });
+  }, [content, activeIdx, query, passage]);
+
+  const step = (dir: 1 | -1) => {
+    if (matches.length === 0) return;
+    setActive((a) => (a + dir + matches.length) % matches.length);
+  };
+
+  const segments: { text: string; hit: boolean; current: boolean }[] = [];
+  if (content) {
+    let pos = 0;
+    ranges.forEach(([s, e], i) => {
+      if (s > pos) segments.push({ text: content.slice(pos, s), hit: false, current: false });
+      segments.push({ text: content.slice(s, e), hit: true, current: i === activeIdx });
+      pos = e;
+    });
+    if (pos < content.length)
+      segments.push({ text: content.slice(pos), hit: false, current: false });
+  }
+
+  return (
+    <Modal
+      open={!!viewing}
+      onClose={close}
+      title={source?.title ?? viewing?.title ?? ""}
+      width="max-w-3xl"
+    >
+      {viewing && (
+        <div className="flex h-[70vh] flex-col gap-3">
+          <div className="flex shrink-0 items-center gap-2">
+            {source && (
+              <span className="flex items-center gap-1.5 text-[11px] text-subtle-foreground">
+                {sourceIcon(source.sourceType)}
+                {source.chunkCount} chunks · {Intl.NumberFormat().format(source.charCount)} chars
+              </span>
+            )}
+            {source?.url && (
+              <button
+                className="inline-flex items-center gap-1 text-[11px] text-citation hover:underline"
+                onClick={() => void openUrl(source.url)}
+                title={source.url}
+              >
+                Open original
+                <ExternalLink className="h-3 w-3" />
+              </button>
+            )}
+            <div className="ml-auto flex items-center gap-1.5">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-subtle-foreground" />
+                <Input
+                  value={query}
+                  onChange={(e) => {
+                    setQuery(e.target.value);
+                    setActive(0);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") step(e.shiftKey ? -1 : 1);
+                  }}
+                  placeholder="Find in source…"
+                  className="h-7 w-52 pl-7 pr-7 text-[12px]"
+                />
+                {query && (
+                  <button
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+                    onClick={() => setQuery("")}
+                    aria-label="Clear search"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+              {query.trim() && (
+                <>
+                  <span className="text-[11px] tabular-nums text-subtle-foreground">
+                    {matches.length === 0 ? "0/0" : `${activeIdx + 1}/${matches.length}`}
+                  </span>
+                  <button
+                    className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40"
+                    onClick={() => step(-1)}
+                    disabled={matches.length === 0}
+                    aria-label="Previous match"
+                  >
+                    <ChevronUp className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40"
+                    onClick={() => step(1)}
+                    disabled={matches.length === 0}
+                    aria-label="Next match"
+                  >
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-border bg-surface-2/40 p-4">
+            {content === null ? (
+              <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+                <Spinner className="h-3.5 w-3.5" /> Loading source…
+              </div>
+            ) : content === "" ? (
+              <div className="text-[13px] text-muted-foreground">
+                No text stored for this source.
+              </div>
+            ) : (
+              <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/90 selectable">
+                {segments.map((seg, i) =>
+                  seg.hit ? (
+                    <mark
+                      key={i}
+                      ref={seg.current ? markRef : undefined}
+                      className={cn(
+                        "rounded-sm px-0.5 text-foreground",
+                        seg.current ? "bg-primary/40" : "bg-primary/20",
+                      )}
+                    >
+                      {seg.text}
+                    </mark>
+                  ) : (
+                    <span key={i}>{seg.text}</span>
+                  ),
+                )}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}

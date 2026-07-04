@@ -49,6 +49,7 @@ export function ChatPanel() {
   const failedInput = useStore((s) => s.failedInput);
   const { confirm, dialog: confirmDialog } = useConfirm();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // A failed send hands its text back — restore it into the composer so the
   // user can retry without retyping.
@@ -159,8 +160,10 @@ export function ChatPanel() {
                 <button
                   key={i}
                   onClick={() => {
-                    setDraft("");
-                    void send(q);
+                    // Fill the composer instead of firing immediately — the
+                    // user can tweak the question, or just hit Enter.
+                    setDraft(q);
+                    inputRef.current?.focus();
                   }}
                   className="flex items-start gap-2 rounded-lg border border-border bg-surface/60 px-3 py-2 text-left text-[13px] text-foreground/90 transition-colors hover:border-border-strong hover:bg-surface-2"
                 >
@@ -182,6 +185,7 @@ export function ChatPanel() {
             )}
           >
             <Textarea
+              ref={inputRef}
               rows={1}
               className="border-0 bg-transparent focus:ring-0 min-h-[24px] max-h-[180px] px-1.5 py-1"
               placeholder={
@@ -192,14 +196,15 @@ export function ChatPanel() {
                     : "Select or create a notebook"
               }
               value={draft}
-              disabled={!canChat || sending}
+              disabled={!canChat}
               onChange={(e) => {
                 setDraft(e.target.value);
                 e.target.style.height = "auto";
                 e.target.style.height = `${Math.min(e.target.scrollHeight, 180)}px`;
               }}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
+                // isComposing: don't send mid-IME-composition (CJK input).
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   submit();
                 }
@@ -220,7 +225,12 @@ export function ChatPanel() {
                 {agentMode ? "Deep research: on" : "Deep research: off"}
               </button>
               {sending ? (
-                <Button variant="secondary" size="icon" onClick={cancelGeneration} title="Stop">
+                <Button
+                  variant="secondary"
+                  size="icon"
+                  onClick={() => cancelGeneration("chat")}
+                  title="Stop"
+                >
                   <Square className="h-3.5 w-3.5" />
                 </Button>
               ) : (
@@ -288,6 +298,7 @@ function SummaryBanner({
 }
 
 function ChatMessage({ message }: { message: Message }) {
+  const openSourceViewer = useStore((s) => s.openSourceViewer);
   if (message.role === "user") {
     return (
       <div className="flex flex-col items-end gap-1">
@@ -300,7 +311,12 @@ function ChatMessage({ message }: { message: Message }) {
   return (
     <div className="group flex flex-col gap-2">
       <RoleLabel role="assistant" />
-      <Markdown>{message.content}</Markdown>
+      <Markdown
+        citations={message.citations}
+        onCitation={(c) => openSourceViewer(c.sourceId, c.sourceTitle, c.snippet)}
+      >
+        {message.content}
+      </Markdown>
       {message.citations.length > 0 && <Citations citations={message.citations} />}
       <MessageActions content={message.content} />
     </div>
@@ -367,6 +383,7 @@ function RoleLabel({ role }: { role: "assistant" | "user" }) {
 function Citations({ citations }: { citations: Citation[] }) {
   const [open, setOpen] = useState(false);
   const sources = useStore((s) => s.sources);
+  const openSourceViewer = useStore((s) => s.openSourceViewer);
   const urlOf = (sourceId: string) => sources.find((x) => x.id === sourceId)?.url || "";
   return (
     <div className="mt-1">
@@ -380,34 +397,35 @@ function Citations({ citations }: { citations: Citation[] }) {
       {open && (
         <div className="mt-2 flex flex-col gap-2">
           {citations.map((c, i) => (
-            <div
+            <button
               key={c.chunkId}
-              className="rounded-md border border-border bg-surface px-3 py-2"
+              onClick={() => openSourceViewer(c.sourceId, c.sourceTitle, c.snippet)}
+              title="Open in the source, highlighted"
+              className="rounded-md border border-border bg-surface px-3 py-2 text-left transition-colors hover:border-border-strong hover:bg-surface-2"
             >
               <div className="mb-1 flex items-center gap-2 text-[11px]">
                 <span className="flex h-4 min-w-4 items-center justify-center rounded bg-primary/15 px-1 font-semibold text-citation">
                   {i + 1}
                 </span>
-                {urlOf(c.sourceId) ? (
-                  <button
-                    className="truncate font-medium text-citation hover:underline"
+                <span className="font-medium text-foreground/90 truncate">{c.sourceTitle}</span>
+                {urlOf(c.sourceId) && (
+                  <span
+                    role="link"
+                    className="ml-auto shrink-0 text-citation hover:underline"
                     title={`Open ${urlOf(c.sourceId)}`}
-                    onClick={() => void openUrl(urlOf(c.sourceId))}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void openUrl(urlOf(c.sourceId));
+                    }}
                   >
-                    {c.sourceTitle}
-                    <ExternalLink className="ml-1 inline h-3 w-3 align-[-1px]" />
-                  </button>
-                ) : (
-                  <span className="font-medium text-foreground/90 truncate">{c.sourceTitle}</span>
+                    <ExternalLink className="h-3 w-3" />
+                  </span>
                 )}
-                <span className="ml-auto text-subtle-foreground">
-                  {(1 - c.distance).toFixed(2)}
-                </span>
               </div>
               <p className="text-[12px] leading-relaxed text-muted-foreground line-clamp-4 selectable">
                 {c.snippet}
               </p>
-            </div>
+            </button>
           ))}
         </div>
       )}
