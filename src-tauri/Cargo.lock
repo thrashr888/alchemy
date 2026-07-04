@@ -7812,9 +7812,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-debug-bridge"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2008f11772f93d8dab3fd990195329c268dd94006d686cb7bf6ff7edcf01ab93"
+checksum = "7918a8c2ae00d006a470979a09690a585278f8d825b249b20119a911e122ab49"
 dependencies = [
  "anyhow",
  "axum",
