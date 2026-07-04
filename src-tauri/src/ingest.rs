@@ -429,7 +429,7 @@ fn hidden_element_end(rest: &str, tag: &str, after_open: usize) -> Option<usize>
     }
     let name: String = tag
         .chars()
-        .take_while(|c| c.is_ascii_alphanumeric())
+        .take_while(|c| c.is_ascii_alphanumeric() || matches!(*c, '-' | ':' | '_'))
         .collect::<String>()
         .to_ascii_lowercase();
     if name.is_empty() || is_void_element(&name) {
@@ -502,12 +502,13 @@ fn is_void_element(name: &str) -> bool {
     )
 }
 
-/// Is the byte at `idx` an ASCII alphanumeric? Used as a tag-name boundary
-/// check so `<div` doesn't match `<divx`.
+/// Is the byte at `idx` a valid ASCII tag-name character? Used as a tag-name
+/// boundary check so `<div` doesn't match `<divx` and `<my-element` doesn't
+/// match `<my-element-extra`.
 fn next_is_alnum(s: &str, idx: usize) -> bool {
-    s.as_bytes()
-        .get(idx)
-        .is_some_and(|b| b.is_ascii_alphanumeric())
+    s.as_bytes().get(idx).is_some_and(|b| {
+        b.is_ascii_alphanumeric() || matches!(b, b'-' | b':' | b'_')
+    })
 }
 
 /// Collapse runs of blank (or whitespace-only) lines down to one blank line.
