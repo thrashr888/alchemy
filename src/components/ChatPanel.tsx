@@ -9,6 +9,7 @@ import { DitherBackground } from "./DitherBackground";
 import { AlchemySymbol } from "./AlchemyHero";
 import type { Citation, Message } from "@/lib/types";
 import {
+  ArrowDown,
   ArrowUp,
   Square,
   Eraser,
@@ -96,12 +97,34 @@ export function ChatPanel() {
 
   // Autoscroll on new content — but only when the user is already near the
   // bottom, so scrolling up to re-read mid-stream isn't yanked back down.
+  // `atBottom` also drives the "jump to latest" pill when content arrives
+  // off-screen.
+  const [atBottom, setAtBottom] = useState(true);
+  const updateAtBottom = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 120);
+  };
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
     if (nearBottom) el.scrollTo({ top: el.scrollHeight });
+    setAtBottom(nearBottom);
   }, [messages, streamingText, steps]);
+
+  // Sending your own message always jumps to it, even from deep in history —
+  // the near-bottom guard is for incoming content, not your own action.
+  useEffect(() => {
+    if (!sending) return;
+    const el = scrollRef.current;
+    el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [sending]);
+
+  const jumpToLatest = () => {
+    const el = scrollRef.current;
+    el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  };
 
   const canChat = !!currentId && sources.length > 0;
   const isBlank = messages.length === 0 && !sending;
@@ -143,7 +166,7 @@ export function ChatPanel() {
         </div>
       </div>
 
-      <div ref={scrollRef} className="relative z-10 flex-1 overflow-y-auto">
+      <div ref={scrollRef} onScroll={updateAtBottom} className="relative z-10 flex-1 overflow-y-auto">
         <div className={cn("mx-auto flex max-w-[720px] flex-col gap-6 px-5 py-6", chatReadingClass(reading))}>
           {canChat && (
             <SummaryBanner
@@ -194,6 +217,22 @@ export function ChatPanel() {
             </div>
           )}
         </div>
+
+        {!atBottom && !isBlank && (
+          <div className="pointer-events-none sticky bottom-3 z-20 flex justify-center">
+            <button
+              onClick={jumpToLatest}
+              className={cn(
+                "pointer-events-auto flex h-7 items-center gap-1.5 rounded-full border border-border-strong",
+                "bg-elevated/95 px-3 text-[11px] font-medium text-muted-foreground shadow-lg backdrop-blur",
+                "transition-colors hover:text-foreground",
+              )}
+            >
+              <ArrowDown className="h-3 w-3" />
+              {sending ? "New content below" : "Jump to latest"}
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="relative z-10 px-5 pb-5 pt-2">
