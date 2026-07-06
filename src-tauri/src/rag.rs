@@ -33,18 +33,22 @@ Rules:\n\
 - Use ONLY the information in the numbered excerpts below. Do not rely on outside knowledge.\n\
 - Cite every claim with bracketed numbers matching the excerpt, e.g. [1] or [2][3].\n\
 - If the excerpts do not contain the answer, say so plainly. Do not fabricate.\n\
-- Be concise and well-structured. Prefer short paragraphs and bullet lists.";
+- Be concise and well-structured. Prefer short paragraphs and bullet lists.\n\
+- Exception: when the user asks you to FIND or ADD sources, you may propose full, concrete URLs — \
+adapt the URLs of existing sources (e.g. change a search query in one) or use well-known sites. \
+List each proposed URL on its own line and tell the user to reply \"add those links\" to import them.";
 
 /// Build the chat message list from the retrieved citations and the question.
-/// The citation list passed in becomes excerpts [1..n] in order. `source_titles`
-/// is the full list of sources in the notebook, so the model can answer
-/// corpus-level questions ("what documents do we have?") even when top-k
-/// retrieval only surfaced chunks from a few of them.
+/// The citation list passed in becomes excerpts [1..n] in order. `sources` is
+/// the full (title, url) list for the notebook — url empty for local files —
+/// so the model can answer corpus-level questions ("what documents do we
+/// have?") even when top-k retrieval only surfaced chunks from a few of them,
+/// and can propose new addable URLs derived from existing ones.
 pub fn build_chat_messages(
     history: &[ChatTurn],
     question: &str,
     citations: &[Citation],
-    source_titles: &[String],
+    sources: &[(String, String)],
     extra_system: &str,
     persona: &str,
 ) -> Vec<ChatTurn> {
@@ -81,12 +85,18 @@ pub fn build_chat_messages(
     // A manifest of every source in the notebook. The excerpts below are only
     // the top matches for THIS question; this list is the whole corpus, so
     // "which documents are here?" is answerable without relying on retrieval.
-    let manifest = if source_titles.is_empty() {
+    let manifest = if sources.is_empty() {
         "(none)".to_string()
     } else {
-        source_titles
+        sources
             .iter()
-            .map(|t| format!("- {t}"))
+            .map(|(title, url)| {
+                if url.is_empty() {
+                    format!("- {title}")
+                } else {
+                    format!("- {title} — {url}")
+                }
+            })
             .collect::<Vec<_>>()
             .join("\n")
     };
@@ -95,7 +105,7 @@ pub fn build_chat_messages(
         "Sources in this notebook ({} total):\n{manifest}\n\n\
          Source excerpts (top matches for this question only):\n\n{context}\n---\n\n\
          Question: {question}",
-        source_titles.len()
+        sources.len()
     )));
     messages
 }
