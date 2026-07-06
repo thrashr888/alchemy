@@ -55,13 +55,15 @@ pub fn run() {
             let db = tauri::async_runtime::block_on(db::Db::open(&db_dir))
                 .expect("failed to open LanceDB");
 
-            // App menu with Open Recent seeded from the notebook list.
+            // App menu, built exactly once (rebuilding would clear AppKit's
+            // auto-managed Window list). Open Recent mutates in place later.
             let recents: Vec<(String, String)> =
                 tauri::async_runtime::block_on(db.list_notebooks())
                     .map(|nbs| nbs.into_iter().map(|n| (n.id, n.title)).collect())
                     .unwrap_or_default();
-            let app_menu = menu::build(&app.handle().clone(), &recents)?;
+            let (app_menu, recent_menu) = menu::build(&app.handle().clone(), &recents)?;
             app.set_menu(app_menu)?;
+            app.manage(menu::RecentMenu(recent_menu));
 
             let runtime = commands::ai_runtime(app.handle().clone(), data_dir.clone());
             app.manage(AppState {

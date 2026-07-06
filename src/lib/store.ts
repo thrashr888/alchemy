@@ -312,16 +312,22 @@ export const useStore = create<AppState>((set, get) => {
       if (get().generatingKind)
         set({ artifactStreamText: get().artifactStreamText + e.payload.content });
     });
-    // App-menu actions route here from the focused window's Rust side.
-    void listen<string>("menu://action", (e) => {
+    // App-menu actions broadcast to every window with the intended target's
+    // label in the payload — each window acts only on events addressed to it.
+    // (JS "Any" listeners receive every event regardless of emit target, so
+    // this self-filter is what actually prevents N windows from all reacting.)
+    const label = getCurrentWebview().label;
+    void listen<{ target: string; id: string }>("menu://action", (e) => {
+      if (e.payload.target !== label) return;
       const s = get();
-      if (e.payload === "menu-settings") s.openSettings();
-      else if (e.payload === "menu-about") s.openSettings("about");
-      else if (e.payload === "menu-search") s.togglePalette();
-      else if (e.payload === "menu-new-window") void api.newWindow();
+      if (e.payload.id === "menu-settings") s.openSettings();
+      else if (e.payload.id === "menu-about") s.openSettings("about");
+      else if (e.payload.id === "menu-search") s.togglePalette();
+      else if (e.payload.id === "menu-new-window") void api.newWindow();
     });
-    void listen<string>("menu://open-notebook", (e) => {
-      void get().selectNotebook(e.payload);
+    void listen<{ target: string; id: string }>("menu://open-notebook", (e) => {
+      if (e.payload.target !== label) return;
+      void get().selectNotebook(e.payload.id);
     });
   },
 

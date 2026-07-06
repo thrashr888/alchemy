@@ -2264,16 +2264,19 @@ pub async fn new_window(app: AppHandle, notebook_id: Option<String>) -> Result<(
     Ok(())
 }
 
-/// Rebuild the app menu so Open Recent reflects the current notebook list.
+/// Refresh Open Recent in place so it reflects the current notebook list.
+/// The menu itself is never rebuilt — that would clear the native Window list.
 #[tauri::command]
-pub async fn rebuild_app_menu(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn rebuild_app_menu(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    recent: State<'_, crate::menu::RecentMenu>,
+) -> Result<(), String> {
     let recents: Vec<(String, String)> = e(state.db.list_notebooks().await)?
         .into_iter()
         .map(|n| (n.id, n.title))
         .collect();
-    let menu = crate::menu::build(&app, &recents).map_err(|err| err.to_string())?;
-    app.set_menu(menu).map_err(|err| err.to_string())?;
-    Ok(())
+    crate::menu::fill_recents(&app, &recent.0, &recents).map_err(|err| err.to_string())
 }
 
 // ---- Home page: activity, stats, global search ----------------------------
