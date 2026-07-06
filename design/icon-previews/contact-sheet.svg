@@ -1,0 +1,58 @@
+<svg width="1720" height="860" viewBox="0 0 1720 860" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1720" height="860" fill="#0a0b0d"/>
+  <text x="32" y="48" fill="#eceef1" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="24" font-weight="600">Alchemy app icon directions</text>
+  <text x="32" y="78" fill="#8a8f98" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="16">Preview only: src-tauri/icons is untouched. Each direction is a 1024 SVG source.</text>
+
+  <g transform="translate(32 112)">
+    <rect width="320" height="360" rx="22" fill="#141518" stroke="#32353e"/>
+    <image href="current-icon.png" x="50" y="30" width="220" height="220"/>
+    <text x="22" y="286" fill="#eceef1" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="16" font-weight="500">Current</text>
+    <image href="current-icon.png" x="52" y="328" width="16" height="16"/>
+    <image href="current-icon.png" x="132" y="320" width="32" height="32"/>
+    <image href="current-icon.png" x="204" y="304" width="64" height="64"/>
+  </g>
+
+  <g transform="translate(370 112)">
+    <rect width="320" height="360" rx="22" fill="#141518" stroke="#32353e"/>
+    <image href="alchemy-icon-01-sigil-book.svg" x="50" y="30" width="220" height="220"/>
+    <text x="22" y="286" fill="#eceef1" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="16" font-weight="500">01 Sigil Book</text>
+    <image href="alchemy-icon-01-sigil-book.svg" x="52" y="328" width="16" height="16"/>
+    <image href="alchemy-icon-01-sigil-book.svg" x="132" y="320" width="32" height="32"/>
+    <image href="alchemy-icon-01-sigil-book.svg" x="204" y="304" width="64" height="64"/>
+  </g>
+
+  <g transform="translate(708 112)">
+    <rect width="320" height="360" rx="22" fill="#141518" stroke="#32353e"/>
+    <image href="alchemy-icon-02-crucible-pages.svg" x="50" y="30" width="220" height="220"/>
+    <text x="22" y="286" fill="#eceef1" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="16" font-weight="500">02 Crucible Pages</text>
+    <image href="alchemy-icon-02-crucible-pages.svg" x="52" y="328" width="16" height="16"/>
+    <image href="alchemy-icon-02-crucible-pages.svg" x="132" y="320" width="32" height="32"/>
+    <image href="alchemy-icon-02-crucible-pages.svg" x="204" y="304" width="64" height="64"/>
+  </g>
+
+  <g transform="translate(1046 112)">
+    <rect width="320" height="360" rx="22" fill="#141518" stroke="#32353e"/>
+    <image href="alchemy-icon-03-monogram-source.svg" x="50" y="30" width="220" height="220"/>
+    <text x="22" y="286" fill="#eceef1" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="16" font-weight="500">03 Monogram Source</text>
+    <image href="alchemy-icon-03-monogram-source.svg" x="52" y="328" width="16" height="16"/>
+    <image href="alchemy-icon-03-monogram-source.svg" x="132" y="320" width="32" height="32"/>
+    <image href="alchemy-icon-03-monogram-source.svg" x="204" y="304" width="64" height="64"/>
+  </g>
+
+  <g transform="translate(1384 112)">
+    <rect width="320" height="360" rx="22" fill="#141518" stroke="#32353e"/>
+    <image href="alchemy-icon-04-citation-orbit.svg" x="50" y="30" width="220" height="220"/>
+    <text x="22" y="286" fill="#eceef1" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="16" font-weight="500">04 Citation Orbit</text>
+    <image href="alchemy-icon-04-citation-orbit.svg" x="52" y="328" width="16" height="16"/>
+    <image href="alchemy-icon-04-citation-orbit.svg" x="132" y="320" width="32" height="32"/>
+    <image href="alchemy-icon-04-citation-orbit.svg" x="204" y="304" width="64" height="64"/>
+  </g>
+
+  <g transform="translate(32 528)" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif">
+    <text x="0" y="0" fill="#eceef1" font-size="18" font-weight="600">Read</text>
+    <text x="0" y="34" fill="#8a8f98" font-size="15">01 ties most directly to the existing blank-state sigil and research-book motif.</text>
+    <text x="0" y="62" fill="#8a8f98" font-size="15">02 is more object-like and distinct in the macOS dock, but less NotebookLM/research-specific.</text>
+    <text x="0" y="90" fill="#8a8f98" font-size="15">03 is the boldest small-size mark because the A survives at 16px.</text>
+    <text x="0" y="118" fill="#8a8f98" font-size="15">04 is the clearest document/citation metaphor, though the page lines may need simplification for tiny sizes.</text>
+  </g>
+</svg>

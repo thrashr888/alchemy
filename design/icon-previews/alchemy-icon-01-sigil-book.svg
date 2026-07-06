@@ -1,0 +1,35 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="150" y1="112" x2="876" y2="920" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#171a22"/>
+      <stop offset="0.52" stop-color="#232843"/>
+      <stop offset="1" stop-color="#5e6ad2"/>
+    </linearGradient>
+    <linearGradient id="stone" x1="400" y1="292" x2="628" y2="612" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fbebbc"/>
+      <stop offset="0.45" stop-color="#b99b59"/>
+      <stop offset="1" stop-color="#6f5523"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="24" stdDeviation="30" flood-color="#030407" flood-opacity="0.52"/>
+    </filter>
+  </defs>
+  <rect x="72" y="72" width="880" height="880" rx="210" fill="url(#bg)"/>
+  <path d="M138 208C242 138 402 118 548 154c178 45 300 178 326 340 26 164-52 310-190 378 120-88 160-232 106-374-60-158-220-260-398-254-102 4-192 40-254 96Z" fill="#ffffff" opacity=".06"/>
+  <g filter="url(#soft)" fill="none" stroke="#f5efe4" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="512" cy="468" r="292" stroke-width="20" opacity=".92"/>
+    <circle cx="512" cy="468" r="198" stroke-width="10" opacity=".62"/>
+    <path d="M512 186 756 608H268Z" stroke-width="14" opacity=".82"/>
+    <path d="M512 750 268 328h488Z" stroke-width="10" opacity=".45"/>
+  </g>
+  <g filter="url(#soft)">
+    <path d="M512 316 642 542H382Z" fill="url(#stone)"/>
+    <path d="M512 316 512 542 382 542Z" fill="#fff3c7" opacity=".33"/>
+    <path d="M512 316 642 542 512 542Z" fill="#3f3218" opacity=".22"/>
+  </g>
+  <g fill="none" stroke="#f8f7f2" stroke-linecap="round" stroke-linejoin="round" filter="url(#soft)">
+    <path d="M286 662c70-36 146-38 226-4 80-34 156-32 226 4v124c-70-36-146-38-226-4-80-34-156-32-226 4Z" fill="#101218" stroke-width="18"/>
+    <path d="M512 658v124" stroke-width="14"/>
+    <path d="M330 708c48-18 96-18 144 0M550 708c48-18 96-18 144 0" stroke-width="10" opacity=".72"/>
+  </g>
+</svg>

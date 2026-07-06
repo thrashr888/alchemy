@@ -24,11 +24,17 @@ struct MenuPayload {
     id: String,
 }
 
-/// Build the full app menu; returns it plus the Open Recent handle.
-pub fn build(
-    app: &AppHandle,
-    recents: &[(String, String)],
-) -> tauri::Result<(Menu<Wry>, Submenu<Wry>)> {
+/// The built menu plus the submenu handles that get touched after setup.
+pub struct AppMenu {
+    pub menu: Menu<Wry>,
+    pub recent: Submenu<Wry>,
+    pub window: Submenu<Wry>,
+}
+
+/// Build the full app menu. NOTE: mark `window` as the NSApp windows menu
+/// only AFTER `app.set_menu` — the underlying NSMenu doesn't exist until the
+/// menu is attached, so marking earlier silently assigns nothing.
+pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<AppMenu> {
     let settings = MenuItemBuilder::with_id("menu-settings", "Settings…")
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
@@ -85,16 +91,16 @@ pub fn build(
         .minimize()
         .maximize()
         .build()?;
-    // Hand the submenu to AppKit as THE windows menu: macOS then appends and
-    // maintains the list of open windows (titled per notebook) automatically.
-    #[cfg(target_os = "macos")]
-    window_menu.set_as_windows_menu_for_nsapp()?;
 
     let menu = Menu::with_items(
         app,
         &[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu],
     )?;
-    Ok((menu, recent_menu))
+    Ok(AppMenu {
+        menu,
+        recent: recent_menu,
+        window: window_menu,
+    })
 }
 
 /// Replace the Open Recent items in place (the menu itself is never rebuilt).
