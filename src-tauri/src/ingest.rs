@@ -79,6 +79,13 @@ pub fn extract_file(path: &str) -> Result<Extracted> {
             std::fs::read_to_string(path).context("failed to read markdown file")?,
         ),
         "xlsx" | "xls" | "xlsm" | "ods" => ("text".to_string(), extract_spreadsheet(path)?),
+        "csv" | "tsv" => {
+            let delim = if ext == "csv" { ',' } else { '\t' };
+            (
+                "text".to_string(),
+                delimited_to_rows(&read_text_lossy(path)?, delim),
+            )
+        }
         "docx" => ("text".to_string(), extract_docx(path)?),
         "pptx" => ("text".to_string(), extract_pptx(path)?),
         "txt" | "text" | "" => (
@@ -107,9 +114,17 @@ pub fn extract_file(path: &str) -> Result<Extracted> {
 
 /// Extract text from a spreadsheet (xlsx/xls/ods) — sheet by sheet, row by row.
 fn extract_spreadsheet(path: &str) -> Result<String> {
-    use calamine::{open_workbook_auto, Data, Reader};
-    let mut workbook =
-        open_workbook_auto(path).with_context(|| format!("failed to open spreadsheet {path}"))?;
+    let mut workbook = calamine::open_workbook_auto(path)
+        .with_context(|| format!("failed to open spreadsheet {path}"))?;
+    Ok(sheets_to_text(&mut workbook))
+}
+
+/// Render every sheet of an open workbook as "cell | cell | cell" rows.
+fn sheets_to_text<RS>(workbook: &mut calamine::Sheets<RS>) -> String
+where
+    RS: std::io::Read + std::io::Seek,
+{
+    use calamine::{Data, Reader};
     let mut out = String::new();
     for name in workbook.sheet_names() {
         let Ok(range) = workbook.worksheet_range(&name) else {
@@ -134,7 +149,34 @@ fn extract_spreadsheet(path: &str) -> Result<String> {
         }
         out.push('\n');
     }
-    Ok(out)
+    out
+}
+
+/// Read a file as UTF-8, replacing invalid bytes. Excel-exported CSVs are
+/// often Windows-1252 — importing with a few replacement characters beats
+/// failing the whole file.
+fn read_text_lossy(path: &str) -> Result<String> {
+    let bytes = std::fs::read(path).with_context(|| format!("failed to read {path}"))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Convert delimiter-separated text (CSV/TSV) into readable "a | b | c" rows.
+/// The csv crate handles RFC 4180 quoting, CRLF, and ragged rows.
+fn delimited_to_rows(text: &str, delim: char) -> String {
+    let mut rdr = csv::ReaderBuilder::new()
+        .delimiter(delim as u8)
+        .has_headers(false)
+        .flexible(true)
+        .from_reader(text.as_bytes());
+    let mut out = String::new();
+    for rec in rdr.records().flatten() {
+        let cells: Vec<&str> = rec.iter().collect();
+        if cells.iter().any(|c| !c.trim().is_empty()) {
+            out.push_str(&cells.join(" | "));
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// Read a single entry from a zip (Office files are zip archives).
@@ -239,6 +281,12 @@ pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
         .build()
         .context("failed to build HTTP client")?;
 
+    // Google editor documents can't be scraped (JS-rendered), but every kind
+    // has a public export endpoint that works for link-shared docs.
+    if let Some((kind, export_url)) = google_export(&url) {
+        return extract_google(&client, &url, kind, &export_url).await;
+    }
+
     let resp = client
         .get(&url)
         .send()
@@ -266,6 +314,204 @@ pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
         url,
         text,
     })
+}
+
+/// Kinds of Google editor documents reachable via their export endpoints.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum GoogleDocKind {
+    Doc,
+    Sheet,
+    Slides,
+}
+
+impl GoogleDocKind {
+    fn product(self) -> &'static str {
+        match self {
+            GoogleDocKind::Doc => "Google Doc",
+            GoogleDocKind::Sheet => "Google Sheet",
+            GoogleDocKind::Slides => "Google Slides deck",
+        }
+    }
+}
+
+/// Detect a docs.google.com editor URL and build its export endpoint.
+/// Export works without auth for documents shared "Anyone with the link".
+fn google_export(url: &str) -> Option<(GoogleDocKind, String)> {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let mut segs = rest.split(['/', '?', '#']);
+    if segs.next()? != "docs.google.com" {
+        return None;
+    }
+    let kind = match segs.next()? {
+        "document" => GoogleDocKind::Doc,
+        "spreadsheets" => GoogleDocKind::Sheet,
+        "presentation" => GoogleDocKind::Slides,
+        _ => return None,
+    };
+    // Skip the optional account selector (`/u/0/`) to reach the `d/<id>` pair.
+    let mut segs = segs.skip_while(|s| *s != "d");
+    segs.next()?; // "d"
+    let id = segs.next()?;
+    // Published-to-web links (`/d/e/2PACX-…/pub`) have no export endpoint —
+    // they are plain HTML, which the generic page scraper handles fine.
+    if id == "e"
+        || id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return None;
+    }
+    let export = match kind {
+        GoogleDocKind::Doc => {
+            format!("https://docs.google.com/document/d/{id}/export?format=txt")
+        }
+        GoogleDocKind::Sheet => {
+            format!("https://docs.google.com/spreadsheets/d/{id}/export?format=xlsx")
+        }
+        GoogleDocKind::Slides => {
+            format!("https://docs.google.com/presentation/d/{id}/export/txt")
+        }
+    };
+    Some((kind, export))
+}
+
+/// Is this a Google editor URL we ingest via export (plain text, not scraped
+/// HTML)? The bot-wall heuristics don't apply to these sources.
+pub fn is_google_doc_url(url: &str) -> bool {
+    google_export(url).is_some()
+}
+
+/// If `path` is a Google Drive desktop placeholder (.gdoc/.gsheet/.gslides),
+/// return the document's editor URL. These files are tiny JSON stubs — the
+/// real content lives in Google's cloud and is fetched via the export path.
+pub fn google_placeholder_url(path: &str) -> Option<String> {
+    let product = match Path::new(path)
+        .extension()?
+        .to_str()?
+        .to_lowercase()
+        .as_str()
+    {
+        "gdoc" => "document",
+        "gsheet" => "spreadsheets",
+        "gslides" => "presentation",
+        _ => return None,
+    };
+    placeholder_doc_url(product, &std::fs::read_to_string(path).ok()?)
+}
+
+/// Parse a placeholder's JSON into an editor URL. Newer stubs carry `doc_id`;
+/// older ones a `url` of the form `…/open?id=<id>`.
+fn placeholder_doc_url(product: &str, json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let id = v
+        .get("doc_id")
+        .and_then(|d| d.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            let url = v.get("url")?.as_str()?;
+            let (_, after) = url.split_once("id=")?;
+            let id = after.split('&').next().unwrap_or(after);
+            (!id.is_empty()).then(|| id.to_string())
+        })?;
+    Some(format!("https://docs.google.com/{product}/d/{id}/edit"))
+}
+
+/// Fetch a Google Doc/Sheet/Slides via its export endpoint.
+async fn extract_google(
+    client: &reqwest::Client,
+    original_url: &str,
+    kind: GoogleDocKind,
+    export_url: &str,
+) -> Result<Extracted> {
+    let denied = || {
+        anyhow!(
+            "This {} isn't accessible — it may be private or deleted. If it's yours, \
+             set sharing to \"Anyone with the link\" and try again.",
+            kind.product()
+        )
+    };
+    let resp = client
+        .get(export_url)
+        .send()
+        .await
+        .with_context(|| format!("could not reach {export_url}"))?;
+    // Private docs redirect the export endpoint to a Google sign-in page.
+    if resp
+        .url()
+        .host_str()
+        .is_some_and(|h| h.contains("accounts.google"))
+    {
+        return Err(denied());
+    }
+    let status = resp.status();
+    if matches!(status.as_u16(), 401 | 403 | 404) {
+        return Err(denied());
+    }
+    if !status.is_success() {
+        return Err(anyhow!("{export_url} returned HTTP {}", status.as_u16()));
+    }
+    // The export filename carries the document's real title.
+    let title = title_from_content_disposition(resp.headers())
+        .unwrap_or_else(|| kind.product().to_string());
+
+    let text = match kind {
+        GoogleDocKind::Sheet => {
+            let bytes = resp
+                .bytes()
+                .await
+                .context("failed to download spreadsheet")?;
+            // Bytes is AsRef<[u8]>, so the cursor reads it without a copy.
+            let mut workbook = calamine::open_workbook_auto_from_rs(std::io::Cursor::new(bytes))
+                .context("could not parse the exported spreadsheet")?;
+            sheets_to_text(&mut workbook)
+        }
+        _ => resp.text().await.context("failed to read export body")?,
+    };
+    let text = normalize(&text);
+    if text.trim().is_empty() {
+        return Err(anyhow!("this {} exported no text", kind.product()));
+    }
+    Ok(Extracted {
+        title,
+        source_type: "url".to_string(),
+        url: original_url.to_string(),
+        text,
+    })
+}
+
+/// Pull the filename out of a Content-Disposition header, minus its extension.
+fn title_from_content_disposition(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    let value = headers
+        .get(reqwest::header::CONTENT_DISPOSITION)?
+        .to_str()
+        .ok()?;
+    // Prefer the RFC 5987 UTF-8 form; fall back to the quoted filename.
+    let name = value
+        .split(';')
+        .find_map(|p| {
+            p.trim().strip_prefix("filename*=UTF-8''").map(|f| {
+                percent_encoding::percent_decode_str(f)
+                    .decode_utf8_lossy()
+                    .into_owned()
+            })
+        })
+        .or_else(|| {
+            value.split(';').find_map(|p| {
+                p.trim()
+                    .strip_prefix("filename=")
+                    .map(|f| f.trim_matches('"').to_string())
+            })
+        })?;
+    let stem = name
+        .rsplit_once('.')
+        .map(|(s, _)| s.to_string())
+        .unwrap_or(name);
+    let stem = stem.trim().to_string();
+    (!stem.is_empty()).then_some(stem)
 }
 
 /// Readability-style article extraction (drops nav, footers, comments, hidden
@@ -303,7 +549,14 @@ pub fn looks_blocked(text: &str) -> Option<String> {
             "Only {chars} characters extracted — the page may require login, block bots, or render with JavaScript."
         ));
     }
-    let lower = trimmed.to_lowercase();
+    blocked_marker(trimmed)
+}
+
+/// Marker-only variant of [`looks_blocked`], without the minimum-length
+/// heuristic — for text that came from an authoritative export (a tiny public
+/// Google Sheet is not a blocked page) but could still be an interstitial.
+pub fn blocked_marker(text: &str) -> Option<String> {
+    let lower = text.trim().to_lowercase();
     const MARKERS: &[&str] = &[
         "enable javascript",
         "verify you are human",
@@ -315,6 +568,8 @@ pub fn looks_blocked(text: &str) -> Option<String> {
         "sign in to continue",
         "log in to continue",
         "please log in",
+        "you need access",
+        "request access",
     ];
     if let Some(m) = MARKERS.iter().find(|m| lower.contains(**m)) {
         return Some(format!("The page looks blocked or gated (\"{m}\")."));
@@ -351,8 +606,140 @@ pub fn extract_pasted(title: &str, text: &str) -> Result<Extracted> {
     })
 }
 
-/// Split normalized text into overlapping word-window chunks.
-pub fn chunk_text(text: &str) -> Vec<String> {
+/// A chunk ready for storage. `text` is the verbatim slice of the source —
+/// it's what gets stored, shown as a citation snippet, and matched for
+/// click-to-highlight. `embed_text` is the same text prefixed with document
+/// and section context, so the vector carries topical signal (which doc,
+/// which section) that the raw words may lack.
+pub struct Chunk {
+    pub text: String,
+    pub embed_text: String,
+}
+
+fn word_count(s: &str) -> usize {
+    s.split_whitespace().count()
+}
+
+/// Split normalized text into structure-aware chunks: whole paragraphs are
+/// packed up to ~CHUNK_WORDS, markdown-style headings start a new chunk and
+/// become section context, and oversized paragraphs fall back to sentence
+/// (then word-window) splitting.
+pub fn chunk_text(title: &str, text: &str) -> Vec<Chunk> {
+    let make = |heading: &str, body: &str| -> Chunk {
+        let mut ctx = title.trim().to_string();
+        if !heading.is_empty() {
+            if !ctx.is_empty() {
+                ctx.push_str(" › ");
+            }
+            ctx.push_str(heading);
+        }
+        let body = body.trim().to_string();
+        let embed_text = if ctx.is_empty() {
+            body.clone()
+        } else {
+            format!("[{ctx}]\n{body}")
+        };
+        Chunk {
+            text: body,
+            embed_text,
+        }
+    };
+
+    let mut chunks: Vec<Chunk> = Vec::new();
+    let mut heading = String::new(); // current section heading
+    let mut cur = String::new(); // paragraphs packed into the pending chunk
+    let mut cur_words = 0usize;
+    let mut cur_heading = String::new(); // section the pending chunk started in
+
+    for para in text.split("\n\n") {
+        let p = para.trim();
+        if p.is_empty() {
+            continue;
+        }
+        let words = word_count(p);
+
+        // Markdown-style heading (including the "# Sheet:" / "# Slide N"
+        // markers our extractors emit): new section, new chunk.
+        if p.lines().count() == 1 && p.starts_with('#') {
+            if !cur.is_empty() {
+                chunks.push(make(&cur_heading, &cur));
+                cur.clear();
+            }
+            heading = p.trim_start_matches('#').trim().to_string();
+            cur_heading = heading.clone();
+            cur.push_str(p); // the heading line stays in the chunk verbatim
+            cur_words = words;
+            continue;
+        }
+
+        // A single paragraph bigger than a whole chunk: flush what's pending
+        // and split it by sentences (word windows as a last resort).
+        if words > CHUNK_WORDS {
+            if !cur.is_empty() {
+                chunks.push(make(&cur_heading, &cur));
+                cur.clear();
+                cur_words = 0;
+            }
+            for piece in split_oversized(p) {
+                chunks.push(make(&heading, &piece));
+            }
+            cur_heading = heading.clone();
+            continue;
+        }
+
+        if cur_words + words > CHUNK_WORDS && !cur.is_empty() {
+            chunks.push(make(&cur_heading, &cur));
+            cur.clear();
+            cur_words = 0;
+        }
+        if cur.is_empty() {
+            cur_heading = heading.clone();
+        } else {
+            cur.push_str("\n\n");
+        }
+        cur.push_str(p);
+        cur_words += words;
+    }
+    if !cur.trim().is_empty() {
+        chunks.push(make(&cur_heading, &cur));
+    }
+    chunks
+}
+
+/// Split an oversized paragraph at sentence-ish boundaries, packing sentences
+/// up to CHUNK_WORDS. A single run with no boundaries at all (minified text,
+/// giant table row) falls back to overlapping word windows.
+fn split_oversized(p: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut cur_words = 0usize;
+    for seg in p.split_inclusive(['.', '!', '?', '\n']) {
+        let words = word_count(seg);
+        if words > CHUNK_WORDS {
+            if !cur.trim().is_empty() {
+                out.push(cur.trim().to_string());
+                cur.clear();
+                cur_words = 0;
+            }
+            out.extend(word_windows(seg));
+            continue;
+        }
+        if cur_words + words > CHUNK_WORDS && !cur.trim().is_empty() {
+            out.push(cur.trim().to_string());
+            cur.clear();
+            cur_words = 0;
+        }
+        cur.push_str(seg);
+        cur_words += words;
+    }
+    if !cur.trim().is_empty() {
+        out.push(cur.trim().to_string());
+    }
+    out
+}
+
+/// Last-resort overlapping word windows for boundary-free text.
+fn word_windows(text: &str) -> Vec<String> {
     let words: Vec<&str> = text.split_whitespace().collect();
     if words.is_empty() {
         return vec![];
@@ -360,7 +747,6 @@ pub fn chunk_text(text: &str) -> Vec<String> {
     if words.len() <= CHUNK_WORDS {
         return vec![words.join(" ")];
     }
-
     let mut chunks = Vec::new();
     let step = CHUNK_WORDS - OVERLAP_WORDS;
     let mut start = 0;
@@ -605,23 +991,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn chunk_text_splits_and_overlaps() {
-        assert!(chunk_text("").is_empty());
-        let short = chunk_text("one two three");
-        assert_eq!(short.len(), 1);
+    fn chunk_text_packs_paragraphs_and_prefixes_context() {
+        assert!(chunk_text("Doc", "").is_empty());
 
+        // Small paragraphs pack into one chunk; text stays verbatim while the
+        // embed text carries the document title as context.
+        let chunks = chunk_text("My Doc", "first paragraph.\n\nsecond paragraph.");
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].text, "first paragraph.\n\nsecond paragraph.");
+        assert!(chunks[0].embed_text.starts_with("[My Doc]\n"));
+
+        // Headings start a new chunk and become section context.
+        let chunks = chunk_text("Guide", "intro text here.\n\n# Setup\n\nsetup steps.");
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks[1].text.starts_with("# Setup"));
+        assert!(chunks[1].embed_text.starts_with("[Guide › Setup]\n"));
+
+        // An oversized paragraph splits at sentence boundaries.
+        let long: String = (0..600).map(|i| format!("word{i}. ")).collect();
+        let chunks = chunk_text("Doc", &long);
+        assert!(chunks.len() >= 2, "oversized paragraph splits");
+        assert!(chunks.iter().all(|c| word_count(&c.text) <= CHUNK_WORDS));
+
+        // Boundary-free text falls back to overlapping word windows.
         let words = (0..900)
             .map(|i| format!("w{i}"))
             .collect::<Vec<_>>()
             .join(" ");
-        let chunks = chunk_text(&words);
+        let chunks = chunk_text("", &words);
         assert!(chunks.len() >= 3, "long text splits into multiple chunks");
-        // Consecutive chunks overlap (last words of one appear in the next).
-        let tail: Vec<&str> = chunks[0].split_whitespace().rev().take(5).collect();
+        let tail: Vec<&str> = chunks[0].text.split_whitespace().rev().take(5).collect();
         assert!(
-            tail.iter().any(|w| chunks[1].contains(*w)),
-            "chunks overlap"
+            tail.iter().any(|w| chunks[1].text.contains(*w)),
+            "windows overlap"
         );
+        // No title/heading → no context prefix.
+        assert_eq!(chunks[0].text, chunks[0].embed_text);
     }
 
     #[test]
@@ -745,5 +1150,92 @@ mod tests {
         let ex = extract_pasted("", "hello world").unwrap();
         assert_eq!(ex.title, "Pasted text");
         assert_eq!(ex.source_type, "text");
+    }
+
+    #[test]
+    fn google_export_detects_editor_urls() {
+        let (kind, export) =
+            google_export("https://docs.google.com/document/d/abc-123_X/edit#heading=h.1").unwrap();
+        assert_eq!(kind, GoogleDocKind::Doc);
+        assert_eq!(
+            export,
+            "https://docs.google.com/document/d/abc-123_X/export?format=txt"
+        );
+
+        let (kind, export) =
+            google_export("https://docs.google.com/spreadsheets/d/SHEET?usp=sharing").unwrap();
+        assert_eq!(kind, GoogleDocKind::Sheet);
+        assert!(export.ends_with("/SHEET/export?format=xlsx"));
+
+        // Account-selector form.
+        let (kind, _) =
+            google_export("https://docs.google.com/presentation/u/0/d/DECK/edit").unwrap();
+        assert_eq!(kind, GoogleDocKind::Slides);
+
+        assert!(google_export("https://docs.google.com/forms/d/abc/edit").is_none());
+        assert!(google_export("https://example.com/document/d/abc").is_none());
+        // Published-to-web links are plain HTML — leave them to the scraper.
+        assert!(google_export("https://docs.google.com/document/d/e/2PACX-abc123/pub").is_none());
+        assert!(is_google_doc_url("https://docs.google.com/document/d/abc"));
+        assert!(!is_google_doc_url("https://example.com"));
+    }
+
+    #[test]
+    fn placeholder_doc_url_parses_both_formats() {
+        // Newer Drive-for-desktop stubs carry doc_id.
+        let modern = r#"{"":"WARNING!","doc_id":"1A_blIDY","resource_key":"","email":"x@y.com"}"#;
+        assert_eq!(
+            placeholder_doc_url("document", modern).as_deref(),
+            Some("https://docs.google.com/document/d/1A_blIDY/edit")
+        );
+        // Older stubs carry a url with ?id=.
+        let legacy = r#"{"url":"https://docs.google.com/open?id=OLD123&x=1","email":"x@y.com"}"#;
+        assert_eq!(
+            placeholder_doc_url("spreadsheets", legacy).as_deref(),
+            Some("https://docs.google.com/spreadsheets/d/OLD123/edit")
+        );
+        assert!(placeholder_doc_url("document", "{}").is_none());
+        assert!(placeholder_doc_url("document", "not json").is_none());
+        assert!(google_placeholder_url("/tmp/notes.md").is_none());
+    }
+
+    #[test]
+    fn delimited_to_rows_handles_quoting() {
+        let csv = "name,note\n\"Doe, Jane\",\"said \"\"hi\"\"\"\nplain,row\n";
+        assert_eq!(
+            delimited_to_rows(csv, ','),
+            "name | note\nDoe, Jane | said \"hi\"\nplain | row\n"
+        );
+        // Blank rows are dropped; TSV uses tabs.
+        assert_eq!(
+            delimited_to_rows("a\tb\n\n\nc\td\n", '\t'),
+            "a | b\nc | d\n"
+        );
+    }
+
+    #[test]
+    fn content_disposition_title_prefers_utf8_form() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_DISPOSITION,
+            "attachment; filename=\"Plan B.txt\"; filename*=UTF-8''Plan%20%E2%9C%93.txt"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(
+            title_from_content_disposition(&headers).as_deref(),
+            Some("Plan ✓")
+        );
+
+        let mut plain = reqwest::header::HeaderMap::new();
+        plain.insert(
+            reqwest::header::CONTENT_DISPOSITION,
+            "attachment; filename=\"Roadmap.xlsx\"".parse().unwrap(),
+        );
+        assert_eq!(
+            title_from_content_disposition(&plain).as_deref(),
+            Some("Roadmap")
+        );
+        assert!(title_from_content_disposition(&reqwest::header::HeaderMap::new()).is_none());
     }
 }

@@ -15,7 +15,24 @@ use crate::models::Citation;
 use crate::rag;
 
 const MAX_STEPS: usize = 5;
+/// Results kept per search step, after reranking.
 const SEARCH_K: usize = 5;
+/// Hybrid-retrieval pool handed to the reranker.
+const SEARCH_POOL: usize = 20;
+
+/// Total budget (chars, ~4 chars/token) for `read` actions across the whole
+/// loop. This is the input handed to the distillation sub-call, so it is
+/// bounded by what one model call can absorb: local models have small
+/// contexts; gateway models can take far more. Also used by artifact
+/// generation to cap the input of its truncation-rescue distills.
+pub(crate) const READ_CHARS_LOCAL: usize = 12_000;
+pub(crate) const READ_CHARS_GATEWAY: usize = 120_000;
+/// Fallback excerpt size when the distiller fails — a raw head beats nothing.
+const READ_GIST_CHARS: usize = 1_500;
+/// Cap on a distilled read (the prompt asks for ~500 words; this guards
+/// runaway outputs). Distillates are re-sent in the planner transcript and
+/// persisted as the citation snippet, so they must stay small.
+const DISTILL_MAX_CHARS: usize = 4_000;
 
 #[derive(Serialize, Clone)]
 struct StepEvent {
@@ -43,6 +60,11 @@ pub async fn run(
     history: &[ChatTurn],
     extra_system: &str,
 ) -> Result<(String, Vec<Citation>, Option<crate::ai::GenStats>)> {
+    let mut read_remaining = if ollama.config().is_gateway() {
+        READ_CHARS_GATEWAY
+    } else {
+        READ_CHARS_LOCAL
+    };
     let sources = db.list_sources(notebook_id).await?;
     let source_list = sources
         .iter()
@@ -62,7 +84,16 @@ pub async fn run(
             Some(Action::Search(query)) => {
                 emit_step(app, format!("Searching: {query}"));
                 let qvec = ollama.embed_one(&query).await?;
-                let hits = db.search_chunks(notebook_id, qvec, SEARCH_K).await?;
+                let mut hits = db
+                    .search_chunks(notebook_id, qvec, &query, SEARCH_POOL)
+                    .await?;
+                // Retrieve wide, then let the model pick the few passages that
+                // actually answer — recall from hybrid search, precision from
+                // the rerank.
+                if hits.len() > SEARCH_K {
+                    emit_step(app, "Ranking results".into());
+                    hits = rerank(ollama, &query, hits).await;
+                }
                 transcript.push_str(&format!("SEARCH \"{query}\":\n"));
                 for h in &hits {
                     if seen.insert(h.chunk_id.clone()) {
@@ -83,11 +114,30 @@ pub async fn run(
                     .map(|s| s.title.clone())
                     .unwrap_or_else(|| "source".into());
                 emit_step(app, format!("Reading: {title}"));
-                let content = db.source_content(&source_id).await?;
-                transcript.push_str(&format!(
-                    "READ \"{title}\":\n{}\n\n",
-                    truncate(&content, 1500)
-                ));
+                // Later reads always get at least the gist even with the
+                // budget spent, so a read step is never a silent no-op.
+                let budget = read_remaining.max(READ_GIST_CHARS);
+                let content = truncate(&db.source_content(&source_id).await?, budget);
+                read_remaining = read_remaining.saturating_sub(content.chars().count());
+                // RLM-style sub-read: a separate model call distills the
+                // document against the question into verbatim quotes, so a
+                // read contributes evidence — not bulk — to every later
+                // prompt. One distillate serves the planner transcript, the
+                // writer excerpt, and the persisted citation alike.
+                emit_step(app, format!("Distilling: {title}"));
+                let evidence = distill(ollama, question, &title, &content).await;
+                transcript.push_str(&format!("READ \"{title}\":\n{evidence}\n\n"));
+                let read_id = format!("read:{source_id}");
+                if seen.insert(read_id.clone()) {
+                    gathered.push(Citation {
+                        chunk_id: read_id,
+                        source_id: source_id.clone(),
+                        source_title: title,
+                        ordinal: 0,
+                        snippet: evidence,
+                        distance: 0.0,
+                    });
+                }
             }
             Some(Action::Stop) | None => break,
         }
@@ -98,7 +148,7 @@ pub async fn run(
     if gathered.is_empty() {
         emit_step(app, "Searching".into());
         let qvec = ollama.embed_one(question).await?;
-        gathered = db.search_chunks(notebook_id, qvec, 8).await?;
+        gathered = db.search_chunks(notebook_id, qvec, question, 8).await?;
     }
 
     emit_step(app, "Writing answer".into());
@@ -130,6 +180,64 @@ pub async fn run(
         .await?;
 
     Ok((outcome.text, gathered, outcome.stats))
+}
+
+/// Rerank a wide retrieval pool down to the SEARCH_K most relevant hits via
+/// one model call. Any failure (model error, unparseable output, bogus
+/// indices) falls back to the fusion order.
+pub(crate) async fn rerank(ai: &Ai, question: &str, hits: Vec<Citation>) -> Vec<Citation> {
+    let top = |hits: Vec<Citation>| hits.into_iter().take(SEARCH_K).collect::<Vec<_>>();
+
+    let snippets: Vec<(String, String)> = hits
+        .iter()
+        .map(|h| (h.source_title.clone(), truncate(&h.snippet, 300)))
+        .collect();
+    let messages = rag::build_rerank_messages(question, &snippets, SEARCH_K);
+    let raw = match ai.chat(&messages).await {
+        Ok(out) => out.text,
+        Err(_) => return top(hits),
+    };
+    let Some(json) = extract_json(&raw) else {
+        return top(hits);
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) else {
+        return top(hits);
+    };
+    let indices: Vec<usize> = value
+        .get("keep")
+        .and_then(|k| k.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_u64())
+                .map(|x| x as usize)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut used = HashSet::new();
+    let picked: Vec<Citation> = indices
+        .into_iter()
+        .take(SEARCH_K)
+        .filter(|&i| i < hits.len() && used.insert(i))
+        .map(|i| hits[i].clone())
+        .collect();
+    if picked.is_empty() {
+        top(hits)
+    } else {
+        picked
+    }
+}
+
+/// Distill one document against the question into verbatim quotes via a
+/// sub-call. On failure (model error, empty output) fall back to a raw head
+/// excerpt — a degraded read still beats an empty one. Shared with artifact
+/// generation, which distills content that won't fit its corpus budget.
+pub(crate) async fn distill(ai: &Ai, question: &str, title: &str, content: &str) -> String {
+    let messages = rag::build_distill_messages(question, title, content);
+    match ai.chat(&messages).await {
+        Ok(out) if !out.text.trim().is_empty() => truncate(out.text.trim(), DISTILL_MAX_CHARS),
+        _ => truncate(content, READ_GIST_CHARS),
+    }
 }
 
 fn emit_step(app: &AppHandle, label: String) {

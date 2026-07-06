@@ -55,9 +55,10 @@ async fn rag_round_trip() {
         stroma and fixes carbon dioxide into glucose. The overall products are glucose \
         and oxygen.";
     let extracted = ingest::extract_pasted("Photosynthesis basics", text).expect("extract");
-    let chunks = ingest::chunk_text(&extracted.text);
+    let chunks = ingest::chunk_text(&extracted.title, &extracted.text);
     assert!(!chunks.is_empty(), "produced chunks");
-    let embeddings = ai.embed(&chunks).await.expect("embed");
+    let embed_inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
+    let embeddings = ai.embed(&embed_inputs).await.expect("embed");
     assert_eq!(embeddings.len(), chunks.len(), "one vector per chunk");
     eprintln!(
         "embedded {} chunks, dim={}",
@@ -68,7 +69,7 @@ async fn rag_round_trip() {
     let chunk_tuples: Vec<(String, i32, String)> = chunks
         .iter()
         .enumerate()
-        .map(|(i, t)| (uuid::Uuid::new_v4().to_string(), i as i32, t.clone()))
+        .map(|(i, c)| (uuid::Uuid::new_v4().to_string(), i as i32, c.text.clone()))
         .collect();
     let source = Source {
         id: uuid::Uuid::new_v4().to_string(),
@@ -99,7 +100,15 @@ async fn rag_round_trip() {
         .unwrap()
         .pop()
         .unwrap();
-    let citations = db.search_chunks(&nb.id, qvec, 4).await.expect("search");
+    let citations = db
+        .search_chunks(
+            &nb.id,
+            qvec,
+            "Where do the light-dependent reactions happen?",
+            4,
+        )
+        .await
+        .expect("search");
     assert!(!citations.is_empty(), "retrieved at least one chunk");
     eprintln!(
         "top citation: \"{}\" (dist={:.3})",
@@ -128,7 +137,7 @@ async fn rag_round_trip() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The OpenAI-compatible client (IBM Bob path) verified against Ollama's own
+/// The OpenAI-compatible client (gateway path) verified against Ollama's own
 /// /v1 gateway — same wire protocol, zero mocks. Skips when Ollama is down.
 #[tokio::test]
 async fn openai_gateway_round_trip() {
@@ -203,12 +212,13 @@ async fn builtin_embedder_round_trip() {
 
     let text = "The light-dependent reactions occur in the thylakoid membranes. \
         The Calvin cycle occurs in the stroma. Ferrari builds sports cars in Maranello.";
-    let chunks = ingest::chunk_text(text);
-    let embeddings = ai.embed(&chunks).await.expect("embed");
+    let chunks = ingest::chunk_text("Biology notes", text);
+    let embed_inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
+    let embeddings = ai.embed(&embed_inputs).await.expect("embed");
     let tuples: Vec<(String, i32, String)> = chunks
         .iter()
         .enumerate()
-        .map(|(i, t)| (uuid::Uuid::new_v4().to_string(), i as i32, t.clone()))
+        .map(|(i, c)| (uuid::Uuid::new_v4().to_string(), i as i32, c.text.clone()))
         .collect();
     db.add_chunks(&nb_id, "src-1", &tuples, &embeddings)
         .await
@@ -218,7 +228,15 @@ async fn builtin_embedder_round_trip() {
         .embed_one("Where do light-dependent reactions happen?")
         .await
         .expect("embed query");
-    let hits = db.search_chunks(&nb_id, qvec, 2).await.expect("search");
+    let hits = db
+        .search_chunks(
+            &nb_id,
+            qvec,
+            "Where do light-dependent reactions happen?",
+            2,
+        )
+        .await
+        .expect("search");
     assert!(!hits.is_empty(), "retrieved chunks with builtin embeddings");
     assert!(
         hits[0].snippet.to_lowercase().contains("thylakoid"),

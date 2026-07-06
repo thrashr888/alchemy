@@ -188,9 +188,17 @@ pub async fn list_sources(
 }
 
 /// Flag URL sources whose extracted text looks like a bot wall / login / JS shell.
-fn classify(source_type: &str, text: &str) -> (String, String) {
+/// Google export endpoints return authoritative plain text (not scraped HTML),
+/// so a short public doc is not a blocked page — but an interstitial ("you
+/// need access") can still come through, so the marker check stays.
+fn classify(source_type: &str, url: &str, text: &str) -> (String, String) {
     if source_type == "url" {
-        if let Some(reason) = ingest::looks_blocked(text) {
+        let reason = if ingest::is_google_doc_url(url) {
+            ingest::blocked_marker(text)
+        } else {
+            ingest::looks_blocked(text)
+        };
+        if let Some(reason) = reason {
             return ("error".to_string(), reason);
         }
     }
@@ -225,19 +233,20 @@ async fn store_extracted(
     if let Some(title) = find_duplicate(state, notebook_id, &extracted.text).await? {
         anyhow::bail!("Already in this notebook as \"{title}\" — skipped duplicate");
     }
-    let chunks = ingest::chunk_text(&extracted.text);
+    let chunks = ingest::chunk_text(&extracted.title, &extracted.text);
+    let embed_inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
     let embeddings = {
         let ai = state.ai.read().await;
-        ai.embed(&chunks).await?
+        ai.embed(&embed_inputs).await?
     };
 
     let chunk_tuples: Vec<(String, i32, String)> = chunks
         .iter()
         .enumerate()
-        .map(|(i, text)| (new_id(), i as i32, text.clone()))
+        .map(|(i, c)| (new_id(), i as i32, c.text.clone()))
         .collect();
 
-    let (status, error) = classify(&extracted.source_type, &extracted.text);
+    let (status, error) = classify(&extracted.source_type, &extracted.url, &extracted.text);
     let source = Source {
         id: new_id(),
         notebook_id: notebook_id.to_string(),
@@ -400,7 +409,11 @@ pub async fn add_source_file(
     notebook_id: String,
     path: String,
 ) -> Result<Source, String> {
-    let mut extracted = if ingest::is_image(&path) {
+    let mut extracted = if let Some(url) = ingest::google_placeholder_url(&path) {
+        // Google Drive desktop placeholder — the content lives in the cloud;
+        // fetch it through the same export path as a pasted docs.google.com URL.
+        e(ingest::extract_url(&url).await)?
+    } else if ingest::is_image(&path) {
         e(extract_image(&state, &path).await)?
     } else if ingest::is_pdf(&path) {
         // Try fast text extraction; fall back to per-page OCR for scanned PDFs.
@@ -463,18 +476,21 @@ async fn reingest(
     existing: &Source,
     extracted: ingest::Extracted,
 ) -> anyhow::Result<Source> {
-    let chunks = ingest::chunk_text(&extracted.text);
+    let chunks = ingest::chunk_text(&extracted.title, &extracted.text);
+    let embed_inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
     let embeddings = {
         let ai = state.ai.read().await;
-        ai.embed(&chunks).await?
+        ai.embed(&embed_inputs).await?
     };
     let chunk_tuples: Vec<(String, i32, String)> = chunks
         .iter()
         .enumerate()
-        .map(|(i, text)| (new_id(), i as i32, text.clone()))
+        .map(|(i, c)| (new_id(), i as i32, c.text.clone()))
         .collect();
 
-    let (status, error) = classify(&existing.source_type, &extracted.text);
+    // Classify against the stored URL: text edits arrive via extract_pasted
+    // with an empty extracted.url, which would drop the Google-doc exemption.
+    let (status, error) = classify(&existing.source_type, &existing.url, &extracted.text);
     let updated = Source {
         id: existing.id.clone(),
         notebook_id: existing.notebook_id.clone(),
@@ -606,15 +622,16 @@ pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u
                 title: title.clone(),
             },
         );
-        let chunks = ingest::chunk_text(content);
+        let chunks = ingest::chunk_text(title, content);
         if chunks.is_empty() {
             continue;
         }
-        let embeddings = e(ai.embed(&chunks).await)?;
+        let embed_inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
+        let embeddings = e(ai.embed(&embed_inputs).await)?;
         let tuples: Vec<(String, i32, String)> = chunks
             .iter()
             .enumerate()
-            .map(|(j, text)| (new_id(), j as i32, text.clone()))
+            .map(|(j, c)| (new_id(), j as i32, c.text.clone()))
             .collect();
         e(state
             .db
@@ -1598,7 +1615,10 @@ pub async fn send_message(
         let ai = state.ai.read().await;
         e(ai.embed_one(&content).await)?
     };
-    let citations = e(state.db.search_chunks(&notebook_id, query_vec, 8).await)?;
+    let citations = e(state
+        .db
+        .search_chunks(&notebook_id, query_vec, &content, 8)
+        .await)?;
 
     // Full source manifest so corpus-level questions are answerable regardless
     // of which chunks the top-k search happened to surface.
@@ -1869,12 +1889,8 @@ async fn generate_content(
     // Budget the corpus fairly across sources (waterfill): every source is
     // represented, small ones donate unused budget to large ones. A blunt
     // head-truncation previously dropped later sources entirely.
-    let provider = { state.ai.read().await.config().provider.clone() };
-    let budget: usize = if provider == "openai" {
-        150_000
-    } else {
-        24_000
-    };
+    let is_gateway = { state.ai.read().await.config().is_gateway() };
+    let budget: usize = if is_gateway { 150_000 } else { 24_000 };
 
     let mut contents = Vec::with_capacity(sources.len());
     for s in &sources {
@@ -1900,15 +1916,33 @@ async fn generate_content(
         remaining -= alloc[i];
     }
 
+    // The distiller can only absorb so much of an over-budget source's tail.
+    let distill_cap = if is_gateway {
+        crate::agent::READ_CHARS_GATEWAY
+    } else {
+        crate::agent::READ_CHARS_LOCAL
+    };
     let mut corpus = String::new();
     for (i, (heading, full)) in contents.iter().enumerate() {
+        let total = full.chars().count();
+        if total <= alloc[i] {
+            corpus.push_str(&format!("{heading}\n\n{full}\n\n"));
+            continue;
+        }
+        // Over budget: keep the head that fits, then distill the part that
+        // would have been dropped against the instruction, so a truncated
+        // source still contributes its relevant passages instead of silently
+        // losing everything past the cut.
         let clipped: String = full.chars().take(alloc[i]).collect();
-        let marker = if full.chars().count() > alloc[i] {
-            "\n…[source truncated to fit context]"
-        } else {
-            ""
+        let tail: String = full.chars().skip(alloc[i]).take(distill_cap).collect();
+        let rescued = {
+            let ai = state.ai.read().await;
+            crate::agent::distill(&ai, &instruction, heading, &tail).await
         };
-        corpus.push_str(&format!("{heading}\n\n{clipped}{marker}\n\n"));
+        corpus.push_str(&format!(
+            "{heading}\n\n{clipped}\n…[source truncated to fit context; key passages from the \
+             remainder:]\n{rescued}\n\n"
+        ));
     }
     let persona = {
         let ai = state.ai.read().await;
@@ -2337,16 +2371,21 @@ pub async fn check_models(state: State<'_, AppState>) -> Result<ModelHealth, Str
     };
 
     let vision = if cfg.provider == "openai" {
-        let name = if cfg.openai_vision_model.trim().is_empty() {
-            "sonnet-4.6".to_string()
+        let name = cfg.openai_vision_model.trim().to_string();
+        if name.is_empty() {
+            ModelStatus {
+                name,
+                installed: false,
+                working: false,
+                detail: "Not configured (optional — enables image & scanned-PDF OCR)".into(),
+            }
         } else {
-            cfg.openai_vision_model.trim().to_string()
-        };
-        ModelStatus {
-            name: name.clone(),
-            installed: true,
-            working: true,
-            detail: format!("Via IBM Bob ({name})"),
+            ModelStatus {
+                name: name.clone(),
+                installed: true,
+                working: true,
+                detail: format!("Via gateway ({name})"),
+            }
         }
     } else if cfg.vision_model.trim().is_empty() {
         ModelStatus {

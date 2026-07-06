@@ -4,7 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { Button, Textarea, useConfirm } from "./ui";
 import { Markdown } from "./Markdown";
-import { cn, chatReadingClass, cardButtonProps, shortcutBlocked } from "@/lib/utils";
+import { cn, chatReadingClass, cardButtonProps } from "@/lib/utils";
 import { DitherBackground } from "./DitherBackground";
 import { AlchemySymbol } from "./AlchemyHero";
 import type { Citation, Message } from "@/lib/types";
@@ -74,16 +74,11 @@ export function ChatPanel() {
     };
   }, [appendToken, appendStep]);
 
-  // Cmd/Ctrl+K: jump to the composer.
+  // "Focus the chat composer" command from the Cmd+K menu.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k" && !shortcutBlocked(e)) {
-        e.preventDefault();
-        inputRef.current?.focus();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    const onFocus = () => inputRef.current?.focus();
+    window.addEventListener("nb:focus-composer", onFocus);
+    return () => window.removeEventListener("nb:focus-composer", onFocus);
   }, []);
 
   // Jump straight to the latest message when a notebook's chat first loads —
@@ -499,7 +494,7 @@ function ThinkingDots() {
 
 function ChatEmpty({ hasNotebook, hasSources }: { hasNotebook: boolean; hasSources: boolean }) {
   const aiConfig = useStore((s) => s.aiConfig);
-  const via = aiConfig?.provider === "openai" ? "via IBM Bob" : "locally with Ollama";
+  const via = aiConfig?.provider === "openai" ? "via your gateway" : "locally with Ollama";
   return (
     <div className="flex min-h-[62vh] flex-col items-center justify-center gap-4 text-center">
       <AlchemySymbol className="h-16 w-16 text-citation/60" />

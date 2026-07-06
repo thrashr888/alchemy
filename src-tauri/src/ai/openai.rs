@@ -1,5 +1,6 @@
-//! Minimal OpenAI-compatible chat client (IBM Bob gateway, LM Studio, vLLM,
-//! LiteLLM, or Ollama's own /v1). Bearer-token auth, SSE streaming.
+//! Minimal OpenAI-compatible chat client (LM Studio, vLLM, LiteLLM-style
+//! enterprise gateways, or Ollama's own /v1). Bearer-token auth by default,
+//! with automatic handling of LiteLLM-style static-key schemes; SSE streaming.
 
 use anyhow::{anyhow, Context, Result};
 use futures_util::StreamExt;
@@ -13,12 +14,13 @@ pub struct OpenAiClient {
     base_url: String,
     api_key: String,
     model: String,
-    /// Bob instance/team headers, fetched once from /admin/v1/profile.
-    bob_ctx: std::sync::Arc<tokio::sync::OnceCell<Option<BobContext>>>,
+    /// Gateway instance/team headers, fetched once from /admin/v1/profile
+    /// (LiteLLM-style gateways that resolve billing from them).
+    team_ctx: std::sync::Arc<tokio::sync::OnceCell<Option<TeamContext>>>,
 }
 
 #[derive(Clone)]
-struct BobContext {
+struct TeamContext {
     instance_id: String,
     team_id: String,
 }
@@ -29,11 +31,12 @@ impl OpenAiClient {
             .timeout(std::time::Duration::from_secs(600))
             .build()
             .expect("failed to build reqwest client");
-        // Empty base falls back to Bob's gateway here too, so no caller can
-        // construct a client that builds relative (schemeless) request URLs.
+        // An unset base stays a clearly-invalid placeholder host so request
+        // errors read as "configure the gateway URL", never as a panic on a
+        // relative (schemeless) URL.
         let base = base_url.trim().trim_end_matches('/');
         let base = if base.is_empty() {
-            super::DEFAULT_GATEWAY_URL
+            "http://gateway-url-not-set.invalid/v1"
         } else {
             base
         };
@@ -42,18 +45,19 @@ impl OpenAiClient {
             base_url: base.to_string(),
             api_key: api_key.to_string(),
             model: model.to_string(),
-            bob_ctx: std::sync::Arc::new(tokio::sync::OnceCell::new()),
+            team_ctx: std::sync::Arc::new(tokio::sync::OnceCell::new()),
         }
     }
 
-    /// Bob's chat backend resolves the caller's "team user" from
+    /// Some LiteLLM-style gateways resolve the caller's "team user" from
     /// x-instance-id / x-team-id headers. Fetch the first instance+team from
-    /// the profile endpoint once per client; None for non-Bob gateways.
-    async fn bob_context(&self) -> Option<BobContext> {
-        if !self.base_url.contains("bob.ibm.com") || self.api_key.is_empty() {
+    /// the profile endpoint once per client; None everywhere else (detected
+    /// by the gateway's static-key format).
+    async fn team_context(&self) -> Option<TeamContext> {
+        if !self.api_key.trim().starts_with("bob_") {
             return None;
         }
-        self.bob_ctx
+        self.team_ctx
             .get_or_init(|| async {
                 let url = reqwest::Url::parse(&self.base_url).ok()?;
                 let origin = format!(
@@ -80,7 +84,7 @@ impl OpenAiClient {
                     .and_then(|t| t["id"].as_str())
                     .unwrap_or_default()
                     .to_string();
-                Some(BobContext {
+                Some(TeamContext {
                     instance_id,
                     team_id,
                 })
@@ -89,9 +93,9 @@ impl OpenAiClient {
             .clone()
     }
 
-    /// Attach Bob team headers when applicable.
-    async fn with_bob_headers(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        if let Some(ctx) = self.bob_context().await {
+    /// Attach gateway team headers when applicable.
+    async fn with_team_headers(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(ctx) = self.team_context().await {
             req = req.header("x-instance-id", &ctx.instance_id);
             if !ctx.team_id.is_empty() {
                 req = req.header("x-team-id", &ctx.team_id);
@@ -108,19 +112,20 @@ impl OpenAiClient {
         self.apply_auth(self.http.post(self.url(path)))
     }
 
-    /// Bob Shell's auth scheme: JWT-shaped tokens use `Bearer`; static keys
-    /// (bob_…) use `Apikey` plus `X-API-KEY` on Bob hosts. Non-Bob gateways
-    /// keep the standard Bearer scheme.
+    /// Standard Bearer auth, except for LiteLLM-style static keys (`bob_…`),
+    /// which expect `Apikey` plus `X-API-KEY`; JWT-shaped tokens always use
+    /// Bearer. Detected from the key format so any host works.
     fn apply_auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         let key = self.api_key.trim();
         if key.is_empty() {
             return req;
         }
-        if looks_like_jwt(key) || !self.base_url.contains("bob.ibm.com") {
-            return req.bearer_auth(key);
+        if key.starts_with("bob_") && !looks_like_jwt(key) {
+            return req
+                .header("Authorization", format!("Apikey {key}"))
+                .header("X-API-KEY", key);
         }
-        req.header("Authorization", format!("Apikey {key}"))
-            .header("X-API-KEY", key)
+        req.bearer_auth(key)
     }
 
     /// Non-streaming completion. Token throughput is wall-clock based since
@@ -128,7 +133,7 @@ impl OpenAiClient {
     pub async fn chat(&self, messages: &[ChatTurn]) -> Result<ChatOutcome> {
         let started = std::time::Instant::now();
         let resp = self
-            .with_bob_headers(self.request("/chat/completions"))
+            .with_team_headers(self.request("/chat/completions"))
             .await
             .json(&json!({ "model": self.model, "messages": messages, "stream": false }))
             .send()
@@ -158,7 +163,7 @@ impl OpenAiClient {
     {
         let started = std::time::Instant::now();
         let resp = self
-            .with_bob_headers(self.request("/chat/completions"))
+            .with_team_headers(self.request("/chat/completions"))
             .await
             .json(&json!({
                 "model": self.model,
@@ -220,8 +225,7 @@ impl OpenAiClient {
     }
 
     /// OCR an image via a vision-capable chat model (OpenAI image_url parts;
-    /// LiteLLM translates for Anthropic/Google backends). Verified live against
-    /// Bob's sonnet models.
+    /// LiteLLM translates for Anthropic/Google backends).
     pub async fn ocr(&self, image_base64: &str, model: &str) -> Result<String> {
         use base64::Engine;
         let mime = base64::engine::general_purpose::STANDARD
@@ -232,7 +236,7 @@ impl OpenAiClient {
         let started = std::time::Instant::now();
         let _ = started;
         let resp = self
-            .with_bob_headers(self.request("/chat/completions"))
+            .with_team_headers(self.request("/chat/completions"))
             .await
             .timeout(std::time::Duration::from_secs(180))
             .json(&json!({
@@ -259,7 +263,7 @@ impl OpenAiClient {
     }
 
     /// Model ids from the gateway. Tries OpenAI's GET /models, then falls back
-    /// to LiteLLM's GET /model/info (IBM Bob's shape: data[].model_name).
+    /// to LiteLLM's GET /model/info (data[].model_name).
     pub async fn list_models(&self) -> Result<Vec<String>> {
         match self.get_json("/models").await {
             Ok(value) => {
@@ -300,7 +304,7 @@ impl OpenAiClient {
 
     async fn get_json(&self, path: &str) -> Result<serde_json::Value> {
         let req = self
-            .with_bob_headers(
+            .with_team_headers(
                 self.apply_auth(
                     self.http
                         .get(self.url(path))

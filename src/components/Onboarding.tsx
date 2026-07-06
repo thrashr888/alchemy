@@ -4,7 +4,7 @@ import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { AlchemySymbol } from "./AlchemyHero";
 import { Button, Input } from "./ui";
-import { cn, bobKeyLooksOff } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import type { ModelStatus } from "@/lib/types";
 import { Check, Copy, CheckCircle2, XCircle, Circle, RefreshCw } from "lucide-react";
 
@@ -128,7 +128,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
     await save({
       ...aiConfig,
       provider: "openai",
-      // Fully Bob mode: without Ollama, index sources with the built-in embedder.
+      // Gateway-only mode: without Ollama, index sources with the built-in embedder.
       embedder: health?.reachable ? aiConfig.embedder : "builtin",
       openaiBaseUrl: gwUrl.trim(),
       openaiApiKey: gwKey.trim(),
@@ -167,8 +167,8 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
           <p className="max-w-sm text-[13px] leading-relaxed text-muted-foreground">
             {provider === "openai" ? (
               <>
-                Connect your IBM Bob gateway. Your sources are indexed locally — only
-                your chat prompts are sent to Bob.
+                Connect an OpenAI-compatible gateway. Your sources are indexed
+                locally — only your chat prompts are sent to the gateway.
               </>
             ) : (
               <>
@@ -188,7 +188,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
         <div className="grid grid-cols-2 gap-1.5">
           {[
             { id: "ollama", label: "Ollama", note: "Local & private" },
-            { id: "openai", label: "IBM Bob", note: "Enterprise gateway" },
+            { id: "openai", label: "OpenAI-compatible", note: "Cloud or enterprise gateway" },
           ].map((pv) => (
             <button
               key={pv.id}
@@ -208,17 +208,17 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
 
         {provider === "openai" && (
           <div className="flex flex-col gap-1.5 rounded-lg border border-border-strong bg-surface px-4 py-3">
-            <span className="text-[13px] font-medium text-foreground">Bob gateway</span>
+            <span className="text-[13px] font-medium text-foreground">Gateway</span>
             <Input
               value={gwUrl}
               onChange={(e) => setGwUrl(e.target.value)}
-              placeholder="Gateway URL (empty = Bob default)"
+              placeholder="Gateway URL (usually ends in /v1)"
             />
             <Input
               type="password"
               value={gwKey}
               onChange={(e) => setGwKey(e.target.value)}
-              placeholder="API key — bob_prod_…"
+              placeholder="API key"
             />
             <div className="flex gap-1.5">
               {gwModels.length > 0 ? (
@@ -263,22 +263,9 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
                     : "text-subtle-foreground",
               )}
             >
-              {gwStatus ? (
-                gwStatus
-              ) : bobKeyLooksOff(gwUrl, gwKey) ? (
-                "Heads up: Bob keys start with bob_ — double-check you pasted the whole key."
-              ) : (
-                <>
-                  Stored locally; sent only to the gateway. Usage is billed to{" "}
-                  <button
-                    className="text-citation hover:underline"
-                    onClick={() => void openUrl("https://bob.ibm.com/admin/subscription")}
-                  >
-                    your Bob account
-                  </button>
-                  .
-                </>
-              )}
+              {gwStatus
+                ? gwStatus
+                : "Stored locally; sent only to the gateway you configure."}
             </span>
           </div>
         )}
@@ -303,7 +290,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
 
           <Step
             ok={provider === "openai" ? chat.working : health.reachable && chat.working}
-            title={provider === "openai" ? "IBM Bob connected" : "Chat model"}
+            title={provider === "openai" ? "Gateway connected" : "Chat model"}
             detail={
               provider === "openai"
                 ? chat.detail

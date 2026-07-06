@@ -8,6 +8,8 @@ mod pdf;
 mod rag;
 
 #[cfg(test)]
+mod evals;
+#[cfg(test)]
 mod tests;
 
 use std::sync::Arc;

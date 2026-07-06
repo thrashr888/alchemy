@@ -13,6 +13,8 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use futures::TryStreamExt;
+use lancedb::index::scalar::{FtsIndexBuilder, FullTextSearchQuery};
+use lancedb::index::Index;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::Connection;
 
@@ -434,6 +436,15 @@ impl Db {
             ],
         )?;
         self.add_batch(T_CHUNKS, schema, batch).await?;
+
+        // Keep the BM25 side of hybrid search current. Rebuilding on every
+        // write is fine at personal-corpus scale (thousands of rows, ms-level).
+        let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
+        tbl.create_index(&["text"], Index::FTS(FtsIndexBuilder::default()))
+            .replace(true)
+            .execute()
+            .await
+            .context("failed to build full-text index on chunks")?;
         Ok(())
     }
 
@@ -544,10 +555,14 @@ impl Db {
     }
 
     /// Vector-search chunks within a notebook, returning citations.
+    /// Hybrid search: vector similarity and BM25 full-text, fused with
+    /// reciprocal rank fusion. Embeddings find paraphrases; BM25 finds exact
+    /// identifiers (names, codes, numbers) that vectors reliably miss.
     pub async fn search_chunks(
         &self,
         notebook_id: &str,
         query_vec: Vec<f32>,
+        query_text: &str,
         k: usize,
     ) -> Result<Vec<Citation>> {
         if !self.table_exists(T_CHUNKS).await? {
@@ -559,46 +574,59 @@ impl Db {
             titles.insert(s.id, s.title);
         }
 
+        let filter = format!("notebook_id = '{}'", esc(notebook_id));
         let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
-        let batches = tbl
+        // Fetch a wider pool from each side than we return, so fusion has
+        // something to work with.
+        let pool = k.max(1) * 3;
+
+        let vec_batches = tbl
             .query()
-            .only_if(format!("notebook_id = '{}'", esc(notebook_id)))
+            .only_if(filter.clone())
             .nearest_to(query_vec)?
-            .limit(k)
+            .limit(pool)
             .execute()
             .await?
             .try_collect::<Vec<_>>()
             .await?;
-
-        let mut citations = Vec::new();
-        for b in &batches {
-            let id = str_col(b, "id")?;
-            let sid = str_col(b, "source_id")?;
-            let ord = i32_col(b, "ordinal")?;
-            let text = str_col(b, "text")?;
-            let dist = b.column_by_name("_distance").and_then(|c| {
-                c.as_any()
-                    .downcast_ref::<arrow_array::Float32Array>()
-                    .cloned()
-            });
-            for i in 0..b.num_rows() {
-                let source_id = sid.value(i).to_string();
-                citations.push(Citation {
-                    chunk_id: id.value(i).to_string(),
-                    source_title: titles.get(&source_id).cloned().unwrap_or_default(),
-                    source_id,
-                    ordinal: ord.value(i),
-                    snippet: text.value(i).to_string(),
-                    distance: dist.as_ref().map(|d| d.value(i)).unwrap_or(0.0),
-                });
-            }
-        }
-        citations.sort_by(|a, b| {
+        let mut vec_hits = citations_from_batches(&vec_batches, &titles)?;
+        vec_hits.sort_by(|a, b| {
             a.distance
                 .partial_cmp(&b.distance)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        Ok(citations)
+
+        // BM25 side is best-effort: a database from before the FTS index
+        // existed (or an exotic query string) degrades to vector-only.
+        let fts_hits = if query_text.trim().is_empty() {
+            vec![]
+        } else {
+            match tbl
+                .query()
+                .only_if(filter)
+                .full_text_search(FullTextSearchQuery::new(query_text.to_string()))
+                .limit(pool)
+                .execute()
+                .await
+            {
+                Ok(stream) => match stream.try_collect::<Vec<_>>().await {
+                    Ok(batches) => citations_from_batches(&batches, &titles)?,
+                    Err(_) => vec![],
+                },
+                Err(_) => vec![],
+            }
+        };
+
+        // Reciprocal rank fusion: score = Σ 1/(60 + rank) over both lists.
+        let mut fused: HashMap<String, (Citation, f32)> = HashMap::new();
+        for hits in [vec_hits, fts_hits] {
+            for (rank, c) in hits.into_iter().enumerate() {
+                fused.entry(c.chunk_id.clone()).or_insert((c, 0.0)).1 += 1.0 / (60.0 + rank as f32);
+            }
+        }
+        let mut merged: Vec<(Citation, f32)> = fused.into_values().collect();
+        merged.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(merged.into_iter().take(k).map(|(c, _)| c).collect())
     }
 
     // ---- Messages --------------------------------------------------------
@@ -833,6 +861,38 @@ impl Db {
 }
 
 // ---- Arrow column helpers ------------------------------------------------
+
+/// Decode chunk-query result batches into citations. `_distance` is present
+/// on vector results only; FTS hits leave it at 0.0.
+fn citations_from_batches(
+    batches: &[RecordBatch],
+    titles: &HashMap<String, String>,
+) -> Result<Vec<Citation>> {
+    let mut citations = Vec::new();
+    for b in batches {
+        let id = str_col(b, "id")?;
+        let sid = str_col(b, "source_id")?;
+        let ord = i32_col(b, "ordinal")?;
+        let text = str_col(b, "text")?;
+        let dist = b.column_by_name("_distance").and_then(|c| {
+            c.as_any()
+                .downcast_ref::<arrow_array::Float32Array>()
+                .cloned()
+        });
+        for i in 0..b.num_rows() {
+            let source_id = sid.value(i).to_string();
+            citations.push(Citation {
+                chunk_id: id.value(i).to_string(),
+                source_title: titles.get(&source_id).cloned().unwrap_or_default(),
+                source_id,
+                ordinal: ord.value(i),
+                snippet: text.value(i).to_string(),
+                distance: dist.as_ref().map(|d| d.value(i)).unwrap_or(0.0),
+            });
+        }
+    }
+    Ok(citations)
+}
 
 fn str_col<'a>(b: &'a RecordBatch, name: &str) -> Result<&'a StringArray> {
     b.column_by_name(name)
