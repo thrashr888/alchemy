@@ -138,6 +138,52 @@ pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
             "Extract a chronological timeline of events, milestones, or developments mentioned in the sources below. \
              Format each entry as `- **<when>** — <what>`. If little temporal information exists, say so.",
         )),
+        "insights" => Some((
+            "Insights",
+            "Surface the non-obvious insights hiding across the sources below — the things a reader \
+             skimming each document separately would miss. Look specifically for: connections between \
+             different sources (one source's claim explains or extends another's), agreements and \
+             contradictions between sources, surprising or counterintuitive facts, recurring themes, \
+             and notable gaps nothing covers. Write 4-8 insights. For each, use a `### <one-line \
+             insight>` heading stating the takeaway itself (not a topic label), then 2-4 sentences of \
+             support naming the specific sources involved and why it matters. Order by how interesting \
+             the insight is, most interesting first. Only report what the sources support — if the \
+             sources are too thin or too similar for real cross-source insights, say so briefly \
+             instead of inventing them.",
+        )),
+        "flashcards" => Some((
+            "Flashcards",
+            "Create a deck of flashcards covering the most important facts, concepts, and definitions \
+             in the sources below. Make 12-20 cards (fewer if the material is thin — never pad). \
+             Spread the cards across ALL the sources and order them from foundational to advanced. \
+             Each front is one focused question or term; each back is a concise answer (1-3 sentences) \
+             that stands alone without the question. Avoid yes/no questions and avoid answers that \
+             just restate the front. Format each card exactly as:\n\
+             **Front:** <question or term>\n\
+             **Back:** <answer>\n\
+             separated by `---` lines, with no headings or preamble.",
+        )),
+        "quiz" => Some((
+            "Quiz",
+            "Write a multiple-choice quiz that tests real understanding of the sources below. Create \
+             8-12 questions spanning ALL the sources, mixing recall with comprehension (why/how, \
+             implications, comparisons) — not just surface facts. Each question has options A-D with \
+             exactly one correct answer and plausible distractors drawn from the material (no joke \
+             options, no \"all of the above\"). Number the questions under a `## Questions` heading, \
+             each option on its own line. Then add a `## Answer Key` section listing each number's \
+             correct letter with a one-sentence explanation of why it is right.",
+        )),
+        "data_table" => Some((
+            "Data Table",
+            "Distill the sources below into structured reference tables. First decide what the \
+             natural rows are (events, entities, options, studies, versions, claims — whatever the \
+             material dictates) and pick 3-6 columns that capture what matters about each. Produce \
+             one Markdown (GFM) table per natural grouping — usually one, at most three — with a \
+             short `##` heading per table. Keep cells terse (numbers, names, fragments — not \
+             sentences), use consistent units, and put `—` in cells the sources don't answer. After \
+             the tables, add a short **Notes** list for caveats or conflicting figures between \
+             sources. Every value must come from the sources — do not estimate.",
+        )),
         "problems" => Some((
             "Problems",
             "Critically analyze the sources below and identify the problems in them: factual errors, unsupported \

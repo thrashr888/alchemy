@@ -16,6 +16,7 @@ const INTERVALS = [
 const KINDS = [
   { value: "briefing", label: "Briefing" },
   { value: "summary", label: "Summary" },
+  { value: "insights", label: "Insights" },
   { value: "timeline", label: "Timeline" },
   { value: "faq", label: "FAQ" },
   { value: "custom", label: "Custom prompt" },
