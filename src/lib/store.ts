@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import { SUPPORTED_EXTENSIONS } from "./utils";
@@ -275,10 +276,16 @@ export const useStore = create<AppState>((set, get) => {
     set({ notebooks, aiConfig, ollamaOk });
     void get().refreshModelHealth();
     void get().refreshModelStats();
-    // Reopen the last-used notebook if it still exists; otherwise show the picker.
-    const last = localStorage.getItem("lastNotebookId");
-    if (last && notebooks.some((n) => n.id === last)) {
-      await get().selectNotebook(last);
+    // Secondary windows boot into the notebook the opener asked for (or a
+    // fresh home screen); the main window reopens the last-used notebook.
+    const boot = window.__ALCHEMY_NOTEBOOK__;
+    if (boot && notebooks.some((n) => n.id === boot)) {
+      await get().selectNotebook(boot);
+    } else if (!window.__ALCHEMY_FRESH__ && !boot) {
+      const last = localStorage.getItem("lastNotebookId");
+      if (last && notebooks.some((n) => n.id === last)) {
+        await get().selectNotebook(last);
+      }
     }
     get().startReportScheduler();
   },
@@ -755,6 +762,9 @@ export const useStore = create<AppState>((set, get) => {
 
   startReportScheduler: () => {
     if (schedulerStarted) return;
+    // Only the main window runs the scheduler — one tick loop per app, not
+    // one per window, or reports would generate once per open window.
+    if (getCurrentWebview().label !== "main") return;
     schedulerStarted = true;
     const tick = async () => {
       let due: ReportSchedule[];

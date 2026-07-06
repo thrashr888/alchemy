@@ -62,12 +62,14 @@ export function ChatPanel() {
   }, [failedInput]);
 
   // Subscribe once to streaming tokens + agent progress steps from the backend.
+  // Events broadcast to every window — only the one with a send in flight
+  // should accumulate them.
   useEffect(() => {
     const unToken = listen<{ content: string }>("chat://token", (e) => {
-      appendToken(e.payload.content);
+      if (useStore.getState().sending) appendToken(e.payload.content);
     });
     const unStep = listen<{ label: string }>("chat://step", (e) => {
-      appendStep(e.payload.label);
+      if (useStore.getState().sending) appendStep(e.payload.label);
     });
     return () => {
       unToken.then((fn) => fn());

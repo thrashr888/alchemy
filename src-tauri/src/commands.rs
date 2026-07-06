@@ -1580,6 +1580,7 @@ async fn add_url_sources(
 #[tauri::command]
 pub async fn send_message(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     state: State<'_, AppState>,
     notebook_id: String,
     content: String,
@@ -1653,7 +1654,7 @@ pub async fn send_message(
     // cancellation token so a Stop click aborts the request; on cancel we keep
     // whatever partial text streamed so far.
     let app_for_cb = app.clone();
-    let cancel = state.begin_generation("chat");
+    let cancel = state.begin_generation(&format!("chat:{}", window.label()));
     let partial = Arc::new(Mutex::new(String::new()));
     let partial_cb = partial.clone();
     let (answer, stats, model) = {
@@ -1694,6 +1695,7 @@ pub async fn send_message(
 #[tauri::command]
 pub async fn send_message_agentic(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     state: State<'_, AppState>,
     notebook_id: String,
     content: String,
@@ -1731,7 +1733,7 @@ pub async fn send_message_agentic(
         })
         .collect();
 
-    let cancel = state.begin_generation("chat");
+    let cancel = state.begin_generation(&format!("chat:{}", window.label()));
     let (answer, citations, stats, model) = {
         let ai = state.ai.read().await;
         let model = ai.active_chat_model();
@@ -1772,8 +1774,14 @@ pub async fn send_message_agentic(
 /// Stop an in-flight generation. `scope` is "chat" or "artifact"; omitted
 /// cancels everything (legacy behavior).
 #[tauri::command]
-pub fn cancel_generation(state: State<'_, AppState>, scope: Option<String>) {
-    state.cancel_current(scope.as_deref());
+pub fn cancel_generation(
+    state: State<'_, AppState>,
+    window: tauri::WebviewWindow,
+    scope: Option<String>,
+) {
+    // Scopes are per-window so Stop in one window never kills another's stream.
+    let scoped = scope.map(|s| format!("{s}:{}", window.label()));
+    state.cancel_current(scoped.as_deref());
 }
 
 // ---- Notes & artifacts ---------------------------------------------------
@@ -1974,13 +1982,14 @@ async fn generate_content(
 #[tauri::command]
 pub async fn generate_artifact(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     state: State<'_, AppState>,
     notebook_id: String,
     kind: String,
     prompt: Option<String>,
 ) -> Result<Note, String> {
     let prompt = prompt.unwrap_or_default();
-    let cancel = state.begin_generation("artifact");
+    let cancel = state.begin_generation(&format!("artifact:{}", window.label()));
     let produced = tokio::select! {
         r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt) => Some(e(r)?),
         _ = cancel.cancelled() => None,
@@ -2009,13 +2018,14 @@ pub async fn generate_artifact(
 #[tauri::command]
 pub async fn rebuild_note(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     state: State<'_, AppState>,
     note_id: String,
     notebook_id: String,
     kind: String,
     prompt: String,
 ) -> Result<Note, String> {
-    let cancel = state.begin_generation("artifact");
+    let cancel = state.begin_generation(&format!("artifact:{}", window.label()));
     let produced = tokio::select! {
         r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt) => Some(e(r)?),
         _ = cancel.cancelled() => None,
@@ -2225,6 +2235,33 @@ pub async fn run_report(
     e(state.db.touch_notebook(&schedule.notebook_id, ts).await)?;
     let _ = app.emit("generate://done", &note);
     Ok(note)
+}
+
+// ---- Windows ---------------------------------------------------------------
+
+/// Open another app window — at the home screen, or straight into a notebook.
+/// The boot target rides an init script (not the URL) so it works identically
+/// under the dev server and the bundled custom protocol.
+#[tauri::command]
+pub async fn new_window(app: AppHandle, notebook_id: Option<String>) -> Result<(), String> {
+    let label = format!("win-{}", new_id());
+    let boot = match notebook_id {
+        Some(id) => format!("window.__ALCHEMY_NOTEBOOK__ = '{}';", id.replace('\'', "")),
+        None => "window.__ALCHEMY_FRESH__ = true;".to_string(),
+    };
+    let builder =
+        tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::App("index.html".into()))
+            .title("Alchemy")
+            .inner_size(1280.0, 820.0)
+            .min_inner_size(1040.0, 640.0)
+            .initialization_script(&boot);
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true)
+        .traffic_light_position(tauri::LogicalPosition::new(20.0, 18.0));
+    builder.build().map_err(|e2| e2.to_string())?;
+    Ok(())
 }
 
 // ---- Home page: activity, stats, global search ----------------------------
