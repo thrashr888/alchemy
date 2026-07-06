@@ -27,8 +27,16 @@ That one command, from a clean `main`:
    the notarized DMG and auto-generated notes.
 
 Typical time: a few minutes with a warm `target/` cache (vs. ~25 min on CI).
-Edit the release notes on GitHub afterward if you want more than the
-auto-generated changelog.
+
+## Release notes format
+
+Replace the auto-generated changelog with notes in the house style
+(`gh release edit vX.Y.Z --title ... --notes ...`):
+
+- **Title**: `vX.Y.Z — short, comma-separated feature summary`
+- **Body**: `## Highlights` (bold-led bullets, most user-visible first),
+  `## Fixes` (plain bullets), optional `## Notes` (upgrade caveats), ending
+  with `**Full Changelog**: .../compare/vPREV...vX.Y.Z`
 
 ## One-time setup
 
