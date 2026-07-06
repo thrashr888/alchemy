@@ -6,8 +6,10 @@ import {
 
 let granted: boolean | null = null;
 
-/** Send a desktop notification, requesting permission once. No-op on failure. */
+/** Send a desktop notification, requesting permission once. No-op on failure.
+ *  Gated by the "Show notifications" preference (Settings → General). */
 export async function notify(title: string, body: string) {
+  if (localStorage.getItem("showNotifications") === "false") return;
   try {
     if (granted === null) {
       granted = await isPermissionGranted();

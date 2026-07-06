@@ -52,6 +52,17 @@ You need three things on your machine:
 
 3. **`gh`** authenticated with push + release access (`gh auth login`).
 
+4. **A Tauri updater keypair** at `~/.tauri/alchemy.key` (the public key lives in
+   `src-tauri/tauri.conf.json`). It signs the auto-update artifact each release.
+   Generate once with:
+   ```bash
+   pnpm tauri signer generate --write-keys ~/.tauri/alchemy.key --password ""
+   ```
+   Losing this key means shipped apps can no longer verify updates — back it up.
+   The release publishes `Alchemy.app.tar.gz`, its `.sig`, and `latest.json`
+   alongside the DMG; the app checks
+   `releases/latest/download/latest.json` on launch.
+
 ## Manual CI fallback
 
 If you can't release locally, trigger the workflow from the **Actions → Release**

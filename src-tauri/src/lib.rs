@@ -3,6 +3,7 @@ mod ai;
 mod commands;
 mod db;
 mod ingest;
+mod menu;
 mod models;
 mod pdf;
 mod rag;
@@ -22,7 +23,9 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_notification::init());
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build());
 
     #[cfg(feature = "debug")]
     let builder = builder.plugin(tauri_plugin_debug_bridge::init());
@@ -52,6 +55,14 @@ pub fn run() {
             let db = tauri::async_runtime::block_on(db::Db::open(&db_dir))
                 .expect("failed to open LanceDB");
 
+            // App menu with Open Recent seeded from the notebook list.
+            let recents: Vec<(String, String)> =
+                tauri::async_runtime::block_on(db.list_notebooks())
+                    .map(|nbs| nbs.into_iter().map(|n| (n.id, n.title)).collect())
+                    .unwrap_or_default();
+            let app_menu = menu::build(&app.handle().clone(), &recents)?;
+            app.set_menu(app_menu)?;
+
             let runtime = commands::ai_runtime(app.handle().clone(), data_dir.clone());
             app.manage(AppState {
                 db: Arc::new(db),
@@ -63,6 +74,7 @@ pub fn run() {
             });
             Ok(())
         })
+        .on_menu_event(|app, event| menu::handle_event(app, event.id().0.as_str()))
         .invoke_handler(tauri::generate_handler![
             commands::list_notebooks,
             commands::create_notebook,
@@ -87,6 +99,7 @@ pub fn run() {
             commands::list_recent_notes,
             commands::corpus_stats,
             commands::new_window,
+            commands::rebuild_app_menu,
             commands::search_everything,
             commands::create_note,
             commands::update_note,

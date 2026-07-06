@@ -6,6 +6,8 @@ import { api } from "./api";
 import { SUPPORTED_EXTENSIONS } from "./utils";
 import { applyTheme, DEFAULT_THEME } from "./themes";
 import { notify } from "./notify";
+import { playDone } from "./sound";
+import { autoUpdateEnabled, checkForUpdatesQuietly } from "./updates";
 import { DEFAULT_CHAT_CONFIG, DEFAULT_READING_PREFS } from "./types";
 import type {
   AiConfig,
@@ -108,6 +110,8 @@ interface AppState {
   openSettings: (tab?: string) => void;
   closeSettings: () => void;
   setPaletteOpen: (open: boolean) => void;
+  /** Open/close the command menu, refusing to stack over an open dialog. */
+  togglePalette: () => void;
   createReport: (name: string, kind: string, prompt: string, intervalSecs: number) => Promise<void>;
   updateReport: (r: ReportSchedule) => Promise<void>;
   deleteReport: (id: string) => Promise<void>;
@@ -268,6 +272,17 @@ export const useStore = create<AppState>((set, get) => {
       if (get().generatingKind)
         set({ artifactStreamText: get().artifactStreamText + e.payload.content });
     });
+    // App-menu actions route here from the focused window's Rust side.
+    void listen<string>("menu://action", (e) => {
+      const s = get();
+      if (e.payload === "menu-settings") s.openSettings();
+      else if (e.payload === "menu-about") s.openSettings("about");
+      else if (e.payload === "menu-search") s.togglePalette();
+      else if (e.payload === "menu-new-window") void api.newWindow();
+    });
+    void listen<string>("menu://open-notebook", (e) => {
+      void get().selectNotebook(e.payload);
+    });
     const [notebooks, aiConfig, ollamaOk] = await Promise.all([
       api.listNotebooks(),
       api.getAiConfig(),
@@ -288,6 +303,13 @@ export const useStore = create<AppState>((set, get) => {
       }
     }
     get().startReportScheduler();
+    void api.rebuildAppMenu();
+    // Quiet update check, once per launch, main window only.
+    if (getCurrentWebview().label === "main" && autoUpdateEnabled()) {
+      setTimeout(() => {
+        void checkForUpdatesQuietly((m) => get().pushToast("info", m));
+      }, 4000);
+    }
   },
 
   refreshModelHealth: async () => {
@@ -306,7 +328,10 @@ export const useStore = create<AppState>((set, get) => {
     }
   },
 
-  refreshNotebooks: async () => set({ notebooks: await api.listNotebooks() }),
+  refreshNotebooks: async () => {
+    set({ notebooks: await api.listNotebooks() });
+    void api.rebuildAppMenu();
+  },
 
   selectNotebook: async (id) => {
     localStorage.setItem("lastNotebookId", id);
@@ -375,6 +400,11 @@ export const useStore = create<AppState>((set, get) => {
   openSettings: (tab = "models") => set({ settingsOpen: true, settingsTab: tab }),
   closeSettings: () => set({ settingsOpen: false }),
   setPaletteOpen: (open) => set({ paletteOpen: open }),
+  togglePalette: () => {
+    const { paletteOpen } = get();
+    if (!paletteOpen && document.querySelector('[aria-modal="true"]')) return;
+    set({ paletteOpen: !paletteOpen });
+  },
 
   toggleSources: () => {
     const v = !get().sourcesOpen;
@@ -395,6 +425,7 @@ export const useStore = create<AppState>((set, get) => {
   createNotebook: async (title) => {
     const nb = await api.createNotebook(title);
     set({ notebooks: [nb, ...get().notebooks] });
+    void api.rebuildAppMenu();
     await get().selectNotebook(nb.id);
   },
 
@@ -535,6 +566,7 @@ export const useStore = create<AppState>((set, get) => {
       // write another notebook's data over the current one.
       if (get().currentId === id) {
         set({ messages, sources, notes, reportSchedules, streamingText: "" });
+        playDone();
         void get().loadFollowups();
       }
       await get().refreshNotebooks();
@@ -624,6 +656,7 @@ export const useStore = create<AppState>((set, get) => {
       set({ notes: [note, ...get().notes], justCreatedNoteId: note.id });
       void get().refreshModelStats();
       get().pushToast("success", `${note.title} ready`);
+      playDone();
       void notify("Document ready", `“${note.title}” finished generating.`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -642,6 +675,7 @@ export const useStore = create<AppState>((set, get) => {
     try {
       const updated = await api.rebuildNote(note.id, id, note.kind, note.prompt);
       set({ notes: get().notes.map((n) => (n.id === updated.id ? updated : n)) });
+      playDone();
       void notify("Rebuilt", `“${updated.title}” was regenerated.`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -748,6 +782,7 @@ export const useStore = create<AppState>((set, get) => {
     set({ generatingKind: "report" });
     try {
       await api.runReport(rid);
+      playDone();
       void notify("Report ready", schedule ? `“${schedule.name}” was generated.` : "Report generated.");
       const id = get().currentId;
       if (id) {

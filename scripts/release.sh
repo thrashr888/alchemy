@@ -29,6 +29,16 @@ SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-$(
 )}"
 DMG="src-tauri/target/$TARGET/release/bundle/dmg/Alchemy_${VERSION}_aarch64.dmg"
 DYLIB="src-tauri/libs/libpdfium.dylib"
+UPDATER_TGZ="src-tauri/target/$TARGET/release/bundle/macos/Alchemy.app.tar.gz"
+
+# Updater artifacts are signed with the Tauri updater key (separate from the
+# Apple identity). Defaults to the local keyfile; CI passes the env directly.
+UPDATER_KEY_FILE="$HOME/.tauri/alchemy.key"
+if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+  [ -f "$UPDATER_KEY_FILE" ] || { echo "Updater key not found: $UPDATER_KEY_FILE (see RELEASE.md)." >&2; exit 1; }
+  export TAURI_SIGNING_PRIVATE_KEY="$(cat "$UPDATER_KEY_FILE")"
+fi
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
 
 cd "$(dirname "$0")/.."
 
@@ -68,6 +78,8 @@ scripts/fetch-pdfium.sh
 codesign --force --timestamp --options runtime --sign "$SIGNING_IDENTITY" "$DYLIB"
 APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY" pnpm tauri build --target "$TARGET"
 [ -f "$DMG" ] || { echo "DMG not produced: $DMG" >&2; exit 1; }
+[ -f "$UPDATER_TGZ" ] || { echo "Updater artifact not produced: $UPDATER_TGZ" >&2; exit 1; }
+[ -f "$UPDATER_TGZ.sig" ] || { echo "Updater signature not produced: $UPDATER_TGZ.sig" >&2; exit 1; }
 
 # --- Notarize + staple + verify ---------------------------------------------
 echo "==> Notarize start: $(date -u +%FT%TZ)"
@@ -82,7 +94,25 @@ git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Ca
 git commit -m "$TAG"
 git tag "$TAG"
 git push origin main "$TAG"
-gh release create "$TAG" "$DMG" --title "Alchemy $TAG" --generate-notes
+
+# latest.json points the in-app updater at this release's signed tarball.
+LATEST_JSON="src-tauri/target/$TARGET/release/bundle/macos/latest.json"
+python3 - "$VERSION" "$UPDATER_TGZ.sig" > "$LATEST_JSON" <<'PYEOF'
+import json, sys, datetime
+version, sig_path = sys.argv[1], sys.argv[2]
+print(json.dumps({
+    "version": version,
+    "pub_date": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "platforms": {
+        "darwin-aarch64": {
+            "signature": open(sig_path).read().strip(),
+            "url": f"https://github.com/thrashr888/alchemy/releases/download/v{version}/Alchemy.app.tar.gz",
+        }
+    },
+}, indent=2))
+PYEOF
+gh release create "$TAG" "$DMG" "$UPDATER_TGZ" "$UPDATER_TGZ.sig" "$LATEST_JSON" \
+  --title "Alchemy $TAG" --generate-notes
 
 echo "==> Done. Released $TAG -- https://github.com/thrashr888/alchemy/releases/tag/$TAG"
 echo "    (edit the notes on GitHub if you want more than the auto-generated changelog.)"
