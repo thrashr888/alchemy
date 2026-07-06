@@ -689,31 +689,99 @@ impl Db {
     pub async fn list_notes(&self, notebook_id: &str) -> Result<Vec<Note>> {
         let filter = format!("notebook_id = '{}'", esc(notebook_id));
         let batches = self.collect(T_NOTES, Some(&filter)).await?;
-        let mut notes = Vec::new();
+        let mut notes = notes_from_batches(&batches)?;
+        notes.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
+        Ok(notes)
+    }
+
+    /// The most recently updated notes across every notebook (home activity).
+    pub async fn recent_notes(&self, limit: usize) -> Result<Vec<Note>> {
+        let batches = self.collect(T_NOTES, None).await?;
+        let mut notes = notes_from_batches(&batches)?;
+        notes.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
+        notes.truncate(limit);
+        Ok(notes)
+    }
+
+    /// (id, notebook_id, title) for every source — lightweight lookups without
+    /// dragging full content across.
+    pub async fn all_source_meta(&self) -> Result<Vec<(String, String, String)>> {
+        let batches = self.collect(T_SOURCES, None).await?;
+        let mut out = Vec::new();
         for b in &batches {
             let id = str_col(b, "id")?;
             let nb = str_col(b, "notebook_id")?;
             let title = str_col(b, "title")?;
-            let content = str_col(b, "content")?;
-            let kind = str_col(b, "kind")?;
-            let created = i64_col(b, "created_at")?;
-            let updated = i64_col(b, "updated_at")?;
-            let prompt = str_col(b, "prompt")?;
             for i in 0..b.num_rows() {
-                notes.push(Note {
-                    id: id.value(i).to_string(),
-                    notebook_id: nb.value(i).to_string(),
-                    title: title.value(i).to_string(),
-                    content: content.value(i).to_string(),
-                    kind: kind.value(i).to_string(),
-                    prompt: prompt.value(i).to_string(),
-                    created_at: created.value(i),
-                    updated_at: updated.value(i),
-                });
+                out.push((
+                    id.value(i).to_string(),
+                    nb.value(i).to_string(),
+                    title.value(i).to_string(),
+                ));
             }
         }
-        notes.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
-        Ok(notes)
+        Ok(out)
+    }
+
+    /// Aggregate (source count, total chars) across every notebook.
+    pub async fn corpus_stats(&self) -> Result<(i64, i64)> {
+        let batches = self.collect(T_SOURCES, None).await?;
+        let (mut count, mut chars) = (0i64, 0i64);
+        for b in &batches {
+            let cc = i64_col(b, "char_count")?;
+            for i in 0..b.num_rows() {
+                count += 1;
+                chars += cc.value(i);
+            }
+        }
+        Ok((count, chars))
+    }
+
+    /// BM25-only search across every notebook — no embedding round-trip, so
+    /// it's fast enough for as-you-type global search. Returns
+    /// (notebook_id, citation); source titles are the caller's to fill.
+    /// Empty on databases from before the FTS index existed.
+    pub async fn search_chunks_fts_all(
+        &self,
+        query_text: &str,
+        k: usize,
+    ) -> Result<Vec<(String, Citation)>> {
+        if query_text.trim().is_empty() || !self.table_exists(T_CHUNKS).await? {
+            return Ok(vec![]);
+        }
+        let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
+        let batches = match tbl
+            .query()
+            .full_text_search(FullTextSearchQuery::new(query_text.to_string()))
+            .limit(k)
+            .execute()
+            .await
+        {
+            Ok(stream) => stream.try_collect::<Vec<_>>().await.unwrap_or_default(),
+            Err(_) => return Ok(vec![]),
+        };
+        let mut out = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let nb = str_col(b, "notebook_id")?;
+            let sid = str_col(b, "source_id")?;
+            let ord = i32_col(b, "ordinal")?;
+            let text = str_col(b, "text")?;
+            for i in 0..b.num_rows() {
+                out.push((
+                    nb.value(i).to_string(),
+                    Citation {
+                        chunk_id: id.value(i).to_string(),
+                        source_id: sid.value(i).to_string(),
+                        source_title: String::new(),
+                        ordinal: ord.value(i),
+                        snippet: text.value(i).to_string(),
+                        distance: 0.0,
+                    },
+                ));
+            }
+        }
+        Ok(out)
     }
 
     /// Fetch a single note by id (None if not found).
@@ -861,6 +929,34 @@ impl Db {
 }
 
 // ---- Arrow column helpers ------------------------------------------------
+
+/// Decode note-table batches into Note rows.
+fn notes_from_batches(batches: &[RecordBatch]) -> Result<Vec<Note>> {
+    let mut notes = Vec::new();
+    for b in batches {
+        let id = str_col(b, "id")?;
+        let nb = str_col(b, "notebook_id")?;
+        let title = str_col(b, "title")?;
+        let content = str_col(b, "content")?;
+        let kind = str_col(b, "kind")?;
+        let created = i64_col(b, "created_at")?;
+        let updated = i64_col(b, "updated_at")?;
+        let prompt = str_col(b, "prompt")?;
+        for i in 0..b.num_rows() {
+            notes.push(Note {
+                id: id.value(i).to_string(),
+                notebook_id: nb.value(i).to_string(),
+                title: title.value(i).to_string(),
+                content: content.value(i).to_string(),
+                kind: kind.value(i).to_string(),
+                prompt: prompt.value(i).to_string(),
+                created_at: created.value(i),
+                updated_at: updated.value(i),
+            });
+        }
+    }
+    Ok(notes)
+}
 
 /// Decode chunk-query result batches into citations. `_distance` is present
 /// on vector results only; FTS hits leave it at 0.0.

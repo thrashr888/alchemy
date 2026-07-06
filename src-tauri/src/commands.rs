@@ -2227,6 +2227,110 @@ pub async fn run_report(
     Ok(note)
 }
 
+// ---- Home page: activity, stats, global search ----------------------------
+
+#[tauri::command]
+pub async fn list_recent_notes(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<Note>, String> {
+    e(state.db.recent_notes(limit.unwrap_or(6)).await)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CorpusStats {
+    pub sources: i64,
+    pub chars: i64,
+}
+
+#[tauri::command]
+pub async fn corpus_stats(state: State<'_, AppState>) -> Result<CorpusStats, String> {
+    let (sources, chars) = e(state.db.corpus_stats().await)?;
+    Ok(CorpusStats { sources, chars })
+}
+
+/// One global-search result for the command menu.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHit {
+    /// "source" (title match) | "note" (title/content match) | "content" (BM25 chunk hit)
+    pub kind: String,
+    pub notebook_id: String,
+    /// Source id for source/content hits; note id for note hits.
+    pub id: String,
+    pub title: String,
+    pub snippet: String,
+}
+
+/// Search source titles, note titles/content, and chunk text (BM25) across
+/// every notebook. No embedding round-trip, so it's cheap enough to run
+/// as-you-type from the command menu.
+#[tauri::command]
+pub async fn search_everything(
+    state: State<'_, AppState>,
+    query: String,
+) -> Result<Vec<SearchHit>, String> {
+    let q = query.trim().to_lowercase();
+    if q.len() < 2 {
+        return Ok(vec![]);
+    }
+    let meta = e(state.db.all_source_meta().await)?;
+    let title_of: std::collections::HashMap<&str, (&str, &str)> = meta
+        .iter()
+        .map(|(id, nb, title)| (id.as_str(), (nb.as_str(), title.as_str())))
+        .collect();
+
+    let mut hits = Vec::new();
+    for (id, nb, title) in &meta {
+        if title.to_lowercase().contains(&q) {
+            hits.push(SearchHit {
+                kind: "source".into(),
+                notebook_id: nb.clone(),
+                id: id.clone(),
+                title: title.clone(),
+                snippet: String::new(),
+            });
+        }
+        if hits.len() >= 4 {
+            break;
+        }
+    }
+
+    let mut note_hits = 0;
+    for n in e(state.db.recent_notes(usize::MAX).await)? {
+        if note_hits >= 4 {
+            break;
+        }
+        if n.title.to_lowercase().contains(&q) || n.content.to_lowercase().contains(&q) {
+            note_hits += 1;
+            hits.push(SearchHit {
+                kind: "note".into(),
+                notebook_id: n.notebook_id,
+                id: n.id,
+                title: n.title,
+                snippet: n.content.chars().take(120).collect(),
+            });
+        }
+    }
+
+    for (nb, c) in e(state.db.search_chunks_fts_all(query.trim(), 6).await)? {
+        let title = title_of
+            .get(c.source_id.as_str())
+            .map(|(_, t)| t.to_string())
+            .unwrap_or_default();
+        hits.push(SearchHit {
+            kind: "content".into(),
+            notebook_id: nb,
+            id: c.source_id,
+            title,
+            snippet: c.snippet.chars().take(140).collect(),
+        });
+    }
+    hits.truncate(12);
+    Ok(hits)
+}
+
 // ---- Settings / health ---------------------------------------------------
 
 /// Verify the configured chat + embedding models are installed and (for embed)

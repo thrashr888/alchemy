@@ -4,6 +4,7 @@ import { describe, IpcError, TimeoutError, type AppError } from "./errors";
 import type {
   AiConfig,
   ChatConfig,
+  CorpusStats,
   Message,
   ModelHealth,
   ModelStat,
@@ -11,6 +12,7 @@ import type {
   NoteKind,
   Notebook,
   ReportSchedule,
+  SearchHit,
   Source,
 } from "./types";
 
@@ -117,6 +119,9 @@ export const api = {
 
   // Notes & artifacts
   listNotes: (notebookId: string) => run(query<Note[]>("list_notes", { notebookId })),
+  listRecentNotes: (limit = 6) => run(query<Note[]>("list_recent_notes", { limit })),
+  corpusStats: () => run(query<CorpusStats>("corpus_stats")),
+  searchEverything: (q: string) => run(query<SearchHit[]>("search_everything", { query: q })),
   createNote: (notebookId: string, title: string, content: string) =>
     run(cmd<Note>("create_note", { notebookId, title, content })),
   updateNote: (id: string, title: string, content: string) =>
