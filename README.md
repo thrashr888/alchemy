@@ -234,18 +234,27 @@ to the gateway you configure — never anywhere else. LiteLLM-style gateways wit
 non-standard key schemes are handled automatically. Alchemy does no in-app
 accounting — usage is whatever your gateway bills.
 
-| Setting          | Default                                       |
-| ---------------- | --------------------------------------------- |
-| Provider         | OpenAI-compatible gateway                     |
-| Gateway URL      | _(your gateway's base URL, ends in `/v1`)_    |
-| Chat model       | _(pick from the gateway's list)_              |
-| Vision model     | _(any vision-capable model, for OCR)_         |
-| Embeddings       | Built-in (`potion-base-8M`, on-device CPU)    |
+### Provider quick-reference
+
+Any OpenAI-compatible endpoint works. Settings that are known-good:
+
+| Provider       | Gateway URL                                      | API key                                                                     | Notes                                                        |
+| -------------- | ------------------------------------------------ | --------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| **OpenAI**     | `https://api.openai.com/v1`                      | `sk-…` from [platform.openai.com](https://platform.openai.com/api-keys)     | `gpt-4o` & friends are vision-capable (works for OCR too)    |
+| **Anthropic**  | `https://api.anthropic.com/v1`                   | `sk-ant-…` from the [console](https://console.anthropic.com/settings/keys)  | Via Anthropic's OpenAI SDK-compat layer; chat + streaming    |
+| **OpenRouter** | `https://openrouter.ai/api/v1`                   | `sk-or-…` from [openrouter.ai/keys](https://openrouter.ai/keys)             | One key, hundreds of models (`anthropic/…`, `google/…`, …)   |
+| **Groq**       | `https://api.groq.com/openai/v1`                 | from [console.groq.com](https://console.groq.com/keys)                      | Very fast open-weight models                                 |
+| **IBM Bob**    | `https://api.us-east.bob.ibm.com/inference/v1`   | `bob_…` from the Bob portal (IBM-internal)                                  | Bob's `Apikey` scheme & team headers are handled automatically |
+| **LM Studio**  | `http://localhost:1234/v1`                       | _(none)_                                                                     | Local server; load a model in LM Studio first                |
+| **Ollama**     | `http://localhost:11434/v1`                      | _(none)_                                                                     | Ollama's own OpenAI-compat endpoint (or just use the native Ollama provider) |
+
+For OCR of images and scanned PDFs, set a **vision-capable** model as the gateway
+vision model (e.g. `gpt-4o`, a Claude model, or any vision model on OpenRouter);
+leaving it empty disables OCR. Embeddings never leave your machine regardless of
+provider — the built-in on-device embedder (`potion-base-8M`) indexes your sources.
 
 ## Releases
 
-Releases are built by GitHub Actions
-([.github/workflows/release.yml](.github/workflows/release.yml)) on any `v*` tag
 Releases are cut **locally** on Apple Silicon — one command builds, signs,
 notarizes, and publishes:
 
