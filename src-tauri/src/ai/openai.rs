@@ -112,18 +112,30 @@ impl OpenAiClient {
         self.apply_auth(self.http.post(self.url(path)))
     }
 
-    /// Standard Bearer auth, except for LiteLLM-style static keys (`bob_…`),
-    /// which expect `Apikey` plus `X-API-KEY`; JWT-shaped tokens always use
-    /// Bearer. Detected from the key format so any host works.
+    /// Standard Bearer auth, with two key-format-detected exceptions (so any
+    /// host works): LiteLLM-style static keys (`bob_…`) expect `Apikey` plus
+    /// `X-API-KEY`; Anthropic keys (`sk-ant-…`) get `x-api-key` + version
+    /// headers alongside Bearer, because the OpenAI-compat chat endpoint takes
+    /// Bearer but native endpoints like GET /models only accept `x-api-key`.
+    /// JWT-shaped tokens always use plain Bearer.
     fn apply_auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         let key = self.api_key.trim();
         if key.is_empty() {
             return req;
         }
-        if key.starts_with("bob_") && !looks_like_jwt(key) {
+        if looks_like_jwt(key) {
+            return req.bearer_auth(key);
+        }
+        if key.starts_with("bob_") {
             return req
                 .header("Authorization", format!("Apikey {key}"))
                 .header("X-API-KEY", key);
+        }
+        if key.starts_with("sk-ant-") {
+            return req
+                .bearer_auth(key)
+                .header("x-api-key", key)
+                .header("anthropic-version", "2023-06-01");
         }
         req.bearer_auth(key)
     }
