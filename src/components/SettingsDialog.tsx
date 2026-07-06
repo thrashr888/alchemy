@@ -928,6 +928,16 @@ function GeneralTab() {
   const [update, setUpdate] = useState<UpdateFlow | null>(null);
   const [installing, setInstalling] = useState(false);
 
+  // "Check for Updates…" from the app menu lands here with the flag set.
+  const pendingUpdateCheck = useStore((s) => s.pendingUpdateCheck);
+  useEffect(() => {
+    if (pendingUpdateCheck) {
+      useStore.setState({ pendingUpdateCheck: false });
+      void onCheck();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingUpdateCheck]);
+
   async function onCheck() {
     setChecking(true);
     const flow = await checkForUpdates();
