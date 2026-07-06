@@ -243,7 +243,7 @@ export const useStore = create<AppState>((set, get) => {
   studioWidth: clampPanel("studio", Number(localStorage.getItem("studioWidth")) || 320),
   onboardingDismissed: localStorage.getItem("onboardingDismissed") === "true",
   settingsOpen: false,
-  settingsTab: "models",
+  settingsTab: "general",
   paletteOpen: false,
   pendingAddUrl: false,
   embedderDownload: null,
@@ -397,7 +397,7 @@ export const useStore = create<AppState>((set, get) => {
     set({ onboardingDismissed: true });
   },
 
-  openSettings: (tab = "models") => set({ settingsOpen: true, settingsTab: tab }),
+  openSettings: (tab = "general") => set({ settingsOpen: true, settingsTab: tab }),
   closeSettings: () => set({ settingsOpen: false }),
   setPaletteOpen: (open) => set({ paletteOpen: open }),
   togglePalette: () => {

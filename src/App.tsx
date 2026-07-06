@@ -71,7 +71,8 @@ function App() {
       {currentId && <FileDrop />}
       <MigrationOverlay />
       {needsSetup && !onboardingDismissed && !settingsOpen && (
-        <Onboarding onOpenSettings={() => openSettings()} />
+        // Onboarding's buttons are model-setup affordances — take them to Models.
+        <Onboarding onOpenSettings={() => openSettings("models")} />
       )}
 
       {embedderDownload && (

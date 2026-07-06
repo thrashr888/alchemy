@@ -75,7 +75,8 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
         </div>
       </header>
 
-      <HealthBanner onOpenSettings={onOpenSettings} />
+      {/* The banner flags model problems — its click-to-fix goes to Models. */}
+      <HealthBanner onOpenSettings={() => useStore.getState().openSettings("models")} />
 
       <div className="flex flex-1 overflow-hidden">
         {sourcesOpen ? <SourcesPanel /> : <SourcesRail />}
