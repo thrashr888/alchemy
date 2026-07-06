@@ -31,6 +31,10 @@ import {
   FileInput,
   TriangleAlert,
   MessageSquare,
+  Lightbulb,
+  Table,
+  Layers,
+  ListChecks,
 } from "lucide-react";
 
 type Artifact = { kind: NoteKind; label: string; icon: ReactNode };
@@ -41,7 +45,14 @@ const SUMMARIES: Artifact[] = [
   { kind: "study_guide", label: "Study guide", icon: <GraduationCap className="h-3.5 w-3.5" /> },
   { kind: "briefing", label: "Briefing", icon: <Newspaper className="h-3.5 w-3.5" /> },
   { kind: "timeline", label: "Timeline", icon: <Clock className="h-3.5 w-3.5" /> },
+  { kind: "insights", label: "Insights", icon: <Lightbulb className="h-3.5 w-3.5" /> },
+  { kind: "data_table", label: "Data table", icon: <Table className="h-3.5 w-3.5" /> },
   { kind: "problems", label: "Problems", icon: <TriangleAlert className="h-3.5 w-3.5" /> },
+];
+
+const LEARNING: Artifact[] = [
+  { kind: "flashcards", label: "Flashcards", icon: <Layers className="h-3.5 w-3.5" /> },
+  { kind: "quiz", label: "Quiz", icon: <ListChecks className="h-3.5 w-3.5" /> },
 ];
 
 const DOCUMENTS: Artifact[] = [
@@ -52,7 +63,7 @@ const DOCUMENTS: Artifact[] = [
 ];
 
 /** Every generator, for surfaces beyond the Studio panel (command menu). */
-export const ARTIFACTS: Artifact[] = [...SUMMARIES, ...DOCUMENTS];
+export const ARTIFACTS: Artifact[] = [...SUMMARIES, ...LEARNING, ...DOCUMENTS];
 
 /**
  * Card preview text: skip a leading markdown heading (or a first line equal to
@@ -81,6 +92,10 @@ const KIND_LABEL: Record<NoteKind, string> = {
   study_guide: "Study guide",
   briefing: "Briefing",
   timeline: "Timeline",
+  insights: "Insights",
+  flashcards: "Flashcards",
+  quiz: "Quiz",
+  data_table: "Data table",
   problems: "Problems",
   prd: "PRD",
   prfaq: "PR/FAQ",
@@ -221,6 +236,16 @@ export function StudioPanel() {
                 onPick={(k) => generate(k, instructions)}
               />
             </div>
+
+            <div className="mb-2 mt-3 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+              Learning
+            </div>
+            <ArtifactGrid
+              artifacts={LEARNING}
+              disabled={!hasSources || !!generatingKind}
+              generatingKind={generatingKind}
+              onPick={(k) => generate(k, instructions)}
+            />
 
             <div className="mb-2 mt-3 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
               Documents
