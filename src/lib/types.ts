@@ -74,6 +74,22 @@ export interface Note {
   updatedAt: number;
 }
 
+/** Aggregate corpus totals for the home page. */
+export interface CorpusStats {
+  sources: number;
+  chars: number;
+}
+
+/** One global-search result (command menu). */
+export interface SearchHit {
+  kind: "source" | "note" | "content";
+  notebookId: string;
+  /** Source id for source/content hits; note id for note hits. */
+  id: string;
+  title: string;
+  snippet: string;
+}
+
 export interface ModelStatus {
   name: string;
   installed: boolean;

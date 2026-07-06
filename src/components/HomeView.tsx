@@ -5,7 +5,7 @@ import { Button, Input, Modal, Badge, useConfirm } from "./ui";
 import { AlchemyHero } from "./AlchemyHero";
 import { intervalLabel } from "./Reports";
 import { cn, relativeTime, providerStatus, cardButtonProps, shortcutBlocked } from "@/lib/utils";
-import type { ReportSchedule } from "@/lib/types";
+import type { CorpusStats, Note, ReportSchedule } from "@/lib/types";
 import {
   BookOpen,
   Clock,
@@ -36,15 +36,32 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
-  // All scheduled reports across notebooks — the app's ongoing activity.
+  // All scheduled reports, recent documents, and corpus totals across
+  // notebooks — the app's ongoing activity, refreshed with the notebook list.
   const [allReports, setAllReports] = useState<ReportSchedule[]>([]);
+  const [recentNotes, setRecentNotes] = useState<Note[]>([]);
+  const [stats, setStats] = useState<CorpusStats | null>(null);
   useEffect(() => {
     api
       .listAllReportSchedules()
       .then(setAllReports)
       .catch(() => setAllReports([]));
+    api
+      .listRecentNotes(5)
+      .then(setRecentNotes)
+      .catch(() => setRecentNotes([]));
+    api
+      .corpusStats()
+      .then(setStats)
+      .catch(() => setStats(null));
   }, [notebooks]);
   const notebookTitle = new Map(notebooks.map((n) => [n.id, n.title]));
+
+  function openNote(note: Note) {
+    // StudioPanel auto-opens this id once the notebook's notes load.
+    useStore.setState({ justCreatedNoteId: note.id });
+    void open(note.notebookId);
+  }
 
   // Cmd/Ctrl+N: new notebook.
   useEffect(() => {
@@ -119,8 +136,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             <div>
               <h1 className="text-[22px] font-semibold tracking-tight">Your notebooks</h1>
               <p className="mt-1 text-[13px] text-muted-foreground">
-                {notebooks.length === 0
-                  ? "Create your first notebook to get started."
+                {stats
+                  ? `${notebooks.length} ${notebooks.length === 1 ? "notebook" : "notebooks"} · ${stats.sources} ${stats.sources === 1 ? "source" : "sources"} · ${Intl.NumberFormat().format(stats.chars)} chars indexed`
                   : "Most recently used first."}
               </p>
             </div>
@@ -206,6 +223,38 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               </div>
             ))}
           </div>
+
+          {/* The last few generated/edited documents across all notebooks. */}
+          {recentNotes.length > 0 && (
+            <div className="mt-10">
+              <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+                Recent documents
+              </div>
+              <div className="flex flex-col gap-1">
+                {recentNotes.map((n) => (
+                  <div
+                    key={n.id}
+                    onClick={() => openNote(n)}
+                    {...cardButtonProps(() => openNote(n))}
+                    title={`Open in "${notebookTitle.get(n.notebookId) ?? "notebook"}"`}
+                    className="flex cursor-pointer items-center gap-2.5 rounded-md border border-border bg-surface px-3 py-2 transition-colors hover:border-border-strong hover:bg-surface-2"
+                  >
+                    <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="truncate text-[13px] text-foreground">{n.title}</span>
+                    <Badge className="shrink-0 gap-1">
+                      <BookOpen className="h-2.5 w-2.5" />
+                      <span className="max-w-[160px] truncate">
+                        {notebookTitle.get(n.notebookId) ?? "Unknown notebook"}
+                      </span>
+                    </Badge>
+                    <span className="ml-auto shrink-0 text-[11px] text-subtle-foreground">
+                      {relativeTime(n.updatedAt)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Scheduled reports across all notebooks — the app's ongoing activity. */}
           {allReports.length > 0 && (
