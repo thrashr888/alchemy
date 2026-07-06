@@ -7,6 +7,7 @@ import type { SearchHit } from "@/lib/types";
 import { ARTIFACTS } from "./StudioPanel";
 import { useConfirm } from "./ui";
 import {
+  AppWindow,
   BookOpen,
   ChevronLeft,
   Eraser,
@@ -208,6 +209,30 @@ export function CommandPalette() {
             },
           }),
         ),
+      ...notebooks.map(
+        (n): Command => ({
+          id: `nbw-${n.id}`,
+          group: "Navigate",
+          label: `Open in new window: ${n.title}`,
+          keywords: "window parallel side",
+          icon: <AppWindow className="h-3.5 w-3.5" />,
+          run: () => {
+            close();
+            void api.newWindow(n.id);
+          },
+        }),
+      ),
+      {
+        id: "new-window",
+        group: "Navigate",
+        label: "New window",
+        keywords: "open another parallel",
+        icon: <AppWindow className="h-3.5 w-3.5" />,
+        run: () => {
+          close();
+          void api.newWindow();
+        },
+      },
       {
         id: "new-notebook",
         group: "Navigate",

@@ -121,6 +121,7 @@ export const api = {
   listNotes: (notebookId: string) => run(query<Note[]>("list_notes", { notebookId })),
   listRecentNotes: (limit = 6) => run(query<Note[]>("list_recent_notes", { limit })),
   corpusStats: () => run(query<CorpusStats>("corpus_stats")),
+  newWindow: (notebookId?: string) => run(cmd<void>("new_window", { notebookId })),
   searchEverything: (q: string) => run(query<SearchHit[]>("search_everything", { query: q })),
   createNote: (notebookId: string, title: string, content: string) =>
     run(cmd<Note>("create_note", { notebookId, title, content })),

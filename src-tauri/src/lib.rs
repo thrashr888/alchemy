@@ -86,6 +86,7 @@ pub fn run() {
             commands::list_notes,
             commands::list_recent_notes,
             commands::corpus_stats,
+            commands::new_window,
             commands::search_everything,
             commands::create_note,
             commands::update_note,

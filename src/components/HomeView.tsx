@@ -11,6 +11,7 @@ import {
   Clock,
   Plus,
   Power,
+  Search,
   Settings,
   Trash2,
   Pencil,
@@ -104,6 +105,15 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   : `${provider.label} offline`}
             </span>
           </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => useStore.getState().setPaletteOpen(true)}
+            title="Search & commands (⌘K)"
+            aria-label="Open the command menu"
+          >
+            <Search className="h-4 w-4" />
+          </Button>
           <Button variant="ghost" size="icon" onClick={onOpenSettings} title="Settings">
             <Settings className="h-4 w-4" />
           </Button>
