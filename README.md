@@ -60,16 +60,16 @@ built-in embedder. See
 ## Architecture
 
 ```
-┌──────────────────────────────── Tauri window ───────────────────────────────┐
+┌──────────────────────────────── Tauri window ────────────────────────────────┐
 │  React + Tailwind                                                            │
 │  Home (notebook picker)  |  Sources │ Chat (streaming) │ Studio (docs+notes) │
-└───────────────────────────────── IPC (invoke / events) ─────────────────────┘
+└───────────────────────────────── IPC (invoke / events) ──────────────────────┘
                                      │
-┌───────────────────────────────── Rust backend ──────────────────────────────┐
+┌───────────────────────────────── Rust backend ───────────────────────────────┐
 │  commands.rs   Tauri command surface + per-model stats                       │
 │  ingest.rs     extract (pdf/office/url/text) → normalize → structure-aware   │
 │                chunking (paragraphs/headings, title+section context prefix)  │
-│  pdf.rs        PDFium page rasterization for scanned-PDF OCR                  │
+│  pdf.rs        PDFium page rasterization for scanned-PDF OCR                 │
 │  ai/ollama.rs  embeddings, streaming chat, OCR over Ollama HTTP              │
 │  agent.rs      agentic "deep research" retrieval loop                        │
 │  rag.rs        retrieval prompt assembly + generator prompts                 │
@@ -101,7 +101,7 @@ has enough:
 User question
       │
       ▼
-┌─ Planner loop (≤5 steps, one JSON action per step) ─────────────────────────┐
+┌─ Planner loop (≤5 steps, one JSON action per step) ──────────────────────────┐
 │                                                                              │
 │  "search <query>"  hybrid search (vector + BM25, RRF) → top-20 pool          │
 │                        │                                                     │
