@@ -40,10 +40,8 @@ function App() {
         e.preventDefault();
         openSettings();
       } else if (e.key === "k") {
-        const { paletteOpen, setPaletteOpen } = useStore.getState();
-        if (!paletteOpen && document.querySelector('[aria-modal="true"]')) return;
         e.preventDefault();
-        setPaletteOpen(!paletteOpen);
+        useStore.getState().togglePalette();
       }
     };
     window.addEventListener("keydown", onKey);

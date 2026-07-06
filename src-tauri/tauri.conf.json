@@ -41,6 +41,15 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEwNDZCMTNDQ0QxMjM3OTUKUldTVk54TE5QTEZHb05tdmpEdEVZTWlCUmQvVU9uOWdZek5Tb3FvMm1jSXRhb3FwRW4vanQxS24K",
+      "endpoints": [
+        "https://github.com/thrashr888/alchemy/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

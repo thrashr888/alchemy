@@ -4,6 +4,8 @@ import { api } from "@/lib/api";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
 import { SYSTEM_THEME, THEME_LIST, THEMES } from "@/lib/themes";
+import { playDone } from "@/lib/sound";
+import { checkForUpdates, type UpdateFlow } from "@/lib/updates";
 import { Button, Input, Modal, Spinner, Textarea } from "./ui";
 import { cn } from "@/lib/utils";
 import { AlchemySymbol } from "./AlchemyHero";
@@ -21,6 +23,7 @@ import {
   Keyboard,
   Info,
   Globe,
+  SlidersHorizontal,
   UserRound,
 } from "lucide-react";
 
@@ -49,6 +52,7 @@ const SUGGESTED_VISION = [
 
 
 const TABS = [
+  { id: "general", label: "General", icon: SlidersHorizontal },
   { id: "models", label: "Models", icon: Cpu },
   { id: "chat", label: "Chat", icon: MessageSquare },
   { id: "personalization", label: "Personalization", icon: UserRound },
@@ -60,7 +64,7 @@ const TABS = [
 export function SettingsDialog({
   open,
   onClose,
-  initialTab = "models",
+  initialTab = "general",
 }: {
   open: boolean;
   onClose: () => void;
@@ -225,6 +229,7 @@ export function SettingsDialog({
         </nav>
 
         <div className="flex min-w-0 flex-1 flex-col gap-4">
+          {tab === "general" && <GeneralTab />}
           {tab === "models" && (
             <>
               <StatusBox
@@ -878,6 +883,104 @@ function StatusBox({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Toggle row: label + native checkbox, persisted to localStorage. */
+function PrefToggle({
+  storageKey,
+  label,
+  hint,
+  onEnable,
+}: {
+  storageKey: string;
+  label: string;
+  hint: string;
+  onEnable?: () => void;
+}) {
+  const [on, setOn] = useState(localStorage.getItem(storageKey) !== "false");
+  return (
+    <label className="flex cursor-pointer items-start gap-2.5">
+      <input
+        type="checkbox"
+        checked={on}
+        onChange={(e) => {
+          const v = e.target.checked;
+          localStorage.setItem(storageKey, String(v));
+          setOn(v);
+          if (v) onEnable?.();
+        }}
+        className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
+      />
+      <span className="flex flex-col gap-0.5">
+        <span className="text-[13px] text-foreground">{label}</span>
+        <span className="text-[11px] text-subtle-foreground">{hint}</span>
+      </span>
+    </label>
+  );
+}
+
+/** App-level preferences: updates, notifications, sounds. */
+function GeneralTab() {
+  const pushToast = useStore((s) => s.pushToast);
+  const [checking, setChecking] = useState(false);
+  const [update, setUpdate] = useState<UpdateFlow | null>(null);
+  const [installing, setInstalling] = useState(false);
+
+  async function onCheck() {
+    setChecking(true);
+    const flow = await checkForUpdates();
+    setUpdate(flow);
+    setChecking(false);
+    if (flow.status === "none") pushToast("success", "You're on the latest version.");
+    if (flow.status === "error") pushToast("error", `Update check failed: ${flow.message}`);
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-3">
+        <PrefToggle
+          storageKey="autoUpdateCheck"
+          label="Automatically check for updates"
+          hint="Checks GitHub once per launch; installing is always your call."
+        />
+        <div className="flex items-center gap-2 pl-6.5">
+          <Button variant="secondary" size="sm" onClick={() => void onCheck()} loading={checking}>
+            Check for updates…
+          </Button>
+          {update?.status === "available" && (
+            <Button
+              variant="primary"
+              size="sm"
+              loading={installing}
+              onClick={() => {
+                setInstalling(true);
+                void update.install().catch((e) => {
+                  setInstalling(false);
+                  pushToast("error", e instanceof Error ? e.message : String(e));
+                });
+              }}
+            >
+              Install {update.version} & relaunch
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="h-px bg-border" />
+
+      <PrefToggle
+        storageKey="showNotifications"
+        label="Show notifications"
+        hint="Desktop notification when a document, rebuild, or report finishes."
+      />
+      <PrefToggle
+        storageKey="playSounds"
+        label="Play sounds"
+        hint="A soft chime when generation or a chat answer completes."
+        onEnable={playDone}
+      />
     </div>
   );
 }
