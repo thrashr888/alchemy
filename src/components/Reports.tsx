@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useStore } from "@/lib/store";
 import { Button, Input, Textarea, Modal, Spinner } from "./ui";
 import { cn } from "@/lib/utils";
-import { Clock, Plus, Play, Trash2, Power, Pencil } from "lucide-react";
+import { Clock, Eye, EyeOff, Plus, Play, Trash2, Power, Pencil } from "lucide-react";
 import type { ReportSchedule } from "@/lib/types";
 
 const INTERVALS = [
@@ -34,6 +34,13 @@ export function Reports() {
   const generating = useStore((s) => s.generatingKind === "report");
 
   const [editing, setEditing] = useState(false);
+  // Section hidden/shown — persisted so a notes-heavy workflow keeps its room.
+  const [open, setOpen] = useState(localStorage.getItem("studioReportsOpen") !== "false");
+  const toggleOpen = () => {
+    const v = !open;
+    localStorage.setItem("studioReportsOpen", String(v));
+    setOpen(v);
+  };
   // The schedule being edited; null means the modal creates a new one.
   const [editTarget, setEditTarget] = useState<ReportSchedule | null>(null);
   const [name, setName] = useState("");
@@ -61,21 +68,28 @@ export function Reports() {
 
   return (
     <div className="border-t border-border px-4 py-3">
-      <div className="mb-2 flex items-center">
-        <span className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
-          Reports
-        </span>
-        <Button variant="ghost" size="icon" className="ml-auto" onClick={openEditor} title="Schedule a report">
+      <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+        <span>Reports</span>
+        <button
+          onClick={toggleOpen}
+          className="ml-auto rounded p-0.5 transition-colors hover:text-foreground"
+          title={open ? "Hide reports" : "Show reports"}
+          aria-label={open ? "Hide reports" : "Show reports"}
+          aria-expanded={open}
+        >
+          {open ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+        </button>
+        <Button variant="ghost" size="icon" onClick={openEditor} title="Schedule a report">
           <Plus className="h-4 w-4" />
         </Button>
       </div>
 
-      {schedules.length === 0 ? (
-        <p className="text-[11px] text-subtle-foreground">
+      {!open ? null : schedules.length === 0 ? (
+        <p className="mt-2 text-[11px] text-subtle-foreground">
           Schedule recurring reports that refresh your URL sources, then generate a timestamped note.
         </p>
       ) : (
-        <div className="flex flex-col gap-1">
+        <div className="mt-2 flex flex-col gap-1">
           {schedules.map((r) => (
             <div key={r.id} className="group flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-surface-2">
               <button
