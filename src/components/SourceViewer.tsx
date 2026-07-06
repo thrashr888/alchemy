@@ -1,11 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { Modal, Input, Spinner } from "./ui";
 import { sourceIcon } from "./SourcesPanel";
-import { cn } from "@/lib/utils";
-import { ChevronDown, ChevronUp, ExternalLink, Search, X } from "lucide-react";
+import { cn, isWebUrl } from "@/lib/utils";
+import {
+  ChevronDown,
+  ChevronUp,
+  ExternalLink,
+  FolderOpen,
+  MessageSquarePlus,
+  Scale,
+  Search,
+  Sparkles,
+  X,
+} from "lucide-react";
 
 const esc = (w: string) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -46,16 +56,24 @@ function findMatches(content: string, query: string): [number, number][] {
   return out;
 }
 
+/** How much selected text travels into a chat question before truncation. */
+const MAX_PASSAGE_CHARS = 1200;
+
 /** Full-text reader for a source, scrolled to a cited passage or search hit. */
 export function SourceViewer() {
   const viewing = useStore((s) => s.viewingSource);
   const close = useStore((s) => s.closeSourceViewer);
   const sources = useStore((s) => s.sources);
+  const sendMessage = useStore((s) => s.sendMessage);
+  const sending = useStore((s) => s.sending);
   const [content, setContent] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
+  /** Live text selection inside the reader body, with popover coordinates. */
+  const [sel, setSel] = useState<{ text: string; top: number; left: number } | null>(null);
   const markRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
   // Cmd/Ctrl+F focuses the find field while the reader is open.
   useEffect(() => {
@@ -77,6 +95,7 @@ export function SourceViewer() {
     setContent(null);
     setQuery("");
     setActive(0);
+    setSel(null);
     if (!viewing) return;
     let stale = false;
     api
@@ -118,6 +137,63 @@ export function SourceViewer() {
     setActive((a) => (a + dir + matches.length) % matches.length);
   };
 
+  const title = source?.title ?? viewing?.title ?? "this source";
+
+  /** Track the selection inside the reader body to place the ask toolbar. */
+  function updateSelection() {
+    const container = bodyRef.current;
+    const s = window.getSelection();
+    if (!container || !s || s.isCollapsed || s.rangeCount === 0) {
+      setSel(null);
+      return;
+    }
+    const range = s.getRangeAt(0);
+    if (!container.contains(range.commonAncestorContainer)) {
+      setSel(null);
+      return;
+    }
+    const text = s.toString().trim();
+    if (text.length < 3) {
+      setSel(null);
+      return;
+    }
+    const rect = range.getBoundingClientRect();
+    const wrap = container.getBoundingClientRect();
+    setSel({
+      text,
+      // Coordinates are relative to the scroll container so the toolbar
+      // travels with the text; clamped so it never clips out of view.
+      top: Math.max(rect.top - wrap.top + container.scrollTop, 44),
+      left: Math.min(
+        Math.max(rect.left - wrap.left + rect.width / 2, 150),
+        Math.max(wrap.width - 150, 150),
+      ),
+    });
+  }
+
+  const selectedPassage = () =>
+    sel && sel.text.length > MAX_PASSAGE_CHARS
+      ? `${sel.text.slice(0, MAX_PASSAGE_CHARS)}…`
+      : (sel?.text ?? "");
+
+  /** Fire a grounded chat question about the selected passage and close. */
+  function askAbout(question: string) {
+    const p = selectedPassage();
+    if (!p) return;
+    setSel(null);
+    close();
+    void sendMessage(`${question}\n\n"${p}"`);
+  }
+
+  /** Stage the passage in the composer so the user can write the question. */
+  function askCustom() {
+    const p = selectedPassage();
+    if (!p) return;
+    setSel(null);
+    close();
+    useStore.setState({ pendingInput: `About this passage from "${title}":\n"${p}"\n\n` });
+  }
+
   const segments: { text: string; hit: boolean; current: boolean }[] = [];
   if (content) {
     let pos = 0;
@@ -146,16 +222,26 @@ export function SourceViewer() {
                 {source.chunkCount} chunks · {Intl.NumberFormat().format(source.charCount)} chars
               </span>
             )}
-            {source?.url && (
-              <button
-                className="inline-flex items-center gap-1 text-[11px] text-citation hover:underline"
-                onClick={() => void openUrl(source.url)}
-                title={source.url}
-              >
-                Open original
-                <ExternalLink className="h-3 w-3" />
-              </button>
-            )}
+            {source?.url &&
+              (isWebUrl(source.url) ? (
+                <button
+                  className="inline-flex items-center gap-1 text-[11px] text-citation hover:underline"
+                  onClick={() => void openUrl(source.url)}
+                  title={source.url}
+                >
+                  Open original
+                  <ExternalLink className="h-3 w-3" />
+                </button>
+              ) : (
+                <button
+                  className="inline-flex items-center gap-1 text-[11px] text-citation hover:underline"
+                  onClick={() => void revealItemInDir(source.url)}
+                  title={source.url}
+                >
+                  Show in Finder
+                  <FolderOpen className="h-3 w-3" />
+                </button>
+              ))}
             <div className="ml-auto flex items-center gap-1.5">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-subtle-foreground" />
@@ -208,7 +294,47 @@ export function SourceViewer() {
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-border bg-surface-2/40 p-4">
+          <div
+            ref={bodyRef}
+            onMouseUp={updateSelection}
+            className="relative min-h-0 flex-1 overflow-y-auto rounded-md border border-border bg-surface-2/40 p-4"
+          >
+            {sel && content && (
+              <div
+                className="absolute z-10 flex items-center gap-0.5 rounded-md border border-border-strong bg-elevated p-0.5 shadow-lg"
+                style={{ top: sel.top, left: sel.left, transform: "translate(-50%, calc(-100% - 6px))" }}
+                // preventDefault keeps the browser from collapsing the
+                // selection on mousedown; stopPropagation keeps the container's
+                // mouseup handler from dismissing the toolbar before click.
+                onMouseDown={(e) => e.preventDefault()}
+                onMouseUp={(e) => e.stopPropagation()}
+                role="toolbar"
+                aria-label="Ask about selection"
+              >
+                <SelAction
+                  icon={<Sparkles className="h-3.5 w-3.5" />}
+                  label="Explain"
+                  disabled={sending}
+                  onClick={() => askAbout(`Explain this passage from "${title}":`)}
+                />
+                <SelAction
+                  icon={<Scale className="h-3.5 w-3.5" />}
+                  label="Compare sources"
+                  disabled={sending}
+                  onClick={() =>
+                    askAbout(
+                      `What do the other sources say about this passage from "${title}"? ` +
+                        "Note where they agree, disagree, or add context:",
+                    )
+                  }
+                />
+                <SelAction
+                  icon={<MessageSquarePlus className="h-3.5 w-3.5" />}
+                  label="Ask…"
+                  onClick={askCustom}
+                />
+              </div>
+            )}
             {content === null ? (
               <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
                 <Spinner className="h-3.5 w-3.5" /> Loading source…
@@ -243,5 +369,32 @@ export function SourceViewer() {
         </div>
       )}
     </Modal>
+  );
+}
+
+/** One action in the floating selection toolbar. */
+function SelAction({
+  icon,
+  label,
+  onClick,
+  disabled,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      className={cn(
+        "flex items-center gap-1.5 whitespace-nowrap rounded px-2 py-1 text-[12px] text-foreground/90",
+        "transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40",
+      )}
+      onClick={onClick}
+      disabled={disabled}
+    >
+      <span className="text-citation">{icon}</span>
+      {label}
+    </button>
   );
 }

@@ -82,6 +82,8 @@ interface AppState {
   error: string | null;
   /** Text of a chat send that failed, handed back to the composer so it isn't lost. */
   failedInput: string | null;
+  /** Text another surface (e.g. the source reader) wants in the composer. */
+  pendingInput: string | null;
   /** Ephemeral toasts (success/info auto-dismiss; errors linger a bit longer). */
   toasts: Toast[];
   /** Id of a just-generated note, so the Studio panel can auto-open it. */
@@ -254,6 +256,7 @@ export const useStore = create<AppState>((set, get) => {
   pendingAddUrl: false,
   embedderDownload: null,
   failedInput: null,
+  pendingInput: null,
   error: null,
   toasts: [],
   justCreatedNoteId: null,
