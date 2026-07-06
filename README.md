@@ -61,6 +61,8 @@ built-in embedder. See
 
 ## Architecture
 
+![Alchemy app architecture — React UI, Tauri IPC, Rust backend, LanceDB storage, and local or gateway AI providers](docs/architecture-app-map.png)
+
 ```
 ┌──────────────────────────────── Tauri window ────────────────────────────────┐
 │  React + Tailwind                                                            │
@@ -93,11 +95,15 @@ numbered excerpts in the prompt, and the model answers with `[n]` citations
 that map back to the retrieved chunks shown in the UI.
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+![Normal RAG flow — source ingestion, hybrid retrieval, prompt assembly, and streamed cited answer](docs/architecture-rag-flow.png)
+
 ### Deep-research (agent mode) loop
 
 In agent mode (`agent.rs`), the model plans its own retrieval before answering.
 Each step it emits one JSON action; evidence accumulates until it decides it
 has enough:
+
+![Deep research / RLM mode — planner loop, search/read actions, reranking, distillation, evidence pool, and final writer](docs/architecture-rlm-flow.png)
 
 ```
 User question
@@ -148,6 +154,18 @@ and any source that exceeds its allocation gets the same distillation
 treatment — the overflow is distilled against the generation instructions and
 appended, so a big source contributes its relevant passages instead of losing
 everything past the cut.
+
+### Chat tracing flow
+
+The UI traces long-running chat work through Tauri events. `ChatPanel` starts a
+send through the Zustand store and `api.sendMessage` / `api.sendMessageAgentic`;
+the backend persists the user turn, emits `chat://step` progress labels for
+tooling and agent work, emits `chat://token` deltas as the model streams, then
+emits `chat://done` after the assistant message is saved. The store appends
+live text into `streamingText`, records progress labels in `steps[]`, and then
+reloads canonical messages, sources, notes, and report schedules.
+
+![Chat tracing flow — frontend store, Tauri invoke, backend progress events, streamed tokens, completion, and scoped cancellation](docs/architecture-tracing-flow.png)
 
 ## Install (Apple Silicon)
 
