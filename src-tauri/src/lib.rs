@@ -61,9 +61,13 @@ pub fn run() {
                 tauri::async_runtime::block_on(db.list_notebooks())
                     .map(|nbs| nbs.into_iter().map(|n| (n.id, n.title)).collect())
                     .unwrap_or_default();
-            let (app_menu, recent_menu) = menu::build(&app.handle().clone(), &recents)?;
-            app.set_menu(app_menu)?;
-            app.manage(menu::RecentMenu(recent_menu));
+            let handles = menu::build(&app.handle().clone(), &recents)?;
+            app.set_menu(handles.menu)?;
+            // Only after set_menu does the NSMenu exist — now AppKit can be
+            // told this is the windows menu and start listing open windows.
+            #[cfg(target_os = "macos")]
+            handles.window.set_as_windows_menu_for_nsapp()?;
+            app.manage(menu::RecentMenu(handles.recent));
 
             let runtime = commands::ai_runtime(app.handle().clone(), data_dir.clone());
             app.manage(AppState {

@@ -1,0 +1,58 @@
+<svg width="1720" height="860" viewBox="0 0 1720 860" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1720" height="860" fill="#0a0b0d"/>
+  <text x="32" y="48" fill="#eceef1" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="24" font-weight="600">Alchemy monogram iterations</text>
+  <text x="32" y="78" fill="#8a8f98" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="16">Monogram direction crossed with cleaner alchemy sigils. Preview only; src-tauri/icons is untouched.</text>
+
+  <g transform="translate(32 112)">
+    <rect width="320" height="360" rx="22" fill="#141518" stroke="#32353e"/>
+    <image href="previous-monogram.png" x="50" y="30" width="220" height="220"/>
+    <text x="22" y="286" fill="#eceef1" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="16" font-weight="500">Previous Monogram</text>
+    <image href="previous-monogram.png" x="52" y="328" width="16" height="16"/>
+    <image href="previous-monogram.png" x="132" y="320" width="32" height="32"/>
+    <image href="previous-monogram.png" x="204" y="304" width="64" height="64"/>
+  </g>
+
+  <g transform="translate(370 112)">
+    <rect width="320" height="360" rx="22" fill="#141518" stroke="#32353e"/>
+    <image href="alchemy-monogram-01-philosopher.svg" x="50" y="30" width="220" height="220"/>
+    <text x="22" y="286" fill="#eceef1" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="16" font-weight="500">01 Philosopher</text>
+    <image href="alchemy-monogram-01-philosopher.svg" x="52" y="328" width="16" height="16"/>
+    <image href="alchemy-monogram-01-philosopher.svg" x="132" y="320" width="32" height="32"/>
+    <image href="alchemy-monogram-01-philosopher.svg" x="204" y="304" width="64" height="64"/>
+  </g>
+
+  <g transform="translate(708 112)">
+    <rect width="320" height="360" rx="22" fill="#141518" stroke="#32353e"/>
+    <image href="alchemy-monogram-02-hexagram.svg" x="50" y="30" width="220" height="220"/>
+    <text x="22" y="286" fill="#eceef1" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="16" font-weight="500">02 Hexagram</text>
+    <image href="alchemy-monogram-02-hexagram.svg" x="52" y="328" width="16" height="16"/>
+    <image href="alchemy-monogram-02-hexagram.svg" x="132" y="320" width="32" height="32"/>
+    <image href="alchemy-monogram-02-hexagram.svg" x="204" y="304" width="64" height="64"/>
+  </g>
+
+  <g transform="translate(1046 112)">
+    <rect width="320" height="360" rx="22" fill="#141518" stroke="#32353e"/>
+    <image href="alchemy-monogram-03-squared-circle.svg" x="50" y="30" width="220" height="220"/>
+    <text x="22" y="286" fill="#eceef1" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="16" font-weight="500">03 Squared Circle</text>
+    <image href="alchemy-monogram-03-squared-circle.svg" x="52" y="328" width="16" height="16"/>
+    <image href="alchemy-monogram-03-squared-circle.svg" x="132" y="320" width="32" height="32"/>
+    <image href="alchemy-monogram-03-squared-circle.svg" x="204" y="304" width="64" height="64"/>
+  </g>
+
+  <g transform="translate(1384 112)">
+    <rect width="320" height="360" rx="22" fill="#141518" stroke="#32353e"/>
+    <image href="alchemy-monogram-04-celestial.svg" x="50" y="30" width="220" height="220"/>
+    <text x="22" y="286" fill="#eceef1" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="16" font-weight="500">04 Celestial</text>
+    <image href="alchemy-monogram-04-celestial.svg" x="52" y="328" width="16" height="16"/>
+    <image href="alchemy-monogram-04-celestial.svg" x="132" y="320" width="32" height="32"/>
+    <image href="alchemy-monogram-04-celestial.svg" x="204" y="304" width="64" height="64"/>
+  </g>
+
+  <g transform="translate(32 528)" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif">
+    <text x="0" y="0" fill="#eceef1" font-size="18" font-weight="600">Read</text>
+    <text x="0" y="34" fill="#8a8f98" font-size="15">01 keeps the clearest alchemy reference without overpowering the A.</text>
+    <text x="0" y="62" fill="#8a8f98" font-size="15">02 is more occult/transmutation-forward, but the line density starts to compete at small sizes.</text>
+    <text x="0" y="90" fill="#8a8f98" font-size="15">03 is the most geometric and app-icon-like; it reads as a constructed mark rather than a radar UI.</text>
+    <text x="0" y="118" fill="#8a8f98" font-size="15">04 is the quietest variant and leaves the A very legible, but it is less instantly alchemical.</text>
+  </g>
+</svg>
