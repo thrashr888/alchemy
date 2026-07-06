@@ -1,16 +1,34 @@
-//! macOS application menu. Custom actions emit `menu://…` events to the
-//! focused window; the frontend routes them to the same store actions the
-//! in-app shortcuts use. "Open Recent" is rebuilt (via `rebuild_app_menu`)
-//! whenever the notebook list changes.
+//! macOS application menu. Custom actions broadcast `menu://…` events whose
+//! payload names the target window — each window's frontend ignores events
+//! not addressed to it (JS "Any" listeners receive every event regardless of
+//! emit target, so target-side filtering is the only reliable routing).
+//!
+//! The menu is built ONCE: AppKit only auto-populates the windows menu with
+//! windows created after it's assigned, so rebuilding the menu would empty
+//! the Window list. "Open Recent" is refreshed by mutating its items in
+//! place (`fill_recents`).
 
-use tauri::menu::{Menu, MenuItemBuilder, SubmenuBuilder};
+use tauri::menu::{Menu, MenuItemBuilder, Submenu, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
 /// How many notebooks Open Recent shows.
 const RECENT_LIMIT: usize = 6;
 
-/// Build the full app menu. `recents` is (notebook id, title), newest first.
-pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<Menu<Wry>> {
+/// Managed handle to the Open Recent submenu, for in-place refreshes.
+pub struct RecentMenu(pub Submenu<Wry>);
+
+#[derive(Clone, serde::Serialize)]
+struct MenuPayload {
+    /// Window label this action is addressed to.
+    target: String,
+    id: String,
+}
+
+/// Build the full app menu; returns it plus the Open Recent handle.
+pub fn build(
+    app: &AppHandle,
+    recents: &[(String, String)],
+) -> tauri::Result<(Menu<Wry>, Submenu<Wry>)> {
     let settings = MenuItemBuilder::with_id("menu-settings", "Settings…")
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
@@ -29,24 +47,15 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<Men
         .quit()
         .build()?;
 
-    let mut recent_menu = SubmenuBuilder::new(app, "Open Recent");
-    for (id, title) in recents.iter().take(RECENT_LIMIT) {
-        recent_menu =
-            recent_menu.item(&MenuItemBuilder::with_id(format!("recent:{id}"), title).build(app)?);
-    }
-    if recents.is_empty() {
-        recent_menu = recent_menu.item(
-            &MenuItemBuilder::new("No notebooks yet")
-                .enabled(false)
-                .build(app)?,
-        );
-    }
+    let recent_menu = SubmenuBuilder::new(app, "Open Recent").build()?;
+    fill_recents(app, &recent_menu, recents)?;
+
     let new_window = MenuItemBuilder::with_id("menu-new-window", "New Window")
         .accelerator("CmdOrCtrl+Shift+N")
         .build(app)?;
     let file_menu = SubmenuBuilder::new(app, "File")
         .item(&new_window)
-        .item(&recent_menu.build()?)
+        .item(&recent_menu)
         .separator()
         .close_window()
         .build()?;
@@ -81,26 +90,60 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<Men
     #[cfg(target_os = "macos")]
     window_menu.set_as_windows_menu_for_nsapp()?;
 
-    Menu::with_items(
+    let menu = Menu::with_items(
         app,
         &[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu],
-    )
+    )?;
+    Ok((menu, recent_menu))
 }
 
-/// Route a menu click to the focused window (falling back to any window) so
-/// e.g. Settings opens once, where the user is — not in every window.
+/// Replace the Open Recent items in place (the menu itself is never rebuilt).
+pub fn fill_recents(
+    app: &AppHandle,
+    submenu: &Submenu<Wry>,
+    recents: &[(String, String)],
+) -> tauri::Result<()> {
+    while submenu.remove_at(0)?.is_some() {}
+    if recents.is_empty() {
+        submenu.append(
+            &MenuItemBuilder::new("No notebooks yet")
+                .enabled(false)
+                .build(app)?,
+        )?;
+        return Ok(());
+    }
+    for (id, title) in recents.iter().take(RECENT_LIMIT) {
+        submenu.append(&MenuItemBuilder::with_id(format!("recent:{id}"), title).build(app)?)?;
+    }
+    Ok(())
+}
+
+/// Address a menu click to the focused window ("main", then any, as
+/// fallbacks). The event broadcasts, but only the addressed window acts.
 pub fn handle_event(app: &AppHandle, id: &str) {
     let windows = app.webview_windows();
     let target = windows
         .values()
         .find(|w| w.is_focused().unwrap_or(false))
-        .or_else(|| windows.values().next());
-    let Some(win) = target else { return };
-    // emit_to targets ONE window — plain emit broadcasts to every window,
-    // which turned "New Window" into exponential window spawning.
+        .map(|w| w.label().to_string())
+        .or_else(|| windows.contains_key("main").then(|| "main".to_string()))
+        .or_else(|| windows.keys().next().cloned());
+    let Some(target) = target else { return };
     if let Some(nb) = id.strip_prefix("recent:") {
-        let _ = win.emit_to(win.label(), "menu://open-notebook", nb.to_string());
+        let _ = app.emit(
+            "menu://open-notebook",
+            MenuPayload {
+                target,
+                id: nb.to_string(),
+            },
+        );
     } else {
-        let _ = win.emit_to(win.label(), "menu://action", id.to_string());
+        let _ = app.emit(
+            "menu://action",
+            MenuPayload {
+                target,
+                id: id.to_string(),
+            },
+        );
     }
 }
