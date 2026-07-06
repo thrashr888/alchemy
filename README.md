@@ -1,3 +1,5 @@
+![Alchemy — local-first research notebooks](docs/readme-header.png)
+
 # Alchemy
 
 A local-first, privacy-respecting desktop app inspired by
