@@ -266,7 +266,7 @@ export function SettingsDialog({
                 <>
                   <Field
                     label="Gateway URL"
-                    hint="Any OpenAI-compatible base URL works (usually ends in /v1)."
+                    hint="Empty = inferred from your key for OpenAI, Anthropic, OpenRouter, and Groq. Any OpenAI-compatible base URL works (usually ends in /v1)."
                   >
                     <Input
                       value={draft.openaiBaseUrl}
@@ -390,13 +390,22 @@ export function SettingsDialog({
               {draft.provider === "openai" ? (
                 <Field
                   label="Vision model"
-                  hint="OCR for images & scanned PDFs runs through a vision-capable gateway model."
+                  hint="Pick a vision-capable model (e.g. gpt-4o or a Claude model) to enable OCR for images & scanned PDFs."
                 >
-                  <Input
-                    value={draft.openaiVisionModel ?? ""}
-                    onChange={(e) => setDraft({ ...draft, openaiVisionModel: e.target.value })}
-                    placeholder="a vision-capable model id (empty = OCR disabled)"
-                  />
+                  {gatewayModels.length > 0 ? (
+                    <Select
+                      value={draft.openaiVisionModel ?? ""}
+                      onChange={(v) => setDraft({ ...draft, openaiVisionModel: v })}
+                      options={gatewayModels}
+                      emptyLabel="OCR disabled — choose a vision-capable model to enable"
+                    />
+                  ) : (
+                    <Input
+                      value={draft.openaiVisionModel ?? ""}
+                      onChange={(e) => setDraft({ ...draft, openaiVisionModel: e.target.value })}
+                      placeholder="a vision-capable model id (empty = OCR disabled)"
+                    />
+                  )}
                 </Field>
               ) : (
                 <Field
@@ -911,10 +920,13 @@ function Select({
   value,
   onChange,
   options,
+  emptyLabel,
 }: {
   value: string;
   onChange: (v: string) => void;
   options: string[];
+  /** When set, "" is always offered with this label (a real, selectable state). */
+  emptyLabel?: string;
 }) {
   const list = options.includes(value) || !value ? options : [value, ...options];
   return (
@@ -923,7 +935,7 @@ function Select({
       onChange={(e) => onChange(e.target.value)}
       className="h-8 w-full appearance-none rounded-md border border-input bg-surface-2 px-2.5 text-[13px] text-foreground outline-none transition-colors focus:border-ring/60"
     >
-      {!value && <option value="">Choose a model…</option>}
+      {(emptyLabel || !value) && <option value="">{emptyLabel ?? "Choose a model…"}</option>}
       {list.map((m) => (
         <option key={m} value={m}>
           {m}

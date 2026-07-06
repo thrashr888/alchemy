@@ -248,6 +248,9 @@ Any OpenAI-compatible endpoint works. Settings that are known-good:
 | **LM Studio**  | `http://localhost:1234/v1`                       | _(none)_                                                                     | Local server; load a model in LM Studio first                |
 | **Ollama**     | `http://localhost:11434/v1`                      | _(none)_                                                                     | Ollama's own OpenAI-compat endpoint (or just use the native Ollama provider) |
 
+You can leave the **Gateway URL empty** for OpenAI, Anthropic, OpenRouter, Groq,
+and Bob-style keys — Alchemy infers the URL from the key format.
+
 For OCR of images and scanned PDFs, set a **vision-capable** model as the gateway
 vision model (e.g. `gpt-4o`, a Claude model, or any vision model on OpenRouter);
 leaving it empty disables OCR. Embeddings never leave your machine regardless of

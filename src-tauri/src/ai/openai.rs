@@ -31,12 +31,13 @@ impl OpenAiClient {
             .timeout(std::time::Duration::from_secs(600))
             .build()
             .expect("failed to build reqwest client");
-        // An unset base stays a clearly-invalid placeholder host so request
-        // errors read as "configure the gateway URL", never as a panic on a
-        // relative (schemeless) URL.
+        // An empty base is inferred from the key format for well-known
+        // providers; otherwise it stays a clearly-invalid placeholder host so
+        // request errors read as "configure the gateway URL", never as a
+        // panic on a relative (schemeless) URL.
         let base = base_url.trim().trim_end_matches('/');
         let base = if base.is_empty() {
-            "http://gateway-url-not-set.invalid/v1"
+            default_base_for_key(api_key).unwrap_or("http://gateway-url-not-set.invalid/v1")
         } else {
             base
         };
@@ -362,6 +363,26 @@ fn sniff_mime(head: &[u8]) -> &'static str {
     }
 }
 
+/// Providers recognizable by their key format, so the URL field can stay
+/// empty for them. Order matters: the specific `sk-ant-`/`sk-or-` prefixes
+/// must match before the generic `sk-`.
+fn default_base_for_key(key: &str) -> Option<&'static str> {
+    let key = key.trim();
+    if key.starts_with("sk-ant-") {
+        Some("https://api.anthropic.com/v1")
+    } else if key.starts_with("sk-or-") {
+        Some("https://openrouter.ai/api/v1")
+    } else if key.starts_with("gsk_") {
+        Some("https://api.groq.com/openai/v1")
+    } else if key.starts_with("bob_") {
+        Some("https://api.us-east.bob.ibm.com/inference/v1")
+    } else if key.starts_with("sk-") {
+        Some("https://api.openai.com/v1")
+    } else {
+        None
+    }
+}
+
 /// Three dot-separated non-empty segments — the shape of a JWT.
 fn looks_like_jwt(key: &str) -> bool {
     let parts: Vec<&str> = key.split('.').collect();
@@ -384,5 +405,34 @@ fn truncate(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         s.chars().take(max).collect::<String>() + "…"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_formats_infer_provider_urls() {
+        assert_eq!(
+            default_base_for_key("sk-ant-abc"),
+            Some("https://api.anthropic.com/v1")
+        );
+        assert_eq!(
+            default_base_for_key("sk-or-v1-abc"),
+            Some("https://openrouter.ai/api/v1")
+        );
+        assert_eq!(
+            default_base_for_key("gsk_abc"),
+            Some("https://api.groq.com/openai/v1")
+        );
+        // Generic sk- matches only after the specific prefixes.
+        assert_eq!(
+            default_base_for_key("sk-abc123"),
+            Some("https://api.openai.com/v1")
+        );
+        assert!(default_base_for_key("bob_prod_x").is_some());
+        assert!(default_base_for_key("something-else").is_none());
+        assert!(default_base_for_key("").is_none());
     }
 }
