@@ -401,9 +401,18 @@ export const useStore = create<AppState>((set, get) => {
   closeSettings: () => set({ settingsOpen: false }),
   setPaletteOpen: (open) => set({ paletteOpen: open }),
   togglePalette: () => {
-    const { paletteOpen } = get();
-    if (!paletteOpen && document.querySelector('[aria-modal="true"]')) return;
-    set({ paletteOpen: !paletteOpen });
+    const { paletteOpen, settingsOpen } = get();
+    if (paletteOpen) {
+      set({ paletteOpen: false });
+      return;
+    }
+    // Explicit intent wins: an open dialog is dismissed (same as pressing
+    // Escape first), never silently swallowed.
+    if (settingsOpen) get().closeSettings();
+    if (document.querySelector('[aria-modal="true"]')) {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    }
+    set({ paletteOpen: true });
   },
 
   toggleSources: () => {
