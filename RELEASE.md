@@ -58,7 +58,8 @@ You need three things on your machine:
    ```bash
    pnpm tauri signer generate --write-keys ~/.tauri/alchemy.key --password ""
    ```
-   Losing this key means shipped apps can no longer verify updates — back it up.
+   Losing this key means shipped apps can no longer verify updates. A verified
+   copy lives in 1Password (Private vault, "Alchemy Tauri Updater Key").
    The release publishes `Alchemy.app.tar.gz`, its `.sig`, and `latest.json`
    alongside the DMG; the app checks
    `releases/latest/download/latest.json` on launch.
