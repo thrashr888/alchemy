@@ -1147,15 +1147,13 @@ async fn try_tool_route(
     }
     // "Add those URLs" — resolve the referent from recent messages and
     // citation snippets. Deterministic, so it also works in deep-research mode.
+    // No URLs in context ("find me sources for X")? Fall through to chat: the
+    // model sees the sources' URLs and can propose concrete ones to add.
     if urls.is_empty() && wants_add_context_urls(content) && !has_non_add_verb(content) {
         let ctx = recent_context_urls(state, notebook_id).await;
-        if ctx.is_empty() {
-            return Some(
-                "I couldn't find any new URLs in the recent conversation to add — paste the addresses and I'll add them."
-                    .to_string(),
-            );
+        if !ctx.is_empty() {
+            return Some(add_url_sources(app, state, notebook_id, &ctx).await);
         }
-        return Some(add_url_sources(app, state, notebook_id, &ctx).await);
     }
     if !allow_router {
         return None;
@@ -1620,11 +1618,12 @@ pub async fn send_message(
         .search_chunks(&notebook_id, query_vec, &content, 8)
         .await)?;
 
-    // Full source manifest so corpus-level questions are answerable regardless
-    // of which chunks the top-k search happened to surface.
-    let source_titles: Vec<String> = e(state.db.list_sources(&notebook_id).await)?
+    // Full source manifest (title + url) so corpus-level questions are
+    // answerable regardless of which chunks the top-k search happened to
+    // surface, and the model can propose new addable URLs.
+    let source_manifest: Vec<(String, String)> = e(state.db.list_sources(&notebook_id).await)?
         .into_iter()
-        .map(|s| s.title)
+        .map(|s| (s.title, s.url))
         .collect();
 
     // Build prompt with short history (exclude the just-added user msg from window).
@@ -1645,7 +1644,7 @@ pub async fn send_message(
         &history_turns,
         &content,
         &citations,
-        &source_titles,
+        &source_manifest,
         &extra,
         &persona,
     );

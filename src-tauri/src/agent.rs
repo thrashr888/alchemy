@@ -152,18 +152,18 @@ pub async fn run(
     }
 
     emit_step(app, "Writing answer".into());
-    let source_titles: Vec<String> = db
+    let source_manifest: Vec<(String, String)> = db
         .list_sources(notebook_id)
         .await?
         .into_iter()
-        .map(|s| s.title)
+        .map(|s| (s.title, s.url))
         .collect();
     let persona = rag::persona_block(&ollama.config().profile);
     let messages = rag::build_chat_messages(
         history,
         question,
         &gathered,
-        &source_titles,
+        &source_manifest,
         extra_system,
         &persona,
     );
