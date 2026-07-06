@@ -87,6 +87,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [gwUrl, setGwUrl] = useState("");
   const [gwKey, setGwKey] = useState("");
   const [gwModel, setGwModel] = useState("");
+  const [gwVision, setGwVision] = useState("");
   const [gwSaving, setGwSaving] = useState(false);
   const [gwModels, setGwModels] = useState<string[]>([]);
   const [gwStatus, setGwStatus] = useState<string | null>(null);
@@ -97,6 +98,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
       setGwUrl((v) => v || aiConfig.openaiBaseUrl);
       setGwKey((v) => v || aiConfig.openaiApiKey);
       setGwModel((v) => v || aiConfig.openaiChatModel);
+      setGwVision((v) => v || aiConfig.openaiVisionModel);
     }
   }, [aiConfig]);
 
@@ -133,6 +135,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
       openaiBaseUrl: gwUrl.trim(),
       openaiApiKey: gwKey.trim(),
       openaiChatModel: model,
+      openaiVisionModel: gwVision.trim(),
     });
     if (model) {
       // Let the success state land before health flips the overlay away.
@@ -212,13 +215,18 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
             <Input
               value={gwUrl}
               onChange={(e) => setGwUrl(e.target.value)}
-              placeholder="Gateway URL (usually ends in /v1)"
+              placeholder="Gateway URL — optional for OpenAI / Anthropic / OpenRouter / Groq keys"
             />
             <Input
               type="password"
               value={gwKey}
               onChange={(e) => setGwKey(e.target.value)}
               placeholder="API key"
+            />
+            <Input
+              value={gwVision}
+              onChange={(e) => setGwVision(e.target.value)}
+              placeholder="Vision model for OCR (optional, e.g. gpt-4o)"
             />
             <div className="flex gap-1.5">
               {gwModels.length > 0 ? (
@@ -246,6 +254,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
               <Button
                 variant="primary"
                 size="sm"
+                className="shrink-0"
                 onClick={() => void saveGateway()}
                 loading={gwSaving}
                 disabled={!gwKey.trim() && !gwUrl.trim()}
@@ -326,12 +335,16 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
           </Step>
 
           <Step
-            ok={health.reachable && vision.working}
+            ok={provider === "openai" ? vision.working : health.reachable && vision.working}
             optional
             title="Vision model"
-            detail="Enables OCR for images and scanned PDFs. Skip it if you don't need that."
+            detail={
+              provider === "openai"
+                ? "Enables OCR for images and scanned PDFs — set a vision-capable model (e.g. gpt-4o) in the Gateway box above."
+                : "Enables OCR for images and scanned PDFs. Skip it if you don't need that."
+            }
           >
-            {health.reachable && (
+            {provider !== "openai" && health.reachable && (
               <CommandChip command={`ollama pull ${vision.name || "glm-ocr"}`} />
             )}
           </Step>
