@@ -148,7 +148,7 @@ pub struct Note {
     pub title: String,
     pub content: String,
     /// "note" | "summary" | "faq" | "study_guide" | "briefing" | "timeline" |
-    /// "insights" | "flashcards" | "quiz" | "data_table" | "problems" |
+    /// "insights" | "flashcards" | "quiz" | "mind_map" | "data_table" | "problems" |
     /// "prd" | "prfaq" | "rfc" | "skill" | "report"
     #[serde(default = "default_note_kind")]
     pub kind: String,

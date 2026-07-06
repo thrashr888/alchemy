@@ -184,6 +184,16 @@ pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
              the tables, add a short **Notes** list for caveats or conflicting figures between \
              sources. Every value must come from the sources — do not estimate.",
         )),
+        "mind_map" => Some((
+            "Mind Map",
+            "Distill the sources below into a mind-map outline. The FIRST line is the central \
+             topic: 2-5 words, no bullet, no heading marks. Every following line is a `- ` bullet, \
+             indented by exactly two additional spaces per level. Use 3-6 main branches that \
+             together cover the whole corpus, each with 2-5 sub-items, going at most 3 levels \
+             below the root. Keep every label short — 5 words or fewer, telegraphic style. \
+             Output ONLY the outline: no prose before or after, no headings, no code fences, \
+             no bold or other formatting.",
+        )),
         "problems" => Some((
             "Problems",
             "Critically analyze the sources below and identify the problems in them: factual errors, unsupported \
