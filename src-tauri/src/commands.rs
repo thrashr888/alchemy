@@ -403,29 +403,41 @@ async fn friendly_title(state: &AppState, extracted: &mut ingest::Extracted) {
     }
 }
 
+/// Extract a local file through the full pipeline (Google placeholder fetch,
+/// image OCR, scanned-PDF OCR fallback, plain extraction). File-backed results
+/// record the originating path in `url` so the source can be refreshed from
+/// disk later; Google placeholders keep their cloud URL instead.
+async fn extract_any_file(state: &AppState, path: &str) -> anyhow::Result<ingest::Extracted> {
+    let mut extracted = if let Some(url) = ingest::google_placeholder_url(path) {
+        // Google Drive desktop placeholder — the content lives in the cloud;
+        // fetch it through the same export path as a pasted docs.google.com URL.
+        ingest::extract_url(&url).await?
+    } else if ingest::is_image(path) {
+        extract_image(state, path).await?
+    } else if ingest::is_pdf(path) {
+        // Try fast text extraction; fall back to per-page OCR for scanned PDFs.
+        match ingest::extract_file(path) {
+            Ok(ex) => ex,
+            Err(text_err) => extract_pdf_ocr(state, path)
+                .await
+                .map_err(|ocr_err| anyhow::anyhow!("{text_err} OCR fallback failed: {ocr_err}"))?,
+        }
+    } else {
+        ingest::extract_file(path)?
+    };
+    if extracted.url.is_empty() {
+        extracted.url = path.to_string();
+    }
+    Ok(extracted)
+}
+
 #[tauri::command]
 pub async fn add_source_file(
     state: State<'_, AppState>,
     notebook_id: String,
     path: String,
 ) -> Result<Source, String> {
-    let mut extracted = if let Some(url) = ingest::google_placeholder_url(&path) {
-        // Google Drive desktop placeholder — the content lives in the cloud;
-        // fetch it through the same export path as a pasted docs.google.com URL.
-        e(ingest::extract_url(&url).await)?
-    } else if ingest::is_image(&path) {
-        e(extract_image(&state, &path).await)?
-    } else if ingest::is_pdf(&path) {
-        // Try fast text extraction; fall back to per-page OCR for scanned PDFs.
-        match ingest::extract_file(&path) {
-            Ok(ex) => ex,
-            Err(text_err) => e(extract_pdf_ocr(&state, &path)
-                .await
-                .map_err(|ocr_err| anyhow::anyhow!("{text_err} OCR fallback failed: {ocr_err}")))?,
-        }
-    } else {
-        e(ingest::extract_file(&path))?
-    };
+    let mut extracted = e(extract_any_file(&state, &path).await)?;
     friendly_title(&state, &mut extracted).await;
     e(store_extracted(&state, &notebook_id, extracted).await)
 }
@@ -491,12 +503,20 @@ async fn reingest(
     // Classify against the stored URL: text edits arrive via extract_pasted
     // with an empty extracted.url, which would drop the Google-doc exemption.
     let (status, error) = classify(&existing.source_type, &existing.url, &extracted.text);
+    // An empty extracted.url means the text came from an edit or paste, not a
+    // re-fetch — keep the stored origin (URL or file path) so refresh keeps
+    // working after edits.
+    let url = if extracted.url.is_empty() {
+        existing.url.clone()
+    } else {
+        extracted.url
+    };
     let updated = Source {
         id: existing.id.clone(),
         notebook_id: existing.notebook_id.clone(),
         title: extracted.title,
         source_type: existing.source_type.clone(),
-        url: extracted.url,
+        url,
         content: extracted.text.clone(),
         char_count: extracted.text.chars().count() as i64,
         chunk_count: chunk_tuples.len() as i64,
@@ -553,6 +573,11 @@ pub async fn update_source_text(
     e(reingest(&state, &existing, extracted).await)
 }
 
+/// Does this source origin point at the web (vs. a local file path)?
+fn is_web_url(s: &str) -> bool {
+    s.starts_with("http://") || s.starts_with("https://")
+}
+
 #[tauri::command]
 pub async fn refresh_source_url(
     state: State<'_, AppState>,
@@ -561,12 +586,29 @@ pub async fn refresh_source_url(
     let existing =
         e(state.db.get_source(&source_id).await)?.ok_or_else(|| "Source not found".to_string())?;
     if existing.url.is_empty() {
-        return Err("This source has no URL to refresh".into());
+        return Err("This source has no URL or file path to refresh from".into());
     }
-    match ingest::extract_url(&existing.url).await {
-        Ok(extracted) => e(reingest(&state, &existing, extracted).await),
-        Err(err) => e(mark_source_failed(&state, &existing, err.to_string()).await),
+    if is_web_url(&existing.url) {
+        return match ingest::extract_url(&existing.url).await {
+            Ok(extracted) => e(reingest(&state, &existing, extracted).await),
+            Err(err) => e(mark_source_failed(&state, &existing, err.to_string()).await),
+        };
     }
+    // File-backed source. Unlike a dead URL (where the errored row is the
+    // retry affordance), a failed re-read must NOT wipe the working source —
+    // the extracted text and chunks are still perfectly usable. Surface the
+    // failure and leave the source untouched.
+    if !std::path::Path::new(&existing.url).exists() {
+        return Err(format!(
+            "Original file no longer exists at {}",
+            existing.url
+        ));
+    }
+    let mut extracted = e(extract_any_file(&state, &existing.url).await)?;
+    // Keep the existing title — the file's content changed, its name didn't,
+    // and the stored title may be a friendlier one than the file stem.
+    extracted.title = existing.title.clone();
+    e(reingest(&state, &existing, extracted).await)
 }
 
 #[tauri::command]
@@ -1903,11 +1945,14 @@ async fn generate_content(
     for s in &sources {
         let full = state.db.source_content(&s.id).await?;
         // URL sources get a "Source URL:" line under their heading so
-        // generated notes can cite where each finding can be viewed.
+        // generated notes can cite where each finding can be viewed. File
+        // sources carry their on-disk path under a "Source file:" label.
         let heading = if s.url.is_empty() {
             format!("## {}", s.title)
-        } else {
+        } else if is_web_url(&s.url) {
             format!("## {}\nSource URL: {}", s.title, s.url)
+        } else {
+            format!("## {}\nSource file: {}", s.title, s.url)
         };
         contents.push((heading, full));
     }

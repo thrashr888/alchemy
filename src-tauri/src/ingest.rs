@@ -12,7 +12,8 @@ const OVERLAP_WORDS: usize = 40;
 pub struct Extracted {
     pub title: String,
     pub source_type: String,
-    /// Original URL for `url` sources; empty for local files / pasted text.
+    /// Origin of the content: the URL for `url` sources, the local file path
+    /// for file imports (stamped by the command layer), empty for pasted text.
     pub url: String,
     pub text: String,
 }
