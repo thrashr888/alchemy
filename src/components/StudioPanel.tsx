@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import { Button, Input, Textarea, Modal, EmptyState, Badge, ResizeHandle, Spinner, useConfirm } from "./ui";
 import { Markdown } from "./Markdown";
+import { MindMap } from "./MindMap";
 import { Reports } from "./Reports";
 import { RichEditor } from "./RichEditor";
 import { cardButtonProps, relativeTime, shortcutBlocked } from "@/lib/utils";
@@ -35,6 +36,7 @@ import {
   Table,
   Layers,
   ListChecks,
+  Waypoints,
 } from "lucide-react";
 
 type Artifact = { kind: NoteKind; label: string; icon: ReactNode };
@@ -53,6 +55,7 @@ const SUMMARIES: Artifact[] = [
 const LEARNING: Artifact[] = [
   { kind: "flashcards", label: "Flashcards", icon: <Layers className="h-3.5 w-3.5" /> },
   { kind: "quiz", label: "Quiz", icon: <ListChecks className="h-3.5 w-3.5" /> },
+  { kind: "mind_map", label: "Mind map", icon: <Waypoints className="h-3.5 w-3.5" /> },
 ];
 
 const DOCUMENTS: Artifact[] = [
@@ -95,6 +98,7 @@ const KIND_LABEL: Record<NoteKind, string> = {
   insights: "Insights",
   flashcards: "Flashcards",
   quiz: "Quiz",
+  mind_map: "Mind map",
   data_table: "Data table",
   problems: "Problems",
   prd: "PRD",
@@ -568,6 +572,8 @@ function NoteViewer({ note, onClose }: { note: Note | null; onClose: () => void 
             <div className="max-h-[60vh] overflow-y-auto pr-1">
               {rebuilding && artifactStreamText ? (
                 <StreamingBody text={artifactStreamText} />
+              ) : live.kind === "mind_map" ? (
+                <MindMap content={live.content} />
               ) : (
                 <Markdown>{live.content}</Markdown>
               )}

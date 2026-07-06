@@ -59,6 +59,7 @@ export type NoteKind =
   | "insights"
   | "flashcards"
   | "quiz"
+  | "mind_map"
   | "data_table"
   | "problems"
   | "prd"
