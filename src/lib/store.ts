@@ -78,6 +78,8 @@ interface AppState {
   /** Command-menu ask for the URL form — a flag (not an event) because the
    *  Sources panel may still be mounting when the command runs. */
   pendingAddUrl: boolean;
+  /** Menu asked for an update check — Settings' General tab runs it on mount. */
+  pendingUpdateCheck: boolean;
   embedderDownload: { label: string; done: number; total: number } | null;
   error: string | null;
   /** Text of a chat send that failed, handed back to the composer so it isn't lost. */
@@ -252,6 +254,7 @@ export const useStore = create<AppState>((set, get) => {
   settingsTab: "general",
   paletteOpen: false,
   pendingAddUrl: false,
+  pendingUpdateCheck: false,
   embedderDownload: null,
   failedInput: null,
   error: null,
@@ -323,6 +326,10 @@ export const useStore = create<AppState>((set, get) => {
       if (e.payload.id === "menu-settings") s.openSettings();
       else if (e.payload.id === "menu-about") s.openSettings("about");
       else if (e.payload.id === "menu-search") s.togglePalette();
+      else if (e.payload.id === "menu-check-updates") {
+        set({ pendingUpdateCheck: true });
+        s.openSettings("general");
+      }
       else if (e.payload.id === "menu-new-window") void api.newWindow();
     });
     void listen<{ target: string; id: string }>("menu://open-notebook", (e) => {

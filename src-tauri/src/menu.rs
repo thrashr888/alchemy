@@ -38,11 +38,14 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
     let settings = MenuItemBuilder::with_id("menu-settings", "Settings…")
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
+    let check_updates =
+        MenuItemBuilder::with_id("menu-check-updates", "Check for Updates…").build(app)?;
     let about = MenuItemBuilder::with_id("menu-about", "About Alchemy").build(app)?;
     let app_menu = SubmenuBuilder::new(app, "Alchemy")
         .item(&about)
         .separator()
         .item(&settings)
+        .item(&check_updates)
         .separator()
         .services()
         .separator()
