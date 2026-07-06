@@ -931,7 +931,9 @@ function GeneralTab() {
   // "Check for Updates…" from the app menu lands here with the flag set.
   const pendingUpdateCheck = useStore((s) => s.pendingUpdateCheck);
   useEffect(() => {
-    if (pendingUpdateCheck) {
+    // Read the live value: StrictMode replays mount effects with the same
+    // captured snapshot, so checking the prop would double-run the check.
+    if (useStore.getState().pendingUpdateCheck) {
       useStore.setState({ pendingUpdateCheck: false });
       void onCheck();
     }
