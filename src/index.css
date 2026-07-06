@@ -91,10 +91,14 @@ body {
 }
 
 /* Keyboard focus is always visible. Components with their own focus-visible
-   ring (ui.tsx Button) opt out via `outline-none`. */
-:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
+   ring (ui.tsx Button) opt out via `outline-none`. Lives in the base layer so
+   the `outline-none` utility (utilities layer) can actually override it —
+   un-layered rules would beat every Tailwind utility. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 1px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
