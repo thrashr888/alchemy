@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
-import { THEMES } from "@/lib/themes";
+import { SYSTEM_THEME, THEMES } from "@/lib/themes";
 import { cn } from "@/lib/utils";
 import { ARTIFACTS } from "./StudioPanel";
 import { useConfirm } from "./ui";
@@ -231,6 +231,17 @@ export function CommandPalette() {
         run: () => {
           close();
           state().openSettings();
+        },
+      },
+      {
+        id: "theme-system",
+        group: "Settings",
+        label: "Theme: System",
+        keywords: "appearance color dark light auto os",
+        icon: <Palette className="h-3.5 w-3.5" />,
+        run: () => {
+          state().setTheme(SYSTEM_THEME);
+          close();
         },
       },
       ...Object.values(THEMES).map(

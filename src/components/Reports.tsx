@@ -21,7 +21,7 @@ const KINDS = [
   { value: "custom", label: "Custom prompt" },
 ];
 
-function intervalLabel(secs: number): string {
+export function intervalLabel(secs: number): string {
   return INTERVALS.find((i) => i.secs === secs)?.label ?? `${Math.round(secs / 3600)}h`;
 }
 
