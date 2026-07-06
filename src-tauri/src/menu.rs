@@ -76,6 +76,10 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<Men
         .minimize()
         .maximize()
         .build()?;
+    // Hand the submenu to AppKit as THE windows menu: macOS then appends and
+    // maintains the list of open windows (titled per notebook) automatically.
+    #[cfg(target_os = "macos")]
+    window_menu.set_as_windows_menu_for_nsapp()?;
 
     Menu::with_items(
         app,
@@ -92,9 +96,11 @@ pub fn handle_event(app: &AppHandle, id: &str) {
         .find(|w| w.is_focused().unwrap_or(false))
         .or_else(|| windows.values().next());
     let Some(win) = target else { return };
+    // emit_to targets ONE window — plain emit broadcasts to every window,
+    // which turned "New Window" into exponential window spawning.
     if let Some(nb) = id.strip_prefix("recent:") {
-        let _ = win.emit("menu://open-notebook", nb.to_string());
+        let _ = win.emit_to(win.label(), "menu://open-notebook", nb.to_string());
     } else {
-        let _ = win.emit("menu://action", id.to_string());
+        let _ = win.emit_to(win.label(), "menu://action", id.to_string());
     }
 }
