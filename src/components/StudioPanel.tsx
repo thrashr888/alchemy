@@ -7,6 +7,8 @@ import { RichEditor } from "./RichEditor";
 import { cardButtonProps, relativeTime, shortcutBlocked } from "@/lib/utils";
 import type { Note, NoteKind } from "@/lib/types";
 import {
+  Eye,
+  EyeOff,
   FileText,
   HelpCircle,
   GraduationCap,
@@ -146,6 +148,13 @@ export function StudioPanel() {
   }, [currentId]);
   const [instructions, setInstructions] = useState("");
   const [showInstructions, setShowInstructions] = useState(false);
+  // Generators hidden/shown — persisted so a notes-heavy workflow keeps its room.
+  const [genOpen, setGenOpen] = useState(localStorage.getItem("studioGenOpen") !== "false");
+  const toggleGenOpen = () => {
+    const v = !genOpen;
+    localStorage.setItem("studioGenOpen", String(v));
+    setGenOpen(v);
+  };
 
   const hasSources = sources.length > 0;
   const width = useStore((s) => s.studioWidth);
@@ -180,7 +189,7 @@ export function StudioPanel() {
       </div>
 
       <div className="border-b border-border p-3">
-        <div className="mb-2 flex items-center justify-between text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+        <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
           <span>Generate</span>
           {generatingKind && (
             <button
@@ -192,46 +201,61 @@ export function StudioPanel() {
               Stop
             </button>
           )}
-        </div>
-        <ArtifactGrid
-          artifacts={SUMMARIES}
-          disabled={!hasSources || !!generatingKind}
-          generatingKind={generatingKind}
-          onPick={(k) => generate(k, instructions)}
-        />
-
-        <div className="mb-2 mt-3 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
-          Documents
-        </div>
-        <ArtifactGrid
-          artifacts={DOCUMENTS}
-          disabled={!hasSources || !!generatingKind}
-          generatingKind={generatingKind}
-          onPick={(k) => generate(k, instructions)}
-        />
-
-        {showInstructions ? (
-          <Textarea
-            rows={2}
-            autoFocus
-            value={instructions}
-            onChange={(e) => setInstructions(e.target.value)}
-            placeholder="Optional instructions applied to the next generation…"
-            className="mt-2.5 text-[12px]"
-          />
-        ) : (
           <button
-            onClick={() => setShowInstructions(true)}
-            disabled={!hasSources}
-            className="mt-2.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+            onClick={toggleGenOpen}
+            className="ml-auto rounded p-0.5 transition-colors hover:text-foreground"
+            title={genOpen ? "Hide generators" : "Show generators"}
+            aria-label={genOpen ? "Hide generators" : "Show generators"}
+            aria-expanded={genOpen}
           >
-            + Add instructions
+            {genOpen ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
           </button>
-        )}
-        {!hasSources && (
-          <p className="mt-2 text-[11px] text-subtle-foreground">
-            Add sources to generate documents.
-          </p>
+        </div>
+        {genOpen && (
+          <>
+            <div className="mt-2">
+              <ArtifactGrid
+                artifacts={SUMMARIES}
+                disabled={!hasSources || !!generatingKind}
+                generatingKind={generatingKind}
+                onPick={(k) => generate(k, instructions)}
+              />
+            </div>
+
+            <div className="mb-2 mt-3 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+              Documents
+            </div>
+            <ArtifactGrid
+              artifacts={DOCUMENTS}
+              disabled={!hasSources || !!generatingKind}
+              generatingKind={generatingKind}
+              onPick={(k) => generate(k, instructions)}
+            />
+
+            {showInstructions ? (
+              <Textarea
+                rows={2}
+                autoFocus
+                value={instructions}
+                onChange={(e) => setInstructions(e.target.value)}
+                placeholder="Optional instructions applied to the next generation…"
+                className="mt-2.5 text-[12px]"
+              />
+            ) : (
+              <button
+                onClick={() => setShowInstructions(true)}
+                disabled={!hasSources}
+                className="mt-2.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+              >
+                + Add instructions
+              </button>
+            )}
+            {!hasSources && (
+              <p className="mt-2 text-[11px] text-subtle-foreground">
+                Add sources to generate documents.
+              </p>
+            )}
+          </>
         )}
       </div>
 

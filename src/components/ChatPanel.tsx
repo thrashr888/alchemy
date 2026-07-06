@@ -148,7 +148,9 @@ export function ChatPanel() {
       )}
       <div className="relative z-10 flex items-center px-5 h-12 border-b border-border">
         <MessageSquare className="h-4 w-4 text-muted-foreground" />
-        <span className="ml-2 text-[13px] font-semibold">Chat</span>
+        <span className="ml-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Chat
+        </span>
         <div className="ml-auto flex items-center gap-1">
           {messages.length > 0 && (
             <Button
