@@ -319,6 +319,13 @@ export function CommandPalette() {
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Type a command or search…"
                 className="h-11 w-full bg-transparent text-[14px] text-foreground placeholder:text-subtle-foreground outline-none"
+                // macOS text intelligence draws a focus ring + suggestion pill
+                // on this field and its popup steals the arrow keys.
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                {...({ writingsuggestions: "false" } as Record<string, string>)}
                 role="combobox"
                 aria-expanded="true"
                 aria-controls="palette-list"
