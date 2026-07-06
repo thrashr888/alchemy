@@ -185,8 +185,28 @@ export const THEMES: Record<string, Theme> = {
 
 export const THEME_LIST = Object.values(THEMES);
 
+/** Pseudo-theme id: follow the OS appearance (Midnight when dark, Light when
+ *  light), re-resolving live when the system setting changes. */
+export const SYSTEM_THEME = "system";
+
+let osListener: (() => void) | null = null;
+
 export function applyTheme(name: string) {
-  const theme = THEMES[name] ?? THEMES[DEFAULT_THEME];
+  const mq = window.matchMedia?.("(prefers-color-scheme: dark)");
+  // (Un)subscribe the OS-appearance listener as we enter/leave system mode.
+  if (osListener && mq) {
+    mq.removeEventListener("change", osListener);
+    osListener = null;
+  }
+  let resolved = name;
+  if (name === SYSTEM_THEME) {
+    resolved = mq && !mq.matches ? "light" : DEFAULT_THEME;
+    if (mq) {
+      osListener = () => applyTheme(SYSTEM_THEME);
+      mq.addEventListener("change", osListener);
+    }
+  }
+  const theme = THEMES[resolved] ?? THEMES[DEFAULT_THEME];
   const root = document.documentElement;
   for (const [key, value] of Object.entries(theme.vars)) {
     root.style.setProperty(`--${key}`, value);

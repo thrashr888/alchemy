@@ -1,11 +1,16 @@
 import { useEffect, useState } from "react";
 import { useStore } from "@/lib/store";
+import { api } from "@/lib/api";
 import { Button, Input, Modal, Badge, useConfirm } from "./ui";
 import { AlchemyHero } from "./AlchemyHero";
+import { intervalLabel } from "./Reports";
 import { cn, relativeTime, providerStatus, cardButtonProps, shortcutBlocked } from "@/lib/utils";
+import type { ReportSchedule } from "@/lib/types";
 import {
   BookOpen,
+  Clock,
   Plus,
+  Power,
   Settings,
   Trash2,
   Pencil,
@@ -30,6 +35,16 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [newTitle, setNewTitle] = useState("");
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
+
+  // All scheduled reports across notebooks — the app's ongoing activity.
+  const [allReports, setAllReports] = useState<ReportSchedule[]>([]);
+  useEffect(() => {
+    api
+      .listAllReportSchedules()
+      .then(setAllReports)
+      .catch(() => setAllReports([]));
+  }, [notebooks]);
+  const notebookTitle = new Map(notebooks.map((n) => [n.id, n.title]));
 
   // Cmd/Ctrl+N: new notebook.
   useEffect(() => {
@@ -191,6 +206,54 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               </div>
             ))}
           </div>
+
+          {/* Scheduled reports across all notebooks — the app's ongoing activity. */}
+          {allReports.length > 0 && (
+            <div className="mt-10">
+              <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+                Scheduled reports
+              </div>
+              <div className="flex flex-col gap-1">
+                {[...allReports]
+                  .sort((a, b) =>
+                    a.enabled !== b.enabled ? (a.enabled ? -1 : 1) : b.lastRunAt - a.lastRunAt,
+                  )
+                  .map((r) => (
+                    <div
+                      key={r.id}
+                      onClick={() => open(r.notebookId)}
+                      {...cardButtonProps(() => open(r.notebookId))}
+                      title={`Open "${notebookTitle.get(r.notebookId) ?? "notebook"}"`}
+                      className="flex cursor-pointer items-center gap-2.5 rounded-md border border-border bg-surface px-3 py-2 transition-colors hover:border-border-strong hover:bg-surface-2"
+                    >
+                      <Power
+                        className={cn(
+                          "h-3.5 w-3.5 shrink-0",
+                          r.enabled ? "text-success" : "text-subtle-foreground",
+                        )}
+                      />
+                      <span className="truncate text-[13px] text-foreground">{r.name}</span>
+                      <Badge className="shrink-0 gap-1">
+                        <BookOpen className="h-2.5 w-2.5" />
+                        <span className="max-w-[160px] truncate">
+                          {notebookTitle.get(r.notebookId) ?? "Unknown notebook"}
+                        </span>
+                      </Badge>
+                      <span className="ml-auto flex shrink-0 items-center gap-1 text-[11px] text-subtle-foreground">
+                        <Clock className="h-2.5 w-2.5" />
+                        {intervalLabel(r.intervalSecs)}
+                        {r.lastRunAt > 0 ? (
+                          <span>· last {relativeTime(r.lastRunAt)}</span>
+                        ) : (
+                          <span>· never run</span>
+                        )}
+                        {!r.enabled && <span>· paused</span>}
+                      </span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
         </div>
         </div>
       )}

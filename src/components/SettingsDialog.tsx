@@ -3,7 +3,7 @@ import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
-import { THEME_LIST } from "@/lib/themes";
+import { SYSTEM_THEME, THEME_LIST, THEMES } from "@/lib/themes";
 import { Button, Input, Modal, Spinner, Textarea } from "./ui";
 import { cn } from "@/lib/utils";
 import { AlchemySymbol } from "./AlchemyHero";
@@ -885,8 +885,35 @@ function StatusBox({
 function ThemePicker() {
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
+  const darkBg = THEMES.midnight.vars.background;
+  const lightBg = THEMES.light.vars.background;
   return (
     <div className="grid grid-cols-2 gap-1.5">
+      {/* Follow the OS appearance: Midnight when dark, Light when light. */}
+      <button
+        onClick={() => setTheme(SYSTEM_THEME)}
+        className={cn(
+          "flex items-center gap-2 rounded-md border px-2 py-1.5 text-left text-[12px] transition-colors",
+          theme === SYSTEM_THEME
+            ? "border-primary/60 bg-primary/10 text-foreground"
+            : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
+        )}
+      >
+        <span
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded border"
+          style={{
+            background: `linear-gradient(135deg, ${darkBg} 50%, ${lightBg} 50%)`,
+            borderColor: THEMES.midnight.vars["border-strong"],
+          }}
+        >
+          <span
+            className="h-2.5 w-2.5 rounded-full"
+            style={{ background: THEMES.midnight.vars.primary }}
+          />
+        </span>
+        <span className="flex-1 truncate">System</span>
+        {theme === SYSTEM_THEME && <Check className="h-3.5 w-3.5 text-primary" />}
+      </button>
       {THEME_LIST.map((t) => {
         const active = t.id === theme;
         return (

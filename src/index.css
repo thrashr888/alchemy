@@ -101,6 +101,15 @@ body {
   }
 }
 
+/* Honor the macOS "Reduce transparency" accessibility setting: drop the
+   frosted-glass blurs (elements keep their near-opaque backgrounds). */
+@media (prefers-reduced-transparency: reduce) {
+  * {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
