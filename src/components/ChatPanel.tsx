@@ -4,7 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { Button, Textarea, useConfirm } from "./ui";
 import { Markdown } from "./Markdown";
-import { cn, chatReadingClass, cardButtonProps } from "@/lib/utils";
+import { cn, chatReadingClass, cardButtonProps, isWebUrl } from "@/lib/utils";
 import { DitherBackground } from "./DitherBackground";
 import { AlchemySymbol } from "./AlchemyHero";
 import type { Citation, Message } from "@/lib/types";
@@ -60,6 +60,25 @@ export function ChatPanel() {
       useStore.setState({ failedInput: null });
     }
   }, [failedInput]);
+
+  // Another surface (the source reader's "Ask about this") staged text for
+  // the composer — load it and focus so the user can finish their question.
+  const pendingInput = useStore((s) => s.pendingInput);
+  useEffect(() => {
+    if (!pendingInput) return;
+    setDraft(pendingInput);
+    useStore.setState({ pendingInput: null });
+    // Focus after the surface that staged the text (a modal) has closed, and
+    // autosize for multi-line prefills (onChange normally handles this).
+    setTimeout(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
+      el.selectionStart = el.selectionEnd = el.value.length;
+    }, 0);
+  }, [pendingInput]);
 
   // Subscribe once to streaming tokens + agent progress steps from the backend.
   // Events broadcast to every window — only the one with a send in flight
@@ -447,7 +466,12 @@ function Citations({ citations }: { citations: Citation[] }) {
   const [open, setOpen] = useState(false);
   const sources = useStore((s) => s.sources);
   const openSourceViewer = useStore((s) => s.openSourceViewer);
-  const urlOf = (sourceId: string) => sources.find((x) => x.id === sourceId)?.url || "";
+  // Only web origins get the open-in-browser chip; file paths live in the
+  // same field but belong to the source reader's "Show in Finder".
+  const urlOf = (sourceId: string) => {
+    const url = sources.find((x) => x.id === sourceId)?.url || "";
+    return isWebUrl(url) ? url : "";
+  };
   return (
     <div className="mt-1">
       <button
