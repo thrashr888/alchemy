@@ -168,6 +168,56 @@ pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
+/// System prompt for the read-distillation sub-call: pull only the passages
+/// relevant to the question out of a document, verbatim — so a full read
+/// contributes evidence, not bulk, to the final answer context.
+const DISTILL_SYSTEM: &str = "You extract evidence from a document for a research assistant. \
+You are given a question and one document. Return ONLY the parts of the document that help \
+answer the question:\n\
+- Copy relevant passages VERBATIM — no paraphrasing, no commentary, no code fences.\n\
+- Separate passages with a blank line, in document order.\n\
+- Begin with a single line `NOTE: <one sentence on what the document is>` — the only line \
+that may be your own words.\n\
+- If nothing is relevant, return just the NOTE line describing what the document covers.\n\
+Keep the total under about 500 words; prefer the few most load-bearing passages.";
+
+/// Build the sub-read prompt that distills one document against the question.
+pub fn build_distill_messages(question: &str, title: &str, content: &str) -> Vec<ChatTurn> {
+    vec![
+        ChatTurn::system(DISTILL_SYSTEM),
+        ChatTurn::user(format!(
+            "Question: {question}\n\nDocument \"{title}\":\n\n{content}"
+        )),
+    ]
+}
+
+const RERANK_SYSTEM: &str =
+    "You rank search results for relevance. Given a question and a numbered \
+list of passages, respond with EXACTLY ONE JSON object and nothing else: \
+{\"keep\":[<indices of the passages that help answer the question, most relevant first>]}. \
+Exclude passages that are off-topic even if they share keywords with the question.";
+
+/// Build the rerank prompt: pick the `keep` most relevant of the numbered snippets.
+pub fn build_rerank_messages(
+    question: &str,
+    snippets: &[(String, String)],
+    keep: usize,
+) -> Vec<ChatTurn> {
+    let list = snippets
+        .iter()
+        .enumerate()
+        .map(|(i, (title, text))| format!("[{i}] ({title}) {text}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    vec![
+        ChatTurn::system(RERANK_SYSTEM),
+        ChatTurn::user(format!(
+            "Question: {question}\n\nPassages:\n{list}\n\n\
+             Keep at most {keep}. One JSON object:"
+        )),
+    ]
+}
+
 const AGENT_SYSTEM: &str = "You are a retrieval planner for a research assistant. Your job is NOT to answer the \
 question yet — it is to decide the next retrieval step that will gather the evidence needed to answer it well.\n\n\
 Respond with EXACTLY ONE JSON object and nothing else. Valid actions:\n\

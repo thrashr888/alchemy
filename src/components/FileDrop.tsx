@@ -1,12 +1,7 @@
 import { useEffect } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useStore } from "@/lib/store";
-
-const SUPPORTED = [
-  "pdf", "txt", "text", "md", "markdown",
-  "docx", "pptx", "xlsx", "xls", "xlsm", "ods",
-  "png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff", "heic",
-];
+import { SUPPORTED_EXTENSIONS } from "@/lib/utils";
 
 function ext(path: string): string {
   const i = path.lastIndexOf(".");
@@ -57,7 +52,7 @@ async function handleDrop(paths: string[]) {
     setError("Select or create a notebook before adding sources.");
     return;
   }
-  const supported = paths.filter((p) => SUPPORTED.includes(ext(p)));
+  const supported = paths.filter((p) => SUPPORTED_EXTENSIONS.includes(ext(p)));
   if (supported.length === 0) {
     setError("Unsupported file type. Drop PDF, Office, image, or text files.");
     return;

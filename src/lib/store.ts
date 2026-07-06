@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
+import { SUPPORTED_EXTENSIONS } from "./utils";
 import { applyTheme, DEFAULT_THEME } from "./themes";
 import { notify } from "./notify";
 import { DEFAULT_CHAT_CONFIG, DEFAULT_READING_PREFS } from "./types";
@@ -67,6 +69,11 @@ interface AppState {
   onboardingDismissed: boolean;
   settingsOpen: boolean;
   settingsTab: string;
+  /** Cmd+K command menu. */
+  paletteOpen: boolean;
+  /** Command-menu ask for the URL form — a flag (not an event) because the
+   *  Sources panel may still be mounting when the command runs. */
+  pendingAddUrl: boolean;
   embedderDownload: { label: string; done: number; total: number } | null;
   error: string | null;
   /** Text of a chat send that failed, handed back to the composer so it isn't lost. */
@@ -99,12 +106,14 @@ interface AppState {
   dismissOnboarding: () => void;
   openSettings: (tab?: string) => void;
   closeSettings: () => void;
+  setPaletteOpen: (open: boolean) => void;
   createReport: (name: string, kind: string, prompt: string, intervalSecs: number) => Promise<void>;
   updateReport: (r: ReportSchedule) => Promise<void>;
   deleteReport: (id: string) => Promise<void>;
   runReportNow: (id: string) => Promise<void>;
   startReportScheduler: () => void;
 
+  pickAndAddFiles: () => Promise<void>;
   addSourceFiles: (paths: string[]) => Promise<void>;
   addSourceUrl: (url: string) => Promise<void>;
   addSourceText: (title: string, text: string) => Promise<void>;
@@ -230,6 +239,8 @@ export const useStore = create<AppState>((set, get) => {
   onboardingDismissed: localStorage.getItem("onboardingDismissed") === "true",
   settingsOpen: false,
   settingsTab: "models",
+  paletteOpen: false,
+  pendingAddUrl: false,
   embedderDownload: null,
   failedInput: null,
   error: null,
@@ -356,6 +367,7 @@ export const useStore = create<AppState>((set, get) => {
 
   openSettings: (tab = "models") => set({ settingsOpen: true, settingsTab: tab }),
   closeSettings: () => set({ settingsOpen: false }),
+  setPaletteOpen: (open) => set({ paletteOpen: open }),
 
   toggleSources: () => {
     const v = !get().sourcesOpen;
@@ -395,6 +407,15 @@ export const useStore = create<AppState>((set, get) => {
         else set({ currentId: null, sources: [], messages: [], notes: [] });
       }
     }),
+
+  pickAndAddFiles: async () => {
+    const picked = await open({
+      multiple: true,
+      filters: [{ name: "Documents", extensions: SUPPORTED_EXTENSIONS }],
+    });
+    if (!picked) return;
+    await get().addSourceFiles(Array.isArray(picked) ? picked : [picked]);
+  },
 
   addSourceFiles: async (paths) => {
     const id = get().currentId;

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { Button, Input, Textarea, Modal, EmptyState, ResizeHandle, Spinner, useConfirm } from "./ui";
@@ -78,7 +77,7 @@ export function SourcesPanel() {
   const currentId = useStore((s) => s.currentId);
   const queue = useStore((s) => s.ingestQueue);
   const clearQueueItem = useStore((s) => s.clearQueueItem);
-  const addFiles = useStore((s) => s.addSourceFiles);
+  const pickAndAddFiles = useStore((s) => s.pickAndAddFiles);
   const addUrl = useStore((s) => s.addSourceUrl);
   const addText = useStore((s) => s.addSourceText);
   const editSourceText = useStore((s) => s.editSourceText);
@@ -119,6 +118,17 @@ export function SourcesPanel() {
   const [pasteText, setPasteText] = useState("");
   const [editing, setEditing] = useState<{ id: string; title: string; text: string } | null>(null);
 
+  // "Add source from URL" command from the Cmd+K menu. A store flag rather
+  // than an event: the panel may be mid-mount when the command runs.
+  const pendingAddUrl = useStore((s) => s.pendingAddUrl);
+  useEffect(() => {
+    if (pendingAddUrl) {
+      useStore.setState({ pendingAddUrl: false });
+      setUrl("");
+      setMode("url");
+    }
+  }, [pendingAddUrl]);
+
   async function startEdit(s: Source) {
     // List payloads omit content; fetch the full text to prefill the editor.
     const content = await api.getSourceContent(s.id);
@@ -130,22 +140,7 @@ export function SourcesPanel() {
 
   async function pickFiles() {
     setMenuOpen(false);
-    const selected = await open({
-      multiple: true,
-      filters: [
-        {
-          name: "Documents",
-          extensions: [
-            "pdf", "txt", "md", "markdown", "text",
-            "docx", "pptx", "xlsx", "xls", "xlsm", "ods",
-            "png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff", "heic",
-          ],
-        },
-      ],
-    });
-    if (!selected) return;
-    const paths = Array.isArray(selected) ? selected : [selected];
-    await addFiles(paths);
+    await pickAndAddFiles();
   }
 
   const width = useStore((s) => s.sourcesWidth);
@@ -311,7 +306,7 @@ export function SourcesPanel() {
           <EmptyState
             icon={<FileText className="h-7 w-7" />}
             title="No sources yet"
-            hint="Upload PDFs, text, or markdown, add a URL, or paste text. You can also drag files onto the window."
+            hint="Upload PDFs, Office files, CSVs, images, or markdown; add a URL (Google Docs, Sheets & Slides work); or paste text. You can also drag files onto the window."
           />
         ) : (
           <div className="flex flex-col gap-0.5">
@@ -424,6 +419,10 @@ export function SourcesPanel() {
             value={url}
             onChange={(e) => setUrl(e.target.value)}
           />
+          <p className="text-[11px] leading-relaxed text-subtle-foreground">
+            Google Docs, Sheets, and Slides links work too — share them as
+            “Anyone with the link” first.
+          </p>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={() => setMode(null)}>
               Cancel

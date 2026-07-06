@@ -108,7 +108,7 @@ export interface ReportSchedule {
 }
 
 export interface AiConfig {
-  /** Chat backend: "ollama" | "openai" (IBM Bob or any OpenAI-compatible gateway). */
+  /** Chat backend: "ollama" | "openai" (any OpenAI-compatible gateway). */
   provider: string;
   /** Embedding backend: "ollama" | "builtin". */
   embedder: string;

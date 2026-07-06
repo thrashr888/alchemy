@@ -49,6 +49,9 @@ const DOCUMENTS: Artifact[] = [
   { kind: "skill", label: "Skill", icon: <Sparkles className="h-3.5 w-3.5" /> },
 ];
 
+/** Every generator, for surfaces beyond the Studio panel (command menu). */
+export const ARTIFACTS: Artifact[] = [...SUMMARIES, ...DOCUMENTS];
+
 /**
  * Card preview text: skip a leading markdown heading (or a first line equal to
  * the title) so the card doesn't repeat its own title, then flatten markdown.

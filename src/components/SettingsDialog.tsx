@@ -5,7 +5,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
 import { THEME_LIST } from "@/lib/themes";
 import { Button, Input, Modal, Spinner, Textarea } from "./ui";
-import { cn, bobKeyLooksOff } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { AlchemySymbol } from "./AlchemyHero";
 import type { AiConfig, ChatConfig } from "@/lib/types";
 import {
@@ -47,10 +47,6 @@ const SUGGESTED_VISION = [
   { name: "minimax-m3", note: "vision · 1M context (general)" },
 ];
 
-/** Targeting Bob (default or explicit) with a key that doesn't look like one. */
-function keyLooksOff(draft: { openaiBaseUrl: string; openaiApiKey: string }): boolean {
-  return bobKeyLooksOff(draft.openaiBaseUrl, draft.openaiApiKey);
-}
 
 const TABS = [
   { id: "models", label: "Models", icon: Cpu },
@@ -247,7 +243,7 @@ export function SettingsDialog({
                 <div className="grid grid-cols-2 gap-1.5">
                   {[
                     { id: "ollama", label: "Ollama", note: "Local & private" },
-                    { id: "openai", label: "IBM Bob / OpenAI-compatible", note: "Enterprise gateway" },
+                    { id: "openai", label: "OpenAI-compatible", note: "Cloud or enterprise gateway" },
                   ].map((pv) => (
                     <button
                       key={pv.id}
@@ -270,27 +266,23 @@ export function SettingsDialog({
                 <>
                   <Field
                     label="Gateway URL"
-                    hint="Leave empty to use IBM Bob's default gateway. Any OpenAI-compatible base URL works (usually ends in /v1)."
+                    hint="Any OpenAI-compatible base URL works (usually ends in /v1)."
                   >
                     <Input
                       value={draft.openaiBaseUrl}
                       onChange={(e) => setDraft({ ...draft, openaiBaseUrl: e.target.value })}
-                      placeholder="https://api.us-east.bob.ibm.com/inference/v1 (default)"
+                      placeholder="https://api.example.com/v1"
                     />
                   </Field>
                   <Field
                     label="API key"
-                    hint={
-                      keyLooksOff(draft)
-                        ? "Heads up: Bob keys start with bob_ — double-check you pasted the whole key."
-                        : "Stored locally in your config file; sent only to the gateway."
-                    }
+                    hint="Stored locally in your config file; sent only to the gateway."
                   >
                     <Input
                       type="password"
                       value={draft.openaiApiKey}
                       onChange={(e) => setDraft({ ...draft, openaiApiKey: e.target.value })}
-                      placeholder="bob_prod_…"
+                      placeholder="sk-… or your gateway's key format"
                     />
                   </Field>
                   <Field
@@ -298,7 +290,7 @@ export function SettingsDialog({
                     hint={
                       gatewayError
                         ? `Couldn't list models: ${gatewayError}`
-                        : "The model id billed to your account (bobcoins on Bob)."
+                        : "The model id billed to your account."
                     }
                   >
                     <div className="flex gap-1.5">
@@ -323,15 +315,6 @@ export function SettingsDialog({
                       >
                         {gatewayModels.length > 0 ? "Refresh" : "Load"}
                       </Button>
-                    </div>
-                    <div className="mt-1 text-[11px] text-subtle-foreground">
-                      Usage is billed to your Bob account ·{" "}
-                      <button
-                        className="text-citation hover:underline"
-                        onClick={() => void openUrl("https://bob.ibm.com/admin/subscription")}
-                      >
-                        view usage on bob.ibm.com
-                      </button>
                     </div>
                   </Field>
                 </>
@@ -407,12 +390,12 @@ export function SettingsDialog({
               {draft.provider === "openai" ? (
                 <Field
                   label="Vision model"
-                  hint="OCR for images & scanned PDFs runs through Bob's vision-capable models. Empty = sonnet-4.6."
+                  hint="OCR for images & scanned PDFs runs through a vision-capable gateway model."
                 >
                   <Input
                     value={draft.openaiVisionModel ?? ""}
                     onChange={(e) => setDraft({ ...draft, openaiVisionModel: e.target.value })}
-                    placeholder="sonnet-4.6 (default)"
+                    placeholder="a vision-capable model id (empty = OCR disabled)"
                   />
                 </Field>
               ) : (
@@ -679,7 +662,7 @@ function AppearanceTab() {
 const SHORTCUTS: { keys: string[]; label: string; context?: string }[] = [
   { keys: ["⌘", "N"], label: "New notebook", context: "Home" },
   { keys: ["⌘", "N"], label: "New note", context: "Notebook" },
-  { keys: ["⌘", "K"], label: "Focus the chat composer", context: "Notebook" },
+  { keys: ["⌘", "K"], label: "Open the command menu" },
   { keys: ["⌘", "F"], label: "Find in source", context: "Reader" },
   { keys: ["⌘", "1"], label: "Show or hide Sources", context: "Notebook" },
   { keys: ["⌘", "2"], label: "Show or hide Studio", context: "Notebook" },
@@ -828,16 +811,16 @@ function StatusBox({
   );
 
   // For the gateway provider, connection state comes from the gateway's chat
-  // health, not the Ollama probe — a Bob user may not run Ollama at all.
+  // health, not the Ollama probe — a gateway user may not run Ollama at all.
   const isGateway = provider === "openai";
   const ok: boolean | null = isGateway ? (health ? health.chat.working : null) : connOk;
   const okText = isGateway
-    ? `Connected to IBM Bob · ${modelCount} models available`
+    ? `Connected to gateway · ${modelCount} models available`
     : `Connected · ${modelCount} models available`;
   const failText = isGateway
-    ? "Cannot reach the Bob gateway — check the URL and API key below."
+    ? "Cannot reach the gateway — check the URL and API key below."
     : "Cannot reach Ollama. Is `ollama serve` running?";
-  const checkingText = isGateway ? "Checking IBM Bob…" : "Checking Ollama…";
+  const checkingText = isGateway ? "Checking gateway…" : "Checking Ollama…";
 
   return (
     <div className="flex flex-col gap-2 rounded-md border border-border bg-surface-2 px-3 py-2.5">

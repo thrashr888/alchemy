@@ -1,8 +1,10 @@
 [package]
 name = "alchemy"
 version = "0.7.0"
-description = "Local-first NotebookLM clone — RAG over your sources, powered by Ollama"
+description = "Local-first research notebook inspired by NotebookLM — RAG over your sources, powered by Ollama"
 authors = ["thrashr888"]
+license = "MPL-2.0"
+repository = "https://github.com/thrashr888/alchemy"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -47,6 +49,8 @@ tokio-util = { version = "0.7.18", default-features = false }
 # Readability-style article extraction for URL sources. Built on dom_query,
 # which is already in the tree via tauri-utils.
 dom_smoothie = "0.18"
+csv = "1"
+percent-encoding = "2"
 
 [features]
 # Dev-only: exposes the debug bridge for CLI automation/inspection.

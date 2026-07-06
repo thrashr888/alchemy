@@ -2,11 +2,12 @@
 # Notarize + staple the locally-built, Developer ID-signed DMG, then verify
 # Gatekeeper accepts it. Requires a one-time notary profile:
 #   xcrun notarytool store-credentials alchemy-notary \
-#     --apple-id thrashr888@gmail.com --team-id 5T4QSYSNP2
+#     --apple-id <your-apple-id> --team-id <your-team-id>
 set -euo pipefail
 
 PROFILE="${1:-alchemy-notary}"
-DMG="src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Alchemy_0.4.0_aarch64.dmg"
+VERSION="$(node -p "require('./package.json').version")"
+DMG="src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Alchemy_${VERSION}_aarch64.dmg"
 
 [ -f "$DMG" ] || { echo "DMG not found: $DMG -- run 'pnpm tauri build --target aarch64-apple-darwin' first."; exit 1; }
 

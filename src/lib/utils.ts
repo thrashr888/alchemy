@@ -8,6 +8,18 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /**
+ * File extensions the ingester accepts (mirrors the dispatch in
+ * src-tauri/src/ingest.rs) — the single list behind the file-pick dialog,
+ * OS drag-drop filtering, and the command menu.
+ */
+export const SUPPORTED_EXTENSIONS = [
+  "pdf", "txt", "text", "md", "markdown",
+  "docx", "pptx", "xlsx", "xls", "xlsm", "ods", "csv", "tsv",
+  "gdoc", "gsheet", "gslides",
+  "png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff", "heic",
+];
+
+/**
  * Make a clickable non-button element (card, list row) keyboard-operable:
  * focusable, announced as a button, activated with Enter or Space.
  * Spread alongside the element's onClick.
@@ -50,7 +62,7 @@ export function chatReadingClass(cfg: ReadingPrefs): string {
 
 /** Human label for the active chat provider. */
 export function providerLabel(config: AiConfig | null): string {
-  return config?.provider === "openai" ? "IBM Bob" : "Ollama";
+  return config?.provider === "openai" ? "Gateway" : "Ollama";
 }
 
 /**
@@ -63,18 +75,9 @@ export function providerStatus(
   health: ModelHealth | null,
 ): { label: string; ok: boolean | null } {
   if (config?.provider === "openai") {
-    return { label: "IBM Bob", ok: health ? health.chat.working : null };
+    return { label: "Gateway", ok: health ? health.chat.working : null };
   }
   return { label: "Ollama", ok: ollamaOk };
-}
-
-/** True when targeting Bob's gateway with a key that doesn't look like a Bob key. */
-export function bobKeyLooksOff(baseUrl: string, apiKey: string): boolean {
-  const key = apiKey.trim();
-  if (!key) return false;
-  const url = baseUrl.trim();
-  const targetsBob = url === "" || url.includes("bob.ibm.com");
-  return targetsBob && !key.startsWith("bob_");
 }
 
 export function relativeTime(ms: number): string {

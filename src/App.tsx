@@ -3,6 +3,7 @@ import { useStore } from "@/lib/store";
 import { HomeView } from "@/components/HomeView";
 import { Workspace } from "@/components/Workspace";
 import { SettingsDialog } from "@/components/SettingsDialog";
+import { CommandPalette } from "@/components/CommandPalette";
 import { FileDrop } from "@/components/FileDrop";
 import { MigrationOverlay } from "@/components/MigrationOverlay";
 import { Onboarding } from "@/components/Onboarding";
@@ -29,12 +30,20 @@ function App() {
     void init();
   }, [init]);
 
-  // Cmd/Ctrl+, opens Settings (standard desktop convention).
+  // Cmd/Ctrl+, opens Settings (standard desktop convention); Cmd/Ctrl+K
+  // toggles the command menu — from anywhere, including inputs, but not on
+  // top of an open dialog (Settings, confirms).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key === ",") {
         e.preventDefault();
         openSettings();
+      } else if (e.key === "k") {
+        const { paletteOpen, setPaletteOpen } = useStore.getState();
+        if (!paletteOpen && document.querySelector('[aria-modal="true"]')) return;
+        e.preventDefault();
+        setPaletteOpen(!paletteOpen);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -59,6 +68,7 @@ function App() {
       )}
 
       <SettingsDialog open={settingsOpen} onClose={closeSettings} initialTab={settingsTab} />
+      <CommandPalette />
       {/* Drag-drop only routes into a notebook when one is open. */}
       {currentId && <FileDrop />}
       <MigrationOverlay />

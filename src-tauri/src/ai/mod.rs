@@ -1,6 +1,6 @@
 //! AI provider abstraction. `Ai` routes each capability to a backend:
-//! chat/generation goes to Ollama or an OpenAI-compatible gateway (IBM Bob,
-//! LM Studio, vLLM, Ollama's own /v1); embeddings, OCR, and model listing stay
+//! chat/generation goes to Ollama or an OpenAI-compatible gateway (LM Studio,
+//! vLLM, LiteLLM, Ollama's own /v1); embeddings, OCR, and model listing stay
 //! on Ollama for now.
 
 mod local_embed;
@@ -13,10 +13,6 @@ pub use openai::OpenAiClient;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-
-/// IBM Bob's OpenAI-compatible gateway (LiteLLM behind /inference/v1, per the
-/// Bob Shell bundle's DEFAULT_BACKEND_URL); used whenever the URL field is empty.
-pub const DEFAULT_GATEWAY_URL: &str = "https://api.us-east.bob.ibm.com/inference/v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,7 +36,7 @@ pub struct AiConfig {
     pub openai_api_key: String,
     #[serde(default)]
     pub openai_chat_model: String,
-    /// Vision-capable gateway model for OCR (empty = sonnet-4.6 on Bob).
+    /// Vision-capable gateway model for OCR (empty = OCR disabled).
     #[serde(default)]
     pub openai_vision_model: String,
     /// Who the user is; woven into system prompts so answers fit them.
@@ -59,6 +55,15 @@ pub struct UserProfile {
 
 fn default_provider() -> String {
     "ollama".to_string()
+}
+
+impl AiConfig {
+    /// Is chat routed through the OpenAI-compatible gateway (large-context
+    /// remote models) rather than local Ollama? Context-size budgets key off
+    /// this in one place instead of scattering provider string comparisons.
+    pub fn is_gateway(&self) -> bool {
+        self.provider == "openai"
+    }
 }
 
 impl Default for AiConfig {
@@ -167,12 +172,11 @@ pub struct Ai {
 impl Ai {
     pub fn new(config: AiConfig, runtime: AiRuntime) -> Self {
         let openai = (config.provider == "openai").then(|| {
-            let base = if config.openai_base_url.trim().is_empty() {
-                DEFAULT_GATEWAY_URL
-            } else {
-                config.openai_base_url.trim()
-            };
-            OpenAiClient::new(base, &config.openai_api_key, &config.openai_chat_model)
+            OpenAiClient::new(
+                config.openai_base_url.trim(),
+                &config.openai_api_key,
+                &config.openai_chat_model,
+            )
         });
         let ollama = Ollama::new(config.clone());
         let data_dir = if runtime.data_dir.as_os_str().is_empty() {
@@ -248,11 +252,12 @@ impl Ai {
     pub async fn ocr(&self, image_base64: &str) -> Result<String> {
         match &self.openai {
             Some(gw) => {
-                let model = if self.config.openai_vision_model.trim().is_empty() {
-                    "sonnet-4.6"
-                } else {
-                    self.config.openai_vision_model.trim()
-                };
+                let model = self.config.openai_vision_model.trim();
+                if model.is_empty() {
+                    anyhow::bail!(
+                        "no vision model configured — set one in Settings → Models to enable OCR"
+                    );
+                }
                 gw.ocr(image_base64, model).await
             }
             None => self.ollama.ocr(image_base64).await,
