@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import { SUPPORTED_EXTENSIONS } from "./utils";
@@ -93,6 +94,8 @@ interface AppState {
   viewingSource: { sourceId: string; title: string; highlight?: string } | null;
 
   init: () => Promise<void>;
+  /** Register page-lifetime Tauri event listeners (called once from init). */
+  bindGlobalListeners: () => void;
   refreshNotebooks: () => Promise<void>;
   selectNotebook: (id: string) => Promise<void>;
   closeNotebook: () => void;
@@ -175,6 +178,9 @@ function loadReadingPrefs(): ReadingPrefs {
 
 // Module-level guard so the report scheduler is only started once.
 let schedulerStarted = false;
+// Global Tauri event listeners bind once per page — React StrictMode runs
+// init() twice in dev, and a doubled menu listener spawns doubled windows.
+let listenersBound = false;
 // Monotonic toast ids (avoids Date.now collisions on rapid toasts).
 let toastSeq = 0;
 
@@ -257,32 +263,10 @@ export const useStore = create<AppState>((set, get) => {
 
   init: async () => {
     applyTheme(get().theme);
-    // Built-in embedder first-use download progress (one-time ~30 MB).
-    void listen<{ label: string; done: number; total: number }>(
-      "embedder://progress",
-      (e) => {
-        const p = e.payload;
-        const finished = p.total > 0 && p.done >= p.total && p.label === "model.safetensors";
-        set({ embedderDownload: finished ? null : p });
-        if (finished) setTimeout(() => set({ embedderDownload: null }), 1500);
-      },
-    );
-    // Studio generations stream their tokens; buffer them for the live preview.
-    void listen<{ content: string }>("artifact://token", (e) => {
-      if (get().generatingKind)
-        set({ artifactStreamText: get().artifactStreamText + e.payload.content });
-    });
-    // App-menu actions route here from the focused window's Rust side.
-    void listen<string>("menu://action", (e) => {
-      const s = get();
-      if (e.payload === "menu-settings") s.openSettings();
-      else if (e.payload === "menu-about") s.openSettings("about");
-      else if (e.payload === "menu-search") s.togglePalette();
-      else if (e.payload === "menu-new-window") void api.newWindow();
-    });
-    void listen<string>("menu://open-notebook", (e) => {
-      void get().selectNotebook(e.payload);
-    });
+    if (!listenersBound) {
+      listenersBound = true;
+      get().bindGlobalListeners();
+    }
     const [notebooks, aiConfig, ollamaOk] = await Promise.all([
       api.listNotebooks(),
       api.getAiConfig(),
@@ -310,6 +294,35 @@ export const useStore = create<AppState>((set, get) => {
         void checkForUpdatesQuietly((m) => get().pushToast("info", m));
       }, 4000);
     }
+  },
+
+  bindGlobalListeners: () => {
+    // Built-in embedder first-use download progress (one-time ~30 MB).
+    void listen<{ label: string; done: number; total: number }>(
+      "embedder://progress",
+      (e) => {
+        const p = e.payload;
+        const finished = p.total > 0 && p.done >= p.total && p.label === "model.safetensors";
+        set({ embedderDownload: finished ? null : p });
+        if (finished) setTimeout(() => set({ embedderDownload: null }), 1500);
+      },
+    );
+    // Studio generations stream their tokens; buffer them for the live preview.
+    void listen<{ content: string }>("artifact://token", (e) => {
+      if (get().generatingKind)
+        set({ artifactStreamText: get().artifactStreamText + e.payload.content });
+    });
+    // App-menu actions route here from the focused window's Rust side.
+    void listen<string>("menu://action", (e) => {
+      const s = get();
+      if (e.payload === "menu-settings") s.openSettings();
+      else if (e.payload === "menu-about") s.openSettings("about");
+      else if (e.payload === "menu-search") s.togglePalette();
+      else if (e.payload === "menu-new-window") void api.newWindow();
+    });
+    void listen<string>("menu://open-notebook", (e) => {
+      void get().selectNotebook(e.payload);
+    });
   },
 
   refreshModelHealth: async () => {
@@ -355,6 +368,8 @@ export const useStore = create<AppState>((set, get) => {
       summary: localStorage.getItem(`summary:${id}`) ?? "",
       viewingSource: null,
     });
+    const nb = get().notebooks.find((n) => n.id === id);
+    if (nb) void getCurrentWebviewWindow().setTitle(`${nb.title} — Alchemy`);
     const [sources, messages, notes, reportSchedules] = await Promise.all([
       api.listSources(id),
       api.listMessages(id),
@@ -364,7 +379,8 @@ export const useStore = create<AppState>((set, get) => {
     if (get().currentId === id) set({ sources, messages, notes, reportSchedules });
   },
 
-  closeNotebook: () =>
+  closeNotebook: () => {
+    void getCurrentWebviewWindow().setTitle("Alchemy");
     set({
       currentId: null,
       sources: [],
@@ -374,7 +390,8 @@ export const useStore = create<AppState>((set, get) => {
       ingestQueue: [],
       steps: [],
       viewingSource: null,
-    }),
+    });
+  },
 
   setTheme: (theme) => {
     localStorage.setItem("theme", theme);
