@@ -191,19 +191,29 @@ export function ChatPanel() {
 
       <div ref={scrollRef} onScroll={updateAtBottom} className="relative z-10 flex-1 overflow-y-auto">
         <div className={cn("mx-auto flex max-w-[720px] flex-col gap-6 px-5 py-6", chatReadingClass(reading))}>
+          {/* The sigil hero: full-size welcome on a truly blank notebook, and
+              once a summary exists it transitions up to sit as a compact
+              design element at the top of the chat, above the summary. */}
+          {isBlank && (
+            <ChatHero
+              hasNotebook={!!currentId}
+              hasSources={sources.length > 0}
+              compact={canChat && !!summary}
+            />
+          )}
+
           {canChat && (
             <SummaryBanner
               summary={summary}
               loading={summaryLoading}
               onRefresh={refreshSummary}
+              centered={isBlank}
             />
           )}
 
-          {messages.length === 0 && !sending ? (
-            <ChatEmpty hasNotebook={!!currentId} hasSources={sources.length > 0} />
-          ) : (
-            messages.map((m) => <ChatMessage key={m.id} message={m} />)
-          )}
+          {messages.map((m) => (
+            <ChatMessage key={m.id} message={m} />
+          ))}
 
           {sending && (
             <div className="flex flex-col gap-2">
@@ -340,16 +350,22 @@ function SummaryBanner({
   summary,
   loading,
   onRefresh,
+  centered,
 }: {
   summary: string;
   loading: boolean;
   onRefresh: () => void;
+  /** Blank notebook: the chip sits under the centered hero, so center it. */
+  centered?: boolean;
 }) {
   if (!summary && !loading) {
     return (
       <button
         onClick={onRefresh}
-        className="self-start rounded-lg border border-dashed border-border-strong bg-surface/50 px-3 py-1.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+        className={cn(
+          "rounded-lg border border-dashed border-border-strong bg-surface/50 px-3 py-1.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground",
+          centered ? "self-center" : "self-start",
+        )}
       >
         <Sparkles className="mr-1.5 inline h-3 w-3" />
         Generate notebook summary
@@ -559,22 +575,49 @@ function ThinkingDots() {
   );
 }
 
-function ChatEmpty({ hasNotebook, hasSources }: { hasNotebook: boolean; hasSources: boolean }) {
+/**
+ * The blank-state sigil. Full-size and vertically centered on an empty
+ * notebook; `compact` (a summary exists) shrinks it to a small emblem at the
+ * top of the chat column. Same element in both states, so the move animates.
+ */
+function ChatHero({
+  hasNotebook,
+  hasSources,
+  compact,
+}: {
+  hasNotebook: boolean;
+  hasSources: boolean;
+  compact: boolean;
+}) {
   const aiConfig = useStore((s) => s.aiConfig);
   const via = aiConfig?.provider === "openai" ? "via your gateway" : "locally with Ollama";
   return (
-    <div className="flex min-h-[62vh] flex-col items-center justify-center gap-4 text-center">
-      <AlchemySymbol className="h-16 w-16 text-citation/60" />
-      <div className="text-[15px] font-semibold text-foreground/90">
-        {!hasNotebook
-          ? "Create a notebook to begin"
-          : !hasSources
-            ? "Add sources to start a grounded chat"
-            : "Ask anything about your sources"}
-      </div>
-      <p className="max-w-[360px] text-[13px] text-muted-foreground">
-        Answers are generated {via} and cite the exact passages they draw from.
-      </p>
+    <div
+      className={cn(
+        "flex flex-col items-center gap-4 text-center transition-all duration-700",
+        compact ? "pt-1" : "min-h-[62vh] justify-center",
+      )}
+    >
+      <AlchemySymbol
+        className={cn(
+          "text-citation/60 transition-all duration-700",
+          compact ? "h-9 w-9" : "h-16 w-16",
+        )}
+      />
+      {!compact && (
+        <>
+          <div className="text-[15px] font-semibold text-foreground/90">
+            {!hasNotebook
+              ? "Create a notebook to begin"
+              : !hasSources
+                ? "Add sources to start a grounded chat"
+                : "Ask anything about your sources"}
+          </div>
+          <p className="max-w-[360px] text-[13px] text-muted-foreground">
+            Answers are generated {via} and cite the exact passages they draw from.
+          </p>
+        </>
+      )}
     </div>
   );
 }

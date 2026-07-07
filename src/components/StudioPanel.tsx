@@ -207,6 +207,9 @@ export function StudioPanel() {
         </Button>
       </div>
 
+      {/* Everything below the header scrolls as one column, so a tall
+          generator section never pins the notes list below the fold. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <div className="border-b border-border p-3">
         <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
           <span>Generate</span>
@@ -309,7 +312,7 @@ export function StudioPanel() {
         </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-2 pb-2">
+      <div className="px-2 pb-2">
         {notes.length === 0 ? (
           <EmptyState
             icon={<StickyNote className="h-6 w-6" />}
@@ -370,6 +373,7 @@ export function StudioPanel() {
             ))}
           </div>
         )}
+      </div>
       </div>
 
       <NoteViewer note={viewing} onClose={() => setViewing(null)} />

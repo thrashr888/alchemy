@@ -5,7 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import { SUPPORTED_EXTENSIONS } from "./utils";
-import { applyTheme, DEFAULT_THEME } from "./themes";
+import { applyTheme, SYSTEM_THEME } from "./themes";
 import { notify } from "./notify";
 import { playDone } from "./sound";
 import { autoUpdateEnabled, checkForUpdatesQuietly } from "./updates";
@@ -230,7 +230,8 @@ export const useStore = create<AppState>((set, get) => {
   ollamaOk: null,
   modelHealth: null,
   modelStats: [],
-  theme: localStorage.getItem("theme") ?? DEFAULT_THEME,
+  // Fresh installs follow the OS appearance; an explicit pick sticks.
+  theme: localStorage.getItem("theme") ?? SYSTEM_THEME,
   reading: loadReadingPrefs(),
 
   sending: false,
