@@ -1876,8 +1876,83 @@ pub async fn update_note(
 }
 
 #[tauri::command]
-pub async fn delete_note(state: State<'_, AppState>, id: String) -> Result<(), String> {
+pub async fn delete_note(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    // An Audio Overview's episode file lives outside the DB — remove it too.
+    if let Some(path) = audio_path(&app, &id) {
+        let _ = std::fs::remove_file(path);
+    }
     e(state.db.delete_note(&id).await)
+}
+
+// ---- Audio overview ---------------------------------------------------------
+
+/// Where a note's episode audio lives; None only if the data dir is unknown.
+fn audio_path(app: &AppHandle, note_id: &str) -> Option<PathBuf> {
+    use tauri::Manager;
+    let dir = app.path().app_data_dir().ok()?.join("audio");
+    Some(dir.join(format!("{note_id}.m4a")))
+}
+
+/// The episode file for a note, if it has been synthesized (frontend player).
+#[tauri::command]
+pub fn get_audio_path(app: AppHandle, note_id: String) -> Option<String> {
+    let path = audio_path(&app, &note_id)?;
+    path.exists().then(|| path.display().to_string())
+}
+
+#[derive(serde::Serialize, Clone)]
+struct AudioProgress {
+    done: u32,
+    total: u32,
+}
+
+/// Synthesize an Audio Overview script into `<data>/audio/<note_id>.m4a`,
+/// emitting `audio://progress` per line. Cancellable between lines via the
+/// artifact cancel token, so Stop works during the long synthesis tail.
+async fn synthesize_audio(
+    app: &AppHandle,
+    note_id: &str,
+    script: &str,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> anyhow::Result<()> {
+    let lines = crate::tts::parse_script(script);
+    anyhow::ensure!(
+        !lines.is_empty(),
+        "The script contained no HOST/GUEST lines to synthesize."
+    );
+    let out = audio_path(app, note_id).context("could not resolve the app data dir")?;
+    std::fs::create_dir_all(out.parent().unwrap())?;
+    // Rebuilds overwrite the previous episode.
+    let _ = std::fs::remove_file(&out);
+
+    let scratch = std::env::temp_dir().join(format!("alchemy-audio-{note_id}"));
+    std::fs::create_dir_all(&scratch)?;
+    let engine = crate::tts::SayTts::default();
+    let total = lines.len() as u32;
+    let mut wavs = Vec::with_capacity(lines.len());
+    let result: anyhow::Result<()> = async {
+        for (i, line) in lines.iter().enumerate() {
+            anyhow::ensure!(!cancel.is_cancelled(), "Generation stopped.");
+            let wav = scratch.join(format!("line-{i:04}.wav"));
+            engine.synth(line.speaker, &line.text, &wav).await?;
+            wavs.push(wav);
+            let _ = app.emit(
+                "audio://progress",
+                AudioProgress {
+                    done: (i + 1) as u32,
+                    total,
+                },
+            );
+        }
+        crate::tts::assemble_episode(&wavs, &out).await
+    }
+    .await;
+    let _ = std::fs::remove_dir_all(&scratch);
+    result
 }
 
 /// Turn a note into a standalone source (chunked/embedded), then remove the note.
@@ -2055,6 +2130,11 @@ pub async fn generate_artifact(
         created_at: ts,
         updated_at: ts,
     };
+    // Audio overviews synthesize the episode before the note is saved, so a
+    // failed or stopped synthesis never leaves a half-built artifact behind.
+    if note.kind == "audio_overview" {
+        e(synthesize_audio(&app, &note.id, &note.content, &cancel).await)?;
+    }
     e(state.db.add_note(&note).await)?;
     let _ = app.emit("generate://done", &note);
     Ok(note)
@@ -2079,6 +2159,11 @@ pub async fn rebuild_note(
         Some(t) => t,
         None => return Err("Generation stopped.".into()),
     };
+    // Re-synthesize before touching the stored note, so a failed rebuild
+    // keeps the old script/audio pair intact.
+    if kind == "audio_overview" {
+        e(synthesize_audio(&app, &note_id, &content, &cancel).await)?;
+    }
     let ts = now();
     e(state.db.update_note(&note_id, &title, &content, ts).await)?;
 

@@ -94,6 +94,8 @@ interface AppState {
   pendingNewNote: boolean;
   /** Streaming buffer for the in-flight Studio generation (artifact://token). */
   artifactStreamText: string;
+  /** Audio Overview synthesis progress (audio://progress), null when idle. */
+  audioProgress: { done: number; total: number } | null;
   /** Source open in the reader, optionally scrolled to a cited passage. */
   viewingSource: { sourceId: string; title: string; highlight?: string } | null;
 
@@ -268,6 +270,7 @@ export const useStore = create<AppState>((set, get) => {
   justCreatedNoteId: null,
   pendingNewNote: false,
   artifactStreamText: "",
+  audioProgress: null,
   viewingSource: null,
 
   init: async () => {
@@ -323,6 +326,10 @@ export const useStore = create<AppState>((set, get) => {
     void listen<{ content: string }>("artifact://token", (e) => {
       if (get().generatingKind)
         set({ artifactStreamText: get().artifactStreamText + e.payload.content });
+    });
+    // Audio Overview synthesis reports per-line progress after the script.
+    void listen<{ done: number; total: number }>("audio://progress", (e) => {
+      if (get().generatingKind) set({ audioProgress: e.payload });
     });
     // App-menu actions broadcast to every window with the intended target's
     // label in the payload — each window acts only on events addressed to it.
@@ -713,7 +720,7 @@ export const useStore = create<AppState>((set, get) => {
       if (msg.includes("Generation stopped")) get().pushToast("info", "Generation stopped");
       else set({ error: msg });
     } finally {
-      set({ generatingKind: null, artifactStreamText: "" });
+      set({ generatingKind: null, artifactStreamText: "", audioProgress: null });
     }
   },
 
@@ -731,7 +738,7 @@ export const useStore = create<AppState>((set, get) => {
       if (msg.includes("Generation stopped")) get().pushToast("info", "Rebuild stopped");
       else set({ error: msg });
     } finally {
-      set({ generatingKind: null, artifactStreamText: "" });
+      set({ generatingKind: null, artifactStreamText: "", audioProgress: null });
     }
   },
 

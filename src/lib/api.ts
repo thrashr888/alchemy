@@ -127,6 +127,7 @@ export const api = {
     run(cmd<string>("export_notebook_okf", { notebookId, destDir })),
   rebuildAppMenu: () => run(cmd<void>("rebuild_app_menu")),
   fixTrafficLights: () => run(cmd<void>("fix_traffic_lights")),
+  getAudioPath: (noteId: string) => run(query<string | null>("get_audio_path", { noteId })),
   searchEverything: (q: string) => run(query<SearchHit[]>("search_everything", { query: q })),
   createNote: (notebookId: string, title: string, content: string) =>
     run(cmd<Note>("create_note", { notebookId, title, content })),

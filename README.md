@@ -51,6 +51,10 @@ built-in embedder. See
 - **Select-to-ask** — highlight any passage in the source reader to **Explain** it,
   **Compare** it against your other sources, or stage it in the chat composer with
   your own question.
+- **Audio Overview** — one click turns a notebook into a two-host podcast episode,
+  scripted by your chat model and voiced **entirely on-device** (macOS speech
+  synthesis; a neural TTS engine is on the roadmap). The script stays readable
+  and editable as a note; the episode plays inline.
 - **Studio generators** — one-click **Summary**, **FAQ**, **Study guide**, **Briefing**,
   **Timeline**, **Insights** (cross-source connections, contradictions & surprises),
   **Data table**, **Problems** (finds errors/gaps/contradictions), **Flashcards**,
@@ -309,5 +313,5 @@ but those runners queue for hours; it can be re-added to the matrix if needed.
 
 ## Scope
 
-Audio/video overviews are intentionally out of scope. Notes are not embedded into
+Video overviews are intentionally out of scope. Notes are not embedded into
 retrieval on their own — **Convert to source** to make a note retrievable.

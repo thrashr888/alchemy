@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { Button, Input, Textarea, Modal, EmptyState, Badge, ResizeHandle, Spinner, useConfirm } from "./ui";
 import { Markdown } from "./Markdown";
 import { MindMap } from "./MindMap";
+import { AudioPlayer, DialogueScript } from "./AudioNote";
 import { Reports } from "./Reports";
 import { RichEditor } from "./RichEditor";
 import { cardButtonProps, relativeTime, shortcutBlocked } from "@/lib/utils";
@@ -39,11 +40,13 @@ import {
   ListChecks,
   Waypoints,
   AppWindow,
+  AudioLines,
 } from "lucide-react";
 
 type Artifact = { kind: NoteKind; label: string; icon: ReactNode };
 
 const SUMMARIES: Artifact[] = [
+  { kind: "audio_overview", label: "Audio Overview", icon: <AudioLines className="h-3.5 w-3.5" /> },
   { kind: "summary", label: "Summary", icon: <FileText className="h-3.5 w-3.5" /> },
   { kind: "faq", label: "FAQ", icon: <HelpCircle className="h-3.5 w-3.5" /> },
   { kind: "study_guide", label: "Study guide", icon: <GraduationCap className="h-3.5 w-3.5" /> },
@@ -92,6 +95,7 @@ function notePreview(n: Note): string {
 
 const KIND_LABEL: Record<NoteKind, string> = {
   note: "Note",
+  audio_overview: "Audio Overview",
   summary: "Summary",
   faq: "FAQ",
   study_guide: "Study guide",
@@ -116,6 +120,7 @@ export function StudioPanel() {
   const notes = useStore((s) => s.notes);
   const generatingKind = useStore((s) => s.generatingKind);
   const artifactStreamText = useStore((s) => s.artifactStreamText);
+  const audioProgress = useStore((s) => s.audioProgress);
   const generate = useStore((s) => s.generateArtifact);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
   const toggleStudio = useStore((s) => s.toggleStudio);
@@ -224,6 +229,11 @@ export function StudioPanel() {
               <Square className="h-3 w-3" />
               Stop
             </button>
+          )}
+          {audioProgress && (
+            <span className="text-[10px] normal-case tabular-nums text-subtle-foreground">
+              voicing {audioProgress.done}/{audioProgress.total}
+            </span>
           )}
           <button
             onClick={toggleGenOpen}
@@ -389,9 +399,11 @@ export function StudioPanel() {
         width="max-w-2xl"
         footer={
           <div className="flex items-center justify-between">
-            <span className="flex items-center gap-2 text-[12px] text-muted-foreground">
+            <span className="flex items-center gap-2 text-[12px] tabular-nums text-muted-foreground">
               <Spinner className="h-3.5 w-3.5" />
-              Streaming — closing this keeps generating
+              {audioProgress
+                ? `Voicing the episode — line ${audioProgress.done} of ${audioProgress.total}`
+                : "Streaming — closing this keeps generating"}
             </span>
             <Button variant="danger" onClick={() => cancelGeneration("artifact")}>
               <Square className="h-3.5 w-3.5" />
@@ -596,6 +608,12 @@ function NoteViewer({ note, onClose }: { note: Note | null; onClose: () => void 
                 <StreamingBody text={artifactStreamText} />
               ) : live.kind === "mind_map" ? (
                 <MindMap content={live.content} />
+              ) : live.kind === "audio_overview" ? (
+                <div className="flex flex-col gap-4">
+                  {/* Key by updatedAt so a rebuild swaps in the new episode. */}
+                  <AudioPlayer noteId={live.id} key={live.updatedAt} />
+                  <DialogueScript content={live.content} />
+                </div>
               ) : (
                 <Markdown>{live.content}</Markdown>
               )}

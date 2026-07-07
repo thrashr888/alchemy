@@ -7,6 +7,7 @@ mod menu;
 mod models;
 mod pdf;
 mod rag;
+mod tts;
 
 #[cfg(test)]
 mod evals;
@@ -106,6 +107,7 @@ pub fn run() {
             commands::corpus_stats,
             commands::export_notebook_okf,
             commands::fix_traffic_lights,
+            commands::get_audio_path,
             commands::new_window,
             commands::rebuild_app_menu,
             commands::search_everything,

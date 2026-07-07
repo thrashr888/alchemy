@@ -96,4 +96,17 @@ or two Kokoro voice embeddings), configurable later in Settings if wanted.
 
 ## Decision
 
-Pending review.
+Accepted 2026-07-07, with these calls on the open questions:
+
+1. Ship the `say` engine now (it proves the whole pipeline with zero
+   downloads); Kokoro via `ort` is the follow-up quality engine. The `Tts`
+   trait is deferred until that second engine exists — `SayTts` is concrete.
+2. Default ~5-minute episode (~900-1200 words); the existing "Add
+   instructions" box steers tone and length like any other generator.
+3. Default voices: Samantha (host) and Daniel (guest), with a fallback to the
+   system voice when one is missing. Settings UI for voices deferred.
+
+Implementation notes: the episode synthesizes *before* the note is saved, so
+a failed or stopped run never leaves a script note with missing audio; the
+audio file lives at `<app-data>/audio/<note_id>.m4a`, is exposed via the
+asset protocol, and is deleted with its note.

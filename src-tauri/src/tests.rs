@@ -264,3 +264,48 @@ fn okf_helpers() {
     let long = "word ".repeat(60);
     assert!(okf_description(&long).ends_with('…'));
 }
+
+#[test]
+fn audio_script_parsing() {
+    use crate::tts::{parse_script, Speaker};
+    let script = "\
+# Episode\n\
+HOST: Welcome to the show!\n\
+**GUEST:** Thanks — glad to be here.\n\
+guest — Lowercase with a dash works too.\n\
+Some narration line that is skipped.\n\
+Hostile prose starting with host-ish words is skipped.\n\
+HOST:\n\
+HOST: Second real host line.";
+    let lines = parse_script(script);
+    assert_eq!(lines.len(), 4);
+    assert_eq!(lines[0].speaker, Speaker::Host);
+    assert_eq!(lines[0].text, "Welcome to the show!");
+    assert_eq!(lines[1].speaker, Speaker::Guest);
+    assert_eq!(lines[1].text, "Thanks — glad to be here.");
+    assert_eq!(lines[2].speaker, Speaker::Guest);
+    assert_eq!(lines[3].text, "Second real host line.");
+    assert!(parse_script("just prose, no dialogue").is_empty());
+}
+
+/// Full audio pipeline on the real macOS toolchain: say → wav → m4a.
+#[tokio::test]
+async fn audio_pipeline_round_trip() {
+    use crate::tts::{assemble_episode, parse_script, SayTts};
+    let lines = parse_script("HOST: A tiny smoke test.\nGUEST: Indeed it is.");
+    assert_eq!(lines.len(), 2);
+    let dir = std::env::temp_dir().join(format!("alchemy-tts-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let engine = SayTts::default();
+    let mut wavs = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        let wav = dir.join(format!("l{i}.wav"));
+        engine.synth(l.speaker, &l.text, &wav).await.expect("synth");
+        wavs.push(wav);
+    }
+    let m4a = dir.join("episode.m4a");
+    assemble_episode(&wavs, &m4a).await.expect("assemble");
+    let size = std::fs::metadata(&m4a).expect("episode exists").len();
+    assert!(size > 4_000, "episode suspiciously small: {size} bytes");
+    let _ = std::fs::remove_dir_all(&dir);
+}
