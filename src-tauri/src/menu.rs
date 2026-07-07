@@ -59,9 +59,14 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
     let new_window = MenuItemBuilder::with_id("menu-new-window", "New Window")
         .accelerator("CmdOrCtrl+Shift+N")
         .build(app)?;
+    let export_okf = MenuItemBuilder::with_id("menu-export-okf", "Export Notebook as OKF…")
+        .accelerator("CmdOrCtrl+Shift+E")
+        .build(app)?;
     let file_menu = SubmenuBuilder::new(app, "File")
         .item(&new_window)
         .item(&recent_menu)
+        .separator()
+        .item(&export_okf)
         .separator()
         .close_window()
         .build()?;

@@ -117,6 +117,8 @@ interface AppState {
   setPaletteOpen: (open: boolean) => void;
   /** Open/close the command menu, refusing to stack over an open dialog. */
   togglePalette: () => void;
+  /** Pick a directory and export the current notebook as an OKF bundle. */
+  exportNotebookOkf: () => Promise<void>;
   createReport: (name: string, kind: string, prompt: string, intervalSecs: number) => Promise<void>;
   updateReport: (r: ReportSchedule) => Promise<void>;
   deleteReport: (id: string) => Promise<void>;
@@ -328,6 +330,7 @@ export const useStore = create<AppState>((set, get) => {
       else if (e.payload.id === "menu-about") s.openSettings("about");
       else if (e.payload.id === "menu-search") s.togglePalette();
       else if (e.payload.id === "menu-new-window") void api.newWindow();
+      else if (e.payload.id === "menu-export-okf") void s.exportNotebookOkf();
     });
     void listen<{ target: string; id: string }>("menu://open-notebook", (e) => {
       if (e.payload.target !== label) return;
@@ -788,6 +791,22 @@ export const useStore = create<AppState>((set, get) => {
       set({ migration: null });
       const id = get().currentId;
       if (id) set({ sources: await api.listSources(id) });
+    }
+  },
+
+  exportNotebookOkf: async () => {
+    const id = get().currentId;
+    if (!id) {
+      get().pushToast("info", "Open a notebook to export it");
+      return;
+    }
+    const dest = await open({ directory: true, title: "Export OKF bundle into…" });
+    if (!dest) return;
+    try {
+      const path = await api.exportNotebookOkf(id, dest as string);
+      get().pushToast("success", `Exported to ${path}`);
+    } catch (e) {
+      get().pushToast("error", e instanceof Error ? e.message : String(e));
     }
   },
 

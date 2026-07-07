@@ -550,6 +550,22 @@ function NoteViewer({ note, onClose }: { note: Note | null; onClose: () => void 
       }}
       title={live?.title ?? ""}
       width="max-w-2xl"
+      headerActions={
+        live && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              void api.newWindow(live.notebookId, live.id);
+              onClose();
+            }}
+            title="Open in its own window"
+            aria-label="Open this note in its own window"
+          >
+            <AppWindow className="h-4 w-4" />
+          </Button>
+        )
+      }
     >
       {live &&
         (editing ? (
@@ -585,18 +601,6 @@ function NoteViewer({ note, onClose }: { note: Note | null; onClose: () => void 
               )}
             </div>
             <div className="flex justify-end gap-2 border-t border-border pt-3">
-              <Button
-                variant="secondary"
-                size="icon"
-                onClick={() => {
-                  void api.newWindow(live.notebookId, live.id);
-                  onClose();
-                }}
-                title="Open in its own window"
-                aria-label="Open this note in its own window"
-              >
-                <AppWindow className="h-3.5 w-3.5" />
-              </Button>
               {live.kind !== "note" && (
                 <Button
                   variant="secondary"

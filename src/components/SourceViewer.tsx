@@ -139,6 +139,17 @@ export function SourceViewer() {
 
   const title = source?.title ?? viewing?.title ?? "this source";
 
+  // Listen at the window so releasing the mouse OUTSIDE the text container
+  // (common when dragging a selection) still raises the toolbar. The handler
+  // itself validates that the selection lives inside the reader body.
+  const updateSelectionRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    if (!viewing) return;
+    const onUp = () => updateSelectionRef.current();
+    window.addEventListener("mouseup", onUp);
+    return () => window.removeEventListener("mouseup", onUp);
+  }, [viewing]);
+
   /** Track the selection inside the reader body to place the ask toolbar. */
   function updateSelection() {
     const container = bodyRef.current;
@@ -170,6 +181,7 @@ export function SourceViewer() {
       ),
     });
   }
+  updateSelectionRef.current = updateSelection;
 
   const selectedPassage = () =>
     sel && sel.text.length > MAX_PASSAGE_CHARS
@@ -220,6 +232,7 @@ export function SourceViewer() {
               <span className="flex items-center gap-1.5 text-[11px] text-subtle-foreground">
                 {sourceIcon(source.sourceType)}
                 {source.chunkCount} chunks · {Intl.NumberFormat().format(source.charCount)} chars
+                <span className="hidden sm:inline"> · select text to ask about it</span>
               </span>
             )}
             {source?.url &&
@@ -296,7 +309,6 @@ export function SourceViewer() {
 
           <div
             ref={bodyRef}
-            onMouseUp={updateSelection}
             className="relative min-h-0 flex-1 overflow-y-auto rounded-md border border-border bg-surface-2/40 p-4"
           >
             {sel && content && (
