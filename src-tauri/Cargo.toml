@@ -54,6 +54,11 @@ percent-encoding = "2"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
 
+# Already in the tree via tauri/wry — used to re-apply the traffic-light
+# inset after webview reloads reset it (see commands::fix_traffic_lights).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = "0.3"
+
 [features]
 # Dev-only: exposes the debug bridge for CLI automation/inspection.
 debug = ["dep:tauri-plugin-debug-bridge"]
