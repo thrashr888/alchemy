@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { SYSTEM_THEME, THEMES } from "@/lib/themes";
@@ -12,6 +13,7 @@ import {
   ChevronLeft,
   Eraser,
   FileText,
+  FolderOutput,
   Link2,
   MessageSquare,
   Palette,
@@ -157,6 +159,26 @@ export function CommandPalette() {
             },
           }),
         ),
+        {
+          id: "export-okf",
+          group: "Notebook",
+          label: "Export notebook as OKF bundle…",
+          keywords: "open knowledge format markdown share backup download",
+          icon: <FolderOutput className="h-3.5 w-3.5" />,
+          run: () => {
+            close();
+            void (async () => {
+              const dest = await open({ directory: true, title: "Export OKF bundle into…" });
+              if (!dest || !currentId) return;
+              try {
+                const path = await api.exportNotebookOkf(currentId, dest as string);
+                state().pushToast("success", `Exported to ${path}`);
+              } catch (e) {
+                state().pushToast("error", e instanceof Error ? e.message : String(e));
+              }
+            })();
+          },
+        },
         {
           id: "toggle-sources",
           group: "View",
