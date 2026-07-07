@@ -2284,21 +2284,38 @@ pub async fn run_report(
 
 // ---- Windows ---------------------------------------------------------------
 
-/// Open another app window — at the home screen, or straight into a notebook.
-/// The boot target rides an init script (not the URL) so it works identically
-/// under the dev server and the bundled custom protocol.
+/// Open another app window — at the home screen, straight into a notebook,
+/// or onto a single note (a document-sized reader window). The boot target
+/// rides an init script (not the URL) so it works identically under the dev
+/// server and the bundled custom protocol.
 #[tauri::command]
-pub async fn new_window(app: AppHandle, notebook_id: Option<String>) -> Result<(), String> {
+pub async fn new_window(
+    app: AppHandle,
+    notebook_id: Option<String>,
+    note_id: Option<String>,
+) -> Result<(), String> {
     let label = format!("win-{}", new_id());
-    let boot = match notebook_id {
+    let mut boot = match notebook_id {
         Some(id) => format!("window.__ALCHEMY_NOTEBOOK__ = '{}';", id.replace('\'', "")),
         None => "window.__ALCHEMY_FRESH__ = true;".to_string(),
+    };
+    if let Some(nid) = &note_id {
+        boot.push_str(&format!(
+            "window.__ALCHEMY_NOTE__ = '{}';",
+            nid.replace('\'', "")
+        ));
+    }
+    // Note windows are readers, not workspaces — size them like a document.
+    let (w, h, min_w, min_h) = if note_id.is_some() {
+        (880.0, 780.0, 480.0, 400.0)
+    } else {
+        (1280.0, 820.0, 1040.0, 640.0)
     };
     let builder =
         tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::App("index.html".into()))
             .title("Alchemy")
-            .inner_size(1280.0, 820.0)
-            .min_inner_size(1040.0, 640.0)
+            .inner_size(w, h)
+            .min_inner_size(min_w, min_h)
             .initialization_script(&boot);
     #[cfg(target_os = "macos")]
     let builder = builder
@@ -2347,6 +2364,216 @@ pub struct CorpusStats {
 pub async fn corpus_stats(state: State<'_, AppState>) -> Result<CorpusStats, String> {
     let (sources, chars) = e(state.db.corpus_stats().await)?;
     Ok(CorpusStats { sources, chars })
+}
+
+// ---- OKF export ------------------------------------------------------------
+
+/// Kebab-case a title into a filesystem/URL-safe slug.
+pub(crate) fn okf_slug(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else if !out.ends_with('-') && !out.is_empty() {
+            out.push('-');
+        }
+    }
+    let out: String = out.trim_matches('-').chars().take(60).collect();
+    let out = out.trim_end_matches('-').to_string();
+    if out.is_empty() {
+        "untitled".into()
+    } else {
+        out
+    }
+}
+
+/// Double-quote a string for YAML frontmatter.
+fn yaml_str(s: &str) -> String {
+    format!(
+        "\"{}\"",
+        s.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', " ")
+    )
+}
+
+/// First ~140 chars of content, flattened, for `description:` and index lines.
+pub(crate) fn okf_description(content: &str) -> String {
+    let flat = content
+        .replace(['#', '*', '`', '>', '|'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut out: String = flat.chars().take(140).collect();
+    if flat.chars().count() > 140 {
+        out.push('…');
+    }
+    out
+}
+
+fn okf_timestamp(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_default()
+}
+
+/// Titles go into markdown link text; keep them from breaking the link.
+fn link_text(s: &str) -> String {
+    s.replace(['[', ']'], " ").trim().to_string()
+}
+
+/// Export a notebook as an Open Knowledge Format bundle: a directory of
+/// markdown concept files with YAML frontmatter (sources/ and notes/), plus
+/// index.md listings and a log.md — per the OKF v0.1 spec.
+#[tauri::command]
+pub async fn export_notebook_okf(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    dest_dir: String,
+) -> Result<String, String> {
+    let notebook = e(state.db.list_notebooks().await)?
+        .into_iter()
+        .find(|n| n.id == notebook_id)
+        .ok_or_else(|| "Notebook not found".to_string())?;
+    let sources = e(state.db.list_sources(&notebook_id).await)?;
+    let notes = e(state.db.list_notes(&notebook_id).await)?;
+
+    // A fresh directory per export — never merge into (or clobber) one the
+    // user already has.
+    let base = std::path::Path::new(&dest_dir);
+    let nb_slug = okf_slug(&notebook.title);
+    let mut bundle = base.join(&nb_slug);
+    let mut n = 2;
+    while bundle.exists() {
+        bundle = base.join(format!("{nb_slug}-{n}"));
+        n += 1;
+    }
+    let write = |path: &std::path::Path, text: &str| -> Result<(), String> {
+        std::fs::write(path, text).map_err(|err| format!("Failed to write {path:?}: {err}"))
+    };
+
+    // Concept files, with per-directory slug dedup.
+    let mut used: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut claim = |dir: &str, title: &str| -> String {
+        let s = okf_slug(title);
+        let key = format!("{dir}/{s}");
+        let count = used.entry(key).or_insert(0);
+        *count += 1;
+        if *count == 1 {
+            s
+        } else {
+            format!("{s}-{count}")
+        }
+    };
+
+    let mut source_entries = Vec::new(); // (slug, title, description)
+    if !sources.is_empty() {
+        let dir = bundle.join("sources");
+        std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+        for s in &sources {
+            let content = e(state.db.source_content(&s.id).await)?;
+            let slug = claim("sources", &s.title);
+            let mut fm = String::from("---\ntype: Source\n");
+            fm.push_str(&format!("title: {}\n", yaml_str(&s.title)));
+            let desc = okf_description(&content);
+            if !desc.is_empty() {
+                fm.push_str(&format!("description: {}\n", yaml_str(&desc)));
+            }
+            if !s.url.is_empty() {
+                let resource = if is_web_url(&s.url) {
+                    s.url.clone()
+                } else {
+                    format!("file://{}", s.url)
+                };
+                fm.push_str(&format!("resource: {}\n", yaml_str(&resource)));
+            }
+            fm.push_str(&format!("tags: [{}]\n", s.source_type));
+            fm.push_str(&format!(
+                "timestamp: {}\n---\n\n",
+                okf_timestamp(s.created_at)
+            ));
+            write(&dir.join(format!("{slug}.md")), &format!("{fm}{content}\n"))?;
+            source_entries.push((slug, s.title.clone(), desc));
+        }
+        let listing = source_entries
+            .iter()
+            .map(|(slug, title, desc)| format!("- [{}]({slug}.md) — {desc}", link_text(title)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        write(&dir.join("index.md"), &format!("# Sources\n\n{listing}\n"))?;
+    }
+
+    let mut note_entries = Vec::new();
+    if !notes.is_empty() {
+        let dir = bundle.join("notes");
+        std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+        for note in &notes {
+            let slug = claim("notes", &note.title);
+            let type_label = match note.kind.as_str() {
+                "note" => "Note",
+                "report" => "Report",
+                kind => rag::artifact_spec(kind).map(|(t, _)| t).unwrap_or("Note"),
+            };
+            let desc = okf_description(&note.content);
+            let mut fm = format!("---\ntype: {type_label}\n");
+            fm.push_str(&format!("title: {}\n", yaml_str(&note.title)));
+            if !desc.is_empty() {
+                fm.push_str(&format!("description: {}\n", yaml_str(&desc)));
+            }
+            fm.push_str(&format!(
+                "timestamp: {}\n---\n\n",
+                okf_timestamp(note.updated_at)
+            ));
+            write(
+                &dir.join(format!("{slug}.md")),
+                &format!("{fm}{}\n", note.content),
+            )?;
+            note_entries.push((slug, note.title.clone(), desc));
+        }
+        let listing = note_entries
+            .iter()
+            .map(|(slug, title, desc)| format!("- [{}]({slug}.md) — {desc}", link_text(title)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        write(&dir.join("index.md"), &format!("# Notes\n\n{listing}\n"))?;
+    }
+
+    // Root index.md: progressive-disclosure listing of the whole bundle.
+    let mut index = format!("# {}\n\n", notebook.title);
+    index.push_str(
+        "A research notebook exported from Alchemy as an Open Knowledge Format bundle.\n",
+    );
+    if !source_entries.is_empty() {
+        index.push_str("\n# Sources\n\n");
+        for (slug, title, desc) in &source_entries {
+            index.push_str(&format!(
+                "- [{}](sources/{slug}.md) — {desc}\n",
+                link_text(title)
+            ));
+        }
+    }
+    if !note_entries.is_empty() {
+        index.push_str("\n# Notes\n\n");
+        for (slug, title, desc) in &note_entries {
+            index.push_str(&format!(
+                "- [{}](notes/{slug}.md) — {desc}\n",
+                link_text(title)
+            ));
+        }
+    }
+    write(&bundle.join("index.md"), &index)?;
+
+    let today = chrono::Utc::now().format("%Y-%m-%d");
+    write(
+        &bundle.join("log.md"),
+        &format!(
+            "# {today}\n\nExported from Alchemy: {} sources, {} notes.\n",
+            source_entries.len(),
+            note_entries.len()
+        ),
+    )?;
+
+    Ok(bundle.display().to_string())
 }
 
 /// One global-search result for the command menu.

@@ -57,8 +57,13 @@ built-in embedder. See
   **Quiz**, and a **Mind map** rendered as a native SVG diagram, plus HashiCorp-style
   **PRD**, **PR/FAQ**, **RFC**, and a **Skill** (SKILL.md) generator. Add custom
   instructions, and **rebuild** any document against the latest sources.
-- **Notes** — a **WYSIWYG** editor (Markdown under the hood), copy to clipboard, and
-  **Convert to source** to fold a note into the retrievable source set.
+- **Notes** — a **WYSIWYG** editor (Markdown under the hood), copy to clipboard,
+  **Convert to source** to fold a note into the retrievable source set, and
+  **Open in window** for a full-size reader (mind maps especially).
+- **OKF export** — export a whole notebook (sources + notes) as an
+  [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
+  bundle: plain markdown concepts with YAML frontmatter, indexes, and a log —
+  readable by humans and agents alike (⌘K → "Export notebook as OKF").
 - **Periodic reports** — schedule a notebook to refresh its URL sources and generate a
   timestamped report note on an interval.
 - **Model tooling** — live chat/embed **health check**, per-model **tokens/sec**

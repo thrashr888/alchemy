@@ -121,7 +121,10 @@ export const api = {
   listNotes: (notebookId: string) => run(query<Note[]>("list_notes", { notebookId })),
   listRecentNotes: (limit = 6) => run(query<Note[]>("list_recent_notes", { limit })),
   corpusStats: () => run(query<CorpusStats>("corpus_stats")),
-  newWindow: (notebookId?: string) => run(cmd<void>("new_window", { notebookId })),
+  newWindow: (notebookId?: string, noteId?: string) =>
+    run(cmd<void>("new_window", { notebookId, noteId })),
+  exportNotebookOkf: (notebookId: string, destDir: string) =>
+    run(cmd<string>("export_notebook_okf", { notebookId, destDir })),
   rebuildAppMenu: () => run(cmd<void>("rebuild_app_menu")),
   searchEverything: (q: string) => run(query<SearchHit[]>("search_everything", { query: q })),
   createNote: (notebookId: string, title: string, content: string) =>
