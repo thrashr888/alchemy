@@ -3,6 +3,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useStore } from "@/lib/store";
 import { Markdown } from "./Markdown";
 import { MindMap } from "./MindMap";
+import { AudioPlayer, DialogueScript } from "./AudioNote";
 import { Spinner } from "./ui";
 import { cn } from "@/lib/utils";
 import { StickyNote } from "lucide-react";
@@ -54,6 +55,11 @@ export function NoteWindow({ noteId }: { noteId: string }) {
             </div>
           ) : note.kind === "mind_map" ? (
             <MindMap content={note.content} />
+          ) : note.kind === "audio_overview" ? (
+            <div className="flex flex-col gap-4">
+              <AudioPlayer noteId={note.id} key={note.updatedAt} />
+              <DialogueScript content={note.content} />
+            </div>
           ) : (
             <Markdown>{note.content}</Markdown>
           )}

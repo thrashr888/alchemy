@@ -184,6 +184,21 @@ pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
              the tables, add a short **Notes** list for caveats or conflicting figures between \
              sources. Every value must come from the sources — do not estimate.",
         )),
+        "audio_overview" => Some((
+            "Audio Overview",
+            "Write the script for a two-host podcast episode discussing the sources below — \
+             about 900-1200 words (a five-minute listen). HOST is a warm, curious interviewer \
+             who frames the big questions and keeps the thread moving; GUEST is the expert who \
+             answers with specifics from the material, reaching for an analogy when it helps. \
+             Open with a hook — the most surprising fact or sharpest question in the sources. \
+             Work through the 3-5 most interesting threads with natural handoffs, letting the \
+             hosts push back on each other where the sources conflict, and end with a crisp \
+             takeaway. Write ONLY dialogue lines, each on its own line, in exactly this form:\n\
+             HOST: <what they say>\n\
+             GUEST: <what they say>\n\
+             No headings, no stage directions, no markdown, no names other than HOST and GUEST. \
+             Keep each turn under 60 words so it sounds like real speech.",
+        )),
         "mind_map" => Some((
             "Mind Map",
             "Distill the sources below into a mind-map outline. The FIRST line is the central \
