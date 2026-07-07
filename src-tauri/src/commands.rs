@@ -2323,7 +2323,7 @@ pub async fn new_window(
         .hidden_title(true)
         // Keep in sync with tauri.conf.json: centers the stoplights in the
         // 48px custom titlebar row.
-        .traffic_light_position(tauri::LogicalPosition::new(20.0, 24.0));
+        .traffic_light_position(tauri::LogicalPosition::new(20.0, 26.0));
     builder.build().map_err(|e2| e2.to_string())?;
     Ok(())
 }
