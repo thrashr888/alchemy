@@ -191,23 +191,23 @@ export function ChatPanel() {
 
       <div ref={scrollRef} onScroll={updateAtBottom} className="relative z-10 flex-1 overflow-y-auto">
         <div className={cn("mx-auto flex max-w-[720px] flex-col gap-6 px-5 py-6", chatReadingClass(reading))}>
-          {/* The sigil hero: full-size welcome on a truly blank notebook, and
-              once a summary exists it transitions up to sit as a compact
-              design element at the top of the chat, above the summary. */}
-          {isBlank && (
-            <ChatHero
-              hasNotebook={!!currentId}
-              hasSources={sources.length > 0}
-              compact={canChat && !!summary}
-            />
-          )}
-
           {canChat && (
             <SummaryBanner
               summary={summary}
               loading={summaryLoading}
               onRefresh={refreshSummary}
               centered={isBlank}
+            />
+          )}
+
+          {/* The sigil: full-size welcome on a truly blank notebook; once a
+              summary exists it stays as a compact emblem between the summary
+              and the start of the thread. */}
+          {(isBlank || (canChat && !!summary)) && (
+            <ChatHero
+              hasNotebook={!!currentId}
+              hasSources={sources.length > 0}
+              compact={canChat && !!summary}
             />
           )}
 
