@@ -162,6 +162,7 @@ export function Modal({
   title,
   children,
   footer,
+  headerActions,
   width = "max-w-md",
 }: {
   open: boolean;
@@ -169,6 +170,8 @@ export function Modal({
   title: string;
   children: React.ReactNode;
   footer?: React.ReactNode;
+  /** Icon buttons rendered in the title bar, left of the close X. */
+  headerActions?: React.ReactNode;
   width?: string;
 }) {
   const panelRef = React.useRef<HTMLDivElement>(null);
@@ -245,9 +248,12 @@ export function Modal({
           <h2 id={titleId} className="text-[13px] font-semibold text-foreground">
             {title}
           </h2>
-          <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close dialog">
-            <X className="h-4 w-4" />
-          </Button>
+          <div className="flex shrink-0 items-center gap-1">
+            {headerActions}
+            <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close dialog">
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-4">{children}</div>
         {footer && (

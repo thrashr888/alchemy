@@ -4,7 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { Button, Textarea, useConfirm } from "./ui";
 import { Markdown } from "./Markdown";
-import { cn, chatReadingClass, cardButtonProps } from "@/lib/utils";
+import { cn, chatReadingClass, cardButtonProps, isWebUrl } from "@/lib/utils";
 import { DitherBackground } from "./DitherBackground";
 import { AlchemySymbol } from "./AlchemyHero";
 import type { Citation, Message } from "@/lib/types";
@@ -60,6 +60,25 @@ export function ChatPanel() {
       useStore.setState({ failedInput: null });
     }
   }, [failedInput]);
+
+  // Another surface (the source reader's "Ask about this") staged text for
+  // the composer — load it and focus so the user can finish their question.
+  const pendingInput = useStore((s) => s.pendingInput);
+  useEffect(() => {
+    if (!pendingInput) return;
+    setDraft(pendingInput);
+    useStore.setState({ pendingInput: null });
+    // Focus after the surface that staged the text (a modal) has closed, and
+    // autosize for multi-line prefills (onChange normally handles this).
+    setTimeout(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
+      el.selectionStart = el.selectionEnd = el.value.length;
+    }, 0);
+  }, [pendingInput]);
 
   // Subscribe once to streaming tokens + agent progress steps from the backend.
   // Events broadcast to every window — only the one with a send in flight
@@ -177,14 +196,24 @@ export function ChatPanel() {
               summary={summary}
               loading={summaryLoading}
               onRefresh={refreshSummary}
+              centered={isBlank}
             />
           )}
 
-          {messages.length === 0 && !sending ? (
-            <ChatEmpty hasNotebook={!!currentId} hasSources={sources.length > 0} />
-          ) : (
-            messages.map((m) => <ChatMessage key={m.id} message={m} />)
+          {/* The sigil: full-size welcome on a truly blank notebook; once a
+              summary exists it stays as a compact emblem between the summary
+              and the start of the thread. */}
+          {(isBlank || (canChat && !!summary)) && (
+            <ChatHero
+              hasNotebook={!!currentId}
+              hasSources={sources.length > 0}
+              compact={canChat && !!summary}
+            />
           )}
+
+          {messages.map((m) => (
+            <ChatMessage key={m.id} message={m} />
+          ))}
 
           {sending && (
             <div className="flex flex-col gap-2">
@@ -321,16 +350,22 @@ function SummaryBanner({
   summary,
   loading,
   onRefresh,
+  centered,
 }: {
   summary: string;
   loading: boolean;
   onRefresh: () => void;
+  /** Blank notebook: the chip sits under the centered hero, so center it. */
+  centered?: boolean;
 }) {
   if (!summary && !loading) {
     return (
       <button
         onClick={onRefresh}
-        className="self-start rounded-lg border border-dashed border-border-strong bg-surface/50 px-3 py-1.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+        className={cn(
+          "rounded-lg border border-dashed border-border-strong bg-surface/50 px-3 py-1.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground",
+          centered ? "self-center" : "self-start",
+        )}
       >
         <Sparkles className="mr-1.5 inline h-3 w-3" />
         Generate notebook summary
@@ -447,7 +482,12 @@ function Citations({ citations }: { citations: Citation[] }) {
   const [open, setOpen] = useState(false);
   const sources = useStore((s) => s.sources);
   const openSourceViewer = useStore((s) => s.openSourceViewer);
-  const urlOf = (sourceId: string) => sources.find((x) => x.id === sourceId)?.url || "";
+  // Only web origins get the open-in-browser chip; file paths live in the
+  // same field but belong to the source reader's "Show in Finder".
+  const urlOf = (sourceId: string) => {
+    const url = sources.find((x) => x.id === sourceId)?.url || "";
+    return isWebUrl(url) ? url : "";
+  };
   return (
     <div className="mt-1">
       <button
@@ -535,22 +575,49 @@ function ThinkingDots() {
   );
 }
 
-function ChatEmpty({ hasNotebook, hasSources }: { hasNotebook: boolean; hasSources: boolean }) {
+/**
+ * The blank-state sigil. Full-size and vertically centered on an empty
+ * notebook; `compact` (a summary exists) shrinks it to a small emblem at the
+ * top of the chat column. Same element in both states, so the move animates.
+ */
+function ChatHero({
+  hasNotebook,
+  hasSources,
+  compact,
+}: {
+  hasNotebook: boolean;
+  hasSources: boolean;
+  compact: boolean;
+}) {
   const aiConfig = useStore((s) => s.aiConfig);
   const via = aiConfig?.provider === "openai" ? "via your gateway" : "locally with Ollama";
   return (
-    <div className="flex min-h-[62vh] flex-col items-center justify-center gap-4 text-center">
-      <AlchemySymbol className="h-16 w-16 text-citation/60" />
-      <div className="text-[15px] font-semibold text-foreground/90">
-        {!hasNotebook
-          ? "Create a notebook to begin"
-          : !hasSources
-            ? "Add sources to start a grounded chat"
-            : "Ask anything about your sources"}
-      </div>
-      <p className="max-w-[360px] text-[13px] text-muted-foreground">
-        Answers are generated {via} and cite the exact passages they draw from.
-      </p>
+    <div
+      className={cn(
+        "flex flex-col items-center gap-4 text-center transition-all duration-700",
+        compact ? "pt-1" : "min-h-[62vh] justify-center",
+      )}
+    >
+      <AlchemySymbol
+        className={cn(
+          "text-citation/60 transition-all duration-700",
+          compact ? "h-9 w-9" : "h-16 w-16",
+        )}
+      />
+      {!compact && (
+        <>
+          <div className="text-[15px] font-semibold text-foreground/90">
+            {!hasNotebook
+              ? "Create a notebook to begin"
+              : !hasSources
+                ? "Add sources to start a grounded chat"
+                : "Ask anything about your sources"}
+          </div>
+          <p className="max-w-[360px] text-[13px] text-muted-foreground">
+            Answers are generated {via} and cite the exact passages they draw from.
+          </p>
+        </>
+      )}
     </div>
   );
 }

@@ -403,29 +403,41 @@ async fn friendly_title(state: &AppState, extracted: &mut ingest::Extracted) {
     }
 }
 
+/// Extract a local file through the full pipeline (Google placeholder fetch,
+/// image OCR, scanned-PDF OCR fallback, plain extraction). File-backed results
+/// record the originating path in `url` so the source can be refreshed from
+/// disk later; Google placeholders keep their cloud URL instead.
+async fn extract_any_file(state: &AppState, path: &str) -> anyhow::Result<ingest::Extracted> {
+    let mut extracted = if let Some(url) = ingest::google_placeholder_url(path) {
+        // Google Drive desktop placeholder — the content lives in the cloud;
+        // fetch it through the same export path as a pasted docs.google.com URL.
+        ingest::extract_url(&url).await?
+    } else if ingest::is_image(path) {
+        extract_image(state, path).await?
+    } else if ingest::is_pdf(path) {
+        // Try fast text extraction; fall back to per-page OCR for scanned PDFs.
+        match ingest::extract_file(path) {
+            Ok(ex) => ex,
+            Err(text_err) => extract_pdf_ocr(state, path)
+                .await
+                .map_err(|ocr_err| anyhow::anyhow!("{text_err} OCR fallback failed: {ocr_err}"))?,
+        }
+    } else {
+        ingest::extract_file(path)?
+    };
+    if extracted.url.is_empty() {
+        extracted.url = path.to_string();
+    }
+    Ok(extracted)
+}
+
 #[tauri::command]
 pub async fn add_source_file(
     state: State<'_, AppState>,
     notebook_id: String,
     path: String,
 ) -> Result<Source, String> {
-    let mut extracted = if let Some(url) = ingest::google_placeholder_url(&path) {
-        // Google Drive desktop placeholder — the content lives in the cloud;
-        // fetch it through the same export path as a pasted docs.google.com URL.
-        e(ingest::extract_url(&url).await)?
-    } else if ingest::is_image(&path) {
-        e(extract_image(&state, &path).await)?
-    } else if ingest::is_pdf(&path) {
-        // Try fast text extraction; fall back to per-page OCR for scanned PDFs.
-        match ingest::extract_file(&path) {
-            Ok(ex) => ex,
-            Err(text_err) => e(extract_pdf_ocr(&state, &path)
-                .await
-                .map_err(|ocr_err| anyhow::anyhow!("{text_err} OCR fallback failed: {ocr_err}")))?,
-        }
-    } else {
-        e(ingest::extract_file(&path))?
-    };
+    let mut extracted = e(extract_any_file(&state, &path).await)?;
     friendly_title(&state, &mut extracted).await;
     e(store_extracted(&state, &notebook_id, extracted).await)
 }
@@ -491,12 +503,20 @@ async fn reingest(
     // Classify against the stored URL: text edits arrive via extract_pasted
     // with an empty extracted.url, which would drop the Google-doc exemption.
     let (status, error) = classify(&existing.source_type, &existing.url, &extracted.text);
+    // An empty extracted.url means the text came from an edit or paste, not a
+    // re-fetch — keep the stored origin (URL or file path) so refresh keeps
+    // working after edits.
+    let url = if extracted.url.is_empty() {
+        existing.url.clone()
+    } else {
+        extracted.url
+    };
     let updated = Source {
         id: existing.id.clone(),
         notebook_id: existing.notebook_id.clone(),
         title: extracted.title,
         source_type: existing.source_type.clone(),
-        url: extracted.url,
+        url,
         content: extracted.text.clone(),
         char_count: extracted.text.chars().count() as i64,
         chunk_count: chunk_tuples.len() as i64,
@@ -553,6 +573,11 @@ pub async fn update_source_text(
     e(reingest(&state, &existing, extracted).await)
 }
 
+/// Does this source origin point at the web (vs. a local file path)?
+fn is_web_url(s: &str) -> bool {
+    s.starts_with("http://") || s.starts_with("https://")
+}
+
 #[tauri::command]
 pub async fn refresh_source_url(
     state: State<'_, AppState>,
@@ -561,12 +586,29 @@ pub async fn refresh_source_url(
     let existing =
         e(state.db.get_source(&source_id).await)?.ok_or_else(|| "Source not found".to_string())?;
     if existing.url.is_empty() {
-        return Err("This source has no URL to refresh".into());
+        return Err("This source has no URL or file path to refresh from".into());
     }
-    match ingest::extract_url(&existing.url).await {
-        Ok(extracted) => e(reingest(&state, &existing, extracted).await),
-        Err(err) => e(mark_source_failed(&state, &existing, err.to_string()).await),
+    if is_web_url(&existing.url) {
+        return match ingest::extract_url(&existing.url).await {
+            Ok(extracted) => e(reingest(&state, &existing, extracted).await),
+            Err(err) => e(mark_source_failed(&state, &existing, err.to_string()).await),
+        };
     }
+    // File-backed source. Unlike a dead URL (where the errored row is the
+    // retry affordance), a failed re-read must NOT wipe the working source —
+    // the extracted text and chunks are still perfectly usable. Surface the
+    // failure and leave the source untouched.
+    if !std::path::Path::new(&existing.url).exists() {
+        return Err(format!(
+            "Original file no longer exists at {}",
+            existing.url
+        ));
+    }
+    let mut extracted = e(extract_any_file(&state, &existing.url).await)?;
+    // Keep the existing title — the file's content changed, its name didn't,
+    // and the stored title may be a friendlier one than the file stem.
+    extracted.title = existing.title.clone();
+    e(reingest(&state, &existing, extracted).await)
 }
 
 #[tauri::command]
@@ -1903,11 +1945,14 @@ async fn generate_content(
     for s in &sources {
         let full = state.db.source_content(&s.id).await?;
         // URL sources get a "Source URL:" line under their heading so
-        // generated notes can cite where each finding can be viewed.
+        // generated notes can cite where each finding can be viewed. File
+        // sources carry their on-disk path under a "Source file:" label.
         let heading = if s.url.is_empty() {
             format!("## {}", s.title)
-        } else {
+        } else if is_web_url(&s.url) {
             format!("## {}\nSource URL: {}", s.title, s.url)
+        } else {
+            format!("## {}\nSource file: {}", s.title, s.url)
         };
         contents.push((heading, full));
     }
@@ -2239,27 +2284,92 @@ pub async fn run_report(
 
 // ---- Windows ---------------------------------------------------------------
 
-/// Open another app window — at the home screen, or straight into a notebook.
-/// The boot target rides an init script (not the URL) so it works identically
-/// under the dev server and the bundled custom protocol.
+/// Put the macOS stoplights back where they belong. AppKit resets them to
+/// their default spot whenever the webview reloads (dev HMR, navigation),
+/// and tao only re-applies its inset when its own — webview-covered — view
+/// redraws, so the frontend invokes this on every boot. Mirrors tao's
+/// `inset_traffic_lights`; keep the inset in sync with tauri.conf.json.
 #[tauri::command]
-pub async fn new_window(app: AppHandle, notebook_id: Option<String>) -> Result<(), String> {
+pub fn fix_traffic_lights(window: tauri::WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    {
+        const INSET_X: f64 = 20.0;
+        const INSET_Y: f64 = 26.0;
+        let Ok(ns_window_ptr) = window.ns_window() else {
+            return;
+        };
+        let addr = ns_window_ptr as usize;
+        let _ = window.run_on_main_thread(move || unsafe {
+            use objc2_app_kit::{NSWindow, NSWindowButton};
+            let ns_window = &*(addr as *const NSWindow);
+            let (Some(close), Some(mini), Some(zoom)) = (
+                ns_window.standardWindowButton(NSWindowButton::CloseButton),
+                ns_window.standardWindowButton(NSWindowButton::MiniaturizeButton),
+                ns_window.standardWindowButton(NSWindowButton::ZoomButton),
+            ) else {
+                return;
+            };
+            let Some(container) = close.superview().and_then(|v| v.superview()) else {
+                return;
+            };
+            let close_rect = close.frame();
+            let bar_height = close_rect.size.height + INSET_Y;
+            let mut bar_rect = container.frame();
+            bar_rect.size.height = bar_height;
+            bar_rect.origin.y = ns_window.frame().size.height - bar_height;
+            container.setFrame(bar_rect);
+            let spacing = mini.frame().origin.x - close_rect.origin.x;
+            for (i, button) in [&*close, &*mini, &*zoom].into_iter().enumerate() {
+                let mut rect = button.frame();
+                rect.origin.x = INSET_X + (i as f64 * spacing);
+                button.setFrameOrigin(rect.origin);
+            }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+}
+
+/// Open another app window — at the home screen, straight into a notebook,
+/// or onto a single note (a document-sized reader window). The boot target
+/// rides an init script (not the URL) so it works identically under the dev
+/// server and the bundled custom protocol.
+#[tauri::command]
+pub async fn new_window(
+    app: AppHandle,
+    notebook_id: Option<String>,
+    note_id: Option<String>,
+) -> Result<(), String> {
     let label = format!("win-{}", new_id());
-    let boot = match notebook_id {
+    let mut boot = match notebook_id {
         Some(id) => format!("window.__ALCHEMY_NOTEBOOK__ = '{}';", id.replace('\'', "")),
         None => "window.__ALCHEMY_FRESH__ = true;".to_string(),
+    };
+    if let Some(nid) = &note_id {
+        boot.push_str(&format!(
+            "window.__ALCHEMY_NOTE__ = '{}';",
+            nid.replace('\'', "")
+        ));
+    }
+    // Note windows are readers, not workspaces — size them like a document.
+    let (w, h, min_w, min_h) = if note_id.is_some() {
+        (880.0, 780.0, 480.0, 400.0)
+    } else {
+        (1280.0, 820.0, 1040.0, 640.0)
     };
     let builder =
         tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::App("index.html".into()))
             .title("Alchemy")
-            .inner_size(1280.0, 820.0)
-            .min_inner_size(1040.0, 640.0)
+            .inner_size(w, h)
+            .min_inner_size(min_w, min_h)
             .initialization_script(&boot);
     #[cfg(target_os = "macos")]
     let builder = builder
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true)
-        .traffic_light_position(tauri::LogicalPosition::new(20.0, 18.0));
+        // Keep in sync with tauri.conf.json: centers the stoplights in the
+        // 48px custom titlebar row.
+        .traffic_light_position(tauri::LogicalPosition::new(20.0, 26.0));
     builder.build().map_err(|e2| e2.to_string())?;
     Ok(())
 }
@@ -2300,6 +2410,216 @@ pub struct CorpusStats {
 pub async fn corpus_stats(state: State<'_, AppState>) -> Result<CorpusStats, String> {
     let (sources, chars) = e(state.db.corpus_stats().await)?;
     Ok(CorpusStats { sources, chars })
+}
+
+// ---- OKF export ------------------------------------------------------------
+
+/// Kebab-case a title into a filesystem/URL-safe slug.
+pub(crate) fn okf_slug(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else if !out.ends_with('-') && !out.is_empty() {
+            out.push('-');
+        }
+    }
+    let out: String = out.trim_matches('-').chars().take(60).collect();
+    let out = out.trim_end_matches('-').to_string();
+    if out.is_empty() {
+        "untitled".into()
+    } else {
+        out
+    }
+}
+
+/// Double-quote a string for YAML frontmatter.
+fn yaml_str(s: &str) -> String {
+    format!(
+        "\"{}\"",
+        s.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', " ")
+    )
+}
+
+/// First ~140 chars of content, flattened, for `description:` and index lines.
+pub(crate) fn okf_description(content: &str) -> String {
+    let flat = content
+        .replace(['#', '*', '`', '>', '|'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut out: String = flat.chars().take(140).collect();
+    if flat.chars().count() > 140 {
+        out.push('…');
+    }
+    out
+}
+
+fn okf_timestamp(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_default()
+}
+
+/// Titles go into markdown link text; keep them from breaking the link.
+fn link_text(s: &str) -> String {
+    s.replace(['[', ']'], " ").trim().to_string()
+}
+
+/// Export a notebook as an Open Knowledge Format bundle: a directory of
+/// markdown concept files with YAML frontmatter (sources/ and notes/), plus
+/// index.md listings and a log.md — per the OKF v0.1 spec.
+#[tauri::command]
+pub async fn export_notebook_okf(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    dest_dir: String,
+) -> Result<String, String> {
+    let notebook = e(state.db.list_notebooks().await)?
+        .into_iter()
+        .find(|n| n.id == notebook_id)
+        .ok_or_else(|| "Notebook not found".to_string())?;
+    let sources = e(state.db.list_sources(&notebook_id).await)?;
+    let notes = e(state.db.list_notes(&notebook_id).await)?;
+
+    // A fresh directory per export — never merge into (or clobber) one the
+    // user already has.
+    let base = std::path::Path::new(&dest_dir);
+    let nb_slug = okf_slug(&notebook.title);
+    let mut bundle = base.join(&nb_slug);
+    let mut n = 2;
+    while bundle.exists() {
+        bundle = base.join(format!("{nb_slug}-{n}"));
+        n += 1;
+    }
+    let write = |path: &std::path::Path, text: &str| -> Result<(), String> {
+        std::fs::write(path, text).map_err(|err| format!("Failed to write {path:?}: {err}"))
+    };
+
+    // Concept files, with per-directory slug dedup.
+    let mut used: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut claim = |dir: &str, title: &str| -> String {
+        let s = okf_slug(title);
+        let key = format!("{dir}/{s}");
+        let count = used.entry(key).or_insert(0);
+        *count += 1;
+        if *count == 1 {
+            s
+        } else {
+            format!("{s}-{count}")
+        }
+    };
+
+    let mut source_entries = Vec::new(); // (slug, title, description)
+    if !sources.is_empty() {
+        let dir = bundle.join("sources");
+        std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+        for s in &sources {
+            let content = e(state.db.source_content(&s.id).await)?;
+            let slug = claim("sources", &s.title);
+            let mut fm = String::from("---\ntype: Source\n");
+            fm.push_str(&format!("title: {}\n", yaml_str(&s.title)));
+            let desc = okf_description(&content);
+            if !desc.is_empty() {
+                fm.push_str(&format!("description: {}\n", yaml_str(&desc)));
+            }
+            if !s.url.is_empty() {
+                let resource = if is_web_url(&s.url) {
+                    s.url.clone()
+                } else {
+                    format!("file://{}", s.url)
+                };
+                fm.push_str(&format!("resource: {}\n", yaml_str(&resource)));
+            }
+            fm.push_str(&format!("tags: [{}]\n", s.source_type));
+            fm.push_str(&format!(
+                "timestamp: {}\n---\n\n",
+                okf_timestamp(s.created_at)
+            ));
+            write(&dir.join(format!("{slug}.md")), &format!("{fm}{content}\n"))?;
+            source_entries.push((slug, s.title.clone(), desc));
+        }
+        let listing = source_entries
+            .iter()
+            .map(|(slug, title, desc)| format!("- [{}]({slug}.md) — {desc}", link_text(title)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        write(&dir.join("index.md"), &format!("# Sources\n\n{listing}\n"))?;
+    }
+
+    let mut note_entries = Vec::new();
+    if !notes.is_empty() {
+        let dir = bundle.join("notes");
+        std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+        for note in &notes {
+            let slug = claim("notes", &note.title);
+            let type_label = match note.kind.as_str() {
+                "note" => "Note",
+                "report" => "Report",
+                kind => rag::artifact_spec(kind).map(|(t, _)| t).unwrap_or("Note"),
+            };
+            let desc = okf_description(&note.content);
+            let mut fm = format!("---\ntype: {type_label}\n");
+            fm.push_str(&format!("title: {}\n", yaml_str(&note.title)));
+            if !desc.is_empty() {
+                fm.push_str(&format!("description: {}\n", yaml_str(&desc)));
+            }
+            fm.push_str(&format!(
+                "timestamp: {}\n---\n\n",
+                okf_timestamp(note.updated_at)
+            ));
+            write(
+                &dir.join(format!("{slug}.md")),
+                &format!("{fm}{}\n", note.content),
+            )?;
+            note_entries.push((slug, note.title.clone(), desc));
+        }
+        let listing = note_entries
+            .iter()
+            .map(|(slug, title, desc)| format!("- [{}]({slug}.md) — {desc}", link_text(title)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        write(&dir.join("index.md"), &format!("# Notes\n\n{listing}\n"))?;
+    }
+
+    // Root index.md: progressive-disclosure listing of the whole bundle.
+    let mut index = format!("# {}\n\n", notebook.title);
+    index.push_str(
+        "A research notebook exported from Alchemy as an Open Knowledge Format bundle.\n",
+    );
+    if !source_entries.is_empty() {
+        index.push_str("\n# Sources\n\n");
+        for (slug, title, desc) in &source_entries {
+            index.push_str(&format!(
+                "- [{}](sources/{slug}.md) — {desc}\n",
+                link_text(title)
+            ));
+        }
+    }
+    if !note_entries.is_empty() {
+        index.push_str("\n# Notes\n\n");
+        for (slug, title, desc) in &note_entries {
+            index.push_str(&format!(
+                "- [{}](notes/{slug}.md) — {desc}\n",
+                link_text(title)
+            ));
+        }
+    }
+    write(&bundle.join("index.md"), &index)?;
+
+    let today = chrono::Utc::now().format("%Y-%m-%d");
+    write(
+        &bundle.join("log.md"),
+        &format!(
+            "# {today}\n\nExported from Alchemy: {} sources, {} notes.\n",
+            source_entries.len(),
+            note_entries.len()
+        ),
+    )?;
+
+    Ok(bundle.display().to_string())
 }
 
 /// One global-search result for the command menu.

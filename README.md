@@ -37,6 +37,8 @@ built-in embedder. See
   link-shared **Google Docs, Sheets, and Slides** (paste the link, or drag the
   `.gdoc` / `.gsheet` / `.gslides` files from a local Google Drive folder). Each is
   extracted, chunked, and embedded locally. Drag-and-drop onto the Sources panel.
+  File sources remember their on-disk path — **Refresh** re-reads a changed file
+  (and URL sources re-fetch); **Show in Finder** jumps to the original.
   Failed/blocked imports show an error badge and can be retried; edited/refreshed
   sources are re-embedded.
 - **Command menu** — press **⌘K** anywhere to search notebooks, add sources, generate
@@ -46,12 +48,22 @@ built-in embedder. See
 - **Grounded chat** — streamed answers that cite the exact source passages they drew
   from, with a **"Deep research"** agentic mode that plans multiple retrieval steps.
   Copy a response or save it as a note.
+- **Select-to-ask** — highlight any passage in the source reader to **Explain** it,
+  **Compare** it against your other sources, or stage it in the chat composer with
+  your own question.
 - **Studio generators** — one-click **Summary**, **FAQ**, **Study guide**, **Briefing**,
-  **Timeline**, **Problems** (finds errors/gaps/contradictions), plus HashiCorp-style
+  **Timeline**, **Insights** (cross-source connections, contradictions & surprises),
+  **Data table**, **Problems** (finds errors/gaps/contradictions), **Flashcards**,
+  **Quiz**, and a **Mind map** rendered as a native SVG diagram, plus HashiCorp-style
   **PRD**, **PR/FAQ**, **RFC**, and a **Skill** (SKILL.md) generator. Add custom
   instructions, and **rebuild** any document against the latest sources.
-- **Notes** — a **WYSIWYG** editor (Markdown under the hood), copy to clipboard, and
-  **Convert to source** to fold a note into the retrievable source set.
+- **Notes** — a **WYSIWYG** editor (Markdown under the hood), copy to clipboard,
+  **Convert to source** to fold a note into the retrievable source set, and
+  **Open in window** for a full-size reader (mind maps especially).
+- **OKF export** — export a whole notebook (sources + notes) as an
+  [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
+  bundle: plain markdown concepts with YAML frontmatter, indexes, and a log —
+  readable by humans and agents alike (⌘K → "Export notebook as OKF").
 - **Periodic reports** — schedule a notebook to refresh its URL sources and generate a
   timestamped report note on an interval.
 - **Model tooling** — live chat/embed **health check**, per-model **tokens/sec**

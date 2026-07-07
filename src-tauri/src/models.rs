@@ -23,8 +23,9 @@ pub struct Source {
     pub title: String,
     /// "pdf" | "text" | "markdown" | "url"
     pub source_type: String,
-    /// Original URL for `url` sources (empty otherwise). Retained so an agent
-    /// can crawl/expand the source later.
+    /// Origin of the content: the URL for `url` sources, the local file path
+    /// for file imports, empty for pasted text. Retained so sources can be
+    /// refreshed from their origin and agents can crawl/expand them later.
     #[serde(default)]
     pub url: String,
     /// Full extracted text. Kept so we can re-chunk or show the original.
@@ -147,7 +148,8 @@ pub struct Note {
     pub title: String,
     pub content: String,
     /// "note" | "summary" | "faq" | "study_guide" | "briefing" | "timeline" |
-    /// "prd" | "prfaq" | "rfc" | "skill"
+    /// "insights" | "flashcards" | "quiz" | "mind_map" | "data_table" | "problems" |
+    /// "prd" | "prfaq" | "rfc" | "skill" | "report"
     #[serde(default = "default_note_kind")]
     pub kind: String,
     /// Optional custom instructions used to generate this note, retained so it

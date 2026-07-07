@@ -20,6 +20,14 @@ export const SUPPORTED_EXTENSIONS = [
 ];
 
 /**
+ * A source's `url` holds its origin: a web URL for fetched sources, a local
+ * file path for file imports, empty for pasted text. True for the web case.
+ */
+export function isWebUrl(s: string): boolean {
+  return /^https?:\/\//.test(s);
+}
+
+/**
  * Make a clickable non-button element (card, list row) keyboard-operable:
  * focusable, announced as a button, activated with Enter or Space.
  * Spread alongside the element's onClick.

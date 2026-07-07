@@ -12,6 +12,7 @@ import {
   ChevronLeft,
   Eraser,
   FileText,
+  FolderOutput,
   Link2,
   MessageSquare,
   Palette,
@@ -157,6 +158,18 @@ export function CommandPalette() {
             },
           }),
         ),
+        {
+          id: "export-okf",
+          group: "Notebook",
+          label: "Export notebook as OKF bundle…",
+          keywords: "open knowledge format markdown share backup download",
+          icon: <FolderOutput className="h-3.5 w-3.5" />,
+          hint: "⌘⇧E",
+          run: () => {
+            close();
+            void state().exportNotebookOkf();
+          },
+        },
         {
           id: "toggle-sources",
           group: "View",

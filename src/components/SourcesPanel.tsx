@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { Button, Input, Textarea, Modal, EmptyState, ResizeHandle, Spinner, useConfirm } from "./ui";
-import { cn, cardButtonProps } from "@/lib/utils";
+import { cn, cardButtonProps, isWebUrl } from "@/lib/utils";
 import type { Source } from "@/lib/types";
 import {
   FileText,
@@ -353,19 +353,26 @@ export function SourcesPanel() {
                   )}
                 </div>
                 <div className="flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
-                  {s.sourceType === "url" ? (
+                  {/* url holds the origin: a web URL or, for file imports,
+                      the on-disk path — either way it can be refreshed. */}
+                  {s.url && (
                     <button
                       className="rounded p-1 text-muted-foreground hover:text-foreground"
                       onClick={(e) => {
                         e.stopPropagation();
                         refreshSource(s.id);
                       }}
-                      title="Refresh from URL (re-fetch & re-embed)"
-                      aria-label={`Refresh "${s.title}" from URL`}
+                      title={
+                        isWebUrl(s.url)
+                          ? "Refresh from URL (re-fetch & re-embed)"
+                          : "Refresh from file (re-read & re-embed)"
+                      }
+                      aria-label={`Refresh "${s.title}" from ${isWebUrl(s.url) ? "URL" : "file"}`}
                     >
                       <RefreshCw className="h-3.5 w-3.5" />
                     </button>
-                  ) : (
+                  )}
+                  {s.sourceType !== "url" && (
                     <button
                       className="rounded p-1 text-muted-foreground hover:text-foreground"
                       onClick={(e) => {
