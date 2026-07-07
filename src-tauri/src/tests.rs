@@ -249,3 +249,18 @@ async fn builtin_embedder_round_trip() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn okf_helpers() {
+    use crate::commands::{okf_description, okf_slug};
+    assert_eq!(
+        okf_slug("Building macOS Apps with Tauri!"),
+        "building-macos-apps-with-tauri"
+    );
+    assert_eq!(okf_slug("***"), "untitled");
+    assert_eq!(okf_slug("Ünïcode — Títle"), "n-code-t-tle");
+    let d = okf_description("# Heading\n\nSome **bold** text\nwith lines");
+    assert_eq!(d, "Heading Some bold text with lines");
+    let long = "word ".repeat(60);
+    assert!(okf_description(&long).ends_with('…'));
+}

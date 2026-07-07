@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
+import { api } from "@/lib/api";
 import { Button, Input, Textarea, Modal, EmptyState, Badge, ResizeHandle, Spinner, useConfirm } from "./ui";
 import { Markdown } from "./Markdown";
+import { MindMap } from "./MindMap";
 import { Reports } from "./Reports";
 import { RichEditor } from "./RichEditor";
 import { cardButtonProps, relativeTime, shortcutBlocked } from "@/lib/utils";
@@ -31,6 +33,12 @@ import {
   FileInput,
   TriangleAlert,
   MessageSquare,
+  Lightbulb,
+  Table,
+  Layers,
+  ListChecks,
+  Waypoints,
+  AppWindow,
 } from "lucide-react";
 
 type Artifact = { kind: NoteKind; label: string; icon: ReactNode };
@@ -41,7 +49,15 @@ const SUMMARIES: Artifact[] = [
   { kind: "study_guide", label: "Study guide", icon: <GraduationCap className="h-3.5 w-3.5" /> },
   { kind: "briefing", label: "Briefing", icon: <Newspaper className="h-3.5 w-3.5" /> },
   { kind: "timeline", label: "Timeline", icon: <Clock className="h-3.5 w-3.5" /> },
+  { kind: "insights", label: "Insights", icon: <Lightbulb className="h-3.5 w-3.5" /> },
+  { kind: "data_table", label: "Data table", icon: <Table className="h-3.5 w-3.5" /> },
   { kind: "problems", label: "Problems", icon: <TriangleAlert className="h-3.5 w-3.5" /> },
+];
+
+const LEARNING: Artifact[] = [
+  { kind: "flashcards", label: "Flashcards", icon: <Layers className="h-3.5 w-3.5" /> },
+  { kind: "quiz", label: "Quiz", icon: <ListChecks className="h-3.5 w-3.5" /> },
+  { kind: "mind_map", label: "Mind map", icon: <Waypoints className="h-3.5 w-3.5" /> },
 ];
 
 const DOCUMENTS: Artifact[] = [
@@ -52,7 +68,7 @@ const DOCUMENTS: Artifact[] = [
 ];
 
 /** Every generator, for surfaces beyond the Studio panel (command menu). */
-export const ARTIFACTS: Artifact[] = [...SUMMARIES, ...DOCUMENTS];
+export const ARTIFACTS: Artifact[] = [...SUMMARIES, ...LEARNING, ...DOCUMENTS];
 
 /**
  * Card preview text: skip a leading markdown heading (or a first line equal to
@@ -81,6 +97,11 @@ const KIND_LABEL: Record<NoteKind, string> = {
   study_guide: "Study guide",
   briefing: "Briefing",
   timeline: "Timeline",
+  insights: "Insights",
+  flashcards: "Flashcards",
+  quiz: "Quiz",
+  mind_map: "Mind map",
+  data_table: "Data table",
   problems: "Problems",
   prd: "PRD",
   prfaq: "PR/FAQ",
@@ -188,6 +209,9 @@ export function StudioPanel() {
         </Button>
       </div>
 
+      {/* Everything below the header scrolls as one column, so a tall
+          generator section never pins the notes list below the fold. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <div className="border-b border-border p-3">
         <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
           <span>Generate</span>
@@ -221,6 +245,16 @@ export function StudioPanel() {
                 onPick={(k) => generate(k, instructions)}
               />
             </div>
+
+            <div className="mb-2 mt-3 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+              Learning
+            </div>
+            <ArtifactGrid
+              artifacts={LEARNING}
+              disabled={!hasSources || !!generatingKind}
+              generatingKind={generatingKind}
+              onPick={(k) => generate(k, instructions)}
+            />
 
             <div className="mb-2 mt-3 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
               Documents
@@ -280,7 +314,7 @@ export function StudioPanel() {
         </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-2 pb-2">
+      <div className="px-2 pb-2">
         {notes.length === 0 ? (
           <EmptyState
             icon={<StickyNote className="h-6 w-6" />}
@@ -341,6 +375,7 @@ export function StudioPanel() {
             ))}
           </div>
         )}
+      </div>
       </div>
 
       <NoteViewer note={viewing} onClose={() => setViewing(null)} />
@@ -515,6 +550,22 @@ function NoteViewer({ note, onClose }: { note: Note | null; onClose: () => void 
       }}
       title={live?.title ?? ""}
       width="max-w-2xl"
+      headerActions={
+        live && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              void api.newWindow(live.notebookId, live.id);
+              onClose();
+            }}
+            title="Open in its own window"
+            aria-label="Open this note in its own window"
+          >
+            <AppWindow className="h-4 w-4" />
+          </Button>
+        )
+      }
     >
       {live &&
         (editing ? (
@@ -543,6 +594,8 @@ function NoteViewer({ note, onClose }: { note: Note | null; onClose: () => void 
             <div className="max-h-[60vh] overflow-y-auto pr-1">
               {rebuilding && artifactStreamText ? (
                 <StreamingBody text={artifactStreamText} />
+              ) : live.kind === "mind_map" ? (
+                <MindMap content={live.content} />
               ) : (
                 <Markdown>{live.content}</Markdown>
               )}

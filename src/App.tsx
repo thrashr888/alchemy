@@ -6,6 +6,7 @@ import { SettingsDialog } from "@/components/SettingsDialog";
 import { CommandPalette } from "@/components/CommandPalette";
 import { FileDrop } from "@/components/FileDrop";
 import { MigrationOverlay } from "@/components/MigrationOverlay";
+import { NoteWindow } from "@/components/NoteWindow";
 import { Onboarding } from "@/components/Onboarding";
 import { Toaster } from "@/components/ui";
 
@@ -56,6 +57,16 @@ function App() {
       setError(null);
     }
   }, [error, pushToast, setError]);
+
+  // A note-reader window renders just the note — no panels, no palette.
+  if (window.__ALCHEMY_NOTE__) {
+    return (
+      <>
+        <NoteWindow noteId={window.__ALCHEMY_NOTE__} />
+        <Toaster toasts={toasts} onDismiss={dismissToast} />
+      </>
+    );
+  }
 
   return (
     <>

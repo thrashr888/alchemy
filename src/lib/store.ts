@@ -5,7 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import { SUPPORTED_EXTENSIONS } from "./utils";
-import { applyTheme, DEFAULT_THEME } from "./themes";
+import { applyTheme, SYSTEM_THEME } from "./themes";
 import { notify } from "./notify";
 import { playDone } from "./sound";
 import { autoUpdateEnabled, checkForUpdatesQuietly } from "./updates";
@@ -84,6 +84,8 @@ interface AppState {
   error: string | null;
   /** Text of a chat send that failed, handed back to the composer so it isn't lost. */
   failedInput: string | null;
+  /** Text another surface (e.g. the source reader) wants in the composer. */
+  pendingInput: string | null;
   /** Ephemeral toasts (success/info auto-dismiss; errors linger a bit longer). */
   toasts: Toast[];
   /** Id of a just-generated note, so the Studio panel can auto-open it. */
@@ -117,6 +119,8 @@ interface AppState {
   setPaletteOpen: (open: boolean) => void;
   /** Open/close the command menu, refusing to stack over an open dialog. */
   togglePalette: () => void;
+  /** Pick a directory and export the current notebook as an OKF bundle. */
+  exportNotebookOkf: () => Promise<void>;
   createReport: (name: string, kind: string, prompt: string, intervalSecs: number) => Promise<void>;
   updateReport: (r: ReportSchedule) => Promise<void>;
   deleteReport: (id: string) => Promise<void>;
@@ -230,7 +234,8 @@ export const useStore = create<AppState>((set, get) => {
   ollamaOk: null,
   modelHealth: null,
   modelStats: [],
-  theme: localStorage.getItem("theme") ?? DEFAULT_THEME,
+  // Fresh installs follow the OS appearance; an explicit pick sticks.
+  theme: localStorage.getItem("theme") ?? SYSTEM_THEME,
   reading: loadReadingPrefs(),
 
   sending: false,
@@ -257,6 +262,7 @@ export const useStore = create<AppState>((set, get) => {
   pendingUpdateCheck: false,
   embedderDownload: null,
   failedInput: null,
+  pendingInput: null,
   error: null,
   toasts: [],
   justCreatedNoteId: null,
@@ -266,6 +272,9 @@ export const useStore = create<AppState>((set, get) => {
 
   init: async () => {
     applyTheme(get().theme);
+    // Every page load (incl. dev reloads) resets the macOS stoplights to
+    // their default position — put them back first thing.
+    void api.fixTrafficLights();
     if (!listenersBound) {
       listenersBound = true;
       get().bindGlobalListeners();
@@ -331,6 +340,7 @@ export const useStore = create<AppState>((set, get) => {
         s.openSettings("general");
       }
       else if (e.payload.id === "menu-new-window") void api.newWindow();
+      else if (e.payload.id === "menu-export-okf") void s.exportNotebookOkf();
     });
     void listen<{ target: string; id: string }>("menu://open-notebook", (e) => {
       if (e.payload.target !== label) return;
@@ -791,6 +801,22 @@ export const useStore = create<AppState>((set, get) => {
       set({ migration: null });
       const id = get().currentId;
       if (id) set({ sources: await api.listSources(id) });
+    }
+  },
+
+  exportNotebookOkf: async () => {
+    const id = get().currentId;
+    if (!id) {
+      get().pushToast("info", "Open a notebook to export it");
+      return;
+    }
+    const dest = await open({ directory: true, title: "Export OKF bundle into…" });
+    if (!dest) return;
+    try {
+      const path = await api.exportNotebookOkf(id, dest as string);
+      get().pushToast("success", `Exported to ${path}`);
+    } catch (e) {
+      get().pushToast("error", e instanceof Error ? e.message : String(e));
     }
   },
 
