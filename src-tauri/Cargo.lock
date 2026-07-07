@@ -69,6 +69,7 @@ dependencies = [
  "image",
  "lancedb",
  "model2vec-rs",
+ "objc2-app-kit",
  "pdf-extract",
  "pdfium-render",
  "percent-encoding",

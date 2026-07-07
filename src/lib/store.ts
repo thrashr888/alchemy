@@ -269,6 +269,9 @@ export const useStore = create<AppState>((set, get) => {
 
   init: async () => {
     applyTheme(get().theme);
+    // Every page load (incl. dev reloads) resets the macOS stoplights to
+    // their default position — put them back first thing.
+    void api.fixTrafficLights();
     if (!listenersBound) {
       listenersBound = true;
       get().bindGlobalListeners();

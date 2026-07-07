@@ -105,6 +105,7 @@ pub fn run() {
             commands::list_recent_notes,
             commands::corpus_stats,
             commands::export_notebook_okf,
+            commands::fix_traffic_lights,
             commands::new_window,
             commands::rebuild_app_menu,
             commands::search_everything,

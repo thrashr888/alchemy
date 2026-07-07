@@ -2284,6 +2284,52 @@ pub async fn run_report(
 
 // ---- Windows ---------------------------------------------------------------
 
+/// Put the macOS stoplights back where they belong. AppKit resets them to
+/// their default spot whenever the webview reloads (dev HMR, navigation),
+/// and tao only re-applies its inset when its own — webview-covered — view
+/// redraws, so the frontend invokes this on every boot. Mirrors tao's
+/// `inset_traffic_lights`; keep the inset in sync with tauri.conf.json.
+#[tauri::command]
+pub fn fix_traffic_lights(window: tauri::WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    {
+        const INSET_X: f64 = 20.0;
+        const INSET_Y: f64 = 26.0;
+        let Ok(ns_window_ptr) = window.ns_window() else {
+            return;
+        };
+        let addr = ns_window_ptr as usize;
+        let _ = window.run_on_main_thread(move || unsafe {
+            use objc2_app_kit::{NSWindow, NSWindowButton};
+            let ns_window = &*(addr as *const NSWindow);
+            let (Some(close), Some(mini), Some(zoom)) = (
+                ns_window.standardWindowButton(NSWindowButton::CloseButton),
+                ns_window.standardWindowButton(NSWindowButton::MiniaturizeButton),
+                ns_window.standardWindowButton(NSWindowButton::ZoomButton),
+            ) else {
+                return;
+            };
+            let Some(container) = close.superview().and_then(|v| v.superview()) else {
+                return;
+            };
+            let close_rect = close.frame();
+            let bar_height = close_rect.size.height + INSET_Y;
+            let mut bar_rect = container.frame();
+            bar_rect.size.height = bar_height;
+            bar_rect.origin.y = ns_window.frame().size.height - bar_height;
+            container.setFrame(bar_rect);
+            let spacing = mini.frame().origin.x - close_rect.origin.x;
+            for (i, button) in [&*close, &*mini, &*zoom].into_iter().enumerate() {
+                let mut rect = button.frame();
+                rect.origin.x = INSET_X + (i as f64 * spacing);
+                button.setFrameOrigin(rect.origin);
+            }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+}
+
 /// Open another app window — at the home screen, straight into a notebook,
 /// or onto a single note (a document-sized reader window). The boot target
 /// rides an init script (not the URL) so it works identically under the dev
