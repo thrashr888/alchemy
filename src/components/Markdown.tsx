@@ -72,6 +72,19 @@ function remarkCitations(maxN: number) {
   return () => (tree: Node) => visit(tree);
 }
 
+/** A wide table scrolls inside its own container instead of stretching the
+ *  whole chat/note column sideways. */
+function ScrollableTable({
+  node: _node,
+  ...props
+}: React.TableHTMLAttributes<HTMLTableElement> & { node?: unknown }) {
+  return (
+    <div className="overflow-x-auto">
+      <table {...props} />
+    </div>
+  );
+}
+
 export function Markdown({
   children,
   citations,
@@ -90,6 +103,7 @@ export function Markdown({
         components={
           interactive
             ? {
+                table: ScrollableTable,
                 a: ({ href, children: linkChildren, ...props }) => {
                   const n = href?.startsWith("#cite-") ? Number(href.slice(6)) : NaN;
                   const cite = Number.isInteger(n) ? citations[n - 1] : undefined;
@@ -110,7 +124,7 @@ export function Markdown({
                   );
                 },
               }
-            : { a: ExternalLink }
+            : { table: ScrollableTable, a: ExternalLink }
         }
       >
         {children}
