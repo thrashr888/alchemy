@@ -42,6 +42,12 @@ pub struct AiConfig {
     /// Who the user is; woven into system prompts so answers fit them.
     #[serde(default)]
     pub profile: UserProfile,
+    /// Embedded MCP server for agent access (localhost-only streamable HTTP,
+    /// see docs/RFC-mcp-server.md).
+    #[serde(default = "default_true")]
+    pub mcp_enabled: bool,
+    #[serde(default = "default_mcp_port")]
+    pub mcp_port: u16,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -55,6 +61,14 @@ pub struct UserProfile {
 
 fn default_provider() -> String {
     "ollama".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_mcp_port() -> u16 {
+    41414
 }
 
 impl AiConfig {
@@ -81,6 +95,8 @@ impl Default for AiConfig {
             openai_chat_model: String::new(),
             openai_vision_model: String::new(),
             profile: UserProfile::default(),
+            mcp_enabled: default_true(),
+            mcp_port: default_mcp_port(),
         }
     }
 }

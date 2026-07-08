@@ -4,8 +4,10 @@ import { describe, IpcError, TimeoutError, type AppError } from "./errors";
 import type {
   AiConfig,
   ChatConfig,
+  ConnectorStatus,
   CorpusStats,
   KokoroStatus,
+  McpStatus,
   Message,
   ModelHealth,
   ModelStat,
@@ -177,4 +179,9 @@ export const api = {
   checkOllama: () => run(query<boolean>("check_ollama")),
   checkModels: () => run(query<ModelHealth>("check_models")),
   getModelStats: () => run(query<ModelStat[]>("get_model_stats")),
+
+  // Agent access (MCP)
+  mcpStatus: () => run(query<McpStatus>("mcp_status")),
+  listAgentConnectors: () => run(query<ConnectorStatus[]>("list_agent_connectors")),
+  connectAgent: (id: string) => run(cmd<ConnectorStatus>("connect_agent", { id })),
 };

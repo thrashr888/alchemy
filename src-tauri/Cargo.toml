@@ -54,6 +54,11 @@ percent-encoding = "2"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
 
+# Embedded MCP server for agent access (see docs/RFC-mcp-server.md):
+# official Rust MCP SDK + axum to host the streamable-HTTP transport.
+rmcp = { version = "2.1", features = ["transport-streamable-http-server"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+
 # Tiny pure-Rust WAV reader/writer — stitches per-line TTS output into one
 # Audio Overview episode (see tts.rs).
 hound = "3"
