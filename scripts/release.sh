@@ -61,6 +61,9 @@ perl -i -pe 'if (!$d && /^version = /) { s/^version = ".*"/version = "'"$VERSION
 
 # --- Quality gate (fast dev feature set) ------------------------------------
 echo "==> Quality gate"
+# Releases run from an isolated clone (no node_modules yet); without this,
+# `pnpm exec tsc` silently falls through to whatever global tsc is on PATH.
+pnpm install --frozen-lockfile
 pnpm exec tsc --noEmit
 (
   cd src-tauri
