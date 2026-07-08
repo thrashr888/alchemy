@@ -57,6 +57,12 @@ tauri-plugin-process = "2.3.1"
 # Tiny pure-Rust WAV reader/writer — stitches per-line TTS output into one
 # Audio Overview episode (see tts.rs).
 hound = "3"
+# Kokoro-82M inference for Audio Overview voices: ort (ONNX) + misaki-rs G2P.
+# default-features = false is load-bearing: the default `g2p-espeak` feature
+# links espeak-ng, which is GPL-3.0 — without it the tree is Apache/MIT only
+# (misaki's dictionary handles G2P). Model downloads on first use like the
+# built-in embedder.
+kokoro-en = { version = "0.1.4", default-features = false }
 
 # Already in the tree via tauri/wry — used to re-apply the traffic-light
 # inset after webview reloads reset it (see commands::fix_traffic_lights).

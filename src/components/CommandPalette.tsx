@@ -4,7 +4,7 @@ import { api } from "@/lib/api";
 import { SYSTEM_THEME, THEMES } from "@/lib/themes";
 import { cn } from "@/lib/utils";
 import type { SearchHit } from "@/lib/types";
-import { ARTIFACTS } from "./StudioPanel";
+import { ARTIFACTS, AUDIO_OVERVIEW } from "./StudioPanel";
 import { useConfirm } from "./ui";
 import {
   AppWindow,
@@ -44,6 +44,7 @@ export function CommandPalette() {
   const currentId = useStore((s) => s.currentId);
   const notebooks = useStore((s) => s.notebooks);
   const agentMode = useStore((s) => s.agentMode);
+  const kokoroReady = useStore((s) => !!s.kokoroStatus?.verified);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [query, setQuery] = useState("");
@@ -145,7 +146,7 @@ export function CommandPalette() {
             if (!s.studioOpen) s.toggleStudio();
           },
         },
-        ...ARTIFACTS.map(
+        ...(kokoroReady ? [AUDIO_OVERVIEW, ...ARTIFACTS] : ARTIFACTS).map(
           (a): Command => ({
             id: `gen-${a.kind}`,
             group: "Generate",
@@ -300,7 +301,7 @@ export function CommandPalette() {
       ),
     );
     return list;
-  }, [currentId, notebooks, agentMode, confirm]);
+  }, [currentId, notebooks, agentMode, kokoroReady, confirm]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();

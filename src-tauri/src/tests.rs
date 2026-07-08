@@ -288,24 +288,82 @@ HOST: Second real host line.";
     assert!(parse_script("just prose, no dialogue").is_empty());
 }
 
-/// Full audio pipeline on the real macOS toolchain: say → wav → m4a.
+/// Kokoro end-to-end: downloads the model into the real app data dir on
+/// first run (~93 MB — also pre-warms the app), then synthesizes one line
+/// per voice. Ignored by default: needs network and a few minutes.
+/// Run with: cargo test kokoro_smoke -- --ignored --nocapture
 #[tokio::test]
-async fn audio_pipeline_round_trip() {
-    use crate::tts::{assemble_episode, parse_script, SayTts};
-    let lines = parse_script("HOST: A tiny smoke test.\nGUEST: Indeed it is.");
-    assert_eq!(lines.len(), 2);
-    let dir = std::env::temp_dir().join(format!("alchemy-tts-test-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let engine = SayTts::default();
-    let mut wavs = Vec::new();
-    for (i, l) in lines.iter().enumerate() {
-        let wav = dir.join(format!("l{i}.wav"));
-        engine.synth(l.speaker, &l.text, &wav).await.expect("synth");
-        wavs.push(wav);
-    }
-    let m4a = dir.join("episode.m4a");
-    assemble_episode(&wavs, &m4a).await.expect("assemble");
-    let size = std::fs::metadata(&m4a).expect("episode exists").len();
-    assert!(size > 4_000, "episode suspiciously small: {size} bytes");
-    let _ = std::fs::remove_dir_all(&dir);
+#[ignore = "downloads ~93 MB and runs real inference"]
+async fn kokoro_smoke() {
+    use crate::tts::{ensure_kokoro_files, KokoroEngine, Speaker};
+    let home = std::env::var("HOME").expect("HOME");
+    let dir = std::path::PathBuf::from(home)
+        .join("Library/Application Support/com.thrashr888.alchemy/kokoro");
+    let cancel = tokio_util::sync::CancellationToken::new();
+    ensure_kokoro_files(&dir, None, &cancel)
+        .await
+        .expect("download kokoro");
+    let engine = KokoroEngine::load(&dir).await.expect("load kokoro");
+    let out = std::env::temp_dir().join("alchemy-kokoro-smoke-host.wav");
+    engine
+        .synth(
+            Speaker::Host,
+            "Welcome back to the show. Today we're digging into something genuinely surprising.",
+            &out,
+        )
+        .await
+        .expect("synth host line");
+    let host_len = std::fs::metadata(&out).unwrap().len();
+    let out2 = std::env::temp_dir().join("alchemy-kokoro-smoke-guest.wav");
+    engine
+        .synth(
+            Speaker::Guest,
+            "Thanks for having me. The short version: the data doesn't say what everyone thinks.",
+            &out2,
+        )
+        .await
+        .expect("synth guest line");
+    let guest_len = std::fs::metadata(&out2).unwrap().len();
+    assert!(
+        host_len > 50_000 && guest_len > 50_000,
+        "audio suspiciously small"
+    );
+
+    // Stitch both lines into an episode m4a — the full pipeline shape.
+    let m4a = std::env::temp_dir().join("alchemy-kokoro-smoke.m4a");
+    crate::tts::assemble_episode(
+        &[out.clone(), out2.clone()],
+        &[350],
+        &m4a,
+        KokoroEngine::SAMPLE_RATE,
+    )
+    .await
+    .expect("assemble episode");
+    let episode_len = std::fs::metadata(&m4a).unwrap().len();
+    assert!(episode_len > 20_000, "episode suspiciously small");
+    eprintln!(
+        "kokoro smoke OK: host {host_len} B, guest {guest_len} B, episode {episode_len} B ({})",
+        m4a.display()
+    );
+}
+
+#[test]
+fn outro_stripping() {
+    use crate::commands::strip_outro;
+    let script = "HOST: Welcome!\nGUEST: Glad to be here.\nHOST: Deep point.\nGUEST: Indeed.\nHOST: That's a wrap — thanks for listening!\nGUEST: See you next time.";
+    let trimmed = strip_outro(script);
+    assert!(
+        trimmed.ends_with("GUEST: Indeed."),
+        "outro removed: {trimmed}"
+    );
+    // A "thanks for listening" far from the tail survives — only the last
+    // few lines are outro territory.
+    let long: String = "HOST: Thanks for listening tips came up early here.\n".to_string()
+        + &(0..10)
+            .map(|i| format!("GUEST: Substantive line {i}.\n"))
+            .collect::<String>()
+        + "HOST: Final point.";
+    assert_eq!(strip_outro(&long), long);
+    // No outro → unchanged.
+    assert_eq!(strip_outro("HOST: A.\nGUEST: B."), "HOST: A.\nGUEST: B.");
 }

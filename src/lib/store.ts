@@ -13,6 +13,7 @@ import { DEFAULT_CHAT_CONFIG, DEFAULT_READING_PREFS } from "./types";
 import type {
   AiConfig,
   ChatConfig,
+  KokoroStatus,
   Message,
   ModelHealth,
   ModelStat,
@@ -80,7 +81,8 @@ interface AppState {
   pendingAddUrl: boolean;
   /** Menu asked for an update check — Settings' General tab runs it on mount. */
   pendingUpdateCheck: boolean;
-  embedderDownload: { label: string; done: number; total: number } | null;
+  /** One-time model download overlay (embedder or TTS voice model). */
+  embedderDownload: { label: string; done: number; total: number; title?: string } | null;
   error: string | null;
   /** Text of a chat send that failed, handed back to the composer so it isn't lost. */
   failedInput: string | null;
@@ -96,6 +98,10 @@ interface AppState {
   artifactStreamText: string;
   /** Audio Overview synthesis progress (audio://progress), null when idle. */
   audioProgress: { done: number; total: number } | null;
+  /** Podcast voice model readiness; the generator hides until verified. */
+  kokoroStatus: KokoroStatus | null;
+  /** setup_kokoro in flight (Settings → Models). */
+  kokoroBusy: boolean;
   /** Source open in the reader, optionally scrolled to a cited passage. */
   viewingSource: { sourceId: string; title: string; highlight?: string } | null;
 
@@ -161,6 +167,9 @@ interface AppState {
   refreshModelHealth: () => Promise<void>;
   refreshModelStats: () => Promise<void>;
   reembedAll: () => Promise<void>;
+  refreshKokoroStatus: () => Promise<void>;
+  setupKokoro: () => Promise<void>;
+  removeKokoro: () => Promise<void>;
   setError: (e: string | null) => void;
   pushToast: (kind: ToastKind, message: string) => void;
   dismissToast: (id: string) => void;
@@ -271,6 +280,8 @@ export const useStore = create<AppState>((set, get) => {
   pendingNewNote: false,
   artifactStreamText: "",
   audioProgress: null,
+  kokoroStatus: null,
+  kokoroBusy: false,
   viewingSource: null,
 
   init: async () => {
@@ -290,6 +301,7 @@ export const useStore = create<AppState>((set, get) => {
     set({ notebooks, aiConfig, ollamaOk });
     void get().refreshModelHealth();
     void get().refreshModelStats();
+    void get().refreshKokoroStatus();
     // Secondary windows boot into the notebook the opener asked for (or a
     // fresh home screen); the main window reopens the last-used notebook.
     const boot = window.__ALCHEMY_NOTEBOOK__;
@@ -330,6 +342,24 @@ export const useStore = create<AppState>((set, get) => {
     // Audio Overview synthesis reports per-line progress after the script.
     void listen<{ done: number; total: number }>("audio://progress", (e) => {
       if (get().generatingKind) set({ audioProgress: e.payload });
+    });
+    // Safety net: the backend broadcasts every finished generation. If the
+    // invoke path lost the result (e.g. a long synthesis outlived a timeout),
+    // this still lands the note in the list instead of losing it silently.
+    void listen<Note>("generate://done", (e) => {
+      const note = e.payload;
+      if (get().currentId !== note.notebookId) return;
+      set({ notes: [note, ...get().notes.filter((n) => n.id !== note.id)] });
+    });
+    // First Audio Overview downloads the Kokoro voice model (~93 MB); reuse
+    // the embedder's download overlay with its own title. "done" clears it.
+    void listen<{ label: string; done: number; total: number }>("tts://download", (e) => {
+      const p = e.payload;
+      if (p.label === "done") {
+        set({ embedderDownload: null });
+        return;
+      }
+      set({ embedderDownload: { ...p, title: "Downloading the podcast voice model" } });
     });
     // App-menu actions broadcast to every window with the intended target's
     // label in the payload — each window acts only on events addressed to it.
@@ -898,6 +928,38 @@ export const useStore = create<AppState>((set, get) => {
     void tick();
     setInterval(() => void tick(), 60_000);
   },
+
+  refreshKokoroStatus: async () => {
+    try {
+      set({ kokoroStatus: await api.kokoroStatus() });
+    } catch {
+      /* leave previous status */
+    }
+  },
+
+  setupKokoro: async () => {
+    if (get().kokoroBusy) return;
+    set({ kokoroBusy: true });
+    try {
+      const status = await api.setupKokoro();
+      set({ kokoroStatus: status });
+      get().pushToast("success", "Podcast voices ready");
+      playDone();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("Generation stopped")) get().pushToast("info", "Download cancelled");
+      else set({ error: msg });
+      void get().refreshKokoroStatus();
+    } finally {
+      set({ kokoroBusy: false });
+    }
+  },
+
+  removeKokoro: () =>
+    guard(async () => {
+      set({ kokoroStatus: await api.removeKokoro() });
+      get().pushToast("success", "Podcast voices removed");
+    }),
 
   setError: (e) => set({ error: e }),
 

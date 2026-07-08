@@ -25,6 +25,8 @@ import {
   Globe,
   SlidersHorizontal,
   UserRound,
+  AudioLines,
+  Trash2,
 } from "lucide-react";
 
 /** Treat `name` and `name:latest` as the same model for matching. */
@@ -425,6 +427,8 @@ export function SettingsDialog({
                   />
                 </Field>
               )}
+
+              <PodcastVoicesSection />
             </>
           )}
 
@@ -789,6 +793,7 @@ function StatusBox({
 }) {
   const health = useStore((s) => s.modelHealth);
   const stats = useStore((s) => s.modelStats);
+  const kokoro = useStore((s) => s.kokoroStatus);
   const chatStat = stats.find((s) => normModel(s.name) === normModel(chatModel));
 
   const Row = ({
@@ -867,6 +872,20 @@ function StatusBox({
           <Row label="Chat" status={health?.chat} />
           <Row label="Embed" status={health?.embed} />
           <Row label="Vision" status={health?.vision} optional />
+          <Row
+            label="Voices"
+            optional
+            status={{
+              working: !!kokoro?.verified,
+              detail: !kokoro
+                ? "Checking…"
+                : kokoro.verified
+                  ? "Kokoro-82M ready — Audio Overview enabled"
+                  : kokoro.downloaded
+                    ? "Downloaded — verify below to enable Audio Overview"
+                    : "Not set up — download below to enable Audio Overview",
+            }}
+          />
           {chatStat && chatStat.samples > 0 && (
             <div className="flex items-center gap-2 text-[12px]">
               <Zap className="h-3.5 w-3.5 shrink-0 text-citation" />
@@ -1153,5 +1172,77 @@ function ModelPicker({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Settings → Models: manage the on-device podcast voice model (Kokoro-82M).
+ * The Audio Overview generator stays hidden until a download AND a test
+ * synthesis have succeeded, so users never hit a broken or robotic episode.
+ */
+function PodcastVoicesSection() {
+  const status = useStore((s) => s.kokoroStatus);
+  const busy = useStore((s) => s.kokoroBusy);
+  const setup = useStore((s) => s.setupKokoro);
+  const remove = useStore((s) => s.removeKokoro);
+  const download = useStore((s) => s.embedderDownload);
+  const downloading = busy && !!download?.title?.includes("podcast");
+
+  const state = !status
+    ? { label: "Checking…", cls: "text-subtle-foreground" }
+    : status.verified
+      ? { label: "Ready — voices verified", cls: "text-success" }
+      : status.downloaded
+        ? { label: "Downloaded, not yet verified", cls: "text-muted-foreground" }
+        : { label: "Not downloaded", cls: "text-muted-foreground" };
+
+  return (
+    <Field
+      label="Podcast voices"
+      hint="Audio Overview speaks with Kokoro-82M, a neural TTS that runs entirely on-device (one-time ~93 MB download). The generator appears in the Studio once the voices are downloaded and verified with a test synthesis."
+    >
+      <div className="flex items-center gap-3 rounded-md border border-border bg-surface-2/60 px-3 py-2.5">
+        <AudioLines className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <div className="flex min-w-0 flex-col">
+          <span className={cn("text-[12px] font-medium", state.cls)}>{state.label}</span>
+          {downloading && download && (
+            <span className="text-[11px] tabular-nums text-subtle-foreground">
+              {download.total > 0
+                ? `${download.label} — ${Math.round((download.done / download.total) * 100)}% of ${(download.total / 1e6).toFixed(0)} MB`
+                : `${(download.done / 1e6).toFixed(1)} MB…`}
+            </span>
+          )}
+          {busy && !downloading && (
+            <span className="text-[11px] text-subtle-foreground">Verifying with a test synthesis…</span>
+          )}
+        </div>
+        <div className="ml-auto flex items-center gap-1.5">
+          {busy ? (
+            <Button variant="secondary" onClick={() => void api.cancelGeneration("tts")}>
+              Cancel
+            </Button>
+          ) : (
+            <Button variant={status?.verified ? "secondary" : "primary"} onClick={() => void setup()}>
+              {status?.verified
+                ? "Test again"
+                : status?.downloaded
+                  ? "Verify voices"
+                  : "Download & verify"}
+            </Button>
+          )}
+          {status?.downloaded && !busy && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => void remove()}
+              title="Remove the downloaded voice model (~93 MB)"
+              aria-label="Remove the podcast voice model"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          )}
+        </div>
+      </div>
+    </Field>
   );
 }

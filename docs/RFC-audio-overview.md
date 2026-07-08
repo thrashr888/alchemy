@@ -98,15 +98,21 @@ or two Kokoro voice embeddings), configurable later in Settings if wanted.
 
 Accepted 2026-07-07, with these calls on the open questions:
 
-1. Ship the `say` engine now (it proves the whole pipeline with zero
-   downloads); Kokoro via `ort` is the follow-up quality engine. The `Tts`
-   trait is deferred until that second engine exists — `SayTts` is concrete.
+1. `say` proved the pipeline, then was deleted the same day: its quality is
+   far below the feature's bar, and a robotic episode is worse than a clear
+   error. **Kokoro-82M via `ort` (`kokoro-en`, default-features off — the
+   default `g2p-espeak` feature links GPL espeak-ng) is the only engine.**
+   The model (~92 MB int8 ONNX + two voice packs) downloads on first use with
+   the embedder's progress-overlay pattern; if it can't be fetched, the
+   generation fails with a clear message. No fallback engine, no trait.
 2. Default ~5-minute episode (~900-1200 words); the existing "Add
    instructions" box steers tone and length like any other generator.
-3. Default voices: Samantha (host) and Daniel (guest), with a fallback to the
-   system voice when one is missing. Settings UI for voices deferred.
+3. Default voices: `af_heart` (host) and `am_michael` (guest). Settings UI
+   for voices deferred.
 
 Implementation notes: the episode synthesizes *before* the note is saved, so
 a failed or stopped run never leaves a script note with missing audio; the
 audio file lives at `<app-data>/audio/<note_id>.m4a`, is exposed via the
-asset protocol, and is deleted with its note.
+asset protocol, and is deleted with its note. onnxruntime links statically —
+nothing new to sign at release. The ignored `kokoro_smoke` test covers
+download → synthesis → episode assembly end-to-end.

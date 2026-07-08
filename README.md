@@ -52,9 +52,10 @@ built-in embedder. See
   **Compare** it against your other sources, or stage it in the chat composer with
   your own question.
 - **Audio Overview** — one click turns a notebook into a two-host podcast episode,
-  scripted by your chat model and voiced **entirely on-device** (macOS speech
-  synthesis; a neural TTS engine is on the roadmap). The script stays readable
-  and editable as a note; the episode plays inline.
+  scripted by your chat model and voiced **entirely on-device** by
+  [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) neural TTS (a one-time
+  ~93 MB download). The script stays readable and editable as a note; the
+  episode plays inline.
 - **Studio generators** — one-click **Summary**, **FAQ**, **Study guide**, **Briefing**,
   **Timeline**, **Insights** (cross-source connections, contradictions & surprises),
   **Data table**, **Problems** (finds errors/gaps/contradictions), **Flashcards**,

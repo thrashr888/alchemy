@@ -45,8 +45,14 @@ import {
 
 type Artifact = { kind: NoteKind; label: string; icon: ReactNode };
 
+/** Shown only once the voice model is downloaded & verified (Settings → Models). */
+export const AUDIO_OVERVIEW: Artifact = {
+  kind: "audio_overview",
+  label: "Audio Overview",
+  icon: <AudioLines className="h-3.5 w-3.5" />,
+};
+
 const SUMMARIES: Artifact[] = [
-  { kind: "audio_overview", label: "Audio Overview", icon: <AudioLines className="h-3.5 w-3.5" /> },
   { kind: "summary", label: "Summary", icon: <FileText className="h-3.5 w-3.5" /> },
   { kind: "faq", label: "FAQ", icon: <HelpCircle className="h-3.5 w-3.5" /> },
   { kind: "study_guide", label: "Study guide", icon: <GraduationCap className="h-3.5 w-3.5" /> },
@@ -121,6 +127,7 @@ export function StudioPanel() {
   const generatingKind = useStore((s) => s.generatingKind);
   const artifactStreamText = useStore((s) => s.artifactStreamText);
   const audioProgress = useStore((s) => s.audioProgress);
+  const kokoroReady = useStore((s) => !!s.kokoroStatus?.verified);
   const generate = useStore((s) => s.generateArtifact);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
   const toggleStudio = useStore((s) => s.toggleStudio);
@@ -249,7 +256,7 @@ export function StudioPanel() {
           <>
             <div className="mt-2">
               <ArtifactGrid
-                artifacts={SUMMARIES}
+                artifacts={kokoroReady ? [AUDIO_OVERVIEW, ...SUMMARIES] : SUMMARIES}
                 disabled={!hasSources || !!generatingKind}
                 generatingKind={generatingKind}
                 onPick={(k) => generate(k, instructions)}
@@ -611,7 +618,7 @@ function NoteViewer({ note, onClose }: { note: Note | null; onClose: () => void 
               ) : live.kind === "audio_overview" ? (
                 <div className="flex flex-col gap-4">
                   {/* Key by updatedAt so a rebuild swaps in the new episode. */}
-                  <AudioPlayer noteId={live.id} key={live.updatedAt} />
+                  <AudioPlayer noteId={live.id} title={live.title} key={live.updatedAt} />
                   <DialogueScript content={live.content} />
                 </div>
               ) : (
