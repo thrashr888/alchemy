@@ -91,7 +91,7 @@ function App() {
           <span className="h-2 w-2 animate-pulse rounded-full bg-primary" />
           <div className="flex flex-col">
             <span className="text-[12px] font-medium text-foreground">
-              Setting up the built-in embedder
+              {embedderDownload.title ?? "Setting up the built-in embedder"}
             </span>
             <span className="text-[11px] text-muted-foreground">
               One-time download ·{" "}

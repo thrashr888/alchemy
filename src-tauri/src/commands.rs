@@ -1910,6 +1910,117 @@ struct AudioProgress {
     total: u32,
 }
 
+fn kokoro_dir(app: &AppHandle) -> anyhow::Result<PathBuf> {
+    use tauri::Manager;
+    Ok(app.path().app_data_dir()?.join("kokoro"))
+}
+
+/// Marker written after a successful test synthesis — the Audio Overview
+/// generator only appears in the UI once this exists.
+fn kokoro_verified_marker(dir: &std::path::Path) -> PathBuf {
+    dir.join(".verified")
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct KokoroStatus {
+    pub downloaded: bool,
+    pub verified: bool,
+}
+
+fn kokoro_status_of(dir: &std::path::Path) -> KokoroStatus {
+    let downloaded = crate::tts::kokoro_files_present(dir);
+    KokoroStatus {
+        downloaded,
+        verified: downloaded && kokoro_verified_marker(dir).exists(),
+    }
+}
+
+/// Where the podcast voice model stands: absent, downloaded, or verified.
+#[tauri::command]
+pub fn kokoro_status(app: AppHandle) -> Result<KokoroStatus, String> {
+    Ok(kokoro_status_of(
+        &kokoro_dir(&app).map_err(|e2| e2.to_string())?,
+    ))
+}
+
+/// Download the Kokoro model if needed, then prove it works with a short
+/// test synthesis. Drives the Settings → Models "Podcast voices" section;
+/// progress streams as `tts://download`. Cancellable via scope "tts".
+#[tauri::command]
+pub async fn setup_kokoro(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<KokoroStatus, String> {
+    #[derive(serde::Serialize, Clone)]
+    struct TtsDownload {
+        label: String,
+        done: u64,
+        total: u64,
+    }
+    let dir = e(kokoro_dir(&app))?;
+    let cancel = state.begin_generation("tts");
+    let emitter = app.clone();
+    let progress: crate::tts::DownloadProgress = std::sync::Arc::new(move |label, done, total| {
+        let _ = emitter.emit(
+            "tts://download",
+            TtsDownload {
+                label: label.to_string(),
+                done,
+                total,
+            },
+        );
+    });
+    let result: anyhow::Result<()> = async {
+        crate::tts::ensure_kokoro_files(&dir, Some(&progress), &cancel).await?;
+        let engine = crate::tts::KokoroEngine::load(&dir).await?;
+        let probe = std::env::temp_dir().join("alchemy-kokoro-verify.wav");
+        engine
+            .synth(
+                crate::tts::Speaker::Host,
+                "Your podcast voices are ready.",
+                &probe,
+            )
+            .await?;
+        let _ = std::fs::remove_file(&probe);
+        std::fs::write(kokoro_verified_marker(&dir), b"ok")?;
+        Ok(())
+    }
+    .await;
+    // Always clear the download overlay, even on failure.
+    let _ = app.emit(
+        "tts://download",
+        TtsDownload {
+            label: "done".into(),
+            done: 1,
+            total: 1,
+        },
+    );
+    e(result)?;
+    Ok(kokoro_status_of(&dir))
+}
+
+/// Delete the downloaded voice model (frees ~93 MB; the generator hides).
+#[tauri::command]
+pub fn remove_kokoro(app: AppHandle) -> Result<KokoroStatus, String> {
+    let dir = kokoro_dir(&app).map_err(|e2| e2.to_string())?;
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).map_err(|e2| e2.to_string())?;
+    }
+    Ok(kokoro_status_of(&dir))
+}
+
+/// Copy a note's episode audio to a user-chosen destination (Save dialog).
+#[tauri::command]
+pub fn export_audio(app: AppHandle, note_id: String, dest: String) -> Result<(), String> {
+    let src = audio_path(&app, &note_id).ok_or("could not resolve the app data dir")?;
+    if !src.exists() {
+        return Err("This note has no audio yet.".into());
+    }
+    std::fs::copy(&src, &dest).map_err(|e2| e2.to_string())?;
+    Ok(())
+}
+
 /// Synthesize an Audio Overview script into `<data>/audio/<note_id>.m4a`,
 /// emitting `audio://progress` per line. Cancellable between lines via the
 /// artifact cancel token, so Stop works during the long synthesis tail.
@@ -1929,9 +2040,33 @@ async fn synthesize_audio(
     // Rebuilds overwrite the previous episode.
     let _ = std::fs::remove_file(&out);
 
+    // Kokoro is the only voice, and generation never kicks off a 93 MB
+    // download behind the user's back — the model is set up (and verified)
+    // from Settings → Models, and the generator is hidden until then.
+    let dir = kokoro_dir(app)?;
+    anyhow::ensure!(
+        crate::tts::kokoro_files_present(&dir),
+        "The podcast voices aren't set up — download them in Settings → Models."
+    );
+    let engine = crate::tts::KokoroEngine::load(&dir).await?;
+
+    // Pause lengths between turns follow the dialogue: a beat after a
+    // question, snappy for short interjections, a steady gap otherwise.
+    let gaps: Vec<u32> = lines
+        .windows(2)
+        .map(|w| {
+            if w[1].text.chars().count() < 25 || w[1].text.starts_with(['—', '-']) {
+                180
+            } else if w[0].text.ends_with('?') {
+                420
+            } else {
+                300
+            }
+        })
+        .collect();
+
     let scratch = std::env::temp_dir().join(format!("alchemy-audio-{note_id}"));
     std::fs::create_dir_all(&scratch)?;
-    let engine = crate::tts::SayTts::default();
     let total = lines.len() as u32;
     let mut wavs = Vec::with_capacity(lines.len());
     let result: anyhow::Result<()> = async {
@@ -1948,7 +2083,8 @@ async fn synthesize_audio(
                 },
             );
         }
-        crate::tts::assemble_episode(&wavs, &out).await
+        crate::tts::assemble_episode(&wavs, &gaps, &out, crate::tts::KokoroEngine::SAMPLE_RATE)
+            .await
     }
     .await;
     let _ = std::fs::remove_dir_all(&scratch);
@@ -2076,12 +2212,44 @@ async fn generate_content(
         rag::persona_block(&ai.config().profile)
     };
     let messages = rag::build_artifact_messages(&instruction, &corpus, &persona);
-    let (content, stats, model) = {
+    let mut content = run_generation_chat(state, app, &messages).await?;
+
+    // A twenty-minute episode is ~3,000 words, and chat models routinely fade
+    // early. Continue the episode (dropping any premature outro) until it's
+    // within reach of the target or the model has nothing more to add.
+    if kind == "audio_overview" {
+        const TARGET_WORDS: usize = 3000;
+        for _ in 0..3 {
+            let words = content.split_whitespace().count();
+            if words >= TARGET_WORDS * 8 / 10 {
+                break;
+            }
+            let trimmed = strip_outro(&content);
+            let messages = rag::build_audio_continuation(&instruction, &corpus, &persona, &trimmed);
+            let more = run_generation_chat(state, app, &messages).await?;
+            // A tiny continuation means the model considers the episode done.
+            if more.split_whitespace().count() < 100 {
+                break;
+            }
+            content = format!("{}\n{}", trimmed.trim_end(), more.trim());
+        }
+    }
+    Ok((title.to_string(), content))
+}
+
+/// One artifact-generation chat call: stream tokens to the UI when a window
+/// is listening, and record model throughput either way.
+async fn run_generation_chat(
+    state: &AppState,
+    app: Option<&AppHandle>,
+    messages: &[crate::ai::ChatTurn],
+) -> anyhow::Result<String> {
+    let (text, stats, model) = {
         let ai = state.ai.read().await;
         let out = match app {
             Some(app) => {
                 let app = app.clone();
-                ai.chat_stream(&messages, move |tok| {
+                ai.chat_stream(messages, move |tok| {
                     let _ = app.emit(
                         "artifact://token",
                         TokenEvent {
@@ -2091,12 +2259,36 @@ async fn generate_content(
                 })
                 .await?
             }
-            None => ai.chat(&messages).await?,
+            None => ai.chat(messages).await?,
         };
         (out.text, out.stats, ai.active_chat_model())
     };
     state.record_chat_stats(&model, stats);
-    Ok((title.to_string(), content))
+    Ok(text)
+}
+
+/// Drop a premature sign-off from the tail of a dialogue script so a
+/// continuation can pick up mid-episode instead of talking past a goodbye.
+pub(crate) fn strip_outro(script: &str) -> String {
+    const MARKERS: [&str; 6] = [
+        "thanks for listening",
+        "thanks for tuning",
+        "until next time",
+        "that's a wrap",
+        "see you next",
+        "signing off",
+    ];
+    let lines: Vec<&str> = script.lines().collect();
+    let mut end = lines.len();
+    // Only the last few lines can be an outro; a mid-episode "thanks" is fine.
+    for (i, line) in lines.iter().enumerate().skip(lines.len().saturating_sub(4)) {
+        let l = line.to_lowercase();
+        if MARKERS.iter().any(|m| l.contains(m)) {
+            end = i;
+            break;
+        }
+    }
+    lines[..end].join("\n")
 }
 
 #[tauri::command]

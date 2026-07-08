@@ -57,7 +57,7 @@ export function NoteWindow({ noteId }: { noteId: string }) {
             <MindMap content={note.content} />
           ) : note.kind === "audio_overview" ? (
             <div className="flex flex-col gap-4">
-              <AudioPlayer noteId={note.id} key={note.updatedAt} />
+              <AudioPlayer noteId={note.id} title={note.title} key={note.updatedAt} />
               <DialogueScript content={note.content} />
             </div>
           ) : (

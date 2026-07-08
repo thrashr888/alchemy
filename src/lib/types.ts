@@ -96,6 +96,13 @@ export interface SearchHit {
   snippet: string;
 }
 
+/** Podcast voice model (Kokoro) readiness. */
+export interface KokoroStatus {
+  downloaded: boolean;
+  /** A test synthesis succeeded — the Audio Overview generator may show. */
+  verified: boolean;
+}
+
 export interface ModelStatus {
   name: string;
   installed: boolean;

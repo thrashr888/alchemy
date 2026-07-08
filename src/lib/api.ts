@@ -5,6 +5,7 @@ import type {
   AiConfig,
   ChatConfig,
   CorpusStats,
+  KokoroStatus,
   Message,
   ModelHealth,
   ModelStat,
@@ -71,6 +72,16 @@ const ai = <T>(command: string, args?: Record<string, unknown>) =>
     }),
   );
 
+/** Marathon op (a 20-minute episode scripts + synthesizes for a long time):
+ *  the ceiling exists only to catch a truly wedged backend. */
+const slow = <T>(command: string, args?: Record<string, unknown>) =>
+  invokeRaw<T>(command, args).pipe(
+    Effect.timeoutFail({
+      duration: Duration.minutes(60),
+      onTimeout: () => new TimeoutError({ command }),
+    }),
+  );
+
 /** Run an Effect to a Promise, rejecting with a clean, user-friendly Error. */
 async function run<A>(effect: Effect.Effect<A, AppError>): Promise<A> {
   const exit = await Effect.runPromiseExit(effect);
@@ -108,7 +119,7 @@ export const api = {
     run(ai<Message>("send_message", { notebookId, content, config })),
   sendMessageAgentic: (notebookId: string, content: string, config: ChatConfig) =>
     run(ai<Message>("send_message_agentic", { notebookId, content, config })),
-  cancelGeneration: (scope?: "chat" | "artifact") =>
+  cancelGeneration: (scope?: "chat" | "artifact" | "tts") =>
     run(cmd<void>("cancel_generation", { scope })),
   suggestFollowups: (notebookId: string) =>
     run(query<string[]>("suggest_followups", { notebookId })),
@@ -128,6 +139,11 @@ export const api = {
   rebuildAppMenu: () => run(cmd<void>("rebuild_app_menu")),
   fixTrafficLights: () => run(cmd<void>("fix_traffic_lights")),
   getAudioPath: (noteId: string) => run(query<string | null>("get_audio_path", { noteId })),
+  exportAudio: (noteId: string, dest: string) =>
+    run(cmd<void>("export_audio", { noteId, dest })),
+  kokoroStatus: () => run(query<KokoroStatus>("kokoro_status")),
+  setupKokoro: () => run(slow<KokoroStatus>("setup_kokoro")),
+  removeKokoro: () => run(cmd<KokoroStatus>("remove_kokoro")),
   searchEverything: (q: string) => run(query<SearchHit[]>("search_everything", { query: q })),
   createNote: (notebookId: string, title: string, content: string) =>
     run(cmd<Note>("create_note", { notebookId, title, content })),
@@ -137,9 +153,9 @@ export const api = {
   convertNoteToSource: (noteId: string) =>
     run(ai<Source>("convert_note_to_source", { noteId })),
   generateArtifact: (notebookId: string, kind: NoteKind, prompt?: string) =>
-    run(ai<Note>("generate_artifact", { notebookId, kind, prompt: prompt ?? "" })),
+    run(slow<Note>("generate_artifact", { notebookId, kind, prompt: prompt ?? "" })),
   rebuildNote: (noteId: string, notebookId: string, kind: NoteKind, prompt: string) =>
-    run(ai<Note>("rebuild_note", { noteId, notebookId, kind, prompt })),
+    run(slow<Note>("rebuild_note", { noteId, notebookId, kind, prompt })),
 
   // Reports
   listReportSchedules: (notebookId: string) =>

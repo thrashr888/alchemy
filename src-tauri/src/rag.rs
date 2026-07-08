@@ -187,17 +187,26 @@ pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
         "audio_overview" => Some((
             "Audio Overview",
             "Write the script for a two-host podcast episode discussing the sources below — \
-             about 900-1200 words (a five-minute listen). HOST is a warm, curious interviewer \
-             who frames the big questions and keeps the thread moving; GUEST is the expert who \
-             answers with specifics from the material, reaching for an analogy when it helps. \
-             Open with a hook — the most surprising fact or sharpest question in the sources. \
-             Work through the 3-5 most interesting threads with natural handoffs, letting the \
-             hosts push back on each other where the sources conflict, and end with a crisp \
-             takeaway. Write ONLY dialogue lines, each on its own line, in exactly this form:\n\
+             aim for roughly 3,000 words (a twenty-minute listen); going long beats going \
+             short. HOST is a warm, curious interviewer who frames the big questions, reacts, \
+             and keeps the thread moving; GUEST is the expert who answers with specifics from \
+             the material, reaching for analogies and concrete examples. Structure it like a \
+             real episode: a cold-open hook (the most surprising fact or sharpest question in \
+             the sources), a one-breath preview of where the conversation is going, then 4-6 \
+             segments that each dig deep into one thread with natural transitions between \
+             them, a brief mid-episode recap of what's emerged so far, and a closing exchange \
+             that lands the takeaways. Make it SOUND spoken, not written: contractions \
+             everywhere, short reaction beats (\"Right.\", \"Huh — okay.\", \"Wait, really?\"), \
+             rhetorical questions, one host occasionally interrupting or finishing the \
+             other's thought, and genuine pushback wherever the sources disagree. Use \
+             punctuation as delivery: em dashes for interruptions and pivots, ellipses for a \
+             beat of hesitation, question and exclamation marks for lift. Vary the rhythm — \
+             quick three-word volleys against longer explanations. Write ONLY dialogue lines, \
+             each on its own line, in exactly this form:\n\
              HOST: <what they say>\n\
              GUEST: <what they say>\n\
-             No headings, no stage directions, no markdown, no names other than HOST and GUEST. \
-             Keep each turn under 60 words so it sounds like real speech.",
+             No headings, no stage directions, no sound-effect cues, no markdown, no names \
+             other than HOST and GUEST. Keep any single turn under 80 words.",
         )),
         "mind_map" => Some((
             "Mind Map",
@@ -326,6 +335,38 @@ pub fn build_agent_decision(
             "Question: {question}\n\nAvailable sources:\n{source_list}\n\n\
              Evidence gathered so far ({gathered_count} excerpts):\n{gathered}\n\n\
              Next action (one JSON object):"
+        )),
+    ]
+}
+
+/// Continuation prompt for an under-length Audio Overview script: more
+/// dialogue picking up mid-episode — never a restart.
+pub fn build_audio_continuation(
+    instruction: &str,
+    corpus: &str,
+    persona: &str,
+    script_so_far: &str,
+) -> Vec<ChatTurn> {
+    const MAX_CHARS: usize = 150_000;
+    let corpus: String = corpus.chars().take(MAX_CHARS).collect();
+    let mut system = "You continue writing a two-host podcast script from provided source \
+                      material. Stay faithful to the sources and never invent facts."
+        .to_string();
+    if !persona.is_empty() {
+        system.push_str(&format!("\n\n{persona}"));
+    }
+    vec![
+        ChatTurn::system(system),
+        ChatTurn::user(format!(
+            "Episode brief:\n{instruction}\n\n--- SOURCES ---\n\n{corpus}\n\n\
+             --- EPISODE SO FAR ---\n\n{script_so_far}\n\n--- TASK ---\n\
+             The episode above stopped short of its length target. Continue it from exactly \
+             where it leaves off: new dialogue lines only, in the same one-line-per-turn \
+             HOST:/GUEST: format. Do not restart, re-introduce the show, or repeat ground \
+             already covered — pick up mid-conversation and dig into the threads and details \
+             from the sources that haven't been discussed yet. When (and only when) the full \
+             episode reaches the target length, land the takeaways in a proper closing \
+             exchange. Output ONLY the new lines.",
         )),
     ]
 }
