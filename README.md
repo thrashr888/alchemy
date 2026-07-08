@@ -69,6 +69,12 @@ built-in embedder. See
   [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
   bundle: plain markdown concepts with YAML frontmatter, indexes, and a log —
   readable by humans and agents alike (⌘K → "Export notebook as OKF").
+- **Agent access (MCP)** — an embedded MCP server (localhost-only) lets agents
+  create notebooks, add sources, run hybrid search, and write notes — with changes
+  appearing live in the app. One-click connect (config + companion skill) for
+  **Claude Code, OpenAI Codex, GitHub Copilot, VS Code, OpenCode, Gemini CLI,
+  Google Antigravity, Factory Droid, AWS Kiro, IBM Bob, and Hermes** in
+  Settings → Agents (see `docs/RFC-mcp-server.md`).
 - **Periodic reports** — schedule a notebook to refresh its URL sources and generate a
   timestamped report note on an interval.
 - **Model tooling** — live chat/embed **health check**, per-model **tokens/sec**

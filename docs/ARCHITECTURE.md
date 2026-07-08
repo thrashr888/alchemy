@@ -72,6 +72,23 @@ All `#[tauri::command]`s. Notable flow — **`send_message`**:
 
 Errors are flattened to strings so they cross IPC cleanly.
 
+### `mcp.rs` — agent access (MCP server)
+An embedded MCP server (official `rmcp` SDK, streamable HTTP on
+`127.0.0.1:41414`, axum-hosted) exposes notebook/source/note CRUD and hybrid
+`search` as agent tools, reusing the same `AppState` helpers the commands
+call — one process owns LanceDB and the embedder, so there are no
+cross-process write conflicts. Mutations emit `mcp://changed` so open windows
+refresh live. Requests carrying a browser `Origin` header are rejected (CSRF
+guard); enable/port live in `AiConfig` (Settings → Agents), and a discovery
+file is written to `<app-data>/mcp.json`. See `docs/RFC-mcp-server.md`.
+
+### `connectors.rs` — agent client registry
+One-click registration of the MCP server (plus the bundled `skills/alchemy`
+SKILL.md) with installed agent clients — Claude Code, Codex, OpenCode, Gemini
+CLI, Antigravity, Kiro, IBM Bob, Hermes. Each target declares detection
+paths, a config strategy (JSON merge / TOML append / manual snippet), and its
+skills dir; Settings → Agents renders one row per target.
+
 ## Frontend (`src`)
 
 - `lib/types.ts` mirrors the Rust models.

@@ -121,11 +121,11 @@ pub fn ai_runtime(app: AppHandle, data_dir: std::path::PathBuf) -> crate::ai::Ai
     }
 }
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     Utc::now().timestamp_millis()
 }
 
-fn new_id() -> String {
+pub(crate) fn new_id() -> String {
     Uuid::new_v4().to_string()
 }
 
@@ -225,7 +225,7 @@ async fn find_duplicate(
     Ok(None)
 }
 
-async fn store_extracted(
+pub(crate) async fn store_extracted(
     state: &AppState,
     notebook_id: &str,
     extracted: ingest::Extracted,
@@ -354,7 +354,7 @@ async fn extract_pdf_ocr(state: &AppState, path: &str) -> anyhow::Result<ingest:
 /// gets its first heading; everything else asks the chat model for a short
 /// title. Best-effort — any failure keeps the filename, titling must never
 /// break an import.
-async fn friendly_title(state: &AppState, extracted: &mut ingest::Extracted) {
+pub(crate) async fn friendly_title(state: &AppState, extracted: &mut ingest::Extracted) {
     // A title containing spaces is usually already human-written.
     if extracted.title.contains(char::is_whitespace) {
         return;
@@ -407,7 +407,10 @@ async fn friendly_title(state: &AppState, extracted: &mut ingest::Extracted) {
 /// image OCR, scanned-PDF OCR fallback, plain extraction). File-backed results
 /// record the originating path in `url` so the source can be refreshed from
 /// disk later; Google placeholders keep their cloud URL instead.
-async fn extract_any_file(state: &AppState, path: &str) -> anyhow::Result<ingest::Extracted> {
+pub(crate) async fn extract_any_file(
+    state: &AppState,
+    path: &str,
+) -> anyhow::Result<ingest::Extracted> {
     let mut extracted = if let Some(url) = ingest::google_placeholder_url(path) {
         // Google Drive desktop placeholder — the content lives in the cloud;
         // fetch it through the same export path as a pasted docs.google.com URL.
@@ -453,7 +456,11 @@ pub async fn add_source_url(
 
 /// Fetch a URL into a source. Hard failures (network / HTTP / empty) still
 /// produce an errored source row so the user sees it and can retry.
-async fn ingest_url(state: &AppState, notebook_id: &str, url: &str) -> anyhow::Result<Source> {
+pub(crate) async fn ingest_url(
+    state: &AppState,
+    notebook_id: &str,
+    url: &str,
+) -> anyhow::Result<Source> {
     // Same URL twice is always a mistake — fail fast before fetching.
     let normalized = ingest::normalize_url(url);
     let normalized = normalized.trim_end_matches('/');
@@ -1891,7 +1898,7 @@ pub async fn delete_note(
 // ---- Audio overview ---------------------------------------------------------
 
 /// Where a note's episode audio lives; None only if the data dir is unknown.
-fn audio_path(app: &AppHandle, note_id: &str) -> Option<PathBuf> {
+pub(crate) fn audio_path(app: &AppHandle, note_id: &str) -> Option<PathBuf> {
     use tauri::Manager;
     let dir = app.path().app_data_dir().ok()?.join("audio");
     Some(dir.join(format!("{note_id}.m4a")))
@@ -3182,13 +3189,17 @@ pub async fn set_ai_config(
 ) -> Result<(), String> {
     let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     std::fs::write(&state.config_path, json).map_err(|e| e.to_string())?;
-    let mut ai = state.ai.write().await;
-    let data_dir = state
-        .config_path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_default();
-    *ai = Ai::new(config, ai_runtime(app, data_dir));
+    let (mcp_enabled, mcp_port) = (config.mcp_enabled, config.mcp_port);
+    {
+        let mut ai = state.ai.write().await;
+        let data_dir = state
+            .config_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_default();
+        *ai = Ai::new(config, ai_runtime(app.clone(), data_dir));
+    }
+    crate::mcp::apply_config(&app, mcp_enabled, mcp_port).await;
     Ok(())
 }
 

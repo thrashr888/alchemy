@@ -343,6 +343,16 @@ export const useStore = create<AppState>((set, get) => {
     void listen<{ done: number; total: number }>("audio://progress", (e) => {
       if (get().generatingKind) set({ audioProgress: e.payload });
     });
+    // An agent changed something through the MCP server — refresh whatever
+    // this window is looking at so the change appears live.
+    void listen<{ scope: string; notebookId: string | null }>("mcp://changed", (e) => {
+      const { scope, notebookId } = e.payload;
+      void get().refreshNotebooks();
+      const current = get().currentId;
+      if (!current || (notebookId && notebookId !== current)) return;
+      if (scope === "sources") void api.listSources(current).then((sources) => set({ sources }));
+      if (scope === "notes") void api.listNotes(current).then((notes) => set({ notes }));
+    });
     // Safety net: the backend broadcasts every finished generation. If the
     // invoke path lost the result (e.g. a long synthesis outlived a timeout),
     // this still lands the note in the list instead of losing it silently.

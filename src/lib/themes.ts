@@ -183,7 +183,7 @@ export const THEMES: Record<string, Theme> = {
   },
 };
 
-export const THEME_LIST = Object.values(THEMES);
+export const THEME_LIST = Object.values(THEMES).sort((a, b) => a.label.localeCompare(b.label));
 
 /** Pseudo-theme id: follow the OS appearance (Midnight when dark, Light when
  *  light), re-resolving live when the system setting changes. */

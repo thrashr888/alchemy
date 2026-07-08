@@ -151,6 +151,31 @@ export interface AiConfig {
   openaiVisionModel: string;
   /** Who the user is; woven into system prompts so answers fit them. */
   profile: UserProfile;
+  /** Embedded MCP server for agent access (localhost streamable HTTP). */
+  mcpEnabled: boolean;
+  mcpPort: number;
+}
+
+export interface McpStatus {
+  running: boolean;
+  port: number;
+  url: string;
+}
+
+/** One agent client (Claude Code, Codex, …) and its connection state. */
+export interface ConnectorStatus {
+  id: string;
+  name: string;
+  installed: boolean;
+  configured: boolean;
+  /** False = we don't write its config; user copies the snippet. */
+  canAuto: boolean;
+  supportsSkill: boolean;
+  skillInstalled: boolean;
+  /** CLI one-liner or config snippet for manual setup. */
+  snippet: string;
+  /** Where its config lives, e.g. "~/.codex/config.toml". */
+  configPath: string;
 }
 
 export interface UserProfile {

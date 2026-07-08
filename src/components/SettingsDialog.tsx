@@ -9,7 +9,7 @@ import { checkForUpdates, type UpdateFlow } from "@/lib/updates";
 import { Button, Input, Modal, Spinner, Textarea } from "./ui";
 import { cn } from "@/lib/utils";
 import { AlchemySymbol } from "./AlchemyHero";
-import type { AiConfig, ChatConfig } from "@/lib/types";
+import type { AiConfig, ChatConfig, ConnectorStatus, McpStatus } from "@/lib/types";
 import {
   RefreshCw,
   CheckCircle2,
@@ -27,6 +27,8 @@ import {
   UserRound,
   AudioLines,
   Trash2,
+  Bot,
+  Copy,
 } from "lucide-react";
 
 /** Treat `name` and `name:latest` as the same model for matching. */
@@ -58,6 +60,7 @@ const TABS = [
   { id: "models", label: "Models", icon: Cpu },
   { id: "chat", label: "Chat", icon: MessageSquare },
   { id: "personalization", label: "Personalization", icon: UserRound },
+  { id: "agents", label: "Agents", icon: Bot },
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
   { id: "about", label: "About", icon: Info },
@@ -109,7 +112,7 @@ export function SettingsDialog({
     setLoadingModels(true);
     try {
       const list = await api.listModels();
-      setModels(list);
+      setModels([...list].sort((a, b) => a.localeCompare(b)));
       setConnOk(true);
     } catch {
       setModels([]);
@@ -125,7 +128,8 @@ export function SettingsDialog({
     setLoadingGateway(true);
     setGatewayError(null);
     try {
-      setGatewayModels(await api.listGatewayModels(url, key));
+      const gateway = await api.listGatewayModels(url, key);
+      setGatewayModels([...gateway].sort((a, b) => a.localeCompare(b)));
     } catch (e) {
       setGatewayModels([]);
       setGatewayError(e instanceof Error ? e.message : String(e));
@@ -211,7 +215,9 @@ export function SettingsDialog({
         ) : undefined
       }
     >
-      <div className="flex gap-5">
+      {/* Fixed height: the nav stays put and only the tab content scrolls
+          (also keeps the modal from resizing as tabs change). */}
+      <div className="flex h-[60vh] gap-5">
         <nav className="flex w-36 shrink-0 flex-col gap-0.5">
           {TABS.map((t) => (
             <button
@@ -230,7 +236,7 @@ export function SettingsDialog({
           ))}
         </nav>
 
-        <div className="flex min-w-0 flex-1 flex-col gap-4">
+        <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
           {tab === "general" && <GeneralTab />}
           {tab === "models" && (
             <>
@@ -435,6 +441,8 @@ export function SettingsDialog({
           {tab === "chat" && <ChatTab />}
 
           {tab === "personalization" && <PersonalizationTab />}
+
+          {tab === "agents" && <AgentsTab />}
 
           {tab === "appearance" && <AppearanceTab />}
 
@@ -1012,6 +1020,170 @@ function GeneralTab() {
         hint="A soft chime when generation or a chat answer completes."
         onEnable={playDone}
       />
+    </div>
+  );
+}
+
+/** Agent access: the embedded MCP server + one connect row per agent client. */
+function AgentsTab() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  const pushToast = useStore((s) => s.pushToast);
+  const [status, setStatus] = useState<McpStatus | null>(null);
+  const [connectors, setConnectors] = useState<ConnectorStatus[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  function refresh() {
+    api
+      .mcpStatus()
+      .then(setStatus)
+      .catch(() => setStatus(null));
+    api
+      .listAgentConnectors()
+      .then(setConnectors)
+      .catch(() => setConnectors([]));
+  }
+  useEffect(refresh, []);
+
+  if (!aiConfig) return null;
+  const running = status?.running ?? false;
+
+  function connect(c: ConnectorStatus) {
+    setBusy(c.id);
+    api
+      .connectAgent(c.id)
+      .then((updated) => {
+        setConnectors((list) => list.map((x) => (x.id === updated.id ? updated : x)));
+        pushToast(
+          "success",
+          updated.configured
+            ? `${updated.name} connected — restart it to pick up the change`
+            : `Skill installed for ${updated.name}`,
+        );
+      })
+      .catch((e) => pushToast("error", e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(null));
+  }
+
+  function copySnippet(c: ConnectorStatus) {
+    void navigator.clipboard.writeText(c.snippet);
+    pushToast("success", `Setup for ${c.name} copied`);
+  }
+
+  const sorted = [...connectors].sort((a, b) => a.name.localeCompare(b.name));
+
+  return (
+    <div className="flex flex-col gap-5">
+      <label className="flex cursor-pointer items-start gap-2.5">
+        <input
+          type="checkbox"
+          checked={aiConfig.mcpEnabled}
+          onChange={(e) => {
+            void saveAiConfig({ ...aiConfig, mcpEnabled: e.target.checked }).then(() =>
+              // The server starts/stops on save; give it a beat before polling.
+              setTimeout(refresh, 400),
+            );
+          }}
+          className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
+        />
+        <span className="flex flex-col gap-0.5">
+          <span className="text-[13px] text-foreground">Let AI agents use Alchemy (MCP)</span>
+          <span className="text-[11px] text-subtle-foreground">
+            Agents can create notebooks, add sources, search, and write notes — changes appear
+            live in the app. Local-only: the server listens on 127.0.0.1 and nothing leaves this
+            Mac.
+          </span>
+        </span>
+      </label>
+
+      <div className="flex items-center gap-2 text-[12px]">
+        <span
+          className={cn("h-2 w-2 rounded-full", running ? "bg-success" : "bg-muted-foreground/40")}
+        />
+        <span className="text-muted-foreground">
+          {running ? (
+            <>
+              Running at <span className="text-foreground">{status?.url}</span>
+            </>
+          ) : (
+            "Not running"
+          )}
+        </span>
+      </div>
+
+      <Field
+        label="Clients"
+        hint="Connect writes the client's own MCP config and installs the Alchemy skill where supported. The copy button gives the same setup as a command or snippet."
+      >
+        <div className="flex flex-col divide-y divide-border rounded-md border border-border">
+          {sorted.map((c) => (
+            <div
+              key={c.id}
+              className={cn(
+                "flex items-center gap-2 px-2.5 py-2",
+                !c.installed && "opacity-50",
+              )}
+            >
+              <div className="flex min-w-0 flex-1 flex-col">
+                <span className="text-[12.5px] text-foreground">{c.name}</span>
+                <span className="truncate text-[10.5px] text-subtle-foreground">
+                  {c.configPath}
+                </span>
+              </div>
+
+              {c.configured ? (
+                <span className="flex items-center gap-1 text-[11px] text-success">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Connected{c.supportsSkill && c.skillInstalled ? " + skill" : ""}
+                </span>
+              ) : c.installed ? (
+                c.canAuto ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    loading={busy === c.id}
+                    onClick={() => connect(c)}
+                  >
+                    Connect
+                  </Button>
+                ) : (
+                  <Button variant="secondary" size="sm" onClick={() => copySnippet(c)}>
+                    Copy command
+                  </Button>
+                )
+              ) : (
+                <span className="text-[11px] text-subtle-foreground">Not installed</span>
+              )}
+
+              {/* Skill catch-up for manual/partial rows. */}
+              {c.installed && c.configured && c.supportsSkill && !c.skillInstalled && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  loading={busy === c.id}
+                  onClick={() => connect(c)}
+                >
+                  Add skill
+                </Button>
+              )}
+
+              {/* Escape hatch: the manual setup, always copyable. */}
+              <button
+                title={`Copy manual setup\n${c.snippet}`}
+                onClick={() => copySnippet(c)}
+                className="rounded p-1 text-subtle-foreground transition-colors hover:text-foreground"
+              >
+                <Copy className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+          {connectors.length === 0 && (
+            <div className="px-2.5 py-3 text-[11.5px] text-subtle-foreground">
+              Loading clients…
+            </div>
+          )}
+        </div>
+      </Field>
     </div>
   );
 }

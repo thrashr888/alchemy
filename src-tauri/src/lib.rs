@@ -1,8 +1,10 @@
 mod agent;
 mod ai;
 mod commands;
+mod connectors;
 mod db;
 mod ingest;
+mod mcp;
 mod menu;
 mod models;
 mod pdf;
@@ -71,6 +73,7 @@ pub fn run() {
             app.manage(menu::RecentMenu(handles.recent));
 
             let runtime = commands::ai_runtime(app.handle().clone(), data_dir.clone());
+            let (mcp_enabled, mcp_port) = (config.mcp_enabled, config.mcp_port);
             app.manage(AppState {
                 db: Arc::new(db),
                 ai: tokio::sync::RwLock::new(ai::Ai::new(config, runtime)),
@@ -78,6 +81,13 @@ pub fn run() {
                 stats_path,
                 model_stats: std::sync::Mutex::new(model_stats),
                 cancel: std::sync::Mutex::new(std::collections::HashMap::new()),
+            });
+
+            // Agent access: embedded MCP server (see docs/RFC-mcp-server.md).
+            app.manage(mcp::McpState::default());
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                mcp::apply_config(&handle, mcp_enabled, mcp_port).await;
             });
             Ok(())
         })
@@ -136,6 +146,9 @@ pub fn run() {
             commands::update_report_schedule,
             commands::delete_report_schedule,
             commands::run_report,
+            mcp::mcp_status,
+            connectors::list_agent_connectors,
+            connectors::connect_agent,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
