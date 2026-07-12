@@ -9,6 +9,7 @@ mod menu;
 mod models;
 mod pdf;
 mod rag;
+mod templates;
 mod tts;
 
 #[cfg(test)]
@@ -150,6 +151,8 @@ pub fn run() {
             commands::update_report_schedule,
             commands::delete_report_schedule,
             commands::run_report,
+            templates::list_templates,
+            templates::open_templates_folder,
             mcp::mcp_status,
             connectors::list_agent_connectors,
             connectors::connect_agent,

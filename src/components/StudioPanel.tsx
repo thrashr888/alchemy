@@ -29,6 +29,7 @@ import {
   ClipboardList,
   Megaphone,
   FileCode2,
+  FolderOpen,
   Sparkles,
   RefreshCw,
   FileInput,
@@ -118,6 +119,7 @@ const KIND_LABEL: Record<NoteKind, string> = {
   rfc: "RFC",
   skill: "Skill",
   report: "Report",
+  template: "Template",
 };
 
 export function StudioPanel() {
@@ -129,6 +131,9 @@ export function StudioPanel() {
   const audioProgress = useStore((s) => s.audioProgress);
   const kokoroReady = useStore((s) => !!s.kokoroStatus?.verified);
   const generate = useStore((s) => s.generateArtifact);
+  const templates = useStore((s) => s.templates);
+  const generatingTemplateId = useStore((s) => s.generatingTemplateId);
+  const generateFromTemplate = useStore((s) => s.generateFromTemplate);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
   const toggleStudio = useStore((s) => s.toggleStudio);
   const createNote = useStore((s) => s.createNote);
@@ -282,6 +287,42 @@ export function StudioPanel() {
               generatingKind={generatingKind}
               onPick={(k) => generate(k, instructions)}
             />
+
+            {templates.length > 0 && (
+              <>
+                <div className="mb-2 mt-3 flex items-center text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+                  <span>Templates</span>
+                  <button
+                    onClick={() => void api.openTemplatesFolder()}
+                    className="ml-auto rounded p-0.5 transition-colors hover:text-foreground"
+                    title="Open the templates folder — each .md file is a generator"
+                    aria-label="Open templates folder"
+                  >
+                    <FolderOpen className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {templates.map((t) => (
+                    <button
+                      key={t.id}
+                      disabled={!hasSources || !!generatingKind}
+                      onClick={() => generateFromTemplate(t)}
+                      title={t.description || t.name}
+                      className="flex items-center gap-2 rounded-md border border-border bg-surface-2 px-2.5 py-2 text-[12px] text-foreground/90 transition-colors hover:border-border-strong hover:bg-elevated disabled:opacity-40 disabled:pointer-events-none"
+                    >
+                      <span className="text-muted-foreground">
+                        {generatingTemplateId === t.id ? (
+                          <Spinner className="h-3.5 w-3.5" />
+                        ) : (
+                          <FileText className="h-3.5 w-3.5" />
+                        )}
+                      </span>
+                      <span className="truncate">{t.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
 
             {showInstructions ? (
               <Textarea
