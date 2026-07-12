@@ -23,6 +23,7 @@ import {
   RefreshCw,
   CornerDownRight,
   ExternalLink,
+  SlidersHorizontal,
 } from "lucide-react";
 
 export function ChatPanel() {
@@ -186,6 +187,15 @@ export function ChatPanel() {
               Clear
             </Button>
           )}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => useStore.getState().openSettings("chat")}
+            title="Chat settings (style, length, custom prompt)"
+            aria-label="Chat settings"
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5" />
+          </Button>
         </div>
       </div>
 
