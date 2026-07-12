@@ -85,6 +85,10 @@ pub fn run() {
                 folder_scan_lock: tokio::sync::Mutex::new(()),
             });
 
+            // Studio templates: write the default pack on first run so
+            // ~/Documents/Alchemy/templates exists before anything lists it.
+            templates::seed_on_startup(&data_dir);
+
             // Agent access: embedded MCP server (see docs/RFC-mcp-server.md).
             app.manage(mcp::McpState::default());
             let handle = app.handle().clone();
@@ -153,6 +157,7 @@ pub fn run() {
             commands::run_report,
             templates::list_templates,
             templates::open_templates_folder,
+            templates::install_default_templates,
             mcp::mcp_status,
             connectors::list_agent_connectors,
             connectors::connect_agent,

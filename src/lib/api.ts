@@ -168,6 +168,7 @@ export const api = {
   // Templates (custom generators in ~/Documents/Alchemy/templates)
   listTemplates: () => run(query<Template[]>("list_templates")),
   openTemplatesFolder: () => run(cmd<void>("open_templates_folder")),
+  installDefaultTemplates: () => run(cmd<number>("install_default_templates")),
 
   // Reports
   listReportSchedules: (notebookId: string) =>

@@ -155,20 +155,51 @@ const DEFAULT_TEMPLATES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Write every default file that isn't already present, creating the folder
+/// if needed. Existing files (edited or not) are never overwritten. Returns
+/// how many files were written.
+fn install_missing(dir: &Path) -> anyhow::Result<u32> {
+    std::fs::create_dir_all(dir)?;
+    let mut installed = 0;
+    for (id, contents) in DEFAULT_TEMPLATES {
+        let file = dir.join(format!("{id}.md"));
+        if !file.exists() {
+            std::fs::write(file, contents)?;
+            installed += 1;
+        }
+    }
+    Ok(installed)
+}
+
 /// First use: create the folder and write the default pack. An existing folder
 /// is left entirely alone — user edits and deletions stick.
 fn ensure_default_templates(dir: &Path) -> anyhow::Result<()> {
     if dir.exists() {
         return Ok(());
     }
-    std::fs::create_dir_all(dir)?;
-    for (id, contents) in DEFAULT_TEMPLATES {
-        let file = dir.join(format!("{id}.md"));
-        if !file.exists() {
-            std::fs::write(file, contents)?;
-        }
+    install_missing(dir).map(|_| ())
+}
+
+/// App-startup seeding, exactly once per install (tracked by a marker in the
+/// app data dir): materialize the default pack on a truly fresh setup without
+/// waiting for anything to list templates. After that the user's folder is
+/// theirs — deleting files, or the whole folder, sticks; Settings → General
+/// has an explicit "Install template files" button to bring defaults back.
+/// Runs on a spawned thread because the first write into ~/Documents can
+/// block on the macOS folder-access consent dialog.
+pub fn seed_on_startup(data_dir: &Path) {
+    let marker = data_dir.join("templates-seeded");
+    if marker.exists() {
+        return;
     }
-    Ok(())
+    std::thread::spawn(move || {
+        let Some(dir) = templates_dir() else { return };
+        if let Err(err) = ensure_default_templates(&dir) {
+            eprintln!("templates: could not seed {}: {err:#}", dir.display());
+            return; // retry next launch — don't write the marker
+        }
+        let _ = std::fs::write(&marker, b"");
+    });
 }
 
 /// Tolerant frontmatter parse: an optional `---`-fenced block with `name:` /
@@ -230,20 +261,34 @@ fn read_templates(dir: &Path) -> anyhow::Result<Vec<Template>> {
 #[tauri::command]
 pub fn list_templates() -> Result<Vec<Template>, String> {
     let dir = templates_dir().ok_or_else(|| "Could not resolve the home directory".to_string())?;
-    ensure_default_templates(&dir).map_err(|e| format!("{e:#}"))?;
+    // A deleted folder means the user opted out — list empty, don't recreate.
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
     read_templates(&dir).map_err(|e| format!("{e:#}"))
 }
 
 /// Open the templates folder in Finder so the user can add or edit templates.
+/// Creates the (possibly empty) folder if needed, but never the pack — that's
+/// the Settings "Install template files" button's job.
 #[tauri::command]
 pub fn open_templates_folder() -> Result<(), String> {
     let dir = templates_dir().ok_or_else(|| "Could not resolve the home directory".to_string())?;
-    ensure_default_templates(&dir).map_err(|e| format!("{e:#}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{e:#}"))?;
     std::process::Command::new("open")
         .arg(&dir)
         .spawn()
         .map_err(|e| format!("{e:#}"))?;
     Ok(())
+}
+
+/// Settings → General: (re)install any default template files that aren't
+/// present. Never overwrites a file the user has edited. Returns how many
+/// files were written.
+#[tauri::command]
+pub fn install_default_templates() -> Result<u32, String> {
+    let dir = templates_dir().ok_or_else(|| "Could not resolve the home directory".to_string())?;
+    install_missing(&dir).map_err(|e| format!("{e:#}"))
 }
 
 #[cfg(test)]
@@ -281,6 +326,23 @@ mod tests {
     fn empty_files_are_skipped() {
         assert!(parse_template("empty", "").is_none());
         assert!(parse_template("only-front", "---\nname: X\n---\n\n").is_none());
+    }
+
+    /// The Settings install button restores deleted defaults but never
+    /// overwrites a file the user has edited.
+    #[test]
+    fn install_missing_restores_deletions_without_touching_edits() {
+        let dir = tmp_dir().join("templates");
+        assert_eq!(
+            install_missing(&dir).unwrap() as usize,
+            DEFAULT_TEMPLATES.len()
+        );
+        std::fs::remove_file(dir.join("memo.md")).unwrap();
+        std::fs::write(dir.join("sop.md"), "My own SOP instruction.").unwrap();
+        assert_eq!(install_missing(&dir).unwrap(), 1); // memo only
+        assert!(dir.join("memo.md").exists());
+        let sop = std::fs::read_to_string(dir.join("sop.md")).unwrap();
+        assert_eq!(sop, "My own SOP instruction.");
     }
 
     /// The whole default pack must survive a round-trip through the parser —
