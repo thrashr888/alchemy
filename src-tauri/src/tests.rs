@@ -109,6 +109,7 @@ async fn rag_round_trip() {
             qvec,
             "Where do the light-dependent reactions happen?",
             4,
+            None,
         )
         .await
         .expect("search");
@@ -237,6 +238,7 @@ async fn builtin_embedder_round_trip() {
             qvec,
             "Where do light-dependent reactions happen?",
             2,
+            None,
         )
         .await
         .expect("search");

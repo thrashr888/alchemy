@@ -51,6 +51,8 @@ enum Action {
 }
 
 /// Run the loop and return the final answer plus the citations actually gathered.
+/// `source_ids` restricts the loop to those sources; None means all.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     app: &AppHandle,
     db: &Db,
@@ -59,13 +61,19 @@ pub async fn run(
     question: &str,
     history: &[ChatTurn],
     extra_system: &str,
+    source_ids: Option<&[String]>,
 ) -> Result<(String, Vec<Citation>, Option<crate::ai::GenStats>)> {
     let mut read_remaining = if ollama.config().is_gateway() {
         READ_CHARS_GATEWAY
     } else {
         READ_CHARS_LOCAL
     };
-    let sources = db.list_sources(notebook_id).await?;
+    // Deselected sources are invisible to the planner: they never appear in
+    // the source list (so no reads) and are filtered out of every search.
+    let mut sources = db.list_sources(notebook_id).await?;
+    if let Some(ids) = source_ids {
+        sources.retain(|s| ids.contains(&s.id));
+    }
     let source_list = sources
         .iter()
         .map(|s| format!("- {} (id: {}, {} chunks)", s.title, s.id, s.chunk_count))
@@ -85,7 +93,7 @@ pub async fn run(
                 emit_step(app, format!("Searching: {query}"));
                 let qvec = ollama.embed_one(&query).await?;
                 let mut hits = db
-                    .search_chunks(notebook_id, qvec, &query, SEARCH_POOL)
+                    .search_chunks(notebook_id, qvec, &query, SEARCH_POOL, source_ids)
                     .await?;
                 // Retrieve wide, then let the model pick the few passages that
                 // actually answer — recall from hybrid search, precision from
@@ -148,15 +156,15 @@ pub async fn run(
     if gathered.is_empty() {
         emit_step(app, "Searching".into());
         let qvec = ollama.embed_one(question).await?;
-        gathered = db.search_chunks(notebook_id, qvec, question, 8).await?;
+        gathered = db
+            .search_chunks(notebook_id, qvec, question, 8, source_ids)
+            .await?;
     }
 
     emit_step(app, "Writing answer".into());
-    let source_manifest: Vec<(String, String)> = db
-        .list_sources(notebook_id)
-        .await?
-        .into_iter()
-        .map(|s| (s.title, s.url))
+    let source_manifest: Vec<(String, String)> = sources
+        .iter()
+        .map(|s| (s.title.clone(), s.url.clone()))
         .collect();
     let persona = rag::persona_block(&ollama.config().profile);
     let messages = rag::build_chat_messages(

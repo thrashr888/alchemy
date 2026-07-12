@@ -44,6 +44,10 @@ interface AppState {
   notebooks: Notebook[];
   currentId: string | null;
   sources: Source[];
+  /** Which sources feed chat retrieval and Studio generation. null = all
+   *  selected (the default; new sources are auto-included). A non-null map
+   *  holds ONLY deselected ids, set to false. Persisted per notebook. */
+  selectedSourceIds: Record<string, boolean> | null;
   messages: Message[];
   notes: Note[];
   reportSchedules: ReportSchedule[];
@@ -151,6 +155,8 @@ interface AppState {
   editSourceText: (sourceId: string, title: string, text: string) => Promise<void>;
   refreshSource: (sourceId: string) => Promise<void>;
   deleteSource: (id: string) => Promise<void>;
+  toggleSourceSelected: (id: string) => void;
+  setAllSourcesSelected: (selected: boolean) => void;
 
   sendMessage: (content: string) => Promise<void>;
   cancelGeneration: (scope?: "chat" | "artifact") => void;
@@ -191,6 +197,23 @@ const PANEL_BOUNDS = { sources: [220, 400], studio: [260, 460] } as const;
 function clampPanel(panel: "sources" | "studio", width: number): number {
   const [min, max] = PANEL_BOUNDS[panel];
   return Math.round(Math.min(max, Math.max(min, width)));
+}
+
+/** Load a notebook's persisted source selection (null = all selected). */
+function loadSourceSel(notebookId: string): Record<string, boolean> | null {
+  try {
+    const raw = localStorage.getItem(`sourceSel:${notebookId}`);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Persist a notebook's source selection; null (all selected) clears the key. */
+function saveSourceSel(notebookId: string | null, sel: Record<string, boolean> | null) {
+  if (!notebookId) return;
+  if (sel === null) localStorage.removeItem(`sourceSel:${notebookId}`);
+  else localStorage.setItem(`sourceSel:${notebookId}`, JSON.stringify(sel));
 }
 
 function loadReadingPrefs(): ReadingPrefs {
@@ -245,10 +268,24 @@ export const useStore = create<AppState>((set, get) => {
     }
   };
 
+  /** Source ids to send over IPC: null when everything is selected (the
+   *  backend searches all), otherwise the ready non-folder ids still selected
+   *  (an empty array retrieves nothing — the user deselected everything). */
+  const selectedIdsForIpc = (): string[] | null => {
+    const sel = get().selectedSourceIds;
+    if (sel === null) return null;
+    return get()
+      .sources.filter(
+        (s) => s.status === "ready" && s.sourceType !== "folder" && sel[s.id] !== false,
+      )
+      .map((s) => s.id);
+  };
+
   return {
   notebooks: [],
   currentId: null,
   sources: [],
+  selectedSourceIds: null,
   messages: [],
   notes: [],
   reportSchedules: [],
@@ -465,6 +502,7 @@ export const useStore = create<AppState>((set, get) => {
     set({
       currentId: id,
       sources: [],
+      selectedSourceIds: loadSourceSel(id),
       messages: [],
       notes: [],
       reportSchedules: [],
@@ -494,6 +532,7 @@ export const useStore = create<AppState>((set, get) => {
     set({
       currentId: null,
       sources: [],
+      selectedSourceIds: null,
       messages: [],
       notes: [],
       reportSchedules: [],
@@ -710,6 +749,28 @@ export const useStore = create<AppState>((set, get) => {
       get().pushToast("success", "Source removed");
     }),
 
+  toggleSourceSelected: (id) => {
+    const next = { ...(get().selectedSourceIds ?? {}) };
+    if (next[id] === false) delete next[id];
+    else next[id] = false;
+    // An empty map means nothing is deselected — collapse back to null so
+    // future sources stay auto-included.
+    const sel = Object.keys(next).length === 0 ? null : next;
+    saveSourceSel(get().currentId, sel);
+    set({ selectedSourceIds: sel });
+  },
+
+  setAllSourcesSelected: (selected) => {
+    let sel: Record<string, boolean> | null = null;
+    if (!selected) {
+      sel = {};
+      // Folder container rows carry no chunks; only content sources matter.
+      for (const s of get().sources) if (s.sourceType !== "folder") sel[s.id] = false;
+    }
+    saveSourceSel(get().currentId, sel);
+    set({ selectedSourceIds: sel });
+  },
+
   sendMessage: async (content) => {
     const id = get().currentId;
     if (!id || get().sending) return;
@@ -733,10 +794,11 @@ export const useStore = create<AppState>((set, get) => {
     });
     try {
       const cfg = get().chatConfig;
+      const sourceIds = selectedIdsForIpc();
       if (get().agentMode) {
-        await api.sendMessageAgentic(id, content, cfg);
+        await api.sendMessageAgentic(id, content, cfg, sourceIds);
       } else {
-        await api.sendMessage(id, content, cfg);
+        await api.sendMessage(id, content, cfg, sourceIds);
       }
       // Reload in parallel; chat tools can touch sources, notes, and report
       // schedules, so refresh them all alongside the transcript.
@@ -834,7 +896,7 @@ export const useStore = create<AppState>((set, get) => {
     if (!id || get().generatingKind) return;
     set({ generatingKind: kind, artifactStreamText: "", error: null });
     try {
-      const note = await api.generateArtifact(id, kind, prompt);
+      const note = await api.generateArtifact(id, kind, prompt, selectedIdsForIpc());
       // Auto-open the new note so the outcome is visible where the user acted,
       // not just appended to the Notes list below the fold.
       set({ notes: [note, ...get().notes], justCreatedNoteId: note.id });

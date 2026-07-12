@@ -474,7 +474,7 @@ impl AlchemyMcp {
         };
         let citations = state
             .db
-            .search_chunks(&notebook_id, query_vec, &query, k)
+            .search_chunks(&notebook_id, query_vec, &query, k, None)
             .await
             .map_err(internal)?;
         json_result(&citations)
