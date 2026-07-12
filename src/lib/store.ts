@@ -104,6 +104,8 @@ interface AppState {
   kokoroBusy: boolean;
   /** Source open in the reader, optionally scrolled to a cited passage. */
   viewingSource: { sourceId: string; title: string; highlight?: string } | null;
+  /** Live folder-scan progress (folder://progress), null when idle. */
+  folderScan: { done: number; total: number; title: string } | null;
 
   init: () => Promise<void>;
   /** Register page-lifetime Tauri event listeners (called once from init). */
@@ -136,7 +138,11 @@ interface AppState {
   startReportScheduler: () => void;
 
   pickAndAddFiles: () => Promise<void>;
+  pickAndAddFolder: () => Promise<void>;
   addSourceFiles: (paths: string[]) => Promise<void>;
+  /** Start the once-a-minute source resync loop — folder rescans plus
+   *  changed-on-disk re-embeds for loose file sources (main window only). */
+  startSourceSync: () => void;
   addSourceUrl: (url: string) => Promise<void>;
   addSourceText: (title: string, text: string) => Promise<void>;
   editSourceText: (sourceId: string, title: string, text: string) => Promise<void>;
@@ -195,6 +201,8 @@ function loadReadingPrefs(): ReadingPrefs {
 
 // Module-level guard so the report scheduler is only started once.
 let schedulerStarted = false;
+// Same guard for the source-resync loop.
+let sourceSyncStarted = false;
 // Global Tauri event listeners bind once per page — React StrictMode runs
 // init() twice in dev, and a doubled menu listener spawns doubled windows.
 let listenersBound = false;
@@ -283,6 +291,7 @@ export const useStore = create<AppState>((set, get) => {
   kokoroStatus: null,
   kokoroBusy: false,
   viewingSource: null,
+  folderScan: null,
 
   init: async () => {
     applyTheme(get().theme);
@@ -314,6 +323,7 @@ export const useStore = create<AppState>((set, get) => {
       }
     }
     get().startReportScheduler();
+    get().startSourceSync();
     void api.rebuildAppMenu();
     // Quiet update check, once per launch, main window only.
     if (getCurrentWebview().label === "main" && autoUpdateEnabled()) {
@@ -343,6 +353,29 @@ export const useStore = create<AppState>((set, get) => {
     void listen<{ done: number; total: number }>("audio://progress", (e) => {
       if (get().generatingKind) set({ audioProgress: e.payload });
     });
+    // Folder scans report per-file ingest progress; the Sources panel shows it
+    // on the active queue item. The final tick (done === total) clears it.
+    void listen<{ done: number; total: number; title: string }>("folder://progress", (e) => {
+      const p = e.payload;
+      set({ folderScan: p.done >= p.total ? null : p });
+    });
+    // A background folder rescan changed a notebook's sources — reload the
+    // list if this window is showing it, and say what changed.
+    void listen<{ notebookId: string; added: number; updated: number; removed: number; failed: number }>(
+      "sources://changed",
+      (e) => {
+        const p = e.payload;
+        if (get().currentId !== p.notebookId) return;
+        void api.listSources(p.notebookId).then((sources) => set({ sources }));
+        const parts = [
+          p.added && `${p.added} added`,
+          p.updated && `${p.updated} updated`,
+          p.removed && `${p.removed} removed`,
+          p.failed && `${p.failed} failed`,
+        ].filter(Boolean);
+        if (parts.length) get().pushToast("info", `Folder sync: ${parts.join(", ")}`);
+      },
+    );
     // An agent changed something through the MCP server — refresh whatever
     // this window is looking at so the change appears live.
     void listen<{ scope: string; notebookId: string | null }>("mcp://changed", (e) => {
@@ -447,6 +480,9 @@ export const useStore = create<AppState>((set, get) => {
       api.listReportSchedules(id),
     ]);
     if (get().currentId === id) set({ sources, messages, notes, reportSchedules });
+    // Catch up folder and file sources right away rather than waiting for the
+    // next minute tick. Changes come back via sources://changed.
+    void api.resyncSources().catch(() => {});
   },
 
   closeNotebook: () => {
@@ -549,6 +585,41 @@ export const useStore = create<AppState>((set, get) => {
     });
     if (!picked) return;
     await get().addSourceFiles(Array.isArray(picked) ? picked : [picked]);
+  },
+
+  pickAndAddFolder: async () => {
+    const id = get().currentId;
+    if (!id) return;
+    const picked = await open({ directory: true });
+    if (!picked || Array.isArray(picked)) return;
+    const item: QueueItem = {
+      id: `${Date.now()}`,
+      name: picked.split("/").pop() || picked,
+      status: "pending",
+    };
+    set({ ingestQueue: [...get().ingestQueue, item], error: null });
+    await runQueued(get, set, item, () => api.addSourceFolder(id, picked));
+    set({ folderScan: null });
+    if (get().currentId === id) set({ sources: await api.listSources(id) });
+  },
+
+  startSourceSync: () => {
+    if (sourceSyncStarted) return;
+    // Main window only — the backend serializes scans, but one tick loop per
+    // app is still one too few reasons to run N of them.
+    if (getCurrentWebview().label !== "main") return;
+    sourceSyncStarted = true;
+    const tick = async () => {
+      try {
+        await api.resyncSources();
+        // Changed notebooks are announced via sources://changed; every window
+        // (including this one) refreshes from its own listener.
+      } catch {
+        /* disk or embedder hiccup — next tick retries */
+      }
+    };
+    void tick();
+    setInterval(() => void tick(), 60_000);
   },
 
   addSourceFiles: async (paths) => {

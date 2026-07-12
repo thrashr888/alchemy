@@ -21,6 +21,9 @@ import {
   Pencil,
   RefreshCw,
   Image as ImageIcon,
+  Folder,
+  FolderOpen,
+  Cloud,
 } from "lucide-react";
 
 // Soft per-notebook capacity used for the "how full is this notebook" gauge.
@@ -37,6 +40,8 @@ export function sourceIcon(t: Source["sourceType"]) {
       return <Hash className="h-3.5 w-3.5 text-[#9b87f5]" />;
     case "image":
       return <ImageIcon className="h-3.5 w-3.5 text-[#4cb782]" />;
+    case "folder":
+      return <Folder className="h-3.5 w-3.5 text-[#e8a33d]" />;
     default:
       return <FileText className="h-3.5 w-3.5 text-muted-foreground" />;
   }
@@ -78,6 +83,8 @@ export function SourcesPanel() {
   const queue = useStore((s) => s.ingestQueue);
   const clearQueueItem = useStore((s) => s.clearQueueItem);
   const pickAndAddFiles = useStore((s) => s.pickAndAddFiles);
+  const pickAndAddFolder = useStore((s) => s.pickAndAddFolder);
+  const folderScan = useStore((s) => s.folderScan);
   const addUrl = useStore((s) => s.addSourceUrl);
   const addText = useStore((s) => s.addSourceText);
   const editSourceText = useStore((s) => s.editSourceText);
@@ -138,6 +145,20 @@ export function SourcesPanel() {
   const totalChars = sources.reduce((sum, s) => sum + s.charCount, 0);
   const pct = Math.min(100, (totalChars / MAX_NOTEBOOK_CHARS) * 100);
 
+  // Folder children render indented under their folder; everything else is a
+  // flat top-level row.
+  const rows: { s: Source; indent: boolean }[] = [];
+  for (const s of sources) {
+    if (s.parentId) continue;
+    rows.push({ s, indent: false });
+    if (s.sourceType === "folder") {
+      for (const c of sources.filter((x) => x.parentId === s.id)) {
+        rows.push({ s: c, indent: true });
+      }
+    }
+  }
+  const childCount = (folderId: string) => sources.filter((x) => x.parentId === folderId).length;
+
   async function pickFiles() {
     setMenuOpen(false);
     await pickAndAddFiles();
@@ -196,6 +217,14 @@ export function SourcesPanel() {
                 className="absolute right-0 top-8 z-20 w-44 overflow-hidden rounded-md bg-elevated py-1 shadow-[0_0_0_0.5px_var(--border-strong),0_8px_24px_-6px_rgba(0,0,0,0.4)]"
               >
                 <MenuItem icon={<Upload className="h-3.5 w-3.5" />} label="Upload files" onClick={pickFiles} />
+                <MenuItem
+                  icon={<FolderOpen className="h-3.5 w-3.5" />}
+                  label="Add folder"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    void pickAndAddFolder();
+                  }}
+                />
                 <MenuItem
                   icon={<Link2 className="h-3.5 w-3.5" />}
                   label="From URL"
@@ -277,7 +306,9 @@ export function SourcesPanel() {
                     )}
                   >
                     {q.status === "processing"
-                      ? "Embedding…"
+                      ? folderScan
+                        ? `Embedding ${Math.min(folderScan.done + 1, folderScan.total)}/${folderScan.total}: ${folderScan.title}`
+                        : "Embedding…"
                       : q.status === "pending"
                         ? "Queued"
                         : q.status === "done"
@@ -306,28 +337,33 @@ export function SourcesPanel() {
           <EmptyState
             icon={<FileText className="h-7 w-7" />}
             title="No sources yet"
-            hint="Upload PDFs, Office files, CSVs, images, or markdown; add a URL (Google Docs, Sheets & Slides work); or paste text. You can also drag files onto the window."
+            hint="Upload PDFs, Office files, CSVs, images, or markdown; add a folder (it stays in sync — great for OneDrive/Dropbox); add a URL (Google Docs, Sheets & Slides work); or paste text. You can also drag files or folders onto the window."
           />
         ) : (
           <div className="flex flex-col gap-0.5">
-            {sources.map((s) => (
+            {rows.map(({ s, indent }) => {
+              const isFolder = s.sourceType === "folder";
+              const readable = s.status === "ready" && !isFolder;
+              return (
               <div
                 key={s.id}
                 onClick={() => {
-                  if (s.status !== "error") openSourceViewer(s.id, s.title);
+                  if (readable) openSourceViewer(s.id, s.title);
                 }}
-                {...(s.status !== "error"
-                  ? cardButtonProps(() => openSourceViewer(s.id, s.title))
-                  : {})}
-                title={s.status !== "error" ? "Read source" : undefined}
+                {...(readable ? cardButtonProps(() => openSourceViewer(s.id, s.title)) : {})}
+                title={readable ? "Read source" : undefined}
                 className={cn(
                   "group flex items-start gap-2 rounded-md px-2 py-2 hover:bg-surface-2",
-                  s.status === "error" ? "bg-destructive/5" : "cursor-pointer",
+                  s.status === "error" && "bg-destructive/5",
+                  readable && "cursor-pointer",
+                  indent && "ml-5",
                 )}
               >
                 <div className="mt-0.5">
                   {s.status === "error" ? (
                     <AlertCircle className="h-3.5 w-3.5 text-destructive" />
+                  ) : s.status === "placeholder" ? (
+                    <Cloud className="h-3.5 w-3.5 text-subtle-foreground" />
                   ) : s.sourceType === "url" && s.url ? (
                     <Favicon url={s.url} />
                   ) : (
@@ -335,12 +371,26 @@ export function SourcesPanel() {
                   )}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13px] text-foreground" title={s.title}>
+                  <div
+                    className={cn(
+                      "truncate text-[13px]",
+                      s.status === "placeholder" ? "text-muted-foreground" : "text-foreground",
+                    )}
+                    title={s.title}
+                  >
                     {s.title}
                   </div>
                   {s.status === "error" ? (
                     <div className="text-[11px] leading-snug text-destructive" title={s.error}>
                       {s.error || "Import failed"}
+                    </div>
+                  ) : s.status === "placeholder" ? (
+                    <div className="text-[11px] text-subtle-foreground" title={s.url}>
+                      Online-only — not downloaded
+                    </div>
+                  ) : isFolder ? (
+                    <div className="truncate text-[11px] text-subtle-foreground" title={s.url}>
+                      {childCount(s.id)} files · auto-refreshes
                     </div>
                   ) : s.sourceType === "url" && s.url ? (
                     <div className="truncate text-[11px] text-citation" title={s.url}>
@@ -353,8 +403,8 @@ export function SourcesPanel() {
                   )}
                 </div>
                 <div className="flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
-                  {/* url holds the origin: a web URL or, for file imports,
-                      the on-disk path — either way it can be refreshed. */}
+                  {/* url holds the origin: a web URL, an on-disk path, or a
+                      folder — any of them can be refreshed. */}
                   {s.url && (
                     <button
                       className="rounded p-1 text-muted-foreground hover:text-foreground"
@@ -363,16 +413,26 @@ export function SourcesPanel() {
                         refreshSource(s.id);
                       }}
                       title={
-                        isWebUrl(s.url)
-                          ? "Refresh from URL (re-fetch & re-embed)"
-                          : "Refresh from file (re-read & re-embed)"
+                        isFolder
+                          ? "Rescan folder now"
+                          : s.status === "placeholder"
+                            ? "Download & embed now"
+                            : isWebUrl(s.url)
+                              ? "Refresh from URL (re-fetch & re-embed)"
+                              : "Refresh from file (re-read & re-embed)"
                       }
-                      aria-label={`Refresh "${s.title}" from ${isWebUrl(s.url) ? "URL" : "file"}`}
+                      aria-label={
+                        isFolder
+                          ? `Rescan folder "${s.title}"`
+                          : s.status === "placeholder"
+                            ? `Download and embed "${s.title}"`
+                            : `Refresh "${s.title}" from ${isWebUrl(s.url) ? "URL" : "file"}`
+                      }
                     >
                       <RefreshCw className="h-3.5 w-3.5" />
                     </button>
                   )}
-                  {s.sourceType !== "url" && (
+                  {s.sourceType !== "url" && !isFolder && s.status !== "placeholder" && (
                     <button
                       className="rounded p-1 text-muted-foreground hover:text-foreground"
                       onClick={(e) => {
@@ -392,7 +452,9 @@ export function SourcesPanel() {
                       if (
                         await confirm({
                           title: `Remove "${s.title}"?`,
-                          message: "This deletes the source and its embedded chunks from the notebook.",
+                          message: isFolder
+                            ? `This removes the folder and its ${childCount(s.id)} file sources (with their embedded chunks) from the notebook. Nothing on disk is touched.`
+                            : "This deletes the source and its embedded chunks from the notebook.",
                           confirmLabel: "Remove",
                           danger: true,
                         })
@@ -406,7 +468,8 @@ export function SourcesPanel() {
                   </button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

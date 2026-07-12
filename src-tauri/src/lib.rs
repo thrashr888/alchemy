@@ -81,6 +81,7 @@ pub fn run() {
                 stats_path,
                 model_stats: std::sync::Mutex::new(model_stats),
                 cancel: std::sync::Mutex::new(std::collections::HashMap::new()),
+                folder_scan_lock: tokio::sync::Mutex::new(()),
             });
 
             // Agent access: embedded MCP server (see docs/RFC-mcp-server.md).
@@ -99,6 +100,8 @@ pub fn run() {
             commands::delete_notebook,
             commands::list_sources,
             commands::add_source_file,
+            commands::add_source_folder,
+            commands::resync_sources,
             commands::add_source_url,
             commands::add_source_text,
             commands::update_source_text,

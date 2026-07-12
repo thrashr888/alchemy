@@ -52,7 +52,9 @@ async function handleDrop(paths: string[]) {
     setError("Select or create a notebook before adding sources.");
     return;
   }
-  const supported = paths.filter((p) => SUPPORTED_EXTENSIONS.includes(ext(p)));
+  // Extensionless paths pass through: they're folders (which become synced
+  // folder sources) or plain-text files — the backend handles both.
+  const supported = paths.filter((p) => SUPPORTED_EXTENSIONS.includes(ext(p)) || ext(p) === "");
   if (supported.length === 0) {
     setError("Unsupported file type. Drop PDF, Office, image, or text files.");
     return;

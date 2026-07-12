@@ -148,7 +148,8 @@ impl Db {
 
     /// Bring a pre-existing `sources` table up to the current schema by
     /// rebuilding it, backfilling any missing columns (`url`, `status`,
-    /// `error`) with defaults. No-op once all columns are present.
+    /// `error`, `parent_id`, `mtime`) with defaults. No-op once all columns
+    /// are present.
     async fn migrate_sources(&self) -> Result<()> {
         if !self.table_exists(T_SOURCES).await? {
             return Ok(());
@@ -161,7 +162,7 @@ impl Db {
             .schema()
             .await?;
         let has = |n: &str| schema.field_with_name(n).is_ok();
-        if has("url") && has("status") && has("error") {
+        if has("url") && has("status") && has("error") && has("parent_id") && has("mtime") {
             return Ok(());
         }
 
@@ -180,6 +181,8 @@ impl Db {
             let url = opt_str_col(b, "url");
             let status = opt_str_col(b, "status");
             let error = opt_str_col(b, "error");
+            let parent = opt_str_col(b, "parent_id");
+            let mtime = opt_i64_col(b, "mtime");
             for i in 0..b.num_rows() {
                 sources.push(Source {
                     id: id.value(i).to_string(),
@@ -196,6 +199,8 @@ impl Db {
                         .filter(|s| !s.is_empty())
                         .unwrap_or_else(|| "ready".to_string()),
                     error: error.map(|a| a.value(i).to_string()).unwrap_or_default(),
+                    parent_id: parent.map(|a| a.value(i).to_string()).unwrap_or_default(),
+                    mtime: mtime.map(|a| a.value(i)).unwrap_or(0),
                 });
             }
         }
@@ -344,9 +349,10 @@ impl Db {
 
     // ---- Sources & chunks ------------------------------------------------
 
-    pub async fn list_sources(&self, notebook_id: &str) -> Result<Vec<Source>> {
-        let filter = format!("notebook_id = '{}'", esc(notebook_id));
-        let batches = self.collect(T_SOURCES, Some(&filter)).await?;
+    /// Decode source rows matching `filter`. Content is the expensive column —
+    /// callers that only list skip it with `with_content = false`.
+    async fn query_sources(&self, filter: Option<&str>, with_content: bool) -> Result<Vec<Source>> {
+        let batches = self.collect(T_SOURCES, filter).await?;
         let mut sources = Vec::new();
         for b in &batches {
             let id = str_col(b, "id")?;
@@ -354,11 +360,14 @@ impl Db {
             let title = str_col(b, "title")?;
             let stype = str_col(b, "source_type")?;
             let url = str_col(b, "url")?;
+            let content = with_content.then(|| str_col(b, "content")).transpose()?;
             let char_count = i64_col(b, "char_count")?;
             let chunk_count = i64_col(b, "chunk_count")?;
             let created = i64_col(b, "created_at")?;
             let status = str_col(b, "status")?;
             let error = str_col(b, "error")?;
+            let parent = str_col(b, "parent_id")?;
+            let mtime = i64_col(b, "mtime")?;
             for i in 0..b.num_rows() {
                 sources.push(Source {
                     id: id.value(i).to_string(),
@@ -366,17 +375,53 @@ impl Db {
                     title: title.value(i).to_string(),
                     source_type: stype.value(i).to_string(),
                     url: url.value(i).to_string(),
-                    content: String::new(), // omitted from list payloads
+                    content: content.map(|c| c.value(i).to_string()).unwrap_or_default(),
                     char_count: char_count.value(i),
                     chunk_count: chunk_count.value(i),
                     created_at: created.value(i),
                     status: status.value(i).to_string(),
                     error: error.value(i).to_string(),
+                    parent_id: parent.value(i).to_string(),
+                    mtime: mtime.value(i),
                 });
             }
         }
+        Ok(sources)
+    }
+
+    pub async fn list_sources(&self, notebook_id: &str) -> Result<Vec<Source>> {
+        let filter = format!("notebook_id = '{}'", esc(notebook_id));
+        let mut sources = self.query_sources(Some(&filter), false).await?;
         sources.sort_by_key(|s| s.created_at);
         Ok(sources)
+    }
+
+    /// Every folder source across all notebooks (cheap — folders carry no
+    /// content). Drives the periodic auto-refresh rescan.
+    pub async fn all_folder_sources(&self) -> Result<Vec<Source>> {
+        self.query_sources(Some("source_type = 'folder'"), false)
+            .await
+    }
+
+    /// Top-level ready sources that aren't folders — the resync sweep filters
+    /// these down to file-backed ones and re-embeds any whose file changed.
+    pub async fn all_loose_sources(&self) -> Result<Vec<Source>> {
+        self.query_sources(
+            Some("parent_id = '' AND source_type != 'folder' AND status = 'ready'"),
+            false,
+        )
+        .await
+    }
+
+    /// Update a source's recorded file mtime without touching its chunks.
+    pub async fn set_source_mtime(&self, source_id: &str, mtime: i64) -> Result<()> {
+        let tbl = self.conn.open_table(T_SOURCES).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(source_id)))
+            .column("mtime", mtime.to_string())
+            .execute()
+            .await?;
+        Ok(())
     }
 
     /// Insert a source row plus all of its embedded chunks atomically-ish.
@@ -450,37 +495,7 @@ impl Db {
 
     /// All sources across every notebook, with full content (for re-embedding).
     pub async fn all_sources(&self) -> Result<Vec<Source>> {
-        let batches = self.collect(T_SOURCES, None).await?;
-        let mut sources = Vec::new();
-        for b in &batches {
-            let id = str_col(b, "id")?;
-            let nb = str_col(b, "notebook_id")?;
-            let title = str_col(b, "title")?;
-            let stype = str_col(b, "source_type")?;
-            let url = str_col(b, "url")?;
-            let content = str_col(b, "content")?;
-            let cc = i64_col(b, "char_count")?;
-            let ck = i64_col(b, "chunk_count")?;
-            let ca = i64_col(b, "created_at")?;
-            let status = str_col(b, "status")?;
-            let error = str_col(b, "error")?;
-            for i in 0..b.num_rows() {
-                sources.push(Source {
-                    id: id.value(i).to_string(),
-                    notebook_id: nb.value(i).to_string(),
-                    title: title.value(i).to_string(),
-                    source_type: stype.value(i).to_string(),
-                    url: url.value(i).to_string(),
-                    content: content.value(i).to_string(),
-                    char_count: cc.value(i),
-                    chunk_count: ck.value(i),
-                    created_at: ca.value(i),
-                    status: status.value(i).to_string(),
-                    error: error.value(i).to_string(),
-                });
-            }
-        }
-        Ok(sources)
+        self.query_sources(None, true).await
     }
 
     /// Drop the entire chunk index. It is recreated (with the current embedding
@@ -516,26 +531,11 @@ impl Db {
     /// Fetch a single source with its full content (None if not found).
     pub async fn get_source(&self, source_id: &str) -> Result<Option<Source>> {
         let filter = format!("id = '{}'", esc(source_id));
-        let batches = self.collect(T_SOURCES, Some(&filter)).await?;
-        for b in &batches {
-            if b.num_rows() == 0 {
-                continue;
-            }
-            return Ok(Some(Source {
-                id: str_col(b, "id")?.value(0).to_string(),
-                notebook_id: str_col(b, "notebook_id")?.value(0).to_string(),
-                title: str_col(b, "title")?.value(0).to_string(),
-                source_type: str_col(b, "source_type")?.value(0).to_string(),
-                url: str_col(b, "url")?.value(0).to_string(),
-                content: str_col(b, "content")?.value(0).to_string(),
-                char_count: i64_col(b, "char_count")?.value(0),
-                chunk_count: i64_col(b, "chunk_count")?.value(0),
-                created_at: i64_col(b, "created_at")?.value(0),
-                status: str_col(b, "status")?.value(0).to_string(),
-                error: str_col(b, "error")?.value(0).to_string(),
-            }));
-        }
-        Ok(None)
+        Ok(self
+            .query_sources(Some(&filter), true)
+            .await?
+            .into_iter()
+            .next())
     }
 
     /// Replace a source's row and all its chunks in place (same id), used when
@@ -1018,6 +1018,8 @@ fn source_batch(schema: &SchemaRef, sources: &[Source]) -> Result<RecordBatch> {
             i(|x| x.created_at),
             s(|x| x.status.clone()),
             s(|x| x.error.clone()),
+            s(|x| x.parent_id.clone()),
+            i(|x| x.mtime),
         ],
     )?)
 }
@@ -1027,6 +1029,12 @@ fn source_batch(schema: &SchemaRef, sources: &[Source]) -> Result<RecordBatch> {
 fn opt_str_col<'a>(b: &'a RecordBatch, name: &str) -> Option<&'a StringArray> {
     b.column_by_name(name)
         .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+}
+
+/// Like `i64_col` but returns None if the column is absent (migrations).
+fn opt_i64_col<'a>(b: &'a RecordBatch, name: &str) -> Option<&'a Int64Array> {
+    b.column_by_name(name)
+        .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
 }
 
 fn i64_col<'a>(b: &'a RecordBatch, name: &str) -> Result<&'a Int64Array> {
@@ -1071,6 +1079,8 @@ fn sources_schema() -> SchemaRef {
         Field::new("created_at", DataType::Int64, false),
         Field::new("status", DataType::Utf8, false),
         Field::new("error", DataType::Utf8, false),
+        Field::new("parent_id", DataType::Utf8, false),
+        Field::new("mtime", DataType::Int64, false),
     ]))
 }
 

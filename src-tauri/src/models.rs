@@ -34,12 +34,46 @@ pub struct Source {
     pub char_count: i64,
     pub chunk_count: i64,
     pub created_at: i64,
-    /// "ready" | "error" — whether the import succeeded.
+    /// "ready" | "error" | "placeholder". Placeholder = a cloud-sync file
+    /// (OneDrive/Dropbox/Drive/iCloud) that exists in the folder but isn't
+    /// downloaded locally — listed, labeled, and skipped by embedding until
+    /// it materializes.
     #[serde(default = "default_status")]
     pub status: String,
     /// Human-readable failure reason when `status == "error"`.
     #[serde(default)]
     pub error: String,
+    /// Id of the folder source this file belongs to; empty for top-level
+    /// sources. Folder children are regular sources grouped under a parent.
+    #[serde(default)]
+    pub parent_id: String,
+    /// File modification time (unix millis) recorded at ingest for folder
+    /// children; 0 otherwise. Folder rescans compare it to detect changes.
+    #[serde(default)]
+    pub mtime: i64,
+}
+
+/// Tally of what a folder rescan changed across the scanned folder sources.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderScan {
+    pub added: u32,
+    pub updated: u32,
+    pub removed: u32,
+    pub failed: u32,
+}
+
+impl FolderScan {
+    pub fn changed(&self) -> bool {
+        self.added + self.updated + self.removed + self.failed > 0
+    }
+
+    pub fn absorb(&mut self, other: FolderScan) {
+        self.added += other.added;
+        self.updated += other.updated;
+        self.removed += other.removed;
+        self.failed += other.failed;
+    }
 }
 
 fn default_status() -> String {
