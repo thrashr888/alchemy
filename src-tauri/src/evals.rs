@@ -211,6 +211,8 @@ async fn seed_corpus(ai: &Ai, db: &Db, notebook_id: &str) {
             created_at: 0,
             status: "ready".into(),
             error: String::new(),
+            parent_id: String::new(),
+            mtime: 0,
         };
         db.insert_source(&source, &tuples, &embeddings)
             .await

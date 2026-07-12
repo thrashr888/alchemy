@@ -19,14 +19,27 @@ export interface Source {
   id: string;
   notebookId: string;
   title: string;
-  sourceType: "pdf" | "text" | "markdown" | "url" | "image";
+  sourceType: "pdf" | "text" | "markdown" | "url" | "image" | "folder";
   url: string;
   content: string;
-  status: "ready" | "error";
+  /** "placeholder" = cloud-sync file not downloaded yet; listed, not embedded. */
+  status: "ready" | "error" | "placeholder";
   error: string;
   charCount: number;
   chunkCount: number;
   createdAt: number;
+  /** Id of the folder source this file belongs to; empty for top-level. */
+  parentId: string;
+  /** File mtime (unix millis) recorded at ingest for folder children. */
+  mtime: number;
+}
+
+/** Tally of what a folder rescan changed. */
+export interface FolderScan {
+  added: number;
+  updated: number;
+  removed: number;
+  failed: number;
 }
 
 export interface Citation {

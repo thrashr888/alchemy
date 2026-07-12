@@ -83,6 +83,8 @@ async fn rag_round_trip() {
         created_at: now(),
         status: "ready".to_string(),
         error: String::new(),
+        parent_id: String::new(),
+        mtime: 0,
     };
     db.insert_source(&source, &chunk_tuples, &embeddings)
         .await

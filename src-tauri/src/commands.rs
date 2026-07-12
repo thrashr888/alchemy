@@ -12,7 +12,8 @@ use uuid::Uuid;
 use crate::ai::{Ai, AiConfig, GenStats};
 use crate::db::Db;
 use crate::models::{
-    Message, ModelHealth, ModelStat, ModelStatus, Note, Notebook, ReportSchedule, Source,
+    FolderScan, Message, ModelHealth, ModelStat, ModelStatus, Note, Notebook, ReportSchedule,
+    Source,
 };
 use crate::{ingest, rag};
 
@@ -34,6 +35,9 @@ pub struct AppState {
     /// Cancellation tokens for in-flight generations, one per scope ("chat",
     /// "artifact", …) so stopping a chat doesn't kill a running document.
     pub cancel: Mutex<HashMap<String, tokio_util::sync::CancellationToken>>,
+    /// Serializes folder scans: the periodic rescan tick skips while a manual
+    /// folder add/refresh holds it, so the same file is never ingested twice.
+    pub folder_scan_lock: tokio::sync::Mutex<()>,
 }
 
 impl AppState {
@@ -215,8 +219,10 @@ async fn find_duplicate(
 ) -> anyhow::Result<Option<String>> {
     let char_count = text.chars().count() as i64;
     for s in state.db.list_sources(notebook_id).await? {
+        // Only ready sources count — error and placeholder rows have empty
+        // content and would false-match each other.
         if s.char_count == char_count
-            && s.status != "error"
+            && s.status == "ready"
             && state.db.source_content(&s.id).await? == text
         {
             return Ok(Some(s.title));
@@ -233,6 +239,26 @@ pub(crate) async fn store_extracted(
     if let Some(title) = find_duplicate(state, notebook_id, &extracted.text).await? {
         anyhow::bail!("Already in this notebook as \"{title}\" — skipped duplicate");
     }
+    // File-backed sources record the file's mtime so the auto-refresh sweep
+    // can spot on-disk changes; web/pasted sources have nothing to track.
+    let mtime = if !extracted.url.is_empty() && !is_web_url(&extracted.url) {
+        file_mtime(std::path::Path::new(&extracted.url))
+    } else {
+        0
+    };
+    store_new_source(state, notebook_id, extracted, "", mtime).await
+}
+
+/// Chunk, embed, classify, and persist a new source row. `parent_id` is set
+/// for folder children (which dedup by path, not content); `mtime` for any
+/// file-backed source.
+async fn store_new_source(
+    state: &AppState,
+    notebook_id: &str,
+    extracted: ingest::Extracted,
+    parent_id: &str,
+    mtime: i64,
+) -> anyhow::Result<Source> {
     let chunks = ingest::chunk_text(&extracted.title, &extracted.text);
     let embed_inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
     let embeddings = {
@@ -259,6 +285,8 @@ pub(crate) async fn store_extracted(
         created_at: now(),
         status,
         error,
+        parent_id: parent_id.to_string(),
+        mtime,
     };
     state
         .db
@@ -293,6 +321,8 @@ async fn store_failed_url(
         created_at: now(),
         status: "error".to_string(),
         error: reason,
+        parent_id: String::new(),
+        mtime: 0,
     };
     state.db.insert_source(&source, &[], &[]).await?;
     state.db.touch_notebook(notebook_id, now()).await?;
@@ -436,10 +466,16 @@ pub(crate) async fn extract_any_file(
 
 #[tauri::command]
 pub async fn add_source_file(
+    app: AppHandle,
     state: State<'_, AppState>,
     notebook_id: String,
     path: String,
 ) -> Result<Source, String> {
+    // A dropped directory becomes a folder source (drag-and-drop parity with
+    // the "Add folder" menu item).
+    if std::path::Path::new(&path).is_dir() {
+        return add_source_folder(app, state, notebook_id, path).await;
+    }
     let mut extracted = e(extract_any_file(&state, &path).await)?;
     friendly_title(&state, &mut extracted).await;
     e(store_extracted(&state, &notebook_id, extracted).await)
@@ -530,6 +566,10 @@ async fn reingest(
         created_at: existing.created_at,
         status,
         error,
+        // Folder membership and change-tracking travel with the row; a rescan
+        // that re-ingests a changed file passes `existing` with a fresh mtime.
+        parent_id: existing.parent_id.clone(),
+        mtime: existing.mtime,
     };
     state
         .db
@@ -587,6 +627,7 @@ fn is_web_url(s: &str) -> bool {
 
 #[tauri::command]
 pub async fn refresh_source_url(
+    app: AppHandle,
     state: State<'_, AppState>,
     source_id: String,
 ) -> Result<Source, String> {
@@ -594,6 +635,16 @@ pub async fn refresh_source_url(
         e(state.db.get_source(&source_id).await)?.ok_or_else(|| "Source not found".to_string())?;
     if existing.url.is_empty() {
         return Err("This source has no URL or file path to refresh from".into());
+    }
+    if existing.source_type == "folder" {
+        let _guard = state.folder_scan_lock.lock().await;
+        e(rescan_one_folder(&app, &state, &existing).await)?;
+        let folder = e(state.db.get_source(&source_id).await)?
+            .ok_or_else(|| "Source not found".to_string())?;
+        return Ok(Source {
+            content: String::new(),
+            ..folder
+        });
     }
     if is_web_url(&existing.url) {
         return match ingest::extract_url(&existing.url).await {
@@ -606,15 +657,37 @@ pub async fn refresh_source_url(
     // the extracted text and chunks are still perfectly usable. Surface the
     // failure and leave the source untouched.
     if !std::path::Path::new(&existing.url).exists() {
+        // iCloud eviction leaves only a hidden `.name.icloud` stub, which we
+        // can't hydrate by reading — the user has to download it in Finder.
+        let p = std::path::Path::new(&existing.url);
+        let stub = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| p.with_file_name(format!(".{n}.icloud")));
+        if stub.is_some_and(|s| s.exists()) {
+            return Err(
+                "This file is online-only in iCloud — download it in Finder first".to_string(),
+            );
+        }
         return Err(format!(
             "Original file no longer exists at {}",
             existing.url
         ));
     }
     let mut extracted = e(extract_any_file(&state, &existing.url).await)?;
-    // Keep the existing title — the file's content changed, its name didn't,
-    // and the stored title may be a friendlier one than the file stem.
-    extracted.title = existing.title.clone();
+    let mut existing = existing;
+    if existing.status == "placeholder" {
+        // First real read of an evicted file (reading it just hydrated it) —
+        // give it a real title like any fresh import.
+        friendly_title(&state, &mut extracted).await;
+    } else {
+        // Keep the existing title — the file's content changed, its name
+        // didn't, and the stored title may be friendlier than the file stem.
+        extracted.title = existing.title.clone();
+    }
+    // Stamp the on-disk mtime, or the next folder rescan would see a mismatch
+    // and re-embed this file a second time.
+    existing.mtime = file_mtime(std::path::Path::new(&existing.url));
     e(reingest(&state, &existing, extracted).await)
 }
 
@@ -628,7 +701,516 @@ pub async fn get_source_content(
 
 #[tauri::command]
 pub async fn delete_source(state: State<'_, AppState>, source_id: String) -> Result<(), String> {
+    // Deleting a folder removes its children (and their chunks) with it.
+    if let Some(src) = e(state.db.get_source(&source_id).await)? {
+        if src.source_type == "folder" {
+            for child in e(state.db.list_sources(&src.notebook_id).await)? {
+                if child.parent_id == source_id {
+                    e(state.db.delete_source(&child.id).await)?;
+                }
+            }
+        }
+    }
     e(state.db.delete_source(&source_id).await)
+}
+
+// ---- Folder sources --------------------------------------------------------
+
+/// Extensions worth ingesting from a folder scan (mirrors the frontend's
+/// SUPPORTED_EXTENSIONS in src/lib/utils.ts).
+const FOLDER_EXTENSIONS: &[&str] = &[
+    "pdf", "txt", "text", "md", "markdown", "docx", "pptx", "xlsx", "xls", "xlsm", "ods", "csv",
+    "tsv", "gdoc", "gsheet", "gslides", "png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff",
+    "heic",
+];
+
+/// How deep a folder scan descends. Research folders are shallow; the cap only
+/// guards against pathological trees.
+const FOLDER_MAX_DEPTH: usize = 6;
+
+fn folder_ingestable(path: &std::path::Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    FOLDER_EXTENSIONS.contains(&ext.as_str())
+}
+
+/// File mtime in unix millis (0 when unavailable).
+fn file_mtime(path: &std::path::Path) -> i64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// One file found by a folder scan. `placeholder` = the file exists in the
+/// folder but its bytes aren't local (cloud-sync eviction) — list it, but
+/// don't read it, or the File Provider would download it behind the user's
+/// back.
+struct ScanEntry {
+    path: String,
+    mtime: i64,
+    placeholder: bool,
+}
+
+/// Is this file present in the directory but not downloaded? Covers OneDrive,
+/// Dropbox, and Google Drive (streaming) on macOS — all File Provider mounts
+/// mark evicted files SF_DATALESS (stat is safe; only reads hydrate) — plus
+/// zero-byte stubs from older sync clients. iCloud's `.name.icloud` stubs are
+/// handled separately in the walk.
+#[cfg(target_os = "macos")]
+fn is_evicted(meta: &std::fs::Metadata) -> bool {
+    use std::os::macos::fs::MetadataExt;
+    const SF_DATALESS: u32 = 0x4000_0000;
+    meta.st_flags() & SF_DATALESS != 0 || meta.len() == 0
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_evicted(meta: &std::fs::Metadata) -> bool {
+    meta.len() == 0
+}
+
+/// Recursively collect ingestable files under `root`, sorted by path. Skips
+/// hidden entries and symlinks (cycle safety). Cloud-evicted files come back
+/// as placeholders rather than being dropped.
+fn scan_folder(root: &std::path::Path) -> Vec<ScanEntry> {
+    fn walk(dir: &std::path::Path, depth: usize, out: &mut Vec<ScanEntry>) {
+        if depth > FOLDER_MAX_DEPTH {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let path = entry.path();
+            if name.starts_with('.') {
+                // iCloud Drive evicts files by replacing them with a hidden
+                // `.name.icloud` stub — surface it under the real filename so
+                // it upgrades in place once downloaded.
+                if let Some(real) = name
+                    .strip_prefix('.')
+                    .and_then(|n| n.strip_suffix(".icloud"))
+                    .filter(|n| !n.is_empty())
+                {
+                    let real_path = dir.join(real);
+                    if folder_ingestable(&real_path) && !real_path.exists() {
+                        out.push(ScanEntry {
+                            path: real_path.to_string_lossy().to_string(),
+                            mtime: file_mtime(&path),
+                            placeholder: true,
+                        });
+                    }
+                }
+                continue;
+            }
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_symlink() {
+                continue;
+            }
+            if ft.is_dir() {
+                walk(&path, depth + 1, out);
+            } else if folder_ingestable(&path) {
+                let Ok(meta) = entry.metadata() else { continue };
+                out.push(ScanEntry {
+                    path: path.to_string_lossy().to_string(),
+                    mtime: file_mtime(&path),
+                    placeholder: is_evicted(&meta),
+                });
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, 0, &mut out);
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out
+}
+
+/// Source type for a file we haven't read yet (placeholder rows), so the list
+/// shows the right icon.
+fn source_type_for_path(path: &str) -> &'static str {
+    if ingest::is_pdf(path) {
+        "pdf"
+    } else if ingest::is_image(path) {
+        "image"
+    } else if std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
+    {
+        "markdown"
+    } else {
+        "text"
+    }
+}
+
+/// Emitted per file while a folder scan ingests, so the UI can show progress.
+#[derive(serde::Serialize, Clone)]
+struct FolderProgress {
+    done: u32,
+    total: u32,
+    title: String,
+}
+
+/// Persist a folder child whose extraction failed. Recording the mtime means
+/// the file isn't retried (possibly through expensive OCR) every rescan —
+/// only when it changes on disk again.
+async fn store_failed_child(
+    state: &AppState,
+    folder: &Source,
+    path: &str,
+    mtime: i64,
+    reason: String,
+) -> anyhow::Result<()> {
+    let source = Source {
+        id: new_id(),
+        notebook_id: folder.notebook_id.clone(),
+        title: ingest::file_title(path),
+        source_type: source_type_for_path(path).to_string(),
+        url: path.to_string(),
+        content: String::new(),
+        char_count: 0,
+        chunk_count: 0,
+        created_at: now(),
+        status: "error".to_string(),
+        error: reason,
+        parent_id: folder.id.clone(),
+        mtime,
+    };
+    state.db.insert_source(&source, &[], &[]).await
+}
+
+/// Persist a cloud-evicted folder child: visible and labeled in the list, no
+/// content or chunks. It upgrades to a real source the rescan after its bytes
+/// arrive locally.
+async fn store_placeholder_child(
+    state: &AppState,
+    folder: &Source,
+    path: &str,
+    mtime: i64,
+) -> anyhow::Result<()> {
+    let source = Source {
+        id: new_id(),
+        notebook_id: folder.notebook_id.clone(),
+        title: ingest::file_title(path),
+        source_type: source_type_for_path(path).to_string(),
+        url: path.to_string(),
+        content: String::new(),
+        char_count: 0,
+        chunk_count: 0,
+        created_at: now(),
+        status: "placeholder".to_string(),
+        error: String::new(),
+        parent_id: folder.id.clone(),
+        mtime,
+    };
+    state.db.insert_source(&source, &[], &[]).await
+}
+
+/// Reconcile one folder source with the directory on disk: ingest new files,
+/// re-ingest changed ones (by mtime), and drop children whose file is gone.
+async fn rescan_one_folder(
+    app: &AppHandle,
+    state: &AppState,
+    folder: &Source,
+) -> anyhow::Result<FolderScan> {
+    let mut scan = FolderScan::default();
+    let root = std::path::Path::new(&folder.url);
+    if !root.is_dir() {
+        // Folder vanished (unmounted / renamed / not yet synced). Keep the
+        // children — their text is still usable — but flag the folder row.
+        if folder.status != "error" {
+            let failed = Source {
+                status: "error".to_string(),
+                error: format!("Folder no longer exists at {}", folder.url),
+                ..folder.clone()
+            };
+            state.db.replace_source(&failed, &[], &[]).await?;
+        }
+        return Ok(scan);
+    }
+    if folder.status == "error" {
+        // The folder came back — clear the flag before reconciling.
+        let ok = Source {
+            status: "ready".to_string(),
+            error: String::new(),
+            ..folder.clone()
+        };
+        state.db.replace_source(&ok, &[], &[]).await?;
+    }
+
+    let children: Vec<Source> = state
+        .db
+        .list_sources(&folder.notebook_id)
+        .await?
+        .into_iter()
+        .filter(|s| s.parent_id == folder.id)
+        .collect();
+    let on_disk = scan_folder(root);
+    let by_path: HashMap<&str, &Source> = children.iter().map(|c| (c.url.as_str(), c)).collect();
+
+    // Decide the work list up front so progress events get a meaningful total.
+    // An evicted file next to a ready child is NOT work: the text we embedded
+    // before eviction is still good, and reading the file would force a
+    // download the user didn't ask for.
+    let needs_action = |entry: &ScanEntry| match by_path.get(entry.path.as_str()) {
+        None => true,
+        Some(c) if c.status == "placeholder" => !entry.placeholder,
+        Some(c) => !entry.placeholder && c.mtime != entry.mtime,
+    };
+    let work: Vec<&ScanEntry> = on_disk.iter().filter(|e| needs_action(e)).collect();
+    let total = work.len() as u32;
+
+    for (done, entry) in work.iter().enumerate() {
+        let path = entry.path.as_str();
+        let mtime = entry.mtime;
+        let _ = app.emit(
+            "folder://progress",
+            FolderProgress {
+                done: done as u32,
+                total,
+                title: ingest::file_title(path),
+            },
+        );
+        match by_path.get(path) {
+            // New but not downloaded — list it, label it, embed nothing.
+            None if entry.placeholder => {
+                store_placeholder_child(state, folder, path, mtime).await?;
+                scan.added += 1;
+            }
+            // New file — full ingest as a child of this folder.
+            None => match extract_any_file(state, path).await {
+                Ok(mut extracted) => {
+                    friendly_title(state, &mut extracted).await;
+                    store_new_source(state, &folder.notebook_id, extracted, &folder.id, mtime)
+                        .await?;
+                    scan.added += 1;
+                }
+                Err(err) => {
+                    store_failed_child(state, folder, path, mtime, err.to_string()).await?;
+                    scan.failed += 1;
+                }
+            },
+            // A placeholder's bytes arrived, or a real file changed — read and
+            // (re-)embed in place.
+            Some(child) => match extract_any_file(state, path).await {
+                Ok(mut extracted) => {
+                    let mut existing = (*child).clone();
+                    existing.mtime = mtime;
+                    if existing.status == "placeholder" {
+                        // First real read of this file — give it a real title.
+                        friendly_title(state, &mut extracted).await;
+                    } else {
+                        // Keep the stored title: the content changed, not the
+                        // file. (A failed child keeps its filename title.)
+                        extracted.title = existing.title.clone();
+                    }
+                    reingest(state, &existing, extracted).await?;
+                    scan.updated += 1;
+                }
+                Err(err) if child.status == "placeholder" => {
+                    // The bytes arrived but extraction failed — there's no
+                    // embedded text to protect, so show the real failure.
+                    let failed = Source {
+                        status: "error".to_string(),
+                        error: err.to_string(),
+                        mtime,
+                        ..(*child).clone()
+                    };
+                    state.db.replace_source(&failed, &[], &[]).await?;
+                    scan.failed += 1;
+                }
+                Err(err) => {
+                    // Don't wipe the working text over a failed re-read; bump
+                    // the mtime so the file isn't re-attempted every minute.
+                    state.db.set_source_mtime(&child.id, mtime).await?;
+                    eprintln!("folder rescan: failed to re-read {path}: {err:#}");
+                    scan.failed += 1;
+                }
+            },
+        }
+    }
+
+    if total > 0 {
+        // Final tick so the UI can clear its progress indicator.
+        let _ = app.emit(
+            "folder://progress",
+            FolderProgress {
+                done: total,
+                total,
+                title: String::new(),
+            },
+        );
+    }
+
+    // Files that disappeared from disk take their sources with them.
+    let disk_paths: HashSet<&str> = on_disk.iter().map(|e| e.path.as_str()).collect();
+    for child in &children {
+        if !disk_paths.contains(child.url.as_str()) {
+            state.db.delete_source(&child.id).await?;
+            scan.removed += 1;
+        }
+    }
+
+    if scan.changed() {
+        state.db.touch_notebook(&folder.notebook_id, now()).await?;
+    }
+    Ok(scan)
+}
+
+#[tauri::command]
+pub async fn add_source_folder(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    notebook_id: String,
+    path: String,
+) -> Result<Source, String> {
+    let root = std::path::Path::new(&path);
+    if !root.is_dir() {
+        return Err(format!("Not a folder: {path}"));
+    }
+    let _guard = state.folder_scan_lock.lock().await;
+    for s in e(state.db.list_sources(&notebook_id).await)? {
+        if s.source_type == "folder" && s.url == path {
+            return Err(format!(
+                "Folder already added as \"{}\" — it refreshes automatically",
+                s.title
+            ));
+        }
+    }
+    let title = root
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Folder")
+        .to_string();
+    let folder = Source {
+        id: new_id(),
+        notebook_id: notebook_id.clone(),
+        title,
+        source_type: "folder".to_string(),
+        url: path,
+        content: String::new(),
+        char_count: 0,
+        chunk_count: 0,
+        created_at: now(),
+        status: "ready".to_string(),
+        error: String::new(),
+        parent_id: String::new(),
+        mtime: 0,
+    };
+    e(state.db.insert_source(&folder, &[], &[]).await)?;
+    e(rescan_one_folder(&app, &state, &folder).await)?;
+    e(state.db.touch_notebook(&notebook_id, now()).await)?;
+    Ok(folder)
+}
+
+/// Payload for `sources://changed` — a background rescan altered a notebook's
+/// sources, so any window showing it should reload its list.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SourcesChanged {
+    notebook_id: String,
+    #[serde(flatten)]
+    scan: FolderScan,
+}
+
+/// Rescan every folder source and re-embed loose file sources whose on-disk
+/// file changed (the frontend ticks this once a minute from the main window,
+/// and on notebook open). Emits `sources://changed` per notebook that
+/// actually changed. Missing files never remove a loose source — uploads are
+/// snapshots; the origin path is only a refresh hint.
+#[tauri::command]
+pub async fn resync_sources(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<FolderScan, String> {
+    // A manual folder add/refresh is already scanning — skip this tick rather
+    // than queue behind it and ingest the same files twice.
+    let Ok(_guard) = state.folder_scan_lock.try_lock() else {
+        return Ok(FolderScan::default());
+    };
+    let mut total = FolderScan::default();
+    let mut per_notebook: HashMap<String, FolderScan> = HashMap::new();
+    for folder in e(state.db.all_folder_sources().await)? {
+        match rescan_one_folder(&app, &state, &folder).await {
+            Ok(scan) => {
+                per_notebook
+                    .entry(folder.notebook_id.clone())
+                    .or_default()
+                    .absorb(scan);
+                total.absorb(scan);
+            }
+            Err(err) => {
+                eprintln!("folder rescan: {} failed: {err:#}", folder.url);
+                total.failed += 1;
+            }
+        }
+    }
+
+    // Loose file sources (added or dropped individually) re-embed when their
+    // file changes. Deleted files leave the source untouched; cloud-evicted
+    // files aren't read (that would force a download).
+    for src in e(state.db.all_loose_sources().await)? {
+        if src.url.is_empty() || is_web_url(&src.url) {
+            continue;
+        }
+        let path = std::path::Path::new(&src.url);
+        let Ok(meta) = std::fs::metadata(path) else {
+            continue; // file gone — the snapshot stays
+        };
+        if is_evicted(&meta) {
+            continue;
+        }
+        let mtime = file_mtime(path);
+        if mtime == src.mtime {
+            continue;
+        }
+        if src.mtime == 0 {
+            // Source predates mtime tracking — adopt the current mtime quietly
+            // instead of re-embedding the whole back catalog on first sweep.
+            e(state.db.set_source_mtime(&src.id, mtime).await)?;
+            continue;
+        }
+        let scan = per_notebook.entry(src.notebook_id.clone()).or_default();
+        match extract_any_file(&state, &src.url).await {
+            Ok(mut extracted) => {
+                let mut existing = src.clone();
+                existing.mtime = mtime;
+                // Content changed, not the file's name — keep the stored title.
+                extracted.title = existing.title.clone();
+                match reingest(&state, &existing, extracted).await {
+                    Ok(_) => {
+                        scan.updated += 1;
+                        total.updated += 1;
+                    }
+                    Err(err) => {
+                        eprintln!("file resync: failed to re-embed {}: {err:#}", src.url);
+                        scan.failed += 1;
+                        total.failed += 1;
+                    }
+                }
+            }
+            Err(err) => {
+                // Keep the working text; bump the mtime so a broken file isn't
+                // re-attempted every minute.
+                e(state.db.set_source_mtime(&src.id, mtime).await)?;
+                eprintln!("file resync: failed to re-read {}: {err:#}", src.url);
+                scan.failed += 1;
+                total.failed += 1;
+            }
+        }
+    }
+
+    for (notebook_id, scan) in per_notebook {
+        if scan.changed() {
+            let _ = app.emit("sources://changed", SourcesChanged { notebook_id, scan });
+        }
+    }
+    Ok(total)
 }
 
 #[derive(serde::Serialize, Clone)]

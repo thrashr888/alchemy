@@ -6,6 +6,7 @@ import type {
   ChatConfig,
   ConnectorStatus,
   CorpusStats,
+  FolderScan,
   KokoroStatus,
   McpStatus,
   Message,
@@ -102,6 +103,9 @@ export const api = {
   listSources: (notebookId: string) => run(query<Source[]>("list_sources", { notebookId })),
   addSourceFile: (notebookId: string, path: string) =>
     run(ai<Source>("add_source_file", { notebookId, path })),
+  addSourceFolder: (notebookId: string, path: string) =>
+    run(slow<Source>("add_source_folder", { notebookId, path })),
+  resyncSources: () => run(slow<FolderScan>("resync_sources")),
   addSourceUrl: (notebookId: string, url: string) =>
     run(ai<Source>("add_source_url", { notebookId, url })),
   addSourceText: (notebookId: string, title: string, text: string) =>
