@@ -110,6 +110,7 @@ pub fn run() {
             commands::add_source_folder,
             commands::add_source_mac,
             mac::mac_available,
+            mac::mac_connect,
             mac::list_mac_collections,
             commands::resync_sources,
             commands::add_source_url,

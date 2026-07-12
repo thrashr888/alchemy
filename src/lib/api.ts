@@ -124,6 +124,7 @@ export const api = {
 
   // Mac providers (Calendar, Reminders, Apple Notes via cider)
   macAvailable: () => run(query<boolean>("mac_available")),
+  macConnect: (provider: string) => run(cmd<void>("mac_connect", { provider })),
   listMacCollections: (provider: string) =>
     run(query<MacCollection[]>("list_mac_collections", { provider })),
   addSourceMac: (notebookId: string, provider: string, collection: string, label: string) =>

@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { AlchemySymbol } from "./AlchemyHero";
+import { MacConnect } from "./MacConnect";
 import { Button, Input } from "./ui";
 import { cn } from "@/lib/utils";
 import type { ModelStatus } from "@/lib/types";
@@ -347,6 +348,15 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
             {provider !== "openai" && health.reachable && (
               <CommandChip command={`ollama pull ${vision.name || "glm-ocr"}`} />
             )}
+          </Step>
+
+          <Step
+            ok={false}
+            optional
+            title="Connect Mac apps"
+            detail="Add Calendar, Reminders, and Apple Notes as auto-syncing sources. Connecting triggers the macOS permission prompts once, up front."
+          >
+            <MacConnect showInstallHint />
           </Step>
         </div>
 

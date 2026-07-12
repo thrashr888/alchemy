@@ -9,6 +9,7 @@ import { checkForUpdates, type UpdateFlow } from "@/lib/updates";
 import { Button, Input, Modal, Spinner, Textarea } from "./ui";
 import { cn } from "@/lib/utils";
 import { AlchemySymbol } from "./AlchemyHero";
+import { MacConnect } from "./MacConnect";
 import type { AiConfig, ChatConfig, ConnectorStatus, McpStatus } from "@/lib/types";
 import {
   RefreshCw,
@@ -1038,6 +1039,18 @@ function GeneralTab() {
             Install template files
           </Button>
         </div>
+      </div>
+
+      <div className="h-px bg-border" />
+
+      <div className="flex flex-col gap-1.5">
+        <div className="text-[13px]">Mac apps</div>
+        <p className="text-[11px] leading-relaxed text-subtle-foreground">
+          Calendar, Reminders, and Apple Notes can be added as auto-syncing
+          sources. Connecting here triggers the macOS permission prompts once,
+          so adding them to a notebook later just works.
+        </p>
+        <MacConnect showInstallHint />
       </div>
 
       <div className="h-px bg-border" />
