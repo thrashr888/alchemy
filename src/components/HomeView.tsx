@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { Button, Input, Modal, Badge, useConfirm } from "./ui";
@@ -17,8 +17,6 @@ import {
   Trash2,
   Pencil,
   CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
   Circle,
   FileText,
 } from "lucide-react";
@@ -60,9 +58,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [allReports, setAllReports] = useState<ReportSchedule[]>([]);
   const [recentNotes, setRecentNotes] = useState<Note[]>([]);
   const [stats, setStats] = useState<CorpusStats | null>(null);
-  // Latest generated reports, read in place in the right-hand pane.
+  // Latest generated reports, read in place in the right-hand feed. The
+  // limit grows as the feed scrolls (infinite-scroll in pages of 10).
   const [reports, setReports] = useState<Note[]>([]);
-  const [reportIdx, setReportIdx] = useState(0);
+  const [reportLimit, setReportLimit] = useState(10);
   useEffect(() => {
     api
       .listAllReportSchedules()
@@ -73,17 +72,18 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       .then(setRecentNotes)
       .catch(() => setRecentNotes([]));
     api
-      .listRecentReports(10)
-      .then(setReports)
-      .catch(() => setReports([]));
-    api
       .corpusStats()
       .then(setStats)
       .catch(() => setStats(null));
   }, [notebooks]);
+  useEffect(() => {
+    api
+      .listRecentReports(reportLimit)
+      .then(setReports)
+      .catch(() => setReports([]));
+  }, [notebooks, reportLimit]);
   const notebookTitle = new Map(notebooks.map((n) => [n.id, n.title]));
   const notebookColor = new Map(notebooks.map((n) => [n.id, n.color]));
-  const report = reports[Math.min(reportIdx, Math.max(0, reports.length - 1))];
 
   // Palette popup stays local to one card and closes on outside interaction or Escape.
   useEffect(() => {
@@ -197,14 +197,11 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           </AlchemyHero>
         </div>
       ) : (
-        <div className="flex-1 overflow-y-auto">
-        <div
-          className={cn(
-            "mx-auto px-6 py-10",
-            report ? "flex max-w-[1440px] items-start gap-8" : "max-w-[960px]",
-          )}
-        >
-        <div className="min-w-0 max-w-[960px] flex-1">
+        <div className="flex min-h-0 flex-1">
+        {/* Left pane: notebooks & activity. Right pane: the reports feed.
+            Two independent scroll regions, same idiom as the notebook view. */}
+        <div className="min-w-0 flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-[960px] px-6 py-10">
           <div className="mb-6 flex items-end justify-between">
             <div>
               <h1 className="text-[22px] font-semibold tracking-tight">Your notebooks</h1>
@@ -419,70 +416,22 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             </div>
           )}
         </div>
+        </div>
 
-        {/* Report reader: the latest generated reports, pageable in place —
-            the homepage doubles as the morning-read surface. */}
-        {report && (
-          <aside className="sticky top-0 hidden w-[420px] shrink-0 lg:block">
-            <div className="flex max-h-[calc(100vh-128px)] flex-col rounded-lg border border-border bg-surface">
-              <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-                <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
-                  Reports
-                </span>
-                <div className="ml-auto flex items-center gap-0.5">
-                  <button
-                    disabled={reportIdx <= 0}
-                    onClick={() => setReportIdx((i) => Math.max(0, i - 1))}
-                    className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-30"
-                    title="Newer report"
-                    aria-label="Newer report"
-                  >
-                    <ChevronLeft className="h-3.5 w-3.5" />
-                  </button>
-                  <span className="text-[11px] tabular-nums text-subtle-foreground">
-                    {Math.min(reportIdx, reports.length - 1) + 1} / {reports.length}
-                  </span>
-                  <button
-                    disabled={reportIdx >= reports.length - 1}
-                    onClick={() => setReportIdx((i) => Math.min(reports.length - 1, i + 1))}
-                    className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-30"
-                    title="Older report"
-                    aria-label="Older report"
-                  >
-                    <ChevronRight className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </div>
-              <div className="border-b border-border px-4 py-3">
-                <button
-                  onClick={() => openNote(report)}
-                  className="block w-full text-left"
-                  title={`Open in "${notebookTitle.get(report.notebookId) ?? "notebook"}"`}
-                >
-                  <div className="text-[14px] font-medium text-foreground hover:underline">
-                    {report.title}
-                  </div>
-                </button>
-                <div className="mt-1 flex items-center gap-1.5 text-[11px] text-subtle-foreground">
-                  <span
-                    className="inline-flex h-2 w-2 shrink-0 rounded-full"
-                    style={{ backgroundColor: notebookColor.get(report.notebookId) || NOTEBOOK_PALETTE[0] }}
-                    aria-hidden="true"
-                  />
-                  <span className="truncate">
-                    {notebookTitle.get(report.notebookId) ?? "Unknown notebook"}
-                  </span>
-                  <span>·</span>
-                  <span className="shrink-0">{relativeTime(report.updatedAt)}</span>
-                </div>
-              </div>
-              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 text-[13px] leading-relaxed">
-                <Markdown>{report.content}</Markdown>
-              </div>
-            </div>
+        {/* Reports feed: the latest reports as a continuously scrolling read,
+            newest first — the homepage doubles as the morning-read surface. */}
+        {reports.length > 0 && (
+          <aside className="hidden min-w-0 flex-1 flex-col border-l border-border lg:flex">
+            <ReportsFeed
+              reports={reports}
+              hasMore={reports.length >= reportLimit}
+              onMore={() => setReportLimit((l) => l + 10)}
+              notebookTitle={notebookTitle}
+              notebookColor={notebookColor}
+              onOpen={openNote}
+            />
           </aside>
         )}
-        </div>
         </div>
       )}
 
@@ -539,5 +488,180 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         </form>
       </Modal>
     </div>
+  );
+}
+
+/**
+ * The reports feed: latest reports stacked newest-first as one continuous
+ * read. Read state lives in localStorage keyed by note id and compared to
+ * updatedAt, so a rebuilt report goes unread again; a card marks itself read
+ * after dwelling in view. Scrolling near the end loads another page.
+ */
+function ReportsFeed({
+  reports,
+  hasMore,
+  onMore,
+  notebookTitle,
+  notebookColor,
+  onOpen,
+}: {
+  reports: Note[];
+  hasMore: boolean;
+  onMore: () => void;
+  notebookTitle: Map<string, string>;
+  notebookColor: Map<string, string>;
+  onOpen: (n: Note) => void;
+}) {
+  const [reads, setReads] = useState<Record<string, number>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("reportReads") ?? "{}");
+    } catch {
+      return {};
+    }
+  });
+  const isUnread = (n: Note) => (reads[n.id] ?? 0) < n.updatedAt;
+  const unreadCount = reports.filter(isUnread).length;
+  const markRead = (ids: string[]) =>
+    setReads((r) => {
+      const next = { ...r };
+      for (const id of ids) next[id] = Date.now();
+      localStorage.setItem("reportReads", JSON.stringify(next));
+      return next;
+    });
+
+  // Load another page when the tail sentinel scrolls into view.
+  const moreRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = moreRef.current;
+    if (!el || !hasMore) return;
+    const io = new IntersectionObserver(([e]) => {
+      if (e.isIntersecting) onMore();
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore, onMore]);
+
+  return (
+    <>
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-6">
+        <span className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Reports
+        </span>
+        {unreadCount > 0 && (
+          <>
+            <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-citation">
+              {unreadCount} unread
+            </span>
+            <button
+              onClick={() => markRead(reports.filter(isUnread).map((n) => n.id))}
+              className="ml-auto text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Mark all read
+            </button>
+          </>
+        )}
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {reports.map((n) => (
+          <ReportCard
+            key={n.id}
+            note={n}
+            unread={isUnread(n)}
+            onSeen={() => markRead([n.id])}
+            notebook={notebookTitle.get(n.notebookId) ?? "Unknown notebook"}
+            color={notebookColor.get(n.notebookId) || NOTEBOOK_PALETTE[0]}
+            onOpen={() => onOpen(n)}
+          />
+        ))}
+        {hasMore && <div ref={moreRef} className="h-10" aria-hidden="true" />}
+        {!hasMore && reports.length > 3 && (
+          <div className="px-6 py-6 text-center text-[11px] text-subtle-foreground">
+            You're all caught up.
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+/** One report in the feed; unread until it has dwelt in view for a moment. */
+function ReportCard({
+  note,
+  unread,
+  onSeen,
+  notebook,
+  color,
+  onOpen,
+}: {
+  note: Note;
+  unread: boolean;
+  onSeen: () => void;
+  notebook: string;
+  color: string;
+  onOpen: () => void;
+}) {
+  const ref = useRef<HTMLElement>(null);
+  const seenRef = useRef(onSeen);
+  seenRef.current = onSeen;
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !unread) return;
+    // "Seen" = 40% of the card visible, or (for cards taller than the pane)
+    // the card filling most of it — held for a beat, so a fast scroll-past
+    // doesn't count as reading.
+    let timer: number | undefined;
+    const io = new IntersectionObserver(
+      ([e]) => {
+        const paneH = e.rootBounds?.height ?? window.innerHeight;
+        const showing = e.intersectionRatio >= 0.4 || e.intersectionRect.height >= paneH * 0.6;
+        window.clearTimeout(timer);
+        if (e.isIntersecting && showing) {
+          timer = window.setTimeout(() => seenRef.current(), 1500);
+        }
+      },
+      { threshold: [0, 0.4, 0.8] },
+    );
+    io.observe(el);
+    return () => {
+      window.clearTimeout(timer);
+      io.disconnect();
+    };
+  }, [unread]);
+
+  return (
+    <article
+      ref={ref}
+      className={cn(
+        "border-b border-border px-6 py-5",
+        unread && "border-l-2 border-l-primary bg-primary/[0.04]",
+      )}
+    >
+      <div className="flex items-center gap-1.5 text-[11px] text-subtle-foreground">
+        <span
+          className="inline-flex h-2 w-2 shrink-0 rounded-full"
+          style={{ backgroundColor: color }}
+          aria-hidden="true"
+        />
+        <span className="truncate">{notebook}</span>
+        <span>·</span>
+        <span className="shrink-0">{relativeTime(note.updatedAt)}</span>
+        {unread && (
+          <span className="ml-auto shrink-0 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-citation">
+            new
+          </span>
+        )}
+      </div>
+      <button
+        onClick={onOpen}
+        className="mt-1 block w-full text-left"
+        title={`Open in "${notebook}"`}
+      >
+        <h3 className="text-[15px] font-semibold text-foreground hover:underline">{note.title}</h3>
+      </button>
+      <div className="mt-2 text-[13px] leading-relaxed">
+        <Markdown>{note.content}</Markdown>
+      </div>
+    </article>
   );
 }
