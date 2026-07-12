@@ -55,6 +55,29 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [colorPickerFor, setColorPickerFor] = useState<string | null>(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
+  // The ask box: jump straight into a notebook's chat with a question.
+  // Defaults to the notebook you were last in.
+  const [ask, setAsk] = useState("");
+  const [askNb, setAskNb] = useState<string | null>(null);
+  const lastUsed = localStorage.getItem("lastNotebookId");
+  const askTarget =
+    askNb ??
+    (lastUsed && notebooks.some((n) => n.id === lastUsed) ? lastUsed : notebooks[0]?.id);
+  async function submitAsk(e: React.FormEvent) {
+    e.preventDefault();
+    const q = ask.trim();
+    if (!q || !askTarget) return;
+    setAsk("");
+    await open(askTarget);
+    void useStore.getState().sendMessage(q);
+  }
+
+  // "Since you were away": what landed since the last time home was open.
+  const [prevVisit] = useState<number>(() => Number(localStorage.getItem("lastHomeVisit") ?? 0));
+  useEffect(() => {
+    localStorage.setItem("lastHomeVisit", String(Date.now()));
+  }, []);
+
   // All scheduled reports, recent documents, and corpus totals across
   // notebooks — the app's ongoing activity, refreshed with the notebook list.
   const [allReports, setAllReports] = useState<ReportSchedule[]>([]);
@@ -207,7 +230,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           <div className="absolute inset-0 bg-[linear-gradient(to_bottom,transparent_55%,var(--background)_100%)]" />
         </div>
         <div className="relative mx-auto max-w-[960px] px-6 py-10">
-          <div className="mb-6 flex items-end justify-between">
+          <div className="mb-5 flex items-end justify-between">
             <div>
               <h1 className="text-[22px] font-semibold tracking-tight">Your notebooks</h1>
               <p className="mt-1 text-[13px] text-muted-foreground">
@@ -215,6 +238,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   ? `${notebooks.length} ${notebooks.length === 1 ? "notebook" : "notebooks"} · ${stats.sources} ${stats.sources === 1 ? "source" : "sources"} · ${Intl.NumberFormat().format(stats.chars)} chars indexed`
                   : "Most recently used first."}
               </p>
+              <AwayDigest prevVisit={prevVisit} notebooks={notebooks} reports={reports} />
             </div>
             <Button
               variant="primary"
@@ -226,6 +250,49 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               <Plus className="h-4 w-4" />
               New notebook
             </Button>
+          </div>
+
+          {/* Ask box: the front door to the core loop — pick a notebook (last
+              used by default), type a question, land in its chat mid-answer. */}
+          <div className="mb-8 flex items-center gap-2">
+            <form
+              onSubmit={submitAsk}
+              className="flex min-w-0 flex-1 items-center gap-1.5 rounded-xl border border-border bg-surface/80 p-1.5 shadow-sm backdrop-blur transition-colors focus-within:border-primary/50"
+            >
+              <select
+                value={askTarget ?? ""}
+                onChange={(e) => setAskNb(e.target.value)}
+                aria-label="Notebook to ask"
+                className="h-8 max-w-[200px] shrink-0 truncate rounded-lg border-0 bg-surface-2 px-2 text-[12px] text-muted-foreground outline-none"
+              >
+                {notebooks.map((n) => (
+                  <option key={n.id} value={n.id}>
+                    {n.title}
+                  </option>
+                ))}
+              </select>
+              <input
+                value={ask}
+                onChange={(e) => setAsk(e.target.value)}
+                placeholder="Ask anything about your sources…"
+                aria-label="Ask a question"
+                className="h-8 min-w-0 flex-1 bg-transparent px-1.5 text-[13px] text-foreground outline-none placeholder:text-subtle-foreground"
+              />
+              <Button type="submit" variant="primary" size="sm" disabled={!ask.trim()}>
+                Ask
+              </Button>
+            </form>
+            <button
+              onClick={() => useStore.getState().setPaletteOpen(true)}
+              title="Search notebooks, sources & notes"
+              className="flex h-[46px] shrink-0 items-center gap-1.5 rounded-xl border border-border bg-surface/80 px-3 text-[12px] text-muted-foreground shadow-sm backdrop-blur transition-colors hover:border-border-strong hover:text-foreground"
+            >
+              <Search className="h-3.5 w-3.5" />
+              Search
+              <kbd className="rounded border border-border bg-surface-2 px-1 py-0.5 text-[10px] text-subtle-foreground">
+                ⌘K
+              </kbd>
+            </button>
           </div>
 
           <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
@@ -502,6 +569,32 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   );
 }
 
+/** One quiet line: what landed since home was last open. Renders nothing on a
+ *  first visit or when nothing happened — silence beats a zero. */
+function AwayDigest({
+  prevVisit,
+  notebooks,
+  reports,
+}: {
+  prevVisit: number;
+  notebooks: { updatedAt: number }[];
+  reports: Note[];
+}) {
+  if (!prevVisit) return null;
+  const newReports = reports.filter((r) => r.updatedAt > prevVisit).length;
+  const updatedNbs = notebooks.filter((n) => n.updatedAt > prevVisit).length;
+  const parts = [
+    newReports > 0 && `${newReports} new ${newReports === 1 ? "report" : "reports"}`,
+    updatedNbs > 0 && `${updatedNbs} ${updatedNbs === 1 ? "notebook" : "notebooks"} updated`,
+  ].filter(Boolean);
+  if (parts.length === 0) return null;
+  return (
+    <p className="mt-0.5 text-[12px] text-subtle-foreground">
+      Since you were away: {parts.join(" · ")}
+    </p>
+  );
+}
+
 /**
  * The reports feed: unread reports (newest first), then a Show-more button
  * exposing already-read ones five at a time. Read state lives in localStorage
@@ -596,7 +689,7 @@ function ReportsFeed({
         {remaining > 0 && (
           <div className="flex justify-center px-6 py-5">
             <Button variant="secondary" size="sm" onClick={() => setReadShown((s) => s + 5)}>
-              Show {Math.min(5, remaining)} more
+              Load older reports
             </Button>
           </div>
         )}
