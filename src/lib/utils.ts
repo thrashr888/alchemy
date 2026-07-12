@@ -14,9 +14,10 @@ export function cn(...inputs: ClassValue[]) {
  */
 export const SUPPORTED_EXTENSIONS = [
   "pdf", "txt", "text", "md", "markdown",
-  "docx", "pptx", "xlsx", "xls", "xlsm", "ods", "csv", "tsv",
+  "docx", "pptx", "epub", "xlsx", "xls", "xlsm", "ods", "csv", "tsv",
   "gdoc", "gsheet", "gslides",
-  "png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff", "heic",
+  "png", "jpg", "jpeg", "jpe", "webp", "gif", "bmp", "tif", "tiff",
+  "heic", "heif", "avif", "ico", "jp2",
 ];
 
 /**

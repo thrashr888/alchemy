@@ -27,7 +27,20 @@ pub fn is_image(path: &str) -> bool {
         .to_lowercase();
     matches!(
         ext.as_str(),
-        "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "tif" | "tiff" | "heic"
+        "png"
+            | "jpg"
+            | "jpeg"
+            | "jpe"
+            | "webp"
+            | "gif"
+            | "bmp"
+            | "tif"
+            | "tiff"
+            | "heic"
+            | "heif"
+            | "avif"
+            | "ico"
+            | "jp2"
     )
 }
 
@@ -89,6 +102,7 @@ pub fn extract_file(path: &str) -> Result<Extracted> {
         }
         "docx" => ("text".to_string(), extract_docx(path)?),
         "pptx" => ("text".to_string(), extract_pptx(path)?),
+        "epub" => ("text".to_string(), extract_epub(path)?),
         "txt" | "text" | "" => (
             "text".to_string(),
             std::fs::read_to_string(path).context("failed to read text file")?,
@@ -234,6 +248,104 @@ fn extract_pptx(path: &str) -> Result<String> {
         let text = strip_html(&xml);
         if !text.trim().is_empty() {
             out.push_str(&format!("# Slide {n}\n{}\n\n", text.trim()));
+        }
+    }
+    Ok(out)
+}
+
+/// Pull a double-quoted attribute value out of an XML tag string.
+fn xml_attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let needle = format!("{name}=\"");
+    let start = tag.find(&needle)? + needle.len();
+    let end = tag[start..].find('"')? + start;
+    Some(&tag[start..end])
+}
+
+/// Chapter paths in reading order: META-INF/container.xml names the OPF
+/// package file, whose spine lists manifest ids in the order a reader shows
+/// them. None if any of that structure is missing or malformed.
+fn epub_spine<R: std::io::Read + std::io::Seek>(
+    zip: &mut zip::ZipArchive<R>,
+) -> Option<Vec<String>> {
+    use std::io::Read;
+    let mut container = String::new();
+    zip.by_name("META-INF/container.xml")
+        .ok()?
+        .read_to_string(&mut container)
+        .ok()?;
+    let rootfile = &container[container.find("<rootfile")?..];
+    let opf_path = xml_attr(rootfile, "full-path")?.to_string();
+    let mut opf = String::new();
+    zip.by_name(&opf_path).ok()?.read_to_string(&mut opf).ok()?;
+    // Manifest hrefs resolve relative to the OPF's own directory.
+    let base = opf_path
+        .rsplit_once('/')
+        .map(|(dir, _)| format!("{dir}/"))
+        .unwrap_or_default();
+
+    let mut hrefs = std::collections::HashMap::new();
+    for tag in opf.split("<item ").skip(1) {
+        let Some(end) = tag.find('>') else { continue };
+        let tag = &tag[..end];
+        if let (Some(id), Some(href)) = (xml_attr(tag, "id"), xml_attr(tag, "href")) {
+            hrefs.insert(id.to_string(), href.to_string());
+        }
+    }
+    let mut order = Vec::new();
+    for tag in opf[opf.find("<spine")?..].split("<itemref").skip(1) {
+        let Some(end) = tag.find('>') else { continue };
+        if let Some(href) = xml_attr(&tag[..end], "idref").and_then(|id| hrefs.get(id)) {
+            order.push(format!("{base}{href}"));
+        }
+    }
+    Some(order)
+}
+
+/// Every HTML-ish entry in archive order — the fallback when an epub's
+/// package metadata can't be parsed.
+fn epub_html_entries<R: std::io::Read + std::io::Seek>(
+    zip: &mut zip::ZipArchive<R>,
+) -> Vec<String> {
+    (0..zip.len())
+        .filter_map(|i| zip.by_index(i).ok().map(|e| e.name().to_string()))
+        .filter(|n| {
+            let l = n.to_lowercase();
+            l.ends_with(".xhtml") || l.ends_with(".html") || l.ends_with(".htm")
+        })
+        .collect()
+}
+
+/// Extract text from an .epub (a zip of XHTML chapters), in reading order.
+fn extract_epub(path: &str) -> Result<String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).with_context(|| format!("failed to open {path}"))?;
+    let mut zip = zip::ZipArchive::new(file).context("not a valid .epub (zip) file")?;
+
+    let chapters = match epub_spine(&mut zip) {
+        Some(c) if !c.is_empty() => c,
+        _ => epub_html_entries(&mut zip),
+    };
+
+    let mut out = String::new();
+    for name in chapters {
+        let Ok(mut entry) = zip.by_name(&name) else {
+            continue;
+        };
+        let mut html = String::new();
+        if entry.read_to_string(&mut html).is_err() {
+            continue;
+        }
+        // Block-level closers become newlines so paragraphs survive stripping.
+        for closer in [
+            "</p>", "</div>", "</li>", "</h1>", "</h2>", "</h3>", "</h4>", "</h5>", "</h6>",
+            "<br/>", "<br />", "<br>",
+        ] {
+            html = html.replace(closer, &format!("{closer}\n"));
+        }
+        let text = strip_html(&html);
+        if !text.trim().is_empty() {
+            out.push_str(text.trim());
+            out.push_str("\n\n");
         }
     }
     Ok(out)
@@ -1238,5 +1350,51 @@ mod tests {
             Some("Roadmap")
         );
         assert!(title_from_content_disposition(&reqwest::header::HeaderMap::new()).is_none());
+    }
+
+    #[test]
+    fn epub_extracts_chapters_in_spine_order() {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+
+        // Minimal epub: container.xml -> OPF -> spine listing ch2 before ch1,
+        // proving we honor reading order rather than archive order.
+        let path = std::env::temp_dir().join(format!("alchemy-test-{}.epub", std::process::id()));
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let mut add = |name: &str, body: &str| {
+            zip.start_file(name, opts).unwrap();
+            zip.write_all(body.as_bytes()).unwrap();
+        };
+        add(
+            "chapter1.xhtml",
+            "<html><body><p>Second in spine &amp; last in text.</p></body></html>",
+        );
+        add(
+            "chapter2.xhtml",
+            "<html><body><h1>Opening</h1><p>First in spine.</p></body></html>",
+        );
+        add(
+            "META-INF/container.xml",
+            r#"<container><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+        );
+        add(
+            "content.opf",
+            r#"<package><manifest>
+                <item id="c1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+                <item id="c2" href="chapter2.xhtml" media-type="application/xhtml+xml"/>
+            </manifest><spine><itemref idref="c2"/><itemref idref="c1"/></spine></package>"#,
+        );
+        zip.finish().unwrap();
+
+        let text = extract_epub(path.to_str().unwrap()).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        let first = text.find("First in spine").unwrap();
+        let second = text.find("Second in spine & last in text").unwrap();
+        assert!(first < second, "spine order should win over archive order");
+        assert!(text.contains("Opening"));
+        assert!(!text.contains('<'), "no tags survive: {text}");
     }
 }
