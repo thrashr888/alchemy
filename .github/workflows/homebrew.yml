@@ -1,0 +1,64 @@
+# Update the alchemy cask in thrashr888/homebrew-tap on every release.
+# Releases are cut locally by scripts/release.sh (`gh release create` fires
+# the release event); workflow_dispatch covers re-runs and backfills.
+name: Homebrew
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (e.g. v0.12.0)
+        required: true
+
+jobs:
+  cask:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: tag
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download DMG and compute SHA256
+        id: sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          VERSION="${TAG#v}"
+          gh release download "$TAG" --repo thrashr888/alchemy --pattern "Alchemy_${VERSION}_aarch64.dmg"
+          echo "darwin_arm64=$(sha256sum "Alchemy_${VERSION}_aarch64.dmg" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Update Homebrew cask
+        uses: thrashr888/homebrew-tap@main
+        with:
+          type: cask
+          formula: alchemy
+          tag: ${{ steps.tag.outputs.tag }}
+          tap-token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          darwin-arm64-sha256: ${{ steps.sha.outputs.darwin_arm64 }}
+          template: |
+            cask "alchemy" do
+              version "${VERSION}"
+              sha256 "${SHA_DARWIN_ARM64}"
+
+              url "https://github.com/thrashr888/alchemy/releases/download/${TAG}/Alchemy_${VERSION}_aarch64.dmg"
+              name "Alchemy"
+              desc "Local-first research notebooks - grounded chat with your own sources"
+              homepage "https://github.com/thrashr888/alchemy"
+
+              depends_on macos: ">= :ventura"
+              depends_on arch: :arm64
+
+              app "Alchemy.app"
+
+              zap trash: [
+                "~/Library/Application Support/com.thrashr888.alchemy",
+                "~/Library/Preferences/com.thrashr888.alchemy.plist",
+                "~/Library/Caches/com.thrashr888.alchemy",
+                "~/Library/WebKit/com.thrashr888.alchemy",
+              ]
+            end
