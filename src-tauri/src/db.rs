@@ -26,6 +26,9 @@ const T_CHUNKS: &str = "chunks";
 const T_MESSAGES: &str = "messages";
 const T_NOTES: &str = "notes";
 const T_REPORTS: &str = "report_schedules";
+pub const NOTEBOOK_PALETTE: [&str; 8] = [
+    "#eb5757", "#e8a33d", "#4cb782", "#5e9bd2", "#9b87f5", "#e274b6", "#4fc1c9", "#98a562",
+];
 
 pub struct Db {
     conn: Connection,
@@ -44,6 +47,7 @@ impl Db {
             .context("failed to open LanceDB")?;
         let db = Self { conn };
         db.ensure_table(T_NOTEBOOKS, notebooks_schema()).await?;
+        db.migrate_notebooks().await?;
         db.ensure_table(T_SOURCES, sources_schema()).await?;
         db.migrate_sources().await?;
         db.ensure_table(T_MESSAGES, messages_schema()).await?;
@@ -52,6 +56,53 @@ impl Db {
         db.migrate_notes().await?;
         db.ensure_table(T_REPORTS, reports_schema()).await?;
         Ok(db)
+    }
+
+    /// Backfill the `color` column on pre-existing `notebooks` tables.
+    async fn migrate_notebooks(&self) -> Result<()> {
+        if !self.table_exists(T_NOTEBOOKS).await? {
+            return Ok(());
+        }
+        let schema = self
+            .conn
+            .open_table(T_NOTEBOOKS)
+            .execute()
+            .await?
+            .schema()
+            .await?;
+        if schema.field_with_name("color").is_ok() {
+            return Ok(());
+        }
+
+        let batches = self.collect(T_NOTEBOOKS, None).await?;
+        let mut notebooks = Vec::new();
+        let mut idx = 0usize;
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let title = str_col(b, "title")?;
+            let created = i64_col(b, "created_at")?;
+            let updated = i64_col(b, "updated_at")?;
+            for i in 0..b.num_rows() {
+                notebooks.push(Notebook {
+                    id: id.value(i).to_string(),
+                    title: title.value(i).to_string(),
+                    created_at: created.value(i),
+                    updated_at: updated.value(i),
+                    color: NOTEBOOK_PALETTE[idx % NOTEBOOK_PALETTE.len()].to_string(),
+                    source_count: 0,
+                });
+                idx += 1;
+            }
+        }
+
+        self.conn.drop_table(T_NOTEBOOKS, &[]).await?;
+        self.ensure_table(T_NOTEBOOKS, notebooks_schema()).await?;
+        if !notebooks.is_empty() {
+            let schema = notebooks_schema();
+            let batch = notebook_batch(&schema, &notebooks)?;
+            self.add_batch(T_NOTEBOOKS, schema, batch).await?;
+        }
+        Ok(())
     }
 
     /// Backfill the `kind` column ("chat") on pre-existing `messages` tables.
@@ -275,12 +326,14 @@ impl Db {
             let title = str_col(b, "title")?;
             let created = i64_col(b, "created_at")?;
             let updated = i64_col(b, "updated_at")?;
+            let color = opt_str_col(b, "color");
             for i in 0..b.num_rows() {
                 notebooks.push(Notebook {
                     id: id.value(i).to_string(),
                     title: title.value(i).to_string(),
                     created_at: created.value(i),
                     updated_at: updated.value(i),
+                    color: color.map(|c| c.value(i).to_string()).unwrap_or_default(),
                     source_count: 0,
                 });
             }
@@ -303,15 +356,7 @@ impl Db {
 
     pub async fn create_notebook(&self, notebook: &Notebook) -> Result<()> {
         let schema = notebooks_schema();
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(StringArray::from(vec![notebook.id.clone()])),
-                Arc::new(StringArray::from(vec![notebook.title.clone()])),
-                Arc::new(Int64Array::from(vec![notebook.created_at])),
-                Arc::new(Int64Array::from(vec![notebook.updated_at])),
-            ],
-        )?;
+        let batch = notebook_batch(&schema, std::slice::from_ref(notebook))?;
         self.add_batch(T_NOTEBOOKS, schema, batch).await
     }
 
@@ -331,6 +376,16 @@ impl Db {
         tbl.update()
             .only_if(format!("id = '{}'", esc(id)))
             .column("updated_at", updated_at.to_string())
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_notebook_color(&self, id: &str, color: &str) -> Result<()> {
+        let tbl = self.conn.open_table(T_NOTEBOOKS).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(id)))
+            .column("color", format!("'{}'", esc(color)))
             .execute()
             .await?;
         Ok(())
@@ -990,6 +1045,29 @@ fn citations_from_batches(
     Ok(citations)
 }
 
+fn notebook_batch(schema: &SchemaRef, notebooks: &[Notebook]) -> Result<RecordBatch> {
+    let s = |f: fn(&Notebook) -> String| {
+        Arc::new(StringArray::from(
+            notebooks.iter().map(f).collect::<Vec<_>>(),
+        )) as ArrayRef
+    };
+    let i = |f: fn(&Notebook) -> i64| {
+        Arc::new(Int64Array::from(
+            notebooks.iter().map(f).collect::<Vec<_>>(),
+        )) as ArrayRef
+    };
+    Ok(RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            s(|x| x.id.clone()),
+            s(|x| x.title.clone()),
+            i(|x| x.created_at),
+            i(|x| x.updated_at),
+            s(|x| x.color.clone()),
+        ],
+    )?)
+}
+
 fn str_col<'a>(b: &'a RecordBatch, name: &str) -> Result<&'a StringArray> {
     b.column_by_name(name)
         .and_then(|c| c.as_any().downcast_ref::<StringArray>())
@@ -1063,6 +1141,7 @@ fn notebooks_schema() -> SchemaRef {
         Field::new("title", DataType::Utf8, false),
         Field::new("created_at", DataType::Int64, false),
         Field::new("updated_at", DataType::Int64, false),
+        Field::new("color", DataType::Utf8, false),
     ]))
 }
 

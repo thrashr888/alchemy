@@ -20,6 +20,19 @@ import {
   FileText,
 } from "lucide-react";
 
+// Keep this list in sync with Rust in `src-tauri/src/db.rs` (`NOTEBOOK_PALETTE`)
+// and the `set_notebook_color` validator in `src-tauri/src/commands.rs`.
+const NOTEBOOK_PALETTE = [
+  "#eb5757",
+  "#e8a33d",
+  "#4cb782",
+  "#5e9bd2",
+  "#9b87f5",
+  "#e274b6",
+  "#4fc1c9",
+  "#98a562",
+];
+
 export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const notebooks = useStore((s) => s.notebooks);
   const ollamaOk = useStore((s) => s.ollamaOk);
@@ -29,12 +42,14 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const open = useStore((s) => s.selectNotebook);
   const create = useStore((s) => s.createNotebook);
   const rename = useStore((s) => s.renameNotebook);
+  const setColor = useStore((s) => s.setNotebookColor);
   const remove = useStore((s) => s.deleteNotebook);
   const theme = useStore((s) => s.theme);
 
   const [creating, setCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
+  const [colorPickerFor, setColorPickerFor] = useState<string | null>(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   // All scheduled reports, recent documents, and corpus totals across
@@ -57,6 +72,36 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       .catch(() => setStats(null));
   }, [notebooks]);
   const notebookTitle = new Map(notebooks.map((n) => [n.id, n.title]));
+
+  // Palette popup stays local to one card and closes on outside interaction or Escape.
+  useEffect(() => {
+    if (!colorPickerFor) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.closest("[data-notebook-color-trigger]") ||
+          t.closest("[data-notebook-color-palette]"))
+      ) {
+        return;
+      }
+      setColorPickerFor(null);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setColorPickerFor(null);
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [colorPickerFor]);
+
+  const onPickColor = (notebookId: string, color: string) => {
+    setColorPickerFor(null);
+    setColor(notebookId, color);
+  };
 
   function openNote(note: Note) {
     // StudioPanel auto-opens this id once the notebook's notes load.
@@ -183,6 +228,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 {...cardButtonProps(() => open(nb.id))}
                 className="group relative flex min-h-[132px] cursor-pointer flex-col rounded-lg border border-border bg-surface p-4 transition-colors hover:border-border-strong hover:bg-surface-2"
               >
+                <span
+                  className="pointer-events-none absolute left-0 top-0 h-full w-[3px] rounded-l-lg"
+                  style={{ backgroundColor: nb.color || NOTEBOOK_PALETTE[0] }}
+                />
                 <div className="mb-auto flex h-8 w-8 items-center justify-center rounded-lg bg-primary/12 text-primary">
                   <BookOpen className="h-4 w-4" />
                 </div>
@@ -199,6 +248,21 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 </div>
 
                 <div className="absolute right-2 top-2 flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+                  <button
+                    type="button"
+                    className="rounded p-1 text-muted-foreground transition hover:bg-elevated"
+                    style={{ backgroundColor: nb.color || NOTEBOOK_PALETTE[0] }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setColorPickerFor((cur) => (cur === nb.id ? null : nb.id));
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    data-notebook-color-trigger
+                    aria-label={`Change color for ${nb.title}`}
+                    title="Change notebook color"
+                  >
+                    <span className="relative block h-3 w-3 rounded-full border border-background" />
+                  </button>
                   <button
                     className="rounded p-1 text-muted-foreground hover:bg-elevated hover:text-foreground"
                     onClick={(e) => {
@@ -230,6 +294,29 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 </div>
+                {colorPickerFor === nb.id && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    data-notebook-color-palette
+                    className="absolute right-2 top-10 z-10 flex rounded-md border border-border bg-surface px-2 py-1.5 shadow-sm"
+                  >
+                    {NOTEBOOK_PALETTE.map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => onPickColor(nb.id, c)}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        aria-label={`Set ${nb.title} color to ${c}`}
+                        className={cn(
+                          "m-0.5 h-5 w-5 rounded-full border border-border",
+                          c === (nb.color || NOTEBOOK_PALETTE[0]) ? "ring-2 ring-foreground ring-offset-1 ring-offset-surface" : "",
+                        )}
+                        style={{ backgroundColor: c }}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>

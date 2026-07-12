@@ -10,6 +10,8 @@ pub struct Notebook {
     pub title: String,
     pub created_at: i64,
     pub updated_at: i64,
+    #[serde(default)]
+    pub color: String,
     /// Populated on list queries; not stored on the row.
     #[serde(default)]
     pub source_count: i64,

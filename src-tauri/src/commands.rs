@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::ai::{Ai, AiConfig, GenStats};
 use crate::db::Db;
+use crate::db::NOTEBOOK_PALETTE;
 use crate::models::{
     FolderScan, Message, ModelHealth, ModelStat, ModelStatus, Note, Notebook, ReportSchedule,
     Source,
@@ -138,6 +139,17 @@ fn e<T>(r: anyhow::Result<T>) -> Result<T, String> {
     r.map_err(|err| format!("{err:#}"))
 }
 
+// Keep this palette in sync with the Rust DB schema helper constant in
+// `src-tauri/src/db.rs` and the frontend palette in HomeView.
+fn is_valid_hex_color(color: &str) -> bool {
+    color.len() == 7
+        && color.starts_with('#')
+        && color
+            .as_bytes()
+            .get(1..)
+            .is_some_and(|hex| hex.iter().all(|b| (*b as char).is_ascii_hexdigit()))
+}
+
 // ---- Notebooks -----------------------------------------------------------
 
 #[tauri::command]
@@ -151,6 +163,8 @@ pub async fn create_notebook(
     title: String,
 ) -> Result<Notebook, String> {
     let ts = now();
+    let count = e(state.db.list_notebooks().await)?;
+    let color = NOTEBOOK_PALETTE[count.len() % NOTEBOOK_PALETTE.len()];
     let title = if title.trim().is_empty() {
         "Untitled notebook".into()
     } else {
@@ -161,10 +175,24 @@ pub async fn create_notebook(
         title,
         created_at: ts,
         updated_at: ts,
+        color: color.to_string(),
         source_count: 0,
     };
     e(state.db.create_notebook(&nb).await)?;
     Ok(nb)
+}
+
+#[tauri::command]
+pub async fn set_notebook_color(
+    state: State<'_, AppState>,
+    id: String,
+    color: String,
+) -> Result<(), String> {
+    let color = color.trim();
+    if !is_valid_hex_color(color) {
+        return Err("color must be in hex form (#rrggbb)".into());
+    }
+    e(state.db.set_notebook_color(&id, color).await)
 }
 
 #[tauri::command]

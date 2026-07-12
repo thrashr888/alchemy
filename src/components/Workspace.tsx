@@ -55,6 +55,12 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
         <div className="mx-1 h-4 w-px bg-border" />
         <div className="flex items-center gap-1.5 min-w-0">
           <BookOpen className="h-3.5 w-3.5 shrink-0 text-primary" />
+          <span
+            className="inline-flex h-2.5 w-2.5 shrink-0 rounded-full border border-background"
+            style={{ backgroundColor: notebook?.color }}
+            title={notebook?.title}
+            aria-hidden="true"
+          />
           <span className="truncate text-[13px] font-semibold" title={notebook?.title}>
             {notebook?.title ?? "Notebook"}
           </span>

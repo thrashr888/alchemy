@@ -117,6 +117,7 @@ interface AppState {
   closeNotebook: () => void;
   createNotebook: (title: string) => Promise<void>;
   renameNotebook: (id: string, title: string) => Promise<void>;
+  setNotebookColor: (id: string, color: string) => Promise<void>;
   deleteNotebook: (id: string) => Promise<void>;
   setTheme: (theme: string) => void;
   setReading: (patch: Partial<ReadingPrefs>) => void;
@@ -568,6 +569,19 @@ export const useStore = create<AppState>((set, get) => {
     guard(async () => {
       await api.renameNotebook(id, title);
       await get().refreshNotebooks();
+    }),
+
+  setNotebookColor: (id, color) =>
+    guard(async () => {
+      const prev = get().notebooks;
+      set({ notebooks: prev.map((n) => (n.id === id ? { ...n, color } : n)) });
+      try {
+        await api.setNotebookColor(id, color);
+      } catch (e) {
+        set({ notebooks: prev });
+        await get().refreshNotebooks();
+        throw e;
+      }
     }),
 
   deleteNotebook: (id) =>
