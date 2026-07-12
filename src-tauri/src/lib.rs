@@ -123,6 +123,7 @@ pub fn run() {
             commands::cancel_generation,
             commands::list_notes,
             commands::list_recent_notes,
+            commands::list_recent_reports,
             commands::corpus_stats,
             commands::export_notebook_okf,
             commands::fix_traffic_lights,
