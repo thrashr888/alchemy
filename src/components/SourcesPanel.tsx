@@ -30,6 +30,33 @@ import {
 // ~1M chars ≈ ~250k tokens — generous for local RAG over many documents.
 const MAX_NOTEBOOK_CHARS = 1_000_000;
 
+/**
+ * Close an open dropdown when the pointer goes down anywhere outside it, or
+ * when the window loses focus. The in-DOM click-catcher overlay alone isn't
+ * enough: the app header is a Tauri drag region, where mousedown starts a
+ * native window drag and no click event ever reaches the overlay —
+ * pointerdown still dispatches through the DOM first, so listen for that.
+ */
+export function useCloseOnOutside(
+  open: boolean,
+  close: () => void,
+  ...refs: React.RefObject<HTMLElement | null>[]
+) {
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (!refs.some((r) => r.current?.contains(e.target as Node))) close();
+    };
+    const onBlur = () => close();
+    window.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, [open, close]); // refs are stable RefObjects — deliberately not deps
+}
+
 export function sourceIcon(t: Source["sourceType"]) {
   switch (t) {
     case "pdf":
@@ -104,6 +131,7 @@ export function SourcesPanel() {
   useEffect(() => {
     if (menuOpen) menuRef.current?.querySelector<HTMLElement>("button")?.focus();
   }, [menuOpen]);
+  useCloseOnOutside(menuOpen, () => setMenuOpen(false), menuRef, menuTriggerRef);
 
   function onMenuKey(e: React.KeyboardEvent) {
     const items = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? []);
@@ -125,9 +153,11 @@ export function SourcesPanel() {
   const [pasteText, setPasteText] = useState("");
   const [editing, setEditing] = useState<{ id: string; title: string; text: string } | null>(null);
 
-  // "Add source from URL" command from the Cmd+K menu. A store flag rather
-  // than an event: the panel may be mid-mount when the command runs.
+  // "Add source from URL / paste text" asks from the Cmd+K menu or the
+  // collapsed rail. Store flags rather than events: the panel may be
+  // mid-mount when the ask happens.
   const pendingAddUrl = useStore((s) => s.pendingAddUrl);
+  const pendingAddText = useStore((s) => s.pendingAddText);
   useEffect(() => {
     if (pendingAddUrl) {
       useStore.setState({ pendingAddUrl: false });
@@ -135,6 +165,14 @@ export function SourcesPanel() {
       setMode("url");
     }
   }, [pendingAddUrl]);
+  useEffect(() => {
+    if (pendingAddText) {
+      useStore.setState({ pendingAddText: false });
+      setPasteTitle("");
+      setPasteText("");
+      setMode("text");
+    }
+  }, [pendingAddText]);
 
   async function startEdit(s: Source) {
     // List payloads omit content; fetch the full text to prefill the editor.
@@ -580,7 +618,7 @@ export function SourcesPanel() {
   );
 }
 
-function MenuItem({
+export function MenuItem({
   icon,
   label,
   onClick,

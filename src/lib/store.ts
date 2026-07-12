@@ -79,6 +79,8 @@ interface AppState {
   /** Command-menu ask for the URL form — a flag (not an event) because the
    *  Sources panel may still be mounting when the command runs. */
   pendingAddUrl: boolean;
+  /** Same, for the paste-text form (set by the collapsed-rail add menu). */
+  pendingAddText: boolean;
   /** Menu asked for an update check — Settings' General tab runs it on mount. */
   pendingUpdateCheck: boolean;
   /** One-time model download overlay (embedder or TTS voice model). */
@@ -278,6 +280,7 @@ export const useStore = create<AppState>((set, get) => {
   settingsTab: "general",
   paletteOpen: false,
   pendingAddUrl: false,
+  pendingAddText: false,
   pendingUpdateCheck: false,
   embedderDownload: null,
   failedInput: null,
