@@ -772,6 +772,16 @@ impl Db {
         Ok(notes)
     }
 
+    /// The most recently updated report notes across every notebook, full
+    /// content included — the home page reads them in place.
+    pub async fn recent_reports(&self, limit: usize) -> Result<Vec<Note>> {
+        let batches = self.collect(T_NOTES, Some("kind = 'report'")).await?;
+        let mut notes = notes_from_batches(&batches)?;
+        notes.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
+        notes.truncate(limit);
+        Ok(notes)
+    }
+
     /// (id, notebook_id, title) for every source — lightweight lookups without
     /// dragging full content across.
     pub async fn all_source_meta(&self) -> Result<Vec<(String, String, String)>> {

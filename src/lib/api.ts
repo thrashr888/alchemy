@@ -139,6 +139,7 @@ export const api = {
   // Notes & artifacts
   listNotes: (notebookId: string) => run(query<Note[]>("list_notes", { notebookId })),
   listRecentNotes: (limit = 6) => run(query<Note[]>("list_recent_notes", { limit })),
+  listRecentReports: (limit = 10) => run(query<Note[]>("list_recent_reports", { limit })),
   corpusStats: () => run(query<CorpusStats>("corpus_stats")),
   newWindow: (notebookId?: string, noteId?: string) =>
     run(cmd<void>("new_window", { notebookId, noteId })),

@@ -3341,6 +3341,16 @@ pub async fn list_recent_notes(
     e(state.db.recent_notes(limit.unwrap_or(6)).await)
 }
 
+/// The latest report notes across every notebook, newest first — the home
+/// page's report reader pages through these.
+#[tauri::command]
+pub async fn list_recent_reports(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<Note>, String> {
+    e(state.db.recent_reports(limit.unwrap_or(10)).await)
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CorpusStats {

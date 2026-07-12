@@ -3,6 +3,7 @@ import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { Button, Input, Modal, Badge, useConfirm } from "./ui";
 import { AlchemyHero } from "./AlchemyHero";
+import { Markdown } from "./Markdown";
 import { intervalLabel } from "./Reports";
 import { cn, relativeTime, providerStatus, cardButtonProps, shortcutBlocked } from "@/lib/utils";
 import type { CorpusStats, Note, ReportSchedule } from "@/lib/types";
@@ -16,6 +17,8 @@ import {
   Trash2,
   Pencil,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Circle,
   FileText,
 } from "lucide-react";
@@ -57,6 +60,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [allReports, setAllReports] = useState<ReportSchedule[]>([]);
   const [recentNotes, setRecentNotes] = useState<Note[]>([]);
   const [stats, setStats] = useState<CorpusStats | null>(null);
+  // Latest generated reports, read in place in the right-hand pane.
+  const [reports, setReports] = useState<Note[]>([]);
+  const [reportIdx, setReportIdx] = useState(0);
   useEffect(() => {
     api
       .listAllReportSchedules()
@@ -67,11 +73,17 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       .then(setRecentNotes)
       .catch(() => setRecentNotes([]));
     api
+      .listRecentReports(10)
+      .then(setReports)
+      .catch(() => setReports([]));
+    api
       .corpusStats()
       .then(setStats)
       .catch(() => setStats(null));
   }, [notebooks]);
   const notebookTitle = new Map(notebooks.map((n) => [n.id, n.title]));
+  const notebookColor = new Map(notebooks.map((n) => [n.id, n.color]));
+  const report = reports[Math.min(reportIdx, Math.max(0, reports.length - 1))];
 
   // Palette popup stays local to one card and closes on outside interaction or Escape.
   useEffect(() => {
@@ -186,7 +198,13 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[960px] px-6 py-10">
+        <div
+          className={cn(
+            "mx-auto px-6 py-10",
+            report ? "flex max-w-[1440px] items-start gap-8" : "max-w-[960px]",
+          )}
+        >
+        <div className="min-w-0 max-w-[960px] flex-1">
           <div className="mb-6 flex items-end justify-between">
             <div>
               <h1 className="text-[22px] font-semibold tracking-tight">Your notebooks</h1>
@@ -400,6 +418,70 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               </div>
             </div>
           )}
+        </div>
+
+        {/* Report reader: the latest generated reports, pageable in place —
+            the homepage doubles as the morning-read surface. */}
+        {report && (
+          <aside className="sticky top-0 hidden w-[420px] shrink-0 lg:block">
+            <div className="flex max-h-[calc(100vh-128px)] flex-col rounded-lg border border-border bg-surface">
+              <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+                <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+                  Reports
+                </span>
+                <div className="ml-auto flex items-center gap-0.5">
+                  <button
+                    disabled={reportIdx <= 0}
+                    onClick={() => setReportIdx((i) => Math.max(0, i - 1))}
+                    className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-30"
+                    title="Newer report"
+                    aria-label="Newer report"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                  </button>
+                  <span className="text-[11px] tabular-nums text-subtle-foreground">
+                    {Math.min(reportIdx, reports.length - 1) + 1} / {reports.length}
+                  </span>
+                  <button
+                    disabled={reportIdx >= reports.length - 1}
+                    onClick={() => setReportIdx((i) => Math.min(reports.length - 1, i + 1))}
+                    className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-30"
+                    title="Older report"
+                    aria-label="Older report"
+                  >
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+              <div className="border-b border-border px-4 py-3">
+                <button
+                  onClick={() => openNote(report)}
+                  className="block w-full text-left"
+                  title={`Open in "${notebookTitle.get(report.notebookId) ?? "notebook"}"`}
+                >
+                  <div className="text-[14px] font-medium text-foreground hover:underline">
+                    {report.title}
+                  </div>
+                </button>
+                <div className="mt-1 flex items-center gap-1.5 text-[11px] text-subtle-foreground">
+                  <span
+                    className="inline-flex h-2 w-2 shrink-0 rounded-full"
+                    style={{ backgroundColor: notebookColor.get(report.notebookId) || NOTEBOOK_PALETTE[0] }}
+                    aria-hidden="true"
+                  />
+                  <span className="truncate">
+                    {notebookTitle.get(report.notebookId) ?? "Unknown notebook"}
+                  </span>
+                  <span>·</span>
+                  <span className="shrink-0">{relativeTime(report.updatedAt)}</span>
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 text-[13px] leading-relaxed">
+                <Markdown>{report.content}</Markdown>
+              </div>
+            </div>
+          </aside>
+        )}
         </div>
         </div>
       )}
