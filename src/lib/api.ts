@@ -18,6 +18,7 @@ import type {
   ReportSchedule,
   SearchHit,
   Source,
+  Template,
 } from "./types";
 
 /**
@@ -163,6 +164,10 @@ export const api = {
     run(slow<Note>("generate_artifact", { notebookId, kind, prompt: prompt ?? "", sourceIds })),
   rebuildNote: (noteId: string, notebookId: string, kind: NoteKind, prompt: string) =>
     run(slow<Note>("rebuild_note", { noteId, notebookId, kind, prompt })),
+
+  // Templates (custom generators in ~/Documents/Alchemy/templates)
+  listTemplates: () => run(query<Template[]>("list_templates")),
+  openTemplatesFolder: () => run(cmd<void>("open_templates_folder")),
 
   // Reports
   listReportSchedules: (notebookId: string) =>

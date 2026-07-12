@@ -23,6 +23,7 @@ import type {
   ReadingPrefs,
   ReportSchedule,
   Source,
+  Template,
   Toast,
   ToastKind,
 } from "./types";
@@ -51,6 +52,8 @@ interface AppState {
   messages: Message[];
   notes: Note[];
   reportSchedules: ReportSchedule[];
+  /** Custom generators from ~/Documents/Alchemy/templates (global, not per-notebook). */
+  templates: Template[];
   aiConfig: AiConfig | null;
   ollamaOk: boolean | null;
   modelHealth: ModelHealth | null;
@@ -67,6 +70,8 @@ interface AppState {
   summary: string;
   summaryLoading: boolean;
   generatingKind: NoteKind | null;
+  /** Which template tile is generating (kind alone can't tell them apart). */
+  generatingTemplateId: string | null;
   ingestQueue: QueueItem[];
   migration: Migration | null;
   draggingFiles: boolean;
@@ -171,6 +176,8 @@ interface AppState {
   clearChat: () => Promise<void>;
 
   generateArtifact: (kind: NoteKind, prompt?: string) => Promise<void>;
+  /** Run a user template's instruction through the custom-prompt generation path. */
+  generateFromTemplate: (t: Template) => Promise<void>;
   rebuildNote: (note: Note) => Promise<void>;
   createNote: (title: string, content: string) => Promise<void>;
   updateNote: (id: string, title: string, content: string) => Promise<void>;
@@ -289,6 +296,7 @@ export const useStore = create<AppState>((set, get) => {
   messages: [],
   notes: [],
   reportSchedules: [],
+  templates: [],
   aiConfig: null,
   ollamaOk: null,
   modelHealth: null,
@@ -306,6 +314,7 @@ export const useStore = create<AppState>((set, get) => {
   summary: "",
   summaryLoading: false,
   generatingKind: null,
+  generatingTemplateId: null,
   ingestQueue: [],
   migration: null,
   draggingFiles: false,
@@ -343,12 +352,15 @@ export const useStore = create<AppState>((set, get) => {
       listenersBound = true;
       get().bindGlobalListeners();
     }
-    const [notebooks, aiConfig, ollamaOk] = await Promise.all([
+    const [notebooks, aiConfig, ollamaOk, templates] = await Promise.all([
       api.listNotebooks(),
       api.getAiConfig(),
       api.checkOllama().catch(() => false),
+      // Templates are global (a user folder), not per-notebook. A read failure
+      // just hides the section — never blocks boot.
+      api.listTemplates().catch(() => []),
     ]);
-    set({ notebooks, aiConfig, ollamaOk });
+    set({ notebooks, aiConfig, ollamaOk, templates });
     void get().refreshModelHealth();
     void get().refreshModelStats();
     void get().refreshKokoroStatus();
@@ -914,12 +926,54 @@ export const useStore = create<AppState>((set, get) => {
     }
   },
 
+  generateFromTemplate: async (t) => {
+    const id = get().currentId;
+    if (!id || get().generatingKind) return;
+    set({
+      generatingKind: "template",
+      generatingTemplateId: t.id,
+      artifactStreamText: "",
+      error: null,
+    });
+    try {
+      const note = await api.generateArtifact(id, "template", t.prompt);
+      // The backend titles unknown kinds "Report" — rename to the template's name.
+      await api.updateNote(note.id, t.name, note.content);
+      const titled = { ...note, title: t.name };
+      set({
+        notes: [titled, ...get().notes.filter((n) => n.id !== note.id)],
+        justCreatedNoteId: note.id,
+      });
+      void get().refreshModelStats();
+      get().pushToast("success", `${t.name} ready`);
+      playDone();
+      void notify("Document ready", `“${t.name}” finished generating.`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("Generation stopped")) get().pushToast("info", "Generation stopped");
+      else set({ error: msg });
+    } finally {
+      set({
+        generatingKind: null,
+        generatingTemplateId: null,
+        artifactStreamText: "",
+        audioProgress: null,
+      });
+    }
+  },
+
   rebuildNote: async (note) => {
     const id = get().currentId;
     if (!id || get().generatingKind) return;
     set({ generatingKind: note.kind, artifactStreamText: "", error: null });
     try {
       const updated = await api.rebuildNote(note.id, id, note.kind, note.prompt);
+      // Template rebuilds keep their template name (the backend re-titles
+      // unknown kinds "Report").
+      if (note.kind === "template" && updated.title !== note.title) {
+        await api.updateNote(updated.id, note.title, updated.content);
+        updated.title = note.title;
+      }
       set({ notes: get().notes.map((n) => (n.id === updated.id ? updated : n)) });
       playDone();
       void notify("Rebuilt", `“${updated.title}” was regenerated.`);

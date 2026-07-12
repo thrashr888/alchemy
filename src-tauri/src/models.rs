@@ -186,7 +186,7 @@ pub struct Note {
     /// "note" | "summary" | "faq" | "study_guide" | "briefing" | "timeline" |
     /// "insights" | "flashcards" | "quiz" | "audio_overview" | "mind_map" |
     /// "data_table" | "problems" |
-    /// "prd" | "prfaq" | "rfc" | "skill" | "report"
+    /// "prd" | "prfaq" | "rfc" | "skill" | "report" | "template"
     #[serde(default = "default_note_kind")]
     pub kind: String,
     /// Optional custom instructions used to generate this note, retained so it

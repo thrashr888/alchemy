@@ -81,7 +81,8 @@ export type NoteKind =
   | "prfaq"
   | "rfc"
   | "skill"
-  | "report";
+  | "report"
+  | "template";
 
 export interface Note {
   id: string;
@@ -92,6 +93,16 @@ export interface Note {
   prompt: string;
   createdAt: number;
   updatedAt: number;
+}
+
+/** A custom Studio generator: one ~/Documents/Alchemy/templates/*.md file. */
+export interface Template {
+  /** Filename stem, e.g. "swot-analysis". */
+  id: string;
+  name: string;
+  description: string;
+  /** Generation instruction (file body), run over the notebook's sources. */
+  prompt: string;
 }
 
 /** Aggregate corpus totals for the home page. */
