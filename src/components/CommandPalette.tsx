@@ -126,10 +126,7 @@ export function CommandPalette() {
           icon: <Link2 className="h-3.5 w-3.5" />,
           run: () => {
             close();
-            const s = state();
-            // Flag, not an event: SourcesPanel may still be mounting.
-            useStore.setState({ pendingAddUrl: true });
-            if (!s.sourcesOpen) s.toggleSources();
+            state().openAddSource("url");
           },
         },
         {

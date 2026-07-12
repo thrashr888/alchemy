@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { Button, Input, Textarea, Modal, EmptyState, ResizeHandle, Spinner, useConfirm } from "./ui";
@@ -13,8 +13,6 @@ import {
   PanelLeftClose,
   Trash2,
   Upload,
-  Link2,
-  ClipboardPaste,
   Check,
   AlertCircle,
   X,
@@ -22,40 +20,13 @@ import {
   RefreshCw,
   Image as ImageIcon,
   Folder,
-  FolderOpen,
   Cloud,
+  Command,
 } from "lucide-react";
 
 // Soft per-notebook capacity used for the "how full is this notebook" gauge.
 // ~1M chars ≈ ~250k tokens — generous for local RAG over many documents.
 const MAX_NOTEBOOK_CHARS = 1_000_000;
-
-/**
- * Close an open dropdown when the pointer goes down anywhere outside it, or
- * when the window loses focus. The in-DOM click-catcher overlay alone isn't
- * enough: the app header is a Tauri drag region, where mousedown starts a
- * native window drag and no click event ever reaches the overlay —
- * pointerdown still dispatches through the DOM first, so listen for that.
- */
-export function useCloseOnOutside(
-  open: boolean,
-  close: () => void,
-  ...refs: React.RefObject<HTMLElement | null>[]
-) {
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: PointerEvent) => {
-      if (!refs.some((r) => r.current?.contains(e.target as Node))) close();
-    };
-    const onBlur = () => close();
-    window.addEventListener("pointerdown", onDown, true);
-    window.addEventListener("blur", onBlur);
-    return () => {
-      window.removeEventListener("pointerdown", onDown, true);
-      window.removeEventListener("blur", onBlur);
-    };
-  }, [open, close]); // refs are stable RefObjects — deliberately not deps
-}
 
 export function sourceIcon(t: Source["sourceType"]) {
   switch (t) {
@@ -69,6 +40,8 @@ export function sourceIcon(t: Source["sourceType"]) {
       return <ImageIcon className="h-3.5 w-3.5 text-[#4cb782]" />;
     case "folder":
       return <Folder className="h-3.5 w-3.5 text-[#e8a33d]" />;
+    case "mac":
+      return <Command className="h-3.5 w-3.5 text-[#5ec2c2]" />;
     default:
       return <FileText className="h-3.5 w-3.5 text-muted-foreground" />;
   }
@@ -101,8 +74,6 @@ function hostname(url: string): string {
     return url;
   }
 }
-
-type AddMode = null | "url" | "text";
 
 /** Compact selection checkbox; supports the folder/master indeterminate state.
  *  Clicks stop propagating so the row's open-reader handler never fires. */
@@ -139,11 +110,8 @@ export function SourcesPanel() {
   const currentId = useStore((s) => s.currentId);
   const queue = useStore((s) => s.ingestQueue);
   const clearQueueItem = useStore((s) => s.clearQueueItem);
-  const pickAndAddFiles = useStore((s) => s.pickAndAddFiles);
-  const pickAndAddFolder = useStore((s) => s.pickAndAddFolder);
+  const openAddSource = useStore((s) => s.openAddSource);
   const folderScan = useStore((s) => s.folderScan);
-  const addUrl = useStore((s) => s.addSourceUrl);
-  const addText = useStore((s) => s.addSourceText);
   const editSourceText = useStore((s) => s.editSourceText);
   const refreshSource = useStore((s) => s.refreshSource);
   const deleteSource = useStore((s) => s.deleteSource);
@@ -155,57 +123,7 @@ export function SourcesPanel() {
   const setAllSourcesSelected = useStore((s) => s.setAllSourcesSelected);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const menuTriggerRef = useRef<HTMLButtonElement>(null);
-  const [mode, setMode] = useState<AddMode>(null);
-
-  // Menu keyboard behavior: focus first item on open, arrows cycle, Escape closes.
-  useEffect(() => {
-    if (menuOpen) menuRef.current?.querySelector<HTMLElement>("button")?.focus();
-  }, [menuOpen]);
-  useCloseOnOutside(menuOpen, () => setMenuOpen(false), menuRef, menuTriggerRef);
-
-  function onMenuKey(e: React.KeyboardEvent) {
-    const items = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? []);
-    const idx = items.indexOf(document.activeElement as HTMLButtonElement);
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      setMenuOpen(false);
-      menuTriggerRef.current?.focus();
-    } else if (e.key === "ArrowDown") {
-      e.preventDefault();
-      items[(idx + 1) % items.length]?.focus();
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      items[(idx - 1 + items.length) % items.length]?.focus();
-    }
-  }
-  const [url, setUrl] = useState("");
-  const [pasteTitle, setPasteTitle] = useState("");
-  const [pasteText, setPasteText] = useState("");
   const [editing, setEditing] = useState<{ id: string; title: string; text: string } | null>(null);
-
-  // "Add source from URL / paste text" asks from the Cmd+K menu or the
-  // collapsed rail. Store flags rather than events: the panel may be
-  // mid-mount when the ask happens.
-  const pendingAddUrl = useStore((s) => s.pendingAddUrl);
-  const pendingAddText = useStore((s) => s.pendingAddText);
-  useEffect(() => {
-    if (pendingAddUrl) {
-      useStore.setState({ pendingAddUrl: false });
-      setUrl("");
-      setMode("url");
-    }
-  }, [pendingAddUrl]);
-  useEffect(() => {
-    if (pendingAddText) {
-      useStore.setState({ pendingAddText: false });
-      setPasteTitle("");
-      setPasteText("");
-      setMode("text");
-    }
-  }, [pendingAddText]);
 
   async function startEdit(s: Source) {
     // List payloads omit content; fetch the full text to prefill the editor.
@@ -246,11 +164,6 @@ export function SourcesPanel() {
     }
   }
 
-  async function pickFiles() {
-    setMenuOpen(false);
-    await pickAndAddFiles();
-  }
-
   const width = useStore((s) => s.sourcesWidth);
   const setPanelWidth = useStore((s) => s.setPanelWidth);
 
@@ -279,62 +192,16 @@ export function SourcesPanel() {
         </span>
         <span className="ml-2 text-[11px] text-subtle-foreground">{sources.length}</span>
         <div className="ml-auto flex items-center gap-0.5">
-        <div className="relative">
-          <Button
-            ref={menuTriggerRef}
-            variant="ghost"
-            size="icon"
-            onClick={() => setMenuOpen((o) => !o)}
-            disabled={!currentId}
-            title="Add source"
-            aria-label="Add source"
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-          {menuOpen && (
-            <>
-              <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-              <div
-                ref={menuRef}
-                role="menu"
-                aria-label="Add source"
-                onKeyDown={onMenuKey}
-                className="absolute right-0 top-8 z-20 w-44 overflow-hidden rounded-md bg-elevated py-1 shadow-[0_0_0_0.5px_var(--border-strong),0_8px_24px_-6px_rgba(0,0,0,0.4)]"
-              >
-                <MenuItem icon={<Upload className="h-3.5 w-3.5" />} label="Upload files" onClick={pickFiles} />
-                <MenuItem
-                  icon={<FolderOpen className="h-3.5 w-3.5" />}
-                  label="Add folder"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    void pickAndAddFolder();
-                  }}
-                />
-                <MenuItem
-                  icon={<Link2 className="h-3.5 w-3.5" />}
-                  label="From URL"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    setUrl("");
-                    setMode("url");
-                  }}
-                />
-                <MenuItem
-                  icon={<ClipboardPaste className="h-3.5 w-3.5" />}
-                  label="Paste text"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    setPasteTitle("");
-                    setPasteText("");
-                    setMode("text");
-                  }}
-                />
-              </div>
-            </>
-          )}
-        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => openAddSource()}
+          disabled={!currentId}
+          title="Add source"
+          aria-label="Add source"
+        >
+          <Plus className="h-4 w-4" />
+        </Button>
         <Button variant="ghost" size="icon" onClick={toggleSources} title="Collapse sources">
           <PanelLeftClose className="h-4 w-4" />
         </Button>
@@ -597,36 +464,6 @@ export function SourcesPanel() {
         )}
       </div>
 
-      <Modal open={mode === "url"} onClose={() => setMode(null)} title="Add source from URL">
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            setMode(null);
-            await addUrl(url);
-          }}
-          className="flex flex-col gap-3"
-        >
-          <Input
-            autoFocus
-            placeholder="https://example.com/article"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-          />
-          <p className="text-[11px] leading-relaxed text-subtle-foreground">
-            Google Docs, Sheets, and Slides links work too — share them as
-            “Anyone with the link” first.
-          </p>
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => setMode(null)}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="primary" disabled={!url.trim()}>
-              Fetch & add
-            </Button>
-          </div>
-        </form>
-      </Modal>
-
       <Modal
         open={!!editing}
         onClose={() => setEditing(null)}
@@ -666,63 +503,7 @@ export function SourcesPanel() {
         </form>
       </Modal>
 
-      <Modal open={mode === "text"} onClose={() => setMode(null)} title="Paste text" width="max-w-lg">
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            setMode(null);
-            await addText(pasteTitle, pasteText);
-          }}
-          className="flex flex-col gap-3"
-        >
-          <Input
-            autoFocus
-            placeholder="Title (optional)"
-            value={pasteTitle}
-            onChange={(e) => setPasteTitle(e.target.value)}
-          />
-          <Textarea
-            rows={10}
-            placeholder="Paste or type your text here…"
-            value={pasteText}
-            onChange={(e) => setPasteText(e.target.value)}
-          />
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => setMode(null)}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="primary" disabled={!pasteText.trim()}>
-              Add source
-            </Button>
-          </div>
-        </form>
-      </Modal>
-
       {confirmDialog}
     </div>
-  );
-}
-
-export function MenuItem({
-  icon,
-  label,
-  onClick,
-}: {
-  icon: ReactNode;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      role="menuitem"
-      className={cn(
-        "flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] text-foreground/90",
-        "hover:bg-surface-2 hover:text-foreground focus-visible:bg-surface-2",
-      )}
-      onClick={onClick}
-    >
-      <span className="text-muted-foreground">{icon}</span>
-      {label}
-    </button>
   );
 }

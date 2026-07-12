@@ -8,6 +8,7 @@ import type {
   CorpusStats,
   FolderScan,
   KokoroStatus,
+  MacCollection,
   McpStatus,
   Message,
   ModelHealth,
@@ -120,6 +121,13 @@ export const api = {
     run(query<string>("get_source_content", { sourceId })),
   reembedAll: () => run(ai<number>("reembed_all")),
   deleteSource: (sourceId: string) => run(cmd<void>("delete_source", { sourceId })),
+
+  // Mac providers (Calendar, Reminders, Apple Notes via cider)
+  macAvailable: () => run(query<boolean>("mac_available")),
+  listMacCollections: (provider: string) =>
+    run(query<MacCollection[]>("list_mac_collections", { provider })),
+  addSourceMac: (notebookId: string, provider: string, collection: string, label: string) =>
+    run(ai<Source>("add_source_mac", { notebookId, provider, collection, label })),
 
   // Chat
   listMessages: (notebookId: string) => run(query<Message[]>("list_messages", { notebookId })),
