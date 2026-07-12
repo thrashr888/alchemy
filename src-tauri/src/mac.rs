@@ -56,15 +56,23 @@ async fn cider(args: &[&str]) -> anyhow::Result<serde_json::Value> {
     .map_err(|_| anyhow!("cider timed out"))?
     .context("failed to run cider")?;
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let v: serde_json::Value = serde_json::from_str(stdout.trim())
-        .with_context(|| format!("unexpected cider output: {}", stdout.chars().take(200).collect::<String>()))?;
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).with_context(|| {
+        format!(
+            "unexpected cider output: {}",
+            stdout.chars().take(200).collect::<String>()
+        )
+    })?;
     if v["ok"].as_bool() == Some(true) {
         Ok(v["data"].clone())
     } else {
-        let msg = v["error"]["message"].as_str().unwrap_or("cider call failed");
+        let msg = v["error"]["message"]
+            .as_str()
+            .unwrap_or("cider call failed");
         // The first call to a data class pops a macOS permission prompt; a
         // timeout here usually means it's waiting on (or was denied) consent.
-        Err(anyhow!("{msg} — if macOS asked for permission, allow it and retry"))
+        Err(anyhow!(
+            "{msg} — if macOS asked for permission, allow it and retry"
+        ))
     }
 }
 
@@ -81,6 +89,20 @@ pub fn mac_available() -> bool {
     cider_path().is_some()
 }
 
+/// Settings/onboarding "Connect" buttons: one benign read per provider so the
+/// macOS consent prompt fires at a predictable moment instead of mid-add.
+#[tauri::command]
+pub async fn mac_connect(provider: String) -> Result<(), String> {
+    match provider.as_str() {
+        "reminders" => cider(&["reminders", "list", "--limit", "1"]).await,
+        "calendar" => cider(&["calendar", "list", "--days-back", "0", "--days-ahead", "1"]).await,
+        "notes" => cider(&["notes", "folders"]).await,
+        other => return Err(format!("Unknown Mac provider: {other}")),
+    }
+    .map(|_| ())
+    .map_err(|e| format!("{e:#}"))
+}
+
 #[tauri::command]
 pub async fn list_mac_collections(provider: String) -> Result<Vec<MacCollection>, String> {
     match provider.as_str() {
@@ -95,7 +117,9 @@ pub async fn list_mac_collections(provider: String) -> Result<Vec<MacCollection>
             })
             .collect()),
         "reminders" => {
-            let data = cider(&["reminders", "list"]).await.map_err(|e| format!("{e:#}"))?;
+            let data = cider(&["reminders", "list"])
+                .await
+                .map_err(|e| format!("{e:#}"))?;
             let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
             for r in data.as_array().unwrap_or(&vec![]) {
                 if let Some(list) = r["list"].as_str() {
@@ -112,7 +136,9 @@ pub async fn list_mac_collections(provider: String) -> Result<Vec<MacCollection>
                 .collect())
         }
         "notes" => {
-            let data = cider(&["notes", "folders"]).await.map_err(|e| format!("{e:#}"))?;
+            let data = cider(&["notes", "folders"])
+                .await
+                .map_err(|e| format!("{e:#}"))?;
             Ok(data
                 .as_array()
                 .unwrap_or(&vec![])
@@ -180,9 +206,15 @@ pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
         let data = cider(&["reminders", "list", "--list", list]).await?;
         let mut out = format!("# Reminders — {list}\n\n");
         for r in data.as_array().unwrap_or(&vec![]) {
-            out.push_str(&format!("- [ ] {}", r["title"].as_str().unwrap_or("Untitled")));
+            out.push_str(&format!(
+                "- [ ] {}",
+                r["title"].as_str().unwrap_or("Untitled")
+            ));
             if let Some(due) = r["due_date"].as_str() {
-                out.push_str(&format!(" — due {}", due.chars().take(10).collect::<String>()));
+                out.push_str(&format!(
+                    " — due {}",
+                    due.chars().take(10).collect::<String>()
+                ));
             }
             out.push('\n');
             if let Some(notes) = r["notes"].as_str() {
@@ -197,9 +229,15 @@ pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
         let data = cider(&["notes", "list", "--folder", folder]).await?;
         let mut out = format!("# Apple Notes — {folder}\n\n");
         for n in data.as_array().unwrap_or(&vec![]) {
-            out.push_str(&format!("## {}\n", n["title"].as_str().unwrap_or("Untitled")));
+            out.push_str(&format!(
+                "## {}\n",
+                n["title"].as_str().unwrap_or("Untitled")
+            ));
             if let Some(m) = n["modified"].as_str() {
-                out.push_str(&format!("_Modified {}_\n\n", m.chars().take(10).collect::<String>()));
+                out.push_str(&format!(
+                    "_Modified {}_\n\n",
+                    m.chars().take(10).collect::<String>()
+                ));
             }
             if let Some(body) = n["body"].as_str() {
                 out.push_str(body.trim());
