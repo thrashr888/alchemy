@@ -238,7 +238,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           {recentNotes.length > 0 && (
             <div className="mt-10">
               <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
-                Recent documents
+                Recent notes
               </div>
               <div className="flex flex-col gap-1">
                 {recentNotes.map((n) => (
