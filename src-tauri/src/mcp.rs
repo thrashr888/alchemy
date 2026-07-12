@@ -18,6 +18,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::commands::{self, AppState};
+use crate::db::NOTEBOOK_PALETTE;
 use crate::models::{Note, Notebook, Source};
 
 // ---- Server lifecycle ------------------------------------------------------
@@ -303,6 +304,7 @@ impl AlchemyMcp {
             title,
             created_at: ts,
             updated_at: ts,
+            color: NOTEBOOK_PALETTE[0].to_string(),
             source_count: 0,
         };
         self.state()

@@ -38,6 +38,7 @@ async fn rag_round_trip() {
         title: "Photosynthesis".into(),
         created_at: now(),
         updated_at: now(),
+        color: "#eb5757".into(),
         source_count: 0,
     };
     db.create_notebook(&nb).await.expect("create notebook");

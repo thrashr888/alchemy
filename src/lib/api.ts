@@ -97,6 +97,7 @@ export const api = {
   listNotebooks: () => run(query<Notebook[]>("list_notebooks")),
   createNotebook: (title: string) => run(cmd<Notebook>("create_notebook", { title })),
   renameNotebook: (id: string, title: string) => run(cmd<void>("rename_notebook", { id, title })),
+  setNotebookColor: (id: string, color: string) => run(cmd<void>("set_notebook_color", { id, color })),
   deleteNotebook: (id: string) => run(cmd<void>("delete_notebook", { id })),
 
   // Sources

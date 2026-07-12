@@ -12,6 +12,7 @@ export interface Notebook {
   title: string;
   createdAt: number;
   updatedAt: number;
+  color: string;
   sourceCount: number;
 }
 

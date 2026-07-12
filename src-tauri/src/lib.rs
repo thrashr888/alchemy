@@ -97,6 +97,7 @@ pub fn run() {
             commands::list_notebooks,
             commands::create_notebook,
             commands::rename_notebook,
+            commands::set_notebook_color,
             commands::delete_notebook,
             commands::list_sources,
             commands::add_source_file,
