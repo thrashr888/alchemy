@@ -430,15 +430,17 @@ export function SourcesPanel() {
           <>
             {/* Master selection row: which sources feed chat & Studio. */}
             <div className="mb-0.5 flex items-center gap-2 px-2 py-1.5">
-              <SelectBox
-                checked={allSelected}
-                indeterminate={selectedCount > 0 && !allSelected}
-                onToggle={() => setAllSourcesSelected(!allSelected)}
-                label={allSelected ? "Deselect all sources" : "Select all sources"}
-              />
               <span className="text-[11px] text-muted-foreground">
                 {selectedCount} of {contentSources.length} selected
               </span>
+              <div className="ml-auto">
+                <SelectBox
+                  checked={allSelected}
+                  indeterminate={selectedCount > 0 && !allSelected}
+                  onToggle={() => setAllSourcesSelected(!allSelected)}
+                  label={allSelected ? "Deselect all sources" : "Select all sources"}
+                />
+              </div>
             </div>
             <div className="flex flex-col gap-0.5">
             {rows.map(({ s, indent }) => {
@@ -461,22 +463,6 @@ export function SourcesPanel() {
                   indent && "ml-5",
                 )}
               >
-                <div className="mt-0.5">
-                  {isFolder ? (
-                    <SelectBox
-                      checked={kids.length > 0 && kidsOn === kids.length}
-                      indeterminate={kidsOn > 0 && kidsOn < kids.length}
-                      onToggle={() => toggleFolderSelected(s.id)}
-                      label={`Include "${s.title}" files in chat & generation`}
-                    />
-                  ) : (
-                    <SelectBox
-                      checked={isSelected(s.id)}
-                      onToggle={() => toggleSourceSelected(s.id)}
-                      label={`Include "${s.title}" in chat & generation`}
-                    />
-                  )}
-                </div>
                 <div className="mt-0.5">
                   {s.status === "error" ? (
                     <AlertCircle className="h-3.5 w-3.5 text-destructive" />
@@ -584,6 +570,24 @@ export function SourcesPanel() {
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
+                </div>
+                {/* Selection stays at the far right (NotebookLM-style), always
+                    visible — the hover actions slide in to its left. */}
+                <div className="mt-0.5">
+                  {isFolder ? (
+                    <SelectBox
+                      checked={kids.length > 0 && kidsOn === kids.length}
+                      indeterminate={kidsOn > 0 && kidsOn < kids.length}
+                      onToggle={() => toggleFolderSelected(s.id)}
+                      label={`Include "${s.title}" files in chat & generation`}
+                    />
+                  ) : (
+                    <SelectBox
+                      checked={isSelected(s.id)}
+                      onToggle={() => toggleSourceSelected(s.id)}
+                      label={`Include "${s.title}" in chat & generation`}
+                    />
+                  )}
                 </div>
               </div>
               );

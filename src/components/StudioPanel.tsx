@@ -7,7 +7,7 @@ import { MindMap } from "./MindMap";
 import { AudioPlayer, DialogueScript } from "./AudioNote";
 import { Reports } from "./Reports";
 import { RichEditor } from "./RichEditor";
-import { cardButtonProps, relativeTime, shortcutBlocked } from "@/lib/utils";
+import { cardButtonProps, cn, relativeTime, shortcutBlocked } from "@/lib/utils";
 import type { Note, NoteKind } from "@/lib/types";
 import {
   Eye,
@@ -42,9 +42,31 @@ import {
   Waypoints,
   AppWindow,
   AudioLines,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 
 type Artifact = { kind: NoteKind; label: string; icon: ReactNode };
+
+/** Tile tint per generator family — the color IS the section label
+ *  (NotebookLM-style), replacing the old uppercase headers. */
+type Tint = { tile: string; icon: string };
+const TINT_GENERATE: Tint = {
+  tile: "border-[#5e9bd2]/20 bg-[#5e9bd2]/10 hover:border-[#5e9bd2]/40 hover:bg-[#5e9bd2]/20",
+  icon: "text-[#5e9bd2]",
+};
+const TINT_LEARNING: Tint = {
+  tile: "border-[#9b87f5]/20 bg-[#9b87f5]/10 hover:border-[#9b87f5]/40 hover:bg-[#9b87f5]/20",
+  icon: "text-[#9b87f5]",
+};
+const TINT_DOCUMENTS: Tint = {
+  tile: "border-[#4cb782]/20 bg-[#4cb782]/10 hover:border-[#4cb782]/40 hover:bg-[#4cb782]/20",
+  icon: "text-[#4cb782]",
+};
+const TINT_TEMPLATES: Tint = {
+  tile: "border-[#e8a33d]/20 bg-[#e8a33d]/10 hover:border-[#e8a33d]/40 hover:bg-[#e8a33d]/20",
+  icon: "text-[#e8a33d]",
+};
 
 /** Shown only once the voice model is downloaded & verified (Settings → Models). */
 export const AUDIO_OVERVIEW: Artifact = {
@@ -194,6 +216,15 @@ export function StudioPanel() {
     setGenOpen(v);
   };
 
+  // Templates beyond the first few collapse behind a More tile so the
+  // generator grid stays short; expansion is per-session.
+  const [templatesExpanded, setTemplatesExpanded] = useState(false);
+  const TEMPLATES_PREVIEW = 3;
+  const collapsible = templates.length > TEMPLATES_PREVIEW + 1;
+  const visibleTemplates =
+    collapsible && !templatesExpanded ? templates.slice(0, TEMPLATES_PREVIEW) : templates;
+  const hiddenTemplateCount = collapsible ? templates.length - TEMPLATES_PREVIEW : 0;
+
   const hasSources = sources.length > 0;
   const width = useStore((s) => s.studioWidth);
   const setPanelWidth = useStore((s) => s.setPanelWidth);
@@ -248,8 +279,16 @@ export function StudioPanel() {
             </span>
           )}
           <button
-            onClick={toggleGenOpen}
+            onClick={() => void api.openTemplatesFolder()}
             className="ml-auto rounded p-0.5 transition-colors hover:text-foreground"
+            title="Open the templates folder — each .md file is a generator"
+            aria-label="Open templates folder"
+          >
+            <FolderOpen className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={toggleGenOpen}
+            className="rounded p-0.5 transition-colors hover:text-foreground"
             title={genOpen ? "Hide generators" : "Show generators"}
             aria-label={genOpen ? "Hide generators" : "Show generators"}
             aria-expanded={genOpen}
@@ -259,70 +298,79 @@ export function StudioPanel() {
         </div>
         {genOpen && (
           <>
-            <div className="mt-2">
-              <ArtifactGrid
-                artifacts={kokoroReady ? [AUDIO_OVERVIEW, ...SUMMARIES] : SUMMARIES}
-                disabled={!hasSources || !!generatingKind}
-                generatingKind={generatingKind}
-                onPick={(k) => generate(k, instructions)}
-              />
+            {/* One continuous grid — generator families flow into each other
+                and are told apart by tile tint, not headers: blue = generate,
+                violet = learning, green = documents, amber = templates.
+                Templates beyond the first few live behind the More tile. */}
+            <div className="mt-2 grid grid-cols-2 gap-1.5">
+              {(kokoroReady ? [AUDIO_OVERVIEW, ...SUMMARIES] : SUMMARIES).map((a) => (
+                <GenTile
+                  key={a.kind}
+                  icon={generatingKind === a.kind ? <Spinner className="h-3.5 w-3.5" /> : a.icon}
+                  label={a.label}
+                  tint={TINT_GENERATE}
+                  disabled={!hasSources || !!generatingKind}
+                  onClick={() => generate(a.kind, instructions)}
+                />
+              ))}
+              {LEARNING.map((a) => (
+                <GenTile
+                  key={a.kind}
+                  icon={generatingKind === a.kind ? <Spinner className="h-3.5 w-3.5" /> : a.icon}
+                  label={a.label}
+                  tint={TINT_LEARNING}
+                  disabled={!hasSources || !!generatingKind}
+                  onClick={() => generate(a.kind, instructions)}
+                />
+              ))}
+              {DOCUMENTS.map((a) => (
+                <GenTile
+                  key={a.kind}
+                  icon={generatingKind === a.kind ? <Spinner className="h-3.5 w-3.5" /> : a.icon}
+                  label={a.label}
+                  tint={TINT_DOCUMENTS}
+                  disabled={!hasSources || !!generatingKind}
+                  onClick={() => generate(a.kind, instructions)}
+                />
+              ))}
+              {visibleTemplates.map((t) => (
+                <GenTile
+                  key={t.id}
+                  icon={
+                    generatingTemplateId === t.id ? (
+                      <Spinner className="h-3.5 w-3.5" />
+                    ) : (
+                      <FileText className="h-3.5 w-3.5" />
+                    )
+                  }
+                  label={t.name}
+                  title={t.description || t.name}
+                  tint={TINT_TEMPLATES}
+                  disabled={!hasSources || !!generatingKind}
+                  onClick={() => generateFromTemplate(t)}
+                />
+              ))}
+              {hiddenTemplateCount > 0 && (
+                <GenTile
+                  icon={
+                    templatesExpanded ? (
+                      <ChevronUp className="h-3.5 w-3.5" />
+                    ) : (
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    )
+                  }
+                  label={templatesExpanded ? "Less" : `More (${hiddenTemplateCount})`}
+                  title={
+                    templatesExpanded
+                      ? "Show fewer templates"
+                      : `Show ${hiddenTemplateCount} more templates`
+                  }
+                  tint={TINT_TEMPLATES}
+                  disabled={false}
+                  onClick={() => setTemplatesExpanded((v) => !v)}
+                />
+              )}
             </div>
-
-            <div className="mb-2 mt-3 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
-              Learning
-            </div>
-            <ArtifactGrid
-              artifacts={LEARNING}
-              disabled={!hasSources || !!generatingKind}
-              generatingKind={generatingKind}
-              onPick={(k) => generate(k, instructions)}
-            />
-
-            <div className="mb-2 mt-3 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
-              Documents
-            </div>
-            <ArtifactGrid
-              artifacts={DOCUMENTS}
-              disabled={!hasSources || !!generatingKind}
-              generatingKind={generatingKind}
-              onPick={(k) => generate(k, instructions)}
-            />
-
-            {templates.length > 0 && (
-              <>
-                <div className="mb-2 mt-3 flex items-center text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
-                  <span>Templates</span>
-                  <button
-                    onClick={() => void api.openTemplatesFolder()}
-                    className="ml-auto rounded p-0.5 transition-colors hover:text-foreground"
-                    title="Open the templates folder — each .md file is a generator"
-                    aria-label="Open templates folder"
-                  >
-                    <FolderOpen className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {templates.map((t) => (
-                    <button
-                      key={t.id}
-                      disabled={!hasSources || !!generatingKind}
-                      onClick={() => generateFromTemplate(t)}
-                      title={t.description || t.name}
-                      className="flex items-center gap-2 rounded-md border border-border bg-surface-2 px-2.5 py-2 text-[12px] text-foreground/90 transition-colors hover:border-border-strong hover:bg-elevated disabled:opacity-40 disabled:pointer-events-none"
-                    >
-                      <span className="text-muted-foreground">
-                        {generatingTemplateId === t.id ? (
-                          <Spinner className="h-3.5 w-3.5" />
-                        ) : (
-                          <FileText className="h-3.5 w-3.5" />
-                        )}
-                      </span>
-                      <span className="truncate">{t.name}</span>
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
 
             {showInstructions ? (
               <Textarea
@@ -495,33 +543,35 @@ export function StudioPanel() {
   );
 }
 
-function ArtifactGrid({
-  artifacts,
+/** One generator tile in the flowing Studio grid. */
+function GenTile({
+  icon,
+  label,
+  title,
+  tint,
   disabled,
-  generatingKind,
-  onPick,
+  onClick,
 }: {
-  artifacts: Artifact[];
+  icon: ReactNode;
+  label: string;
+  title?: string;
+  tint: Tint;
   disabled: boolean;
-  generatingKind: NoteKind | null;
-  onPick: (kind: NoteKind) => void;
+  onClick: () => void;
 }) {
   return (
-    <div className="grid grid-cols-2 gap-1.5">
-      {artifacts.map((a) => (
-        <button
-          key={a.kind}
-          disabled={disabled}
-          onClick={() => onPick(a.kind)}
-          className="flex items-center gap-2 rounded-md border border-border bg-surface-2 px-2.5 py-2 text-[12px] text-foreground/90 transition-colors hover:border-border-strong hover:bg-elevated disabled:opacity-40 disabled:pointer-events-none"
-        >
-          <span className="text-muted-foreground">
-            {generatingKind === a.kind ? <Spinner className="h-3.5 w-3.5" /> : a.icon}
-          </span>
-          {a.label}
-        </button>
-      ))}
-    </div>
+    <button
+      disabled={disabled}
+      onClick={onClick}
+      title={title}
+      className={cn(
+        "flex items-center gap-2 rounded-md border px-2.5 py-2 text-[12px] text-foreground/90 transition-colors disabled:opacity-40 disabled:pointer-events-none",
+        tint.tile,
+      )}
+    >
+      <span className={tint.icon}>{icon}</span>
+      <span className="truncate">{label}</span>
+    </button>
   );
 }
 
