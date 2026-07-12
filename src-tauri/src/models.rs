@@ -23,7 +23,7 @@ pub struct Source {
     pub id: String,
     pub notebook_id: String,
     pub title: String,
-    /// "pdf" | "text" | "markdown" | "url"
+    /// "pdf" | "text" | "markdown" | "url" | "image" | "folder" | "mac"
     pub source_type: String,
     /// Origin of the content: the URL for `url` sources, the local file path
     /// for file imports, empty for pasted text. Retained so sources can be

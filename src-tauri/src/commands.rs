@@ -706,6 +706,21 @@ pub async fn refresh_source_url(
             ..folder
         });
     }
+    if crate::mac::is_mac_uri(&existing.url) {
+        // Mac item — re-fetch through cider and re-embed. Like files, a
+        // failed fetch (permission prompt pending, app closed) must not wipe
+        // the working source.
+        let (_, text) = e(crate::mac::fetch(&existing.url).await)?;
+        let mut existing = existing;
+        existing.mtime = crate::mac::content_stamp(&text);
+        let extracted = ingest::Extracted {
+            title: existing.title.clone(),
+            source_type: "mac".to_string(),
+            url: existing.url.clone(),
+            text,
+        };
+        return e(reingest(&state, &existing, extracted).await);
+    }
     if is_web_url(&existing.url) {
         return match ingest::extract_url(&existing.url).await {
             Ok(extracted) => e(reingest(&state, &existing, extracted).await),
@@ -772,6 +787,43 @@ pub async fn delete_source(state: State<'_, AppState>, source_id: String) -> Res
         }
     }
     e(state.db.delete_source(&source_id).await)
+}
+
+// ---- Mac sources (cider) ---------------------------------------------------
+
+/// Add a Mac item (Reminders list, Calendar window, Notes folder) as a
+/// living source. See docs/RFC-cider-tools.md and src/mac.rs.
+#[tauri::command]
+pub async fn add_source_mac(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    provider: String,
+    collection: String,
+    label: String,
+) -> Result<Source, String> {
+    let uri = crate::mac::mac_uri(&provider, &collection);
+    for s in e(state.db.list_sources(&notebook_id).await)? {
+        if s.url == uri {
+            return Err(format!(
+                "Already in this notebook as \"{}\" — it re-syncs automatically",
+                s.title
+            ));
+        }
+    }
+    let (default_title, text) = e(crate::mac::fetch(&uri).await)?;
+    let title = if label.trim().is_empty() { default_title } else { label };
+    // Mac sources carry a content hash in `mtime` (there's no file mtime);
+    // store_extracted stamps 0 for a nonexistent path, so set it after.
+    let stamp = crate::mac::content_stamp(&text);
+    let extracted = ingest::Extracted {
+        title,
+        source_type: "mac".to_string(),
+        url: uri,
+        text,
+    };
+    let source = e(store_extracted(&state, &notebook_id, extracted).await)?;
+    e(state.db.set_source_mtime(&source.id, stamp).await)?;
+    Ok(source)
 }
 
 // ---- Folder sources --------------------------------------------------------
@@ -1216,6 +1268,47 @@ pub async fn resync_sources(
     // files aren't read (that would force a download).
     for src in e(state.db.all_loose_sources().await)? {
         if src.url.is_empty() || is_web_url(&src.url) {
+            continue;
+        }
+        // Mac items re-fetch on their own gentler cadence (osascript-backed);
+        // re-embed only when the content hash moved.
+        if crate::mac::is_mac_uri(&src.url) {
+            if !crate::mac::sweep_due(&src.id) {
+                continue;
+            }
+            match crate::mac::fetch(&src.url).await {
+                Ok((_, text)) => {
+                    let stamp = crate::mac::content_stamp(&text);
+                    if stamp == src.mtime {
+                        continue;
+                    }
+                    let mut existing = src.clone();
+                    existing.mtime = stamp;
+                    let extracted = ingest::Extracted {
+                        title: existing.title.clone(),
+                        source_type: "mac".to_string(),
+                        url: existing.url.clone(),
+                        text,
+                    };
+                    let scan = per_notebook.entry(src.notebook_id.clone()).or_default();
+                    match reingest(&state, &existing, extracted).await {
+                        Ok(_) => {
+                            scan.updated += 1;
+                            total.updated += 1;
+                        }
+                        Err(err) => {
+                            eprintln!("mac resync: failed to re-embed {}: {err:#}", src.url);
+                            scan.failed += 1;
+                            total.failed += 1;
+                        }
+                    }
+                }
+                Err(err) => {
+                    // Keep the working text; permission prompts and closed
+                    // apps are transient. The cadence gate throttles retries.
+                    eprintln!("mac resync: failed to fetch {}: {err:#}", src.url);
+                }
+            }
             continue;
         }
         let path = std::path::Path::new(&src.url);
