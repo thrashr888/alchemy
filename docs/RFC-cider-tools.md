@@ -1,120 +1,89 @@
-# RFC: Cider tools — Mac apps as chat context and actions
+# RFC: Mac items as sources (via cider)
+
+> **Pivot (2026-07-12):** the first draft proposed cider as *chat tools* with
+> a per-action permission model. Paul's counter — Mac items as *sources* that
+> auto-sync — is better, and this RFC now describes that design. Tools may
+> come later; nothing here precludes them.
 
 ## Summary
 
-Embed [cider](https://github.com/thrashr888/cider) so Alchemy's agentic chat
-can see and touch the Mac: **read Calendar, Reminders, Notes, Contacts, and
-Mail as grounding context; take actions (create a reminder, draft an email)
-with per-action confirmation**. "What's on my calendar this week?" becomes a
-notebook-adjacent question, and "turn this briefing's action items into
-Reminders" becomes one turn of chat.
+Add Calendar, Reminders, and Apple Notes as **living sources**: pick a
+Reminders list, a calendar range, or a Notes folder in the add-source modal,
+and it becomes a source that re-syncs on the existing resync sweep — embedded,
+citable, and grounded like any file. "What did I commit to this week?"
+retrieves your own calendar items with citations instead of a tool call
+dumping JSON into one turn.
 
-The design problem is not technical — cider is our Rust crate, embedding is
-easy. It's the **permission model**: reads and writes have very different
-blast radii and need different consent shapes.
+## Why sources beat tools here
 
-## Background
+- **Reuses the sync machinery wholesale.** A `cider://` origin rides the same
+  `url` field, refresh command, and minute resync sweep as folders and loose
+  files. Change detection hashes fetched content into the existing `mtime`
+  column (i64 = first 8 bytes of the content hash) — no schema change.
+- **Grounding.** Embedded Mac content is retrieved with citations, weighted
+  against the rest of the corpus — strictly better than context-stuffing.
+- **Consent is structural.** Adding "Reminders: Shopping" as a source *is*
+  the consent; it's visible in the sources list and deletable like anything
+  else. No per-action confirmation UX needed because v1 has no writes.
+- **The trade to state plainly:** unlike tools, source content is embedded
+  and persisted in the local LanceDB index. Local-first makes this
+  acceptable; the add-UI says it in one sentence. Mail and Contacts stay out
+  of v1 for exactly this reason.
 
-- cider (`cider-cli` on crates.io) wraps 30+ Apple apps behind a uniform
-  JSON-out interface, built for both humans and agents. It shells out to
-  Apple frameworks (EventKit, Contacts, Notes via ScriptingBridge, …).
-- Alchemy's agentic chat (`agent.rs`) already runs a plan → tool → answer
-  loop with tools like source search and reads; adding tools is a matter of
-  extending the tool registry and prompt.
-- macOS TCC is the outer permission wall: the *app binary* must hold
-  entitlements/usage strings (Calendars, Reminders, Contacts, …), and the
-  OS prompts the user per data class on first touch. Our inner permission
-  model layers on top of that, it doesn't replace it.
+## Design
 
-## Proposal
+### Integration: subprocess, capability-detected
 
-### 1. Integration shape: embed the crate, not the binary
+cider is binary-only today (`cider-cli`, no lib target). v1 shells out to
+`cider … ` (JSON stdout), resolved from PATH/Homebrew. The UI shows Mac tiles
+only when the binary exists; otherwise a quiet "brew install cider" hint.
+Ship-quality follow-up: bundle cider as a Tauri sidecar (or split a
+`cider-core` crate — we own the repo). TCC prompts attribute to Alchemy as
+the responsible process.
 
-Depend on cider as a library (split a `cider-core` crate if the CLI wrapper
-isn't cleanly importable — we own the repo). In-process calls mean typed
-results, no PATH/install dance for users, and TCC prompts attributed to
-Alchemy.app rather than a helper binary.
+### Source shape
 
-Fallback if the crate split fights us: bundle the `cider` binary as a Tauri
-sidecar and speak its JSON. Same tool surface either way; the RFC's
-permission model is independent of this choice.
+- `source_type: "mac"`, origin in `url` as a cider URI:
+  - `cider://reminders/list/Shopping`
+  - `cider://calendar/upcoming/30` (rolling window, days)
+  - `cider://notes/folder/Research`
+- Fetch → render to readable markdown (reminders as checklists with due
+  dates; events chronologically with date headings; notes as sections) →
+  normal chunk/embed/store path.
+- Refresh: `refresh_source_url` grows a `cider://` branch; the resync sweep
+  treats mac sources like loose files — re-fetch, compare content hash
+  (stored in `mtime`), re-embed on change. Rolling calendar windows change
+  content daily by nature; the hash catches it.
 
-### 2. Tool inventory — start read-heavy
+### Commands
 
-Phase 1 (read-only):
+- `mac_available() -> bool`
+- `list_mac_collections(provider) -> Vec<{id, label, detail}>` — reminders
+  lists, calendars/ranges, notes folders (for the modal's picker step)
+- `add_source_mac(notebook_id, provider, collection, label) -> Source`
 
-| Tool | Backing | Example ask |
-|---|---|---|
-| `calendar_events(range)` | EventKit | "what's on my calendar this week?" |
-| `reminders_list(list?)` | EventKit | "what's still open on my Shopping list?" |
-| `notes_search(query)` / `notes_read(id)` | Notes | "pull my 'Vendor calls' note in as context" |
-| `contacts_search(query)` | Contacts | "what's Sarah's email?" |
-| `mail_search(query, mailbox?)` | Mail | "find the thread about the Q3 invoice" |
+### UI: the add-source modal (NotebookLM-style)
 
-Phase 2 (writes, each gated — see §3):
+The + flow becomes one modal: a drop zone, then tiles — Upload files, Add
+folder, From URL, Paste text, Calendar, Reminders, Apple Notes. Mac tiles
+open a picker step (choose list/range/folder) with a one-line privacy note.
+The rail, Cmd+K, and pending-flag flows open the same modal at the right
+step. This is the UI investment the Mac providers justify; files/URL/text
+get a nicer flow for free.
 
-- `reminders_create(title, list?, due?)`
-- `calendar_create_event(...)`
-- `notes_append(id, text)`
-- `mail_draft(to, subject, body)` — **draft only**, never send.
+## Phasing
 
-Deliberately out: sending mail/messages, deleting anything, Keychain,
-Music/media control (fun but off-mission).
-
-### 3. Permission model — the point of this RFC
-
-Three tiers, enforced in the tool dispatcher (not the prompt):
-
-1. **Off by default.** A "Mac apps" section in Settings → Agents lists each
-   app (Calendar, Reminders, Notes, Contacts, Mail) with a toggle,
-   mirroring the TCC grants. Nothing is callable until toggled on. The chat
-   tool registry only includes enabled apps' tools, so disabled tools don't
-   even exist as far as the model knows.
-2. **Reads: allowed once enabled.** Read results flow into context like
-   source chunks do today. Every read is logged to the chat transcript as a
-   visible tool step ("Read 12 calendar events"), so nothing is silent.
-3. **Writes: per-action confirmation.** A write tool call renders an inline
-   confirmation card in chat — the exact payload, human-readable ("Create
-   reminder 'Renew registration' in list 'Car', due Friday") with
-   Confirm/Cancel. The tool blocks on the user's click; Cancel returns a
-   "declined" result to the model. No "always allow" in v1 — per-action
-   friction is the feature until trust is earned.
-
-Cross-cutting rules:
-
-- Tool results are **data, not instructions**: wrap them in the same
-  provenance framing chat uses for sources, so a calendar event named
-  "ignore previous instructions" stays an event title.
-- Mac-app context is **never embedded or persisted** into the notebook
-  unless the user explicitly converts it to a source; by default it lives
-  only in the turn's context window.
-- Chat privacy note in Settings: when a remote gateway (OpenAI-compatible)
-  is configured, Mac-app reads leave the machine like any other context.
-  Worth a one-line warning under the toggles; local Ollama has no such leak.
-
-### 4. UI
-
-- Settings → Agents → "Mac apps": per-app toggles + a "test" button per app
-  that runs a benign read and surfaces the TCC prompt at a predictable
-  moment (rather than mid-chat).
-- Chat: tool steps already render; write-confirmation cards are the one new
-  surface. Reuse the existing tool-message kind.
-- MCP: expose the same tools over the embedded MCP server **only for reads**
-  in v1 — a remote agent clicking a confirmation card is unresolved UX;
-  writes stay chat-only until that's designed.
-
-### 5. Phasing
-
-1. Crate integration + Calendar/Reminders reads + settings toggles.
-2. Notes/Contacts/Mail reads; convert-to-source affordance.
-3. Writes with confirmation cards.
-4. (Later) MCP read exposure, "always allow" per tool, more apps.
+1. Add-source modal (pure frontend; immediately improves existing adds).
+2. `mac.rs` backend: capability detection, three read-only providers,
+   cider:// refresh + sweep integration.
+3. Later: sidecar bundling, Mail/Contacts (privacy story first), writes/tools
+   if sources prove insufficient.
 
 ## Open questions
 
-- Does `cider`'s current crate layout expose a callable API, or do we do
-  the `cider-core` split first? (Owner: us; small either way.)
-- TCC entitlements: which usage-string keys does the app need in
-  `Info.plist`, and does notarization care? (Prototype phase 1 and find out.)
-- Should reminders/calendar reads be schedulable into Reports ("include my
-  week in the Monday briefing")? Natural extension; defer until reads land.
+- Calendar ranges: fixed presets (7/30/90 days) or a custom picker? Presets
+  first.
+- Should mac sources be excluded from "convert note to source"-style flows
+  that assume file-ish content? Probably moot; verify.
+- Sidecar signing: does bundling a Homebrew-built binary survive
+  notarization, or do we build cider from source in release.sh?

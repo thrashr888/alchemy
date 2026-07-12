@@ -4,6 +4,7 @@ mod commands;
 mod connectors;
 mod db;
 mod ingest;
+mod mac;
 mod mcp;
 mod menu;
 mod models;
@@ -107,6 +108,9 @@ pub fn run() {
             commands::list_sources,
             commands::add_source_file,
             commands::add_source_folder,
+            commands::add_source_mac,
+            mac::mac_available,
+            mac::list_mac_collections,
             commands::resync_sources,
             commands::add_source_url,
             commands::add_source_text,
