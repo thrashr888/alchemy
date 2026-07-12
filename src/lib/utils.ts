@@ -29,6 +29,18 @@ export function isWebUrl(s: string): boolean {
 }
 
 /**
+ * Has this note (or report) changed since the user last opened it? Notes from
+ * before read tracking existed fall under the baseline and count as read.
+ */
+export function noteUnread(
+  n: { id: string; updatedAt: number },
+  reads: Record<string, number>,
+  baseline: number,
+): boolean {
+  return n.updatedAt > (reads[n.id] ?? baseline);
+}
+
+/**
  * Make a clickable non-button element (card, list row) keyboard-operable:
  * focusable, announced as a button, activated with Enter or Space.
  * Spread alongside the element's onClick.

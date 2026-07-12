@@ -117,6 +117,12 @@ interface AppState {
   viewingSource: { sourceId: string; title: string; highlight?: string } | null;
   /** Live folder-scan progress (folder://progress), null when idle. */
   folderScan: { done: number; total: number; title: string } | null;
+  /** Note read-state (notes & reports): note id -> last-read millis.
+   *  Persisted; shared by the home feed, notebook dots, and Studio. */
+  noteReads: Record<string, number>;
+  /** Implicit read horizon — notes older than this predate read tracking
+   *  and count as read, so a fresh install isn't a wall of dots. */
+  noteReadsBaseline: number;
 
   init: () => Promise<void>;
   /** Register page-lifetime Tauri event listeners (called once from init). */
@@ -195,6 +201,7 @@ interface AppState {
   setError: (e: string | null) => void;
   pushToast: (kind: ToastKind, message: string) => void;
   dismissToast: (id: string) => void;
+  markNotesRead: (ids: string[]) => void;
 }
 
 // Side panels stay usable at any drag position: wide enough for content,
@@ -230,6 +237,27 @@ function loadReadingPrefs(): ReadingPrefs {
   } catch {
     return DEFAULT_READING_PREFS;
   }
+}
+
+/** Note read-state, merging the earlier reports-only key on first load. */
+function loadNoteReads(): Record<string, number> {
+  try {
+    return {
+      ...JSON.parse(localStorage.getItem("reportReads") ?? "{}"),
+      ...JSON.parse(localStorage.getItem("noteReads") ?? "{}"),
+    };
+  } catch {
+    return {};
+  }
+}
+
+/** The read horizon is stamped once, on the first launch with read tracking. */
+function loadNoteReadsBaseline(): number {
+  const v = Number(localStorage.getItem("noteReadsBaseline") ?? 0);
+  if (v > 0) return v;
+  const now = Date.now();
+  localStorage.setItem("noteReadsBaseline", String(now));
+  return now;
 }
 
 // Module-level guard so the report scheduler is only started once.
@@ -342,6 +370,8 @@ export const useStore = create<AppState>((set, get) => {
   kokoroBusy: false,
   viewingSource: null,
   folderScan: null,
+  noteReads: loadNoteReads(),
+  noteReadsBaseline: loadNoteReadsBaseline(),
 
   init: async () => {
     applyTheme(get().theme);
@@ -1185,5 +1215,20 @@ export const useStore = create<AppState>((set, get) => {
   },
 
   dismissToast: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),
+
+  markNotesRead: (ids) => {
+    if (ids.length === 0) return;
+    const noteReads = { ...get().noteReads };
+    const now = Date.now();
+    for (const id of ids) noteReads[id] = now;
+    localStorage.setItem("noteReads", JSON.stringify(noteReads));
+    set({ noteReads });
+  },
   };
 });
+
+// Dev builds expose the store for debugging (the debug bridge's invoke path
+// bypasses the frontend, so this is the only window into live UI state).
+if (import.meta.env.DEV) {
+  (window as unknown as Record<string, unknown>).__store = useStore;
+}

@@ -7,7 +7,7 @@ import { MindMap } from "./MindMap";
 import { AudioPlayer, DialogueScript } from "./AudioNote";
 import { Reports } from "./Reports";
 import { RichEditor } from "./RichEditor";
-import { cardButtonProps, cn, relativeTime, shortcutBlocked } from "@/lib/utils";
+import { cardButtonProps, cn, noteUnread, relativeTime, shortcutBlocked } from "@/lib/utils";
 import type { Note, NoteKind } from "@/lib/types";
 import {
   Eye,
@@ -161,9 +161,18 @@ export function StudioPanel() {
   const createNote = useStore((s) => s.createNote);
   const deleteNote = useStore((s) => s.deleteNote);
   const justCreatedNoteId = useStore((s) => s.justCreatedNoteId);
+  const noteReads = useStore((s) => s.noteReads);
+  const noteReadsBaseline = useStore((s) => s.noteReadsBaseline);
+  const markNotesRead = useStore((s) => s.markNotesRead);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [viewing, setViewing] = useState<Note | null>(null);
+  // Opening a note is what marks it read — the activity dot means "not
+  // opened yet", so it clears here and nowhere else.
+  const openNoteCard = (n: Note) => {
+    markNotesRead([n.id]);
+    setViewing(n);
+  };
   // The user can hide the live preview without stopping the generation.
   const [previewHidden, setPreviewHidden] = useState(false);
   useEffect(() => setPreviewHidden(false), [generatingKind]);
@@ -174,7 +183,7 @@ export function StudioPanel() {
     if (!justCreatedNoteId) return;
     const note = notes.find((n) => n.id === justCreatedNoteId);
     if (note) {
-      setViewing(note);
+      openNoteCard(note);
       useStore.setState({ justCreatedNoteId: null });
     }
   }, [justCreatedNoteId, notes]);
@@ -260,7 +269,7 @@ export function StudioPanel() {
       {/* Everything below the header scrolls as one column, so a tall
           generator section never pins the notes list below the fold. */}
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className="border-b border-border p-3">
+      <div className="p-3">
         <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
           <span>Generate</span>
           {generatingKind && (
@@ -432,11 +441,18 @@ export function StudioPanel() {
             {notes.map((n) => (
               <div
                 key={n.id}
-                onClick={() => setViewing(n)}
-                {...cardButtonProps(() => setViewing(n))}
+                onClick={() => openNoteCard(n)}
+                {...cardButtonProps(() => openNoteCard(n))}
                 className="group cursor-pointer rounded-md border border-border bg-surface-2/40 px-3 py-2.5 transition-colors hover:border-border-strong hover:bg-surface-2"
               >
                 <div className="flex items-center gap-2">
+                  {noteUnread(n, noteReads, noteReadsBaseline) && (
+                    <span
+                      className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+                      title="Not opened yet"
+                      aria-label="Unread"
+                    />
+                  )}
                   <span className="truncate text-[13px] font-medium text-foreground">
                     {n.title}
                   </span>
