@@ -1009,6 +1009,39 @@ function GeneralTab() {
 
       <div className="h-px bg-border" />
 
+      <div className="flex flex-col gap-1.5">
+        <div className="text-[13px]">Studio templates</div>
+        <p className="text-[11px] leading-relaxed text-subtle-foreground">
+          Custom generators live in ~/Documents/Alchemy/templates — one .md file
+          per generator. Deleting a file removes its tile for good; this puts
+          the default pack back (without touching files you've edited).
+        </p>
+        <div>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={async () => {
+              try {
+                const n = await api.installDefaultTemplates();
+                useStore.setState({ templates: await api.listTemplates() });
+                pushToast(
+                  "success",
+                  n > 0
+                    ? `Installed ${n} template file${n === 1 ? "" : "s"}`
+                    : "All default templates are already installed",
+                );
+              } catch (e) {
+                pushToast("error", e instanceof Error ? e.message : String(e));
+              }
+            }}
+          >
+            Install template files
+          </Button>
+        </div>
+      </div>
+
+      <div className="h-px bg-border" />
+
       <PrefToggle
         storageKey="showNotifications"
         label="Show notifications"
