@@ -1050,7 +1050,7 @@ function GeneralTab() {
       <PrefToggle
         storageKey="playSounds"
         label="Play sounds"
-        hint="A soft chime when generation or a chat answer completes."
+        hint="Soft event cues: work finishing, new arrivals while the app is in the background, and errors. Never clicks or hovers."
         onEnable={playDone}
       />
     </div>

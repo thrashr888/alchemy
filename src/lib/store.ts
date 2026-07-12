@@ -7,7 +7,7 @@ import { api } from "./api";
 import { SUPPORTED_EXTENSIONS } from "./utils";
 import { applyTheme, SYSTEM_THEME } from "./themes";
 import { notify } from "./notify";
-import { playDone } from "./sound";
+import { playArrival, playDone, playError } from "./sound";
 import { autoUpdateEnabled, checkForUpdatesQuietly } from "./updates";
 import { DEFAULT_CHAT_CONFIG, DEFAULT_READING_PREFS } from "./types";
 import type {
@@ -289,6 +289,7 @@ async function runQueued(
     setTimeout(() => get().clearQueueItem(item.id), 2000);
   } catch (e) {
     patch({ status: "error", error: e instanceof Error ? e.message : String(e) });
+    playError();
   }
 }
 
@@ -457,12 +458,14 @@ export const useStore = create<AppState>((set, get) => {
           p.failed && `${p.failed} failed`,
         ].filter(Boolean);
         if (parts.length) get().pushToast("info", `Folder sync: ${parts.join(", ")}`);
+        playArrival();
       },
     );
     // An agent changed something through the MCP server — refresh whatever
     // this window is looking at so the change appears live.
     void listen<{ scope: string; notebookId: string | null }>("mcp://changed", (e) => {
       const { scope, notebookId } = e.payload;
+      playArrival();
       void get().refreshNotebooks();
       const current = get().currentId;
       if (!current || (notebookId && notebookId !== current)) return;
@@ -1160,6 +1163,7 @@ export const useStore = create<AppState>((set, get) => {
         try {
           await api.runReport(s.id);
           void notify("Report ready", `“${s.name}” was generated.`);
+          playArrival();
           const cur = get().currentId;
           if (cur === s.notebookId) {
             set({ notes: await api.listNotes(cur), reportSchedules: await api.listReportSchedules(cur) });
@@ -1225,6 +1229,14 @@ export const useStore = create<AppState>((set, get) => {
     set({ noteReads });
   },
   };
+});
+
+// Every failure cues once, wherever it surfaces — the global error banner or
+// an error toast. playError throttles, so an error that sets both cues once.
+useStore.subscribe((s, prev) => {
+  if (s.error && s.error !== prev.error) playError();
+  const latest = s.toasts[s.toasts.length - 1];
+  if (s.toasts.length > prev.toasts.length && latest?.kind === "error") playError();
 });
 
 // Dev builds expose the store for debugging (the debug bridge's invoke path
