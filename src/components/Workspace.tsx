@@ -4,6 +4,7 @@ import { SourcesPanel } from "./SourcesPanel";
 import { ChatPanel } from "./ChatPanel";
 import { StudioPanel } from "./StudioPanel";
 import { SourceViewer } from "./SourceViewer";
+import { AddSourceModal } from "./AddSourceModal";
 import { SourcesRail, StudioRail } from "./SidebarRails";
 import { HealthBanner } from "./HealthBanner";
 import { Button } from "./ui";
@@ -91,6 +92,8 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
       </div>
 
       <SourceViewer />
+      {/* Global: adding sources works even while the panel is collapsed. */}
+      <AddSourceModal />
     </div>
   );
 }

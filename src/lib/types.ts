@@ -20,7 +20,7 @@ export interface Source {
   id: string;
   notebookId: string;
   title: string;
-  sourceType: "pdf" | "text" | "markdown" | "url" | "image" | "folder";
+  sourceType: "pdf" | "text" | "markdown" | "url" | "image" | "folder" | "mac";
   url: string;
   content: string;
   /** "placeholder" = cloud-sync file not downloaded yet; listed, not embedded. */
@@ -33,6 +33,13 @@ export interface Source {
   parentId: string;
   /** File mtime (unix millis) recorded at ingest for folder children. */
   mtime: number;
+}
+
+/** One pickable Mac-provider item (a calendar range, reminders list, note…). */
+export interface MacCollection {
+  id: string;
+  label: string;
+  detail: string;
 }
 
 /** Tally of what a folder rescan changed. */

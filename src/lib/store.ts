@@ -85,10 +85,17 @@ interface AppState {
   settingsTab: string;
   /** Cmd+K command menu. */
   paletteOpen: boolean;
-  /** Command-menu ask for the URL form — a flag (not an event) because the
-   *  Sources panel may still be mounting when the command runs. */
+  /** The add-source modal (the single "add sources" surface). */
+  addSourceOpen: boolean;
+  /** Deep-link straight to a form; null opens on the hub of tiles. */
+  addSourceStep: "url" | "text" | null;
+  /** Mac providers (Calendar, Reminders, Notes via cider) reachable?
+   *  null = probe still in flight; false shows the install hint instead. */
+  macAvailable: boolean | null;
+  /** Ask for the URL form — a flag (not an event) because the modal may
+   *  still be mounting when the ask happens. */
   pendingAddUrl: boolean;
-  /** Same, for the paste-text form (set by the collapsed-rail add menu). */
+  /** Same, for the paste-text form. */
   pendingAddText: boolean;
   /** Menu asked for an update check — Settings' General tab runs it on mount. */
   pendingUpdateCheck: boolean;
@@ -147,6 +154,9 @@ interface AppState {
   setPaletteOpen: (open: boolean) => void;
   /** Open/close the command menu, refusing to stack over an open dialog. */
   togglePalette: () => void;
+  /** Open the add-source modal, optionally straight on a form. */
+  openAddSource: (step?: "url" | "text") => void;
+  closeAddSource: () => void;
   /** Pick a directory and export the current notebook as an OKF bundle. */
   exportNotebookOkf: () => Promise<void>;
   createReport: (name: string, kind: string, prompt: string, intervalSecs: number) => Promise<void>;
@@ -163,6 +173,7 @@ interface AppState {
   startSourceSync: () => void;
   addSourceUrl: (url: string) => Promise<void>;
   addSourceText: (title: string, text: string) => Promise<void>;
+  addSourceMac: (provider: string, collection: string, label: string) => Promise<void>;
   editSourceText: (sourceId: string, title: string, text: string) => Promise<void>;
   refreshSource: (sourceId: string) => Promise<void>;
   deleteSource: (id: string) => Promise<void>;
@@ -355,6 +366,9 @@ export const useStore = create<AppState>((set, get) => {
   settingsOpen: false,
   settingsTab: "general",
   paletteOpen: false,
+  addSourceOpen: false,
+  addSourceStep: null,
+  macAvailable: null,
   pendingAddUrl: false,
   pendingAddText: false,
   pendingUpdateCheck: false,
@@ -395,6 +409,11 @@ export const useStore = create<AppState>((set, get) => {
     void get().refreshModelHealth();
     void get().refreshModelStats();
     void get().refreshKokoroStatus();
+    // One-shot probe: are the Mac providers (cider) installed and reachable?
+    void api
+      .macAvailable()
+      .catch(() => false)
+      .then((macAvailable) => set({ macAvailable }));
     // Secondary windows boot into the notebook the opener asked for (or a
     // fresh home screen); the main window reopens the last-used notebook.
     const boot = window.__ALCHEMY_NOTEBOOK__;
@@ -626,6 +645,9 @@ export const useStore = create<AppState>((set, get) => {
     set({ paletteOpen: true });
   },
 
+  openAddSource: (step) => set({ addSourceOpen: true, addSourceStep: step ?? null }),
+  closeAddSource: () => set({ addSourceOpen: false }),
+
   toggleSources: () => {
     const v = !get().sourcesOpen;
     localStorage.setItem("sourcesOpen", String(v));
@@ -760,6 +782,15 @@ export const useStore = create<AppState>((set, get) => {
     };
     set({ ingestQueue: [...get().ingestQueue, item], error: null });
     await runQueued(get, set, item, () => api.addSourceText(id, title, text));
+    if (get().currentId === id) set({ sources: await api.listSources(id) });
+  },
+
+  addSourceMac: async (provider, collection, label) => {
+    const id = get().currentId;
+    if (!id) return;
+    const item: QueueItem = { id: `${Date.now()}`, name: label, status: "pending" };
+    set({ ingestQueue: [...get().ingestQueue, item], error: null });
+    await runQueued(get, set, item, () => api.addSourceMac(id, provider, collection, label));
     if (get().currentId === id) set({ sources: await api.listSources(id) });
   },
 
