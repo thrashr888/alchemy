@@ -56,6 +56,20 @@ async fn cider(args: &[&str]) -> anyhow::Result<serde_json::Value> {
     .map_err(|_| anyhow!("cider timed out"))?
     .context("failed to run cider")?;
     let stdout = String::from_utf8_lossy(&out.stdout);
+    if stdout.trim().is_empty() {
+        // Errors that never reach the JSON envelope land on stderr (e.g. a
+        // permission-denied reading another app's container).
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let detail = stderr.trim().chars().take(300).collect::<String>();
+        anyhow::bail!(
+            "cider produced no output{}",
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!(": {detail}")
+            }
+        );
+    }
     let v: serde_json::Value = serde_json::from_str(stdout.trim()).with_context(|| {
         format!(
             "unexpected cider output: {}",
