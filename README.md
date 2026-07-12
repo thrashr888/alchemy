@@ -18,6 +18,12 @@ built-in embedder. See
 
 [![CI](https://github.com/thrashr888/alchemy/actions/workflows/ci.yml/badge.svg)](https://github.com/thrashr888/alchemy/actions/workflows/ci.yml)
 
+[![One-minute demo: an agent fills a notebook over MCP, grounded chat with citations, an on-device podcast, and one-click agent connectors](demo/alchemy-demo.gif)](demo/alchemy-demo.mp4)
+
+*One minute of Alchemy — [full demo with sound](demo/alchemy-demo.mp4): an agent fills a
+notebook live over MCP, chat cites exact passages, and the notebook becomes a
+two-host podcast voiced on-device.*
+
 ![Grounded chat over your sources — streamed answers with inline citations, an AI notebook summary, and one-click document generators](docs/screenshot-chat.png)
 
 <details>
