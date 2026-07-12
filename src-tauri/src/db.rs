@@ -613,12 +613,14 @@ impl Db {
     /// Hybrid search: vector similarity and BM25 full-text, fused with
     /// reciprocal rank fusion. Embeddings find paraphrases; BM25 finds exact
     /// identifiers (names, codes, numbers) that vectors reliably miss.
+    /// `source_ids` narrows retrieval to those sources; None searches all.
     pub async fn search_chunks(
         &self,
         notebook_id: &str,
         query_vec: Vec<f32>,
         query_text: &str,
         k: usize,
+        source_ids: Option<&[String]>,
     ) -> Result<Vec<Citation>> {
         if !self.table_exists(T_CHUNKS).await? {
             return Ok(vec![]);
@@ -629,7 +631,19 @@ impl Db {
             titles.insert(s.id, s.title);
         }
 
-        let filter = format!("notebook_id = '{}'", esc(notebook_id));
+        let mut filter = format!("notebook_id = '{}'", esc(notebook_id));
+        if let Some(ids) = source_ids {
+            // Some(&[]) matches nothing — '' is never a real source id.
+            let list = if ids.is_empty() {
+                "''".to_string()
+            } else {
+                ids.iter()
+                    .map(|id| format!("'{}'", esc(id)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            filter.push_str(&format!(" AND source_id IN ({list})"));
+        }
         let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
         // Fetch a wider pool from each side than we return, so fusion has
         // something to work with.

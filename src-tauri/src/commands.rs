@@ -1914,7 +1914,7 @@ async fn try_tool_route(
                     label: format!("Generating {label}"),
                 },
             );
-            match generate_content(state, None, notebook_id, &kind, &prompt).await {
+            match generate_content(state, None, notebook_id, &kind, &prompt, None).await {
                 Ok((title, body)) => {
                     let ts = now();
                     let note = Note {
@@ -2276,6 +2276,7 @@ pub async fn send_message(
     notebook_id: String,
     content: String,
     config: Option<ChatConfig>,
+    source_ids: Option<Vec<String>>,
 ) -> Result<Message, String> {
     let content = content.trim().to_string();
     if content.is_empty() {
@@ -2307,14 +2308,16 @@ pub async fn send_message(
     };
     let citations = e(state
         .db
-        .search_chunks(&notebook_id, query_vec, &content, 8)
+        .search_chunks(&notebook_id, query_vec, &content, 8, source_ids.as_deref())
         .await)?;
 
     // Full source manifest (title + url) so corpus-level questions are
     // answerable regardless of which chunks the top-k search happened to
-    // surface, and the model can propose new addable URLs.
+    // surface, and the model can propose new addable URLs. Respects the
+    // source selection so deselected sources stay out of the prompt.
     let source_manifest: Vec<(String, String)> = e(state.db.list_sources(&notebook_id).await)?
         .into_iter()
+        .filter(|s| source_ids.as_ref().is_none_or(|ids| ids.contains(&s.id)))
         .map(|s| (s.title, s.url))
         .collect();
 
@@ -2391,6 +2394,7 @@ pub async fn send_message_agentic(
     notebook_id: String,
     content: String,
     config: Option<ChatConfig>,
+    source_ids: Option<Vec<String>>,
 ) -> Result<Message, String> {
     let content = content.trim().to_string();
     if content.is_empty() {
@@ -2437,6 +2441,7 @@ pub async fn send_message_agentic(
                 &content,
                 &history_turns,
                 &extra,
+                source_ids.as_deref(),
             ) => Some(e(r)?),
             _ = cancel.cancelled() => None,
         };
@@ -2761,13 +2766,15 @@ pub async fn convert_note_to_source(
 
 /// Generate artifact content for a kind (+ optional custom prompt) over all of
 /// a notebook's source text. Returns (title, content). When `app` is given,
-/// tokens stream to the UI as `artifact://token` events.
+/// tokens stream to the UI as `artifact://token` events. `source_ids` limits
+/// the corpus to those sources; None uses everything.
 async fn generate_content(
     state: &AppState,
     app: Option<&AppHandle>,
     notebook_id: &str,
     kind: &str,
     prompt: &str,
+    source_ids: Option<&[String]>,
 ) -> anyhow::Result<(String, String)> {
     // Known kinds use their spec (+ optional extra prompt); "custom"/unknown
     // kinds use the prompt itself as the instruction.
@@ -2791,9 +2798,15 @@ async fn generate_content(
         }
     };
 
-    let sources = state.db.list_sources(notebook_id).await?;
+    let mut sources = state.db.list_sources(notebook_id).await?;
     if sources.is_empty() {
         anyhow::bail!("Add at least one source before generating.");
+    }
+    if let Some(ids) = source_ids {
+        sources.retain(|s| ids.contains(&s.id));
+        if sources.is_empty() {
+            anyhow::bail!("No sources are selected. Select at least one source, then retry.");
+        }
     }
     // Budget the corpus fairly across sources (waterfill): every source is
     // represented, small ones donate unused budget to large ones. A blunt
@@ -2948,11 +2961,12 @@ pub async fn generate_artifact(
     notebook_id: String,
     kind: String,
     prompt: Option<String>,
+    source_ids: Option<Vec<String>>,
 ) -> Result<Note, String> {
     let prompt = prompt.unwrap_or_default();
     let cancel = state.begin_generation(&format!("artifact:{}", window.label()));
     let produced = tokio::select! {
-        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt) => Some(e(r)?),
+        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt, source_ids.as_deref()) => Some(e(r)?),
         _ = cancel.cancelled() => None,
     };
     let (title, content) = match produced {
@@ -2993,7 +3007,7 @@ pub async fn rebuild_note(
 ) -> Result<Note, String> {
     let cancel = state.begin_generation(&format!("artifact:{}", window.label()));
     let produced = tokio::select! {
-        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt) => Some(e(r)?),
+        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt, None) => Some(e(r)?),
         _ = cancel.cancelled() => None,
     };
     let (title, content) = match produced {
@@ -3084,6 +3098,7 @@ pub async fn generate_notebook_summary(
         "custom",
         "Write a 2-4 sentence plain-prose overview of what these sources collectively cover. \
          No lists, headings, or preamble — just the overview.",
+        None,
     )
     .await)?;
     Ok(content)
@@ -3186,6 +3201,7 @@ pub async fn run_report(
         &schedule.notebook_id,
         &schedule.kind,
         &schedule.prompt,
+        None,
     )
     .await)?;
 

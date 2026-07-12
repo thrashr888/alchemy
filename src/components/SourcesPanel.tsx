@@ -104,6 +104,36 @@ function hostname(url: string): string {
 
 type AddMode = null | "url" | "text";
 
+/** Compact selection checkbox; supports the folder/master indeterminate state.
+ *  Clicks stop propagating so the row's open-reader handler never fires. */
+function SelectBox({
+  checked,
+  indeterminate = false,
+  onToggle,
+  label,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  onToggle: () => void;
+  label: string;
+}) {
+  return (
+    <input
+      type="checkbox"
+      ref={(el) => {
+        if (el) el.indeterminate = indeterminate && !checked;
+      }}
+      checked={checked}
+      onChange={onToggle}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
+      title={label}
+      aria-label={label}
+      className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-[var(--primary)]"
+    />
+  );
+}
+
 export function SourcesPanel() {
   const sources = useStore((s) => s.sources);
   const currentId = useStore((s) => s.currentId);
@@ -120,6 +150,9 @@ export function SourcesPanel() {
   const draggingFiles = useStore((s) => s.draggingFiles);
   const toggleSources = useStore((s) => s.toggleSources);
   const openSourceViewer = useStore((s) => s.openSourceViewer);
+  const selectedSourceIds = useStore((s) => s.selectedSourceIds);
+  const toggleSourceSelected = useStore((s) => s.toggleSourceSelected);
+  const setAllSourcesSelected = useStore((s) => s.setAllSourcesSelected);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -196,6 +229,22 @@ export function SourcesPanel() {
     }
   }
   const childCount = (folderId: string) => sources.filter((x) => x.parentId === folderId).length;
+
+  // Selection: null means everything is on; the map holds only deselected ids.
+  const isSelected = (id: string) => !selectedSourceIds || selectedSourceIds[id] !== false;
+  // Folder container rows have no chunks — only content sources count.
+  const contentSources = sources.filter((s) => s.sourceType !== "folder");
+  const selectedCount = contentSources.filter((s) => isSelected(s.id)).length;
+  const allSelected = selectedCount === contentSources.length;
+
+  /** Tri-state folder toggle: partial/none → select all children; all → none. */
+  function toggleFolderSelected(folderId: string) {
+    const kids = sources.filter((x) => x.parentId === folderId);
+    const target = !kids.every((k) => isSelected(k.id));
+    for (const k of kids) {
+      if (isSelected(k.id) !== target) toggleSourceSelected(k.id);
+    }
+  }
 
   async function pickFiles() {
     setMenuOpen(false);
@@ -378,10 +427,25 @@ export function SourcesPanel() {
             hint="Upload PDFs, Office files, CSVs, images, or markdown; add a folder (it stays in sync — great for OneDrive/Dropbox); add a URL (Google Docs, Sheets & Slides work); or paste text. You can also drag files or folders onto the window."
           />
         ) : (
-          <div className="flex flex-col gap-0.5">
+          <>
+            {/* Master selection row: which sources feed chat & Studio. */}
+            <div className="mb-0.5 flex items-center gap-2 px-2 py-1.5">
+              <SelectBox
+                checked={allSelected}
+                indeterminate={selectedCount > 0 && !allSelected}
+                onToggle={() => setAllSourcesSelected(!allSelected)}
+                label={allSelected ? "Deselect all sources" : "Select all sources"}
+              />
+              <span className="text-[11px] text-muted-foreground">
+                {selectedCount} of {contentSources.length} selected
+              </span>
+            </div>
+            <div className="flex flex-col gap-0.5">
             {rows.map(({ s, indent }) => {
               const isFolder = s.sourceType === "folder";
               const readable = s.status === "ready" && !isFolder;
+              const kids = isFolder ? sources.filter((x) => x.parentId === s.id) : [];
+              const kidsOn = kids.filter((k) => isSelected(k.id)).length;
               return (
               <div
                 key={s.id}
@@ -397,6 +461,22 @@ export function SourcesPanel() {
                   indent && "ml-5",
                 )}
               >
+                <div className="mt-0.5">
+                  {isFolder ? (
+                    <SelectBox
+                      checked={kids.length > 0 && kidsOn === kids.length}
+                      indeterminate={kidsOn > 0 && kidsOn < kids.length}
+                      onToggle={() => toggleFolderSelected(s.id)}
+                      label={`Include "${s.title}" files in chat & generation`}
+                    />
+                  ) : (
+                    <SelectBox
+                      checked={isSelected(s.id)}
+                      onToggle={() => toggleSourceSelected(s.id)}
+                      label={`Include "${s.title}" in chat & generation`}
+                    />
+                  )}
+                </div>
                 <div className="mt-0.5">
                   {s.status === "error" ? (
                     <AlertCircle className="h-3.5 w-3.5 text-destructive" />
@@ -508,7 +588,8 @@ export function SourcesPanel() {
               </div>
               );
             })}
-          </div>
+            </div>
+          </>
         )}
       </div>
 

@@ -243,11 +243,11 @@ async fn eval_retrieval_recall() {
     for g in GOLDEN {
         let qvec = ai.embed_one(g.question).await.expect("embed question");
         let vec_only = db
-            .search_chunks(nb, qvec.clone(), "", K)
+            .search_chunks(nb, qvec.clone(), "", K, None)
             .await
             .expect("vector search");
         let hybrid = db
-            .search_chunks(nb, qvec, g.question, K)
+            .search_chunks(nb, qvec, g.question, K, None)
             .await
             .expect("hybrid search");
         rows.push((

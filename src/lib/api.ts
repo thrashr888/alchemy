@@ -122,10 +122,10 @@ export const api = {
 
   // Chat
   listMessages: (notebookId: string) => run(query<Message[]>("list_messages", { notebookId })),
-  sendMessage: (notebookId: string, content: string, config: ChatConfig) =>
-    run(ai<Message>("send_message", { notebookId, content, config })),
-  sendMessageAgentic: (notebookId: string, content: string, config: ChatConfig) =>
-    run(ai<Message>("send_message_agentic", { notebookId, content, config })),
+  sendMessage: (notebookId: string, content: string, config: ChatConfig, sourceIds?: string[] | null) =>
+    run(ai<Message>("send_message", { notebookId, content, config, sourceIds })),
+  sendMessageAgentic: (notebookId: string, content: string, config: ChatConfig, sourceIds?: string[] | null) =>
+    run(ai<Message>("send_message_agentic", { notebookId, content, config, sourceIds })),
   cancelGeneration: (scope?: "chat" | "artifact" | "tts") =>
     run(cmd<void>("cancel_generation", { scope })),
   suggestFollowups: (notebookId: string) =>
@@ -159,8 +159,8 @@ export const api = {
   deleteNote: (id: string) => run(cmd<void>("delete_note", { id })),
   convertNoteToSource: (noteId: string) =>
     run(ai<Source>("convert_note_to_source", { noteId })),
-  generateArtifact: (notebookId: string, kind: NoteKind, prompt?: string) =>
-    run(slow<Note>("generate_artifact", { notebookId, kind, prompt: prompt ?? "" })),
+  generateArtifact: (notebookId: string, kind: NoteKind, prompt?: string, sourceIds?: string[] | null) =>
+    run(slow<Note>("generate_artifact", { notebookId, kind, prompt: prompt ?? "", sourceIds })),
   rebuildNote: (noteId: string, notebookId: string, kind: NoteKind, prompt: string) =>
     run(slow<Note>("rebuild_note", { noteId, notebookId, kind, prompt })),
 
