@@ -151,6 +151,70 @@ pub async fn ensure_kokoro_files(
     Ok(())
 }
 
+/// Stay comfortably under Kokoro's 510-phoneme ceiling (phoneme tokens track
+/// character count closely for English).
+const MAX_SYNTH_CHARS: usize = 300;
+
+/// Split a dialogue line into chunks short enough for Kokoro: pack whole
+/// sentences up to the cap; hard-split on whitespace only when a single
+/// sentence alone exceeds it.
+pub(crate) fn split_for_synthesis(text: &str, max_chars: usize) -> Vec<String> {
+    let text = text.trim();
+    if text.chars().count() <= max_chars {
+        return vec![text.to_string()];
+    }
+    let mut sentences: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for ch in text.chars() {
+        cur.push(ch);
+        if matches!(ch, '.' | '!' | '?' | '…' | ';') {
+            sentences.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.trim().is_empty() {
+        sentences.push(cur);
+    }
+
+    let mut chunks: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for s in sentences {
+        let s = s.trim();
+        if s.is_empty() {
+            continue;
+        }
+        if s.chars().count() > max_chars {
+            if !cur.is_empty() {
+                chunks.push(std::mem::take(&mut cur));
+            }
+            let mut piece = String::new();
+            for w in s.split_whitespace() {
+                if !piece.is_empty() && piece.chars().count() + 1 + w.chars().count() > max_chars {
+                    chunks.push(std::mem::take(&mut piece));
+                }
+                if !piece.is_empty() {
+                    piece.push(' ');
+                }
+                piece.push_str(w);
+            }
+            if !piece.is_empty() {
+                chunks.push(piece);
+            }
+            continue;
+        }
+        if !cur.is_empty() && cur.chars().count() + 1 + s.chars().count() > max_chars {
+            chunks.push(std::mem::take(&mut cur));
+        }
+        if !cur.is_empty() {
+            cur.push(' ');
+        }
+        cur.push_str(s);
+    }
+    if !cur.is_empty() {
+        chunks.push(cur);
+    }
+    chunks
+}
+
 /// Kokoro-82M via ONNX (`kokoro-en`/ort): near-cloud-quality speech, fully
 /// on-device, roughly 2× realtime on Apple Silicon CPU. 24 kHz output.
 pub struct KokoroEngine {
@@ -172,11 +236,28 @@ impl KokoroEngine {
             Speaker::Host => HOST_VOICE,
             Speaker::Guest => GUEST_VOICE,
         };
-        let (samples, _took) = self
-            .tts
-            .synth(text, voice)
-            .await
-            .map_err(|e| anyhow::anyhow!("Kokoro synthesis failed: {e}"))?;
+        // Kokoro's voice packs hold one style vector per phoneme count, capped
+        // at 510 — a long monologue line indexes past the pack and panics
+        // inside kokoro-en. Synthesize in sentence-packed chunks instead, with
+        // a small breath between chunks so the join stays conversational.
+        let mut samples: Vec<f32> = Vec::new();
+        for (i, chunk) in split_for_synthesis(text, MAX_SYNTH_CHARS)
+            .iter()
+            .enumerate()
+        {
+            if i > 0 {
+                samples.extend(std::iter::repeat_n(
+                    0.0f32,
+                    (Self::SAMPLE_RATE / 8) as usize,
+                ));
+            }
+            let (chunk_samples, _took) = self
+                .tts
+                .synth(chunk, voice)
+                .await
+                .map_err(|e| anyhow::anyhow!("Kokoro synthesis failed: {e}"))?;
+            samples.extend(chunk_samples);
+        }
         anyhow::ensure!(!samples.is_empty(), "Kokoro produced no audio for a line");
         let spec = hound::WavSpec {
             channels: 1,
@@ -239,4 +320,37 @@ pub async fn assemble_episode(
     let _ = std::fs::remove_file(&episode_wav);
     anyhow::ensure!(status.success(), "afconvert failed to encode the episode");
     Ok(())
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::split_for_synthesis;
+
+    #[test]
+    fn short_lines_pass_through() {
+        assert_eq!(
+            split_for_synthesis("Hello there.", 300),
+            vec!["Hello there."]
+        );
+    }
+
+    #[test]
+    fn long_lines_split_at_sentences_under_cap() {
+        let line = "First sentence here. ".repeat(40); // ~840 chars
+        let chunks = split_for_synthesis(&line, 300);
+        assert!(chunks.len() >= 3);
+        assert!(chunks.iter().all(|c| c.chars().count() <= 300));
+        assert!(chunks.iter().all(|c| c.ends_with('.')));
+        // Nothing lost: same words in, same words out.
+        let rejoined: Vec<&str> = chunks.iter().flat_map(|c| c.split_whitespace()).collect();
+        assert_eq!(rejoined.len(), line.split_whitespace().count());
+    }
+
+    #[test]
+    fn giant_unpunctuated_sentence_hard_splits() {
+        let line = "word ".repeat(200); // 1000 chars, no terminators
+        let chunks = split_for_synthesis(&line, 300);
+        assert!(chunks.len() >= 4);
+        assert!(chunks.iter().all(|c| c.chars().count() <= 300));
+    }
 }
