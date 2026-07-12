@@ -5,7 +5,17 @@ import { useEffect, useRef } from "react";
  * quantized with 4x4 Bayer ordered dithering and tinted to the current theme.
  * WebGL1 (with an array-free Bayer) so it runs everywhere, incl. WKWebView.
  */
-export function DitherBackground({ themeKey, className }: { themeKey?: string; className?: string }) {
+export function DitherBackground({
+  themeKey,
+  className,
+  intensity = 1,
+}: {
+  themeKey?: string;
+  className?: string;
+  /** Tint strength multiplier — small surfaces (banners) need more than a
+   *  full-bleed hero to read as intentional. 1 = the hero's subtlety. */
+  intensity?: number;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -36,6 +46,8 @@ export function DitherBackground({ themeKey, className }: { themeKey?: string; c
     const uTime = gl.getUniformLocation(program, "u_time");
     const uTint = gl.getUniformLocation(program, "u_tint");
     const uBg = gl.getUniformLocation(program, "u_bg");
+    const uGain = gl.getUniformLocation(program, "u_gain");
+    gl.uniform1f(uGain, intensity);
 
     const readVar = (name: string, fallback: [number, number, number]) =>
       hexToRgb(getComputedStyle(document.documentElement).getPropertyValue(name).trim()) ?? fallback;
@@ -78,7 +90,7 @@ export function DitherBackground({ themeKey, className }: { themeKey?: string; c
       gl.deleteBuffer(buf);
       gl.deleteProgram(program);
     };
-  }, [themeKey]);
+  }, [themeKey, intensity]);
 
   return (
     <canvas
@@ -107,6 +119,7 @@ uniform vec2 u_res;
 uniform float u_time;
 uniform vec3 u_tint;
 uniform vec3 u_bg;
+uniform float u_gain;
 
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
 float vnoise(vec2 p){
@@ -140,7 +153,7 @@ void main(){
   L = max(L, ring);
   float d = bayer4(gl_FragCoord.xy) - 0.5;
   float q = floor(L * 5.0 + d + 0.5) / 5.0;
-  vec3 col = mix(u_bg, u_tint, q * 0.22);
+  vec3 col = mix(u_bg, u_tint, clamp(q * 0.22 * u_gain, 0.0, 1.0));
   gl_FragColor = vec4(col, 1.0);
 }`;
 

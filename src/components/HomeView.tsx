@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import { Button, Input, Modal, Badge, useConfirm } from "./ui";
+import { Button, Input, Modal, Badge, EmptyState, useConfirm } from "./ui";
 import { AlchemyHero } from "./AlchemyHero";
+import { DitherBackground } from "./DitherBackground";
 import { Markdown } from "./Markdown";
 import { intervalLabel } from "./Reports";
 import { cn, relativeTime, providerStatus, cardButtonProps, shortcutBlocked } from "@/lib/utils";
@@ -19,6 +20,7 @@ import {
   CheckCircle2,
   Circle,
   FileText,
+  Newspaper,
 } from "lucide-react";
 
 // Keep this list in sync with Rust in `src-tauri/src/db.rs` (`NOTEBOOK_PALETTE`)
@@ -58,10 +60,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [allReports, setAllReports] = useState<ReportSchedule[]>([]);
   const [recentNotes, setRecentNotes] = useState<Note[]>([]);
   const [stats, setStats] = useState<CorpusStats | null>(null);
-  // Latest generated reports, read in place in the right-hand feed. The
-  // limit grows as the feed scrolls (infinite-scroll in pages of 10).
+  // Latest generated reports, read in place in the right-hand feed. Fifty
+  // covers the pane's purpose — the notebook holds the full archive.
   const [reports, setReports] = useState<Note[]>([]);
-  const [reportLimit, setReportLimit] = useState(10);
   useEffect(() => {
     api
       .listAllReportSchedules()
@@ -72,16 +73,14 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       .then(setRecentNotes)
       .catch(() => setRecentNotes([]));
     api
+      .listRecentReports(50)
+      .then(setReports)
+      .catch(() => setReports([]));
+    api
       .corpusStats()
       .then(setStats)
       .catch(() => setStats(null));
   }, [notebooks]);
-  useEffect(() => {
-    api
-      .listRecentReports(reportLimit)
-      .then(setReports)
-      .catch(() => setReports([]));
-  }, [notebooks, reportLimit]);
   const notebookTitle = new Map(notebooks.map((n) => [n.id, n.title]));
   const notebookColor = new Map(notebooks.map((n) => [n.id, n.color]));
 
@@ -200,8 +199,14 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         <div className="flex min-h-0 flex-1">
         {/* Left pane: notebooks & activity. Right pane: the reports feed.
             Two independent scroll regions, same idiom as the notebook view. */}
-        <div className="min-w-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[960px] px-6 py-10">
+        <div className="relative min-w-0 flex-1 overflow-y-auto">
+        {/* The dither shader from the hero, as a banner behind the heading —
+            it fades into the background before the notebook grid starts. */}
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-64 overflow-hidden" aria-hidden="true">
+          <DitherBackground themeKey={theme} intensity={2} />
+          <div className="absolute inset-0 bg-[linear-gradient(to_bottom,transparent_55%,var(--background)_100%)]" />
+        </div>
+        <div className="relative mx-auto max-w-[960px] px-6 py-10">
           <div className="mb-6 flex items-end justify-between">
             <div>
               <h1 className="text-[22px] font-semibold tracking-tight">Your notebooks</h1>
@@ -418,20 +423,26 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         </div>
         </div>
 
-        {/* Reports feed: the latest reports as a continuously scrolling read,
-            newest first — the homepage doubles as the morning-read surface. */}
-        {reports.length > 0 && (
-          <aside className="hidden min-w-0 flex-1 flex-col border-l border-border lg:flex">
+        {/* Reports feed: unread first as a continuously scrolling read —
+            the homepage doubles as the morning-read surface. */}
+        <aside className="hidden min-w-0 flex-1 flex-col border-l border-border lg:flex">
+          {reports.length > 0 ? (
             <ReportsFeed
               reports={reports}
-              hasMore={reports.length >= reportLimit}
-              onMore={() => setReportLimit((l) => l + 10)}
               notebookTitle={notebookTitle}
               notebookColor={notebookColor}
               onOpen={openNote}
             />
-          </aside>
-        )}
+          ) : (
+            <div className="flex flex-1 items-center justify-center p-8">
+              <EmptyState
+                icon={<Newspaper className="h-7 w-7" />}
+                title="Reports land here"
+                hint="Schedule a recurring report from any notebook's Studio panel — it refreshes the notebook's URL sources, writes a timestamped note, and shows up on this page to read with your coffee."
+              />
+            </div>
+          )}
+        </aside>
         </div>
       )}
 
@@ -492,22 +503,19 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
 }
 
 /**
- * The reports feed: latest reports stacked newest-first as one continuous
- * read. Read state lives in localStorage keyed by note id and compared to
- * updatedAt, so a rebuilt report goes unread again; a card marks itself read
- * after dwelling in view. Scrolling near the end loads another page.
+ * The reports feed: unread reports (newest first), then a Show-more button
+ * exposing already-read ones five at a time. Read state lives in localStorage
+ * keyed by note id and compared to updatedAt, so a rebuilt report goes unread
+ * again; a card becomes read once the user scrolls past its end. Grouping is
+ * snapshotted per visit — cards don't jump between groups as you read.
  */
 function ReportsFeed({
   reports,
-  hasMore,
-  onMore,
   notebookTitle,
   notebookColor,
   onOpen,
 }: {
   reports: Note[];
-  hasMore: boolean;
-  onMore: () => void;
   notebookTitle: Map<string, string>;
   notebookColor: Map<string, string>;
   onOpen: (n: Note) => void;
@@ -529,23 +537,27 @@ function ReportsFeed({
       return next;
     });
 
-  // Load another page when the tail sentinel scrolls into view.
-  const moreRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = moreRef.current;
-    if (!el || !hasMore) return;
-    const io = new IntersectionObserver(([e]) => {
-      if (e.isIntersecting) onMore();
-    });
-    io.observe(el);
-    return () => io.disconnect();
-  }, [hasMore, onMore]);
+  // Group membership freezes on the first render for this set of reports:
+  // marking-as-read updates the badges live, but a card scrolled past must
+  // not vanish into the read fold mid-scroll.
+  const initialReads = useRef<Record<string, number> | null>(null);
+  if (initialReads.current === null) {
+    initialReads.current = { ...reads };
+  }
+  const wasUnread = (n: Note) => ((initialReads.current ?? {})[n.id] ?? 0) < n.updatedAt;
+  const unread = reports.filter(wasUnread);
+  const read = reports.filter((n) => !wasUnread(n));
+
+  // Read reports stay behind a Show-more fold, five at a time.
+  const [readShown, setReadShown] = useState(0);
+  const visibleRead = read.slice(0, readShown);
+  const remaining = read.length - visibleRead.length;
 
   return (
     <>
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-6">
         <span className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
-          Reports
+          Latest reports
         </span>
         {unreadCount > 0 && (
           <>
@@ -562,7 +574,12 @@ function ReportsFeed({
         )}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {reports.map((n) => (
+        {unread.length === 0 && (
+          <div className="px-6 py-6 text-center text-[12px] text-subtle-foreground">
+            You're all caught up.
+          </div>
+        )}
+        {[...unread, ...visibleRead].map((n) => (
           <ReportCard
             key={n.id}
             note={n}
@@ -570,13 +587,17 @@ function ReportsFeed({
             onSeen={() => markRead([n.id])}
             notebook={notebookTitle.get(n.notebookId) ?? "Unknown notebook"}
             color={notebookColor.get(n.notebookId) || NOTEBOOK_PALETTE[0]}
-            onOpen={() => onOpen(n)}
+            onOpen={() => {
+              markRead([n.id]);
+              onOpen(n);
+            }}
           />
         ))}
-        {hasMore && <div ref={moreRef} className="h-10" aria-hidden="true" />}
-        {!hasMore && reports.length > 3 && (
-          <div className="px-6 py-6 text-center text-[11px] text-subtle-foreground">
-            You're all caught up.
+        {remaining > 0 && (
+          <div className="flex justify-center px-6 py-5">
+            <Button variant="secondary" size="sm" onClick={() => setReadShown((s) => s + 5)}>
+              Show {Math.min(5, remaining)} more
+            </Button>
           </div>
         )}
       </div>
@@ -584,7 +605,7 @@ function ReportsFeed({
   );
 }
 
-/** One report in the feed; unread until it has dwelt in view for a moment. */
+/** One report in the feed; read once the user has scrolled past its end. */
 function ReportCard({
   note,
   unread,
@@ -600,38 +621,25 @@ function ReportCard({
   color: string;
   onOpen: () => void;
 }) {
-  const ref = useRef<HTMLElement>(null);
+  // A marker at the card's end: once it enters the pane, the user has reached
+  // (or scrolled past) the end of this report. Short reports fully on screen
+  // are read on sight; the last report is read when the feed bottoms out.
+  const endRef = useRef<HTMLDivElement>(null);
   const seenRef = useRef(onSeen);
   seenRef.current = onSeen;
 
   useEffect(() => {
-    const el = ref.current;
+    const el = endRef.current;
     if (!el || !unread) return;
-    // "Seen" = 40% of the card visible, or (for cards taller than the pane)
-    // the card filling most of it — held for a beat, so a fast scroll-past
-    // doesn't count as reading.
-    let timer: number | undefined;
-    const io = new IntersectionObserver(
-      ([e]) => {
-        const paneH = e.rootBounds?.height ?? window.innerHeight;
-        const showing = e.intersectionRatio >= 0.4 || e.intersectionRect.height >= paneH * 0.6;
-        window.clearTimeout(timer);
-        if (e.isIntersecting && showing) {
-          timer = window.setTimeout(() => seenRef.current(), 1500);
-        }
-      },
-      { threshold: [0, 0.4, 0.8] },
-    );
+    const io = new IntersectionObserver(([e]) => {
+      if (e.isIntersecting) seenRef.current();
+    });
     io.observe(el);
-    return () => {
-      window.clearTimeout(timer);
-      io.disconnect();
-    };
+    return () => io.disconnect();
   }, [unread]);
 
   return (
     <article
-      ref={ref}
       className={cn(
         "border-b border-border px-6 py-5",
         unread && "border-l-2 border-l-primary bg-primary/[0.04]",
@@ -662,6 +670,7 @@ function ReportCard({
       <div className="mt-2 text-[13px] leading-relaxed">
         <Markdown>{note.content}</Markdown>
       </div>
+      <div ref={endRef} aria-hidden="true" />
     </article>
   );
 }
