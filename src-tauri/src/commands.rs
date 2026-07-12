@@ -329,10 +329,42 @@ async fn store_failed_url(
     Ok(source)
 }
 
+/// Image bytes ready for the vision model. Formats its decoders rarely handle
+/// (HEIC/HEIF, AVIF, JPEG 2000, ICO, TIFF) are converted to PNG first via
+/// macOS's built-in `sips`; everything else is sent as-is.
+fn image_bytes_for_ocr(path: &str) -> anyhow::Result<Vec<u8>> {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let needs_png = matches!(
+        ext.as_str(),
+        "heic" | "heif" | "avif" | "ico" | "jp2" | "tif" | "tiff"
+    );
+    if !needs_png {
+        return std::fs::read(path).with_context(|| format!("failed to read {path}"));
+    }
+    let tmp = std::env::temp_dir().join(format!("alchemy-ocr-{}.png", new_id()));
+    let status = std::process::Command::new("sips")
+        .args(["-s", "format", "png"])
+        .arg(path)
+        .arg("-o")
+        .arg(&tmp)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .context("failed to run sips")?;
+    anyhow::ensure!(status.success(), "sips could not convert {path} to PNG");
+    let bytes = std::fs::read(&tmp).context("failed to read converted PNG")?;
+    let _ = std::fs::remove_file(&tmp);
+    Ok(bytes)
+}
+
 /// OCR an image file into an Extracted source using the vision model.
 async fn extract_image(state: &AppState, path: &str) -> anyhow::Result<ingest::Extracted> {
     use base64::Engine;
-    let bytes = std::fs::read(path).with_context(|| format!("failed to read {path}"))?;
+    let bytes = image_bytes_for_ocr(path)?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     let text = {
         let ai = state.ai.read().await;
@@ -719,9 +751,9 @@ pub async fn delete_source(state: State<'_, AppState>, source_id: String) -> Res
 /// Extensions worth ingesting from a folder scan (mirrors the frontend's
 /// SUPPORTED_EXTENSIONS in src/lib/utils.ts).
 const FOLDER_EXTENSIONS: &[&str] = &[
-    "pdf", "txt", "text", "md", "markdown", "docx", "pptx", "xlsx", "xls", "xlsm", "ods", "csv",
-    "tsv", "gdoc", "gsheet", "gslides", "png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff",
-    "heic",
+    "pdf", "txt", "text", "md", "markdown", "docx", "pptx", "epub", "xlsx", "xls", "xlsm", "ods",
+    "csv", "tsv", "gdoc", "gsheet", "gslides", "png", "jpg", "jpeg", "jpe", "webp", "gif", "bmp",
+    "tif", "tiff", "heic", "heif", "avif", "ico", "jp2",
 ];
 
 /// How deep a folder scan descends. Research folders are shallow; the cap only
