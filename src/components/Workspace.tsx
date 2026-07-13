@@ -5,6 +5,7 @@ import { ChatPanel } from "./ChatPanel";
 import { StudioPanel } from "./StudioPanel";
 import { SourceViewer } from "./SourceViewer";
 import { AddSourceModal } from "./AddSourceModal";
+import { ExternalAddModal } from "./ExternalAddModal";
 import { SourcesRail, StudioRail } from "./SidebarRails";
 import { HealthBanner } from "./HealthBanner";
 import { Button } from "./ui";
@@ -49,7 +50,12 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
         data-tauri-drag-region
         className="flex items-center gap-2 h-12 border-b border-border pl-[84px] pr-3"
       >
-        <Button variant="ghost" size="sm" onClick={close} title="Back to notebooks">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={close}
+          title="Back to notebooks"
+        >
           <ChevronLeft className="h-4 w-4" />
           Notebooks
         </Button>
@@ -62,7 +68,10 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
             title={notebook?.title}
             aria-hidden="true"
           />
-          <span className="truncate text-[13px] font-semibold" title={notebook?.title}>
+          <span
+            className="truncate text-[13px] font-semibold"
+            title={notebook?.title}
+          >
             {notebook?.title ?? "Notebook"}
           </span>
         </div>
@@ -76,14 +85,21 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
           >
             <Search className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" onClick={onOpenSettings} title="Settings">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onOpenSettings}
+            title="Settings"
+          >
             <Settings className="h-4 w-4" />
           </Button>
         </div>
       </header>
 
       {/* The banner flags model problems — its click-to-fix goes to Models. */}
-      <HealthBanner onOpenSettings={() => useStore.getState().openSettings("models")} />
+      <HealthBanner
+        onOpenSettings={() => useStore.getState().openSettings("models")}
+      />
 
       <div className="flex flex-1 overflow-hidden">
         {sourcesOpen ? <SourcesPanel /> : <SourcesRail />}
@@ -94,6 +110,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
       <SourceViewer />
       {/* Global: adding sources works even while the panel is collapsed. */}
       <AddSourceModal />
+      <ExternalAddModal />
     </div>
   );
 }

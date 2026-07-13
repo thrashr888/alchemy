@@ -4,12 +4,17 @@ mod commands;
 mod connectors;
 mod db;
 mod ingest;
+mod integrations;
 mod mac;
 mod mcp;
 mod menu;
 mod models;
 mod pdf;
 mod rag;
+#[cfg(target_os = "macos")]
+mod services;
+#[cfg(target_os = "macos")]
+mod spotlight;
 mod templates;
 mod tts;
 
@@ -30,7 +35,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build());
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build());
 
     #[cfg(feature = "debug")]
     let builder = builder.plugin(tauri_plugin_debug_bridge::init());
@@ -68,6 +75,10 @@ pub fn run() {
                     .unwrap_or_default();
             let handles = menu::build(&app.handle().clone(), &recents)?;
             app.set_menu(handles.menu)?;
+            // Deep links, tray, global hotkey (docs/RFC-macos-integrations.md).
+            integrations::setup(app, &recents, config.tray_enabled)?;
+            #[cfg(target_os = "macos")]
+            services::setup(app);
             // Only after set_menu does the NSMenu exist — now AppKit can be
             // told this is the windows menu and start listing open windows.
             #[cfg(target_os = "macos")]
@@ -90,6 +101,10 @@ pub fn run() {
             // ~/Documents/Alchemy/templates exists before anything lists it.
             templates::seed_on_startup(&data_dir);
 
+            // Spotlight needs AppState (it reads the db to build the index).
+            #[cfg(target_os = "macos")]
+            spotlight::setup(app);
+
             // Agent access: embedded MCP server (see docs/RFC-mcp-server.md).
             app.manage(mcp::McpState::default());
             let handle = app.handle().clone();
@@ -109,6 +124,8 @@ pub fn run() {
             commands::add_source_file,
             commands::add_source_folder,
             commands::add_source_mac,
+            integrations::integrations_ready,
+            integrations::locate_note,
             commands::mac_note_body,
             commands::update_mac_note,
             commands::add_mac_reminder,

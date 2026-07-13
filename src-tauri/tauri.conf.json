@@ -47,7 +47,7 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico",
-      "icons/AppIcon.icon"
+      "icons/Assets.car"
     ],
     "createUpdaterArtifacts": true,
     "macOS": {
@@ -55,6 +55,11 @@
     }
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["alchemy"]
+      }
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEwNDZCMTNDQ0QxMjM3OTUKUldTVk54TE5QTEZHb05tdmpEdEVZTWlCUmQvVU9uOWdZek5Tb3FvMm1jSXRhb3FwRW4vanQxS24K",
       "endpoints": [

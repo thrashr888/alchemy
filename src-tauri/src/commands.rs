@@ -871,7 +871,10 @@ pub async fn add_mac_reminder(
 }
 
 /// Post-write resync: fetch the item's current state and re-embed it.
-async fn resync_mac_source(state: &AppState, mut existing: Source) -> Result<Source, String> {
+pub(crate) async fn resync_mac_source(
+    state: &AppState,
+    mut existing: Source,
+) -> Result<Source, String> {
     let (_, text) = e(crate::mac::fetch(&existing.url).await)?;
     existing.mtime = crate::mac::content_stamp(&text);
     let extracted = ingest::Extracted {
@@ -1303,6 +1306,9 @@ pub async fn resync_sources(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<FolderScan, String> {
+    // The Spotlight index rides the same tick (internally ~10-min throttled).
+    #[cfg(target_os = "macos")]
+    crate::spotlight::refresh_if_due(&state).await;
     // A manual folder add/refresh is already scanning — skip this tick rather
     // than queue behind it and ingest the same files twice.
     let Ok(_guard) = state.folder_scan_lock.try_lock() else {
@@ -3479,12 +3485,15 @@ pub async fn rebuild_app_menu(
     app: AppHandle,
     state: State<'_, AppState>,
     recent: State<'_, crate::menu::RecentMenu>,
+    tray_recent: State<'_, crate::integrations::TrayRecents>,
 ) -> Result<(), String> {
     let recents: Vec<(String, String)> = e(state.db.list_notebooks().await)?
         .into_iter()
         .map(|n| (n.id, n.title))
         .collect();
-    crate::menu::fill_recents(&app, &recent.0, &recents).map_err(|err| err.to_string())
+    crate::menu::fill_recents(&app, &recent.0, &recents).map_err(|err| err.to_string())?;
+    // The tray's Recent Notebooks mirrors Open Recent.
+    crate::menu::fill_recents(&app, &tray_recent.0, &recents).map_err(|err| err.to_string())
 }
 
 // ---- Home page: activity, stats, global search ----------------------------
@@ -4014,6 +4023,7 @@ pub async fn set_ai_config(
     let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     std::fs::write(&state.config_path, json).map_err(|e| e.to_string())?;
     let (mcp_enabled, mcp_port) = (config.mcp_enabled, config.mcp_port);
+    crate::integrations::set_tray_visible(&app, config.tray_enabled);
     {
         let mut ai = state.ai.write().await;
         let data_dir = state

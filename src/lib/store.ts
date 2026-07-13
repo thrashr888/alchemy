@@ -35,6 +35,14 @@ export interface QueueItem {
   error?: string;
 }
 
+/** What an external workflow (deep link, Services, tray) wants to add. */
+export interface ExternalAdd {
+  files: string[];
+  url: string | null;
+  text: string | null;
+  title: string | null;
+}
+
 export interface Migration {
   done: number;
   total: number;
@@ -194,6 +202,14 @@ interface AppState {
     text: string,
   ) => Promise<void>;
   refreshSource: (sourceId: string) => Promise<void>;
+  /** Route an alchemy:// URL (deep link, tray, Services, Spotlight). */
+  handleIntegrationUrl: (raw: string) => Promise<void>;
+  /** External add waiting on a notebook choice (deep link/Services/tray). */
+  pendingExternalAdd: ExternalAdd | null;
+  confirmExternalAdd: (
+    notebookId: string,
+    payload?: ExternalAdd,
+  ) => Promise<void>;
   updateMacNote: (sourceId: string, body: string) => Promise<void>;
   addMacReminder: (
     sourceId: string,
@@ -420,6 +436,7 @@ export const useStore = create<AppState>((set, get) => {
     macAvailable: null,
     pendingAddUrl: false,
     pendingAddText: false,
+    pendingExternalAdd: null,
     pendingUpdateCheck: false,
     embedderDownload: null,
     failedInput: null,
@@ -605,6 +622,92 @@ export const useStore = create<AppState>((set, get) => {
           void get().selectNotebook(e.payload.id);
         },
       );
+
+      // OS entry points (deep links, tray, Services, Spotlight) all arrive
+      // as alchemy:// URLs on the main window; the backend buffers anything
+      // that fires before this listener is up.
+      if (label === "main") {
+        void listen<string>("integrations://url", (e) => {
+          void get().handleIntegrationUrl(e.payload);
+        });
+        void listen("integrations://ask", () => {
+          get().setPaletteOpen(true);
+        });
+        void listen<string>("integrations://toast", (e) => {
+          get().pushToast("info", e.payload);
+        });
+        void api.integrationsReady().then((pending) => {
+          for (const url of pending) void get().handleIntegrationUrl(url);
+        });
+      }
+    },
+
+    confirmExternalAdd: async (notebookId, payload) => {
+      const add = payload ?? get().pendingExternalAdd;
+      set({ pendingExternalAdd: null });
+      if (!add) return;
+      try {
+        if (get().currentId !== notebookId)
+          await get().selectNotebook(notebookId);
+        if (add.files.length) await get().addSourceFiles(add.files);
+        else if (add.url) await get().addSourceUrl(add.url);
+        else if (add.text) await get().addSourceText(add.title ?? "", add.text);
+      } catch (e) {
+        get().pushToast("error", e instanceof Error ? e.message : String(e));
+      }
+    },
+
+    handleIntegrationUrl: async (raw) => {
+      let u: URL;
+      try {
+        u = new URL(raw);
+      } catch {
+        return;
+      }
+      if (u.protocol !== "alchemy:") return;
+      const kind = u.hostname || u.pathname.replace(/^\/+/, "").split("/")[0];
+      const tail = decodeURIComponent(u.pathname.replace(/^\/+/, ""));
+      try {
+        if (kind === "notebook" && tail) {
+          await get().selectNotebook(tail);
+        } else if (kind === "note" && tail) {
+          const nb = await api.locateNote(tail);
+          if (!nb) {
+            get().pushToast("error", "That note no longer exists");
+            return;
+          }
+          await get().selectNotebook(nb);
+          // The just-created hook opens the note card (and marks it read).
+          set({ studioOpen: true, justCreatedNoteId: tail });
+        } else if (kind === "add") {
+          const p = u.searchParams;
+          const payload = {
+            files: p.getAll("file"),
+            url: p.get("url"),
+            text: p.get("text"),
+            title: p.get("title"),
+          };
+          if (!payload.files.length && !payload.url && !payload.text) return;
+          if (get().notebooks.length === 0) {
+            get().pushToast(
+              "error",
+              "Create a notebook first, then add sources",
+            );
+            return;
+          }
+          const nb = p.get("notebook");
+          if (nb) {
+            // The caller named a notebook — no need to ask.
+            await get().confirmExternalAdd(nb, payload);
+          } else {
+            // External adds can't know which notebook the user meant (there
+            // may be several windows) — ask, defaulting to the most recent.
+            set({ pendingExternalAdd: payload });
+          }
+        }
+      } catch (e) {
+        get().pushToast("error", e instanceof Error ? e.message : String(e));
+      }
     },
 
     refreshModelHealth: async () => {
@@ -1460,8 +1563,7 @@ useStore.subscribe((s, prev) => {
     playError();
 });
 
-// Dev builds expose the store for debugging (the debug bridge's invoke path
-// bypasses the frontend, so this is the only window into live UI state).
-if (import.meta.env.DEV) {
-  (window as unknown as Record<string, unknown>).__store = useStore;
-}
+// The store rides on `window` in every build — debugging in dev, and a
+// window into live UI state for users' AI agents in prod (the debug
+// bridge's invoke path bypasses the frontend, so this is the only one).
+(window as unknown as Record<string, unknown>).__store = useStore;

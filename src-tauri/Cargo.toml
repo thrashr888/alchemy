@@ -20,7 +20,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+tauri = { version = "2", features = ["protocol-asset", "tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -68,11 +68,17 @@ hound = "3"
 # (misaki's dictionary handles G2P). Model downloads on first use like the
 # built-in embedder.
 kokoro-en = { version = "0.1.4", default-features = false }
+tauri-plugin-deep-link = "2.4.9"
+tauri-plugin-global-shortcut = "2.3.2"
 
-# Already in the tree via tauri/wry — used to re-apply the traffic-light
-# inset after webview reloads reset it (see commands::fix_traffic_lights).
+# Already in the tree via tauri/wry — traffic-light insets, the Services
+# provider (services.rs), and Spotlight indexing (spotlight.rs).
 [target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
 objc2-app-kit = "0.3"
+objc2-core-spotlight = "0.3"
+block2 = "0.6"
 
 [features]
 # Dev-only: exposes the debug bridge for CLI automation/inspection.
