@@ -446,6 +446,9 @@ export function StudioPanel() {
                 className="group cursor-pointer rounded-md border border-border bg-surface-2/40 px-3 py-2.5 transition-colors hover:border-border-strong hover:bg-surface-2"
               >
                 <div className="flex items-center gap-2">
+                  <span className="truncate text-[13px] font-medium text-foreground">
+                    {n.title}
+                  </span>
                   {noteUnread(n, noteReads, noteReadsBaseline) && (
                     <span
                       className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
@@ -453,9 +456,6 @@ export function StudioPanel() {
                       aria-label="Unread"
                     />
                   )}
-                  <span className="truncate text-[13px] font-medium text-foreground">
-                    {n.title}
-                  </span>
                   <div className="ml-auto flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
                     <span onClick={(e) => e.stopPropagation()}>
                       <CopyButton text={n.content} iconOnly />
