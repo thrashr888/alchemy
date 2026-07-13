@@ -76,7 +76,14 @@ get a nicer flow for free.
 1. Add-source modal (pure frontend; immediately improves existing adds).
 2. `mac.rs` backend: capability detection, three read-only providers,
    cider:// refresh + sweep integration.
-3. Later: sidecar bundling, Mail/Contacts (privacy story first), writes/tools
+3. Narrow write-back (shipped): sources stay sync-driven, but the two
+   providers with natural edit affordances accept writes routed through the
+   Mac app itself — "Edit note" replaces an Apple Note's body (first line is
+   the title), "Add reminder…" appends to a connected list. Every write is
+   followed by a normal re-fetch + re-embed, so Alchemy never holds state
+   the app doesn't. Stocks joined as a fourth provider (watchlists +
+   cached quotes; strictly read-only).
+4. Later: sidecar bundling, Mail/Contacts (privacy story first), chat tools
    if sources prove insufficient.
 
 ## Open questions

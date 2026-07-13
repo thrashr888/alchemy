@@ -830,6 +830,59 @@ pub async fn add_source_mac(
     Ok(source)
 }
 
+/// The raw note text behind an Apple Notes source, for the editor (first
+/// line is the note's title — keep it there or Notes renames the note).
+#[tauri::command]
+pub async fn mac_note_body(
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<String, String> {
+    let src =
+        e(state.db.get_source(&source_id).await)?.ok_or_else(|| "Source not found".to_string())?;
+    e(crate::mac::note_body(&src.url).await)
+}
+
+/// Write an edited body back to the Apple Note, then re-fetch and re-embed so
+/// the source mirrors what Notes now has.
+#[tauri::command]
+pub async fn update_mac_note(
+    state: State<'_, AppState>,
+    source_id: String,
+    body: String,
+) -> Result<Source, String> {
+    let existing =
+        e(state.db.get_source(&source_id).await)?.ok_or_else(|| "Source not found".to_string())?;
+    e(crate::mac::update_note(&existing.url, &body).await)?;
+    resync_mac_source(&state, existing).await
+}
+
+/// Add a reminder to the list a Reminders source mirrors, then resync it.
+#[tauri::command]
+pub async fn add_mac_reminder(
+    state: State<'_, AppState>,
+    source_id: String,
+    title: String,
+    notes: Option<String>,
+) -> Result<Source, String> {
+    let existing =
+        e(state.db.get_source(&source_id).await)?.ok_or_else(|| "Source not found".to_string())?;
+    e(crate::mac::add_reminder(&existing.url, &title, notes.as_deref()).await)?;
+    resync_mac_source(&state, existing).await
+}
+
+/// Post-write resync: fetch the item's current state and re-embed it.
+async fn resync_mac_source(state: &AppState, mut existing: Source) -> Result<Source, String> {
+    let (_, text) = e(crate::mac::fetch(&existing.url).await)?;
+    existing.mtime = crate::mac::content_stamp(&text);
+    let extracted = ingest::Extracted {
+        title: existing.title.clone(),
+        source_type: "mac".to_string(),
+        url: existing.url.clone(),
+        text,
+    };
+    e(reingest(state, &existing, extracted).await)
+}
+
 // ---- Folder sources --------------------------------------------------------
 
 /// Extensions worth ingesting from a folder scan (mirrors the frontend's
