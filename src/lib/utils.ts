@@ -13,7 +13,7 @@ export function cn(...inputs: ClassValue[]) {
  * OS drag-drop filtering, and the command menu.
  */
 export const SUPPORTED_EXTENSIONS = [
-  "pdf", "txt", "text", "md", "markdown",
+  "pdf", "txt", "text", "md", "markdown", "html", "htm", "xhtml",
   "docx", "pptx", "epub", "xlsx", "xls", "xlsm", "ods", "csv", "tsv",
   "gdoc", "gsheet", "gslides",
   "png", "jpg", "jpeg", "jpe", "webp", "gif", "bmp", "tif", "tiff",

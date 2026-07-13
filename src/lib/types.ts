@@ -20,7 +20,7 @@ export interface Source {
   id: string;
   notebookId: string;
   title: string;
-  sourceType: "pdf" | "text" | "markdown" | "url" | "image" | "folder" | "mac";
+  sourceType: "pdf" | "text" | "markdown" | "html" | "url" | "image" | "folder" | "mac";
   url: string;
   content: string;
   /** "placeholder" = cloud-sync file not downloaded yet; listed, not embedded. */

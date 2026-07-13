@@ -811,7 +811,11 @@ pub async fn add_source_mac(
         }
     }
     let (default_title, text) = e(crate::mac::fetch(&uri).await)?;
-    let title = if label.trim().is_empty() { default_title } else { label };
+    let title = if label.trim().is_empty() {
+        default_title
+    } else {
+        label
+    };
     // Mac sources carry a content hash in `mtime` (there's no file mtime);
     // store_extracted stamps 0 for a nonexistent path, so set it after.
     let stamp = crate::mac::content_stamp(&text);
@@ -831,9 +835,9 @@ pub async fn add_source_mac(
 /// Extensions worth ingesting from a folder scan (mirrors the frontend's
 /// SUPPORTED_EXTENSIONS in src/lib/utils.ts).
 const FOLDER_EXTENSIONS: &[&str] = &[
-    "pdf", "txt", "text", "md", "markdown", "docx", "pptx", "epub", "xlsx", "xls", "xlsm", "ods",
-    "csv", "tsv", "gdoc", "gsheet", "gslides", "png", "jpg", "jpeg", "jpe", "webp", "gif", "bmp",
-    "tif", "tiff", "heic", "heif", "avif", "ico", "jp2",
+    "pdf", "txt", "text", "md", "markdown", "html", "htm", "xhtml", "docx", "pptx", "epub", "xlsx",
+    "xls", "xlsm", "ods", "csv", "tsv", "gdoc", "gsheet", "gslides", "png", "jpg", "jpeg", "jpe",
+    "webp", "gif", "bmp", "tif", "tiff", "heic", "heif", "avif", "ico", "jp2",
 ];
 
 /// How deep a folder scan descends. Research folders are shallow; the cap only
@@ -1055,15 +1059,21 @@ async fn rescan_one_folder(
         state.db.replace_source(&ok, &[], &[]).await?;
     }
 
-    let children: Vec<Source> = state
-        .db
-        .list_sources(&folder.notebook_id)
-        .await?
-        .into_iter()
+    let all_sources = state.db.list_sources(&folder.notebook_id).await?;
+    // A file already in the notebook some other way — added individually, or
+    // owned by an overlapping folder source — is not this folder's to ingest.
+    let claimed: HashSet<&str> = all_sources
+        .iter()
+        .filter(|s| s.parent_id != folder.id && s.id != folder.id && !s.url.is_empty())
+        .map(|s| s.url.as_str())
+        .collect();
+    let children: Vec<&Source> = all_sources
+        .iter()
         .filter(|s| s.parent_id == folder.id)
         .collect();
-    let on_disk = scan_folder(root);
-    let by_path: HashMap<&str, &Source> = children.iter().map(|c| (c.url.as_str(), c)).collect();
+    let mut on_disk = scan_folder(root);
+    on_disk.retain(|e| !claimed.contains(e.path.as_str()));
+    let by_path: HashMap<&str, &Source> = children.iter().map(|c| (c.url.as_str(), *c)).collect();
 
     // Decide the work list up front so progress events get a meaningful total.
     // An evicted file next to a ready child is NOT work: the text we embedded

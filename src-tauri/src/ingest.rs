@@ -70,13 +70,29 @@ pub fn extract_file(path: &str) -> Result<Extracted> {
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
-    let title = p
+    let mut title = p
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("Untitled")
         .to_string();
 
     let (source_type, text) = match ext.as_str() {
+        "html" | "htm" | "xhtml" => {
+            // Saved pages run through the same readability extraction as
+            // fetched URLs — article body out, nav and boilerplate dropped —
+            // and take the document's own title over the filename.
+            let body = read_text_lossy(path)?;
+            let (doc_title, text) = readable_text(&body, &format!("file://{path}"));
+            // Readability found no article title? The <title> tag still beats
+            // the filename stem.
+            if let Some(t) = doc_title
+                .or_else(|| extract_title(&body))
+                .filter(|t| !t.trim().is_empty())
+            {
+                title = t;
+            }
+            ("html".to_string(), text)
+        }
         "pdf" => {
             let text = pdf_extract::extract_text(path)
                 .with_context(|| format!("failed to extract text from PDF {path}"))?;
@@ -1350,6 +1366,36 @@ mod tests {
             Some("Roadmap")
         );
         assert!(title_from_content_disposition(&reqwest::header::HeaderMap::new()).is_none());
+    }
+
+    /// Local HTML files run through the same readability path as URLs: the
+    /// article body survives, chrome is dropped, and the document title wins
+    /// over the filename stem.
+    #[test]
+    fn html_files_extract_like_urls() {
+        let body = format!(
+            "<html><head><title>The Athanor Manual</title></head><body>\
+             <nav><a href=\"/\">Home</a><a href=\"/about\">About</a></nav>\
+             <article><h1>The Athanor Manual</h1>{}</article>\
+             <footer>Copyright 2026 · Privacy · Terms</footer></body></html>",
+            "<p>The athanor holds a steady heat for the long digestion. Keep the \
+             vessel sealed and the fire moderate; sudden temperature changes crack \
+             the glass and spoil the work entirely.</p>"
+                .repeat(4)
+        );
+        let path = std::env::temp_dir().join(format!("alchemy-test-{}.html", std::process::id()));
+        std::fs::write(&path, &body).unwrap();
+        let ex = extract_file(path.to_str().unwrap()).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(ex.source_type, "html");
+        assert_eq!(ex.title, "The Athanor Manual");
+        assert!(ex.text.contains("steady heat for the long digestion"));
+        assert!(
+            !ex.text.contains("Copyright 2026"),
+            "boilerplate dropped: {}",
+            ex.text
+        );
     }
 
     #[test]
