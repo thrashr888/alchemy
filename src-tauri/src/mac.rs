@@ -76,18 +76,23 @@ async fn cider(args: &[&str]) -> anyhow::Result<serde_json::Value> {
             stdout.chars().take(200).collect::<String>()
         )
     })?;
-    if v["ok"].as_bool() == Some(true) {
-        Ok(v["data"].clone())
-    } else {
+    // Success is BARE JSON (an array or object); only failures wear the
+    // {"ok": false, "error": …} envelope.
+    if v["ok"].as_bool() == Some(false) {
         let msg = v["error"]["message"]
             .as_str()
+            .or_else(|| v["error"].as_str())
             .unwrap_or("cider call failed");
         // The first call to a data class pops a macOS permission prompt; a
         // timeout here usually means it's waiting on (or was denied) consent.
-        Err(anyhow!(
+        return Err(anyhow!(
             "{msg} — if macOS asked for permission, allow it and retry"
-        ))
+        ));
     }
+    if v["ok"].as_bool() == Some(true) {
+        return Ok(v["data"].clone());
+    }
+    Ok(v)
 }
 
 /// Content hash packed into the source's i64 `mtime` column — the sweep's
