@@ -376,7 +376,9 @@ export function SourcesPanel() {
                     </div>
                   )}
                 </div>
-                <div className="flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+                {/* Hidden (not transparent) until hover, so idle rows keep
+                    the full width for their titles. */}
+                <div className="hidden items-center gap-0.5 group-hover:flex group-focus-within:flex">
                   {/* url holds the origin: a web URL, an on-disk path, or a
                       folder — any of them can be refreshed. */}
                   {s.url && (

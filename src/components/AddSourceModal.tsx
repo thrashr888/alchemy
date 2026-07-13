@@ -304,7 +304,7 @@ export function AddSourceModal() {
           )}
           <p className="mt-2 text-[11px] leading-relaxed text-subtle-foreground">
             {provider.id === "notes"
-              ? "A folder syncs as one source — notes you add to it later are picked up automatically. "
+              ? "The note's full text becomes one source and re-syncs as you edit it. "
               : provider.id === "reminders"
                 ? "A list syncs as one source — new reminders are picked up automatically. "
                 : ""}

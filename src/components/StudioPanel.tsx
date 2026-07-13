@@ -456,7 +456,7 @@ export function StudioPanel() {
                       aria-label="Unread"
                     />
                   )}
-                  <div className="ml-auto flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+                  <div className="ml-auto hidden items-center gap-0.5 group-hover:flex group-focus-within:flex">
                     <span onClick={(e) => e.stopPropagation()}>
                       <CopyButton text={n.content} iconOnly />
                     </span>

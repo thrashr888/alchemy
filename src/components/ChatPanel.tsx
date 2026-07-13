@@ -399,7 +399,11 @@ function SummaryBanner({
       {loading && !summary ? (
         <div className="text-[13px] text-muted-foreground">Summarizing sources…</div>
       ) : (
-        <p className="text-[13px] leading-relaxed text-foreground/90 selectable">{summary}</p>
+        <div className="text-[13px] leading-relaxed text-foreground/90 selectable">
+          {/* Single newlines become markdown hard breaks so the model's line
+              breaks survive; double newlines stay paragraphs. */}
+          <Markdown>{summary.replace(/\n(?!\n)/g, "  \n")}</Markdown>
+        </div>
       )}
     </div>
   );

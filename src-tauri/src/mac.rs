@@ -154,19 +154,23 @@ pub async fn list_mac_collections(provider: String) -> Result<Vec<MacCollection>
                 })
                 .collect())
         }
+        // Individual notes, not folders — one note becomes one source (its
+        // full text via `notes get`, past the list command's 2000-char cap).
         "notes" => {
-            let data = cider(&["notes", "folders"])
+            let data = cider(&["notes", "list"])
                 .await
                 .map_err(|e| format!("{e:#}"))?;
             Ok(data
                 .as_array()
                 .unwrap_or(&vec![])
                 .iter()
-                .filter_map(|f| f["name"].as_str())
-                .map(|name| MacCollection {
-                    id: name.to_string(),
-                    label: name.to_string(),
-                    detail: "Apple Notes folder".to_string(),
+                .filter_map(|n| {
+                    let id = n["id"].as_str()?;
+                    Some(MacCollection {
+                        id: id.to_string(),
+                        label: n["title"].as_str().unwrap_or("Untitled").to_string(),
+                        detail: n["folder"].as_str().unwrap_or("Apple Notes").to_string(),
+                    })
                 })
                 .collect())
         }
@@ -180,7 +184,7 @@ pub fn mac_uri(provider: &str, collection: &str) -> String {
     match provider {
         "calendar" => format!("cider://calendar/upcoming/{collection}"),
         "reminders" => format!("cider://reminders/list/{collection}"),
-        _ => format!("cider://notes/folder/{collection}"),
+        _ => format!("cider://notes/note/{collection}"),
     }
 }
 
@@ -244,6 +248,27 @@ pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
         }
         return Ok((format!("Reminders: {list}"), out));
     }
+    if let Some(id) = uri.strip_prefix("cider://notes/note/") {
+        let n = cider(&["notes", "get", "--id", id]).await?;
+        let title = n["title"].as_str().unwrap_or("Untitled").to_string();
+        let mut out = format!("# {title}\n\n");
+        if let Some(f) = n["folder"].as_str() {
+            out.push_str(&format!("_Apple Notes · {f}"));
+            if let Some(m) = n["modified"].as_str() {
+                out.push_str(&format!(
+                    " · modified {}",
+                    m.chars().take(10).collect::<String>()
+                ));
+            }
+            out.push_str("_\n\n");
+        }
+        if let Some(body) = n["body"].as_str() {
+            out.push_str(body.trim());
+            out.push('\n');
+        }
+        return Ok((title, out));
+    }
+    // Legacy folder-as-source origins keep syncing.
     if let Some(folder) = uri.strip_prefix("cider://notes/folder/") {
         let data = cider(&["notes", "list", "--folder", folder]).await?;
         let mut out = format!("# Apple Notes — {folder}\n\n");
