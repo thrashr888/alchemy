@@ -1,0 +1,34 @@
+{
+  "fill": {
+    "automatic-gradient": "extended-srgb:0.14510,0.24706,0.82353,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "blend-mode": "normal",
+          "fill": "automatic",
+          "glass": false,
+          "hidden": false,
+          "image-name": "icon.png",
+          "name": "book",
+          "position": {
+            "scale": 0.78,
+            "translation-in-points": [0, 0]
+          }
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.5
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}
