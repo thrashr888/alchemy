@@ -130,7 +130,7 @@ function SelectBox({
       onKeyDown={(e) => e.stopPropagation()}
       title={label}
       aria-label={label}
-      className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-[var(--muted-foreground)] opacity-60 transition-opacity hover:opacity-100"
+      className="select-quiet"
     />
   );
 }
