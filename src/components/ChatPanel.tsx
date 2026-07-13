@@ -599,8 +599,6 @@ function ChatHero({
   hasSources: boolean;
   compact: boolean;
 }) {
-  const aiConfig = useStore((s) => s.aiConfig);
-  const via = aiConfig?.provider === "openai" ? "via your gateway" : "locally with Ollama";
   return (
     <div
       className={cn(
@@ -623,11 +621,39 @@ function ChatHero({
                 ? "Add sources to start a grounded chat"
                 : "Ask anything about your sources"}
           </div>
-          <p className="max-w-[360px] text-[13px] text-muted-foreground">
-            Answers are generated {via} and cite the exact passages they draw from.
-          </p>
+          <RotatingQuote />
         </>
       )}
     </div>
+  );
+}
+
+/** Alchemy-flavored lines about what the chat actually does — one at a time,
+ *  starting somewhere different each visit, turning over unhurriedly. */
+const QUOTES = [
+  "Solve et coagula — your sources dissolved, your answers given form.",
+  "Every answer shows its work: citations back to the exact passage.",
+  "The athanor burns on your own machine; nothing leaves the laboratory.",
+  "Prima materia in, quintessence out.",
+  "As above, so below — every claim traces to a line in your sources.",
+  "Transmutation, with receipts.",
+  "Distill a hundred pages into one clear draught.",
+  "The Great Work proceeds one question at a time.",
+  "Hermetically sealed: your corpus, your model, your machine.",
+];
+
+function RotatingQuote() {
+  const [i, setI] = useState(() => Math.floor(Math.random() * QUOTES.length));
+  useEffect(() => {
+    const t = setInterval(() => setI((n) => (n + 1) % QUOTES.length), 10_000);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <p
+      key={i}
+      className="max-w-[360px] animate-[quote-fade_0.8s_ease] text-[13px] text-muted-foreground"
+    >
+      {QUOTES[i]}
+    </p>
   );
 }
