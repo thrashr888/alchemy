@@ -10,7 +10,12 @@ import { Button, Input, Modal, Spinner, Textarea } from "./ui";
 import { cn } from "@/lib/utils";
 import { AlchemySymbol } from "./AlchemyHero";
 import { MacConnect } from "./MacConnect";
-import type { AiConfig, ChatConfig, ConnectorStatus, McpStatus } from "@/lib/types";
+import type {
+  AiConfig,
+  ChatConfig,
+  ConnectorStatus,
+  McpStatus,
+} from "@/lib/types";
 import {
   RefreshCw,
   CheckCircle2,
@@ -38,7 +43,10 @@ const normModel = (m: string) => m.replace(/:latest$/, "");
 // MLX-accelerated and lean-active MoE chat models worth benchmarking locally.
 // Compare their recorded tok/s in the status box above against your current one.
 const SUGGESTED_CHAT = [
-  { name: "qwen3.5:35b-a3b-coding-nvfp4", note: "MLX/NVFP4 · 3B active · fastest" },
+  {
+    name: "qwen3.5:35b-a3b-coding-nvfp4",
+    note: "MLX/NVFP4 · 3B active · fastest",
+  },
   { name: "gemma4:31b-mlx", note: "MLX · 31B · vision · 256K ctx" },
   { name: "gemma4:12b-mlx", note: "MLX · 12B · vision · lighter" },
   { name: "gpt-oss:120b", note: "120B MoE · ~5B active · strong all-rounder" },
@@ -54,7 +62,6 @@ const SUGGESTED_VISION = [
   { name: "gemma4:12b-mlx", note: "MLX · general vision" },
   { name: "minimax-m3", note: "vision · 1M context (general)" },
 ];
-
 
 const TABS = [
   { id: "general", label: "General", icon: SlidersHorizontal },
@@ -80,7 +87,9 @@ export function SettingsDialog({
   const save = useStore((s) => s.saveAiConfig);
   const reembedAll = useStore((s) => s.reembedAll);
   const refreshModelHealth = useStore((s) => s.refreshModelHealth);
-  const totalSources = useStore((s) => s.notebooks.reduce((sum, n) => sum + n.sourceCount, 0));
+  const totalSources = useStore((s) =>
+    s.notebooks.reduce((sum, n) => sum + n.sourceCount, 0),
+  );
 
   const [tab, setTab] = useState(initialTab);
   const [draft, setDraft] = useState<AiConfig | null>(null);
@@ -157,7 +166,10 @@ export function SettingsDialog({
     // Gateway provider with no model picked: ask the gateway and take the first.
     if (draft.provider === "openai" && !draft.openaiChatModel.trim()) {
       try {
-        const models = await api.listGatewayModels(draft.openaiBaseUrl, draft.openaiApiKey);
+        const models = await api.listGatewayModels(
+          draft.openaiBaseUrl,
+          draft.openaiApiKey,
+        );
         if (models.length > 0) {
           toSave = { ...draft, openaiChatModel: models[0] };
           setDraft(toSave);
@@ -184,7 +196,8 @@ export function SettingsDialog({
   function cancelSwitch() {
     // Keep the previous embedding model so we never leave a broken index.
     setConfirmReembed(false);
-    if (draft && aiConfig) setDraft({ ...draft, embedModel: aiConfig.embedModel });
+    if (draft && aiConfig)
+      setDraft({ ...draft, embedModel: aiConfig.embedModel });
   }
 
   if (!draft) {
@@ -245,7 +258,11 @@ export function SettingsDialog({
                 connOk={connOk}
                 provider={draft.provider}
                 modelCount={models.length}
-                chatModel={draft.provider === "openai" ? draft.openaiChatModel : draft.chatModel}
+                chatModel={
+                  draft.provider === "openai"
+                    ? draft.openaiChatModel
+                    : draft.chatModel
+                }
                 loading={loadingModels}
                 onRefresh={() => {
                   void refreshModels();
@@ -253,11 +270,18 @@ export function SettingsDialog({
                 }}
               />
 
-              <Field label="AI provider" hint="Where chat and document generation run.">
+              <Field
+                label="AI provider"
+                hint="Where chat and document generation run."
+              >
                 <div className="grid grid-cols-2 gap-1.5">
                   {[
                     { id: "ollama", label: "Ollama", note: "Local & private" },
-                    { id: "openai", label: "OpenAI-compatible", note: "Cloud or enterprise gateway" },
+                    {
+                      id: "openai",
+                      label: "OpenAI-compatible",
+                      note: "Cloud or enterprise gateway",
+                    },
                   ].map((pv) => (
                     <button
                       key={pv.id}
@@ -269,8 +293,12 @@ export function SettingsDialog({
                           : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
                       )}
                     >
-                      <span className="text-[12.5px] font-medium">{pv.label}</span>
-                      <span className="text-[11px] text-subtle-foreground">{pv.note}</span>
+                      <span className="text-[12.5px] font-medium">
+                        {pv.label}
+                      </span>
+                      <span className="text-[11px] text-subtle-foreground">
+                        {pv.note}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -284,7 +312,9 @@ export function SettingsDialog({
                   >
                     <Input
                       value={draft.openaiBaseUrl}
-                      onChange={(e) => setDraft({ ...draft, openaiBaseUrl: e.target.value })}
+                      onChange={(e) =>
+                        setDraft({ ...draft, openaiBaseUrl: e.target.value })
+                      }
                       placeholder="https://api.example.com/v1"
                     />
                   </Field>
@@ -295,7 +325,9 @@ export function SettingsDialog({
                     <Input
                       type="password"
                       value={draft.openaiApiKey}
-                      onChange={(e) => setDraft({ ...draft, openaiApiKey: e.target.value })}
+                      onChange={(e) =>
+                        setDraft({ ...draft, openaiApiKey: e.target.value })
+                      }
                       placeholder="sk-… or your gateway's key format"
                     />
                   </Field>
@@ -311,13 +343,20 @@ export function SettingsDialog({
                       {gatewayModels.length > 0 ? (
                         <Select
                           value={draft.openaiChatModel}
-                          onChange={(v) => setDraft({ ...draft, openaiChatModel: v })}
+                          onChange={(v) =>
+                            setDraft({ ...draft, openaiChatModel: v })
+                          }
                           options={gatewayModels}
                         />
                       ) : (
                         <Input
                           value={draft.openaiChatModel}
-                          onChange={(e) => setDraft({ ...draft, openaiChatModel: e.target.value })}
+                          onChange={(e) =>
+                            setDraft({
+                              ...draft,
+                              openaiChatModel: e.target.value,
+                            })
+                          }
                           placeholder="model id"
                         />
                       )}
@@ -338,7 +377,9 @@ export function SettingsDialog({
                 <Field label="Ollama URL">
                   <Input
                     value={draft.baseUrl}
-                    onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })}
+                    onChange={(e) =>
+                      setDraft({ ...draft, baseUrl: e.target.value })
+                    }
                     placeholder="http://localhost:11434"
                   />
                 </Field>
@@ -368,8 +409,16 @@ export function SettingsDialog({
               >
                 <div className="grid grid-cols-2 gap-1.5">
                   {[
-                    { id: "builtin", label: "Built-in", note: "potion-base-8M · no Ollama · instant" },
-                    { id: "ollama", label: "Ollama model", note: "e.g. nomic-embed-text" },
+                    {
+                      id: "builtin",
+                      label: "Built-in",
+                      note: "potion-base-8M · no Ollama · instant",
+                    },
+                    {
+                      id: "ollama",
+                      label: "Ollama model",
+                      note: "e.g. nomic-embed-text",
+                    },
                   ].map((ev) => (
                     <button
                       key={ev.id}
@@ -381,8 +430,12 @@ export function SettingsDialog({
                           : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
                       )}
                     >
-                      <span className="text-[12.5px] font-medium">{ev.label}</span>
-                      <span className="text-[11px] text-subtle-foreground">{ev.note}</span>
+                      <span className="text-[12.5px] font-medium">
+                        {ev.label}
+                      </span>
+                      <span className="text-[11px] text-subtle-foreground">
+                        {ev.note}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -409,14 +462,21 @@ export function SettingsDialog({
                   {gatewayModels.length > 0 ? (
                     <Select
                       value={draft.openaiVisionModel ?? ""}
-                      onChange={(v) => setDraft({ ...draft, openaiVisionModel: v })}
+                      onChange={(v) =>
+                        setDraft({ ...draft, openaiVisionModel: v })
+                      }
                       options={gatewayModels}
                       emptyLabel="OCR disabled — choose a vision-capable model to enable"
                     />
                   ) : (
                     <Input
                       value={draft.openaiVisionModel ?? ""}
-                      onChange={(e) => setDraft({ ...draft, openaiVisionModel: e.target.value })}
+                      onChange={(e) =>
+                        setDraft({
+                          ...draft,
+                          openaiVisionModel: e.target.value,
+                        })
+                      }
                       placeholder="a vision-capable model id (empty = OCR disabled)"
                     />
                   )}
@@ -453,17 +513,24 @@ export function SettingsDialog({
         </div>
       </div>
 
-      <Modal open={confirmReembed} onClose={cancelSwitch} title="Switch embedding model?">
+      <Modal
+        open={confirmReembed}
+        onClose={cancelSwitch}
+        title="Switch embedding model?"
+      >
         <div className="flex flex-col gap-4">
           <p className="text-[13px] leading-relaxed text-muted-foreground">
             Different embedders produce incompatible vectors, so switching to{" "}
             <span className="font-medium text-foreground">
-              {draft.embedder === "builtin" ? "the built-in embedder" : draft.embedModel}
+              {draft.embedder === "builtin"
+                ? "the built-in embedder"
+                : draft.embedModel}
             </span>{" "}
-            requires
-            re-embedding all{" "}
-            <span className="font-medium text-foreground">{totalSources}</span> source
-            {totalSources === 1 ? "" : "s"}. This runs locally and may take a moment.
+            requires re-embedding all{" "}
+            <span className="font-medium text-foreground">{totalSources}</span>{" "}
+            source
+            {totalSources === 1 ? "" : "s"}. This runs locally and may take a
+            moment.
           </p>
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={cancelSwitch}>
@@ -490,7 +557,11 @@ const CHAT_STYLES = [
     label: "Learning Guide",
     hint: "Explains step by step, defines terms, builds intuition.",
   },
-  { id: "custom", label: "Custom", hint: "Give your own goal, style, or role." },
+  {
+    id: "custom",
+    label: "Custom",
+    hint: "Give your own goal, style, or role.",
+  },
 ] as const;
 
 const CHAT_LENGTHS = [
@@ -522,9 +593,12 @@ function ChatTab() {
   const chatConfig = useStore((s) => s.chatConfig);
   const setChatConfig = useStore((s) => s.setChatConfig);
   const currentId = useStore((s) => s.currentId);
-  const notebook = useStore((s) => s.notebooks.find((n) => n.id === s.currentId));
+  const notebook = useStore((s) =>
+    s.notebooks.find((n) => n.id === s.currentId),
+  );
 
-  const apply = (patch: Partial<ChatConfig>) => setChatConfig({ ...chatConfig, ...patch });
+  const apply = (patch: Partial<ChatConfig>) =>
+    setChatConfig({ ...chatConfig, ...patch });
   const styleHint = CHAT_STYLES.find((s) => s.id === chatConfig.style)?.hint;
 
   return (
@@ -533,7 +607,9 @@ function ChatTab() {
         {currentId ? (
           <>
             Tune how the assistant responds in{" "}
-            <span className="font-medium text-foreground">{notebook?.title ?? "this notebook"}</span>
+            <span className="font-medium text-foreground">
+              {notebook?.title ?? "this notebook"}
+            </span>
             . Changes apply immediately.
           </>
         ) : (
@@ -544,12 +620,20 @@ function ChatTab() {
       <Field label="Conversational goal, style, or role">
         <div className="flex flex-wrap gap-1.5">
           {CHAT_STYLES.map((s) => (
-            <Pill key={s.id} active={chatConfig.style === s.id} onClick={() => apply({ style: s.id })}>
+            <Pill
+              key={s.id}
+              active={chatConfig.style === s.id}
+              onClick={() => apply({ style: s.id })}
+            >
               {s.label}
             </Pill>
           ))}
         </div>
-        {styleHint && <span className="text-[11px] text-subtle-foreground">{styleHint}</span>}
+        {styleHint && (
+          <span className="text-[11px] text-subtle-foreground">
+            {styleHint}
+          </span>
+        )}
         {chatConfig.style === "custom" && (
           <Textarea
             rows={4}
@@ -564,7 +648,11 @@ function ChatTab() {
       <Field label="Response length">
         <div className="flex flex-wrap gap-1.5">
           {CHAT_LENGTHS.map((l) => (
-            <Pill key={l.id} active={chatConfig.length === l.id} onClick={() => apply({ length: l.id })}>
+            <Pill
+              key={l.id}
+              active={chatConfig.length === l.id}
+              onClick={() => apply({ length: l.id })}
+            >
               {l.label}
             </Pill>
           ))}
@@ -578,7 +666,11 @@ function ChatTab() {
 function PersonalizationTab() {
   const aiConfig = useStore((s) => s.aiConfig);
   const save = useStore((s) => s.saveAiConfig);
-  const [draft, setDraft] = useState({ name: "", profession: "", instructions: "" });
+  const [draft, setDraft] = useState({
+    name: "",
+    profession: "",
+    instructions: "",
+  });
 
   useEffect(() => {
     if (aiConfig?.profile) setDraft(aiConfig.profile);
@@ -590,7 +682,11 @@ function PersonalizationTab() {
   // Fields save when you leave them (blur) — no Save button to remember.
   const saveOnBlur = () => {
     if (!aiConfig) return;
-    const p = aiConfig.profile ?? { name: "", profession: "", instructions: "" };
+    const p = aiConfig.profile ?? {
+      name: "",
+      profession: "",
+      instructions: "",
+    };
     const changed =
       draft.name !== p.name ||
       draft.profession !== p.profession ||
@@ -601,9 +697,9 @@ function PersonalizationTab() {
   return (
     <div className="flex flex-col gap-4">
       <p className="text-[13px] leading-relaxed text-muted-foreground">
-        Tell the assistant who you are. This is added to every chat and generated
-        document's system prompt so answers fit you — it is never sent anywhere
-        except your configured model. Changes save automatically.
+        Tell the assistant who you are. This is added to every chat and
+        generated document's system prompt so answers fit you — it is never sent
+        anywhere except your configured model. Changes save automatically.
       </p>
 
       <Field label="What should the assistant call you?">
@@ -653,10 +749,17 @@ function AppearanceTab() {
 
       <div className="h-px bg-border" />
 
-      <Field label="Chat font" hint="How chat responses are displayed. Doesn't change the model.">
+      <Field
+        label="Chat font"
+        hint="How chat responses are displayed. Doesn't change the model."
+      >
         <div className="flex flex-wrap gap-1.5">
           {CHAT_FONTS.map((f) => (
-            <Pill key={f.id} active={reading.font === f.id} onClick={() => setReading({ font: f.id })}>
+            <Pill
+              key={f.id}
+              active={reading.font === f.id}
+              onClick={() => setReading({ font: f.id })}
+            >
               <span className={f.className}>{f.label}</span>
             </Pill>
           ))}
@@ -666,7 +769,11 @@ function AppearanceTab() {
       <Field label="Text size">
         <div className="flex flex-wrap gap-1.5">
           {CHAT_SIZES.map((s) => (
-            <Pill key={s.id} active={reading.fontSize === s.id} onClick={() => setReading({ fontSize: s.id })}>
+            <Pill
+              key={s.id}
+              active={reading.fontSize === s.id}
+              onClick={() => setReading({ fontSize: s.id })}
+            >
               {s.label}
             </Pill>
           ))}
@@ -676,7 +783,11 @@ function AppearanceTab() {
       <Field label="Alignment">
         <div className="flex flex-wrap gap-1.5">
           {CHAT_ALIGNS.map((a) => (
-            <Pill key={a.id} active={reading.textAlign === a.id} onClick={() => setReading({ textAlign: a.id })}>
+            <Pill
+              key={a.id}
+              active={reading.textAlign === a.id}
+              onClick={() => setReading({ textAlign: a.id })}
+            >
               {a.label}
             </Pill>
           ))}
@@ -720,7 +831,9 @@ function ShortcutsTab() {
           </div>
           <span className="text-[13px] text-foreground/90">{s.label}</span>
           {s.context && (
-            <span className="ml-auto text-[11px] text-subtle-foreground">{s.context}</span>
+            <span className="ml-auto text-[11px] text-subtle-foreground">
+              {s.context}
+            </span>
           )}
         </div>
       ))}
@@ -735,17 +848,23 @@ function ShortcutsTab() {
 function AboutTab() {
   const [version, setVersion] = useState("");
   useEffect(() => {
-    getVersion().then(setVersion).catch(() => setVersion(""));
+    getVersion()
+      .then(setVersion)
+      .catch(() => setVersion(""));
   }, []);
   return (
     <div className="flex flex-col items-center gap-1 py-6 text-center">
       <AlchemySymbol className="h-16 w-16 text-citation/70" />
-      <div className="mt-3 text-[17px] font-semibold tracking-tight">Alchemy</div>
+      <div className="mt-3 text-[17px] font-semibold tracking-tight">
+        Alchemy
+      </div>
       <div className="text-[13px] text-muted-foreground">
         Local-first research notebooks
       </div>
       {version && (
-        <div className="mt-2 text-[12px] text-subtle-foreground">Version {version}</div>
+        <div className="mt-2 text-[12px] text-subtle-foreground">
+          Version {version}
+        </div>
       )}
       <button
         className="mt-4 inline-flex items-center gap-1.5 text-[12px] text-citation hover:underline"
@@ -803,7 +922,9 @@ function StatusBox({
   const health = useStore((s) => s.modelHealth);
   const stats = useStore((s) => s.modelStats);
   const kokoro = useStore((s) => s.kokoroStatus);
-  const chatStat = stats.find((s) => normModel(s.name) === normModel(chatModel));
+  const chatStat = stats.find(
+    (s) => normModel(s.name) === normModel(chatModel),
+  );
 
   const Row = ({
     label,
@@ -841,7 +962,11 @@ function StatusBox({
   // For the gateway provider, connection state comes from the gateway's chat
   // health, not the Ollama probe — a gateway user may not run Ollama at all.
   const isGateway = provider === "openai";
-  const ok: boolean | null = isGateway ? (health ? health.chat.working : null) : connOk;
+  const ok: boolean | null = isGateway
+    ? health
+      ? health.chat.working
+      : null
+    : connOk;
   const okText = isGateway
     ? `Connected to gateway · ${modelCount} models available`
     : `Connected · ${modelCount} models available`;
@@ -861,7 +986,11 @@ function StatusBox({
         ) : (
           <XCircle className="h-4 w-4 text-destructive" />
         )}
-        <span className={cn(ok === false ? "text-destructive" : "text-muted-foreground")}>
+        <span
+          className={cn(
+            ok === false ? "text-destructive" : "text-muted-foreground",
+          )}
+        >
           {ok === null ? checkingText : ok ? okText : failText}
         </span>
         <Button
@@ -903,7 +1032,8 @@ function StatusBox({
                 ~{chatStat.avgTokensPerSec.toFixed(1)} tok/s avg
                 <span className="text-subtle-foreground">
                   {" "}
-                  · last {chatStat.lastTokensPerSec.toFixed(1)} · {chatStat.samples} run
+                  · last {chatStat.lastTokensPerSec.toFixed(1)} ·{" "}
+                  {chatStat.samples} run
                   {chatStat.samples === 1 ? "" : "s"}
                 </span>
               </span>
@@ -973,8 +1103,10 @@ function GeneralTab() {
     const flow = await checkForUpdates();
     setUpdate(flow);
     setChecking(false);
-    if (flow.status === "none") pushToast("success", "You're on the latest version.");
-    if (flow.status === "error") pushToast("error", `Update check failed: ${flow.message}`);
+    if (flow.status === "none")
+      pushToast("success", "You're on the latest version.");
+    if (flow.status === "error")
+      pushToast("error", `Update check failed: ${flow.message}`);
   }
 
   return (
@@ -986,7 +1118,12 @@ function GeneralTab() {
           hint="Checks GitHub once per launch; installing is always your call."
         />
         <div className="flex items-center gap-2 pl-6.5">
-          <Button variant="secondary" size="sm" onClick={() => void onCheck()} loading={checking}>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => void onCheck()}
+            loading={checking}
+          >
             Check for updates…
           </Button>
           {update?.status === "available" && (
@@ -998,7 +1135,10 @@ function GeneralTab() {
                 setInstalling(true);
                 void update.install().catch((e) => {
                   setInstalling(false);
-                  pushToast("error", e instanceof Error ? e.message : String(e));
+                  pushToast(
+                    "error",
+                    e instanceof Error ? e.message : String(e),
+                  );
                 });
               }}
             >
@@ -1066,7 +1206,34 @@ function GeneralTab() {
         hint="Soft event cues: work finishing, new arrivals while the app is in the background, and errors. Never clicks or hovers."
         onEnable={playDone}
       />
+      <TrayToggle />
     </div>
+  );
+}
+
+/** Menu bar extra on/off — lives in AiConfig so the backend applies it live. */
+function TrayToggle() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  if (!aiConfig) return null;
+  return (
+    <label className="flex cursor-pointer items-start gap-2.5">
+      <input
+        type="checkbox"
+        checked={aiConfig.trayEnabled}
+        onChange={(e) =>
+          void saveAiConfig({ ...aiConfig, trayEnabled: e.target.checked })
+        }
+        className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
+      />
+      <span className="flex flex-col gap-0.5">
+        <span className="text-[13px] text-foreground">Show menu bar icon</span>
+        <span className="text-[11px] leading-relaxed text-subtle-foreground">
+          Ask Alchemy, add the clipboard as a source, and jump to recent
+          notebooks from the menu bar. ⌥Space summons Alchemy either way.
+        </span>
+      </span>
+    </label>
   );
 }
 
@@ -1099,7 +1266,9 @@ function AgentsTab() {
     api
       .connectAgent(c.id)
       .then((updated) => {
-        setConnectors((list) => list.map((x) => (x.id === updated.id ? updated : x)));
+        setConnectors((list) =>
+          list.map((x) => (x.id === updated.id ? updated : x)),
+        );
         pushToast(
           "success",
           updated.configured
@@ -1107,7 +1276,9 @@ function AgentsTab() {
             : `Skill installed for ${updated.name}`,
         );
       })
-      .catch((e) => pushToast("error", e instanceof Error ? e.message : String(e)))
+      .catch((e) =>
+        pushToast("error", e instanceof Error ? e.message : String(e)),
+      )
       .finally(() => setBusy(null));
   }
 
@@ -1125,7 +1296,10 @@ function AgentsTab() {
           type="checkbox"
           checked={aiConfig.mcpEnabled}
           onChange={(e) => {
-            void saveAiConfig({ ...aiConfig, mcpEnabled: e.target.checked }).then(() =>
+            void saveAiConfig({
+              ...aiConfig,
+              mcpEnabled: e.target.checked,
+            }).then(() =>
               // The server starts/stops on save; give it a beat before polling.
               setTimeout(refresh, 400),
             );
@@ -1133,18 +1307,23 @@ function AgentsTab() {
           className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
         />
         <span className="flex flex-col gap-0.5">
-          <span className="text-[13px] text-foreground">Let AI agents use Alchemy (MCP)</span>
+          <span className="text-[13px] text-foreground">
+            Let AI agents use Alchemy (MCP)
+          </span>
           <span className="text-[11px] text-subtle-foreground">
-            Agents can create notebooks, add sources, search, and write notes — changes appear
-            live in the app. Local-only: the server listens on 127.0.0.1 and nothing leaves this
-            Mac.
+            Agents can create notebooks, add sources, search, and write notes —
+            changes appear live in the app. Local-only: the server listens on
+            127.0.0.1 and nothing leaves this Mac.
           </span>
         </span>
       </label>
 
       <div className="flex items-center gap-2 text-[12px]">
         <span
-          className={cn("h-2 w-2 rounded-full", running ? "bg-success" : "bg-muted-foreground/40")}
+          className={cn(
+            "h-2 w-2 rounded-full",
+            running ? "bg-success" : "bg-muted-foreground/40",
+          )}
         />
         <span className="text-muted-foreground">
           {running ? (
@@ -1180,7 +1359,8 @@ function AgentsTab() {
               {c.configured ? (
                 <span className="flex items-center gap-1 text-[11px] text-success">
                   <CheckCircle2 className="h-3.5 w-3.5" />
-                  Connected{c.supportsSkill && c.skillInstalled ? " + skill" : ""}
+                  Connected
+                  {c.supportsSkill && c.skillInstalled ? " + skill" : ""}
                 </span>
               ) : c.installed ? (
                 c.canAuto ? (
@@ -1193,25 +1373,34 @@ function AgentsTab() {
                     Connect
                   </Button>
                 ) : (
-                  <Button variant="secondary" size="sm" onClick={() => copySnippet(c)}>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => copySnippet(c)}
+                  >
                     Copy command
                   </Button>
                 )
               ) : (
-                <span className="text-[11px] text-subtle-foreground">Not installed</span>
+                <span className="text-[11px] text-subtle-foreground">
+                  Not installed
+                </span>
               )}
 
               {/* Skill catch-up for manual/partial rows. */}
-              {c.installed && c.configured && c.supportsSkill && !c.skillInstalled && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  loading={busy === c.id}
-                  onClick={() => connect(c)}
-                >
-                  Add skill
-                </Button>
-              )}
+              {c.installed &&
+                c.configured &&
+                c.supportsSkill &&
+                !c.skillInstalled && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    loading={busy === c.id}
+                    onClick={() => connect(c)}
+                  >
+                    Add skill
+                  </Button>
+                )}
 
               {/* Escape hatch: the manual setup, always copyable. */}
               <button
@@ -1264,7 +1453,9 @@ function ThemePicker() {
           />
         </span>
         <span className="flex-1 truncate">System</span>
-        {theme === SYSTEM_THEME && <Check className="h-3.5 w-3.5 text-primary" />}
+        {theme === SYSTEM_THEME && (
+          <Check className="h-3.5 w-3.5 text-primary" />
+        )}
       </button>
       {THEME_LIST.map((t) => {
         const active = t.id === theme;
@@ -1282,9 +1473,15 @@ function ThemePicker() {
             {/* Live swatch built from the theme's own tokens. */}
             <span
               className="flex h-5 w-5 shrink-0 items-center justify-center rounded border"
-              style={{ background: t.vars.background, borderColor: t.vars["border-strong"] }}
+              style={{
+                background: t.vars.background,
+                borderColor: t.vars["border-strong"],
+              }}
             >
-              <span className="h-2.5 w-2.5 rounded-full" style={{ background: t.vars.primary }} />
+              <span
+                className="h-2.5 w-2.5 rounded-full"
+                style={{ background: t.vars.primary }}
+              />
             </span>
             <span className="flex-1 truncate">{t.label}</span>
             {active && <Check className="h-3.5 w-3.5 text-primary" />}
@@ -1307,14 +1504,17 @@ function Select({
   /** When set, "" is always offered with this label (a real, selectable state). */
   emptyLabel?: string;
 }) {
-  const list = options.includes(value) || !value ? options : [value, ...options];
+  const list =
+    options.includes(value) || !value ? options : [value, ...options];
   return (
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
       className="h-8 w-full appearance-none rounded-md border border-input bg-surface-2 px-2.5 text-[13px] text-foreground outline-none transition-colors focus:border-ring/60"
     >
-      {(emptyLabel || !value) && <option value="">{emptyLabel ?? "Choose a model…"}</option>}
+      {(emptyLabel || !value) && (
+        <option value="">{emptyLabel ?? "Choose a model…"}</option>
+      )}
       {list.map((m) => (
         <option key={m} value={m}>
           {m}
@@ -1324,12 +1524,22 @@ function Select({
   );
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-1.5">
       <label className="text-[12px] font-medium text-foreground">{label}</label>
       {children}
-      {hint && <span className="text-[11px] text-subtle-foreground">{hint}</span>}
+      {hint && (
+        <span className="text-[11px] text-subtle-foreground">{hint}</span>
+      )}
     </div>
   );
 }
@@ -1411,7 +1621,10 @@ function PodcastVoicesSection() {
     : status.verified
       ? { label: "Ready — voices verified", cls: "text-success" }
       : status.downloaded
-        ? { label: "Downloaded, not yet verified", cls: "text-muted-foreground" }
+        ? {
+            label: "Downloaded, not yet verified",
+            cls: "text-muted-foreground",
+          }
         : { label: "Not downloaded", cls: "text-muted-foreground" };
 
   return (
@@ -1422,7 +1635,9 @@ function PodcastVoicesSection() {
       <div className="flex items-center gap-3 rounded-md border border-border bg-surface-2/60 px-3 py-2.5">
         <AudioLines className="h-4 w-4 shrink-0 text-muted-foreground" />
         <div className="flex min-w-0 flex-col">
-          <span className={cn("text-[12px] font-medium", state.cls)}>{state.label}</span>
+          <span className={cn("text-[12px] font-medium", state.cls)}>
+            {state.label}
+          </span>
           {downloading && download && (
             <span className="text-[11px] tabular-nums text-subtle-foreground">
               {download.total > 0
@@ -1431,16 +1646,24 @@ function PodcastVoicesSection() {
             </span>
           )}
           {busy && !downloading && (
-            <span className="text-[11px] text-subtle-foreground">Verifying with a test synthesis…</span>
+            <span className="text-[11px] text-subtle-foreground">
+              Verifying with a test synthesis…
+            </span>
           )}
         </div>
         <div className="ml-auto flex items-center gap-1.5">
           {busy ? (
-            <Button variant="secondary" onClick={() => void api.cancelGeneration("tts")}>
+            <Button
+              variant="secondary"
+              onClick={() => void api.cancelGeneration("tts")}
+            >
               Cancel
             </Button>
           ) : (
-            <Button variant={status?.verified ? "secondary" : "primary"} onClick={() => void setup()}>
+            <Button
+              variant={status?.verified ? "secondary" : "primary"}
+              onClick={() => void setup()}
+            >
               {status?.verified
                 ? "Test again"
                 : status?.downloaded

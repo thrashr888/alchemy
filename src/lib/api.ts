@@ -153,6 +153,11 @@ export const api = {
       ai<Source>("add_mac_reminder", { sourceId, title, notes: notes ?? null }),
     ),
 
+  // OS integrations (deep links, tray, Services, Spotlight)
+  integrationsReady: () => run(cmd<string[]>("integrations_ready")),
+  locateNote: (noteId: string) =>
+    run(query<string | null>("locate_note", { noteId })),
+
   // Chat
   listMessages: (notebookId: string) =>
     run(query<Message[]>("list_messages", { notebookId })),

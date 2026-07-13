@@ -48,6 +48,9 @@ pub struct AiConfig {
     pub mcp_enabled: bool,
     #[serde(default = "default_mcp_port")]
     pub mcp_port: u16,
+    /// Menu bar extra (tray icon). Settings → General toggles it live.
+    #[serde(default = "default_true")]
+    pub tray_enabled: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -97,6 +100,7 @@ impl Default for AiConfig {
             profile: UserProfile::default(),
             mcp_enabled: default_true(),
             mcp_port: default_mcp_port(),
+            tray_enabled: default_true(),
         }
     }
 }

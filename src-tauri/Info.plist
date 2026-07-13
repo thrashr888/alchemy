@@ -7,5 +7,29 @@
 	     Info.plist by Tauri at build time. -->
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Alchemy syncs Apple Notes and Calendar items you add as sources.</string>
+	<!-- "Add to Alchemy" in every app's Services menu: selected text, links,
+	     or Finder files become sources (handled in src/services.rs). -->
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>Add to Alchemy</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>addToAlchemy</string>
+			<key>NSPortName</key>
+			<string>Alchemy</string>
+			<key>NSSendTypes</key>
+			<array>
+				<string>NSStringPboardType</string>
+				<string>NSURLPboardType</string>
+				<string>NSFilenamesPboardType</string>
+			</array>
+			<key>NSRequiredContext</key>
+			<dict/>
+		</dict>
+	</array>
 </dict>
 </plist>
