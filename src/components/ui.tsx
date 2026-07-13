@@ -425,6 +425,20 @@ export function RowMenu({
 }) {
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef<HTMLDivElement>(null);
+  const menuRef = React.useRef<HTMLDivElement>(null);
+  // Which way the dropdown unfolds — flipped before first paint when the
+  // default (below, left-of-trigger) would land outside the viewport.
+  const [flip, setFlip] = React.useState({ up: false, right: false });
+
+  React.useLayoutEffect(() => {
+    if (!open || !menuRef.current) return;
+    const r = menuRef.current.getBoundingClientRect();
+    setFlip({
+      up: r.bottom > window.innerHeight - 8,
+      right: r.left < 8,
+    });
+    return () => setFlip({ up: false, right: false });
+  }, [open]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -468,9 +482,14 @@ export function RowMenu({
       </button>
       {open && (
         <div
+          ref={menuRef}
           role="menu"
           aria-label={label}
-          className="absolute right-0 top-6 z-30 w-44 overflow-hidden rounded-md bg-elevated py-1 shadow-[0_0_0_0.5px_var(--border-strong),0_8px_24px_-6px_rgba(0,0,0,0.4)]"
+          className={cn(
+            "absolute z-30 w-44 overflow-hidden rounded-md bg-elevated py-1 shadow-[0_0_0_0.5px_var(--border-strong),0_8px_24px_-6px_rgba(0,0,0,0.4)]",
+            flip.up ? "bottom-6" : "top-6",
+            flip.right ? "left-0" : "right-0",
+          )}
         >
           {items.map((it) => (
             <button
