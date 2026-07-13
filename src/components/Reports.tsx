@@ -109,7 +109,7 @@ export function Reports() {
                   {r.lastRunAt > 0 && <span>· last {new Date(r.lastRunAt).toLocaleDateString()}</span>}
                 </div>
               </div>
-              <div className="flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+              <div className="hidden items-center gap-0.5 group-hover:flex group-focus-within:flex">
                 <button
                   className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
                   onClick={() => runNow(r.id)}
