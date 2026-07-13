@@ -25,15 +25,22 @@ const esc = (w: string) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  * whitespace-tolerant: find the first ~12 words, then the last ~12 words
  * within the expected span.
  */
-function locatePassage(content: string, snippet: string): [number, number] | null {
+function locatePassage(
+  content: string,
+  snippet: string,
+): [number, number] | null {
   const words = snippet.split(/\s+/).filter(Boolean);
   if (words.length === 0) return null;
   const head = new RegExp(words.slice(0, 12).map(esc).join("\\s+"));
   const hm = head.exec(content);
   if (!hm) return null;
   const start = hm.index;
-  const fallbackEnd = Math.min(content.length, start + Math.round(snippet.length * 1.1));
-  if (words.length <= 12) return [start, Math.min(fallbackEnd, start + hm[0].length)];
+  const fallbackEnd = Math.min(
+    content.length,
+    start + Math.round(snippet.length * 1.1),
+  );
+  if (words.length <= 12)
+    return [start, Math.min(fallbackEnd, start + hm[0].length)];
   // Look for the tail only within the window the chunk could occupy.
   const window = content.slice(start, fallbackEnd + 200);
   const tail = new RegExp(words.slice(-12).map(esc).join("\\s+"));
@@ -70,7 +77,11 @@ export function SourceViewer() {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   /** Live text selection inside the reader body, with popover coordinates. */
-  const [sel, setSel] = useState<{ text: string; top: number; left: number } | null>(null);
+  const [sel, setSel] = useState<{
+    text: string;
+    top: number;
+    left: number;
+  } | null>(null);
   const markRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -124,8 +135,14 @@ export function SourceViewer() {
   );
 
   // Highlight search matches when searching, else the cited passage.
-  const ranges: [number, number][] = query.trim() ? matches : passage ? [passage] : [];
-  const activeIdx = query.trim() ? Math.min(active, Math.max(0, matches.length - 1)) : 0;
+  const ranges: [number, number][] = query.trim()
+    ? matches
+    : passage
+      ? [passage]
+      : [];
+  const activeIdx = query.trim()
+    ? Math.min(active, Math.max(0, matches.length - 1))
+    : 0;
 
   // Bring the active highlight into view once content and ranges settle.
   useEffect(() => {
@@ -203,15 +220,26 @@ export function SourceViewer() {
     if (!p) return;
     setSel(null);
     close();
-    useStore.setState({ pendingInput: `About this passage from "${title}":\n"${p}"\n\n` });
+    useStore.setState({
+      pendingInput: `About this passage from "${title}":\n"${p}"\n\n`,
+    });
   }
 
   const segments: { text: string; hit: boolean; current: boolean }[] = [];
   if (content) {
     let pos = 0;
     ranges.forEach(([s, e], i) => {
-      if (s > pos) segments.push({ text: content.slice(pos, s), hit: false, current: false });
-      segments.push({ text: content.slice(s, e), hit: true, current: i === activeIdx });
+      if (s > pos)
+        segments.push({
+          text: content.slice(pos, s),
+          hit: false,
+          current: false,
+        });
+      segments.push({
+        text: content.slice(s, e),
+        hit: true,
+        current: i === activeIdx,
+      });
       pos = e;
     });
     if (pos < content.length)
@@ -230,9 +258,13 @@ export function SourceViewer() {
           <div className="flex shrink-0 items-center gap-2">
             {source && (
               <span className="flex items-center gap-1.5 text-[11px] text-subtle-foreground">
-                {sourceIcon(source.sourceType)}
-                {source.chunkCount} chunks · {Intl.NumberFormat().format(source.charCount)} chars
-                <span className="hidden sm:inline"> · select text to ask about it</span>
+                {sourceIcon(source.sourceType, source.url)}
+                {source.chunkCount} chunks ·{" "}
+                {Intl.NumberFormat().format(source.charCount)} chars
+                <span className="hidden sm:inline">
+                  {" "}
+                  · select text to ask about it
+                </span>
               </span>
             )}
             {source?.url &&
@@ -284,7 +316,9 @@ export function SourceViewer() {
               {query.trim() && (
                 <>
                   <span className="text-[11px] tabular-nums text-subtle-foreground">
-                    {matches.length === 0 ? "0/0" : `${activeIdx + 1}/${matches.length}`}
+                    {matches.length === 0
+                      ? "0/0"
+                      : `${activeIdx + 1}/${matches.length}`}
                   </span>
                   <button
                     className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40"
@@ -314,7 +348,11 @@ export function SourceViewer() {
             {sel && content && (
               <div
                 className="absolute z-10 flex items-center gap-0.5 rounded-md border border-border-strong bg-elevated p-0.5 shadow-lg"
-                style={{ top: sel.top, left: sel.left, transform: "translate(-50%, calc(-100% - 6px))" }}
+                style={{
+                  top: sel.top,
+                  left: sel.left,
+                  transform: "translate(-50%, calc(-100% - 6px))",
+                }}
                 // preventDefault keeps the browser from collapsing the
                 // selection on mousedown; stopPropagation keeps the container's
                 // mouseup handler from dismissing the toolbar before click.
@@ -327,7 +365,9 @@ export function SourceViewer() {
                   icon={<Sparkles className="h-3.5 w-3.5" />}
                   label="Explain"
                   disabled={sending}
-                  onClick={() => askAbout(`Explain this passage from "${title}":`)}
+                  onClick={() =>
+                    askAbout(`Explain this passage from "${title}":`)
+                  }
                 />
                 <SelAction
                   icon={<Scale className="h-3.5 w-3.5" />}
@@ -366,7 +406,9 @@ export function SourceViewer() {
                         "rounded-sm px-0.5 text-foreground",
                         // Strong highlight only for the active search match; a
                         // cited passage can span paragraphs, so keep it soft.
-                        seg.current && query.trim() ? "bg-primary/40" : "bg-primary/15",
+                        seg.current && query.trim()
+                          ? "bg-primary/40"
+                          : "bg-primary/15",
                       )}
                     >
                       {seg.text}
