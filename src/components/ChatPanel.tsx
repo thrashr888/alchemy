@@ -628,32 +628,27 @@ function ChatHero({
   );
 }
 
-/** Alchemy-flavored lines about what the chat actually does — one at a time,
- *  starting somewhere different each visit, turning over unhurriedly. */
+/** Alchemy-flavored lines about what the chat actually does — a fresh one
+ *  each page load, set in proper typographic quotes. */
 const QUOTES = [
-  "Solve et coagula — your sources dissolved, your answers given form.",
-  "Every answer shows its work: citations back to the exact passage.",
-  "The athanor burns on your own machine; nothing leaves the laboratory.",
-  "Prima materia in, quintessence out.",
-  "As above, so below — every claim traces to a line in your sources.",
-  "Transmutation, with receipts.",
-  "Distill a hundred pages into one clear draught.",
-  "The Great Work proceeds one question at a time.",
-  "Hermetically sealed: your corpus, your model, your machine.",
+  "“Solve et coagula” — your sources dissolved, your answers given form.",
+  "“Every answer shows its work: citations back to the exact passage.”",
+  "“The athanor burns on your own machine; nothing leaves the laboratory.”",
+  "“Prima materia in, quintessence out.”",
+  "“As above, so below” — every claim traces to a line in your sources.",
+  "“Transmutation, with receipts.”",
+  "“Distill a hundred pages into one clear draught.”",
+  "“The Great Work proceeds one question at a time.”",
+  "“Hermetically sealed: your corpus, your model, your machine.”",
 ];
 
+/** Chosen once per page load — module scope, so remounts don't reshuffle. */
+const QUOTE = QUOTES[Math.floor(Math.random() * QUOTES.length)];
+
 function RotatingQuote() {
-  const [i, setI] = useState(() => Math.floor(Math.random() * QUOTES.length));
-  useEffect(() => {
-    const t = setInterval(() => setI((n) => (n + 1) % QUOTES.length), 10_000);
-    return () => clearInterval(t);
-  }, []);
   return (
-    <p
-      key={i}
-      className="max-w-[360px] animate-[quote-fade_0.8s_ease] text-[13px] text-muted-foreground"
-    >
-      {QUOTES[i]}
+    <p className="max-w-[360px] animate-[quote-fade_0.8s_ease] text-[13px] text-muted-foreground">
+      {QUOTE}
     </p>
   );
 }

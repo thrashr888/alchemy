@@ -198,7 +198,14 @@ reloads canonical messages, sources, notes, and report schedules.
 
 ## Install (Apple Silicon)
 
-Download the latest `Alchemy_x.y.z_aarch64.dmg` from
+With [Homebrew](https://brew.sh):
+
+```sh
+brew tap thrashr888/tap
+brew install --cask thrashr888/tap/alchemy
+```
+
+Or download the latest `Alchemy_x.y.z_aarch64.dmg` from
 [Releases](https://github.com/thrashr888/alchemy/releases), open it, and drag
 **Alchemy** to Applications. Builds are **signed with a Developer ID and
 notarized by Apple**, so they open with a normal double-click.
