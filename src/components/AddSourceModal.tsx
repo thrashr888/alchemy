@@ -303,8 +303,13 @@ export function AddSourceModal() {
             ))
           )}
           <p className="mt-2 text-[11px] leading-relaxed text-subtle-foreground">
-            Content from this item is embedded into this notebook's local index
-            and re-syncs automatically.
+            {provider.id === "notes"
+              ? "A folder syncs as one source — notes you add to it later are picked up automatically. "
+              : provider.id === "reminders"
+                ? "A list syncs as one source — new reminders are picked up automatically. "
+                : ""}
+            Content is embedded into this notebook's local index and re-syncs
+            automatically.
           </p>
         </div>
       )}
