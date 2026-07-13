@@ -21,6 +21,7 @@ import {
   Image as ImageIcon,
   Folder,
   Cloud,
+  CodeXml,
   Command,
 } from "lucide-react";
 
@@ -42,6 +43,8 @@ export function sourceIcon(t: Source["sourceType"]) {
       return <Folder className="h-3.5 w-3.5 text-[#e8a33d]" />;
     case "mac":
       return <Command className="h-3.5 w-3.5 text-[#5ec2c2]" />;
+    case "html":
+      return <CodeXml className="h-3.5 w-3.5 text-[#5e9bd2]" />;
     default:
       return <FileText className="h-3.5 w-3.5 text-muted-foreground" />;
   }
