@@ -1,13 +1,30 @@
 import { useState, useEffect, useRef, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import { Button, Input, Textarea, Modal, EmptyState, Badge, ResizeHandle, Spinner, useConfirm } from "./ui";
+import {
+  Button,
+  Input,
+  Textarea,
+  Modal,
+  EmptyState,
+  Badge,
+  ResizeHandle,
+  RowMenu,
+  Spinner,
+  useConfirm,
+} from "./ui";
 import { Markdown } from "./Markdown";
 import { MindMap } from "./MindMap";
 import { AudioPlayer, DialogueScript } from "./AudioNote";
 import { Reports } from "./Reports";
 import { RichEditor } from "./RichEditor";
-import { cardButtonProps, cn, noteUnread, relativeTime, shortcutBlocked } from "@/lib/utils";
+import {
+  cardButtonProps,
+  cn,
+  noteUnread,
+  relativeTime,
+  shortcutBlocked,
+} from "@/lib/utils";
 import type { Note, NoteKind } from "@/lib/types";
 import {
   Eye,
@@ -76,25 +93,69 @@ export const AUDIO_OVERVIEW: Artifact = {
 };
 
 const SUMMARIES: Artifact[] = [
-  { kind: "summary", label: "Summary", icon: <FileText className="h-3.5 w-3.5" /> },
+  {
+    kind: "summary",
+    label: "Summary",
+    icon: <FileText className="h-3.5 w-3.5" />,
+  },
   { kind: "faq", label: "FAQ", icon: <HelpCircle className="h-3.5 w-3.5" /> },
-  { kind: "study_guide", label: "Study guide", icon: <GraduationCap className="h-3.5 w-3.5" /> },
-  { kind: "briefing", label: "Briefing", icon: <Newspaper className="h-3.5 w-3.5" /> },
-  { kind: "timeline", label: "Timeline", icon: <Clock className="h-3.5 w-3.5" /> },
-  { kind: "insights", label: "Insights", icon: <Lightbulb className="h-3.5 w-3.5" /> },
-  { kind: "data_table", label: "Data table", icon: <Table className="h-3.5 w-3.5" /> },
-  { kind: "problems", label: "Problems", icon: <TriangleAlert className="h-3.5 w-3.5" /> },
+  {
+    kind: "study_guide",
+    label: "Study guide",
+    icon: <GraduationCap className="h-3.5 w-3.5" />,
+  },
+  {
+    kind: "briefing",
+    label: "Briefing",
+    icon: <Newspaper className="h-3.5 w-3.5" />,
+  },
+  {
+    kind: "timeline",
+    label: "Timeline",
+    icon: <Clock className="h-3.5 w-3.5" />,
+  },
+  {
+    kind: "insights",
+    label: "Insights",
+    icon: <Lightbulb className="h-3.5 w-3.5" />,
+  },
+  {
+    kind: "data_table",
+    label: "Data table",
+    icon: <Table className="h-3.5 w-3.5" />,
+  },
+  {
+    kind: "problems",
+    label: "Problems",
+    icon: <TriangleAlert className="h-3.5 w-3.5" />,
+  },
 ];
 
 const LEARNING: Artifact[] = [
-  { kind: "flashcards", label: "Flashcards", icon: <Layers className="h-3.5 w-3.5" /> },
+  {
+    kind: "flashcards",
+    label: "Flashcards",
+    icon: <Layers className="h-3.5 w-3.5" />,
+  },
   { kind: "quiz", label: "Quiz", icon: <ListChecks className="h-3.5 w-3.5" /> },
-  { kind: "mind_map", label: "Mind map", icon: <Waypoints className="h-3.5 w-3.5" /> },
+  {
+    kind: "mind_map",
+    label: "Mind map",
+    icon: <Waypoints className="h-3.5 w-3.5" />,
+  },
 ];
 
 const DOCUMENTS: Artifact[] = [
-  { kind: "prd", label: "PRD", icon: <ClipboardList className="h-3.5 w-3.5" /> },
-  { kind: "prfaq", label: "PR/FAQ", icon: <Megaphone className="h-3.5 w-3.5" /> },
+  {
+    kind: "prd",
+    label: "PRD",
+    icon: <ClipboardList className="h-3.5 w-3.5" />,
+  },
+  {
+    kind: "prfaq",
+    label: "PR/FAQ",
+    icon: <Megaphone className="h-3.5 w-3.5" />,
+  },
   { kind: "rfc", label: "RFC", icon: <FileCode2 className="h-3.5 w-3.5" /> },
   { kind: "skill", label: "Skill", icon: <Sparkles className="h-3.5 w-3.5" /> },
 ];
@@ -111,8 +172,15 @@ function notePreview(n: Note): string {
   let i = 0;
   while (i < lines.length && !lines[i].trim()) i++;
   const first = (lines[i] ?? "").trim();
-  const firstText = first.replace(/^#+\s*/, "").replace(/[*_`]/g, "").trim();
-  if (first.startsWith("#") || firstText.toLowerCase() === n.title.trim().toLowerCase()) i++;
+  const firstText = first
+    .replace(/^#+\s*/, "")
+    .replace(/[*_`]/g, "")
+    .trim();
+  if (
+    first.startsWith("#") ||
+    firstText.toLowerCase() === n.title.trim().toLowerCase()
+  )
+    i++;
   return lines
     .slice(i)
     .join(" ")
@@ -205,7 +273,12 @@ export function StudioPanel() {
   }, [pendingNewNote, currentId]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "n" && !shortcutBlocked(e) && currentId) {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.key === "n" &&
+        !shortcutBlocked(e) &&
+        currentId
+      ) {
         e.preventDefault();
         setDraftTitle("");
         setDraftBody("");
@@ -218,7 +291,9 @@ export function StudioPanel() {
   const [instructions, setInstructions] = useState("");
   const [showInstructions, setShowInstructions] = useState(false);
   // Generators hidden/shown — persisted so a notes-heavy workflow keeps its room.
-  const [genOpen, setGenOpen] = useState(localStorage.getItem("studioGenOpen") !== "false");
+  const [genOpen, setGenOpen] = useState(
+    localStorage.getItem("studioGenOpen") !== "false",
+  );
   const toggleGenOpen = () => {
     const v = !genOpen;
     localStorage.setItem("studioGenOpen", String(v));
@@ -231,8 +306,12 @@ export function StudioPanel() {
   const TEMPLATES_PREVIEW = 3;
   const collapsible = templates.length > TEMPLATES_PREVIEW + 1;
   const visibleTemplates =
-    collapsible && !templatesExpanded ? templates.slice(0, TEMPLATES_PREVIEW) : templates;
-  const hiddenTemplateCount = collapsible ? templates.length - TEMPLATES_PREVIEW : 0;
+    collapsible && !templatesExpanded
+      ? templates.slice(0, TEMPLATES_PREVIEW)
+      : templates;
+  const hiddenTemplateCount = collapsible
+    ? templates.length - TEMPLATES_PREVIEW
+    : 0;
 
   const hasSources = sources.length > 0;
   const width = useStore((s) => s.studioWidth);
@@ -269,235 +348,272 @@ export function StudioPanel() {
       {/* Everything below the header scrolls as one column, so a tall
           generator section never pins the notes list below the fold. */}
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className="p-3">
-        <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
-          <span>Generate</span>
-          {generatingKind && (
+        <div className="p-3">
+          <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+            <span>Generate</span>
+            {generatingKind && (
+              <button
+                onClick={() => cancelGeneration("artifact")}
+                className="flex items-center gap-1 rounded px-1.5 py-0.5 text-destructive hover:bg-destructive/10"
+                title="Stop generating"
+              >
+                <Square className="h-3 w-3" />
+                Stop
+              </button>
+            )}
+            {audioProgress && (
+              <span className="text-[10px] normal-case tabular-nums text-subtle-foreground">
+                voicing {audioProgress.done}/{audioProgress.total}
+              </span>
+            )}
             <button
-              onClick={() => cancelGeneration("artifact")}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-destructive hover:bg-destructive/10"
-              title="Stop generating"
+              onClick={() => void api.openTemplatesFolder()}
+              className="ml-auto rounded p-0.5 transition-colors hover:text-foreground"
+              title="Open the templates folder — each .md file is a generator"
+              aria-label="Open templates folder"
             >
-              <Square className="h-3 w-3" />
-              Stop
+              <FolderOpen className="h-3.5 w-3.5" />
             </button>
-          )}
-          {audioProgress && (
-            <span className="text-[10px] normal-case tabular-nums text-subtle-foreground">
-              voicing {audioProgress.done}/{audioProgress.total}
-            </span>
-          )}
-          <button
-            onClick={() => void api.openTemplatesFolder()}
-            className="ml-auto rounded p-0.5 transition-colors hover:text-foreground"
-            title="Open the templates folder — each .md file is a generator"
-            aria-label="Open templates folder"
-          >
-            <FolderOpen className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={toggleGenOpen}
-            className="rounded p-0.5 transition-colors hover:text-foreground"
-            title={genOpen ? "Hide generators" : "Show generators"}
-            aria-label={genOpen ? "Hide generators" : "Show generators"}
-            aria-expanded={genOpen}
-          >
-            {genOpen ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-          </button>
-        </div>
-        {genOpen && (
-          <>
-            {/* One continuous grid — generator families flow into each other
+            <button
+              onClick={toggleGenOpen}
+              className="rounded p-0.5 transition-colors hover:text-foreground"
+              title={genOpen ? "Hide generators" : "Show generators"}
+              aria-label={genOpen ? "Hide generators" : "Show generators"}
+              aria-expanded={genOpen}
+            >
+              {genOpen ? (
+                <Eye className="h-3.5 w-3.5" />
+              ) : (
+                <EyeOff className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </div>
+          {genOpen && (
+            <>
+              {/* One continuous grid — generator families flow into each other
                 and are told apart by tile tint, not headers: blue = generate,
                 violet = learning, green = documents, amber = templates.
                 Templates beyond the first few live behind the More tile. */}
-            <div className="mt-2 grid grid-cols-2 gap-1.5">
-              {(kokoroReady ? [AUDIO_OVERVIEW, ...SUMMARIES] : SUMMARIES).map((a) => (
-                <GenTile
-                  key={a.kind}
-                  icon={generatingKind === a.kind ? <Spinner className="h-3.5 w-3.5" /> : a.icon}
-                  label={a.label}
-                  tint={TINT_GENERATE}
-                  disabled={!hasSources || !!generatingKind}
-                  onClick={() => generate(a.kind, instructions)}
-                />
-              ))}
-              {LEARNING.map((a) => (
-                <GenTile
-                  key={a.kind}
-                  icon={generatingKind === a.kind ? <Spinner className="h-3.5 w-3.5" /> : a.icon}
-                  label={a.label}
-                  tint={TINT_LEARNING}
-                  disabled={!hasSources || !!generatingKind}
-                  onClick={() => generate(a.kind, instructions)}
-                />
-              ))}
-              {DOCUMENTS.map((a) => (
-                <GenTile
-                  key={a.kind}
-                  icon={generatingKind === a.kind ? <Spinner className="h-3.5 w-3.5" /> : a.icon}
-                  label={a.label}
-                  tint={TINT_DOCUMENTS}
-                  disabled={!hasSources || !!generatingKind}
-                  onClick={() => generate(a.kind, instructions)}
-                />
-              ))}
-              {visibleTemplates.map((t) => (
-                <GenTile
-                  key={t.id}
-                  icon={
-                    generatingTemplateId === t.id ? (
-                      <Spinner className="h-3.5 w-3.5" />
-                    ) : (
-                      <FileText className="h-3.5 w-3.5" />
-                    )
-                  }
-                  label={t.name}
-                  title={t.description || t.name}
-                  tint={TINT_TEMPLATES}
-                  disabled={!hasSources || !!generatingKind}
-                  onClick={() => generateFromTemplate(t)}
-                />
-              ))}
-              {hiddenTemplateCount > 0 && (
-                <GenTile
-                  icon={
-                    templatesExpanded ? (
-                      <ChevronUp className="h-3.5 w-3.5" />
-                    ) : (
-                      <ChevronDown className="h-3.5 w-3.5" />
-                    )
-                  }
-                  label={templatesExpanded ? "Less" : `More (${hiddenTemplateCount})`}
-                  title={
-                    templatesExpanded
-                      ? "Show fewer templates"
-                      : `Show ${hiddenTemplateCount} more templates`
-                  }
-                  tint={TINT_TEMPLATES}
-                  disabled={false}
-                  onClick={() => setTemplatesExpanded((v) => !v)}
-                />
-              )}
-            </div>
-
-            {showInstructions ? (
-              <Textarea
-                rows={2}
-                autoFocus
-                value={instructions}
-                onChange={(e) => setInstructions(e.target.value)}
-                placeholder="Optional instructions applied to the next generation…"
-                className="mt-2.5 text-[12px]"
-              />
-            ) : (
-              <button
-                onClick={() => setShowInstructions(true)}
-                disabled={!hasSources}
-                className="mt-2.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
-              >
-                + Add instructions
-              </button>
-            )}
-            {!hasSources && (
-              <p className="mt-2 text-[11px] text-subtle-foreground">
-                Add sources to generate documents.
-              </p>
-            )}
-          </>
-        )}
-      </div>
-
-      {currentId && <Reports />}
-
-      <div className="flex items-center justify-between px-4 pt-3 pb-1">
-        <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
-          Notes
-        </span>
-        <Button
-          variant="ghost"
-          size="icon"
-          disabled={!currentId}
-          onClick={() => {
-            setDraftTitle("");
-            setDraftBody("");
-            setComposing(true);
-          }}
-          title="New note"
-        >
-          <Plus className="h-4 w-4" />
-        </Button>
-      </div>
-
-      <div className="px-2 pb-2">
-        {notes.length === 0 ? (
-          <EmptyState
-            icon={<StickyNote className="h-6 w-6" />}
-            title="No notes yet"
-            hint="Generate a document above or write your own note."
-          />
-        ) : (
-          <div className="flex flex-col gap-1.5">
-            {notes.map((n) => (
-              <div
-                key={n.id}
-                onClick={() => openNoteCard(n)}
-                {...cardButtonProps(() => openNoteCard(n))}
-                className="group cursor-pointer rounded-md border border-border bg-surface-2/40 px-3 py-2.5 transition-colors hover:border-border-strong hover:bg-surface-2"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="truncate text-[13px] font-medium text-foreground">
-                    {n.title}
-                  </span>
-                  {noteUnread(n, noteReads, noteReadsBaseline) && (
-                    <span
-                      className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
-                      title="Not opened yet"
-                      aria-label="Unread"
-                    />
-                  )}
-                  <div className="ml-auto hidden items-center gap-0.5 group-hover:flex group-focus-within:flex">
-                    <span onClick={(e) => e.stopPropagation()}>
-                      <CopyButton text={n.content} iconOnly />
-                    </span>
-                    <button
-                      className="rounded p-1 text-muted-foreground hover:text-destructive"
-                      title="Delete note"
-                      aria-label={`Delete "${n.title}"`}
-                      onClick={async (e) => {
-                        e.stopPropagation();
-                        if (
-                          await confirm({
-                            title: `Delete "${n.title}"?`,
-                            message: "This note will be permanently removed.",
-                            confirmLabel: "Delete",
-                            danger: true,
-                          })
+              <div className="mt-2 grid grid-cols-2 gap-1.5">
+                {(kokoroReady ? [AUDIO_OVERVIEW, ...SUMMARIES] : SUMMARIES).map(
+                  (a) => (
+                    <GenTile
+                      key={a.kind}
+                      icon={
+                        generatingKind === a.kind ? (
+                          <Spinner className="h-3.5 w-3.5" />
+                        ) : (
+                          a.icon
                         )
-                          deleteNote(n.id);
-                      }}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-1 flex items-center gap-1.5">
-                  {n.kind !== "note" &&
-                    n.title.trim().toLowerCase() !== KIND_LABEL[n.kind].toLowerCase() && (
-                      <Badge>{KIND_LABEL[n.kind]}</Badge>
-                    )}
-                  <span className="text-[11px] text-subtle-foreground">
-                    {relativeTime(n.updatedAt)}
-                  </span>
-                </div>
-                <p className="mt-1.5 line-clamp-2 text-[12px] leading-relaxed text-muted-foreground">
-                  {notePreview(n)}
-                </p>
+                      }
+                      label={a.label}
+                      tint={TINT_GENERATE}
+                      disabled={!hasSources || !!generatingKind}
+                      onClick={() => generate(a.kind, instructions)}
+                    />
+                  ),
+                )}
+                {LEARNING.map((a) => (
+                  <GenTile
+                    key={a.kind}
+                    icon={
+                      generatingKind === a.kind ? (
+                        <Spinner className="h-3.5 w-3.5" />
+                      ) : (
+                        a.icon
+                      )
+                    }
+                    label={a.label}
+                    tint={TINT_LEARNING}
+                    disabled={!hasSources || !!generatingKind}
+                    onClick={() => generate(a.kind, instructions)}
+                  />
+                ))}
+                {DOCUMENTS.map((a) => (
+                  <GenTile
+                    key={a.kind}
+                    icon={
+                      generatingKind === a.kind ? (
+                        <Spinner className="h-3.5 w-3.5" />
+                      ) : (
+                        a.icon
+                      )
+                    }
+                    label={a.label}
+                    tint={TINT_DOCUMENTS}
+                    disabled={!hasSources || !!generatingKind}
+                    onClick={() => generate(a.kind, instructions)}
+                  />
+                ))}
+                {visibleTemplates.map((t) => (
+                  <GenTile
+                    key={t.id}
+                    icon={
+                      generatingTemplateId === t.id ? (
+                        <Spinner className="h-3.5 w-3.5" />
+                      ) : (
+                        <FileText className="h-3.5 w-3.5" />
+                      )
+                    }
+                    label={t.name}
+                    title={t.description || t.name}
+                    tint={TINT_TEMPLATES}
+                    disabled={!hasSources || !!generatingKind}
+                    onClick={() => generateFromTemplate(t)}
+                  />
+                ))}
+                {hiddenTemplateCount > 0 && (
+                  <GenTile
+                    icon={
+                      templatesExpanded ? (
+                        <ChevronUp className="h-3.5 w-3.5" />
+                      ) : (
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      )
+                    }
+                    label={
+                      templatesExpanded
+                        ? "Less"
+                        : `More (${hiddenTemplateCount})`
+                    }
+                    title={
+                      templatesExpanded
+                        ? "Show fewer templates"
+                        : `Show ${hiddenTemplateCount} more templates`
+                    }
+                    tint={TINT_TEMPLATES}
+                    disabled={false}
+                    onClick={() => setTemplatesExpanded((v) => !v)}
+                  />
+                )}
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+
+              {showInstructions ? (
+                <Textarea
+                  rows={2}
+                  autoFocus
+                  value={instructions}
+                  onChange={(e) => setInstructions(e.target.value)}
+                  placeholder="Optional instructions applied to the next generation…"
+                  className="mt-2.5 text-[12px]"
+                />
+              ) : (
+                <button
+                  onClick={() => setShowInstructions(true)}
+                  disabled={!hasSources}
+                  className="mt-2.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+                >
+                  + Add instructions
+                </button>
+              )}
+              {!hasSources && (
+                <p className="mt-2 text-[11px] text-subtle-foreground">
+                  Add sources to generate documents.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+
+        {currentId && <Reports />}
+
+        <div className="flex items-center justify-between px-4 pt-3 pb-1">
+          <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+            Notes
+          </span>
+          <Button
+            variant="ghost"
+            size="icon"
+            disabled={!currentId}
+            onClick={() => {
+              setDraftTitle("");
+              setDraftBody("");
+              setComposing(true);
+            }}
+            title="New note"
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <div className="px-2 pb-2">
+          {notes.length === 0 ? (
+            <EmptyState
+              icon={<StickyNote className="h-6 w-6" />}
+              title="No notes yet"
+              hint="Generate a document above or write your own note."
+            />
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              {notes.map((n) => (
+                <div
+                  key={n.id}
+                  onClick={() => openNoteCard(n)}
+                  {...cardButtonProps(() => openNoteCard(n))}
+                  className="group cursor-pointer rounded-md border border-border bg-surface-2/40 px-3 py-2.5 transition-colors hover:border-border-strong hover:bg-surface-2"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
+                      {n.title}
+                    </span>
+                    {noteUnread(n, noteReads, noteReadsBaseline) && (
+                      <span
+                        className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+                        title="Not opened yet"
+                        aria-label="Unread"
+                      />
+                    )}
+                    <RowMenu
+                      label={`Options for "${n.title}"`}
+                      items={[
+                        {
+                          label: "Copy text",
+                          icon: <Copy className="h-3.5 w-3.5" />,
+                          onClick: () => {
+                            void navigator.clipboard.writeText(n.content);
+                            useStore
+                              .getState()
+                              .pushToast("success", "Note copied");
+                          },
+                        },
+                        {
+                          label: "Delete",
+                          icon: <Trash2 className="h-3.5 w-3.5" />,
+                          danger: true,
+                          onClick: async () => {
+                            if (
+                              await confirm({
+                                title: `Delete "${n.title}"?`,
+                                message:
+                                  "This note will be permanently removed.",
+                                confirmLabel: "Delete",
+                                danger: true,
+                              })
+                            )
+                              deleteNote(n.id);
+                          },
+                        },
+                      ]}
+                    />
+                  </div>
+                  <div className="mt-1 flex items-center gap-1.5">
+                    {n.kind !== "note" &&
+                      n.title.trim().toLowerCase() !==
+                        KIND_LABEL[n.kind].toLowerCase() && (
+                        <Badge>{KIND_LABEL[n.kind]}</Badge>
+                      )}
+                    <span className="text-[11px] text-subtle-foreground">
+                      {relativeTime(n.updatedAt)}
+                    </span>
+                  </div>
+                  <p className="mt-1.5 line-clamp-2 text-[12px] leading-relaxed text-muted-foreground">
+                    {notePreview(n)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <NoteViewer note={viewing} onClose={() => setViewing(null)} />
@@ -505,9 +621,13 @@ export function StudioPanel() {
       {/* Live preview of the in-flight generation (rebuilds stream inside the
           note viewer instead, so only show this when no note is open). */}
       <Modal
-        open={!!generatingKind && !viewing && !!artifactStreamText && !previewHidden}
+        open={
+          !!generatingKind && !viewing && !!artifactStreamText && !previewHidden
+        }
         onClose={() => setPreviewHidden(true)}
-        title={generatingKind ? `Generating ${KIND_LABEL[generatingKind]}…` : ""}
+        title={
+          generatingKind ? `Generating ${KIND_LABEL[generatingKind]}…` : ""
+        }
         width="max-w-2xl"
         footer={
           <div className="flex items-center justify-between">
@@ -517,7 +637,10 @@ export function StudioPanel() {
                 ? `Voicing the episode — line ${audioProgress.done} of ${audioProgress.total}`
                 : "Streaming — closing this keeps generating"}
             </span>
-            <Button variant="danger" onClick={() => cancelGeneration("artifact")}>
+            <Button
+              variant="danger"
+              onClick={() => cancelGeneration("artifact")}
+            >
               <Square className="h-3.5 w-3.5" />
               Stop
             </Button>
@@ -527,7 +650,12 @@ export function StudioPanel() {
         <StreamingBody text={artifactStreamText} />
       </Modal>
 
-      <Modal open={composing} onClose={() => setComposing(false)} title="New note" width="max-w-lg">
+      <Modal
+        open={composing}
+        onClose={() => setComposing(false)}
+        title="New note"
+        width="max-w-lg"
+      >
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -544,10 +672,18 @@ export function StudioPanel() {
           />
           <RichEditor value={draftBody} onChange={setDraftBody} />
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => setComposing(false)}>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setComposing(false)}
+            >
               Cancel
             </Button>
-            <Button type="submit" variant="primary" disabled={!draftBody.trim()}>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={!draftBody.trim()}
+            >
               Save note
             </Button>
           </div>
@@ -619,14 +755,22 @@ function CopyButton({
         onClick={copy}
         title="Copy to clipboard"
       >
-        {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
+        {copied ? (
+          <Check className="h-3 w-3 text-success" />
+        ) : (
+          <Copy className="h-3 w-3" />
+        )}
       </button>
     );
   }
   return (
     <Button variant={variant} onClick={copy}>
-      {copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
-      {copied ? "Copied" : label ?? "Copy"}
+      {copied ? (
+        <Check className="h-3.5 w-3.5 text-success" />
+      ) : (
+        <Copy className="h-3.5 w-3.5" />
+      )}
+      {copied ? "Copied" : (label ?? "Copy")}
     </Button>
   );
 }
@@ -645,7 +789,13 @@ function StreamingBody({ text }: { text: string }) {
   );
 }
 
-function NoteViewer({ note, onClose }: { note: Note | null; onClose: () => void }) {
+function NoteViewer({
+  note,
+  onClose,
+}: {
+  note: Note | null;
+  onClose: () => void;
+}) {
   const updateNote = useStore((s) => s.updateNote);
   const rebuildNote = useStore((s) => s.rebuildNote);
   const convertNoteToSource = useStore((s) => s.convertNoteToSource);
@@ -653,7 +803,9 @@ function NoteViewer({ note, onClose }: { note: Note | null; onClose: () => void 
   const generatingKind = useStore((s) => s.generatingKind);
   const artifactStreamText = useStore((s) => s.artifactStreamText);
   // Track the live note so a rebuild's new content shows without reopening.
-  const live = useStore((s) => (note ? s.notes.find((n) => n.id === note.id) ?? note : null));
+  const live = useStore((s) =>
+    note ? (s.notes.find((n) => n.id === note.id) ?? note) : null,
+  );
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -707,7 +859,11 @@ function NoteViewer({ note, onClose }: { note: Note | null; onClose: () => void 
             <Input value={title} onChange={(e) => setTitle(e.target.value)} />
             <RichEditor value={body} onChange={setBody} />
             <div className="flex justify-end gap-2">
-              <Button type="button" variant="ghost" onClick={() => setEditing(false)}>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setEditing(false)}
+              >
                 Cancel
               </Button>
               <Button type="submit" variant="primary">
@@ -725,7 +881,11 @@ function NoteViewer({ note, onClose }: { note: Note | null; onClose: () => void 
               ) : live.kind === "audio_overview" ? (
                 <div className="flex flex-col gap-4">
                   {/* Key by updatedAt so a rebuild swaps in the new episode. */}
-                  <AudioPlayer noteId={live.id} title={live.title} key={live.updatedAt} />
+                  <AudioPlayer
+                    noteId={live.id}
+                    title={live.title}
+                    key={live.updatedAt}
+                  />
                   <DialogueScript content={live.content} />
                 </div>
               ) : (
@@ -748,7 +908,11 @@ function NoteViewer({ note, onClose }: { note: Note | null; onClose: () => void 
                   Rebuild
                 </Button>
               )}
-              <CopyButton text={live.content} variant="secondary" label="Copy" />
+              <CopyButton
+                text={live.content}
+                variant="secondary"
+                label="Copy"
+              />
               <Button
                 variant="secondary"
                 onClick={() => {

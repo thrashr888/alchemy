@@ -1,7 +1,17 @@
 import { useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import { Button, Input, Textarea, Modal, EmptyState, ResizeHandle, Spinner, useConfirm } from "./ui";
+import {
+  Button,
+  Input,
+  Textarea,
+  Modal,
+  EmptyState,
+  ResizeHandle,
+  RowMenu,
+  Spinner,
+  useConfirm,
+} from "./ui";
 import { cn, cardButtonProps, isWebUrl } from "@/lib/utils";
 import type { Source } from "@/lib/types";
 import {
@@ -59,7 +69,8 @@ function Favicon({ url }: { url: string }) {
   } catch {
     /* malformed */
   }
-  if (failed || !origin) return <Globe className="h-3.5 w-3.5 text-[#5e9bd2]" />;
+  if (failed || !origin)
+    return <Globe className="h-3.5 w-3.5 text-[#5e9bd2]" />;
   return (
     <img
       src={`${origin}/favicon.ico`}
@@ -126,7 +137,11 @@ export function SourcesPanel() {
   const setAllSourcesSelected = useStore((s) => s.setAllSourcesSelected);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
-  const [editing, setEditing] = useState<{ id: string; title: string; text: string } | null>(null);
+  const [editing, setEditing] = useState<{
+    id: string;
+    title: string;
+    text: string;
+  } | null>(null);
 
   async function startEdit(s: Source) {
     // List payloads omit content; fetch the full text to prefill the editor.
@@ -149,10 +164,12 @@ export function SourcesPanel() {
       }
     }
   }
-  const childCount = (folderId: string) => sources.filter((x) => x.parentId === folderId).length;
+  const childCount = (folderId: string) =>
+    sources.filter((x) => x.parentId === folderId).length;
 
   // Selection: null means everything is on; the map holds only deselected ids.
-  const isSelected = (id: string) => !selectedSourceIds || selectedSourceIds[id] !== false;
+  const isSelected = (id: string) =>
+    !selectedSourceIds || selectedSourceIds[id] !== false;
   // Folder container rows have no chunks — only content sources count.
   const contentSources = sources.filter((s) => s.sourceType !== "folder");
   const selectedCount = contentSources.filter((s) => isSelected(s.id)).length;
@@ -185,29 +202,40 @@ export function SourcesPanel() {
       {draggingFiles && currentId && (
         <div className="pointer-events-none absolute inset-1.5 z-30 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary/60 bg-primary/10">
           <Upload className="h-6 w-6 text-primary" />
-          <span className="text-[13px] font-semibold text-foreground">Drop to add sources</span>
-          <span className="text-[11px] text-muted-foreground">PDF · Office · images · text</span>
+          <span className="text-[13px] font-semibold text-foreground">
+            Drop to add sources
+          </span>
+          <span className="text-[11px] text-muted-foreground">
+            PDF · Office · images · text
+          </span>
         </div>
       )}
       <div className="flex items-center px-4 h-12 border-b border-border">
         <span className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
           Sources
         </span>
-        <span className="ml-2 text-[11px] text-subtle-foreground">{sources.length}</span>
+        <span className="ml-2 text-[11px] text-subtle-foreground">
+          {sources.length}
+        </span>
         <div className="ml-auto flex items-center gap-0.5">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => openAddSource()}
-          disabled={!currentId}
-          title="Add source"
-          aria-label="Add source"
-        >
-          <Plus className="h-4 w-4" />
-        </Button>
-        <Button variant="ghost" size="icon" onClick={toggleSources} title="Collapse sources">
-          <PanelLeftClose className="h-4 w-4" />
-        </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => openAddSource()}
+            disabled={!currentId}
+            title="Add source"
+            aria-label="Add source"
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleSources}
+            title="Collapse sources"
+          >
+            <PanelLeftClose className="h-4 w-4" />
+          </Button>
         </div>
       </div>
 
@@ -259,7 +287,9 @@ export function SourcesPanel() {
                   <div
                     className={cn(
                       "text-[11px]",
-                      q.status === "error" ? "text-destructive" : "text-subtle-foreground",
+                      q.status === "error"
+                        ? "text-destructive"
+                        : "text-subtle-foreground",
                     )}
                   >
                     {q.status === "processing"
@@ -308,162 +338,171 @@ export function SourcesPanel() {
                   checked={allSelected}
                   indeterminate={selectedCount > 0 && !allSelected}
                   onToggle={() => setAllSourcesSelected(!allSelected)}
-                  label={allSelected ? "Deselect all sources" : "Select all sources"}
+                  label={
+                    allSelected ? "Deselect all sources" : "Select all sources"
+                  }
                 />
               </div>
             </div>
             <div className="flex flex-col gap-0.5">
-            {rows.map(({ s, indent }) => {
-              const isFolder = s.sourceType === "folder";
-              const readable = s.status === "ready" && !isFolder;
-              const kids = isFolder ? sources.filter((x) => x.parentId === s.id) : [];
-              const kidsOn = kids.filter((k) => isSelected(k.id)).length;
-              return (
-              <div
-                key={s.id}
-                onClick={() => {
-                  if (readable) openSourceViewer(s.id, s.title);
-                }}
-                {...(readable ? cardButtonProps(() => openSourceViewer(s.id, s.title)) : {})}
-                title={readable ? "Read source" : undefined}
-                className={cn(
-                  "group flex items-start gap-2 rounded-md px-2 py-2 hover:bg-surface-2",
-                  s.status === "error" && "bg-destructive/5",
-                  readable && "cursor-pointer",
-                  indent && "ml-5",
-                )}
-              >
-                <div className="mt-0.5">
-                  {s.status === "error" ? (
-                    <AlertCircle className="h-3.5 w-3.5 text-destructive" />
-                  ) : s.status === "placeholder" ? (
-                    <Cloud className="h-3.5 w-3.5 text-subtle-foreground" />
-                  ) : s.sourceType === "url" && s.url ? (
-                    <Favicon url={s.url} />
-                  ) : (
-                    sourceIcon(s.sourceType)
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
+              {rows.map(({ s, indent }) => {
+                const isFolder = s.sourceType === "folder";
+                const readable = s.status === "ready" && !isFolder;
+                const kids = isFolder
+                  ? sources.filter((x) => x.parentId === s.id)
+                  : [];
+                const kidsOn = kids.filter((k) => isSelected(k.id)).length;
+                return (
                   <div
-                    className={cn(
-                      "truncate text-[13px]",
-                      s.status === "placeholder" ? "text-muted-foreground" : "text-foreground",
-                    )}
-                    title={s.title}
-                  >
-                    {s.title}
-                  </div>
-                  {s.status === "error" ? (
-                    <div className="text-[11px] leading-snug text-destructive" title={s.error}>
-                      {s.error || "Import failed"}
-                    </div>
-                  ) : s.status === "placeholder" ? (
-                    <div className="text-[11px] text-subtle-foreground" title={s.url}>
-                      Online-only — not downloaded
-                    </div>
-                  ) : isFolder ? (
-                    <div className="truncate text-[11px] text-subtle-foreground" title={s.url}>
-                      {childCount(s.id)} files · auto-refreshes
-                    </div>
-                  ) : s.sourceType === "url" && s.url ? (
-                    <div className="truncate text-[11px] text-citation" title={s.url}>
-                      {hostname(s.url)}
-                    </div>
-                  ) : (
-                    <div className="text-[11px] text-subtle-foreground">
-                      {s.chunkCount} chunks · {Intl.NumberFormat().format(s.charCount)} chars
-                    </div>
-                  )}
-                </div>
-                {/* Hidden (not transparent) until hover, so idle rows keep
-                    the full width for their titles. */}
-                <div className="hidden items-center gap-0.5 group-hover:flex group-focus-within:flex">
-                  {/* url holds the origin: a web URL, an on-disk path, or a
-                      folder — any of them can be refreshed. */}
-                  {s.url && (
-                    <button
-                      className="rounded p-1 text-muted-foreground hover:text-foreground"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        refreshSource(s.id);
-                      }}
-                      title={
-                        isFolder
-                          ? "Rescan folder now"
-                          : s.status === "placeholder"
-                            ? "Download & embed now"
-                            : isWebUrl(s.url)
-                              ? "Refresh from URL (re-fetch & re-embed)"
-                              : "Refresh from file (re-read & re-embed)"
-                      }
-                      aria-label={
-                        isFolder
-                          ? `Rescan folder "${s.title}"`
-                          : s.status === "placeholder"
-                            ? `Download and embed "${s.title}"`
-                            : `Refresh "${s.title}" from ${isWebUrl(s.url) ? "URL" : "file"}`
-                      }
-                    >
-                      <RefreshCw className="h-3.5 w-3.5" />
-                    </button>
-                  )}
-                  {s.sourceType !== "url" && !isFolder && s.status !== "placeholder" && (
-                    <button
-                      className="rounded p-1 text-muted-foreground hover:text-foreground"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void startEdit(s);
-                      }}
-                      title="Edit text (re-embed)"
-                      aria-label={`Edit "${s.title}"`}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </button>
-                  )}
-                  <button
-                    className="rounded p-1 text-muted-foreground hover:text-destructive"
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      if (
-                        await confirm({
-                          title: `Remove "${s.title}"?`,
-                          message: isFolder
-                            ? `This removes the folder and its ${childCount(s.id)} file sources (with their embedded chunks) from the notebook. Nothing on disk is touched.`
-                            : "This deletes the source and its embedded chunks from the notebook.",
-                          confirmLabel: "Remove",
-                          danger: true,
-                        })
-                      )
-                        deleteSource(s.id);
+                    key={s.id}
+                    onClick={() => {
+                      if (readable) openSourceViewer(s.id, s.title);
                     }}
-                    title="Remove source"
-                    aria-label={`Remove "${s.title}"`}
+                    {...(readable
+                      ? cardButtonProps(() => openSourceViewer(s.id, s.title))
+                      : {})}
+                    title={readable ? "Read source" : undefined}
+                    className={cn(
+                      "group flex items-start gap-2 rounded-md px-2 py-2 hover:bg-surface-2",
+                      s.status === "error" && "bg-destructive/5",
+                      readable && "cursor-pointer",
+                      indent && "ml-5",
+                    )}
                   >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-                {/* Selection stays at the far right (NotebookLM-style), always
-                    visible — the hover actions slide in to its left. */}
-                <div className="mt-0.5">
-                  {isFolder ? (
-                    <SelectBox
-                      checked={kids.length > 0 && kidsOn === kids.length}
-                      indeterminate={kidsOn > 0 && kidsOn < kids.length}
-                      onToggle={() => toggleFolderSelected(s.id)}
-                      label={`Include "${s.title}" files in chat & generation`}
-                    />
-                  ) : (
-                    <SelectBox
-                      checked={isSelected(s.id)}
-                      onToggle={() => toggleSourceSelected(s.id)}
-                      label={`Include "${s.title}" in chat & generation`}
-                    />
-                  )}
-                </div>
-              </div>
-              );
-            })}
+                    <div className="mt-0.5">
+                      {s.status === "error" ? (
+                        <AlertCircle className="h-3.5 w-3.5 text-destructive" />
+                      ) : s.status === "placeholder" ? (
+                        <Cloud className="h-3.5 w-3.5 text-subtle-foreground" />
+                      ) : s.sourceType === "url" && s.url ? (
+                        <Favicon url={s.url} />
+                      ) : (
+                        sourceIcon(s.sourceType)
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      {/* The ⋯ menu lives in the title row: hovering shortens the
+                      title but never reflows the metadata line below. */}
+                      <div className="flex items-center gap-1">
+                        <span
+                          className={cn(
+                            "min-w-0 flex-1 truncate text-[13px]",
+                            s.status === "placeholder"
+                              ? "text-muted-foreground"
+                              : "text-foreground",
+                          )}
+                          title={s.title}
+                        >
+                          {s.title}
+                        </span>
+                        <RowMenu
+                          label={`Options for "${s.title}"`}
+                          items={[
+                            // url holds the origin: a web URL, an on-disk path, or
+                            // a folder — any of them can be refreshed.
+                            ...(s.url
+                              ? [
+                                  {
+                                    label: isFolder
+                                      ? "Rescan folder now"
+                                      : s.status === "placeholder"
+                                        ? "Download & embed"
+                                        : isWebUrl(s.url)
+                                          ? "Refresh from URL"
+                                          : "Refresh from file",
+                                    icon: <RefreshCw className="h-3.5 w-3.5" />,
+                                    onClick: () => void refreshSource(s.id),
+                                  },
+                                ]
+                              : []),
+                            ...(s.sourceType !== "url" &&
+                            !isFolder &&
+                            s.status !== "placeholder"
+                              ? [
+                                  {
+                                    label: "Edit text",
+                                    icon: <Pencil className="h-3.5 w-3.5" />,
+                                    onClick: () => void startEdit(s),
+                                  },
+                                ]
+                              : []),
+                            {
+                              label: "Remove",
+                              icon: <Trash2 className="h-3.5 w-3.5" />,
+                              danger: true,
+                              onClick: async () => {
+                                if (
+                                  await confirm({
+                                    title: `Remove "${s.title}"?`,
+                                    message: isFolder
+                                      ? `This removes the folder and its ${childCount(s.id)} file sources (with their embedded chunks) from the notebook. Nothing on disk is touched.`
+                                      : "This deletes the source and its embedded chunks from the notebook.",
+                                    confirmLabel: "Remove",
+                                    danger: true,
+                                  })
+                                )
+                                  deleteSource(s.id);
+                              },
+                            },
+                          ]}
+                        />
+                      </div>
+                      {s.status === "error" ? (
+                        <div
+                          className="text-[11px] leading-snug text-destructive"
+                          title={s.error}
+                        >
+                          {s.error || "Import failed"}
+                        </div>
+                      ) : s.status === "placeholder" ? (
+                        <div
+                          className="text-[11px] text-subtle-foreground"
+                          title={s.url}
+                        >
+                          Online-only — not downloaded
+                        </div>
+                      ) : isFolder ? (
+                        <div
+                          className="truncate text-[11px] text-subtle-foreground"
+                          title={s.url}
+                        >
+                          {childCount(s.id)} files · auto-refreshes
+                        </div>
+                      ) : s.sourceType === "url" && s.url ? (
+                        <div
+                          className="truncate text-[11px] text-citation"
+                          title={s.url}
+                        >
+                          {hostname(s.url)}
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-subtle-foreground">
+                          {s.chunkCount} chunks ·{" "}
+                          {Intl.NumberFormat().format(s.charCount)} chars
+                        </div>
+                      )}
+                    </div>
+                    {/* Selection stays at the far right (NotebookLM-style), always
+                    visible. */}
+                    <div className="mt-0.5">
+                      {isFolder ? (
+                        <SelectBox
+                          checked={kids.length > 0 && kidsOn === kids.length}
+                          indeterminate={kidsOn > 0 && kidsOn < kids.length}
+                          onToggle={() => toggleFolderSelected(s.id)}
+                          label={`Include "${s.title}" files in chat & generation`}
+                        />
+                      ) : (
+                        <SelectBox
+                          checked={isSelected(s.id)}
+                          onToggle={() => toggleSourceSelected(s.id)}
+                          label={`Include "${s.title}" in chat & generation`}
+                        />
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </>
         )}
@@ -489,19 +528,31 @@ export function SourcesPanel() {
             autoFocus
             placeholder="Title"
             value={editing?.title ?? ""}
-            onChange={(e) => setEditing((s) => (s ? { ...s, title: e.target.value } : s))}
+            onChange={(e) =>
+              setEditing((s) => (s ? { ...s, title: e.target.value } : s))
+            }
           />
           <Textarea
             rows={12}
             placeholder="Source text…"
             value={editing?.text ?? ""}
-            onChange={(e) => setEditing((s) => (s ? { ...s, text: e.target.value } : s))}
+            onChange={(e) =>
+              setEditing((s) => (s ? { ...s, text: e.target.value } : s))
+            }
           />
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => setEditing(null)}>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setEditing(null)}
+            >
               Cancel
             </Button>
-            <Button type="submit" variant="primary" disabled={!editing?.text.trim()}>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={!editing?.text.trim()}
+            >
               Save
             </Button>
           </div>
