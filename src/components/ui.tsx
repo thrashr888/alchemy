@@ -1,6 +1,13 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
-import { Loader2, X, CheckCircle2, AlertTriangle, Info } from "lucide-react";
+import {
+  Loader2,
+  MoreHorizontal,
+  X,
+  CheckCircle2,
+  AlertTriangle,
+  Info,
+} from "lucide-react";
 import type { Toast } from "@/lib/types";
 
 type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
@@ -119,7 +126,9 @@ export function ResizeHandle({
     if (!panel) return;
     const rect = panel.getBoundingClientRect();
     const move = (ev: PointerEvent) => {
-      onResize(edge === "right" ? ev.clientX - rect.left : rect.right - ev.clientX);
+      onResize(
+        edge === "right" ? ev.clientX - rect.left : rect.right - ev.clientX,
+      );
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
@@ -191,7 +200,9 @@ export function Modal({
     const panel = panelRef.current;
     const focusable =
       panel?.querySelector<HTMLElement>("input,textarea,select") ??
-      panel?.querySelector<HTMLElement>('button,[tabindex]:not([tabindex="-1"])');
+      panel?.querySelector<HTMLElement>(
+        'button,[tabindex]:not([tabindex="-1"])',
+      );
     (focusable ?? panel)?.focus();
 
     const onKey = (e: KeyboardEvent) => {
@@ -245,19 +256,29 @@ export function Modal({
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex min-h-11 shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-2">
-          <h2 id={titleId} className="text-[13px] font-semibold text-foreground">
+          <h2
+            id={titleId}
+            className="text-[13px] font-semibold text-foreground"
+          >
             {title}
           </h2>
           <div className="flex shrink-0 items-center gap-1">
             {headerActions}
-            <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close dialog">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onClose}
+              aria-label="Close dialog"
+            >
               <X className="h-4 w-4" />
             </Button>
           </div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-4">{children}</div>
         {footer && (
-          <div className="shrink-0 border-t border-border px-4 py-3">{footer}</div>
+          <div className="shrink-0 border-t border-border px-4 py-3">
+            {footer}
+          </div>
         )}
       </div>
     </div>
@@ -279,7 +300,12 @@ export function useConfirm() {
   } | null>(null);
 
   const confirm = React.useCallback(
-    (opts: { title: string; message?: string; confirmLabel?: string; danger?: boolean }) =>
+    (opts: {
+      title: string;
+      message?: string;
+      confirmLabel?: string;
+      danger?: boolean;
+    }) =>
       new Promise<boolean>((resolve) => {
         setState({
           title: opts.title,
@@ -307,13 +333,21 @@ export function useConfirm() {
           <Button variant="ghost" onClick={() => settle(false)}>
             Cancel
           </Button>
-          <Button variant={state.danger ? "danger" : "primary"} onClick={() => settle(true)} autoFocus>
+          <Button
+            variant={state.danger ? "danger" : "primary"}
+            onClick={() => settle(true)}
+            autoFocus
+          >
             {state.confirmLabel}
           </Button>
         </div>
       }
     >
-      {state.message && <p className="text-[13px] leading-relaxed text-muted-foreground">{state.message}</p>}
+      {state.message && (
+        <p className="text-[13px] leading-relaxed text-muted-foreground">
+          {state.message}
+        </p>
+      )}
     </Modal>
   ) : null;
 
@@ -321,14 +355,26 @@ export function useConfirm() {
 }
 
 /** Bottom-center stack of ephemeral toasts. */
-export function Toaster({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: string) => void }) {
+export function Toaster({
+  toasts,
+  onDismiss,
+}: {
+  toasts: Toast[];
+  onDismiss: (id: string) => void;
+}) {
   if (toasts.length === 0) return null;
   const icon = {
     success: <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />,
-    error: <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />,
+    error: (
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+    ),
     info: <Info className="mt-0.5 h-4 w-4 shrink-0 text-citation" />,
   };
-  const border = { success: "border-success/40", error: "border-destructive/40", info: "border-border-strong" };
+  const border = {
+    success: "border-success/40",
+    error: "border-destructive/40",
+    info: "border-border-strong",
+  };
   return (
     <div className="pointer-events-none fixed bottom-4 left-1/2 z-[70] flex -translate-x-1/2 flex-col items-center gap-2">
       {toasts.map((t) => (
@@ -340,7 +386,9 @@ export function Toaster({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
           )}
         >
           {icon[t.kind]}
-          <div className="text-[12px] text-foreground/90 selectable">{t.message}</div>
+          <div className="text-[12px] text-foreground/90 selectable">
+            {t.message}
+          </div>
           <button
             className="ml-1 rounded p-0.5 text-muted-foreground hover:text-foreground"
             onClick={() => onDismiss(t.id)}
@@ -349,6 +397,108 @@ export function Toaster({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
           </button>
         </div>
       ))}
+    </div>
+  );
+}
+
+export interface RowMenuItem {
+  label: string;
+  icon?: React.ReactNode;
+  onClick: () => void;
+  danger?: boolean;
+}
+
+/**
+ * The ⋯ options menu for list rows. Lives inside the title row so opening it
+ * never reflows the metadata line; hidden until the row is hovered or
+ * focused, but stays put while open. Clicks stop at the menu so the row's
+ * own click handler never fires.
+ */
+export function RowMenu({
+  items,
+  label = "Options",
+  className,
+}: {
+  items: RowMenuItem[];
+  label?: string;
+  className?: string;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    // Capture-phase pointerdown: title-bar drag regions swallow clicks, but
+    // pointerdown still dispatches first. Blur covers leaving the app.
+    const onDown = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onBlur = () => setOpen(false);
+    window.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, [open]);
+
+  return (
+    <div
+      ref={ref}
+      className={cn(
+        "relative shrink-0",
+        open ? "flex" : "hidden group-hover:flex group-focus-within:flex",
+        className,
+      )}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Escape") setOpen(false);
+      }}
+    >
+      <button
+        onClick={() => setOpen((o) => !o)}
+        title={label}
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <MoreHorizontal className="h-3.5 w-3.5" />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          aria-label={label}
+          className="absolute right-0 top-6 z-30 w-44 overflow-hidden rounded-md bg-elevated py-1 shadow-[0_0_0_0.5px_var(--border-strong),0_8px_24px_-6px_rgba(0,0,0,0.4)]"
+        >
+          {items.map((it) => (
+            <button
+              key={it.label}
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                it.onClick();
+              }}
+              className={cn(
+                "flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px]",
+                it.danger
+                  ? "text-destructive hover:bg-destructive/10"
+                  : "text-foreground/90 hover:bg-surface-2 hover:text-foreground",
+              )}
+            >
+              {it.icon && (
+                <span
+                  className={it.danger ? undefined : "text-muted-foreground"}
+                >
+                  {it.icon}
+                </span>
+              )}
+              {it.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -388,7 +538,11 @@ export function EmptyState({
     <div className="flex flex-col items-center justify-center text-center gap-2 px-6 py-10">
       {icon && <div className="text-subtle-foreground mb-1">{icon}</div>}
       <div className="text-[13px] font-medium text-foreground">{title}</div>
-      {hint && <div className="text-[12px] text-muted-foreground max-w-[260px]">{hint}</div>}
+      {hint && (
+        <div className="text-[12px] text-muted-foreground max-w-[260px]">
+          {hint}
+        </div>
+      )}
       {children}
     </div>
   );
