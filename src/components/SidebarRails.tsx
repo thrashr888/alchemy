@@ -49,7 +49,7 @@ export function SourcesRail() {
             title={s.title}
             className="relative rounded-md p-1.5 transition-colors hover:bg-surface-2"
           >
-            {sourceIcon(s.sourceType)}
+            {sourceIcon(s.sourceType, s.url)}
             {s.status === "error" && (
               <AlertCircle className="absolute -right-0 -top-0 h-2.5 w-2.5 text-destructive" />
             )}
@@ -86,7 +86,9 @@ export function StudioRail() {
         title={`Notes${notes.length ? ` (${notes.length})` : ""}`}
         className={cn(
           "relative rounded-md p-1.5 transition-colors hover:bg-surface-2",
-          notes.length ? "text-muted-foreground hover:text-foreground" : "text-subtle-foreground",
+          notes.length
+            ? "text-muted-foreground hover:text-foreground"
+            : "text-subtle-foreground",
         )}
       >
         <StickyNote className="h-4 w-4" />

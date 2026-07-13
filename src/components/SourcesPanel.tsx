@@ -33,13 +33,29 @@ import {
   Cloud,
   CodeXml,
   Command,
+  Calendar,
+  ListChecks,
+  NotebookText,
+  TrendingUp,
 } from "lucide-react";
 
 // Soft per-notebook capacity used for the "how full is this notebook" gauge.
 // ~1M chars ≈ ~250k tokens — generous for local RAG over many documents.
 const MAX_NOTEBOOK_CHARS = 1_000_000;
 
-export function sourceIcon(t: Source["sourceType"]) {
+export function sourceIcon(t: Source["sourceType"], url?: string) {
+  // Mac sources show the app they mirror (same icons as the add-source
+  // modal's provider tiles), in that app's signature color.
+  if (t === "mac" && url) {
+    if (url.startsWith("cider://calendar/"))
+      return <Calendar className="h-3.5 w-3.5 text-[#eb5757]" />;
+    if (url.startsWith("cider://reminders/"))
+      return <ListChecks className="h-3.5 w-3.5 text-[#e8a33d]" />;
+    if (url.startsWith("cider://notes/"))
+      return <NotebookText className="h-3.5 w-3.5 text-[#e5c454]" />;
+    if (url.startsWith("cider://stocks/"))
+      return <TrendingUp className="h-3.5 w-3.5 text-[#4cb782]" />;
+  }
   switch (t) {
     case "pdf":
       return <FileType className="h-3.5 w-3.5 text-[#eb5757]" />;
@@ -396,7 +412,7 @@ export function SourcesPanel() {
                       ) : s.sourceType === "url" && s.url ? (
                         <Favicon url={s.url} />
                       ) : (
-                        sourceIcon(s.sourceType)
+                        sourceIcon(s.sourceType, s.url)
                       )}
                     </div>
                     <div className="min-w-0 flex-1">
