@@ -47,7 +47,10 @@ const query = <T>(command: string, args?: Record<string, unknown>) =>
       duration: Duration.seconds(30),
       onTimeout: () => new TimeoutError({ command }),
     }),
-    Effect.retry({ schedule: retryPolicy, while: (e: AppError) => e._tag === "IpcError" }),
+    Effect.retry({
+      schedule: retryPolicy,
+      while: (e: AppError) => e._tag === "IpcError",
+    }),
   );
 
 /** Quick mutation (DB write): short timeout, no retry (avoid double writes). */
@@ -97,13 +100,17 @@ async function run<A>(effect: Effect.Effect<A, AppError>): Promise<A> {
 export const api = {
   // Notebooks
   listNotebooks: () => run(query<Notebook[]>("list_notebooks")),
-  createNotebook: (title: string) => run(cmd<Notebook>("create_notebook", { title })),
-  renameNotebook: (id: string, title: string) => run(cmd<void>("rename_notebook", { id, title })),
-  setNotebookColor: (id: string, color: string) => run(cmd<void>("set_notebook_color", { id, color })),
+  createNotebook: (title: string) =>
+    run(cmd<Notebook>("create_notebook", { title })),
+  renameNotebook: (id: string, title: string) =>
+    run(cmd<void>("rename_notebook", { id, title })),
+  setNotebookColor: (id: string, color: string) =>
+    run(cmd<void>("set_notebook_color", { id, color })),
   deleteNotebook: (id: string) => run(cmd<void>("delete_notebook", { id })),
 
   // Sources
-  listSources: (notebookId: string) => run(query<Source[]>("list_sources", { notebookId })),
+  listSources: (notebookId: string) =>
+    run(query<Source[]>("list_sources", { notebookId })),
   addSourceFile: (notebookId: string, path: string) =>
     run(ai<Source>("add_source_file", { notebookId, path })),
   addSourceFolder: (notebookId: string, path: string) =>
@@ -120,35 +127,76 @@ export const api = {
   getSourceContent: (sourceId: string) =>
     run(query<string>("get_source_content", { sourceId })),
   reembedAll: () => run(ai<number>("reembed_all")),
-  deleteSource: (sourceId: string) => run(cmd<void>("delete_source", { sourceId })),
+  deleteSource: (sourceId: string) =>
+    run(cmd<void>("delete_source", { sourceId })),
 
   // Mac providers (Calendar, Reminders, Apple Notes via cider)
   macAvailable: () => run(query<boolean>("mac_available")),
   macConnect: (provider: string) => run(cmd<void>("mac_connect", { provider })),
   listMacCollections: (provider: string) =>
     run(query<MacCollection[]>("list_mac_collections", { provider })),
-  addSourceMac: (notebookId: string, provider: string, collection: string, label: string) =>
-    run(ai<Source>("add_source_mac", { notebookId, provider, collection, label })),
+  addSourceMac: (
+    notebookId: string,
+    provider: string,
+    collection: string,
+    label: string,
+  ) =>
+    run(
+      ai<Source>("add_source_mac", { notebookId, provider, collection, label }),
+    ),
+  macNoteBody: (sourceId: string) =>
+    run(query<string>("mac_note_body", { sourceId })),
+  updateMacNote: (sourceId: string, body: string) =>
+    run(ai<Source>("update_mac_note", { sourceId, body })),
+  addMacReminder: (sourceId: string, title: string, notes?: string) =>
+    run(
+      ai<Source>("add_mac_reminder", { sourceId, title, notes: notes ?? null }),
+    ),
 
   // Chat
-  listMessages: (notebookId: string) => run(query<Message[]>("list_messages", { notebookId })),
-  sendMessage: (notebookId: string, content: string, config: ChatConfig, sourceIds?: string[] | null) =>
-    run(ai<Message>("send_message", { notebookId, content, config, sourceIds })),
-  sendMessageAgentic: (notebookId: string, content: string, config: ChatConfig, sourceIds?: string[] | null) =>
-    run(ai<Message>("send_message_agentic", { notebookId, content, config, sourceIds })),
+  listMessages: (notebookId: string) =>
+    run(query<Message[]>("list_messages", { notebookId })),
+  sendMessage: (
+    notebookId: string,
+    content: string,
+    config: ChatConfig,
+    sourceIds?: string[] | null,
+  ) =>
+    run(
+      ai<Message>("send_message", { notebookId, content, config, sourceIds }),
+    ),
+  sendMessageAgentic: (
+    notebookId: string,
+    content: string,
+    config: ChatConfig,
+    sourceIds?: string[] | null,
+  ) =>
+    run(
+      ai<Message>("send_message_agentic", {
+        notebookId,
+        content,
+        config,
+        sourceIds,
+      }),
+    ),
   cancelGeneration: (scope?: "chat" | "artifact" | "tts") =>
     run(cmd<void>("cancel_generation", { scope })),
   suggestFollowups: (notebookId: string) =>
     run(query<string[]>("suggest_followups", { notebookId })),
   generateNotebookSummary: (notebookId: string) =>
     run(ai<string>("generate_notebook_summary", { notebookId })),
-  clearChat: (notebookId: string) => run(cmd<void>("clear_chat", { notebookId })),
-  addNoteToChat: (noteId: string) => run(cmd<Message>("add_note_to_chat", { noteId })),
+  clearChat: (notebookId: string) =>
+    run(cmd<void>("clear_chat", { notebookId })),
+  addNoteToChat: (noteId: string) =>
+    run(cmd<Message>("add_note_to_chat", { noteId })),
 
   // Notes & artifacts
-  listNotes: (notebookId: string) => run(query<Note[]>("list_notes", { notebookId })),
-  listRecentNotes: (limit = 6) => run(query<Note[]>("list_recent_notes", { limit })),
-  listRecentReports: (limit = 10) => run(query<Note[]>("list_recent_reports", { limit })),
+  listNotes: (notebookId: string) =>
+    run(query<Note[]>("list_notes", { notebookId })),
+  listRecentNotes: (limit = 6) =>
+    run(query<Note[]>("list_recent_notes", { limit })),
+  listRecentReports: (limit = 10) =>
+    run(query<Note[]>("list_recent_reports", { limit })),
   corpusStats: () => run(query<CorpusStats>("corpus_stats")),
   newWindow: (notebookId?: string, noteId?: string) =>
     run(cmd<void>("new_window", { notebookId, noteId })),
@@ -156,13 +204,15 @@ export const api = {
     run(cmd<string>("export_notebook_okf", { notebookId, destDir })),
   rebuildAppMenu: () => run(cmd<void>("rebuild_app_menu")),
   fixTrafficLights: () => run(cmd<void>("fix_traffic_lights")),
-  getAudioPath: (noteId: string) => run(query<string | null>("get_audio_path", { noteId })),
+  getAudioPath: (noteId: string) =>
+    run(query<string | null>("get_audio_path", { noteId })),
   exportAudio: (noteId: string, dest: string) =>
     run(cmd<void>("export_audio", { noteId, dest })),
   kokoroStatus: () => run(query<KokoroStatus>("kokoro_status")),
   setupKokoro: () => run(slow<KokoroStatus>("setup_kokoro")),
   removeKokoro: () => run(cmd<KokoroStatus>("remove_kokoro")),
-  searchEverything: (q: string) => run(query<SearchHit[]>("search_everything", { query: q })),
+  searchEverything: (q: string) =>
+    run(query<SearchHit[]>("search_everything", { query: q })),
   createNote: (notebookId: string, title: string, content: string) =>
     run(cmd<Note>("create_note", { notebookId, title, content })),
   updateNote: (id: string, title: string, content: string) =>
@@ -170,10 +220,26 @@ export const api = {
   deleteNote: (id: string) => run(cmd<void>("delete_note", { id })),
   convertNoteToSource: (noteId: string) =>
     run(ai<Source>("convert_note_to_source", { noteId })),
-  generateArtifact: (notebookId: string, kind: NoteKind, prompt?: string, sourceIds?: string[] | null) =>
-    run(slow<Note>("generate_artifact", { notebookId, kind, prompt: prompt ?? "", sourceIds })),
-  rebuildNote: (noteId: string, notebookId: string, kind: NoteKind, prompt: string) =>
-    run(slow<Note>("rebuild_note", { noteId, notebookId, kind, prompt })),
+  generateArtifact: (
+    notebookId: string,
+    kind: NoteKind,
+    prompt?: string,
+    sourceIds?: string[] | null,
+  ) =>
+    run(
+      slow<Note>("generate_artifact", {
+        notebookId,
+        kind,
+        prompt: prompt ?? "",
+        sourceIds,
+      }),
+    ),
+  rebuildNote: (
+    noteId: string,
+    notebookId: string,
+    kind: NoteKind,
+    prompt: string,
+  ) => run(slow<Note>("rebuild_note", { noteId, notebookId, kind, prompt })),
 
   // Templates (custom generators in ~/Documents/Alchemy/templates)
   listTemplates: () => run(query<Template[]>("list_templates")),
@@ -183,17 +249,51 @@ export const api = {
   // Reports
   listReportSchedules: (notebookId: string) =>
     run(query<ReportSchedule[]>("list_report_schedules", { notebookId })),
-  listAllReportSchedules: () => run(query<ReportSchedule[]>("list_all_report_schedules")),
-  createReportSchedule: (notebookId: string, name: string, kind: string, prompt: string, intervalSecs: number) =>
-    run(cmd<ReportSchedule>("create_report_schedule", { notebookId, name, kind, prompt, intervalSecs })),
-  updateReportSchedule: (id: string, name: string, kind: string, prompt: string, intervalSecs: number, enabled: boolean) =>
-    run(cmd<void>("update_report_schedule", { id, name, kind, prompt, intervalSecs, enabled })),
-  deleteReportSchedule: (id: string) => run(cmd<void>("delete_report_schedule", { id })),
-  runReport: (scheduleId: string) => run(ai<Note>("run_report", { scheduleId })),
+  listAllReportSchedules: () =>
+    run(query<ReportSchedule[]>("list_all_report_schedules")),
+  createReportSchedule: (
+    notebookId: string,
+    name: string,
+    kind: string,
+    prompt: string,
+    intervalSecs: number,
+  ) =>
+    run(
+      cmd<ReportSchedule>("create_report_schedule", {
+        notebookId,
+        name,
+        kind,
+        prompt,
+        intervalSecs,
+      }),
+    ),
+  updateReportSchedule: (
+    id: string,
+    name: string,
+    kind: string,
+    prompt: string,
+    intervalSecs: number,
+    enabled: boolean,
+  ) =>
+    run(
+      cmd<void>("update_report_schedule", {
+        id,
+        name,
+        kind,
+        prompt,
+        intervalSecs,
+        enabled,
+      }),
+    ),
+  deleteReportSchedule: (id: string) =>
+    run(cmd<void>("delete_report_schedule", { id })),
+  runReport: (scheduleId: string) =>
+    run(ai<Note>("run_report", { scheduleId })),
 
   // Settings / health
   getAiConfig: () => run(query<AiConfig>("get_ai_config")),
-  setAiConfig: (config: AiConfig) => run(cmd<void>("set_ai_config", { config })),
+  setAiConfig: (config: AiConfig) =>
+    run(cmd<void>("set_ai_config", { config })),
   listModels: () => run(query<string[]>("list_models")),
   listGatewayModels: (baseUrl: string, apiKey: string) =>
     run(probe<string[]>("list_gateway_models", { baseUrl, apiKey })),
@@ -203,6 +303,8 @@ export const api = {
 
   // Agent access (MCP)
   mcpStatus: () => run(query<McpStatus>("mcp_status")),
-  listAgentConnectors: () => run(query<ConnectorStatus[]>("list_agent_connectors")),
-  connectAgent: (id: string) => run(cmd<ConnectorStatus>("connect_agent", { id })),
+  listAgentConnectors: () =>
+    run(query<ConnectorStatus[]>("list_agent_connectors")),
+  connectAgent: (id: string) =>
+    run(cmd<ConnectorStatus>("connect_agent", { id })),
 };

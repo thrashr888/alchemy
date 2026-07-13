@@ -127,6 +127,8 @@ export function SourcesPanel() {
   const openAddSource = useStore((s) => s.openAddSource);
   const folderScan = useStore((s) => s.folderScan);
   const editSourceText = useStore((s) => s.editSourceText);
+  const updateMacNote = useStore((s) => s.updateMacNote);
+  const addMacReminder = useStore((s) => s.addMacReminder);
   const refreshSource = useStore((s) => s.refreshSource);
   const deleteSource = useStore((s) => s.deleteSource);
   const draggingFiles = useStore((s) => s.draggingFiles);
@@ -141,12 +143,25 @@ export function SourcesPanel() {
     id: string;
     title: string;
     text: string;
+    /** Editing the Apple Note itself — save writes back through cider. */
+    macNote?: boolean;
+  } | null>(null);
+  const [addingReminder, setAddingReminder] = useState<{
+    sourceId: string;
+    list: string;
   } | null>(null);
 
   async function startEdit(s: Source) {
     // List payloads omit content; fetch the full text to prefill the editor.
     const content = await api.getSourceContent(s.id);
     setEditing({ id: s.id, title: s.title, text: content });
+  }
+
+  async function startEditMacNote(s: Source) {
+    // The real note body (first line is the title — Notes derives the visible
+    // title from it), not our rendered markdown copy.
+    const body = await api.macNoteBody(s.id);
+    setEditing({ id: s.id, title: s.title, text: body, macNote: true });
   }
 
   const totalChars = sources.reduce((sum, s) => sum + s.charCount, 0);
@@ -347,6 +362,10 @@ export function SourcesPanel() {
             <div className="flex flex-col gap-0.5">
               {rows.map(({ s, indent }) => {
                 const isFolder = s.sourceType === "folder";
+                const isMacNote = s.url.startsWith("cider://notes/note/");
+                const isMacReminders = s.url.startsWith(
+                  "cider://reminders/list/",
+                );
                 const readable = s.status === "ready" && !isFolder;
                 const kids = isFolder
                   ? sources.filter((x) => x.parentId === s.id)
@@ -405,17 +424,45 @@ export function SourcesPanel() {
                                   {
                                     label: isFolder
                                       ? "Rescan folder now"
-                                      : s.status === "placeholder"
-                                        ? "Download & embed"
-                                        : isWebUrl(s.url)
-                                          ? "Refresh from URL"
-                                          : "Refresh from file",
+                                      : s.sourceType === "mac"
+                                        ? "Sync now"
+                                        : s.status === "placeholder"
+                                          ? "Download & embed"
+                                          : isWebUrl(s.url)
+                                            ? "Refresh from URL"
+                                            : "Refresh from file",
                                     icon: <RefreshCw className="h-3.5 w-3.5" />,
                                     onClick: () => void refreshSource(s.id),
                                   },
                                 ]
                               : []),
+                            // Mac sources are mirrors — editing our copy would
+                            // just be overwritten, so writes go to the app
+                            // itself and sync back.
+                            ...(isMacNote
+                              ? [
+                                  {
+                                    label: "Edit note",
+                                    icon: <Pencil className="h-3.5 w-3.5" />,
+                                    onClick: () => void startEditMacNote(s),
+                                  },
+                                ]
+                              : []),
+                            ...(isMacReminders
+                              ? [
+                                  {
+                                    label: "Add reminder…",
+                                    icon: <Plus className="h-3.5 w-3.5" />,
+                                    onClick: () =>
+                                      setAddingReminder({
+                                        sourceId: s.id,
+                                        list: s.title,
+                                      }),
+                                  },
+                                ]
+                              : []),
                             ...(s.sourceType !== "url" &&
+                            s.sourceType !== "mac" &&
                             !isFolder &&
                             s.status !== "placeholder"
                               ? [
@@ -511,28 +558,33 @@ export function SourcesPanel() {
       <Modal
         open={!!editing}
         onClose={() => setEditing(null)}
-        title="Edit source"
+        title={editing?.macNote ? "Edit Apple Note" : "Edit source"}
         width="max-w-lg"
       >
         <form
           onSubmit={async (e) => {
             e.preventDefault();
             if (!editing) return;
-            const { id, title, text } = editing;
+            const { id, title, text, macNote } = editing;
             setEditing(null);
-            await editSourceText(id, title, text);
+            if (macNote) await updateMacNote(id, text);
+            else await editSourceText(id, title, text);
           }}
           className="flex flex-col gap-3"
         >
-          <Input
-            autoFocus
-            placeholder="Title"
-            value={editing?.title ?? ""}
-            onChange={(e) =>
-              setEditing((s) => (s ? { ...s, title: e.target.value } : s))
-            }
-          />
+          {/* The note's title IS its first line — no separate title field. */}
+          {!editing?.macNote && (
+            <Input
+              autoFocus
+              placeholder="Title"
+              value={editing?.title ?? ""}
+              onChange={(e) =>
+                setEditing((s) => (s ? { ...s, title: e.target.value } : s))
+              }
+            />
+          )}
           <Textarea
+            autoFocus={editing?.macNote}
             rows={12}
             placeholder="Source text…"
             value={editing?.text ?? ""}
@@ -540,6 +592,12 @@ export function SourcesPanel() {
               setEditing((s) => (s ? { ...s, text: e.target.value } : s))
             }
           />
+          {editing?.macNote && (
+            <p className="text-[11px] leading-relaxed text-subtle-foreground">
+              Saves straight into Apple Notes — the first line is the note's
+              title.
+            </p>
+          )}
           <div className="flex justify-end gap-2">
             <Button
               type="button"
@@ -553,13 +611,73 @@ export function SourcesPanel() {
               variant="primary"
               disabled={!editing?.text.trim()}
             >
-              Save
+              {editing?.macNote ? "Save to Apple Notes" : "Save"}
             </Button>
           </div>
         </form>
       </Modal>
 
+      <Modal
+        open={!!addingReminder}
+        onClose={() => setAddingReminder(null)}
+        title={`Add reminder to "${addingReminder?.list ?? ""}"`}
+        width="max-w-md"
+      >
+        <AddReminderForm
+          key={addingReminder?.sourceId ?? "none"}
+          onSubmit={async (title, notes) => {
+            if (!addingReminder) return;
+            const { sourceId } = addingReminder;
+            setAddingReminder(null);
+            await addMacReminder(sourceId, title, notes);
+          }}
+          onCancel={() => setAddingReminder(null)}
+        />
+      </Modal>
+
       {confirmDialog}
     </div>
+  );
+}
+
+/** Title + optional notes for a new reminder in a connected list. */
+function AddReminderForm({
+  onSubmit,
+  onCancel,
+}: {
+  onSubmit: (title: string, notes?: string) => void;
+  onCancel: () => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [notes, setNotes] = useState("");
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (title.trim()) onSubmit(title.trim(), notes.trim() || undefined);
+      }}
+      className="flex flex-col gap-3"
+    >
+      <Input
+        autoFocus
+        placeholder="Remind me to…"
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+      />
+      <Textarea
+        rows={3}
+        placeholder="Notes (optional)"
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+      />
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="submit" variant="primary" disabled={!title.trim()}>
+          Add reminder
+        </Button>
+      </div>
+    </form>
   );
 }

@@ -2,12 +2,13 @@ import { useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { Button, Spinner } from "./ui";
-import { Calendar, ListChecks, NotebookText } from "lucide-react";
+import { Calendar, ListChecks, NotebookText, TrendingUp } from "lucide-react";
 
 const PROVIDERS = [
   { id: "calendar", label: "Calendar", icon: Calendar },
   { id: "reminders", label: "Reminders", icon: ListChecks },
   { id: "notes", label: "Apple Notes", icon: NotebookText },
+  { id: "stocks", label: "Stocks", icon: TrendingUp },
 ] as const;
 
 /**
@@ -17,7 +18,11 @@ const PROVIDERS = [
  * later just works. Hidden entirely when cider isn't installed unless
  * `showInstallHint`.
  */
-export function MacConnect({ showInstallHint = false }: { showInstallHint?: boolean }) {
+export function MacConnect({
+  showInstallHint = false,
+}: {
+  showInstallHint?: boolean;
+}) {
   const macAvailable = useStore((s) => s.macAvailable);
   const pushToast = useStore((s) => s.pushToast);
   const [busy, setBusy] = useState<string | null>(null);
@@ -53,7 +58,11 @@ export function MacConnect({ showInstallHint = false }: { showInstallHint?: bool
             }
           }}
         >
-          {busy === id ? <Spinner className="h-3.5 w-3.5" /> : <Icon className="h-3.5 w-3.5" />}
+          {busy === id ? (
+            <Spinner className="h-3.5 w-3.5" />
+          ) : (
+            <Icon className="h-3.5 w-3.5" />
+          )}
           Connect {label}
         </Button>
       ))}

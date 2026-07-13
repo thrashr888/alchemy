@@ -5,8 +5,9 @@
 //! content is fetched over cider's JSON stdout, rendered to markdown, and
 //! ingested through the normal chunk/embed path; the resync sweep re-fetches
 //! on a gentle cadence and re-embeds when the content hash changes (the hash
-//! rides in the source's `mtime` column). Read-only by design — see
-//! docs/RFC-cider-tools.md.
+//! rides in the source's `mtime` column). Sync is the only way data flows
+//! in; the narrow write paths (edit a note, add a reminder) go to the Mac
+//! app first and re-sync back — see docs/RFC-cider-tools.md.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -116,6 +117,7 @@ pub async fn mac_connect(provider: String) -> Result<(), String> {
         "reminders" => cider(&["reminders", "list", "--limit", "1"]).await,
         "calendar" => cider(&["calendar", "list", "--days-back", "0", "--days-ahead", "1"]).await,
         "notes" => cider(&["notes", "folders"]).await,
+        "stocks" => cider(&["stocks", "watchlists"]).await,
         other => return Err(format!("Unknown Mac provider: {other}")),
     }
     .map(|_| ())
@@ -156,8 +158,11 @@ pub async fn list_mac_collections(provider: String) -> Result<Vec<MacCollection>
         }
         // Individual notes, not folders — one note becomes one source (its
         // full text via `notes get`, past the list command's 2000-char cap).
+        // --brief (cider >= 0.1.8) skips bodies and returns the whole
+        // library fast; the picker searches and groups it by folder
+        // client-side.
         "notes" => {
-            let data = cider(&["notes", "list"])
+            let data = cider(&["notes", "list", "--brief"])
                 .await
                 .map_err(|e| format!("{e:#}"))?;
             Ok(data
@@ -174,6 +179,26 @@ pub async fn list_mac_collections(provider: String) -> Result<Vec<MacCollection>
                 })
                 .collect())
         }
+        // Stocks watchlists — one list becomes one auto-refreshing source.
+        "stocks" => {
+            let data = cider(&["stocks", "watchlists"])
+                .await
+                .map_err(|e| format!("{e:#}"))?;
+            Ok(data
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .filter_map(|w| {
+                    let name = w["name"].as_str()?;
+                    let n = w["symbols"].as_array().map(|s| s.len()).unwrap_or(0);
+                    Some(MacCollection {
+                        id: name.to_string(),
+                        label: name.to_string(),
+                        detail: format!("{n} {}", if n == 1 { "symbol" } else { "symbols" }),
+                    })
+                })
+                .collect())
+        }
         other => Err(format!("Unknown Mac provider: {other}")),
     }
 }
@@ -184,6 +209,7 @@ pub fn mac_uri(provider: &str, collection: &str) -> String {
     match provider {
         "calendar" => format!("cider://calendar/upcoming/{collection}"),
         "reminders" => format!("cider://reminders/list/{collection}"),
+        "stocks" => format!("cider://stocks/watchlist/{collection}"),
         _ => format!("cider://notes/note/{collection}"),
     }
 }
@@ -268,6 +294,64 @@ pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
         }
         return Ok((title, out));
     }
+    if let Some(list) = uri.strip_prefix("cider://stocks/watchlist/") {
+        // Two calls: the watchlist for membership/order, the quote cache for
+        // prices. Quotes are as fresh as the Stocks app/widget keeps them.
+        let lists = cider(&["stocks", "watchlists"]).await?;
+        let symbols: Vec<String> = lists
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .find(|w| w["name"].as_str() == Some(list))
+            .and_then(|w| w["symbols"].as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|s| s.as_str().map(String::from))
+            .collect();
+        if symbols.is_empty() {
+            anyhow::bail!("Watchlist \"{list}\" not found in Apple Stocks (was it renamed?)");
+        }
+        let quotes = cider(&["stocks", "list"]).await?;
+        let mut out = format!("# Stocks — {list}\n\n");
+        let mut as_of = "";
+        let empty = vec![];
+        let rows = quotes.as_array().unwrap_or(&empty);
+        out.push_str("| Symbol | Name | Price | Change | Status |\n");
+        out.push_str("|---|---|---|---|---|\n");
+        for sym in &symbols {
+            let q = rows.iter().find(|q| q["symbol"].as_str() == Some(sym));
+            let (name, price, pct, status) = match q {
+                Some(q) => {
+                    if let Some(t) = q["as_of"].as_str() {
+                        if t > as_of {
+                            as_of = t;
+                        }
+                    }
+                    (
+                        q["name"].as_str().unwrap_or("").to_string(),
+                        q["price"]
+                            .as_f64()
+                            .map(|p| format!("{p:.2} {}", q["currency"].as_str().unwrap_or("")))
+                            .unwrap_or_default(),
+                        q["change_percent"]
+                            .as_f64()
+                            .map(|c| format!("{c:+.2}%"))
+                            .unwrap_or_default(),
+                        q["exchange_status"].as_str().unwrap_or("").to_string(),
+                    )
+                }
+                None => (String::new(), String::new(), String::new(), String::new()),
+            };
+            out.push_str(&format!(
+                "| {sym} | {name} | {price} | {pct} | {status} |\n"
+            ));
+        }
+        let as_of = as_of.to_string();
+        if !as_of.is_empty() {
+            out.push_str(&format!("\n_Prices as of {as_of} (Apple Stocks cache)._\n"));
+        }
+        return Ok((format!("Stocks: {list}"), out));
+    }
     // Legacy folder-as-source origins keep syncing.
     if let Some(folder) = uri.strip_prefix("cider://notes/folder/") {
         let data = cider(&["notes", "list", "--folder", folder]).await?;
@@ -296,6 +380,48 @@ pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
 /// Is this origin a Mac item?
 pub fn is_mac_uri(url: &str) -> bool {
     url.starts_with("cider://")
+}
+
+// ---- Write-back ------------------------------------------------------------
+//
+// Sources stay sync-driven (the Mac item is the truth), but the two providers
+// with natural edit affordances accept writes: a note's body can be replaced,
+// and reminders can be added to a connected list. Every write is followed by
+// a normal re-fetch + re-embed, so Alchemy's copy is always what the app has.
+
+/// Raw plaintext of a note source for editing (first line is the title —
+/// Apple Notes derives the visible title from it, so editors keep it there).
+pub async fn note_body(uri: &str) -> anyhow::Result<String> {
+    let id = uri
+        .strip_prefix("cider://notes/note/")
+        .ok_or_else(|| anyhow!("Not an Apple Notes source: {uri}"))?;
+    let n = cider(&["notes", "get", "--id", id]).await?;
+    Ok(n["body"].as_str().unwrap_or_default().to_string())
+}
+
+/// Replace the note's body (cider renders line breaks to Notes' HTML).
+pub async fn update_note(uri: &str, body: &str) -> anyhow::Result<()> {
+    let id = uri
+        .strip_prefix("cider://notes/note/")
+        .ok_or_else(|| anyhow!("Not an Apple Notes source: {uri}"))?;
+    cider(&["notes", "update", "--id", id, "--body", body])
+        .await
+        .map(|_| ())
+}
+
+/// Add a reminder to the list this source mirrors.
+pub async fn add_reminder(uri: &str, title: &str, notes: Option<&str>) -> anyhow::Result<()> {
+    let list = uri
+        .strip_prefix("cider://reminders/list/")
+        .ok_or_else(|| anyhow!("Not a Reminders source: {uri}"))?;
+    let mut args = vec!["reminders", "create", "--title", title, "--list", list];
+    if let Some(n) = notes {
+        if !n.trim().is_empty() {
+            args.push("--notes");
+            args.push(n);
+        }
+    }
+    cider(&args).await.map(|_| ())
 }
 
 /// The resync sweep runs every minute, but Mac fetches go through osascript

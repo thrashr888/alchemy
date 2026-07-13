@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { Button, Input, Textarea, Modal, Spinner } from "./ui";
@@ -7,10 +7,13 @@ import type { MacCollection } from "@/lib/types";
 import {
   Calendar,
   ChevronLeft,
+  ChevronRight,
   ClipboardPaste,
+  Folder,
   Link2,
   ListChecks,
   NotebookText,
+  TrendingUp,
   Upload,
   FolderOpen,
 } from "lucide-react";
@@ -20,6 +23,7 @@ const MAC_PROVIDERS = [
   { id: "calendar", label: "Calendar", icon: Calendar },
   { id: "reminders", label: "Reminders", icon: ListChecks },
   { id: "notes", label: "Apple Notes", icon: NotebookText },
+  { id: "stocks", label: "Stocks", icon: TrendingUp },
 ] as const;
 
 type MacProvider = (typeof MAC_PROVIDERS)[number];
@@ -79,6 +83,9 @@ export function AddSourceModal() {
   const [provider, setProvider] = useState<MacProvider>(MAC_PROVIDERS[0]);
   const [collections, setCollections] = useState<MacCollection[] | null>(null);
   const [macError, setMacError] = useState<string | null>(null);
+  const [macQuery, setMacQuery] = useState("");
+  // Apple Notes drill-down: null = the folder list, a name = that folder's notes.
+  const [notesFolder, setNotesFolder] = useState<string | null>(null);
 
   // Reset to a fresh hub (or the deep-linked form) every time the modal opens.
   useEffect(() => {
@@ -110,6 +117,8 @@ export function AddSourceModal() {
     setProvider(p);
     setCollections(null);
     setMacError(null);
+    setMacQuery("");
+    setNotesFolder(null);
     setStep("mac");
     api
       .listMacCollections(p.id)
@@ -135,7 +144,12 @@ export function AddSourceModal() {
   };
 
   return (
-    <Modal open={open} onClose={closeAddSource} title={titles[step]} width="max-w-lg">
+    <Modal
+      open={open}
+      onClose={closeAddSource}
+      title={titles[step]}
+      width="max-w-lg"
+    >
       {step === "hub" && (
         <div className="flex flex-col gap-3">
           {/* The OS drop already works anywhere on the window (FileDrop.tsx);
@@ -153,7 +167,12 @@ export function AddSourceModal() {
                 : "border-border hover:border-border-strong hover:bg-surface-2/60",
             )}
           >
-            <Upload className={cn("h-5 w-5", draggingFiles ? "text-primary" : "text-muted-foreground")} />
+            <Upload
+              className={cn(
+                "h-5 w-5",
+                draggingFiles ? "text-primary" : "text-muted-foreground",
+              )}
+            />
             <span className="text-[13px] font-medium text-foreground">
               Drop files or folders here
             </span>
@@ -179,7 +198,11 @@ export function AddSourceModal() {
                 void pickAndAddFolder();
               }}
             />
-            <Tile icon={<Link2 className="h-4 w-4" />} label="From URL" onClick={() => setStep("url")} />
+            <Tile
+              icon={<Link2 className="h-4 w-4" />}
+              label="From URL"
+              onClick={() => setStep("url")}
+            />
             <Tile
               icon={<ClipboardPaste className="h-4 w-4" />}
               label="Paste text"
@@ -202,7 +225,9 @@ export function AddSourceModal() {
           {macAvailable === false && (
             <p className="text-[11px] leading-relaxed text-subtle-foreground">
               Connect Calendar, Reminders & Notes —{" "}
-              <code className="rounded bg-surface-2 px-1 py-0.5">brew install cider</code>
+              <code className="rounded bg-surface-2 px-1 py-0.5">
+                brew install cider
+              </code>
             </p>
           )}
         </div>
@@ -265,7 +290,11 @@ export function AddSourceModal() {
             <Button type="button" variant="ghost" onClick={closeAddSource}>
               Cancel
             </Button>
-            <Button type="submit" variant="primary" disabled={!pasteText.trim()}>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={!pasteText.trim()}
+            >
               Add source
             </Button>
           </div>
@@ -273,46 +302,161 @@ export function AddSourceModal() {
       )}
 
       {step === "mac" && (
-        <div className="flex flex-col gap-1">
-          {back}
-          {macError ? (
-            <p className="px-2 py-4 text-[12px] text-destructive">{macError}</p>
-          ) : collections === null ? (
-            <div className="flex items-center justify-center py-8">
-              <Spinner className="h-4 w-4 text-muted-foreground" />
-            </div>
-          ) : collections.length === 0 ? (
-            <p className="px-2 py-4 text-[12px] text-muted-foreground">
-              Nothing to add from {provider.label}.
-            </p>
-          ) : (
-            collections.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => {
-                  closeAddSource();
-                  void addMac(provider.id, c.id, c.label);
-                }}
-                className="flex items-baseline gap-2 rounded-md px-2 py-2 text-left transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 outline-none"
-              >
-                <span className="min-w-0 truncate text-[13px] text-foreground">{c.label}</span>
-                <span className="ml-auto shrink-0 text-[11px] text-subtle-foreground">
-                  {c.detail}
-                </span>
-              </button>
-            ))
-          )}
-          <p className="mt-2 text-[11px] leading-relaxed text-subtle-foreground">
-            {provider.id === "notes"
-              ? "The note's full text becomes one source and re-syncs as you edit it. "
-              : provider.id === "reminders"
-                ? "A list syncs as one source — new reminders are picked up automatically. "
-                : ""}
-            Content is embedded into this notebook's local index and re-syncs
-            automatically.
-          </p>
-        </div>
+        <MacPicker
+          provider={provider}
+          collections={collections}
+          error={macError}
+          query={macQuery}
+          setQuery={setMacQuery}
+          notesFolder={notesFolder}
+          setNotesFolder={setNotesFolder}
+          back={back}
+          onPick={(c) => {
+            closeAddSource();
+            void addMac(provider.id, c.id, c.label);
+          }}
+        />
       )}
     </Modal>
+  );
+}
+
+/**
+ * The Mac collection picker: an auto-focused search over everything the
+ * provider returned, and — for Apple Notes, where "everything" is the whole
+ * library — a folder list to drill into instead of one long flat list.
+ * Searching cuts across all folders; clearing the query returns to where
+ * you were.
+ */
+function MacPicker({
+  provider,
+  collections,
+  error,
+  query,
+  setQuery,
+  notesFolder,
+  setNotesFolder,
+  back,
+  onPick,
+}: {
+  provider: MacProvider;
+  collections: MacCollection[] | null;
+  error: string | null;
+  query: string;
+  setQuery: (q: string) => void;
+  notesFolder: string | null;
+  setNotesFolder: (f: string | null) => void;
+  back: ReactNode;
+  onPick: (c: MacCollection) => void;
+}) {
+  const searchable = provider.id !== "calendar";
+  const q = query.trim().toLowerCase();
+
+  // Apple Notes folders, derived from each note's folder name (its detail).
+  const folders = useMemo(() => {
+    if (provider.id !== "notes" || !collections) return [];
+    const counts = new Map<string, number>();
+    for (const c of collections)
+      counts.set(c.detail, (counts.get(c.detail) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [provider.id, collections]);
+
+  const showFolders = provider.id === "notes" && !q && notesFolder === null;
+  const visible = (collections ?? []).filter((c) => {
+    if (q)
+      return (
+        c.label.toLowerCase().includes(q) || c.detail.toLowerCase().includes(q)
+      );
+    if (provider.id === "notes") return c.detail === notesFolder;
+    return true;
+  });
+  // The folder is redundant on every row while inside that folder.
+  const showDetail = provider.id !== "notes" || notesFolder === null || !!q;
+
+  return (
+    <div className="flex flex-col gap-1">
+      {back}
+      {searchable && (
+        <Input
+          autoFocus
+          placeholder={`Search ${provider.label}…`}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          className="mb-1"
+        />
+      )}
+      {error ? (
+        <p className="px-2 py-4 text-[12px] text-destructive">{error}</p>
+      ) : collections === null ? (
+        <div className="flex items-center justify-center py-8">
+          <Spinner className="h-4 w-4 text-muted-foreground" />
+        </div>
+      ) : collections.length === 0 ? (
+        <p className="px-2 py-4 text-[12px] text-muted-foreground">
+          Nothing to add from {provider.label}.
+        </p>
+      ) : (
+        <div className="flex max-h-72 flex-col gap-0.5 overflow-y-auto">
+          {provider.id === "notes" && !q && notesFolder !== null && (
+            <button
+              onClick={() => setNotesFolder(null)}
+              className="flex items-center gap-1 rounded-md px-2 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground outline-none focus-visible:bg-surface-2"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+              {notesFolder}
+            </button>
+          )}
+          {showFolders
+            ? folders.map(([name, count]) => (
+                <button
+                  key={name}
+                  onClick={() => setNotesFolder(name)}
+                  className="flex items-center gap-2 rounded-md px-2 py-2 text-left transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 outline-none"
+                >
+                  <Folder className="h-3.5 w-3.5 shrink-0 text-[#e8a33d]" />
+                  <span className="min-w-0 truncate text-[13px] text-foreground">
+                    {name}
+                  </span>
+                  <span className="ml-auto shrink-0 text-[11px] text-subtle-foreground">
+                    {count} {count === 1 ? "note" : "notes"}
+                  </span>
+                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-subtle-foreground" />
+                </button>
+              ))
+            : visible.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => onPick(c)}
+                  className="flex items-baseline gap-2 rounded-md px-2 py-2 text-left transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 outline-none"
+                >
+                  <span className="min-w-0 truncate text-[13px] text-foreground">
+                    {c.label}
+                  </span>
+                  {showDetail && (
+                    <span className="ml-auto shrink-0 text-[11px] text-subtle-foreground">
+                      {c.detail}
+                    </span>
+                  )}
+                </button>
+              ))}
+          {!showFolders && visible.length === 0 && q && (
+            <p className="px-2 py-4 text-[12px] text-muted-foreground">
+              No matches for “{query.trim()}”.
+            </p>
+          )}
+        </div>
+      )}
+      <p className="mt-2 text-[11px] leading-relaxed text-subtle-foreground">
+        {provider.id === "notes"
+          ? "The note's full text becomes one source and re-syncs as you edit it. "
+          : provider.id === "reminders"
+            ? "A list syncs as one source — new reminders are picked up automatically. "
+            : provider.id === "stocks"
+              ? "A watchlist syncs as one source with the latest prices from the Stocks app. "
+              : ""}
+        Content is embedded into this notebook's local index and re-syncs
+        automatically.
+      </p>
+    </div>
   );
 }
