@@ -163,8 +163,13 @@ pub fn setup(
         .build()?;
     app.manage(TrayRecents(recent_menu));
 
+    // The menu bar wants a monochrome template glyph, not the app icon (the
+    // squircle just flattens to a rounded blob). tray.png is the sigil drawn
+    // black-on-transparent at 22pt@2x; macOS recolors it for the bar.
+    let glyph = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))
+        .expect("tray.png is a valid PNG");
     tauri::tray::TrayIconBuilder::with_id("alchemy-tray")
-        .icon(app.default_window_icon().unwrap().clone())
+        .icon(glyph)
         .icon_as_template(true)
         .tooltip("Alchemy")
         .menu(&tray_menu)
