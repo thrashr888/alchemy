@@ -35,6 +35,10 @@ claude mcp add --transport http alchemy http://127.0.0.1:41414/mcp
 3. `search` to ground claims before writing — hybrid vector + keyword
    retrieval over the notebook's chunks. It runs on a local embedder and is
    effectively free; make several small queries rather than one broad one.
+   When you don't know WHICH notebook holds something ("where did the user
+   save X?"), use `ask_everything` — the same retrieval across the entire
+   corpus, each passage tagged with its notebook. It returns raw passages;
+   synthesize the answer yourself.
 4. Write findings with `create_note` (markdown). Cite which sources informed
    each claim by title so the user can verify.
 5. Mac-item write-back, when the user asks for it: `update_mac_note` replaces
@@ -43,6 +47,15 @@ claude mcp add --transport http alchemy http://127.0.0.1:41414/mcp
    Reminders source. Both work only on sources the user already connected —
    find them in `list_sources` by a `url` starting with `cider://notes/note/`
    or `cider://reminders/list/`.
+
+## Sharing notebooks
+
+Notebooks travel as OKF bundles: the app exports a single `.okf.zip`
+(File → Share Notebook as Zip…) and imports one — or a bundle folder — via
+the home screen's Import… button, or by dropping the file anywhere on the
+window. Import re-embeds locally and skips duplicates, so re-importing is
+safe. If the user asks how to share a notebook with someone (or move it to
+another machine), point them at this flow.
 
 ## Deep links
 
