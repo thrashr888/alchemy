@@ -191,6 +191,12 @@ struct SourceIdReq {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+struct AskEverythingReq {
+    /// The question to retrieve corpus-wide passages for.
+    question: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 struct UpdateMacNoteReq {
     /// Source id of an Apple Notes source (from list_sources).
     source_id: String,
@@ -465,6 +471,24 @@ impl AlchemyMcp {
         state.db.delete_source(&source_id).await.map_err(internal)?;
         self.changed("sources", notebook_id.as_deref());
         json_result(&serde_json::json!({ "ok": true }))
+    }
+
+    #[tool(
+        description = "Retrieve passages for a question across ALL notebooks at once (hybrid vector + keyword, rank-fused, plus matching notes). Each passage names its notebook — use this to answer 'which notebook has…' questions or to ground corpus-wide answers. Synthesize the answer yourself from the passages."
+    )]
+    async fn ask_everything(
+        &self,
+        Parameters(AskEverythingReq { question }): Parameters<AskEverythingReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let question = question.trim().to_string();
+        if question.is_empty() {
+            return Err(invalid("question is empty"));
+        }
+        let state = self.state();
+        let passages = commands::retrieve_everything(&state, &question, 16)
+            .await
+            .map_err(internal)?;
+        json_result(&passages)
     }
 
     // -- Mac source write-back (Apple Notes / Reminders via cider) --

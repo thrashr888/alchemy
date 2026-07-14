@@ -6,7 +6,14 @@ import { AlchemyHero } from "./AlchemyHero";
 import { DitherBackground } from "./DitherBackground";
 import { Markdown } from "./Markdown";
 import { intervalLabel } from "./Reports";
-import { cn, noteUnread, relativeTime, providerStatus, cardButtonProps, shortcutBlocked } from "@/lib/utils";
+import {
+  cn,
+  noteUnread,
+  relativeTime,
+  providerStatus,
+  cardButtonProps,
+  shortcutBlocked,
+} from "@/lib/utils";
 import type { CorpusStats, Note, ReportSchedule } from "@/lib/types";
 import {
   BookOpen,
@@ -21,6 +28,7 @@ import {
   Circle,
   FileText,
   Newspaper,
+  Sparkles,
 } from "lucide-react";
 
 // Keep this list in sync with Rust in `src-tauri/src/db.rs` (`NOTEBOOK_PALETTE`)
@@ -51,29 +59,29 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   const [creating, setCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
-  const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
+  const [renaming, setRenaming] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
   const [colorPickerFor, setColorPickerFor] = useState<string | null>(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
-  // The ask box: jump straight into a notebook's chat with a question.
-  // Defaults to the notebook you were last in.
+  // The unified ask box: one input over the WHOLE corpus. Enter hands the
+  // question to the palette's ask mode (meta-chat, docs/RFC-meta-chat.md) —
+  // no notebook choice needed; citations name where answers live.
   const [ask, setAsk] = useState("");
-  const [askNb, setAskNb] = useState<string | null>(null);
-  const lastUsed = localStorage.getItem("lastNotebookId");
-  const askTarget =
-    askNb ??
-    (lastUsed && notebooks.some((n) => n.id === lastUsed) ? lastUsed : notebooks[0]?.id);
-  async function submitAsk(e: React.FormEvent) {
+  function submitAsk(e: React.FormEvent) {
     e.preventDefault();
     const q = ask.trim();
-    if (!q || !askTarget) return;
+    if (!q) return;
     setAsk("");
-    await open(askTarget);
-    void useStore.getState().sendMessage(q);
+    useStore.setState({ pendingAsk: q, paletteOpen: true });
   }
 
   // "Since you were away": what landed since the last time home was open.
-  const [prevVisit] = useState<number>(() => Number(localStorage.getItem("lastHomeVisit") ?? 0));
+  const [prevVisit] = useState<number>(() =>
+    Number(localStorage.getItem("lastHomeVisit") ?? 0),
+  );
   useEffect(() => {
     localStorage.setItem("lastHomeVisit", String(Date.now()));
   }, []);
@@ -176,7 +184,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/15 text-primary">
           <BookOpen className="h-4 w-4" />
         </div>
-        <span className="text-[15px] font-semibold tracking-tight">Alchemy</span>
+        <span className="text-[15px] font-semibold tracking-tight">
+          Alchemy
+        </span>
         <div className="ml-auto flex items-center gap-3">
           <div className="flex items-center gap-1.5">
             {provider.ok === null ? (
@@ -203,7 +213,12 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           >
             <Search className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" onClick={onOpenSettings} title="Settings">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onOpenSettings}
+            title="Settings"
+          >
             <Settings className="h-4 w-4" />
           </Button>
         </div>
@@ -230,309 +245,342 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         </div>
       ) : (
         <div className="flex min-h-0 flex-1">
-        {/* Left pane: notebooks & activity. Right pane: the reports feed.
+          {/* Left pane: notebooks & activity. Right pane: the reports feed.
             Two independent scroll regions, same idiom as the notebook view. */}
-        <div className="relative min-w-0 flex-1 overflow-y-auto">
-        {/* The dither shader from the hero, as a banner behind the heading —
+          <div className="relative min-w-0 flex-1 overflow-y-auto">
+            {/* The dither shader from the hero, as a banner behind the heading —
             it fades into the background before the notebook grid starts. */}
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-64 overflow-hidden" aria-hidden="true">
-          <DitherBackground themeKey={theme} intensity={2} />
-          <div className="absolute inset-0 bg-[linear-gradient(to_bottom,transparent_55%,var(--background)_100%)]" />
-        </div>
-        <div className="relative mx-auto max-w-[960px] px-6 py-10">
-          <div className="mb-5 flex items-end justify-between">
-            <div>
-              <h1 className="text-[22px] font-semibold tracking-tight">Your notebooks</h1>
-              <p className="mt-1 text-[13px] text-muted-foreground">
-                {stats
-                  ? `${notebooks.length} ${notebooks.length === 1 ? "notebook" : "notebooks"} · ${stats.sources} ${stats.sources === 1 ? "source" : "sources"} · ${Intl.NumberFormat().format(stats.chars)} chars indexed`
-                  : "Most recently used first."}
-              </p>
-              <AwayDigest prevVisit={prevVisit} notebooks={notebooks} reports={reports} />
+            <div
+              className="pointer-events-none absolute inset-x-0 top-0 h-64 overflow-hidden"
+              aria-hidden="true"
+            >
+              <DitherBackground themeKey={theme} intensity={2} />
+              <div className="absolute inset-0 bg-[linear-gradient(to_bottom,transparent_55%,var(--background)_100%)]" />
             </div>
-            <Button
-              variant="primary"
-              onClick={() => {
-                setNewTitle("");
-                setCreating(true);
-              }}
-            >
-              <Plus className="h-4 w-4" />
-              New notebook
-            </Button>
-          </div>
-
-          {/* Ask box: the front door to the core loop — pick a notebook (last
-              used by default), type a question, land in its chat mid-answer. */}
-          <div className="mb-8 flex items-center gap-2">
-            <form
-              onSubmit={submitAsk}
-              className="flex min-w-0 flex-1 items-center gap-1.5 rounded-xl border border-border bg-surface/80 p-1.5 shadow-sm backdrop-blur transition-colors focus-within:border-primary/50"
-            >
-              <select
-                value={askTarget ?? ""}
-                onChange={(e) => setAskNb(e.target.value)}
-                aria-label="Notebook to ask"
-                className="h-8 max-w-[200px] shrink-0 truncate rounded-lg border-0 bg-surface-2 px-2 text-[12px] text-muted-foreground outline-none"
-              >
-                {notebooks.map((n) => (
-                  <option key={n.id} value={n.id}>
-                    {n.title}
-                  </option>
-                ))}
-              </select>
-              <input
-                value={ask}
-                onChange={(e) => setAsk(e.target.value)}
-                placeholder="Ask anything about your sources…"
-                aria-label="Ask a question"
-                className="h-8 min-w-0 flex-1 bg-transparent px-1.5 text-[13px] text-foreground outline-none placeholder:text-subtle-foreground"
-              />
-              <Button type="submit" variant="primary" size="sm" disabled={!ask.trim()}>
-                Ask
-              </Button>
-            </form>
-            <button
-              onClick={() => useStore.getState().setPaletteOpen(true)}
-              title="Search notebooks, sources & notes"
-              className="flex h-[46px] shrink-0 items-center gap-1.5 rounded-xl border border-border bg-surface/80 px-3 text-[12px] text-muted-foreground shadow-sm backdrop-blur transition-colors hover:border-border-strong hover:text-foreground"
-            >
-              <Search className="h-3.5 w-3.5" />
-              Search
-              <kbd className="rounded border border-border bg-surface-2 px-1 py-0.5 text-[10px] text-subtle-foreground">
-                ⌘K
-              </kbd>
-            </button>
-          </div>
-
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
-            {/* New-notebook tile */}
-            <button
-              onClick={() => {
-                setNewTitle("");
-                setCreating(true);
-              }}
-              className="flex min-h-[132px] flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border-strong bg-surface/40 text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
-            >
-              <Plus className="h-6 w-6" />
-              <span className="text-[13px] font-medium">New notebook</span>
-            </button>
-
-            {notebooks.map((nb) => (
-              <div
-                key={nb.id}
-                onClick={() => open(nb.id)}
-                {...cardButtonProps(() => open(nb.id))}
-                className="group relative flex min-h-[132px] cursor-pointer flex-col rounded-lg border border-border bg-surface p-4 transition-colors hover:border-border-strong hover:bg-surface-2"
-              >
-                <span
-                  className="pointer-events-none absolute left-0 top-0 h-full w-[3px] rounded-l-lg"
-                  style={{ backgroundColor: nb.color || NOTEBOOK_PALETTE[0] }}
-                />
-                <div className="mb-auto flex h-8 w-8 items-center justify-center rounded-lg bg-primary/12 text-primary">
-                  <BookOpen className="h-4 w-4" />
+            <div className="relative mx-auto max-w-[960px] px-6 py-10">
+              <div className="mb-5 flex items-end justify-between">
+                <div>
+                  <h1 className="text-[22px] font-semibold tracking-tight">
+                    Your notebooks
+                  </h1>
+                  <p className="mt-1 text-[13px] text-muted-foreground">
+                    {stats
+                      ? `${notebooks.length} ${notebooks.length === 1 ? "notebook" : "notebooks"} · ${stats.sources} ${stats.sources === 1 ? "source" : "sources"} · ${Intl.NumberFormat().format(stats.chars)} chars indexed`
+                      : "Most recently used first."}
+                  </p>
+                  <AwayDigest
+                    prevVisit={prevVisit}
+                    notebooks={notebooks}
+                    reports={reports}
+                  />
                 </div>
-                <div className="mt-3 flex items-center gap-1.5">
-                  <span className="truncate text-[14px] font-medium" title={nb.title}>
-                    {nb.title}
-                  </span>
-                  {(unreadByNb.get(nb.id) ?? 0) > 0 && (
-                    <span
-                      className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
-                      title={`${unreadByNb.get(nb.id)} unread ${unreadByNb.get(nb.id) === 1 ? "report" : "reports"}`}
-                      aria-label={`${unreadByNb.get(nb.id)} unread reports`}
-                    />
-                  )}
-                </div>
-                <div className="mt-1 flex items-center gap-1.5 text-[11px] text-subtle-foreground">
-                  <Badge className="gap-1">
-                    <FileText className="h-2.5 w-2.5" />
-                    {nb.sourceCount}
-                  </Badge>
-                  <span>·</span>
-                  <span>{relativeTime(nb.updatedAt)}</span>
-                </div>
+                <Button
+                  variant="primary"
+                  onClick={() => {
+                    setNewTitle("");
+                    setCreating(true);
+                  }}
+                >
+                  <Plus className="h-4 w-4" />
+                  New notebook
+                </Button>
+              </div>
 
-                <div className="absolute right-2 top-2 flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+              {/* The unified ask box: one input, the whole corpus. Enter asks
+              across every notebook (palette ask mode); the ⌘K chip is the
+              same surface in search mode. */}
+              <div className="mb-8">
+                <form
+                  onSubmit={submitAsk}
+                  className="flex min-w-0 items-center gap-1.5 rounded-xl border border-border bg-surface/80 p-1.5 shadow-sm backdrop-blur transition-colors focus-within:border-primary/50"
+                >
+                  <Sparkles className="ml-2 h-4 w-4 shrink-0 text-citation" />
+                  <input
+                    value={ask}
+                    onChange={(e) => setAsk(e.target.value)}
+                    placeholder="Ask or search across all your notebooks…"
+                    aria-label="Ask a question across all notebooks"
+                    className="h-8 min-w-0 flex-1 bg-transparent px-1.5 text-[13px] text-foreground outline-none placeholder:text-subtle-foreground"
+                  />
                   <button
                     type="button"
-                    className="rounded p-1 text-muted-foreground transition hover:bg-elevated"
-                    style={{ backgroundColor: nb.color || NOTEBOOK_PALETTE[0] }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setColorPickerFor((cur) => (cur === nb.id ? null : nb.id));
-                    }}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    data-notebook-color-trigger
-                    aria-label={`Change color for ${nb.title}`}
-                    title="Change notebook color"
+                    onClick={() => useStore.getState().setPaletteOpen(true)}
+                    title="Search notebooks, sources & notes (⌘K)"
+                    aria-label="Open search"
+                    className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-[12px] text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
                   >
-                    <span className="relative block h-3 w-3 rounded-full border border-background" />
+                    <Search className="h-3.5 w-3.5" />
+                    <kbd className="rounded border border-border bg-surface-2 px-1 py-0.5 text-[10px] text-subtle-foreground">
+                      ⌘K
+                    </kbd>
                   </button>
-                  <button
-                    className="rounded p-1 text-muted-foreground hover:bg-elevated hover:text-foreground"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setRenaming({ id: nb.id, title: nb.title });
-                    }}
-                    title="Rename"
-                    aria-label={`Rename "${nb.title}"`}
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="sm"
+                    disabled={!ask.trim()}
                   >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    className="rounded p-1 text-muted-foreground hover:bg-elevated hover:text-destructive"
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      if (
-                        await confirm({
-                          title: `Delete "${nb.title}"?`,
-                          message: "This permanently deletes the notebook and all of its sources.",
-                          confirmLabel: "Delete",
-                          danger: true,
-                        })
-                      )
-                        remove(nb.id);
-                    }}
-                    title="Delete"
-                    aria-label={`Delete "${nb.title}"`}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-                {colorPickerFor === nb.id && (
-                  <div
-                    onClick={(e) => e.stopPropagation()}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    data-notebook-color-palette
-                    className="absolute right-2 top-10 z-10 flex rounded-md border border-border bg-surface px-2 py-1.5 shadow-sm"
-                  >
-                    {NOTEBOOK_PALETTE.map((c) => (
-                      <button
-                        key={c}
-                        type="button"
-                        onClick={() => onPickColor(nb.id, c)}
-                        onPointerDown={(e) => e.stopPropagation()}
-                        aria-label={`Set ${nb.title} color to ${c}`}
-                        className={cn(
-                          "m-0.5 h-5 w-5 rounded-full border border-border",
-                          c === (nb.color || NOTEBOOK_PALETTE[0]) ? "ring-2 ring-foreground ring-offset-1 ring-offset-surface" : "",
-                        )}
-                        style={{ backgroundColor: c }}
-                      />
-                    ))}
-                  </div>
-                )}
+                    Ask
+                  </Button>
+                </form>
               </div>
-            ))}
-          </div>
 
-          {/* The last few generated/edited documents across all notebooks. */}
-          {recentNotes.length > 0 && (
-            <div className="mt-10">
-              <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
-                Recent notes
-              </div>
-              <div className="flex flex-col gap-1">
-                {recentNotes.map((n) => (
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
+                {/* New-notebook tile */}
+                <button
+                  onClick={() => {
+                    setNewTitle("");
+                    setCreating(true);
+                  }}
+                  className="flex min-h-[132px] flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border-strong bg-surface/40 text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
+                >
+                  <Plus className="h-6 w-6" />
+                  <span className="text-[13px] font-medium">New notebook</span>
+                </button>
+
+                {notebooks.map((nb) => (
                   <div
-                    key={n.id}
-                    onClick={() => openNote(n)}
-                    {...cardButtonProps(() => openNote(n))}
-                    title={`Open in "${notebookTitle.get(n.notebookId) ?? "notebook"}"`}
-                    className="flex cursor-pointer items-center gap-2.5 rounded-md border border-border bg-surface px-3 py-2 transition-colors hover:border-border-strong hover:bg-surface-2"
+                    key={nb.id}
+                    onClick={() => open(nb.id)}
+                    {...cardButtonProps(() => open(nb.id))}
+                    className="group relative flex min-h-[132px] cursor-pointer flex-col rounded-lg border border-border bg-surface p-4 transition-colors hover:border-border-strong hover:bg-surface-2"
                   >
-                    <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <span className="truncate text-[13px] text-foreground">{n.title}</span>
-                    <Badge className="shrink-0 gap-1">
-                      <BookOpen className="h-2.5 w-2.5" />
-                      <span className="max-w-[160px] truncate">
-                        {notebookTitle.get(n.notebookId) ?? "Unknown notebook"}
+                    <span
+                      className="pointer-events-none absolute left-0 top-0 h-full w-[3px] rounded-l-lg"
+                      style={{
+                        backgroundColor: nb.color || NOTEBOOK_PALETTE[0],
+                      }}
+                    />
+                    <div className="mb-auto flex h-8 w-8 items-center justify-center rounded-lg bg-primary/12 text-primary">
+                      <BookOpen className="h-4 w-4" />
+                    </div>
+                    <div className="mt-3 flex items-center gap-1.5">
+                      <span
+                        className="truncate text-[14px] font-medium"
+                        title={nb.title}
+                      >
+                        {nb.title}
                       </span>
-                    </Badge>
-                    <span className="ml-auto shrink-0 text-[11px] text-subtle-foreground">
-                      {relativeTime(n.updatedAt)}
-                    </span>
+                      {(unreadByNb.get(nb.id) ?? 0) > 0 && (
+                        <span
+                          className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+                          title={`${unreadByNb.get(nb.id)} unread ${unreadByNb.get(nb.id) === 1 ? "report" : "reports"}`}
+                          aria-label={`${unreadByNb.get(nb.id)} unread reports`}
+                        />
+                      )}
+                    </div>
+                    <div className="mt-1 flex items-center gap-1.5 text-[11px] text-subtle-foreground">
+                      <Badge className="gap-1">
+                        <FileText className="h-2.5 w-2.5" />
+                        {nb.sourceCount}
+                      </Badge>
+                      <span>·</span>
+                      <span>{relativeTime(nb.updatedAt)}</span>
+                    </div>
+
+                    <div className="absolute right-2 top-2 flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+                      <button
+                        type="button"
+                        className="rounded p-1 text-muted-foreground transition hover:bg-elevated"
+                        style={{
+                          backgroundColor: nb.color || NOTEBOOK_PALETTE[0],
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setColorPickerFor((cur) =>
+                            cur === nb.id ? null : nb.id,
+                          );
+                        }}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        data-notebook-color-trigger
+                        aria-label={`Change color for ${nb.title}`}
+                        title="Change notebook color"
+                      >
+                        <span className="relative block h-3 w-3 rounded-full border border-background" />
+                      </button>
+                      <button
+                        className="rounded p-1 text-muted-foreground hover:bg-elevated hover:text-foreground"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRenaming({ id: nb.id, title: nb.title });
+                        }}
+                        title="Rename"
+                        aria-label={`Rename "${nb.title}"`}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        className="rounded p-1 text-muted-foreground hover:bg-elevated hover:text-destructive"
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (
+                            await confirm({
+                              title: `Delete "${nb.title}"?`,
+                              message:
+                                "This permanently deletes the notebook and all of its sources.",
+                              confirmLabel: "Delete",
+                              danger: true,
+                            })
+                          )
+                            remove(nb.id);
+                        }}
+                        title="Delete"
+                        aria-label={`Delete "${nb.title}"`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    {colorPickerFor === nb.id && (
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        data-notebook-color-palette
+                        className="absolute right-2 top-10 z-10 flex rounded-md border border-border bg-surface px-2 py-1.5 shadow-sm"
+                      >
+                        {NOTEBOOK_PALETTE.map((c) => (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => onPickColor(nb.id, c)}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            aria-label={`Set ${nb.title} color to ${c}`}
+                            className={cn(
+                              "m-0.5 h-5 w-5 rounded-full border border-border",
+                              c === (nb.color || NOTEBOOK_PALETTE[0])
+                                ? "ring-2 ring-foreground ring-offset-1 ring-offset-surface"
+                                : "",
+                            )}
+                            style={{ backgroundColor: c }}
+                          />
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
-            </div>
-          )}
 
-          {/* Scheduled reports across all notebooks — the app's ongoing activity. */}
-          {allReports.length > 0 && (
-            <div className="mt-10">
-              <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
-                Scheduled reports
-              </div>
-              <div className="flex flex-col gap-1">
-                {[...allReports]
-                  .sort((a, b) =>
-                    a.enabled !== b.enabled ? (a.enabled ? -1 : 1) : b.lastRunAt - a.lastRunAt,
-                  )
-                  .map((r) => (
-                    <div
-                      key={r.id}
-                      onClick={() => open(r.notebookId)}
-                      {...cardButtonProps(() => open(r.notebookId))}
-                      title={`Open "${notebookTitle.get(r.notebookId) ?? "notebook"}"`}
-                      className="flex cursor-pointer items-center gap-2.5 rounded-md border border-border bg-surface px-3 py-2 transition-colors hover:border-border-strong hover:bg-surface-2"
-                    >
-                      <Power
-                        className={cn(
-                          "h-3.5 w-3.5 shrink-0",
-                          r.enabled ? "text-success" : "text-subtle-foreground",
-                        )}
-                      />
-                      <span className="truncate text-[13px] text-foreground">{r.name}</span>
-                      <Badge className="shrink-0 gap-1">
-                        <BookOpen className="h-2.5 w-2.5" />
-                        <span className="max-w-[160px] truncate">
-                          {notebookTitle.get(r.notebookId) ?? "Unknown notebook"}
+              {/* The last few generated/edited documents across all notebooks. */}
+              {recentNotes.length > 0 && (
+                <div className="mt-10">
+                  <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+                    Recent notes
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    {recentNotes.map((n) => (
+                      <div
+                        key={n.id}
+                        onClick={() => openNote(n)}
+                        {...cardButtonProps(() => openNote(n))}
+                        title={`Open in "${notebookTitle.get(n.notebookId) ?? "notebook"}"`}
+                        className="flex cursor-pointer items-center gap-2.5 rounded-md border border-border bg-surface px-3 py-2 transition-colors hover:border-border-strong hover:bg-surface-2"
+                      >
+                        <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <span className="truncate text-[13px] text-foreground">
+                          {n.title}
                         </span>
-                      </Badge>
-                      <span className="ml-auto flex shrink-0 items-center gap-1 text-[11px] text-subtle-foreground">
-                        <Clock className="h-2.5 w-2.5" />
-                        {intervalLabel(r.intervalSecs)}
-                        {r.lastRunAt > 0 ? (
-                          <span>· last {relativeTime(r.lastRunAt)}</span>
-                        ) : (
-                          <span>· never run</span>
-                        )}
-                        {!r.enabled && <span>· paused</span>}
-                      </span>
-                    </div>
-                  ))}
-              </div>
-            </div>
-          )}
-        </div>
-        </div>
+                        <Badge className="shrink-0 gap-1">
+                          <BookOpen className="h-2.5 w-2.5" />
+                          <span className="max-w-[160px] truncate">
+                            {notebookTitle.get(n.notebookId) ??
+                              "Unknown notebook"}
+                          </span>
+                        </Badge>
+                        <span className="ml-auto shrink-0 text-[11px] text-subtle-foreground">
+                          {relativeTime(n.updatedAt)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
-        {/* Reports feed: unread first as a continuously scrolling read —
-            the homepage doubles as the morning-read surface. */}
-        <aside className="hidden min-w-0 flex-1 flex-col border-l border-border lg:flex">
-          {reports.length > 0 ? (
-            <ReportsFeed
-              reports={reports}
-              notebookTitle={notebookTitle}
-              notebookColor={notebookColor}
-              onOpen={openNote}
-            />
-          ) : (
-            <div className="flex flex-1 items-center justify-center p-8">
-              <EmptyState
-                icon={<Newspaper className="h-7 w-7" />}
-                title="Reports land here"
-                hint="Schedule a recurring report from any notebook's Studio panel — it refreshes the notebook's URL sources, writes a timestamped note, and shows up on this page to read with your coffee."
-              />
+              {/* Scheduled reports across all notebooks — the app's ongoing activity. */}
+              {allReports.length > 0 && (
+                <div className="mt-10">
+                  <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+                    Scheduled reports
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    {[...allReports]
+                      .sort((a, b) =>
+                        a.enabled !== b.enabled
+                          ? a.enabled
+                            ? -1
+                            : 1
+                          : b.lastRunAt - a.lastRunAt,
+                      )
+                      .map((r) => (
+                        <div
+                          key={r.id}
+                          onClick={() => open(r.notebookId)}
+                          {...cardButtonProps(() => open(r.notebookId))}
+                          title={`Open "${notebookTitle.get(r.notebookId) ?? "notebook"}"`}
+                          className="flex cursor-pointer items-center gap-2.5 rounded-md border border-border bg-surface px-3 py-2 transition-colors hover:border-border-strong hover:bg-surface-2"
+                        >
+                          <Power
+                            className={cn(
+                              "h-3.5 w-3.5 shrink-0",
+                              r.enabled
+                                ? "text-success"
+                                : "text-subtle-foreground",
+                            )}
+                          />
+                          <span className="truncate text-[13px] text-foreground">
+                            {r.name}
+                          </span>
+                          <Badge className="shrink-0 gap-1">
+                            <BookOpen className="h-2.5 w-2.5" />
+                            <span className="max-w-[160px] truncate">
+                              {notebookTitle.get(r.notebookId) ??
+                                "Unknown notebook"}
+                            </span>
+                          </Badge>
+                          <span className="ml-auto flex shrink-0 items-center gap-1 text-[11px] text-subtle-foreground">
+                            <Clock className="h-2.5 w-2.5" />
+                            {intervalLabel(r.intervalSecs)}
+                            {r.lastRunAt > 0 ? (
+                              <span>· last {relativeTime(r.lastRunAt)}</span>
+                            ) : (
+                              <span>· never run</span>
+                            )}
+                            {!r.enabled && <span>· paused</span>}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-        </aside>
+          </div>
+
+          {/* Reports feed: unread first as a continuously scrolling read —
+            the homepage doubles as the morning-read surface. */}
+          <aside className="hidden min-w-0 flex-1 flex-col border-l border-border lg:flex">
+            {reports.length > 0 ? (
+              <ReportsFeed
+                reports={reports}
+                notebookTitle={notebookTitle}
+                notebookColor={notebookColor}
+                onOpen={openNote}
+              />
+            ) : (
+              <div className="flex flex-1 items-center justify-center p-8">
+                <EmptyState
+                  icon={<Newspaper className="h-7 w-7" />}
+                  title="Reports land here"
+                  hint="Schedule a recurring report from any notebook's Studio panel — it refreshes the notebook's URL sources, writes a timestamped note, and shows up on this page to read with your coffee."
+                />
+              </div>
+            )}
+          </aside>
         </div>
       )}
 
-      <Modal open={creating} onClose={() => setCreating(false)} title="New notebook">
+      <Modal
+        open={creating}
+        onClose={() => setCreating(false)}
+        title="New notebook"
+      >
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -548,7 +596,11 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             onChange={(e) => setNewTitle(e.target.value)}
           />
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => setCreating(false)}>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setCreating(false)}
+            >
               Cancel
             </Button>
             <Button type="submit" variant="primary">
@@ -560,7 +612,11 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
 
       {confirmDialog}
 
-      <Modal open={!!renaming} onClose={() => setRenaming(null)} title="Rename notebook">
+      <Modal
+        open={!!renaming}
+        onClose={() => setRenaming(null)}
+        title="Rename notebook"
+      >
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -572,10 +628,16 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           <Input
             autoFocus
             value={renaming?.title ?? ""}
-            onChange={(e) => setRenaming((r) => (r ? { ...r, title: e.target.value } : r))}
+            onChange={(e) =>
+              setRenaming((r) => (r ? { ...r, title: e.target.value } : r))
+            }
           />
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => setRenaming(null)}>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setRenaming(null)}
+            >
               Cancel
             </Button>
             <Button type="submit" variant="primary">
@@ -603,8 +665,10 @@ function AwayDigest({
   const newReports = reports.filter((r) => r.updatedAt > prevVisit).length;
   const updatedNbs = notebooks.filter((n) => n.updatedAt > prevVisit).length;
   const parts = [
-    newReports > 0 && `${newReports} new ${newReports === 1 ? "report" : "reports"}`,
-    updatedNbs > 0 && `${updatedNbs} ${updatedNbs === 1 ? "notebook" : "notebooks"} updated`,
+    newReports > 0 &&
+      `${newReports} new ${newReports === 1 ? "report" : "reports"}`,
+    updatedNbs > 0 &&
+      `${updatedNbs} ${updatedNbs === 1 ? "notebook" : "notebooks"} updated`,
   ].filter(Boolean);
   if (parts.length === 0) return null;
   return (
@@ -667,7 +731,9 @@ function ReportsFeed({
               {unreadCount} unread
             </span>
             <button
-              onClick={() => markRead(reports.filter(isUnread).map((n) => n.id))}
+              onClick={() =>
+                markRead(reports.filter(isUnread).map((n) => n.id))
+              }
               className="ml-auto text-[11px] text-muted-foreground transition-colors hover:text-foreground"
             >
               Mark all read
@@ -697,7 +763,11 @@ function ReportsFeed({
         ))}
         {remaining > 0 && (
           <div className="flex justify-center px-6 py-5">
-            <Button variant="secondary" size="sm" onClick={() => setReadShown((s) => s + 5)}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setReadShown((s) => s + 5)}
+            >
               Load older reports
             </Button>
           </div>
@@ -767,7 +837,9 @@ function ReportCard({
         className="mt-1 block w-full text-left"
         title={`Open in "${notebook}"`}
       >
-        <h3 className="text-[15px] font-semibold text-foreground hover:underline">{note.title}</h3>
+        <h3 className="text-[15px] font-semibold text-foreground hover:underline">
+          {note.title}
+        </h3>
       </button>
       <div className="mt-2 text-[13px] leading-relaxed">
         <Markdown>{note.content}</Markdown>

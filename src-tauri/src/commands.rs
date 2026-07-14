@@ -3739,6 +3739,145 @@ pub async fn export_notebook_okf(
     Ok(bundle.display().to_string())
 }
 
+/// One passage behind a meta-chat answer: what it is and where it lives.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetaCitation {
+    /// "source" (chunk passage) | "note".
+    pub kind: String,
+    pub notebook_id: String,
+    pub notebook_title: String,
+    /// Source id for source passages; note id for notes.
+    pub id: String,
+    pub title: String,
+    pub snippet: String,
+}
+
+/// A corpus-wide answer (docs/RFC-meta-chat.md).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetaAnswer {
+    pub answer: String,
+    pub citations: Vec<MetaCitation>,
+}
+
+/// Retrieve corpus-wide passages for a question: hybrid chunk search across
+/// every notebook (capped, gateway and local alike) merged with note hits —
+/// notes are often the answer (reports, briefs). Shared by the ask_everything
+/// command and the MCP tool.
+pub(crate) async fn retrieve_everything(
+    state: &AppState,
+    question: &str,
+    k: usize,
+) -> Result<Vec<MetaCitation>, String> {
+    let nb_titles: std::collections::HashMap<String, String> = e(state.db.list_notebooks().await)?
+        .into_iter()
+        .map(|n| (n.id, n.title))
+        .collect();
+
+    let query_vec = {
+        let ai = state.ai.read().await;
+        e(ai.embed_one(question).await)?
+    };
+    let mut out: Vec<MetaCitation> = e(state.db.search_chunks_all(query_vec, question, k).await)?
+        .into_iter()
+        .map(|(nb, c)| MetaCitation {
+            kind: "source".into(),
+            notebook_title: nb_titles.get(&nb).cloned().unwrap_or_default(),
+            notebook_id: nb,
+            id: c.source_id,
+            title: c.source_title,
+            snippet: c.snippet,
+        })
+        .collect();
+
+    // Note pass: substring match over titles/bodies (same as ⌘K search).
+    let q = question.trim().to_lowercase();
+    let mut note_hits = 0;
+    for n in e(state.db.recent_notes(usize::MAX).await)? {
+        if note_hits >= 4 {
+            break;
+        }
+        if n.title.to_lowercase().contains(&q) || n.content.to_lowercase().contains(&q) {
+            note_hits += 1;
+            out.push(MetaCitation {
+                kind: "note".into(),
+                notebook_title: nb_titles.get(&n.notebook_id).cloned().unwrap_or_default(),
+                notebook_id: n.notebook_id,
+                id: n.id,
+                title: n.title,
+                snippet: n.content.chars().take(400).collect(),
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Answer a question across the ENTIRE corpus, streaming tokens as
+/// meta://token events. See docs/RFC-meta-chat.md.
+#[tauri::command]
+pub async fn ask_everything(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    question: String,
+    history: Option<Vec<crate::ai::ChatTurn>>,
+) -> Result<MetaAnswer, String> {
+    let question = question.trim().to_string();
+    if question.is_empty() {
+        return Err("Question is empty".into());
+    }
+
+    let citations = retrieve_everything(&state, &question, 16).await?;
+    let passages: Vec<rag::MetaPassage> = citations
+        .iter()
+        .map(|c| rag::MetaPassage {
+            notebook_title: c.notebook_title.clone(),
+            title: c.title.clone(),
+            snippet: c.snippet.clone(),
+        })
+        .collect();
+
+    let persona = {
+        let ai = state.ai.read().await;
+        rag::persona_block(&ai.config().profile)
+    };
+    let messages = rag::build_meta_messages(
+        history.as_deref().unwrap_or(&[]),
+        &question,
+        &passages,
+        &persona,
+    );
+
+    // Same stream/cancel dance as notebook chat, under its own scope so a
+    // palette Esc never kills a notebook stream (or vice versa).
+    let app_for_cb = app.clone();
+    let cancel = state.begin_generation(&format!("meta:{}", window.label()));
+    let partial = Arc::new(Mutex::new(String::new()));
+    let partial_cb = partial.clone();
+    let (answer, stats, model) = {
+        let ai = state.ai.read().await;
+        let model = ai.active_chat_model();
+        let streamed = tokio::select! {
+            out = ai.chat_stream(&messages, |tok| {
+                partial_cb.lock().unwrap().push_str(tok);
+                let _ = app_for_cb.emit(
+                    "meta://token",
+                    TokenEvent { content: tok.to_string() },
+                );
+            }) => Some(e(out)?),
+            _ = cancel.cancelled() => None,
+        };
+        match streamed {
+            Some(out) => (out.text, out.stats, model),
+            None => (partial.lock().unwrap().clone(), None, model),
+        }
+    };
+    state.record_chat_stats(&model, stats);
+
+    Ok(MetaAnswer { answer, citations })
+}
+
 /// One global-search result for the command menu.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]

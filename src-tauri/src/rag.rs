@@ -38,6 +38,57 @@ Rules:\n\
 adapt the URLs of existing sources (e.g. change a search query in one) or use well-known sites. \
 List each proposed URL on its own line and tell the user to reply \"add those links\" to import them.";
 
+const META_SYSTEM: &str = "You are a research assistant answering questions across the user's ENTIRE library of notebooks (docs/RFC-meta-chat.md). \
+Rules:\n\
+- Use ONLY the numbered excerpts below. Do not rely on outside knowledge.\n\
+- Every excerpt is tagged with the notebook it lives in. When the question is about WHERE something is (\"which notebook…\", \"where did I save…\"), name the notebook plainly and early, in **bold**.\n\
+- Cite claims with bracketed numbers matching the excerpts, e.g. [1] or [2][3].\n\
+- If the excerpts do not contain the answer, say so plainly. Do not fabricate.\n\
+- Be concise — this answer renders in a small palette, not a document. Short paragraphs, no headers.";
+
+/// One passage feeding a meta-chat answer (see commands::MetaCitation).
+pub struct MetaPassage {
+    pub notebook_title: String,
+    pub title: String,
+    pub snippet: String,
+}
+
+/// Build the corpus-wide chat message list: like `build_chat_messages`, but
+/// each excerpt names its notebook and there is no per-notebook manifest.
+pub fn build_meta_messages(
+    history: &[ChatTurn],
+    question: &str,
+    passages: &[MetaPassage],
+    persona: &str,
+) -> Vec<ChatTurn> {
+    let mut context = String::new();
+    if passages.is_empty() {
+        context.push_str("(No passages in any notebook matched this question.)");
+    } else {
+        for (i, p) in passages.iter().enumerate() {
+            context.push_str(&format!(
+                "[{}] (notebook: \"{}\" · \"{}\")\n{}\n\n",
+                i + 1,
+                p.notebook_title,
+                p.title,
+                p.snippet.trim()
+            ));
+        }
+    }
+
+    let mut system = META_SYSTEM.to_string();
+    if !persona.is_empty() {
+        system.push_str(&format!("\n\n{persona}"));
+    }
+    let mut messages = vec![ChatTurn::system(system)];
+    let start = history.len().saturating_sub(6);
+    messages.extend(history[start..].iter().cloned());
+    messages.push(ChatTurn::user(format!(
+        "Excerpts from across all notebooks:\n\n{context}\nQuestion: {question}"
+    )));
+    messages
+}
+
 /// Build the chat message list from the retrieved citations and the question.
 /// The citation list passed in becomes excerpts [1..n] in order. `sources` is
 /// the full (title, url) list for the notebook — url empty for local files —

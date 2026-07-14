@@ -11,6 +11,7 @@ import type {
   MacCollection,
   McpStatus,
   Message,
+  MetaAnswer,
   ModelHealth,
   ModelStat,
   Note,
@@ -184,7 +185,7 @@ export const api = {
         sourceIds,
       }),
     ),
-  cancelGeneration: (scope?: "chat" | "artifact" | "tts") =>
+  cancelGeneration: (scope?: "chat" | "artifact" | "tts" | "meta") =>
     run(cmd<void>("cancel_generation", { scope })),
   suggestFollowups: (notebookId: string) =>
     run(query<string[]>("suggest_followups", { notebookId })),
@@ -218,6 +219,10 @@ export const api = {
   removeKokoro: () => run(cmd<KokoroStatus>("remove_kokoro")),
   searchEverything: (q: string) =>
     run(query<SearchHit[]>("search_everything", { query: q })),
+  askEverything: (
+    question: string,
+    history: { role: string; content: string }[],
+  ) => run(ai<MetaAnswer>("ask_everything", { question, history })),
   createNote: (notebookId: string, title: string, content: string) =>
     run(cmd<Note>("create_note", { notebookId, title, content })),
   updateNote: (id: string, title: string, content: string) =>
