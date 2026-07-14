@@ -47,8 +47,23 @@ two-host podcast voiced on-device.*
   (and URL sources re-fetch); **Show in Finder** jumps to the original.
   Failed/blocked imports show an error badge and can be retried; edited/refreshed
   sources are re-embedded.
+- **Folder sources** — add a whole folder (OneDrive/Dropbox/Drive/iCloud included):
+  it scans supported files, keeps syncing on a timer, and lists cloud
+  placeholders without downloading them.
+- **Mac apps as sources** — connect **Apple Notes** (individual notes),
+  **Reminders** lists, rolling **Calendar** windows, and **Stocks** watchlists
+  via [cider](https://github.com/thrashr888/cider); they re-sync automatically.
+  Notes can be edited (and reminders added) from inside Alchemy — writes go to
+  the real app and sync back.
 - **Command menu** — press **⌘K** anywhere to search notebooks, add sources, generate
   documents, toggle panels, and switch themes.
+- **Ask everything** — the ⌘K palette (and the homepage ask box) answers questions
+  across **all** notebooks at once: hybrid retrieval corpus-wide, a streamed
+  answer with notebook chips, and citations that jump straight to the passage
+  ("which notebook has the SNDK stock data?"). ⌥Space summons it from anywhere.
+- **Part of the Mac** — `alchemy://` deep links, a menu bar extra (ask, add the
+  clipboard as a source, recent notebooks), "Add to Alchemy" in every app's
+  Services menu, and Spotlight-indexed notebooks and notes.
 - **OCR** — image sources and scanned/image-only PDFs are transcribed by a local
   vision model (dedicated OCR models like `glm-ocr` / `deepseek-ocr` recommended).
 - **Grounded chat** — streamed answers that cite the exact source passages they drew
@@ -71,13 +86,17 @@ two-host podcast voiced on-device.*
 - **Notes** — a **WYSIWYG** editor (Markdown under the hood), copy to clipboard,
   **Convert to source** to fold a note into the retrievable source set, and
   **Open in window** for a full-size reader (mind maps especially).
-- **OKF export** — export a whole notebook (sources + notes) as an
+- **Share & import notebooks (OKF)** — export a whole notebook (sources + notes) as an
   [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
   bundle: plain markdown concepts with YAML frontmatter, indexes, and a log —
-  readable by humans and agents alike (⌘K → "Export notebook as OKF").
+  readable by humans and agents alike. **Share as a single `.okf.zip`** to send a
+  notebook to a coworker or another machine, and **import** a zip or bundle folder
+  (drag it onto the window, or Import… on the home screen) into a new notebook or
+  merged into an existing one — sources re-embed locally, duplicates skip.
 - **Agent access (MCP)** — an embedded MCP server (localhost-only) lets agents
-  create notebooks, add sources, run hybrid search, and write notes — with changes
-  appearing live in the app. One-click connect (config + companion skill) for
+  create notebooks, add sources, run hybrid search (per-notebook or across the
+  whole corpus), write notes, and act on connected Mac items (update an Apple
+  Note, add a reminder) — with changes appearing live in the app. One-click connect (config + companion skill) for
   **Claude Code, OpenAI Codex, GitHub Copilot, VS Code, OpenCode, Gemini CLI,
   Google Antigravity, Factory Droid, AWS Kiro, IBM Bob, and Hermes** in
   Settings → Agents (see `docs/RFC-mcp-server.md`).
