@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { Button, Input, Textarea, Modal, Spinner } from "./ui";
 import { cn } from "@/lib/utils";
 import type { MacCollection } from "@/lib/types";
+import { FdaHint } from "./MacConnect";
 import {
   Calendar,
   ChevronLeft,
@@ -386,7 +387,13 @@ function MacPicker({
         />
       )}
       {error ? (
-        <p className="px-2 py-4 text-[12px] text-destructive">{error}</p>
+        error.includes("Full Disk Access") ? (
+          <div className="py-2">
+            <FdaHint message={error} />
+          </div>
+        ) : (
+          <p className="px-2 py-4 text-[12px] text-destructive">{error}</p>
+        )
       ) : collections === null ? (
         <div className="flex items-center justify-center py-8">
           <Spinner className="h-4 w-4 text-muted-foreground" />
