@@ -85,6 +85,7 @@ export type NoteKind =
   | "mind_map"
   | "data_table"
   | "problems"
+  | "evidence"
   | "prd"
   | "prfaq"
   | "rfc"

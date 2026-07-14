@@ -53,6 +53,7 @@ import {
   TriangleAlert,
   MessageSquare,
   Lightbulb,
+  Quote,
   Table,
   Layers,
   ListChecks,
@@ -129,6 +130,11 @@ const SUMMARIES: Artifact[] = [
     label: "Problems",
     icon: <TriangleAlert className="h-3.5 w-3.5" />,
   },
+  {
+    kind: "evidence",
+    label: "Evidence Log",
+    icon: <Quote className="h-3.5 w-3.5" />,
+  },
 ];
 
 const LEARNING: Artifact[] = [
@@ -204,6 +210,7 @@ const KIND_LABEL: Record<NoteKind, string> = {
   mind_map: "Mind map",
   data_table: "Data table",
   problems: "Problems",
+  evidence: "Evidence",
   prd: "PRD",
   prfaq: "PR/FAQ",
   rfc: "RFC",

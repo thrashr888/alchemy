@@ -239,6 +239,9 @@ struct CreateNoteReq {
     title: String,
     /// Markdown body.
     content: String,
+    /// "note" (default) or "evidence" — an evidence record documenting a
+    /// claim or decision with its supporting passages.
+    kind: Option<String>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -611,15 +614,27 @@ impl AlchemyMcp {
         json_result(&note)
     }
 
-    #[tool(description = "Create a markdown note in a notebook and return it.")]
+    #[tool(
+        description = "Create a markdown note in a notebook and return it. When recording WHY you reached a conclusion — a claim, decision, or recommendation grounded in the sources — set kind:\"evidence\" and structure the body as: the claim, supporting passages (verbatim, each naming its source), search queries used, confidence (high/medium/low with why), counter-evidence or \"none found\", and open questions. Evidence notes make your reasoning auditable and let a later session pick up the thread."
+    )]
     async fn create_note(
         &self,
         Parameters(CreateNoteReq {
             notebook_id,
             title,
             content,
+            kind,
         }): Parameters<CreateNoteReq>,
     ) -> Result<CallToolResult, McpError> {
+        let kind = match kind.as_deref().unwrap_or("note") {
+            "" | "note" => "note",
+            "evidence" => "evidence",
+            other => {
+                return Err(invalid(format!(
+                    "unknown note kind \"{other}\" — use \"note\" or \"evidence\""
+                )))
+            }
+        };
         let ts = commands::now();
         let note = Note {
             id: commands::new_id(),
@@ -630,7 +645,7 @@ impl AlchemyMcp {
                 title.trim().to_string()
             },
             content,
-            kind: "note".into(),
+            kind: kind.into(),
             prompt: String::new(),
             created_at: ts,
             updated_at: ts,
