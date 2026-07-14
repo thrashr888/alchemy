@@ -281,6 +281,22 @@ pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
              where it appears (quote or reference the source), and why it matters. Be specific and grounded in \
              the sources — do not invent issues. If the sources are sound, say so and note only minor caveats.",
         )),
+        "evidence" => Some((
+            "Evidence Log",
+            "Build an evidence log from the sources below: the major claims, findings, or decisions \
+             the corpus supports, each as a durable record another reader (or agent) can audit later. \
+             Write 4-10 records. For each, use a `### <the claim itself>` heading — a one-line \
+             statement, not a topic label — followed by:\n\
+             - **Evidence:** the 1-3 most load-bearing passages, quoted verbatim or tightly \
+               paraphrased, each naming its source title.\n\
+             - **Confidence:** high / medium / low, with a phrase on why (corroborated across \
+               sources, single source, secondhand, dated…).\n\
+             - **Counter-evidence:** anything in the sources that cuts against the claim, or \
+               \"none found\".\n\
+             - **Open questions:** what would firm this up, if anything.\n\
+             Order by importance, strongest first. Only record what the sources actually support — \
+             if the corpus is too thin for real evidence records, say so instead of padding.",
+        )),
         "prd" => Some((
             "PRD",
             "Write a Product Requirements Document in the HashiCorp style, grounded in the sources below. \

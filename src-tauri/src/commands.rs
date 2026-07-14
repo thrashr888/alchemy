@@ -1802,7 +1802,7 @@ Respond with EXACTLY ONE JSON object, nothing else.\n\n\
 Tools:\n\
 - {\"action\":\"add_urls\",\"urls\":[\"https://…\"]} — add the given URL(s) as sources.\n\
 - {\"action\":\"add_text\",\"title\":\"<short title>\",\"text\":\"<the text to add>\"} — save text from the message as a source.\n\
-- {\"action\":\"generate\",\"kind\":\"summary|faq|study_guide|briefing|timeline|problems|prd|prfaq|rfc|skill|custom\",\"prompt\":\"<extra instructions or empty>\"} — generate a document from the sources.\n\
+- {\"action\":\"generate\",\"kind\":\"summary|faq|study_guide|briefing|timeline|problems|evidence|prd|prfaq|rfc|skill|custom\",\"prompt\":\"<extra instructions or empty>\"} — generate a document from the sources.\n\
 - {\"action\":\"remove_source\",\"name\":\"<source name fragment>\"} — remove a source.\n\
 - {\"action\":\"refresh_sources\",\"name\":\"<name fragment, or empty for all URL sources>\"} — re-fetch URL sources.\n\
 - {\"action\":\"save_note\",\"title\":\"<title or empty>\"} — save the assistant's previous answer as a note.\n\
