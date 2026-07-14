@@ -13,7 +13,7 @@
           "image-name": "icon.png",
           "name": "book",
           "position": {
-            "scale": 0.78,
+            "scale": 1.02,
             "translation-in-points": [0, 0]
           }
         }

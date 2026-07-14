@@ -6,9 +6,12 @@ description: Use when the user mentions Alchemy, their research notebooks, or wa
 # Alchemy — the user's local research notebook
 
 Alchemy is a local-first NotebookLM-style app. A **notebook** holds **sources**
-(fetched URLs, imported files, pasted text — auto-chunked and embedded on
-device) and **notes** (markdown the user or you write). Everything runs on the
-user's machine; nothing you store or search leaves it.
+(fetched URLs, imported files, watched folders, pasted text — auto-chunked and
+embedded on device) and **notes** (markdown the user or you write). Sources
+can also be living Mac items the user connected (Apple Notes, Reminders
+lists, Calendar windows, Stocks watchlists via `cider://` origins) — these
+re-sync automatically. Everything runs on the user's machine; nothing you
+store or search leaves it.
 
 ## Connecting
 
@@ -34,6 +37,20 @@ claude mcp add --transport http alchemy http://127.0.0.1:41414/mcp
    effectively free; make several small queries rather than one broad one.
 4. Write findings with `create_note` (markdown). Cite which sources informed
    each claim by title so the user can verify.
+5. Mac-item write-back, when the user asks for it: `update_mac_note` replaces
+   the body of an Apple Notes source (writes to the real note, then
+   re-syncs); `add_reminder` appends to the Apple Reminders list behind a
+   Reminders source. Both work only on sources the user already connected —
+   find them in `list_sources` by a `url` starting with `cider://notes/note/`
+   or `cider://reminders/list/`.
+
+## Deep links
+
+`alchemy://` URLs open the app from anywhere (Shortcuts, terminal `open`,
+other apps): `alchemy://notebook/<id>`, `alchemy://note/<id>`, and
+`alchemy://add?url=…|text=…&title=…[&notebook=<id>]`. Adds without a
+`notebook` param ask the user to pick one; prefer passing ids you got from
+`list_notebooks`.
 
 ## Sharp edges
 
@@ -48,5 +65,9 @@ claude mcp add --transport http alchemy http://127.0.0.1:41414/mcp
 - **Notes are shared with the user.** `update_note` replaces the whole note —
   `get_note` first, and preserve the user's edits. Never `delete_notebook` or
   delete notes/sources the user didn't explicitly ask to remove.
+- **Mac write-back edits the user's real Apple Notes/Reminders.**
+  `update_mac_note` replaces the entire note body — `get_source` first and
+  preserve their content; the first line is the note's title, keep it there.
+  Only write when the user asked for the change.
 - The user sees changes live in the app as you work — no need to tell them to
   refresh.
