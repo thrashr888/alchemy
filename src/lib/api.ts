@@ -192,6 +192,8 @@ export const api = {
     run(query<string[]>("suggest_followups", { notebookId })),
   generateNotebookSummary: (notebookId: string) =>
     run(ai<string>("generate_notebook_summary", { notebookId })),
+  generateEpigraph: (mood: string) =>
+    run(ai<string>("generate_epigraph", { mood })),
   clearChat: (notebookId: string) =>
     run(cmd<void>("clear_chat", { notebookId })),
   addNoteToChat: (noteId: string) =>

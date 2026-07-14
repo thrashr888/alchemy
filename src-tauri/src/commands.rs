@@ -3247,6 +3247,31 @@ pub async fn suggest_followups(
     Ok(qs)
 }
 
+/// One-line themed aphorism for the hero / blank states. Ornament, not
+/// content: the frontend caches it daily and falls back to a curated list,
+/// so this may fail freely when no chat model is available.
+#[tauri::command]
+pub async fn generate_epigraph(
+    state: State<'_, AppState>,
+    mood: String,
+) -> Result<String, String> {
+    let mood: String = mood.chars().take(120).collect();
+    let messages = vec![
+        crate::ai::ChatTurn::system(
+            "You write epigraphs for Alchemy, a local-first research notebook. \
+             Respond with ONLY one original aphorism of 8-14 words about research, \
+             knowledge, or transformation, in the voice of an alchemist's notebook, \
+             tinted by the given mood. No quotation marks, no attribution, no preamble.",
+        ),
+        crate::ai::ChatTurn::user(format!("Mood: {mood}")),
+    ];
+    let out = {
+        let ai = state.ai.read().await;
+        e(ai.chat(&messages).await)?.text
+    };
+    Ok(out.trim().to_string())
+}
+
 /// A short prose overview of what the notebook's sources cover (not persisted).
 #[tauri::command]
 pub async fn generate_notebook_summary(

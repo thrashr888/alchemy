@@ -3,6 +3,7 @@ import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { Button, Input, Modal, Badge, EmptyState, useConfirm } from "./ui";
 import { AlchemyHero } from "./AlchemyHero";
+import { currentEpigraph } from "@/lib/epigraph";
 import { DitherBackground } from "./DitherBackground";
 import { Markdown } from "./Markdown";
 import { intervalLabel } from "./Reports";
@@ -230,6 +231,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           <AlchemyHero
             title="Alchemy"
             subtitle="Local-first research notebooks — chat with your own sources, grounded in citations, running entirely on your machine."
+            epigraph={currentEpigraph(theme)}
             themeKey={theme}
           >
             <Button

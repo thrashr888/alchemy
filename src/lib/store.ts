@@ -6,6 +6,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import { SUPPORTED_EXTENSIONS } from "./utils";
 import { applyTheme, SYSTEM_THEME } from "./themes";
+import { refreshEpigraph } from "./epigraph";
 import { notify } from "./notify";
 import { playArrival, playDone, playError } from "./sound";
 import { autoUpdateEnabled, checkForUpdatesQuietly } from "./updates";
@@ -470,6 +471,8 @@ export const useStore = create<AppState>((set, get) => {
 
     init: async () => {
       applyTheme(get().theme);
+      // Daily epigraph: regenerate in the background if stale; shows next open.
+      void refreshEpigraph(get().theme);
       // Every page load (incl. dev reloads) resets the macOS stoplights to
       // their default position — put them back first thing.
       void api.fixTrafficLights();

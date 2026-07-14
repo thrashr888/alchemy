@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { DitherBackground } from "./DitherBackground";
+import { THEMES, resolveThemeId } from "@/lib/themes";
 import { cn } from "@/lib/utils";
 
 // Five minimalist transmutation circles. One is chosen at random per mount and
@@ -55,9 +56,25 @@ function shuffled<T>(a: T[]): T[] {
   return b;
 }
 
-export function AlchemySymbol({ className }: { className?: string }) {
+export function AlchemySymbol({
+  className,
+  preferred,
+}: {
+  className?: string;
+  /** Sigil index to open on (a theme's preferred circle); the slow cycle
+   *  continues from there. Random start if unset. */
+  preferred?: number;
+}) {
   const [order] = useState(() => shuffled(SYMBOLS.map((_, i) => i)));
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(() =>
+    preferred != null ? Math.max(0, order.indexOf(preferred)) : 0,
+  );
+  useEffect(() => {
+    if (preferred != null) {
+      const idx = order.indexOf(preferred);
+      if (idx >= 0) setStep(idx);
+    }
+  }, [preferred, order]);
   useEffect(() => {
     const t = setInterval(() => setStep((s) => (s + 1) % order.length), 9000);
     return () => clearInterval(t);
@@ -88,11 +105,14 @@ export function AlchemySymbol({ className }: { className?: string }) {
 export function AlchemyHero({
   title,
   subtitle,
+  epigraph,
   themeKey,
   children,
 }: {
   title: string;
   subtitle?: string;
+  /** One-line aphorism set beneath the subtitle (see lib/epigraph.ts). */
+  epigraph?: string;
   themeKey?: string;
   children?: ReactNode;
 }) {
@@ -104,13 +124,21 @@ export function AlchemyHero({
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_45%,var(--background)_100%)]" />
 
       <div className="relative z-10 flex flex-col items-center px-6 text-center">
-        <AlchemySymbol className="mb-7 h-24 w-24 text-citation/70" />
+        <AlchemySymbol
+          className="mb-7 h-24 w-24 text-citation/70"
+          preferred={THEMES[resolveThemeId(themeKey)]?.sigil}
+        />
         <h1 className="font-serif text-5xl font-medium uppercase tracking-[0.22em] text-foreground/90 sm:text-6xl">
           {title}
         </h1>
         {subtitle && (
           <p className="mt-4 max-w-md text-[13px] leading-relaxed text-muted-foreground">
             {subtitle}
+          </p>
+        )}
+        {epigraph && (
+          <p className="mt-3 max-w-md font-serif text-[13px] italic leading-relaxed text-subtle-foreground">
+            “{epigraph}”
           </p>
         )}
         {children && <div className="mt-8">{children}</div>}
