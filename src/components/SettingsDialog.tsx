@@ -1334,6 +1334,19 @@ function AgentsTab() {
             "Not running"
           )}
         </span>
+        {running && status?.url && (
+          <button
+            onClick={() => {
+              void navigator.clipboard.writeText(status.url);
+              pushToast("success", "Server URL copied");
+            }}
+            title="Copy server URL"
+            aria-label="Copy the MCP server URL"
+            className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+          >
+            <Copy className="h-3 w-3" />
+          </button>
+        )}
       </div>
 
       <Field
