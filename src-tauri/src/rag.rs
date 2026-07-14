@@ -47,7 +47,11 @@ Rules:\n\
 - Be concise — this answer renders in a small palette, not a document. Short paragraphs, no headers.";
 
 /// One passage feeding a meta-chat answer (see commands::MetaCitation).
+/// `number` is the SOURCE's reference number — several excerpts from the
+/// same source share it, so the model's [n] citations line up with the
+/// deduplicated reference list the UI shows.
 pub struct MetaPassage {
+    pub number: usize,
     pub notebook_title: String,
     pub title: String,
     pub snippet: String,
@@ -65,10 +69,10 @@ pub fn build_meta_messages(
     if passages.is_empty() {
         context.push_str("(No passages in any notebook matched this question.)");
     } else {
-        for (i, p) in passages.iter().enumerate() {
+        for p in passages {
             context.push_str(&format!(
                 "[{}] (notebook: \"{}\" · \"{}\")\n{}\n\n",
-                i + 1,
+                p.number,
                 p.notebook_title,
                 p.title,
                 p.snippet.trim()

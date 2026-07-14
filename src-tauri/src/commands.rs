@@ -3828,15 +3828,30 @@ pub async fn ask_everything(
         return Err("Question is empty".into());
     }
 
-    let citations = retrieve_everything(&state, &question, 16).await?;
-    let passages: Vec<rag::MetaPassage> = citations
-        .iter()
-        .map(|c| rag::MetaPassage {
+    let passages_raw = retrieve_everything(&state, &question, 16).await?;
+    // References are per SOURCE, not per chunk: several excerpts from one
+    // source share a number, and the citation list the UI shows is deduped —
+    // otherwise a source that contributed five chunks shows up five times.
+    let mut citations: Vec<MetaCitation> = Vec::new();
+    let mut passages: Vec<rag::MetaPassage> = Vec::new();
+    for c in &passages_raw {
+        let number = match citations
+            .iter()
+            .position(|u| u.kind == c.kind && u.id == c.id)
+        {
+            Some(i) => i + 1,
+            None => {
+                citations.push(c.clone());
+                citations.len()
+            }
+        };
+        passages.push(rag::MetaPassage {
+            number,
             notebook_title: c.notebook_title.clone(),
             title: c.title.clone(),
             snippet: c.snippet.clone(),
-        })
-        .collect();
+        });
+    }
 
     let persona = {
         let ai = state.ai.read().await;

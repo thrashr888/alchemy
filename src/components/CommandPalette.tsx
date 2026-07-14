@@ -493,16 +493,16 @@ export function CommandPalette() {
     if (e.nativeEvent.isComposing) return;
     if (mode === "ask") {
       // Esc steps back to the search results (query intact); a second Esc
-      // then closes the palette as usual.
+      // then closes the palette as usual. Tab is left alone so focus flows
+      // input → notebook chips → citations (all real buttons); Enter only
+      // re-asks from the input — on a focused citation it activates it.
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
         exitAsk();
-      } else if (e.key === "Enter") {
+      } else if (e.key === "Enter" && e.target === inputRef.current) {
         e.preventDefault();
         startAsk(followup);
-      } else if (e.key === "Tab") {
-        e.preventDefault();
       }
       return;
     }
@@ -566,7 +566,12 @@ export function CommandPalette() {
             aria-modal="true"
             aria-label="Command menu"
             className={cn(
-              "flex max-h-[52vh] w-full max-w-[560px] flex-col overflow-hidden rounded-lg bg-elevated outline-none",
+              "flex w-full flex-col overflow-hidden rounded-lg bg-elevated outline-none",
+              // Ask mode gets real reading room; search stays launcher-sized.
+              mode === "ask"
+                ? "max-h-[78vh] max-w-[780px]"
+                : "max-h-[52vh] max-w-[560px]",
+              "transition-[max-width,max-height] duration-200",
               "shadow-[0_0_0_0.5px_var(--border-strong),0_16px_48px_-8px_rgba(0,0,0,0.45)]",
               "animate-in zoom-in-95 duration-150",
             )}
