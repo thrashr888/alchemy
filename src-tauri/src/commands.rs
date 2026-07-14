@@ -3251,10 +3251,7 @@ pub async fn suggest_followups(
 /// content: the frontend caches it daily and falls back to a curated list,
 /// so this may fail freely when no chat model is available.
 #[tauri::command]
-pub async fn generate_epigraph(
-    state: State<'_, AppState>,
-    mood: String,
-) -> Result<String, String> {
+pub async fn generate_epigraph(state: State<'_, AppState>, mood: String) -> Result<String, String> {
     let mood: String = mood.chars().take(120).collect();
     let messages = vec![
         crate::ai::ChatTurn::system(
