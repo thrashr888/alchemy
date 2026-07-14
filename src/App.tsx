@@ -85,8 +85,8 @@ function App() {
       />
       <CommandPalette />
       <ImportOkfModal />
-      {/* Drag-drop only routes into a notebook when one is open. */}
-      {currentId && <FileDrop />}
+      {/* Always mounted: OKF-bundle drops import from the homepage too. */}
+      <FileDrop />
       <MigrationOverlay />
       {needsSetup && !onboardingDismissed && !settingsOpen && (
         // Onboarding's buttons are model-setup affordances — take them to Models.

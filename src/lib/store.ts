@@ -179,6 +179,8 @@ interface AppState {
   shareNotebookOkf: () => Promise<void>;
   /** The import dialog (new notebook vs merge into existing). */
   importOkfOpen: boolean;
+  /** A dropped bundle path the import dialog should offer directly. */
+  pendingImportPath: string | null;
   /** Import a bundle (.okf.zip or folder); null notebookId = new notebook. */
   importOkf: (path: string, notebookId?: string | null) => Promise<void>;
   createReport: (
@@ -452,6 +454,7 @@ export const useStore = create<AppState>((set, get) => {
     pendingInput: null,
     pendingAsk: null,
     importOkfOpen: false,
+    pendingImportPath: null,
     error: null,
     toasts: [],
     justCreatedNoteId: null,

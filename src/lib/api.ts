@@ -219,6 +219,7 @@ export const api = {
   removeKokoro: () => run(cmd<KokoroStatus>("remove_kokoro")),
   exportNotebookOkfZip: (notebookId: string, destPath: string) =>
     run(slow<string>("export_notebook_okf_zip", { notebookId, destPath })),
+  probeOkf: (path: string) => run(query<boolean>("probe_okf", { path })),
   importNotebookOkf: (path: string, notebookId?: string | null) =>
     run(
       slow<Notebook>("import_notebook_okf", {
