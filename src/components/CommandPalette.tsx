@@ -258,6 +258,17 @@ export function CommandPalette() {
           },
         },
         {
+          id: "share-okf",
+          group: "Notebook",
+          label: "Share notebook as .okf.zip…",
+          keywords: "export send coworker zip package okf",
+          icon: <FolderOutput className="h-3.5 w-3.5" />,
+          run: () => {
+            close();
+            void state().shareNotebookOkf();
+          },
+        },
+        {
           id: "toggle-sources",
           group: "View",
           label: "Show or hide Sources panel",
@@ -327,6 +338,17 @@ export function CommandPalette() {
         run: () => {
           close();
           void api.newWindow();
+        },
+      },
+      {
+        id: "import-okf",
+        group: "Navigate",
+        label: "Import notebook from OKF…",
+        keywords: "zip bundle share receive upload okf",
+        icon: <FolderOutput className="h-3.5 w-3.5" />,
+        run: () => {
+          close();
+          useStore.setState({ importOkfOpen: true });
         },
       },
       {

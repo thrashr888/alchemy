@@ -217,6 +217,15 @@ export const api = {
   kokoroStatus: () => run(query<KokoroStatus>("kokoro_status")),
   setupKokoro: () => run(slow<KokoroStatus>("setup_kokoro")),
   removeKokoro: () => run(cmd<KokoroStatus>("remove_kokoro")),
+  exportNotebookOkfZip: (notebookId: string, destPath: string) =>
+    run(slow<string>("export_notebook_okf_zip", { notebookId, destPath })),
+  importNotebookOkf: (path: string, notebookId?: string | null) =>
+    run(
+      slow<Notebook>("import_notebook_okf", {
+        path,
+        notebookId: notebookId ?? null,
+      }),
+    ),
   searchEverything: (q: string) =>
     run(query<SearchHit[]>("search_everything", { query: q })),
   askEverything: (
