@@ -16,6 +16,7 @@ import {
   Square,
   Eraser,
   Quote,
+  StickyNote,
   Sparkles,
   MessageSquare,
   Telescope,
@@ -412,7 +413,6 @@ function SummaryBanner({
 }
 
 function ChatMessage({ message }: { message: Message }) {
-  const openSourceViewer = useStore((s) => s.openSourceViewer);
   if (message.role === "user") {
     return (
       <div className="flex flex-col items-end gap-1">
@@ -427,7 +427,7 @@ function ChatMessage({ message }: { message: Message }) {
       <RoleLabel role="assistant" />
       <Markdown
         citations={message.citations}
-        onCitation={(c) => openSourceViewer(c.sourceId, c.sourceTitle, c.snippet)}
+        onCitation={openCitationTarget}
       >
         {message.content}
       </Markdown>
@@ -494,10 +494,22 @@ function RoleLabel({ role }: { role: "assistant" | "user" }) {
   );
 }
 
+/** A note citation opens the note in Studio (same routing as ⌘K note hits);
+ *  a source citation opens the source reader at the passage. */
+function openCitationTarget(c: Citation) {
+  const s = useStore.getState();
+  if (c.noteId) {
+    // StudioPanel auto-opens this id once the notebook's notes load.
+    useStore.setState({ justCreatedNoteId: c.noteId });
+    if (!s.studioOpen) s.toggleStudio();
+  } else {
+    s.openSourceViewer(c.sourceId, c.sourceTitle, c.snippet);
+  }
+}
+
 function Citations({ citations }: { citations: Citation[] }) {
   const [open, setOpen] = useState(false);
   const sources = useStore((s) => s.sources);
-  const openSourceViewer = useStore((s) => s.openSourceViewer);
   // Only web origins get the open-in-browser chip; file paths live in the
   // same field but belong to the source reader's "Show in Finder".
   const urlOf = (sourceId: string) => {
@@ -518,9 +530,9 @@ function Citations({ citations }: { citations: Citation[] }) {
           {citations.map((c, i) => (
             <div
               key={c.chunkId}
-              onClick={() => openSourceViewer(c.sourceId, c.sourceTitle, c.snippet)}
-              {...cardButtonProps(() => openSourceViewer(c.sourceId, c.sourceTitle, c.snippet))}
-              title="Open in the source, highlighted"
+              onClick={() => openCitationTarget(c)}
+              {...cardButtonProps(() => openCitationTarget(c))}
+              title={c.noteId ? "Open the note in Studio" : "Open in the source, highlighted"}
               className="cursor-pointer rounded-md border border-border bg-surface px-3 py-2 text-left transition-colors hover:border-border-strong hover:bg-surface-2"
             >
               <div className="mb-1 flex items-center gap-2 text-[11px]">
@@ -528,6 +540,15 @@ function Citations({ citations }: { citations: Citation[] }) {
                   {i + 1}
                 </span>
                 <span className="font-medium text-foreground/90 truncate">{c.sourceTitle}</span>
+                {c.noteId && (
+                  <span
+                    className="inline-flex shrink-0 items-center gap-1 rounded bg-surface-2 px-1.5 py-0.5 font-medium text-muted-foreground"
+                    title="From a note — a saved conclusion, not a source document"
+                  >
+                    <StickyNote className="h-3 w-3" />
+                    note
+                  </span>
+                )}
                 {urlOf(c.sourceId) && (
                   <button
                     className="ml-auto shrink-0 rounded p-0.5 text-citation hover:underline"

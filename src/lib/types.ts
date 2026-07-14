@@ -53,8 +53,12 @@ export interface FolderScan {
 
 export interface Citation {
   chunkId: string;
+  /** Empty when the passage came from a note (see noteId). */
   sourceId: string;
+  /** Title of the source — or of the note for note passages. */
   sourceTitle: string;
+  /** Non-empty when the passage came from a note: the note's id. */
+  noteId: string;
   ordinal: number;
   snippet: string;
   distance: number;

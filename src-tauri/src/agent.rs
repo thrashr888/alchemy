@@ -141,6 +141,7 @@ pub async fn run(
                         chunk_id: read_id,
                         source_id: source_id.clone(),
                         source_title: title,
+                        note_id: String::new(),
                         ordinal: 0,
                         snippet: evidence,
                         distance: 0.0,

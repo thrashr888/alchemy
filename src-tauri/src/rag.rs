@@ -52,6 +52,8 @@ Rules:\n\
 /// deduplicated reference list the UI shows.
 pub struct MetaPassage {
     pub number: usize,
+    /// "source" (document excerpt) | "note" (a prior conclusion).
+    pub kind: String,
     pub notebook_title: String,
     pub title: String,
     pub snippet: String,
@@ -71,9 +73,10 @@ pub fn build_meta_messages(
     } else {
         for p in passages {
             context.push_str(&format!(
-                "[{}] (notebook: \"{}\" · \"{}\")\n{}\n\n",
+                "[{}] (notebook: \"{}\" · {}: \"{}\")\n{}\n\n",
                 p.number,
                 p.notebook_title,
+                p.kind,
                 p.title,
                 p.snippet.trim()
             ));
@@ -112,9 +115,17 @@ pub fn build_chat_messages(
         context.push_str("(No source excerpts matched this question.)");
     } else {
         for (i, c) in citations.iter().enumerate() {
+            // Notes are prior conclusions, not source documents — say so, so
+            // the model never presents its own earlier synthesis as evidence.
+            let tier = if c.note_id.is_empty() {
+                "from"
+            } else {
+                "from note"
+            };
             context.push_str(&format!(
-                "[{}] (from \"{}\")\n{}\n\n",
+                "[{}] ({} \"{}\")\n{}\n\n",
                 i + 1,
+                tier,
                 c.source_title,
                 c.snippet.trim()
             ));

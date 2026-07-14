@@ -553,7 +553,7 @@ impl AlchemyMcp {
     // -- Search --
 
     #[tool(
-        description = "Hybrid search (vector similarity + BM25 keyword, rank-fused) over a notebook's source chunks. Runs on the local embedder — cheap, call freely. Returns passages with sourceId/sourceTitle/snippet/distance; use get_source for a passage's full document. Synthesize answers yourself from the passages."
+        description = "Hybrid search (vector similarity + BM25 keyword, rank-fused) over a notebook's source chunks AND notes. Runs on the local embedder — cheap, call freely. Returns passages with sourceId/sourceTitle/snippet/distance; a passage with a non-empty noteId came from a note (a prior conclusion — yours or the user's), not a source document: weigh it as secondhand and use get_note for its full text. Use get_source for a source passage's full document. Synthesize answers yourself from the passages."
     )]
     async fn search(
         &self,
@@ -650,7 +650,9 @@ impl AlchemyMcp {
             created_at: ts,
             updated_at: ts,
         };
-        self.state().db.add_note(&note).await.map_err(internal)?;
+        commands::add_note_indexed(&self.state(), &note)
+            .await
+            .map_err(internal)?;
         self.changed("notes", Some(&notebook_id));
         json_result(&note)
     }
@@ -678,6 +680,9 @@ impl AlchemyMcp {
             .update_note(&note_id, title.trim(), &content, commands::now())
             .await
             .map_err(internal)?;
+        if let Ok(Some(updated)) = state.db.get_note(&note_id).await {
+            commands::index_note(&state, &updated).await;
+        }
         self.changed("notes", Some(&note.notebook_id));
         json_result(&serde_json::json!({ "ok": true }))
     }

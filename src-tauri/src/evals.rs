@@ -364,6 +364,7 @@ async fn eval_rerank_surfaces_buried_hit() {
             chunk_id: format!("d{i}"),
             source_id: format!("s{i}"),
             source_title: "Garden Notes".into(),
+            note_id: String::new(),
             ordinal: i,
             snippet: format!(
                 "Entry {i}: tomatoes prefer full sun and weekly deep watering in raised beds."
@@ -378,6 +379,7 @@ async fn eval_rerank_surfaces_buried_hit() {
             chunk_id: "needle".into(),
             source_id: "s-needle".into(),
             source_title: "Insurance Policy".into(),
+            note_id: String::new(),
             ordinal: 0,
             snippet: "The homeowner's policy deductible is two thousand five hundred dollars \
                       for wind and hail damage."
