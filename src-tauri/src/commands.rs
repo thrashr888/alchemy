@@ -3739,6 +3739,363 @@ pub async fn export_notebook_okf(
     Ok(bundle.display().to_string())
 }
 
+/// Export the bundle and zip it into a single shareable `.okf.zip` file at
+/// `dest_path` (the coworker / other-laptop case — one file to send, and
+/// import_notebook_okf on the other side recreates the notebook).
+#[tauri::command]
+pub async fn export_notebook_okf_zip(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    dest_path: String,
+) -> Result<String, String> {
+    let staging = std::env::temp_dir().join(format!("alchemy-okf-export-{}", new_id()));
+    std::fs::create_dir_all(&staging).map_err(|e2| e2.to_string())?;
+    let bundle = export_notebook_okf(state, notebook_id, staging.display().to_string()).await?;
+    let result = zip_dir(
+        std::path::Path::new(&bundle),
+        std::path::Path::new(&dest_path),
+    );
+    let _ = std::fs::remove_dir_all(&staging);
+    result?;
+    Ok(dest_path)
+}
+
+/// Zip a bundle directory (bundle-name-rooted entries, so unzipping yields
+/// the folder, matching what the exporter writes on disk).
+fn zip_dir(dir: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+    use std::io::Write as _;
+    let file = std::fs::File::create(dest).map_err(|e| format!("Failed to create zip: {e}"))?;
+    let mut zip = zip::ZipWriter::new(file);
+    let opts: zip::write::SimpleFileOptions = Default::default();
+    let root_name = dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("notebook")
+        .to_string();
+    fn walk(
+        zip: &mut zip::ZipWriter<std::fs::File>,
+        opts: zip::write::SimpleFileOptions,
+        dir: &std::path::Path,
+        prefix: &str,
+    ) -> Result<(), String> {
+        for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            let path = entry.path();
+            let entry_name = format!("{prefix}/{name}");
+            if path.is_dir() {
+                walk(zip, opts, &path, &entry_name)?;
+            } else {
+                zip.start_file(&entry_name, opts)
+                    .map_err(|e| e.to_string())?;
+                let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+                zip.write_all(&bytes).map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
+    }
+    walk(&mut zip, opts, dir, &root_name)?;
+    zip.finish().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ---- OKF import ------------------------------------------------------------
+
+/// Parse the exporter's frontmatter subset (`key: "quoted"` or bare values).
+fn parse_okf_doc(text: &str) -> (std::collections::HashMap<String, String>, String) {
+    let mut fm = std::collections::HashMap::new();
+    let Some(rest) = text.strip_prefix("---\n") else {
+        return (fm, text.to_string());
+    };
+    let Some(end) = rest.find("\n---") else {
+        return (fm, text.to_string());
+    };
+    let head = &rest[..end];
+    let body = rest[end + 4..].trim_start_matches('\n');
+    for line in head.lines() {
+        if let Some((k, v)) = line.split_once(':') {
+            let v = v.trim();
+            let v = if v.len() >= 2 && v.starts_with('"') && v.ends_with('"') {
+                v[1..v.len() - 1]
+                    .replace("\\\"", "\"")
+                    .replace("\\\\", "\\")
+            } else {
+                v.to_string()
+            };
+            fm.insert(k.trim().to_string(), v);
+        }
+    }
+    (fm, body.to_string())
+}
+
+/// Map an exported note's `type:` label back to its kind.
+fn note_kind_from_label(label: &str) -> String {
+    if label.eq_ignore_ascii_case("report") {
+        return "report".into();
+    }
+    const KINDS: &[&str] = &[
+        "summary",
+        "faq",
+        "study_guide",
+        "briefing",
+        "timeline",
+        "insights",
+        "flashcards",
+        "quiz",
+        "mind_map",
+        "data_table",
+        "problems",
+        "prd",
+        "prfaq",
+        "rfc",
+        "skill",
+    ];
+    for k in KINDS {
+        if rag::artifact_spec(k).map(|(t, _)| t) == Some(label) {
+            return (*k).to_string();
+        }
+    }
+    "note".into()
+}
+
+/// Safely extract an .okf.zip into a scratch dir and return it.
+fn extract_okf_zip(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("Failed to open zip: {e}"))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Not a readable zip: {e}"))?;
+    let dest = std::env::temp_dir().join(format!("alchemy-okf-import-{}", new_id()));
+    std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        // enclosed_name refuses absolute paths and `..` traversal.
+        let Some(rel) = entry.enclosed_name() else {
+            continue;
+        };
+        let out = dest.join(rel);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+        } else {
+            if let Some(parent) = out.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            let mut f = std::fs::File::create(&out).map_err(|e| e.to_string())?;
+            std::io::copy(&mut entry, &mut f).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(dest)
+}
+
+/// An OKF bundle root holds index.md (and sources/ / notes/); a zip usually
+/// nests it one directory down.
+fn find_bundle_root(dir: std::path::PathBuf) -> Result<std::path::PathBuf, String> {
+    let looks_like = |p: &std::path::Path| {
+        p.join("index.md").exists() || p.join("sources").is_dir() || p.join("notes").is_dir()
+    };
+    if looks_like(&dir) {
+        return Ok(dir);
+    }
+    let subdirs: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    if let [only] = subdirs.as_slice() {
+        if looks_like(only) {
+            return Ok(only.clone());
+        }
+    }
+    Err("Not an OKF bundle — expected index.md with sources/ and notes/ folders".into())
+}
+
+/// Sorted markdown docs in a bundle subdirectory (index.md excluded).
+fn okf_docs(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension().and_then(|x| x.to_str()) == Some("md")
+                && p.file_name().and_then(|n| n.to_str()) != Some("index.md")
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+/// Import an OKF bundle (a folder or an .okf.zip) into a new notebook (None)
+/// or an existing one. Sources re-chunk and re-embed locally; duplicates are
+/// skipped quietly, so merging the same bundle twice is harmless.
+#[tauri::command]
+pub async fn import_notebook_okf(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    notebook_id: Option<String>,
+) -> Result<Notebook, String> {
+    let src = std::path::PathBuf::from(&path);
+    let (scratch, root) = if src.is_dir() {
+        (None, src)
+    } else {
+        let dest = extract_okf_zip(&src)?;
+        (Some(dest.clone()), dest)
+    };
+    let result = import_bundle(&app, &state, root, notebook_id).await;
+    if let Some(dir) = scratch {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    result
+}
+
+async fn import_bundle(
+    app: &AppHandle,
+    state: &AppState,
+    root: std::path::PathBuf,
+    notebook_id: Option<String>,
+) -> Result<Notebook, String> {
+    let root = find_bundle_root(root)?;
+
+    // Bundle title: index.md's H1, else the folder name.
+    let title = std::fs::read_to_string(root.join("index.md"))
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("# "))
+                .map(|l| l[2..].trim().to_string())
+        })
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| {
+            root.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("Imported notebook")
+                .to_string()
+        });
+
+    // Destination: an existing notebook, or a fresh one named for the bundle.
+    let notebook = match &notebook_id {
+        Some(id) => e(state.db.list_notebooks().await)?
+            .into_iter()
+            .find(|n| &n.id == id)
+            .ok_or_else(|| "Notebook not found".to_string())?,
+        None => {
+            let ts = now();
+            let count = e(state.db.list_notebooks().await)?;
+            let nb = Notebook {
+                id: new_id(),
+                title,
+                created_at: ts,
+                updated_at: ts,
+                color: NOTEBOOK_PALETTE[count.len() % NOTEBOOK_PALETTE.len()].to_string(),
+                source_count: 0,
+            };
+            e(state.db.create_notebook(&nb).await)?;
+            nb
+        }
+    };
+
+    const SOURCE_TYPES: &[&str] = &["pdf", "text", "markdown", "html", "url", "image", "mac"];
+    let mut imported = 0usize;
+    let mut skipped = 0usize;
+    let source_docs = okf_docs(&root.join("sources"));
+    let total = source_docs.len();
+    for (i, doc) in source_docs.into_iter().enumerate() {
+        let Ok(text) = std::fs::read_to_string(&doc) else {
+            skipped += 1;
+            continue;
+        };
+        let (fm, body) = parse_okf_doc(&text);
+        // Folder container rows export with empty bodies — their children
+        // are full documents of their own. Nothing to embed here.
+        if body.trim().is_empty() {
+            skipped += 1;
+            continue;
+        }
+        let title = fm
+            .get("title")
+            .cloned()
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| {
+                doc.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Untitled")
+                    .to_string()
+            });
+        let source_type = fm
+            .get("tags")
+            .map(|t| t.trim_matches(['[', ']']).trim().to_string())
+            .filter(|t| SOURCE_TYPES.contains(&t.as_str()))
+            .unwrap_or_else(|| "text".to_string());
+        // The resource is where the source CAME from — on this machine it's
+        // provenance, not a live path, except web URLs which stay refreshable.
+        let url = match fm.get("resource") {
+            Some(r) if is_web_url(r) => r.clone(),
+            Some(r) => r.strip_prefix("file://").unwrap_or(r).to_string(),
+            None => String::new(),
+        };
+        let extracted = ingest::Extracted {
+            title,
+            source_type,
+            url,
+            text: body,
+        };
+        let _ = app.emit(
+            "import://progress",
+            serde_json::json!({ "done": i, "total": total, "title": extracted.title }),
+        );
+        match store_extracted(state, &notebook.id, extracted).await {
+            Ok(_) => imported += 1,
+            // Duplicates (merging a bundle twice) are success, not failure.
+            Err(_) => skipped += 1,
+        }
+    }
+
+    // Note dedup mirrors source dedup: re-importing the same bundle must not
+    // double every note. Same title + same body = already here.
+    let existing_notes: Vec<(String, String)> = e(state.db.list_notes(&notebook.id).await)?
+        .into_iter()
+        .map(|n| (n.title, n.content))
+        .collect();
+    for doc in okf_docs(&root.join("notes")) {
+        let Ok(text) = std::fs::read_to_string(&doc) else {
+            continue;
+        };
+        let (fm, body) = parse_okf_doc(&text);
+        if body.trim().is_empty() {
+            continue;
+        }
+        let title_for_dup = fm.get("title").cloned().unwrap_or_default();
+        if existing_notes
+            .iter()
+            .any(|(t, c)| t == &title_for_dup && c.trim() == body.trim())
+        {
+            continue;
+        }
+        let note = Note {
+            id: new_id(),
+            notebook_id: notebook.id.clone(),
+            title: fm.get("title").cloned().unwrap_or_else(|| {
+                doc.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Untitled")
+                    .to_string()
+            }),
+            content: body,
+            kind: note_kind_from_label(fm.get("type").map(String::as_str).unwrap_or("Note")),
+            prompt: String::new(),
+            created_at: now(),
+            updated_at: now(),
+        };
+        e(state.db.add_note(&note).await)?;
+    }
+
+    e(state.db.touch_notebook(&notebook.id, now()).await)?;
+    let _ = app.emit(
+        "import://done",
+        serde_json::json!({ "imported": imported, "skipped": skipped }),
+    );
+    Ok(notebook)
+}
+
 /// One passage behind a meta-chat answer: what it is and where it lives.
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -4,6 +4,7 @@ import { HomeView } from "@/components/HomeView";
 import { Workspace } from "@/components/Workspace";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { CommandPalette } from "@/components/CommandPalette";
+import { ImportOkfModal } from "@/components/ImportOkfModal";
 import { FileDrop } from "@/components/FileDrop";
 import { MigrationOverlay } from "@/components/MigrationOverlay";
 import { NoteWindow } from "@/components/NoteWindow";
@@ -20,7 +21,8 @@ function App() {
   const dismissToast = useStore((s) => s.dismissToast);
   const health = useStore((s) => s.modelHealth);
   const onboardingDismissed = useStore((s) => s.onboardingDismissed);
-  const needsSetup = !!health && (!health.chat.working || !health.embed.working);
+  const needsSetup =
+    !!health && (!health.chat.working || !health.embed.working);
   const settingsOpen = useStore((s) => s.settingsOpen);
   const embedderDownload = useStore((s) => s.embedderDownload);
   const settingsTab = useStore((s) => s.settingsTab);
@@ -76,8 +78,13 @@ function App() {
         <HomeView onOpenSettings={() => openSettings()} />
       )}
 
-      <SettingsDialog open={settingsOpen} onClose={closeSettings} initialTab={settingsTab} />
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={closeSettings}
+        initialTab={settingsTab}
+      />
       <CommandPalette />
+      <ImportOkfModal />
       {/* Drag-drop only routes into a notebook when one is open. */}
       {currentId && <FileDrop />}
       <MigrationOverlay />

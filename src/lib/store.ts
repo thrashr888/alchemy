@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import { SUPPORTED_EXTENSIONS } from "./utils";
 import { applyTheme, SYSTEM_THEME } from "./themes";
@@ -175,6 +175,12 @@ interface AppState {
   closeAddSource: () => void;
   /** Pick a directory and export the current notebook as an OKF bundle. */
   exportNotebookOkf: () => Promise<void>;
+  /** Save the current notebook as one shareable .okf.zip file. */
+  shareNotebookOkf: () => Promise<void>;
+  /** The import dialog (new notebook vs merge into existing). */
+  importOkfOpen: boolean;
+  /** Import a bundle (.okf.zip or folder); null notebookId = new notebook. */
+  importOkf: (path: string, notebookId?: string | null) => Promise<void>;
   createReport: (
     name: string,
     kind: string,
@@ -445,6 +451,7 @@ export const useStore = create<AppState>((set, get) => {
     failedInput: null,
     pendingInput: null,
     pendingAsk: null,
+    importOkfOpen: false,
     error: null,
     toasts: [],
     justCreatedNoteId: null,
@@ -618,6 +625,9 @@ export const useStore = create<AppState>((set, get) => {
           s.openSettings("general");
         } else if (e.payload.id === "menu-new-window") void api.newWindow();
         else if (e.payload.id === "menu-export-okf") void s.exportNotebookOkf();
+        else if (e.payload.id === "menu-share-okf") void s.shareNotebookOkf();
+        else if (e.payload.id === "menu-import-okf")
+          set({ importOkfOpen: true });
       });
       void listen<{ target: string; id: string }>(
         "menu://open-notebook",
@@ -1407,6 +1417,49 @@ export const useStore = create<AppState>((set, get) => {
       } catch (e) {
         get().pushToast("error", e instanceof Error ? e.message : String(e));
       }
+    },
+
+    shareNotebookOkf: async () => {
+      const id = get().currentId;
+      if (!id) {
+        get().pushToast("info", "Open a notebook to share it");
+        return;
+      }
+      const nb = get().notebooks.find((n) => n.id === id);
+      const slug = (nb?.title ?? "notebook")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      const dest = await save({
+        title: "Share notebook as…",
+        defaultPath: `${slug || "notebook"}.okf.zip`,
+        filters: [{ name: "OKF bundle", extensions: ["zip"] }],
+      });
+      if (!dest) return;
+      try {
+        const path = await api.exportNotebookOkfZip(id, dest);
+        get().pushToast("success", `Saved ${path}`);
+      } catch (e) {
+        get().pushToast("error", e instanceof Error ? e.message : String(e));
+      }
+    },
+
+    importOkf: async (path, notebookId) => {
+      const item: QueueItem = {
+        id: `${Date.now()}`,
+        name: "Importing notebook…",
+        status: "pending",
+      };
+      set({ ingestQueue: [...get().ingestQueue, item], error: null });
+      let imported: { id: string; title: string } | null = null;
+      await runQueued(get, set, item, async () => {
+        const nb = await api.importNotebookOkf(path, notebookId);
+        imported = nb;
+        get().pushToast("success", `Imported into “${nb.title}”`);
+      });
+      await get().refreshNotebooks();
+      const nb = imported as { id: string; title: string } | null;
+      if (nb) await get().selectNotebook(nb.id);
     },
 
     createReport: (name, kind, prompt, intervalSecs) =>

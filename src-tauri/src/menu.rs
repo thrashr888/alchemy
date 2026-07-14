@@ -65,11 +65,17 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
     let export_okf = MenuItemBuilder::with_id("menu-export-okf", "Export Notebook as OKF…")
         .accelerator("CmdOrCtrl+Shift+E")
         .build(app)?;
+    let share_okf =
+        MenuItemBuilder::with_id("menu-share-okf", "Share Notebook as Zip…").build(app)?;
+    let import_okf =
+        MenuItemBuilder::with_id("menu-import-okf", "Import Notebook from OKF…").build(app)?;
     let file_menu = SubmenuBuilder::new(app, "File")
         .item(&new_window)
         .item(&recent_menu)
         .separator()
+        .item(&import_okf)
         .item(&export_okf)
+        .item(&share_okf)
         .separator()
         .close_window()
         .build()?;

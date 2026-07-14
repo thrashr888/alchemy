@@ -29,6 +29,7 @@ import {
   FileText,
   Newspaper,
   Sparkles,
+  FolderInput,
 } from "lucide-react";
 
 // Keep this list in sync with Rust in `src-tauri/src/db.rs` (`NOTEBOOK_PALETTE`)
@@ -274,16 +275,26 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                     reports={reports}
                   />
                 </div>
-                <Button
-                  variant="primary"
-                  onClick={() => {
-                    setNewTitle("");
-                    setCreating(true);
-                  }}
-                >
-                  <Plus className="h-4 w-4" />
-                  New notebook
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    onClick={() => useStore.setState({ importOkfOpen: true })}
+                    title="Import a shared .okf.zip or bundle folder"
+                  >
+                    <FolderInput className="h-4 w-4" />
+                    Import…
+                  </Button>
+                  <Button
+                    variant="primary"
+                    onClick={() => {
+                      setNewTitle("");
+                      setCreating(true);
+                    }}
+                  >
+                    <Plus className="h-4 w-4" />
+                    New notebook
+                  </Button>
+                </div>
               </div>
 
               {/* The unified ask box: one input, the whole corpus. Enter asks

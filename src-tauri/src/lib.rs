@@ -160,6 +160,8 @@ pub fn run() {
             commands::new_window,
             commands::rebuild_app_menu,
             commands::search_everything,
+            commands::export_notebook_okf_zip,
+            commands::import_notebook_okf,
             commands::ask_everything,
             commands::create_note,
             commands::update_note,
