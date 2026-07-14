@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useStore } from "@/lib/store";
+import { api } from "@/lib/api";
 import { SUPPORTED_EXTENSIONS } from "@/lib/utils";
 
 function ext(path: string): string {
@@ -48,13 +49,31 @@ export function FileDrop() {
 
 async function handleDrop(paths: string[]) {
   const { currentId, addSourceFiles, setError } = useStore.getState();
+
+  // OKF bundles (a shared .okf.zip or an exported folder) route to import,
+  // not source ingestion — and they work from the homepage too. Only zips
+  // and extensionless paths (candidate folders) are worth probing.
+  const rest: string[] = [];
+  for (const p of paths) {
+    const e = ext(p);
+    const probeWorthy = e === "zip" || e === "";
+    if (probeWorthy && (await api.probeOkf(p).catch(() => false))) {
+      useStore.setState({ pendingImportPath: p, importOkfOpen: true });
+    } else {
+      rest.push(p);
+    }
+  }
+  if (rest.length === 0) return;
+
   if (!currentId) {
     setError("Select or create a notebook before adding sources.");
     return;
   }
   // Extensionless paths pass through: they're folders (which become synced
   // folder sources) or plain-text files — the backend handles both.
-  const supported = paths.filter((p) => SUPPORTED_EXTENSIONS.includes(ext(p)) || ext(p) === "");
+  const supported = rest.filter(
+    (p) => SUPPORTED_EXTENSIONS.includes(ext(p)) || ext(p) === "",
+  );
   if (supported.length === 0) {
     setError("Unsupported file type. Drop PDF, Office, image, or text files.");
     return;

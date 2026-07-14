@@ -3923,6 +3923,38 @@ fn okf_docs(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     files
 }
 
+/// Does this dropped path look like an OKF bundle (folder or zip)? Cheap
+/// check so drag-and-drop routes bundles to import instead of trying to
+/// ingest them as sources.
+#[tauri::command]
+pub fn probe_okf(path: String) -> bool {
+    let p = std::path::Path::new(&path);
+    if p.is_dir() {
+        return find_bundle_root(p.to_path_buf()).is_ok();
+    }
+    if p.extension().and_then(|e| e.to_str()) != Some("zip") {
+        return false;
+    }
+    let Ok(file) = std::fs::File::open(p) else {
+        return false;
+    };
+    let Ok(archive) = zip::ZipArchive::new(file) else {
+        return false;
+    };
+    // Bundle zips are name-rooted ("slug/index.md"), but accept flat too.
+    // (Bound to a local: the tail expression would otherwise borrow
+    // `archive` past its drop point — E0597.)
+    let looks_like_bundle = archive.file_names().take(200).any(|name| {
+        name == "index.md"
+            || name.ends_with("/index.md")
+            || name.starts_with("sources/")
+            || name.starts_with("notes/")
+            || name.contains("/sources/")
+            || name.contains("/notes/")
+    });
+    looks_like_bundle
+}
+
 /// Import an OKF bundle (a folder or an .okf.zip) into a new notebook (None)
 /// or an existing one. Sources re-chunk and re-embed locally; duplicates are
 /// skipped quietly, so merging the same bundle twice is harmless.

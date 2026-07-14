@@ -162,6 +162,7 @@ pub fn run() {
             commands::search_everything,
             commands::export_notebook_okf_zip,
             commands::import_notebook_okf,
+            commands::probe_okf,
             commands::ask_everything,
             commands::create_note,
             commands::update_note,

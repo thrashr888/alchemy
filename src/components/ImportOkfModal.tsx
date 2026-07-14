@@ -14,9 +14,13 @@ export function ImportOkfModal() {
   const isOpen = useStore((s) => s.importOkfOpen);
   const notebooks = useStore((s) => s.notebooks);
   const importOkf = useStore((s) => s.importOkf);
+  // Set when a bundle was dropped on the window — the file is already
+  // chosen, so the dialog only asks where it should land.
+  const dropped = useStore((s) => s.pendingImportPath);
   const [dest, setDest] = useState<string>("");
 
-  const close = () => useStore.setState({ importOkfOpen: false });
+  const close = () =>
+    useStore.setState({ importOkfOpen: false, pendingImportPath: null });
 
   async function pick(directory: boolean) {
     const path = await open(
@@ -61,26 +65,51 @@ export function ImportOkfModal() {
             ))}
           </select>
         </label>
+        {dropped && (
+          <div className="flex items-center gap-2 rounded-md border border-border bg-surface-2/40 px-3 py-2 text-[12px] text-foreground/90">
+            <FileArchive className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 truncate">
+              {dropped.split("/").pop() ?? dropped}
+            </span>
+          </div>
+        )}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={close}>
             Cancel
           </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => void pick(true)}
-          >
-            <FolderOpen className="h-3.5 w-3.5" />
-            Bundle folder…
-          </Button>
-          <Button
-            type="button"
-            variant="primary"
-            onClick={() => void pick(false)}
-          >
-            <FileArchive className="h-3.5 w-3.5" />
-            Choose .okf.zip…
-          </Button>
+          {dropped ? (
+            <Button
+              type="button"
+              variant="primary"
+              onClick={() => {
+                const path = dropped;
+                close();
+                void importOkf(path, dest || null);
+              }}
+            >
+              <FileArchive className="h-3.5 w-3.5" />
+              Import
+            </Button>
+          ) : (
+            <>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => void pick(true)}
+              >
+                <FolderOpen className="h-3.5 w-3.5" />
+                Bundle folder…
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                onClick={() => void pick(false)}
+              >
+                <FileArchive className="h-3.5 w-3.5" />
+                Choose .okf.zip…
+              </Button>
+            </>
+          )}
         </div>
       </div>
     </Modal>
