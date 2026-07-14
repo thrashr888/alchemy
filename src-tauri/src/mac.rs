@@ -44,6 +44,44 @@ fn which_cider() -> Option<PathBuf> {
         .find(|c| c.exists())
 }
 
+/// Turn a raw cider failure into something a person can act on. TCC denials
+/// (Full Disk Access missing for THIS app — grants don't transfer between
+/// the dev binary and the installed bundle) all reduce to one instruction.
+fn friendly_cider_error(raw: &str) -> String {
+    let permission = raw.contains("authorization denied")
+        || raw.contains("Operation not permitted")
+        || raw.contains("PermissionError")
+        || raw.contains("permission_denied")
+        || raw.contains("NSAppleScriptErrorNumber=-1743");
+    if permission {
+        return "macOS is blocking access. Grant Alchemy Full Disk Access \
+                (System Settings → Privacy & Security → Full Disk Access), \
+                then relaunch Alchemy."
+            .to_string();
+    }
+    // Keep the first line — subprocess tracebacks aren't toast material.
+    raw.lines()
+        .next()
+        .unwrap_or("cider call failed")
+        .chars()
+        .take(200)
+        .collect()
+}
+
+/// Pull the message out of cider's `{"ok": false, "error": …}` envelope, or
+/// fall back to the raw text.
+fn envelope_message(text: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(text.trim())
+        .ok()
+        .and_then(|v| {
+            v["error"]["message"]
+                .as_str()
+                .or_else(|| v["error"].as_str())
+                .map(String::from)
+        })
+        .unwrap_or_else(|| text.trim().to_string())
+}
+
 /// Run cider and unwrap its `{"ok": bool, "data"/"error": …}` envelope.
 /// cider has internal JXA/osascript timeouts (15–30s); this outer one only
 /// catches a wedged process.
@@ -58,18 +96,13 @@ async fn cider(args: &[&str]) -> anyhow::Result<serde_json::Value> {
     .context("failed to run cider")?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     if stdout.trim().is_empty() {
-        // Errors that never reach the JSON envelope land on stderr (e.g. a
-        // permission-denied reading another app's container).
+        // cider puts data on stdout and errors (including its JSON error
+        // envelope) on stderr — parse the envelope rather than echoing it.
         let stderr = String::from_utf8_lossy(&out.stderr);
-        let detail = stderr.trim().chars().take(300).collect::<String>();
-        anyhow::bail!(
-            "cider produced no output{}",
-            if detail.is_empty() {
-                String::new()
-            } else {
-                format!(": {detail}")
-            }
-        );
+        if stderr.trim().is_empty() {
+            anyhow::bail!("cider produced no output");
+        }
+        anyhow::bail!("{}", friendly_cider_error(&envelope_message(&stderr)));
     }
     let v: serde_json::Value = serde_json::from_str(stdout.trim()).with_context(|| {
         format!(
@@ -84,11 +117,7 @@ async fn cider(args: &[&str]) -> anyhow::Result<serde_json::Value> {
             .as_str()
             .or_else(|| v["error"].as_str())
             .unwrap_or("cider call failed");
-        // The first call to a data class pops a macOS permission prompt; a
-        // timeout here usually means it's waiting on (or was denied) consent.
-        return Err(anyhow!(
-            "{msg} — if macOS asked for permission, allow it and retry"
-        ));
+        return Err(anyhow!("{}", friendly_cider_error(msg)));
     }
     if v["ok"].as_bool() == Some(true) {
         return Ok(v["data"].clone());
@@ -444,5 +473,36 @@ pub fn sweep_due(source_id: &str) -> bool {
             map.insert(source_id.to_string(), now);
             true
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The exact stderr shapes seen in the wild (prod app without Full Disk
+    // Access) — the user must never see raw JSON or tracebacks.
+    #[test]
+    fn tcc_denials_become_one_instruction() {
+        for raw in [
+            r#"{"error":{"code":"operation_failed","message":"sqlite3 failed: Error: unable to open database \"/Users/x/Library/Group Containers/group.com.apple.calendar/Calendar.sqlitedb\": authorization denied\n"},"ok":false}"#,
+            r#"{"error":{"code":"operation_failed","message":"ls failed: ls: /Users/x/Library/Group Containers/group.com.apple.reminders/Container_v1/Stores: Operation not permitted\n"},"ok":false}"#,
+            r#"{"error":{"code":"permission_denied","message":"python3 failed: Traceback (most recent call last):\n  File \"<string>\", line 24, in <module>\nPermissionError: [Errno 1] Operation not permitted: '/Users/x/…'"},"ok":false}"#,
+        ] {
+            let msg = friendly_cider_error(&envelope_message(raw));
+            assert!(msg.contains("Full Disk Access"), "got: {msg}");
+            assert!(!msg.contains('{'), "raw JSON leaked: {msg}");
+        }
+    }
+
+    #[test]
+    fn other_errors_keep_first_line_only() {
+        let msg = friendly_cider_error("osascript failed: some error\nline two\nline three");
+        assert_eq!(msg, "osascript failed: some error");
+    }
+
+    #[test]
+    fn plain_stderr_passes_through() {
+        assert_eq!(envelope_message("not json at all"), "not json at all");
     }
 }
