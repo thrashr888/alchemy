@@ -119,6 +119,9 @@ interface AppState {
   failedInput: string | null;
   /** Text another surface (e.g. the source reader) wants in the composer. */
   pendingInput: string | null;
+  /** A question the palette should ask across all notebooks on next open
+   *  (the homepage's unified ask box seeds this, then opens the palette). */
+  pendingAsk: string | null;
   /** Ephemeral toasts (success/info auto-dismiss; errors linger a bit longer). */
   toasts: Toast[];
   /** Id of a just-generated note, so the Studio panel can auto-open it. */
@@ -441,6 +444,7 @@ export const useStore = create<AppState>((set, get) => {
     embedderDownload: null,
     failedInput: null,
     pendingInput: null,
+    pendingAsk: null,
     error: null,
     toasts: [],
     justCreatedNoteId: null,

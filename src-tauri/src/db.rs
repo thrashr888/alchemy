@@ -820,6 +820,72 @@ impl Db {
     /// it's fast enough for as-you-type global search. Returns
     /// (notebook_id, citation); source titles are the caller's to fill.
     /// Empty on databases from before the FTS index existed.
+    /// Corpus-wide hybrid search — `search_chunks` without the notebook
+    /// filter. Returns (notebook_id, citation), rank-fused across the vector
+    /// and BM25 sides exactly like the per-notebook path.
+    pub async fn search_chunks_all(
+        &self,
+        query_vec: Vec<f32>,
+        query_text: &str,
+        k: usize,
+    ) -> Result<Vec<(String, Citation)>> {
+        if !self.table_exists(T_CHUNKS).await? {
+            return Ok(vec![]);
+        }
+        let titles: HashMap<String, String> = self
+            .all_source_meta()
+            .await?
+            .into_iter()
+            .map(|(id, _nb, title)| (id, title))
+            .collect();
+        let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
+        let pool = k.max(1) * 3;
+
+        let vec_batches = tbl
+            .query()
+            .nearest_to(query_vec)?
+            .limit(pool)
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        let mut vec_hits = nb_citations_from_batches(&vec_batches, &titles)?;
+        vec_hits.sort_by(|a, b| {
+            a.1.distance
+                .partial_cmp(&b.1.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let fts_hits = if query_text.trim().is_empty() {
+            vec![]
+        } else {
+            match tbl
+                .query()
+                .full_text_search(FullTextSearchQuery::new(query_text.to_string()))
+                .limit(pool)
+                .execute()
+                .await
+            {
+                Ok(stream) => match stream.try_collect::<Vec<_>>().await {
+                    Ok(batches) => nb_citations_from_batches(&batches, &titles)?,
+                    Err(_) => vec![],
+                },
+                Err(_) => vec![],
+            }
+        };
+
+        let mut fused: HashMap<String, ((String, Citation), f32)> = HashMap::new();
+        for hits in [vec_hits, fts_hits] {
+            for (rank, hit) in hits.into_iter().enumerate() {
+                fused.entry(hit.1.chunk_id.clone()).or_insert((hit, 0.0)).1 +=
+                    1.0 / (60.0 + rank as f32);
+            }
+        }
+        let mut merged: Vec<((String, Citation), f32)> = fused.into_values().collect();
+        merged.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(merged.into_iter().take(k).map(|(hit, _)| hit).collect())
+    }
+
     pub async fn search_chunks_fts_all(
         &self,
         query_text: &str,
@@ -1039,6 +1105,23 @@ fn notes_from_batches(batches: &[RecordBatch]) -> Result<Vec<Note>> {
 
 /// Decode chunk-query result batches into citations. `_distance` is present
 /// on vector results only; FTS hits leave it at 0.0.
+/// Like `citations_from_batches`, but keeps each row's notebook_id — the
+/// corpus-wide searches need to say where a passage lives.
+fn nb_citations_from_batches(
+    batches: &[RecordBatch],
+    titles: &HashMap<String, String>,
+) -> Result<Vec<(String, Citation)>> {
+    let mut out = Vec::new();
+    for b in batches {
+        let nb = str_col(b, "notebook_id")?;
+        let citations = citations_from_batches(std::slice::from_ref(b), titles)?;
+        for (i, c) in citations.into_iter().enumerate() {
+            out.push((nb.value(i).to_string(), c));
+        }
+    }
+    Ok(out)
+}
+
 fn citations_from_batches(
     batches: &[RecordBatch],
     titles: &HashMap<String, String>,

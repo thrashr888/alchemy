@@ -191,6 +191,23 @@ export interface AiConfig {
   trayEnabled: boolean;
 }
 
+/** One passage behind a meta-chat answer: what it is and where it lives. */
+export interface MetaCitation {
+  kind: "source" | "note";
+  notebookId: string;
+  notebookTitle: string;
+  /** Source id for source passages; note id for notes. */
+  id: string;
+  title: string;
+  snippet: string;
+}
+
+/** A corpus-wide answer (docs/RFC-meta-chat.md). */
+export interface MetaAnswer {
+  answer: string;
+  citations: MetaCitation[];
+}
+
 export interface McpStatus {
   running: boolean;
   port: number;
