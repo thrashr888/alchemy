@@ -145,6 +145,7 @@ export const api = {
     run(
       ai<Source>("add_source_mac", { notebookId, provider, collection, label }),
     ),
+  openPrivacySettings: () => run(cmd<void>("open_privacy_settings")),
   macNoteBody: (sourceId: string) =>
     run(query<string>("mac_note_body", { sourceId })),
   updateMacNote: (sourceId: string, body: string) =>

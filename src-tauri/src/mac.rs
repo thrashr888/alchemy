@@ -138,6 +138,17 @@ pub fn mac_available() -> bool {
     cider_path().is_some()
 }
 
+/// Open System Settings straight to Privacy & Security → Full Disk Access —
+/// the fix for every TCC denial `friendly_cider_error` reports.
+#[tauri::command]
+pub fn open_privacy_settings() -> Result<(), String> {
+    std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// Settings/onboarding "Connect" buttons: one benign read per provider so the
 /// macOS consent prompt fires at a predictable moment instead of mid-add.
 #[tauri::command]

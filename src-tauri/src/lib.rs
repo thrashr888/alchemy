@@ -130,6 +130,7 @@ pub fn run() {
             commands::update_mac_note,
             commands::add_mac_reminder,
             mac::mac_available,
+            mac::open_privacy_settings,
             mac::mac_connect,
             mac::list_mac_collections,
             commands::resync_sources,
