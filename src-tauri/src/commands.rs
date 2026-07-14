@@ -1296,6 +1296,32 @@ struct SourcesChanged {
     scan: FolderScan,
 }
 
+/// Index any notes missing from the retrieval index — notes from before
+/// phase 1 of docs/RFC-note-curator.md, or whose write-time indexing failed.
+/// Runs once per app launch, on the first minute tick.
+async fn backfill_note_index(state: &AppState) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static DONE: AtomicBool = AtomicBool::new(false);
+    if DONE.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let (notes, indexed) = match tokio::try_join!(
+        state.db.recent_notes(usize::MAX),
+        state.db.indexed_note_ids()
+    ) {
+        Ok(pair) => pair,
+        Err(err) => {
+            eprintln!("note backfill: listing failed: {err:#}");
+            return;
+        }
+    };
+    for note in notes {
+        if note.kind != "audio_overview" && !indexed.contains(&note.id) {
+            index_note(state, &note).await;
+        }
+    }
+}
+
 /// Rescan every folder source and re-embed loose file sources whose on-disk
 /// file changed (the frontend ticks this once a minute from the main window,
 /// and on notebook open). Emits `sources://changed` per notebook that
@@ -1309,6 +1335,9 @@ pub async fn resync_sources(
     // The Spotlight index rides the same tick (internally ~10-min throttled).
     #[cfg(target_os = "macos")]
     crate::spotlight::refresh_if_due(&state).await;
+    // One-shot per app run: index notes written before notes joined the
+    // retrieval index (or whose indexing failed at write time).
+    backfill_note_index(&state).await;
     // A manual folder add/refresh is already scanning — skip this tick rather
     // than queue behind it and ingest the same files twice.
     let Ok(_guard) = state.folder_scan_lock.try_lock() else {
@@ -1490,6 +1519,13 @@ pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u
             .db
             .add_chunks(notebook_id, owner_id, &tuples, &embeddings)
             .await)?;
+    }
+
+    drop(ai);
+
+    // Notes ride the same chunk table, so the rebuild must re-embed them too.
+    for note in e(state.db.recent_notes(usize::MAX).await)? {
+        index_note(&state, &note).await;
     }
 
     let _ = app.emit(
@@ -2089,7 +2125,7 @@ async fn try_tool_route(
                         created_at: ts,
                         updated_at: ts,
                     };
-                    if let Err(err) = state.db.add_note(&note).await {
+                    if let Err(err) = add_note_indexed(state, &note).await {
                         return Some(format!("Generation succeeded but saving failed: {err:#}"));
                     }
                     let _ = app.emit("generate://done", &note);
@@ -2221,7 +2257,7 @@ async fn try_tool_route(
                 created_at: ts,
                 updated_at: ts,
             };
-            match state.db.add_note(&note).await {
+            match add_note_indexed(state, &note).await {
                 Ok(()) => Some(format!("Saved the previous answer as note **{title}**.")),
                 Err(err) => Some(format!("Couldn't save the note: {err:#}")),
             }
@@ -2652,6 +2688,55 @@ pub async fn list_notes(
     e(state.db.list_notes(&notebook_id).await)
 }
 
+/// Persist a new note and index it for retrieval. Indexing is best-effort:
+/// the note row is the truth, chunks are derived — a failed embed logs and
+/// the startup backfill retries next launch.
+pub async fn add_note_indexed(state: &AppState, note: &Note) -> anyhow::Result<()> {
+    state.db.add_note(note).await?;
+    index_note(state, note).await;
+    Ok(())
+}
+
+/// (Re)build a note's chunks in the retrieval index so search and chat can
+/// recall prior conclusions (docs/RFC-note-curator.md, phase 1). Chunks ride
+/// the source chunk table under `source_id = "note:<id>"`.
+pub async fn index_note(state: &AppState, note: &Note) {
+    if let Err(err) = try_index_note(state, note).await {
+        eprintln!("indexing note {} failed: {err:#}", note.id);
+    }
+}
+
+async fn try_index_note(state: &AppState, note: &Note) -> anyhow::Result<()> {
+    state.db.delete_note_chunks(&note.id).await?;
+    // Audio Overview scripts are two-host podcast dialogue — retrieval noise.
+    if note.kind == "audio_overview" {
+        return Ok(());
+    }
+    let chunks = ingest::chunk_text(&note.title, &note.content);
+    if chunks.is_empty() {
+        return Ok(());
+    }
+    let inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
+    let embeddings = {
+        let ai = state.ai.read().await;
+        ai.embed(&inputs).await?
+    };
+    let tuples: Vec<(String, i32, String)> = chunks
+        .iter()
+        .enumerate()
+        .map(|(j, c)| (new_id(), j as i32, c.text.clone()))
+        .collect();
+    state
+        .db
+        .add_chunks(
+            &note.notebook_id,
+            &format!("{}{}", crate::db::NOTE_CHUNK_PREFIX, note.id),
+            &tuples,
+            &embeddings,
+        )
+        .await
+}
+
 #[tauri::command]
 pub async fn create_note(
     state: State<'_, AppState>,
@@ -2674,7 +2759,7 @@ pub async fn create_note(
         created_at: ts,
         updated_at: ts,
     };
-    e(state.db.add_note(&note).await)?;
+    e(add_note_indexed(&state, &note).await)?;
     Ok(note)
 }
 
@@ -2688,7 +2773,11 @@ pub async fn update_note(
     e(state
         .db
         .update_note(&id, title.trim(), &content, now())
-        .await)
+        .await)?;
+    if let Some(note) = e(state.db.get_note(&id).await)? {
+        index_note(&state, &note).await;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -3152,7 +3241,7 @@ pub async fn generate_artifact(
     if note.kind == "audio_overview" {
         e(synthesize_audio(&app, &note.id, &note.content, &cancel).await)?;
     }
-    e(state.db.add_note(&note).await)?;
+    e(add_note_indexed(&state, &note).await)?;
     let _ = app.emit("generate://done", &note);
     Ok(note)
 }
@@ -3194,6 +3283,7 @@ pub async fn rebuild_note(
         created_at: ts,
         updated_at: ts,
     };
+    index_note(&state, &note).await;
     let _ = app.emit("generate://done", &note);
     Ok(note)
 }
@@ -3401,7 +3491,7 @@ pub async fn run_report(
         created_at: ts,
         updated_at: ts,
     };
-    e(state.db.add_note(&note).await)?;
+    e(add_note_indexed(&state, &note).await)?;
     e(state.db.set_report_last_run(&schedule_id, ts).await)?;
     e(state.db.touch_notebook(&schedule.notebook_id, ts).await)?;
     let _ = app.emit("generate://done", &note);
@@ -4139,7 +4229,7 @@ async fn import_bundle(
             created_at: now(),
             updated_at: now(),
         };
-        e(state.db.add_note(&note).await)?;
+        e(add_note_indexed(state, &note).await)?;
     }
 
     e(state.db.touch_notebook(&notebook.id, now()).await)?;
@@ -4192,22 +4282,33 @@ pub(crate) async fn retrieve_everything(
     };
     let mut out: Vec<MetaCitation> = e(state.db.search_chunks_all(query_vec, question, k).await)?
         .into_iter()
-        .map(|(nb, c)| MetaCitation {
-            kind: "source".into(),
-            notebook_title: nb_titles.get(&nb).cloned().unwrap_or_default(),
-            notebook_id: nb,
-            id: c.source_id,
-            title: c.source_title,
-            snippet: c.snippet,
+        .map(|(nb, c)| {
+            // Note chunks come back with note_id set (they share the chunk
+            // table); surface them as first-class note citations.
+            let is_note = !c.note_id.is_empty();
+            MetaCitation {
+                kind: if is_note { "note" } else { "source" }.into(),
+                notebook_title: nb_titles.get(&nb).cloned().unwrap_or_default(),
+                notebook_id: nb,
+                id: if is_note { c.note_id } else { c.source_id },
+                title: c.source_title,
+                snippet: c.snippet,
+            }
         })
         .collect();
 
-    // Note pass: substring match over titles/bodies (same as ⌘K search).
+    // Title-match fallback pass: hybrid search covers note bodies now that
+    // notes are embedded, but an exact-title lookup ("the Q3 report note")
+    // can still miss the top k — substring over titles/bodies backstops it.
     let q = question.trim().to_lowercase();
+    let already: std::collections::HashSet<String> = out.iter().map(|c| c.id.clone()).collect();
     let mut note_hits = 0;
     for n in e(state.db.recent_notes(usize::MAX).await)? {
         if note_hits >= 4 {
             break;
+        }
+        if already.contains(&n.id) {
+            continue;
         }
         if n.title.to_lowercase().contains(&q) || n.content.to_lowercase().contains(&q) {
             note_hits += 1;
@@ -4258,6 +4359,7 @@ pub async fn ask_everything(
         };
         passages.push(rag::MetaPassage {
             number,
+            kind: c.kind.clone(),
             notebook_title: c.notebook_title.clone(),
             title: c.title.clone(),
             snippet: c.snippet.clone(),
@@ -4351,8 +4453,9 @@ pub async fn search_everything(
         }
     }
 
+    let notes = e(state.db.recent_notes(usize::MAX).await)?;
     let mut note_hits = 0;
-    for n in e(state.db.recent_notes(usize::MAX).await)? {
+    for n in &notes {
         if note_hits >= 4 {
             break;
         }
@@ -4360,15 +4463,37 @@ pub async fn search_everything(
             note_hits += 1;
             hits.push(SearchHit {
                 kind: "note".into(),
-                notebook_id: n.notebook_id,
-                id: n.id,
-                title: n.title,
+                notebook_id: n.notebook_id.clone(),
+                id: n.id.clone(),
+                title: n.title.clone(),
                 snippet: n.content.chars().take(120).collect(),
             });
         }
     }
 
+    let note_title_of: std::collections::HashMap<&str, &str> = notes
+        .iter()
+        .map(|n| (n.id.as_str(), n.title.as_str()))
+        .collect();
+    let listed: std::collections::HashSet<String> = hits.iter().map(|h| h.id.clone()).collect();
     for (nb, c) in e(state.db.search_chunks_fts_all(query.trim(), 6).await)? {
+        // Note chunks surface as note hits (the palette opens notes by id);
+        // skip ones the substring pass above already listed.
+        if !c.note_id.is_empty() {
+            if !listed.contains(&c.note_id) {
+                hits.push(SearchHit {
+                    kind: "note".into(),
+                    notebook_id: nb,
+                    title: note_title_of
+                        .get(c.note_id.as_str())
+                        .unwrap_or(&"")
+                        .to_string(),
+                    id: c.note_id,
+                    snippet: c.snippet.chars().take(140).collect(),
+                });
+            }
+            continue;
+        }
         let title = title_of
             .get(c.source_id.as_str())
             .map(|(_, t)| t.to_string())

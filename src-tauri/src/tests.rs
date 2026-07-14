@@ -255,6 +255,123 @@ async fn builtin_embedder_round_trip() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Notes ride the chunk table under `source_id = "note:<id>"` (RFC-note-curator
+/// phase 1): search must label note passages, and deleting the note must drop
+/// its chunks. Uses the built-in embedder; skips offline like the test above.
+#[tokio::test]
+async fn note_retrieval_round_trip() {
+    use crate::ai::{Ai, AiConfig};
+    use crate::db::NOTE_CHUNK_PREFIX;
+    use crate::models::Note;
+
+    let ai = Ai::new(
+        AiConfig {
+            embedder: "builtin".into(),
+            ..Default::default()
+        },
+        crate::ai::AiRuntime::default(),
+    );
+    if ai.test_embed().await.is_err() {
+        eprintln!("SKIP: built-in embedder unavailable (no network for first download?)");
+        return;
+    }
+
+    let dir = std::env::temp_dir().join(format!("nbl-notes-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb_id = uuid::Uuid::new_v4().to_string();
+
+    // A source chunk so notes and sources coexist in one table.
+    let src_text = "The Calvin cycle occurs in the stroma and fixes carbon dioxide.";
+    let src_chunks = ingest::chunk_text("Biology", src_text);
+    let src_inputs: Vec<String> = src_chunks.iter().map(|c| c.embed_text.clone()).collect();
+    let src_embeds = ai.embed(&src_inputs).await.expect("embed source");
+    let src_tuples: Vec<(String, i32, String)> = src_chunks
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (uuid::Uuid::new_v4().to_string(), i as i32, c.text.clone()))
+        .collect();
+    db.add_chunks(&nb_id, "src-1", &src_tuples, &src_embeds)
+        .await
+        .expect("write source chunks");
+
+    // An evidence note, indexed under the note prefix.
+    let note = Note {
+        id: uuid::Uuid::new_v4().to_string(),
+        notebook_id: nb_id.clone(),
+        title: "Deductible decision".into(),
+        content: "We concluded the homeowner's hail deductible is twenty-five hundred \
+                  dollars, based on the insurance policy PDF."
+            .into(),
+        kind: "evidence".into(),
+        prompt: String::new(),
+        created_at: now(),
+        updated_at: now(),
+    };
+    db.add_note(&note).await.expect("add note");
+    let note_chunks = ingest::chunk_text(&note.title, &note.content);
+    let note_inputs: Vec<String> = note_chunks.iter().map(|c| c.embed_text.clone()).collect();
+    let note_embeds = ai.embed(&note_inputs).await.expect("embed note");
+    let note_tuples: Vec<(String, i32, String)> = note_chunks
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (uuid::Uuid::new_v4().to_string(), i as i32, c.text.clone()))
+        .collect();
+    db.add_chunks(
+        &nb_id,
+        &format!("{NOTE_CHUNK_PREFIX}{}", note.id),
+        &note_tuples,
+        &note_embeds,
+    )
+    .await
+    .expect("write note chunks");
+
+    assert!(
+        db.indexed_note_ids()
+            .await
+            .expect("indexed ids")
+            .contains(&note.id),
+        "note id visible in the index"
+    );
+
+    // Search: the note passage comes back labeled as a note, with its title.
+    let q = "what is the hail deductible?";
+    let qvec = ai.embed_one(q).await.expect("embed query");
+    let hits = db
+        .search_chunks(&nb_id, qvec, q, 4, None)
+        .await
+        .expect("search");
+    let note_hit = hits
+        .iter()
+        .find(|c| c.note_id == note.id)
+        .expect("note passage retrieved");
+    assert!(note_hit.source_id.is_empty(), "note hit has no source id");
+    assert_eq!(
+        note_hit.source_title, note.title,
+        "note hit carries note title"
+    );
+
+    // Narrowing to explicit sources excludes notes.
+    let qvec = ai.embed_one(q).await.expect("embed query");
+    let narrowed = db
+        .search_chunks(&nb_id, qvec, q, 4, Some(&["src-1".to_string()]))
+        .await
+        .expect("scoped search");
+    assert!(
+        narrowed.iter().all(|c| c.note_id.is_empty()),
+        "source-scoped search returns no note passages"
+    );
+
+    // Deleting the note drops its chunks from the index.
+    db.delete_note(&note.id).await.expect("delete note");
+    assert!(
+        db.indexed_note_ids().await.expect("indexed ids").is_empty(),
+        "note chunks removed with the note"
+    );
+
+    eprintln!("note retrieval round trip OK");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn okf_helpers() {
     use crate::commands::{okf_description, okf_slug};

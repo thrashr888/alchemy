@@ -148,8 +148,15 @@ pub struct Chunk {
 #[serde(rename_all = "camelCase")]
 pub struct Citation {
     pub chunk_id: String,
+    /// Empty when the passage came from a note (see `note_id`).
     pub source_id: String,
+    /// Title of the source — or of the note for note passages.
     pub source_title: String,
+    /// Non-empty when the passage came from a note rather than a source:
+    /// the note's id. Notes are indexed alongside source chunks so agents
+    /// and chat can recall prior conclusions (docs/RFC-note-curator.md).
+    #[serde(default)]
+    pub note_id: String,
     pub ordinal: i32,
     pub snippet: String,
     pub distance: f32,

@@ -26,6 +26,13 @@ const T_CHUNKS: &str = "chunks";
 const T_MESSAGES: &str = "messages";
 const T_NOTES: &str = "notes";
 const T_REPORTS: &str = "report_schedules";
+/// Note chunks share the chunks table with source chunks, stored under
+/// `source_id = "note:<note_id>"` — real source ids are UUIDs, so the prefix
+/// can't collide, and every existing notebook/source filter and delete
+/// predicate keeps working on old databases with no schema migration. The
+/// prefix is decoded back into `Citation::note_id` at the read boundary;
+/// nothing outside this module sees it.
+pub const NOTE_CHUNK_PREFIX: &str = "note:";
 pub const NOTEBOOK_PALETTE: [&str; 8] = [
     "#eb5757", "#e8a33d", "#4cb782", "#5e9bd2", "#9b87f5", "#e274b6", "#4fc1c9", "#98a562",
 ];
@@ -625,10 +632,14 @@ impl Db {
         if !self.table_exists(T_CHUNKS).await? {
             return Ok(vec![]);
         }
-        // Map source_id -> title for citation labels.
+        // Map stored owner id -> title for citation labels (notes keyed by
+        // their prefixed form, matching what the chunk rows store).
         let mut titles: HashMap<String, String> = HashMap::new();
         for s in self.list_sources(notebook_id).await? {
             titles.insert(s.id, s.title);
+        }
+        for n in self.list_notes(notebook_id).await? {
+            titles.insert(format!("{NOTE_CHUNK_PREFIX}{}", n.id), n.title);
         }
 
         let mut filter = format!("notebook_id = '{}'", esc(notebook_id));
@@ -832,12 +843,15 @@ impl Db {
         if !self.table_exists(T_CHUNKS).await? {
             return Ok(vec![]);
         }
-        let titles: HashMap<String, String> = self
+        let mut titles: HashMap<String, String> = self
             .all_source_meta()
             .await?
             .into_iter()
             .map(|(id, _nb, title)| (id, title))
             .collect();
+        for n in self.recent_notes(usize::MAX).await? {
+            titles.insert(format!("{NOTE_CHUNK_PREFIX}{}", n.id), n.title);
+        }
         let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
         let pool = k.max(1) * 3;
 
@@ -913,12 +927,14 @@ impl Db {
             let ord = i32_col(b, "ordinal")?;
             let text = str_col(b, "text")?;
             for i in 0..b.num_rows() {
+                let (source_id, note_id) = split_owner(sid.value(i));
                 out.push((
                     nb.value(i).to_string(),
                     Citation {
                         chunk_id: id.value(i).to_string(),
-                        source_id: sid.value(i).to_string(),
+                        source_id,
                         source_title: String::new(),
+                        note_id,
                         ordinal: ord.value(i),
                         snippet: text.value(i).to_string(),
                         distance: 0.0,
@@ -976,8 +992,42 @@ impl Db {
     }
 
     pub async fn delete_note(&self, id: &str) -> Result<()> {
+        self.delete_note_chunks(id).await?;
         self.delete_where(T_NOTES, &format!("id = '{}'", esc(id)))
             .await
+    }
+
+    /// Drop a note's chunks from the retrieval index (no-op if unindexed).
+    pub async fn delete_note_chunks(&self, note_id: &str) -> Result<()> {
+        let pred = format!("source_id = '{NOTE_CHUNK_PREFIX}{}'", esc(note_id));
+        self.delete_where(T_CHUNKS, &pred).await
+    }
+
+    /// Note ids that currently have chunks in the retrieval index. Used by
+    /// the startup backfill to find notes written before notes were indexed.
+    pub async fn indexed_note_ids(&self) -> Result<std::collections::HashSet<String>> {
+        let mut out = std::collections::HashSet::new();
+        if !self.table_exists(T_CHUNKS).await? {
+            return Ok(out);
+        }
+        let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
+        let batches = tbl
+            .query()
+            .only_if(format!("source_id LIKE '{NOTE_CHUNK_PREFIX}%'"))
+            .select(lancedb::query::Select::columns(&["source_id"]))
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        for b in &batches {
+            let sid = str_col(b, "source_id")?;
+            for i in 0..b.num_rows() {
+                if let Some(id) = sid.value(i).strip_prefix(NOTE_CHUNK_PREFIX) {
+                    out.insert(id.to_string());
+                }
+            }
+        }
+        Ok(out)
     }
 
     // ---- Report schedules -------------------------------------------------
@@ -1122,6 +1172,15 @@ fn nb_citations_from_batches(
     Ok(out)
 }
 
+/// Decode a stored chunk owner id into (source_id, note_id) — exactly one
+/// is non-empty.
+fn split_owner(stored: &str) -> (String, String) {
+    match stored.strip_prefix(NOTE_CHUNK_PREFIX) {
+        Some(note_id) => (String::new(), note_id.to_string()),
+        None => (stored.to_string(), String::new()),
+    }
+}
+
 fn citations_from_batches(
     batches: &[RecordBatch],
     titles: &HashMap<String, String>,
@@ -1138,11 +1197,13 @@ fn citations_from_batches(
                 .cloned()
         });
         for i in 0..b.num_rows() {
-            let source_id = sid.value(i).to_string();
+            let stored = sid.value(i).to_string();
+            let (source_id, note_id) = split_owner(&stored);
             citations.push(Citation {
                 chunk_id: id.value(i).to_string(),
-                source_title: titles.get(&source_id).cloned().unwrap_or_default(),
+                source_title: titles.get(&stored).cloned().unwrap_or_default(),
                 source_id,
+                note_id,
                 ordinal: ord.value(i),
                 snippet: text.value(i).to_string(),
                 distance: dist.as_ref().map(|d| d.value(i)).unwrap_or(0.0),
