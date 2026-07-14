@@ -7,6 +7,8 @@ import { Markdown } from "./Markdown";
 import { cn, chatReadingClass, cardButtonProps, isWebUrl } from "@/lib/utils";
 import { DitherBackground } from "./DitherBackground";
 import { AlchemySymbol } from "./AlchemyHero";
+import { DEFAULT_VERBS, THEMES, resolveThemeId } from "@/lib/themes";
+import { generatedEpigraph } from "@/lib/epigraph";
 import type { Citation, Message } from "@/lib/types";
 import {
   ArrowDown,
@@ -576,15 +578,24 @@ function StepTrail({ steps, done }: { steps: string[]; done: boolean }) {
 }
 
 function ThinkingDots() {
+  const theme = useStore((s) => s.theme);
+  // One verb per thinking session, from the theme's set (see Theme.verbs).
+  const [verb] = useState(() => {
+    const verbs = THEMES[resolveThemeId(theme)]?.verbs ?? DEFAULT_VERBS;
+    return verbs[Math.floor(Math.random() * verbs.length)];
+  });
   return (
-    <div className="flex items-center gap-1 py-1">
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          className="h-1.5 w-1.5 rounded-full bg-muted-foreground"
-          style={{ animation: "pulse-dot 1.2s ease-in-out infinite", animationDelay: `${i * 0.18}s` }}
-        />
-      ))}
+    <div className="flex items-center gap-2 py-1">
+      <span className="text-[12px] text-muted-foreground">{verb}</span>
+      <div className="flex items-center gap-1">
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className="h-1.5 w-1.5 rounded-full bg-muted-foreground"
+            style={{ animation: "pulse-dot 1.2s ease-in-out infinite", animationDelay: `${i * 0.18}s` }}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -603,6 +614,7 @@ function ChatHero({
   hasSources: boolean;
   compact: boolean;
 }) {
+  const theme = useStore((s) => s.theme);
   return (
     <div
       className={cn(
@@ -615,6 +627,7 @@ function ChatHero({
           "text-citation/60 transition-all duration-700",
           compact ? "h-9 w-9" : "h-16 w-16",
         )}
+        preferred={THEMES[resolveThemeId(theme)]?.sigil}
       />
       {!compact && (
         <>
@@ -625,7 +638,7 @@ function ChatHero({
                 ? "Add sources to start a grounded chat"
                 : "Ask anything about your sources"}
           </div>
-          <RotatingQuote />
+          <RotatingQuote theme={theme} />
         </>
       )}
     </div>
@@ -649,10 +662,13 @@ const QUOTES = [
 /** Chosen once per page load — module scope, so remounts don't reshuffle. */
 const QUOTE = QUOTES[Math.floor(Math.random() * QUOTES.length)];
 
-function RotatingQuote() {
+function RotatingQuote({ theme }: { theme: string }) {
+  // A generated daily epigraph (mood-matched to the theme) takes the slot;
+  // the curated product quotes remain the fallback.
+  const gen = generatedEpigraph(theme);
   return (
     <p className="max-w-[360px] animate-[quote-fade_0.8s_ease] text-[13px] text-muted-foreground">
-      {QUOTE}
+      {gen ? `“${gen}”` : QUOTE}
     </p>
   );
 }

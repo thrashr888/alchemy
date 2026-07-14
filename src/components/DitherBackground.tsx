@@ -1,10 +1,15 @@
 import { useEffect, useRef } from "react";
+import { THEMES, resolveThemeId, type ShaderVariant } from "@/lib/themes";
 
 /**
- * Animated WebGL1 background: drifting "aetheric" mist + a central glow,
- * quantized with 4x4 Bayer ordered dithering and tinted to the current theme.
+ * Animated WebGL1 background: a theme-tinted luminance field quantized with
+ * 4x4 Bayer ordered dithering. The field varies per theme (Theme.shader) —
+ * aetheric mist by default, code rain, retro horizon, or paper grain — but
+ * every variant keeps the dither, the central glow, and the transmutation
+ * ring so it always reads as the same design element.
  * WebGL1 (with an array-free Bayer) so it runs everywhere, incl. WKWebView.
  */
+const SHADER_MODE: Record<ShaderVariant, number> = { mist: 0, rain: 1, horizon: 2, grain: 3 };
 export function DitherBackground({
   themeKey,
   className,
@@ -47,7 +52,11 @@ export function DitherBackground({
     const uTint = gl.getUniformLocation(program, "u_tint");
     const uBg = gl.getUniformLocation(program, "u_bg");
     const uGain = gl.getUniformLocation(program, "u_gain");
+    const uMode = gl.getUniformLocation(program, "u_mode");
     gl.uniform1f(uGain, intensity);
+
+    const variant: ShaderVariant = THEMES[resolveThemeId(themeKey)]?.shader ?? "mist";
+    gl.uniform1f(uMode, SHADER_MODE[variant]);
 
     const readVar = (name: string, fallback: [number, number, number]) =>
       hexToRgb(getComputedStyle(document.documentElement).getPropertyValue(name).trim()) ?? fallback;
@@ -65,24 +74,33 @@ export function DitherBackground({
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.uniform2f(uRes, canvas.width, canvas.height);
     };
-    const ro = new ResizeObserver(resize);
-    ro.observe(canvas);
     resize();
 
     let raf = 0;
     let last = 0;
     const startT = performance.now();
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // Grain is a texture, not weather — it draws once, like reduced motion.
+    const isStatic = reducedMotion || variant === "grain";
     const render = (now: number) => {
-      // Reduced motion: draw a single static frame instead of animating.
-      if (!reducedMotion) raf = requestAnimationFrame(render);
+      if (!isStatic) raf = requestAnimationFrame(render);
       if (now - last < 33) return;
       last = now;
       resize();
-      gl.uniform1f(uTime, reducedMotion ? 0 : (now - startT) / 1000);
+      gl.uniform1f(uTime, isStatic ? 0 : (now - startT) / 1000);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     };
     raf = requestAnimationFrame(render);
+
+    const ro = new ResizeObserver(() => {
+      resize();
+      // Static variants get no animation frames, so redraw on resize here.
+      if (isStatic) {
+        gl.uniform1f(uTime, 0);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      }
+    });
+    ro.observe(canvas);
 
     return () => {
       cancelAnimationFrame(raf);
@@ -120,6 +138,7 @@ uniform float u_time;
 uniform vec3 u_tint;
 uniform vec3 u_bg;
 uniform float u_gain;
+uniform float u_mode;
 
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
 float vnoise(vec2 p){
@@ -142,13 +161,61 @@ float bayer4(vec2 p){
   float hi = mix(mix(0.0, 2.0, b.x), mix(3.0, 1.0, b.x), b.y);
   return (lo + hi) / 16.0;
 }
-void main(){
-  vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / u_res.y;
+
+// mode 0 — aetheric mist (the default Alchemy field).
+float mistField(vec2 uv, float glow){
   float t = u_time * 0.03;
   float m = fbm(uv*2.4 + vec2(t, -t*0.6)) + 0.35*fbm(uv*5.0 - vec2(t*0.5, t));
+  return clamp(glow*0.6 + m*0.55 - 0.16, 0.0, 1.0);
+}
+// mode 1 — code rain: quantized columns of falling trails with bright heads.
+float rainField(vec2 uv, float glow){
+  // Extra slow on purpose: the backdrop should read as weather, not motion.
+  float col = floor(uv.x * 44.0);
+  float speed = 0.02 + 0.04 * hash(vec2(col, 7.0));
+  float y = uv.y * 2.2 + mod(u_time, 2048.0) * speed;
+  // Value noise clusters near 0.5, so keep thresholds tight around it.
+  float n = vnoise(vec2(col * 0.61 + 13.7, y));
+  float trail = smoothstep(0.34, 0.72, n);
+  float head = smoothstep(0.62, 0.80, n);
+  return clamp((trail*0.55 + head*0.75) * (0.45 + glow*0.55), 0.0, 1.0);
+}
+// mode 2 — retro horizon: striped sun over a perspective grid rolling toward
+// the viewer, with a whisper of mist so it still reads as Alchemy.
+float horizonField(vec2 uv, float glow){
+  float t = mod(u_time, 2048.0);
+  vec2 sp = uv - vec2(0.0, 0.12);
+  float sun = smoothstep(0.33, 0.32, length(sp));
+  float stripes = step(0.42, fract(sp.y * 16.0));
+  sun *= mix(1.0, stripes, smoothstep(0.02, -0.12, sp.y));
+  float horizon = -0.16;
+  float below = step(uv.y, horizon);
+  float py = horizon - uv.y + 0.001;
+  // Verticals converge on the horizon at constant screen width...
+  float gx = uv.x / (py + 0.05);
+  float lv = smoothstep(0.10, 0.0, abs(fract(gx*0.7 + 0.5) - 0.5) * (py + 0.05) * 30.0);
+  // ...while horizontals thin with distance (perspective-correct rows).
+  float rz = 0.35 / (py + 0.05) - t * 0.12;
+  float lh = smoothstep(0.12, 0.0, abs(fract(rz) - 0.5));
+  float grid = max(lv, lh) * below * smoothstep(0.0, 0.12, py);
+  float m = 0.18 * fbm(uv*3.0 + vec2(t*0.03, 0.0));
+  return clamp(max(sun * (0.5 + 0.5*glow), grid*0.55) + m - 0.05, 0.0, 1.0);
+}
+// mode 3 — paper grain: static anisotropic fibers + fine speckle.
+float grainField(vec2 uv, float glow){
+  float m = fbm(vec2(uv.x*12.0, uv.y*5.0)) + 0.3*vnoise(uv*40.0);
+  return clamp(glow*0.5 + m*0.42 - 0.20, 0.0, 1.0);
+}
+
+void main(){
+  vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / u_res.y;
   float r = length(uv);
   float glow = smoothstep(1.15, 0.05, r);
-  float L = clamp(glow*0.6 + m*0.55 - 0.16, 0.0, 1.0);
+  float L;
+  if (u_mode < 0.5)      L = mistField(uv, glow);
+  else if (u_mode < 1.5) L = rainField(uv, glow);
+  else if (u_mode < 2.5) L = horizonField(uv, glow);
+  else                   L = grainField(uv, glow);
   float ring = smoothstep(0.006, 0.0, abs(r - 0.36)) * glow * 0.4;
   L = max(L, ring);
   float d = bayer4(gl_FragCoord.xy) - 0.5;

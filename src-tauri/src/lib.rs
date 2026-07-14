@@ -179,6 +179,7 @@ pub fn run() {
             commands::list_gateway_models,
             commands::get_model_stats,
             commands::suggest_followups,
+            commands::generate_epigraph,
             commands::generate_notebook_summary,
             commands::list_report_schedules,
             commands::list_all_report_schedules,
