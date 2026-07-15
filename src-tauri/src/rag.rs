@@ -273,27 +273,34 @@ pub fn build_consolidate_messages(
     ]
 }
 
-/// Parse the post-pass reply: None = skip (explicit SKIP or anything
-/// malformed — conservatism is the point), Some((title, body)) otherwise.
+/// Parse the post-pass reply: None = skip (explicit SKIP/KEEP or anything
+/// without a TITLE line — conservatism is the point), Some((title, body))
+/// otherwise. Tolerant of how models actually write: markdown decoration
+/// around the markers ("**TITLE:**", "Title:") and reasoning preamble
+/// before the record.
 pub fn parse_auto_evidence(raw: &str) -> Option<(String, String)> {
     let text = raw.trim();
-    if text.is_empty() || text.to_uppercase().starts_with("SKIP") {
+    // The first non-empty line decides the decline path, decoration and
+    // casing aside ("SKIP", "**SKIP**", "Decision: KEEP — distinct claims").
+    let first = text.lines().find(|l| !l.trim().is_empty())?;
+    let first_up = first.to_uppercase();
+    if !first_up.contains("TITLE:") && (first_up.contains("SKIP") || first_up.contains("KEEP")) {
         return None;
     }
+    let deco = |c: char| c == '*' || c == '_' || c == '#' || c == '>';
     let mut lines = text.lines();
     let title = loop {
-        let line = lines.next()?;
-        if let Some(rest) = line.trim().strip_prefix("TITLE:") {
-            let t = rest.trim().trim_matches('*').trim();
+        let line = lines.next()?; // no TITLE anywhere = skip
+        let clean = line.trim().trim_start_matches(deco).trim_start();
+        if clean
+            .get(..6)
+            .is_some_and(|p| p.eq_ignore_ascii_case("title:"))
+        {
+            let t = clean[6..].trim().trim_matches(deco).trim();
             if t.is_empty() {
                 return None;
             }
             break t.to_string();
-        }
-        // Tolerate a stray preamble line or two, but not prose: a real
-        // record leads with TITLE almost immediately.
-        if !line.trim().is_empty() && line.len() > 120 {
-            return None;
         }
     };
     let body = lines.collect::<Vec<_>>().join("\n").trim().to_string();

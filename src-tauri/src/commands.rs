@@ -1326,6 +1326,29 @@ async fn backfill_note_index(state: &AppState) {
     }
 }
 
+/// One-shot per launch: collapse each schedule's timestamped report notes
+/// ("{name} — 2026-07-13 09:00", one per run, from before reports became
+/// living notes) into a single stable-titled note. Newest content wins.
+async fn collapse_old_report_piles(state: &AppState) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static DONE: AtomicBool = AtomicBool::new(false);
+    if DONE.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let schedules = match state.db.all_report_schedules().await {
+        Ok(s) => s,
+        Err(err) => {
+            eprintln!("report collapse: listing schedules failed: {err:#}");
+            return;
+        }
+    };
+    for s in schedules {
+        if let Err(err) = collapse_report_notes(state, &s.notebook_id, &s.name).await {
+            eprintln!("report collapse for \"{}\" failed: {err:#}", s.name);
+        }
+    }
+}
+
 // ---- Note curator (docs/RFC-note-curator.md phase 4) -----------------------
 
 /// Staleness thresholds in APP-OPEN days — days the app actually ran, not
@@ -1677,6 +1700,9 @@ pub async fn resync_sources(
     // One-shot per app run: index notes written before notes joined the
     // retrieval index (or whose indexing failed at write time).
     backfill_note_index(&state).await;
+    // One-shot per app run: collapse timestamped report piles from before
+    // reports became living notes (one note per schedule, newest wins).
+    collapse_old_report_piles(&state).await;
     // Curator: track app-open days; runs its pass at most weekly.
     note_curator_tick(&app, &state).await;
     // A manual folder add/refresh is already scanning — skip this tick rather
@@ -3118,7 +3144,21 @@ async fn auto_evidence(
         ai.chat(&messages).await?.text
     };
     let Some((title, body)) = rag::parse_auto_evidence(&draft) else {
-        return Ok(()); // SKIP — the common case
+        // SKIP is the common, correct case — but say so in the terminal so
+        // "nothing happened" is diagnosable from the dev console.
+        eprintln!(
+            "auto evidence: model declined ({} chars): {}",
+            draft.len(),
+            draft
+                .trim()
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(80)
+                .collect::<String>()
+        );
+        return Ok(());
     };
 
     // Same claim already on record? Merge into it instead of a sibling
@@ -3144,6 +3184,7 @@ async fn auto_evidence(
             ai.chat(&messages).await?.text
         };
         let Some((title, body)) = rag::parse_auto_evidence(&merged) else {
+            eprintln!("auto evidence: merge declined for \"{}\"", prior.title);
             return Ok(());
         };
         state
@@ -3177,6 +3218,7 @@ async fn auto_evidence(
             updated_at: ts,
         };
         add_note_indexed(&state, &note).await?;
+        eprintln!("auto evidence: created \"{}\"", note.title);
         note
     };
 
@@ -4000,7 +4042,47 @@ async fn refresh_notebook_urls(app: &AppHandle, state: &AppState, notebook_id: &
     }
 }
 
-/// Run a report now: refresh URL sources, generate, save a timestamped note.
+/// A schedule's report notes: the stable-titled living note plus any
+/// timestamped ones from before reports collapsed to a single note
+/// ("{name} — 2026-07-13 09:00").
+fn report_notes_for<'a>(notes: &'a [Note], name: &str) -> Vec<&'a Note> {
+    let prefix = format!("{name} — ");
+    notes
+        .iter()
+        .filter(|n| n.kind == "report" && (n.title == name || n.title.starts_with(&prefix)))
+        .collect()
+}
+
+/// Collapse a schedule's report notes into ONE living note (newest wins,
+/// retitled to the bare schedule name; older runs deleted — reports are
+/// regenerated artifacts, not evidence). Returns the survivor, if any.
+async fn collapse_report_notes(
+    state: &AppState,
+    notebook_id: &str,
+    name: &str,
+) -> anyhow::Result<Option<Note>> {
+    let notes = state.db.list_notes(notebook_id).await?;
+    let mut matches = report_notes_for(&notes, name);
+    matches.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
+    let mut iter = matches.into_iter();
+    let Some(survivor) = iter.next() else {
+        return Ok(None);
+    };
+    for stale in iter {
+        state.db.delete_note(&stale.id).await?;
+    }
+    if survivor.title != name {
+        state
+            .db
+            .update_note(&survivor.id, name, &survivor.content, survivor.updated_at)
+            .await?;
+    }
+    state.db.get_note(&survivor.id).await
+}
+
+/// Run a report now: refresh URL sources, generate, and update the
+/// schedule's single living note (run history collapses — the note IS the
+/// report, always current, with the run stamp in the body).
 #[tauri::command]
 pub async fn run_report(
     app: AppHandle,
@@ -4025,19 +4107,39 @@ pub async fn run_report(
 
     let ts = now();
     let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
-    let note = Note {
-        id: new_id(),
-        notebook_id: schedule.notebook_id.clone(),
-        title: format!("{} — {stamp}", schedule.name),
-        content,
-        kind: "report".into(),
-        prompt: schedule.prompt.clone(),
-        origin: String::new(),
-        status: String::new(),
-        created_at: ts,
-        updated_at: ts,
+    let content = format!("_Run {stamp}_\n\n{content}");
+    let existing = e(collapse_report_notes(&state, &schedule.notebook_id, &schedule.name).await)?;
+    let note = match existing {
+        Some(prior) => {
+            e(state
+                .db
+                .update_note(&prior.id, &schedule.name, &content, ts)
+                .await)?;
+            match e(state.db.get_note(&prior.id).await)? {
+                Some(n) => {
+                    index_note(&state, &n).await;
+                    n
+                }
+                None => return Err("Report note vanished mid-update".into()),
+            }
+        }
+        None => {
+            let note = Note {
+                id: new_id(),
+                notebook_id: schedule.notebook_id.clone(),
+                title: schedule.name.clone(),
+                content,
+                kind: "report".into(),
+                prompt: schedule.prompt.clone(),
+                origin: String::new(),
+                status: String::new(),
+                created_at: ts,
+                updated_at: ts,
+            };
+            e(add_note_indexed(&state, &note).await)?;
+            note
+        }
     };
-    e(add_note_indexed(&state, &note).await)?;
     e(state.db.set_report_last_run(&schedule_id, ts).await)?;
     e(state.db.touch_notebook(&schedule.notebook_id, ts).await)?;
     let _ = app.emit("generate://done", &note);
@@ -5310,9 +5412,11 @@ mod tool_tests {
     #[test]
     fn auto_evidence_parsing_is_conservative() {
         use crate::rag::parse_auto_evidence;
-        // Explicit skip, any casing, with or without trailing prose.
+        // Explicit declines, any casing/decoration, with or without prose.
         assert!(parse_auto_evidence("SKIP").is_none());
         assert!(parse_auto_evidence("  skip — just a lookup").is_none());
+        assert!(parse_auto_evidence("**SKIP**").is_none());
+        assert!(parse_auto_evidence("Decision: KEEP — distinct claims").is_none());
         // Malformed output (no TITLE line) is a skip, not a bad note.
         assert!(parse_auto_evidence("Here's a note about deductibles...").is_none());
         assert!(parse_auto_evidence("TITLE: no body follows").is_none());
@@ -5324,6 +5428,33 @@ mod tool_tests {
         .expect("parses");
         assert_eq!(title, "The hail deductible is $2,500");
         assert!(body.starts_with("**Claim:**"));
+    }
+
+    #[test]
+    fn auto_evidence_parsing_survives_model_dialects() {
+        use crate::rag::parse_auto_evidence;
+        // Markdown-bold marker — the way chat models actually write it.
+        let (title, _) = parse_auto_evidence(
+            "**TITLE:** CNT tethers fall short today\n\n**Claim:** …\n**Evidence:** … (Carbon nanotube)",
+        )
+        .expect("bold marker parses");
+        assert_eq!(title, "CNT tethers fall short today");
+        // Lowercase marker.
+        assert!(parse_auto_evidence("Title: x\n\nbody text").is_some());
+        // Reasoning preamble (long lines) before the record must not kill it.
+        let long_preamble = format!(
+            "{}\n{}\nTITLE: The claim survives preambles\n\n**Claim:** …",
+            "The user asked a cross-source question and the answer synthesized material.".repeat(3),
+            "Weighing whether this is durable enough to record as evidence.",
+        );
+        let (title, _) = parse_auto_evidence(&long_preamble).expect("preamble tolerated");
+        assert_eq!(title, "The claim survives preambles");
+        // A title containing the word KEEPS is not a decline.
+        let (title, _) =
+            parse_auto_evidence("TITLE: The 458 keeps its value better\n\nbody").expect("parses");
+        assert!(title.contains("keeps"));
+        // Multibyte first characters must not panic the slicer.
+        assert!(parse_auto_evidence("日本語のプレアンブル\nTITLE: works\n\nbody").is_some());
     }
 
     #[test]
