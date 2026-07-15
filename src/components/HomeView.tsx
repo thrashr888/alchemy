@@ -340,6 +340,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 {notebooks.map((nb) => (
                   <div
                     key={nb.id}
+                    // Card content is pointer-events-none, so the hover
+                    // tooltip for the truncated title lives on the card.
+                    title={nb.title}
                     className="group relative flex min-h-[132px] cursor-pointer flex-col rounded-lg border border-border bg-surface p-4 transition-colors hover:border-border-strong hover:bg-surface-2"
                   >
                     <CardAction

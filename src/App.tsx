@@ -35,16 +35,18 @@ function App() {
   }, [init]);
 
   // Cmd/Ctrl+, opens Settings (standard desktop convention); Cmd/Ctrl+K
-  // toggles the command menu — from anywhere, including inputs, but not on
-  // top of an open dialog (Settings, confirms).
+  // toggles the command menu — from anywhere, including inputs.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return;
-      if (document.querySelector('[role="dialog"]')) return;
       if (e.key === ",") {
+        // Don't stack Settings on top of an open dialog (confirms, palette).
+        if (document.querySelector('[role="dialog"]')) return;
         e.preventDefault();
         openSettings();
       } else if (e.key === "k") {
+        // togglePalette handles open dialogs itself: it closes an open
+        // palette and dismisses other dialogs before opening.
         e.preventDefault();
         useStore.getState().togglePalette();
       }
