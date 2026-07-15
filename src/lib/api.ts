@@ -3,6 +3,7 @@ import { Cause, Duration, Effect, Schedule } from "effect";
 import { describe, IpcError, TimeoutError, type AppError } from "./errors";
 import type {
   AiConfig,
+  BuildInfo,
   ChatConfig,
   ConnectorStatus,
   CorpusStats,
@@ -243,6 +244,8 @@ export const api = {
   deleteNote: (id: string) => run(cmd<void>("delete_note", { id })),
   /** Fire-and-forget read counter for the note curator (RFC-note-curator). */
   noteOpened: (id: string) => run(cmd<void>("note_opened", { id })),
+  /** Version, commit, and dev/release profile for Settings → About. */
+  buildInfo: () => run(cmd<BuildInfo>("build_info", {})),
   convertNoteToSource: (noteId: string) =>
     run(ai<Source>("convert_note_to_source", { noteId })),
   generateArtifact: (

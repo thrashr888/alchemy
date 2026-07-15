@@ -42,9 +42,22 @@ pub struct McpStatus {
     pub url: String,
 }
 
+/// Dev builds bind one port above the configured one: a dev instance and
+/// the installed app share config + data dir, so without the offset their
+/// MCP servers collide on the same port (first one wins, the other dies
+/// with a bind error at launch).
+fn effective_port(configured: u16) -> u16 {
+    if cfg!(debug_assertions) {
+        configured.saturating_add(1)
+    } else {
+        configured
+    }
+}
+
 /// Start the server if the config wants it running (app launch + settings
 /// save). Stops first when the port changed or it was disabled.
 pub async fn apply_config(app: &AppHandle, enabled: bool, port: u16) {
+    let port = effective_port(port);
     let mcp = app.state::<McpState>();
     {
         let mut running = mcp.running.lock().unwrap();
