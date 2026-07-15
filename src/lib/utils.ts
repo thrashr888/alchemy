@@ -1,7 +1,7 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import type { KeyboardEvent } from "react";
-import type { AiConfig, ModelHealth, ReadingPrefs } from "./types";
+import type { AiConfig, ReadingPrefs } from "./types";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -84,21 +84,6 @@ export function chatReadingClass(cfg: ReadingPrefs): string {
 /** Human label for the active chat provider. */
 export function providerLabel(config: AiConfig | null): string {
   return config?.provider === "openai" ? "Gateway" : "Ollama";
-}
-
-/**
- * Connection status for the active provider — so UI never reports "Ollama
- * offline" to a gateway user who doesn't run Ollama. `ok` is null while unknown.
- */
-export function providerStatus(
-  config: AiConfig | null,
-  ollamaOk: boolean | null,
-  health: ModelHealth | null,
-): { label: string; ok: boolean | null } {
-  if (config?.provider === "openai") {
-    return { label: "Gateway", ok: health ? health.chat.working : null };
-  }
-  return { label: "Ollama", ok: ollamaOk };
 }
 
 export function relativeTime(ms: number): string {
