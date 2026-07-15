@@ -52,9 +52,10 @@ pub struct AiConfig {
     #[serde(default = "default_true")]
     pub tray_enabled: bool,
     /// Weekly LLM consolidation of auto-created evidence notes (the note
-    /// curator's phase-5 pass, docs/RFC-note-curator.md). Off by default:
-    /// it spends tokens and rewrites note content.
-    #[serde(default)]
+    /// curator's phase-5 pass, docs/RFC-note-curator.md). On by default —
+    /// smart defaults over opt-ins; the pass is idle-gated, capped, and
+    /// fully recoverable, so the toggle exists for cost control, not safety.
+    #[serde(default = "default_true")]
     pub curator_consolidate: bool,
 }
 
@@ -106,7 +107,7 @@ impl Default for AiConfig {
             mcp_enabled: default_true(),
             mcp_port: default_mcp_port(),
             tray_enabled: default_true(),
-            curator_consolidate: false,
+            curator_consolidate: default_true(),
         }
     }
 }

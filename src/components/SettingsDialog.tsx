@@ -1212,8 +1212,9 @@ function GeneralTab() {
   );
 }
 
-/** Weekly LLM consolidation of auto-created evidence notes — off by default
- *  because it spends tokens and rewrites note content (RFC-note-curator §4). */
+/** Weekly LLM consolidation of auto-created evidence notes — on by default
+ *  (idle-gated, capped, recoverable); the toggle is cost control
+ *  (RFC-note-curator §4). */
 function CuratorToggle() {
   const aiConfig = useStore((s) => s.aiConfig);
   const saveAiConfig = useStore((s) => s.saveAiConfig);

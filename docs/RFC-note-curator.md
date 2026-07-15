@@ -95,8 +95,10 @@ from. Each run updates **one living "Curator report" note per affected
 notebook** (updated in place — the curator must not generate its own
 silt) listing what was staled/archived/revived and why.
 
-**Phase 2 — LLM consolidation, off by default.** Settings → General →
-"Consolidate auto notes weekly". Candidate pairs come from title-embedding
+**Phase 2 — LLM consolidation, on by default.** Settings → General →
+"Consolidate auto notes weekly" (the toggle is cost control, not a safety
+valve — the pass is idle-gated, capped, and fully recoverable, so the
+smart behavior is the default). Candidate pairs come from title-embedding
 cosine similarity (≥0.75) among a notebook's active auto evidence notes;
 the chat model judges each pair with KEEP as the instructed default and
 writes the merged record when they state the same claim. The older note
@@ -129,7 +131,7 @@ All five phases shipped 2026-07-14:
 3. Chat post-pass auto-creating/updating evidence notes.
 4. Curator deterministic pass (stale/archive/revive) + living report note.
 5. Curator LLM consolidation behind Settings → "Consolidate auto notes
-   weekly", default off.
+   weekly", default on.
 
 ## Open questions
 
