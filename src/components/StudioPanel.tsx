@@ -27,6 +27,7 @@ import type { Note } from "@/lib/types";
 import {
   KIND_LABEL,
   studioArtifacts,
+  type Artifact,
 } from "./studioArtifacts";
 import {
   FileText,
@@ -41,6 +42,36 @@ import {
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
+
+/** Generator families keep their established color language even when the
+ * long tail is collapsed behind More. The disclosure tile stays neutral. */
+type Tint = { tile: string; icon: string };
+const TINT_BY_FAMILY: Record<Artifact["family"], Tint> = {
+  generate: {
+    tile:
+      "border-[#5e9bd2]/20 bg-[#5e9bd2]/10 hover:border-[#5e9bd2]/40 hover:bg-[#5e9bd2]/20",
+    icon: "text-[#5e9bd2]",
+  },
+  learning: {
+    tile:
+      "border-[#9b87f5]/20 bg-[#9b87f5]/10 hover:border-[#9b87f5]/40 hover:bg-[#9b87f5]/20",
+    icon: "text-[#9b87f5]",
+  },
+  documents: {
+    tile:
+      "border-[#4cb782]/20 bg-[#4cb782]/10 hover:border-[#4cb782]/40 hover:bg-[#4cb782]/20",
+    icon: "text-[#4cb782]",
+  },
+};
+const TINT_TEMPLATES: Tint = {
+  tile:
+    "border-[#e8a33d]/20 bg-[#e8a33d]/10 hover:border-[#e8a33d]/40 hover:bg-[#e8a33d]/20",
+  icon: "text-[#e8a33d]",
+};
+const TINT_DISCLOSURE: Tint = {
+  tile: "border-border bg-surface-2 hover:border-border-strong hover:bg-elevated",
+  icon: "text-muted-foreground",
+};
 
 /**
  * Card preview text: skip a leading markdown heading (or a first line equal to
@@ -281,6 +312,8 @@ export function StudioPanel() {
                         )
                       }
                       label={a.label}
+                      category={a.family}
+                      tint={TINT_BY_FAMILY[a.family]}
                       disabled={!hasSources || !!generatingKind}
                       onClick={() => generate(a.kind, instructions)}
                     />
@@ -296,6 +329,8 @@ export function StudioPanel() {
                       )
                     }
                     label={a.label}
+                    category={a.family}
+                    tint={TINT_BY_FAMILY[a.family]}
                     disabled={!hasSources || !!generatingKind}
                     onClick={() => generate(a.kind, instructions)}
                   />
@@ -312,6 +347,8 @@ export function StudioPanel() {
                     }
                     label={t.name}
                     title={t.description || t.name}
+                    category="template"
+                    tint={TINT_TEMPLATES}
                     disabled={!hasSources || !!generatingKind}
                     onClick={() => generateFromTemplate(t)}
                   />
@@ -331,6 +368,7 @@ export function StudioPanel() {
                         ? "Show only common generators"
                         : `Show ${moreCount} more generators and templates`
                     }
+                    tint={TINT_DISCLOSURE}
                     disabled={false}
                     onClick={() => setMoreOpen((open) => !open)}
                   />
@@ -573,12 +611,16 @@ function GenTile({
   icon,
   label,
   title,
+  category,
+  tint,
   disabled,
   onClick,
 }: {
   icon: ReactNode;
   label: string;
   title?: string;
+  category?: Artifact["family"] | "template";
+  tint: Tint;
   disabled: boolean;
   onClick: () => void;
 }) {
@@ -587,9 +629,13 @@ function GenTile({
       disabled={disabled}
       onClick={onClick}
       title={title}
-      className="flex items-center gap-2 rounded-md border border-border bg-surface-2 px-2.5 py-2 text-[12px] text-foreground/90 transition-colors hover:border-border-strong hover:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+      aria-label={category ? `${label} — ${category}` : label}
+      className={cn(
+        "flex items-center gap-2 rounded-md border px-2.5 py-2 text-[12px] text-foreground/90 transition-colors disabled:pointer-events-none disabled:opacity-40",
+        tint.tile,
+      )}
     >
-      <span className="text-muted-foreground">{icon}</span>
+      <span className={tint.icon}>{icon}</span>
       <span className="truncate">{label}</span>
     </button>
   );
