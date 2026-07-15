@@ -29,14 +29,50 @@ instead of joining (LanceDB is not relational).
 | `chunks` | id, notebook_id, source_id, ordinal, text, **vector: FixedSizeList\<Float32, dim\>** |
 | `messages` | id, notebook_id, role, content, citations (JSON), created_at |
 | `notes` | id, notebook_id, title, content, kind, created_at, updated_at |
+| `note_usage` | note_id, reads, retrieval_hits, cited, last_used_at |
+| `report_schedules` | id, notebook_id, cadence fields |
+| `routes` | id, kind, notebook_id, summary, **vector** — the semantic router index |
 
-The `chunks` table is created **lazily** on first ingest, once the embedding
-dimensionality is known from the model — so swapping embedding models with
-different dimensions doesn't require a hardcoded constant.
+The `chunks` and `routes` tables are created **lazily** on first write, once
+the embedding dimensionality is known from the model — so swapping embedding
+models with different dimensions doesn't require a hardcoded constant.
 
 Reads pull Arrow `RecordBatch`es and downcast columns; writes build a one-row
 (or batch) `RecordBatch` and `add` it. Updates/deletes use Lance predicate
 strings (`id = '...'`), with single-quote escaping for user-supplied values.
+
+**Retrieval** (see `docs/RFC-retrieval-maturity.md` for the numbers behind
+each decision):
+
+- `search_chunks` — per-notebook **hybrid search**: vector similarity (finds
+  paraphrases) and BM25 full-text (finds exact identifiers embeddings miss),
+  merged by reciprocal rank fusion with a deterministic chunk-id tie-break.
+  It delegates to `search_chunks_trace`, which returns every stage (vector
+  hits, FTS hits, fused pool, final top-k) plus warnings for degradations
+  the production path tolerates silently (e.g. FTS failure → vector-only).
+- `search_chunks_all_opts` — the corpus-wide variant behind meta-chat, with
+  `SearchOptions` diversity caps (max per source / notebook / notes) applied
+  post-fusion in score order with backfill, and an optional routing hint that
+  narrows the **vector side only** — BM25 stays corpus-wide so an exact
+  identifier always escapes a routing mistake.
+- `route_search` / `upsert_routes` — the semantic-router index used by
+  `router.rs`.
+
+### `router.rs` — semantic router
+One embedded route per source/note title. `ensure_router` diffs desired
+summaries against stored ones and re-embeds only what changed (a no-op string
+compare on the common path), so the index self-heals without hooks in every
+write path. `route_notebooks` ranks notebooks by their closest item —
+per-item routes measurably beat one-summary-per-notebook for topically
+diverse notebooks. Meta-chat routes when the corpus has >5 notebooks and
+falls back to flat search on any failure.
+
+### `trace.rs` — local retrieval traces
+One JSONL line per retrieval (query, surface, stage hit counts, warnings,
+routing/deep flags, ranked citations) appended to
+`<app-data>/traces/retrieval.jsonl`, 5 MB rotation. Strictly local; tracing
+failures never break retrieval. This is the raw data for future retrieval
+tuning.
 
 ### `ingest.rs` — extraction & chunking
 - **PDF** via `pdf-extract`, **text/markdown** via filesystem read, **URL** via
@@ -65,10 +101,17 @@ behind the same surface.
 ### `commands.rs` — IPC surface
 All `#[tauri::command]`s. Notable flow — **`send_message`**:
 1. Persist the user turn.
-2. Embed the question, vector-search chunks (k=8) scoped to the notebook.
+2. Embed the question, hybrid-search chunks (k=8, vector + BM25 + RRF) scoped
+   to the notebook, logging the search trace.
 3. Build the grounded prompt with history.
 4. Stream the answer, emitting `chat://token` events to the UI.
 5. Persist the assistant turn (with citations) and emit `chat://done`.
+
+**`ask_everything`** (meta-chat, `retrieve_everything`): route to likely
+notebooks (>5 notebooks), corpus-wide hybrid search with diversity caps,
+optional deep rerank (3× pool → one model call keeps the k that answer;
+default ON for gateway models, OFF locally), then source/note title-match
+fallbacks for "where did I save X" lookups.
 
 Errors are flattened to strings so they cross IPC cleanly.
 
@@ -111,7 +154,15 @@ compact spacing, thin scrollbars.
 ## Data flow summary
 
 ```
-import source ─► extract ─► chunk ─► embed (Ollama) ─► chunks table (vectors)
-ask question ─► embed ─► vector search (notebook-scoped) ─► top-k excerpts
-            ─► grounded prompt ─► stream answer + citations ─► persist + render
+import source ─► extract ─► chunk ─► embed ─► chunks table (vectors + FTS index)
+
+notebook chat ─► embed ─► hybrid search (vector + BM25, RRF) ─► top-k excerpts
+              ─► grounded prompt ─► stream answer + citations ─► persist + render
+              └─► trace JSONL (stages, warnings, citations)
+
+ask everything ─► embed ─► route notebooks (routes table, >5 notebooks)
+               ─► hybrid search (vector routed, BM25 corpus-wide) ─► RRF
+               ─► diversity caps (per source/notebook/notes, backfilled)
+               ─► deep? model rerank 3×pool → k ─► title fallbacks
+               ─► grounded prompt ─► streamed cited answer + trace JSONL
 ```
