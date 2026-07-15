@@ -38,6 +38,20 @@ pub const NOTEBOOK_PALETTE: [&str; 8] = [
     "#eb5757", "#e8a33d", "#4cb782", "#5e9bd2", "#9b87f5", "#e274b6", "#4fc1c9", "#98a562",
 ];
 
+/// One hybrid search with the working shown: what each stage saw and any
+/// degradation the production path hides (see `search_chunks_trace`).
+/// `fused_hits` is the full RRF-ordered pool; `final_hits` the top-k slice
+/// production callers get.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchTrace {
+    pub vector_hits: Vec<Citation>,
+    pub fts_hits: Vec<Citation>,
+    pub fused_hits: Vec<Citation>,
+    pub final_hits: Vec<Citation>,
+    pub warnings: Vec<String>,
+}
+
 pub struct Db {
     conn: Connection,
 }
@@ -644,8 +658,26 @@ impl Db {
         k: usize,
         source_ids: Option<&[String]>,
     ) -> Result<Vec<Citation>> {
+        Ok(self
+            .search_chunks_trace(notebook_id, query_vec, query_text, k, source_ids)
+            .await?
+            .final_hits)
+    }
+
+    /// `search_chunks` with the working shown: per-stage hits plus warnings
+    /// the production path deliberately swallows (an FTS failure degrades to
+    /// vector-only silently for the UI, but debugging and evals need to see
+    /// it). `final_hits` is exactly what `search_chunks` returns.
+    pub async fn search_chunks_trace(
+        &self,
+        notebook_id: &str,
+        query_vec: Vec<f32>,
+        query_text: &str,
+        k: usize,
+        source_ids: Option<&[String]>,
+    ) -> Result<SearchTrace> {
         if !self.table_exists(T_CHUNKS).await? {
-            return Ok(vec![]);
+            return Ok(SearchTrace::default());
         }
         // Map stored owner id -> title for citation labels (notes keyed by
         // their prefixed form, matching what the chunk rows store).
@@ -692,7 +724,9 @@ impl Db {
         });
 
         // BM25 side is best-effort: a database from before the FTS index
-        // existed (or an exotic query string) degrades to vector-only.
+        // existed (or an exotic query string) degrades to vector-only. The
+        // trace records why instead of hiding it.
+        let mut warnings: Vec<String> = Vec::new();
         let fts_hits = if query_text.trim().is_empty() {
             vec![]
         } else {
@@ -706,9 +740,15 @@ impl Db {
             {
                 Ok(stream) => match stream.try_collect::<Vec<_>>().await {
                     Ok(batches) => citations_from_batches(&batches, &titles)?,
-                    Err(_) => vec![],
+                    Err(err) => {
+                        warnings.push(format!("fts collect failed: {err:#}"));
+                        vec![]
+                    }
                 },
-                Err(_) => vec![],
+                Err(err) => {
+                    warnings.push(format!("fts query failed: {err:#}"));
+                    vec![]
+                }
             }
         };
 
@@ -717,9 +757,12 @@ impl Db {
         // hit at the same rank), and HashMap iteration order is randomized,
         // so break ties by chunk id to keep results stable across runs.
         let mut fused: HashMap<String, (Citation, f32)> = HashMap::new();
-        for hits in [vec_hits, fts_hits] {
-            for (rank, c) in hits.into_iter().enumerate() {
-                fused.entry(c.chunk_id.clone()).or_insert((c, 0.0)).1 += 1.0 / (60.0 + rank as f32);
+        for hits in [&vec_hits, &fts_hits] {
+            for (rank, c) in hits.iter().enumerate() {
+                fused
+                    .entry(c.chunk_id.clone())
+                    .or_insert((c.clone(), 0.0))
+                    .1 += 1.0 / (60.0 + rank as f32);
             }
         }
         let mut merged: Vec<(Citation, f32)> = fused.into_values().collect();
@@ -728,7 +771,15 @@ impl Db {
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.0.chunk_id.cmp(&b.0.chunk_id))
         });
-        Ok(merged.into_iter().take(k).map(|(c, _)| c).collect())
+        let fused_hits: Vec<Citation> = merged.into_iter().map(|(c, _)| c).collect();
+        let final_hits = fused_hits.iter().take(k).cloned().collect();
+        Ok(SearchTrace {
+            vector_hits: vec_hits,
+            fts_hits,
+            fused_hits,
+            final_hits,
+            warnings,
+        })
     }
 
     // ---- Messages --------------------------------------------------------

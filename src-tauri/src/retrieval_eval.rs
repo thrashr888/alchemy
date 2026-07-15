@@ -312,21 +312,20 @@ async fn eval_retrieval_datasets() {
                 .search_chunks(nb, qvec.clone(), "", K, None)
                 .await
                 .expect("vector search");
-            // There is no per-notebook FTS-only entry point yet (Phase 2's
-            // SearchTrace adds one); filter the corpus-wide results to this
-            // notebook so all three variants score the same population.
-            let fts: Vec<Citation> = db
-                .search_chunks_fts_all(&q.query, K)
-                .await
-                .expect("fts search")
-                .into_iter()
-                .filter(|(n, _)| n == nb)
-                .map(|(_, c)| c)
-                .collect();
-            let hybrid = db
-                .search_chunks(nb, qvec.clone(), &q.query, K, None)
+            // One traced search yields both the FTS-only leg (in-notebook,
+            // same population and pool as the other variants) and the
+            // production hybrid result.
+            let trace = db
+                .search_chunks_trace(nb, qvec.clone(), &q.query, K, None)
                 .await
                 .expect("hybrid search");
+            assert!(
+                trace.warnings.is_empty(),
+                "search degraded: {:?}",
+                trace.warnings
+            );
+            let fts: Vec<Citation> = trace.fts_hits.into_iter().take(K).collect();
+            let hybrid = trace.final_hits;
             for (vi, hits) in [vector, fts, hybrid].into_iter().enumerate() {
                 let (ranks, unmatched) = matched_ranks(&hits, &titles, &q.relevant);
                 for si in unmatched {
