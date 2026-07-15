@@ -21,6 +21,8 @@ mod tts;
 #[cfg(test)]
 mod evals;
 #[cfg(test)]
+mod retrieval_eval;
+#[cfg(test)]
 mod tests;
 
 use std::sync::Arc;

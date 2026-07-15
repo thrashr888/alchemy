@@ -170,7 +170,7 @@ const GOLDEN: &[Golden] = &[
     },
 ];
 
-async fn builtin_ai() -> Option<Ai> {
+pub(crate) async fn builtin_ai() -> Option<Ai> {
     let ai = Ai::new(
         AiConfig {
             embedder: "builtin".into(),
@@ -188,7 +188,7 @@ async fn builtin_ai() -> Option<Ai> {
 }
 
 /// Ingest the fixture corpus through the real chunk → embed → store path.
-async fn seed_corpus(ai: &Ai, db: &Db, notebook_id: &str) {
+pub(crate) async fn seed_corpus(ai: &Ai, db: &Db, notebook_id: &str) {
     for (i, (title, body)) in CORPUS.iter().enumerate() {
         let extracted = ingest::extract_pasted(title, body).expect("extract fixture");
         let chunks = ingest::chunk_text(&extracted.title, &extracted.text);
