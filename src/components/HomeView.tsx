@@ -12,7 +12,6 @@ import {
   cn,
   noteUnread,
   relativeTime,
-  providerStatus,
   cardButtonProps,
   shortcutBlocked,
 } from "@/lib/utils";
@@ -26,8 +25,6 @@ import {
   Settings,
   Trash2,
   Pencil,
-  CheckCircle2,
-  Circle,
   FileText,
   Newspaper,
   Sparkles,
@@ -49,10 +46,6 @@ const NOTEBOOK_PALETTE = [
 
 export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const notebooks = useStore((s) => s.notebooks);
-  const ollamaOk = useStore((s) => s.ollamaOk);
-  const aiConfig = useStore((s) => s.aiConfig);
-  const modelHealth = useStore((s) => s.modelHealth);
-  const provider = providerStatus(aiConfig, ollamaOk, modelHealth);
   const open = useStore((s) => s.selectNotebook);
   const create = useStore((s) => s.createNotebook);
   const rename = useStore((s) => s.renameNotebook);
@@ -191,22 +184,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           Alchemy
         </span>
         <div className="ml-auto flex items-center gap-3">
-          <div className="flex items-center gap-1.5">
-            {provider.ok === null ? (
-              <Circle className="h-2.5 w-2.5 text-subtle-foreground" />
-            ) : provider.ok ? (
-              <CheckCircle2 className="h-3.5 w-3.5 text-success" />
-            ) : (
-              <Circle className="h-2.5 w-2.5 fill-destructive text-destructive" />
-            )}
-            <span className="text-[11px] text-muted-foreground">
-              {provider.ok === null
-                ? "Checking…"
-                : provider.ok
-                  ? `${provider.label} connected`
-                  : `${provider.label} offline`}
-            </span>
-          </div>
           <DevBadge />
           <Button
             variant="ghost"
