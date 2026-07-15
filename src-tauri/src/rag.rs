@@ -235,6 +235,44 @@ pub fn build_auto_evidence_messages(
     vec![ChatTurn::system(AUTO_EVIDENCE_SYSTEM), ChatTurn::user(user)]
 }
 
+/// System prompt for curator consolidation (docs/RFC-note-curator.md phase
+/// 5): judge whether two auto evidence records state the same claim and, if
+/// so, write the single merged record. KEEP is the instructed default;
+/// `parse_auto_evidence` treats KEEP (and anything malformed) as None.
+const CONSOLIDATE_SYSTEM: &str = "You review TWO evidence records from the same research notebook \
+and decide whether they record the SAME underlying claim.\n\
+\n\
+Reply with exactly KEEP when they are distinct claims. Related topics are still distinct claims. \
+When in doubt, KEEP.\n\
+\n\
+Only when they state the same claim, reply with the single merged record:\n\
+TITLE: <the claim in one line>\n\
+\n\
+**Claim:** one sentence.\n\
+**Evidence:** every load-bearing passage from BOTH records, deduplicated, each naming its source.\n\
+**Confidence:** high / medium / low for the combined evidence, with why.\n\
+**Counter-evidence:** from either record, or \"none found\".\n\
+**Open questions:** whatever remains open after combining.\n\
+\n\
+Use ONLY material from the two records — invent nothing.";
+
+/// Build the consolidation judgment for one candidate pair.
+pub fn build_consolidate_messages(
+    a_title: &str,
+    a_content: &str,
+    b_title: &str,
+    b_content: &str,
+) -> Vec<ChatTurn> {
+    vec![
+        ChatTurn::system(CONSOLIDATE_SYSTEM),
+        ChatTurn::user(format!(
+            "Record A \"{a_title}\":\n{}\n\nRecord B \"{b_title}\":\n{}",
+            a_content.trim(),
+            b_content.trim()
+        )),
+    ]
+}
+
 /// Parse the post-pass reply: None = skip (explicit SKIP or anything
 /// malformed — conservatism is the point), Some((title, body)) otherwise.
 pub fn parse_auto_evidence(raw: &str) -> Option<(String, String)> {

@@ -95,11 +95,17 @@ from. Each run updates **one living "Curator report" note per affected
 notebook** (updated in place — the curator must not generate its own
 silt) listing what was staled/archived/revived and why.
 
-**Phase 2 — LLM consolidation, off by default.** With the setting on,
-the curator hands the notebook's auto evidence notes to the chat model
-and lets it merge overlapping records into one canonical note (claims
-accumulate evidence over time instead of accumulating siblings). This
-pass IS gated on idle — it spends tokens and rewrites content.
+**Phase 2 — LLM consolidation, off by default.** Settings → General →
+"Consolidate auto notes weekly". Candidate pairs come from title-embedding
+cosine similarity (≥0.75) among a notebook's active auto evidence notes;
+the chat model judges each pair with KEEP as the instructed default and
+writes the merged record when they state the same claim. The older note
+wins (stable id — existing citations keep resolving); the newer is
+archived, never deleted. At most 3 merges per notebook per run, so a bad
+week stays small and the next run catches the rest. This pass IS gated on
+idle (≥30 min since the last user-initiated generation) and keeps its own
+weekly stamp — a busy week defers it to the next quiet tick rather than
+skipping it. Merges appear in the same living Curator report.
 
 ## Non-goals (v1)
 
@@ -115,12 +121,15 @@ pass IS gated on idle — it spends tokens and rewrites content.
 
 ## Phasing
 
+All five phases shipped 2026-07-14:
+
 1. Notes into the retrieval index with labeled citations (+ MCP `noteId`
    in search results). Standalone value: evidence notes become findable.
 2. Telemetry columns + bump sites.
 3. Chat post-pass auto-creating/updating evidence notes.
-4. Curator phase 1 (stale/archive) + report note + settings toggle.
-5. Curator phase 2 (consolidation) behind its own setting, default off.
+4. Curator deterministic pass (stale/archive/revive) + living report note.
+5. Curator LLM consolidation behind Settings → "Consolidate auto notes
+   weekly", default off.
 
 ## Open questions
 

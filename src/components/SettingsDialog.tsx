@@ -1207,7 +1207,39 @@ function GeneralTab() {
         onEnable={playDone}
       />
       <TrayToggle />
+      <CuratorToggle />
     </div>
+  );
+}
+
+/** Weekly LLM consolidation of auto-created evidence notes — off by default
+ *  because it spends tokens and rewrites note content (RFC-note-curator §4). */
+function CuratorToggle() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  if (!aiConfig) return null;
+  return (
+    <label className="flex cursor-pointer items-start gap-2.5">
+      <input
+        type="checkbox"
+        checked={aiConfig.curatorConsolidate}
+        onChange={(e) =>
+          void saveAiConfig({ ...aiConfig, curatorConsolidate: e.target.checked })
+        }
+        className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
+      />
+      <span className="flex flex-col gap-0.5">
+        <span className="text-[13px] text-foreground">
+          Consolidate auto notes weekly
+        </span>
+        <span className="text-[11px] leading-relaxed text-subtle-foreground">
+          Once a week, while you're away, the model merges chat-created
+          evidence notes that state the same claim. The merged-away note is
+          archived, never deleted, and each notebook's Curator report lists
+          what happened. Uses your chat model.
+        </span>
+      </span>
+    </label>
   );
 }
 

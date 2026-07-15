@@ -200,6 +200,9 @@ export interface AiConfig {
   mcpPort: number;
   /** Menu bar extra (tray icon); Settings → General toggles it live. */
   trayEnabled: boolean;
+  /** Weekly LLM consolidation of auto-created evidence notes (note curator
+   *  phase 5). Off by default: spends tokens and rewrites note content. */
+  curatorConsolidate: boolean;
 }
 
 /** One passage behind a meta-chat answer: what it is and where it lives. */
