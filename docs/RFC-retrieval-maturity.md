@@ -24,6 +24,10 @@ real `db.rs` search paths. No runtime behavior change.
 
 - Runner: `src-tauri/src/retrieval_eval.rs`
   (`cargo test --lib retrieval_eval -- --nocapture`)
+- One deliberate runtime touch: RRF fusion in `db.rs` now tie-breaks equal
+  scores by chunk id. Ties are common (a vector-only and an FTS-only hit at
+  the same rank score identically) and previously ordered randomly per
+  process, which made both citations and eval floors nondeterministic.
 - Datasets: `src-tauri/evals/datasets/*.json` — queries labeled by kind
   (exact / paraphrase / section / metadata / multihop) with relevant source +
   required-substring specs.
@@ -39,6 +43,12 @@ Refactor `search_chunks` internals to return a `SearchTrace` (vector hits,
 FTS hits, fused hits, final hits, warnings — e.g. FTS silently failing today)
 while keeping the public return type unchanged. Expose via a dev command
 and/or MCP `search_debug`.
+
+This also gives the eval harness a real in-notebook FTS-only leg (today it
+filters `search_chunks_fts_all` results) and should fill `source_title` /
+note titles uniformly — `search_chunks_fts_all` currently returns note chunks
+with empty titles, which would silently zero the FTS variant on any future
+note-as-memory dataset.
 
 ## Phase 3: diversity post-processing
 

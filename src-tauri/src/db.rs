@@ -713,6 +713,9 @@ impl Db {
         };
 
         // Reciprocal rank fusion: score = Σ 1/(60 + rank) over both lists.
+        // Exact score ties are common (e.g. a vector-only and an FTS-only
+        // hit at the same rank), and HashMap iteration order is randomized,
+        // so break ties by chunk id to keep results stable across runs.
         let mut fused: HashMap<String, (Citation, f32)> = HashMap::new();
         for hits in [vec_hits, fts_hits] {
             for (rank, c) in hits.into_iter().enumerate() {
@@ -720,7 +723,11 @@ impl Db {
             }
         }
         let mut merged: Vec<(Citation, f32)> = fused.into_values().collect();
-        merged.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        merged.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.chunk_id.cmp(&b.0.chunk_id))
+        });
         Ok(merged.into_iter().take(k).map(|(c, _)| c).collect())
     }
 
@@ -903,6 +910,8 @@ impl Db {
             }
         };
 
+        // Same tie-break-by-chunk-id as search_chunks: RRF score ties are
+        // common and HashMap order is randomized.
         let mut fused: HashMap<String, ((String, Citation), f32)> = HashMap::new();
         for hits in [vec_hits, fts_hits] {
             for (rank, hit) in hits.into_iter().enumerate() {
@@ -911,7 +920,11 @@ impl Db {
             }
         }
         let mut merged: Vec<((String, Citation), f32)> = fused.into_values().collect();
-        merged.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        merged.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0 .1.chunk_id.cmp(&b.0 .1.chunk_id))
+        });
         Ok(merged.into_iter().take(k).map(|(hit, _)| hit).collect())
     }
 

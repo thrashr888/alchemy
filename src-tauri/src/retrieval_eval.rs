@@ -2,7 +2,7 @@
 //! MRR@10, MAP@10, nDCG@10) over JSON query datasets, comparing retrieval
 //! variants through the same search paths the app uses. This is Phase 1 of
 //! the retrieval maturity roadmap (docs/RFC-retrieval-maturity.md): make
-//! quality measurable before touching ranking. No runtime behavior changes.
+//! quality measurable before touching ranking.
 //!
 //! Datasets live in `src-tauri/evals/datasets/*.json`. Each query names the
 //! source(s) that answer it, optionally with a substring the winning chunk
@@ -11,7 +11,7 @@
 //!
 //! Run with:  cargo test --lib retrieval_eval -- --nocapture
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -98,11 +98,11 @@ const EXTRA_CORPUS: &[(&str, &str)] = &[
     ),
 ];
 
+/// The JSON `description` field is for humans reading the dataset file;
+/// serde ignores it.
 #[derive(Deserialize)]
 struct Dataset {
     name: String,
-    #[allow(dead_code)]
-    description: String,
     queries: Vec<EvalQuery>,
 }
 
@@ -136,10 +136,12 @@ struct Metrics {
     ndcg_at_10: f64,
 }
 
+// BTreeMaps so the JSON report serializes with stable key order — the file
+// exists to be diffed across runs.
 #[derive(Serialize)]
 struct VariantReport {
     overall: Metrics,
-    by_kind: HashMap<String, Metrics>,
+    by_kind: BTreeMap<String, Metrics>,
 }
 
 #[derive(Serialize)]
@@ -147,17 +149,13 @@ struct DatasetReport {
     dataset: String,
     k: usize,
     queries: usize,
-    variants: HashMap<String, VariantReport>,
-}
-
-fn datasets_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("evals")
-        .join("datasets")
+    variants: BTreeMap<String, VariantReport>,
 }
 
 fn load_datasets() -> Vec<Dataset> {
-    let dir = datasets_dir();
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("evals")
+        .join("datasets");
     let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -175,12 +173,18 @@ fn load_datasets() -> Vec<Dataset> {
 
 /// Ranks (1-based) at which each spec was first satisfied, in rank order,
 /// plus the indices of specs nothing satisfied. Ranks are distinct: a chunk
-/// consumes at most one spec, a spec at most one chunk.
+/// consumes at most one spec, a spec at most one chunk. Among open specs a
+/// chunk satisfies, the most specific (longest `must_contain`) wins, so a
+/// bare source spec can't consume the one chunk a constrained sibling needs.
 fn matched_ranks(
     hits: &[Citation],
     titles: &HashMap<String, String>,
     specs: &[RelevantSpec],
 ) -> (Vec<usize>, Vec<usize>) {
+    let needles: Vec<String> = specs
+        .iter()
+        .map(|s| s.must_contain.to_lowercase())
+        .collect();
     let mut open: Vec<bool> = vec![true; specs.len()];
     let mut ranks = Vec::new();
     for (idx, c) in hits.iter().enumerate() {
@@ -189,11 +193,16 @@ fn matched_ranks(
             .map(String::as_str)
             .unwrap_or(&c.source_title);
         let snippet = c.snippet.to_lowercase();
-        let found = specs.iter().enumerate().position(|(si, s)| {
-            open[si]
-                && s.source_title == title
-                && (s.must_contain.is_empty() || snippet.contains(&s.must_contain.to_lowercase()))
-        });
+        let found = specs
+            .iter()
+            .enumerate()
+            .filter(|(si, s)| {
+                open[*si]
+                    && s.source_title == title
+                    && (needles[*si].is_empty() || snippet.contains(&needles[*si]))
+            })
+            .max_by_key(|(si, _)| needles[*si].len())
+            .map(|(si, _)| si);
         if let Some(si) = found {
             open[si] = false;
             ranks.push(idx + 1);
@@ -270,59 +279,97 @@ async fn eval_retrieval_datasets() {
         .into_iter()
         .map(|s| (s.id, s.title))
         .collect();
+    let title_set: std::collections::HashSet<&str> = titles.values().map(String::as_str).collect();
 
     const VARIANTS: [&str; 3] = ["vector", "fts", "hybrid"];
     let mut reports = Vec::new();
     for ds in &datasets {
-        // (kind, metrics) per query, per variant.
-        let mut rows: HashMap<&str, Vec<(String, Metrics)>> = HashMap::new();
-        let mut misses: Vec<String> = Vec::new();
+        // Fail loudly on dataset authoring errors: an empty query list or a
+        // spec naming a source that was never seeded would otherwise score
+        // zero forever while the failure message blames retrieval.
+        assert!(!ds.queries.is_empty(), "dataset {} has no queries", ds.name);
         for q in &ds.queries {
-            let qvec = ai.embed_one(&q.query).await.expect("embed question");
-            for variant in VARIANTS {
-                let hits: Vec<Citation> = match variant {
-                    "vector" => db
-                        .search_chunks(nb, qvec.clone(), "", K, None)
-                        .await
-                        .expect("vector search"),
-                    "fts" => db
-                        .search_chunks_fts_all(&q.query, K)
-                        .await
-                        .expect("fts search")
-                        .into_iter()
-                        .map(|(_, c)| c)
-                        .collect(),
-                    _ => db
-                        .search_chunks(nb, qvec.clone(), &q.query, K, None)
-                        .await
-                        .expect("hybrid search"),
-                };
+            for s in &q.relevant {
+                assert!(
+                    title_set.contains(s.source_title.as_str()),
+                    "dataset {}: query {:?} names unknown source_title {:?}",
+                    ds.name,
+                    q.query,
+                    s.source_title
+                );
+            }
+        }
+
+        // One embedder call per dataset instead of one per query.
+        let query_texts: Vec<String> = ds.queries.iter().map(|q| q.query.clone()).collect();
+        let qvecs = ai.embed(&query_texts).await.expect("embed queries");
+
+        // (kind, metrics) per query, indexed parallel to VARIANTS.
+        let mut rows: [Vec<(String, Metrics)>; 3] = Default::default();
+        let mut misses: Vec<String> = Vec::new();
+        for (q, qvec) in ds.queries.iter().zip(&qvecs) {
+            let vector = db
+                .search_chunks(nb, qvec.clone(), "", K, None)
+                .await
+                .expect("vector search");
+            // There is no per-notebook FTS-only entry point yet (Phase 2's
+            // SearchTrace adds one); filter the corpus-wide results to this
+            // notebook so all three variants score the same population.
+            let fts: Vec<Citation> = db
+                .search_chunks_fts_all(&q.query, K)
+                .await
+                .expect("fts search")
+                .into_iter()
+                .filter(|(n, _)| n == nb)
+                .map(|(_, c)| c)
+                .collect();
+            let hybrid = db
+                .search_chunks(nb, qvec.clone(), &q.query, K, None)
+                .await
+                .expect("hybrid search");
+            for (vi, hits) in [vector, fts, hybrid].into_iter().enumerate() {
                 let (ranks, unmatched) = matched_ranks(&hits, &titles, &q.relevant);
-                if variant == "hybrid" {
-                    for si in unmatched {
-                        let s = &q.relevant[si];
-                        misses.push(format!(
-                            "[{}] {} — wanted {}{}",
-                            q.kind,
-                            q.query,
-                            s.source_title,
-                            if s.must_contain.is_empty() {
-                                String::new()
-                            } else {
-                                format!(" containing {:?}", s.must_contain)
-                            }
-                        ));
-                    }
+                for si in unmatched {
+                    let s = &q.relevant[si];
+                    misses.push(format!(
+                        "{:<7} [{}] {} — wanted {}{}",
+                        VARIANTS[vi],
+                        q.kind,
+                        q.query,
+                        s.source_title,
+                        if s.must_contain.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" containing {:?}", s.must_contain)
+                        }
+                    ));
                 }
-                rows.entry(variant)
-                    .or_default()
-                    .push((q.kind.clone(), query_metrics(&ranks, q.relevant.len())));
+                rows[vi].push((q.kind.clone(), query_metrics(&ranks, q.relevant.len())));
             }
         }
 
         let mut kinds: Vec<String> = ds.queries.iter().map(|q| q.kind.clone()).collect();
         kinds.sort();
         kinds.dedup();
+
+        // Build the report first, then print from it, so the console table
+        // and the JSON file can't drift apart.
+        let variants: BTreeMap<String, VariantReport> = VARIANTS
+            .iter()
+            .enumerate()
+            .map(|(vi, name)| {
+                (
+                    name.to_string(),
+                    VariantReport {
+                        overall: mean(&rows[vi], None),
+                        by_kind: kinds
+                            .iter()
+                            .map(|k| (k.clone(), mean(&rows[vi], Some(k))))
+                            .collect(),
+                    },
+                )
+            })
+            .collect();
 
         eprintln!(
             "\ndataset {} ({} queries), @{K}:",
@@ -333,35 +380,27 @@ async fn eval_retrieval_datasets() {
             "  {:<10} {:<11} {:>4} {:>4} {:>5} {:>5} {:>5}",
             "variant", "kind", "R@5", "R@10", "MRR", "MAP", "nDCG"
         );
-        let mut variants = HashMap::new();
-        for variant in VARIANTS {
-            let rows = &rows[variant];
-            for kind in kinds.iter().map(Some).chain([None]) {
-                let m = mean(rows, kind.map(String::as_str));
+        for name in VARIANTS {
+            let vr = &variants[name];
+            let line = |label: &str, m: &Metrics| {
                 eprintln!(
                     "  {:<10} {:<11} {:>4.2} {:>4.2} {:>5.2} {:>5.2} {:>5.2}",
-                    variant,
-                    kind.map(String::as_str).unwrap_or("overall"),
+                    name,
+                    label,
                     m.recall_at_5,
                     m.recall_at_10,
                     m.mrr_at_10,
                     m.map_at_10,
                     m.ndcg_at_10
                 );
+            };
+            for kind in &kinds {
+                line(kind, &vr.by_kind[kind]);
             }
-            variants.insert(
-                variant.to_string(),
-                VariantReport {
-                    overall: mean(rows, None),
-                    by_kind: kinds
-                        .iter()
-                        .map(|k| (k.clone(), mean(rows, Some(k))))
-                        .collect(),
-                },
-            );
+            line("overall", &vr.overall);
         }
         for m in &misses {
-            eprintln!("  MISS (hybrid @{K}): {m}");
+            eprintln!("  MISS (@{K}): {m}");
         }
         reports.push(DatasetReport {
             dataset: ds.name.clone(),
@@ -374,6 +413,8 @@ async fn eval_retrieval_datasets() {
     let report_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("target")
         .join("retrieval-eval-report.json");
+    std::fs::create_dir_all(report_path.parent().expect("report path has parent"))
+        .expect("create report dir");
     std::fs::write(
         &report_path,
         serde_json::to_string_pretty(&reports).expect("serialize report"),
@@ -383,8 +424,11 @@ async fn eval_retrieval_datasets() {
 
     // Floors, mirroring evals.rs: hybrid must never lag the vector-only
     // baseline, must nail exact identifiers, and must keep overall recall
-    // high. The built-in embedder and BM25 are deterministic for fixed
-    // inputs, so a failure is a retrieval regression, not flakiness.
+    // high. Ranked floors guard what recall can't on this small corpus: a
+    // regression that keeps relevant chunks in the top-10 but demotes them.
+    // The built-in embedder and BM25 are deterministic for fixed inputs, and
+    // RRF fusion tie-breaks on chunk id, so a failure is a retrieval
+    // regression, not flakiness.
     for r in &reports {
         let hybrid = &r.variants["hybrid"];
         let vector = &r.variants["vector"];
@@ -408,6 +452,18 @@ async fn eval_retrieval_datasets() {
             "{}: overall hybrid recall@10 {:.2} below 0.8 floor",
             r.dataset,
             hybrid.overall.recall_at_10
+        );
+        assert!(
+            hybrid.overall.mrr_at_10 >= 0.75,
+            "{}: overall hybrid MRR@10 {:.2} below 0.75 floor",
+            r.dataset,
+            hybrid.overall.mrr_at_10
+        );
+        assert!(
+            hybrid.overall.ndcg_at_10 >= 0.8,
+            "{}: overall hybrid nDCG@10 {:.2} below 0.8 floor",
+            r.dataset,
+            hybrid.overall.ndcg_at_10
         );
     }
 }
