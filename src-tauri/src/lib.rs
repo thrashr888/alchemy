@@ -166,6 +166,7 @@ pub fn run() {
             commands::probe_okf,
             commands::ask_everything,
             commands::create_note,
+            commands::build_info,
             commands::update_note,
             commands::note_opened,
             commands::delete_note,

@@ -114,6 +114,15 @@ export interface Note {
   updatedAt: number;
 }
 
+/** Which build a window belongs to (Settings → About) — dev and the
+ *  installed app share a data dir and look identical. */
+export interface BuildInfo {
+  version: string;
+  commit: string;
+  /** "dev" (tauri dev) | "release" (installed app). */
+  profile: string;
+}
+
 /** A custom Studio generator: one ~/Documents/Alchemy/templates/*.md file. */
 export interface Template {
   /** Filename stem, e.g. "swot-analysis". */

@@ -3046,6 +3046,13 @@ pub async fn send_message_agentic(
     e(state.db.add_message(&assistant_msg).await)?;
     e(state.db.touch_notebook(&notebook_id, now()).await)?;
     let _ = app.emit("chat://done", &assistant_msg);
+    spawn_auto_evidence(
+        &app,
+        &notebook_id,
+        &content,
+        &assistant_msg.content,
+        &assistant_msg.citations,
+    );
     Ok(assistant_msg)
 }
 
@@ -3095,6 +3102,11 @@ fn spawn_auto_evidence(
         .collect();
     let distinct: HashSet<&str> = sources.iter().map(|c| c.source_id.as_str()).collect();
     if distinct.len() < 2 || answer.chars().count() < 400 {
+        eprintln!(
+            "auto evidence: gate skipped ({} distinct sources, {} chars)",
+            distinct.len(),
+            answer.chars().count()
+        );
         return;
     }
     let app = app.clone();
@@ -3872,6 +3884,31 @@ pub async fn rebuild_note(
     index_note(&state, &note).await;
     let _ = app.emit("generate://done", &note);
     Ok(note)
+}
+
+/// Which build a window belongs to — Settings → About. Dev and the
+/// installed app share a data dir and look identical; this tells them apart.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildInfo {
+    pub version: String,
+    pub commit: String,
+    /// "dev" (cargo debug/tauri dev) | "release" (installed app).
+    pub profile: String,
+}
+
+#[tauri::command]
+pub fn build_info() -> BuildInfo {
+    BuildInfo {
+        version: env!("CARGO_PKG_VERSION").into(),
+        commit: env!("ALCHEMY_GIT_SHA").into(),
+        profile: if cfg!(debug_assertions) {
+            "dev"
+        } else {
+            "release"
+        }
+        .into(),
+    }
 }
 
 #[tauri::command]

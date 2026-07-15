@@ -12,6 +12,7 @@ import { AlchemySymbol } from "./AlchemyHero";
 import { MacConnect } from "./MacConnect";
 import type {
   AiConfig,
+  BuildInfo,
   ChatConfig,
   ConnectorStatus,
   McpStatus,
@@ -847,10 +848,15 @@ function ShortcutsTab() {
 /** App identity, version, and links. */
 function AboutTab() {
   const [version, setVersion] = useState("");
+  const [build, setBuild] = useState<BuildInfo | null>(null);
   useEffect(() => {
     getVersion()
       .then(setVersion)
       .catch(() => setVersion(""));
+    api
+      .buildInfo()
+      .then(setBuild)
+      .catch(() => setBuild(null));
   }, []);
   return (
     <div className="flex flex-col items-center gap-1 py-6 text-center">
@@ -864,6 +870,17 @@ function AboutTab() {
       {version && (
         <div className="mt-2 text-[12px] text-subtle-foreground">
           Version {version}
+          {build && (
+            <>
+              {" · "}
+              <span className="font-mono">{build.commit}</span>
+              {build.profile === "dev" && (
+                <span className="ml-1.5 rounded bg-primary/15 px-1.5 py-0.5 font-medium text-citation">
+                  dev
+                </span>
+              )}
+            </>
+          )}
         </div>
       )}
       <button
