@@ -206,6 +206,11 @@ pub struct Note {
     /// "auto" notes; editing an auto note flips it to "" (user-owned).
     #[serde(default)]
     pub origin: String,
+    /// Curator state for "auto" notes: "" (active) | "stale" (unused ~30
+    /// app-open days, dimmed) | "archived" (~90, dropped from retrieval).
+    /// Usage or an edit revives; the curator never deletes.
+    #[serde(default)]
+    pub status: String,
     pub created_at: i64,
     pub updated_at: i64,
 }

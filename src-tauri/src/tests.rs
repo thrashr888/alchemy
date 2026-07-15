@@ -305,6 +305,7 @@ async fn note_retrieval_round_trip() {
         kind: "evidence".into(),
         prompt: String::new(),
         origin: String::new(),
+        status: String::new(),
         created_at: now(),
         updated_at: now(),
     };
@@ -402,6 +403,84 @@ async fn note_retrieval_round_trip() {
     );
 
     eprintln!("note retrieval round trip OK");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The curator's deterministic pass (RFC-note-curator phase 4): auto notes
+/// go stale after 30 unused APP-OPEN days, archive at 90, and any use
+/// revives them. Owned notes are never touched. Pure DB — no embedder.
+#[tokio::test]
+async fn note_curator_round_trip() {
+    use crate::commands::curate_notes;
+    use crate::models::Note;
+
+    let dir = std::env::temp_dir().join(format!("nbl-curator-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+
+    const DAY: i64 = 86_400_000;
+    let born_day: i64 = 20_000; // arbitrary epoch day number
+    let born_ms = born_day * DAY + 1;
+    let mk = |origin: &str, title: &str| Note {
+        id: uuid::Uuid::new_v4().to_string(),
+        notebook_id: "nb-1".into(),
+        title: title.into(),
+        content: "An old conclusion.".into(),
+        kind: "evidence".into(),
+        prompt: String::new(),
+        origin: origin.into(),
+        status: String::new(),
+        created_at: born_ms,
+        updated_at: born_ms,
+    };
+    let auto = mk("auto", "Auto claim");
+    let owned = mk("", "Owned claim");
+    db.add_note(&auto).await.expect("add auto");
+    db.add_note(&owned).await.expect("add owned");
+
+    let status_of = |id: String| {
+        let db = &db;
+        async move { db.get_note(&id).await.unwrap().unwrap().status }
+    };
+
+    // 31 app-open days since last use → stale (owned note untouched).
+    let open_days: Vec<i64> = (1..=31).map(|i| born_day + i).collect();
+    let actions = curate_notes(&db, &open_days).await.expect("curate");
+    assert_eq!(actions.len(), 1, "only the auto note transitions");
+    assert_eq!(actions[0].action, "stale");
+    assert_eq!(status_of(auto.id.clone()).await, "stale");
+    assert_eq!(status_of(owned.id.clone()).await, "");
+
+    // Idempotent between thresholds: a rerun does nothing.
+    assert!(curate_notes(&db, &open_days)
+        .await
+        .expect("rerun")
+        .is_empty());
+
+    // 95 open days → archived.
+    let open_days: Vec<i64> = (1..=95).map(|i| born_day + i).collect();
+    let actions = curate_notes(&db, &open_days).await.expect("curate");
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].action, "archived");
+    assert_eq!(status_of(auto.id.clone()).await, "archived");
+
+    // Fresh usage (after every open day) revives it.
+    db.bump_note_usage(
+        std::slice::from_ref(&auto.id),
+        "reads",
+        (born_day + 200) * DAY,
+    )
+    .await
+    .expect("bump");
+    let actions = curate_notes(&db, &open_days).await.expect("curate");
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].action, "revived");
+    assert_eq!(status_of(auto.id.clone()).await, "");
+    assert!(curate_notes(&db, &open_days)
+        .await
+        .expect("rerun")
+        .is_empty());
+
+    eprintln!("note curator round trip OK");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

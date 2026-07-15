@@ -1316,10 +1316,207 @@ async fn backfill_note_index(state: &AppState) {
         }
     };
     for note in notes {
-        if note.kind != "audio_overview" && !indexed.contains(&note.id) {
+        if note.kind != "audio_overview" && note.status != "archived" && !indexed.contains(&note.id)
+        {
             index_note(state, &note).await;
         }
     }
+}
+
+// ---- Note curator (docs/RFC-note-curator.md phase 4) -----------------------
+
+/// Staleness thresholds in APP-OPEN days — days the app actually ran, not
+/// wall days — so a month away from the machine doesn't archive everything.
+const CURATOR_STALE_OPEN_DAYS: usize = 30;
+const CURATOR_ARCHIVE_OPEN_DAYS: usize = 90;
+
+/// One curator state change, for the report note and the caller's reindex.
+pub struct CuratorAction {
+    pub notebook_id: String,
+    pub note_id: String,
+    pub title: String,
+    /// "stale" | "archived" | "revived"
+    pub action: &'static str,
+}
+
+fn day_of(ms: i64) -> i64 {
+    ms.div_euclid(86_400_000)
+}
+
+/// The deterministic curator pass: walk `origin: "auto"` notes, count the
+/// app-open days since each was last used, and transition status — active →
+/// stale → archived (chunks dropped from retrieval; the note itself is never
+/// deleted), with any use reviving. No model calls; pure DB so tests can
+/// drive it with a fabricated open-day history.
+pub async fn curate_notes(db: &Db, open_days: &[i64]) -> anyhow::Result<Vec<CuratorAction>> {
+    let usage: HashMap<String, i64> = db
+        .note_usage()
+        .await?
+        .into_iter()
+        .map(|u| (u.note_id, u.last_used_at))
+        .collect();
+    let mut actions = Vec::new();
+    for note in db.recent_notes(usize::MAX).await? {
+        if note.origin != "auto" {
+            continue;
+        }
+        // A note's own update counts as use, so fresh notes start at zero.
+        let last_use = usage
+            .get(&note.id)
+            .copied()
+            .unwrap_or(0)
+            .max(note.updated_at);
+        let unused = open_days.iter().filter(|d| **d > day_of(last_use)).count();
+        let action = match note.status.as_str() {
+            "" | "stale" if unused >= CURATOR_ARCHIVE_OPEN_DAYS => "archived",
+            "" if unused >= CURATOR_STALE_OPEN_DAYS => "stale",
+            "stale" | "archived" if unused == 0 => "revived",
+            _ => continue,
+        };
+        match action {
+            "archived" => {
+                db.set_note_status(&note.id, "archived").await?;
+                db.delete_note_chunks(&note.id).await?;
+            }
+            "stale" => db.set_note_status(&note.id, "stale").await?,
+            _ => db.set_note_status(&note.id, "").await?,
+        }
+        actions.push(CuratorAction {
+            notebook_id: note.notebook_id.clone(),
+            note_id: note.id.clone(),
+            title: note.title.clone(),
+            action,
+        });
+    }
+    Ok(actions)
+}
+
+/// Curator bookkeeping, one JSON file next to the config:
+/// `{"lastRunAt": ms, "openDays": [day numbers]}`.
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct CuratorState {
+    #[serde(default)]
+    last_run_at: i64,
+    #[serde(default)]
+    open_days: Vec<i64>,
+}
+
+/// Rides the minute tick: records today as an app-open day, and at most
+/// once a week runs the deterministic pass, reindexes revived notes, and
+/// updates one living "Curator report" note per affected notebook.
+async fn note_curator_tick(app: &AppHandle, state: &AppState) {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    static LAST_DAY_SEEN: AtomicI64 = AtomicI64::new(0);
+    let today = day_of(now());
+    let path = state.config_path.with_file_name("curator.json");
+    let mut cur: CuratorState = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    if LAST_DAY_SEEN.swap(today, Ordering::SeqCst) != today && !cur.open_days.contains(&today) {
+        cur.open_days.push(today);
+        // Only the archive window's worth of history matters.
+        let keep = CURATOR_ARCHIVE_OPEN_DAYS * 2;
+        if cur.open_days.len() > keep {
+            let drop = cur.open_days.len() - keep;
+            cur.open_days.drain(..drop);
+        }
+        let _ = std::fs::write(&path, serde_json::to_string(&cur).unwrap_or_default());
+    }
+
+    const WEEK_MS: i64 = 7 * 86_400_000;
+    if now() - cur.last_run_at < WEEK_MS {
+        return;
+    }
+    cur.last_run_at = now();
+    let _ = std::fs::write(&path, serde_json::to_string(&cur).unwrap_or_default());
+
+    let actions = match curate_notes(&state.db, &cur.open_days).await {
+        Ok(a) => a,
+        Err(err) => {
+            eprintln!("note curator failed: {err:#}");
+            return;
+        }
+    };
+    if actions.is_empty() {
+        return;
+    }
+
+    // Revived notes need their chunks back in the index.
+    for a in actions.iter().filter(|a| a.action == "revived") {
+        if let Ok(Some(note)) = state.db.get_note(&a.note_id).await {
+            index_note(state, &note).await;
+        }
+    }
+
+    // One living report note per affected notebook, updated in place so the
+    // curator never generates its own silt.
+    let mut by_notebook: HashMap<&str, Vec<&CuratorAction>> = HashMap::new();
+    for a in &actions {
+        by_notebook.entry(&a.notebook_id).or_default().push(a);
+    }
+    let stamp = chrono::Local::now().format("%Y-%m-%d").to_string();
+    for (notebook_id, acts) in by_notebook {
+        let mut body = format!(
+            "# Curator report\n\n_Last run {stamp}. The curator manages auto-created \
+             evidence notes only: unused for ~{CURATOR_STALE_OPEN_DAYS} app-open days → stale \
+             (dimmed), ~{CURATOR_ARCHIVE_OPEN_DAYS} → archived (out of retrieval, never \
+             deleted). Using or editing a note revives it._\n\n"
+        );
+        for a in &acts {
+            body.push_str(&format!("- **{}**: {}\n", a.action, a.title));
+        }
+        let existing = state
+            .db
+            .list_notes(notebook_id)
+            .await
+            .ok()
+            .and_then(|notes| notes.into_iter().find(|n| n.title == "Curator report"));
+        let result = match existing {
+            Some(n) => {
+                state
+                    .db
+                    .update_note(&n.id, "Curator report", &body, now())
+                    .await
+            }
+            None => {
+                let ts = now();
+                state
+                    .db
+                    .add_note(&Note {
+                        id: new_id(),
+                        notebook_id: notebook_id.to_string(),
+                        title: "Curator report".into(),
+                        content: body,
+                        kind: "note".into(),
+                        prompt: String::new(),
+                        origin: String::new(),
+                        status: String::new(),
+                        created_at: ts,
+                        updated_at: ts,
+                    })
+                    .await
+            }
+        };
+        if let Err(err) = result {
+            eprintln!("curator report for {notebook_id} failed: {err:#}");
+        }
+        #[derive(serde::Serialize, Clone)]
+        #[serde(rename_all = "camelCase")]
+        struct Changed<'a> {
+            scope: &'a str,
+            notebook_id: Option<&'a str>,
+        }
+        let _ = app.emit(
+            "mcp://changed",
+            Changed {
+                scope: "notes",
+                notebook_id: Some(notebook_id),
+            },
+        );
+    }
+    eprintln!("note curator: {} action(s)", actions.len());
 }
 
 /// Rescan every folder source and re-embed loose file sources whose on-disk
@@ -1338,6 +1535,8 @@ pub async fn resync_sources(
     // One-shot per app run: index notes written before notes joined the
     // retrieval index (or whose indexing failed at write time).
     backfill_note_index(&state).await;
+    // Curator: track app-open days; runs its pass at most weekly.
+    note_curator_tick(&app, &state).await;
     // A manual folder add/refresh is already scanning — skip this tick rather
     // than queue behind it and ingest the same files twice.
     let Ok(_guard) = state.folder_scan_lock.try_lock() else {
@@ -1523,9 +1722,12 @@ pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u
 
     drop(ai);
 
-    // Notes ride the same chunk table, so the rebuild must re-embed them too.
+    // Notes ride the same chunk table, so the rebuild must re-embed them too
+    // (archived notes stay out — the curator dropped them from retrieval).
     for note in e(state.db.recent_notes(usize::MAX).await)? {
-        index_note(&state, &note).await;
+        if note.status != "archived" {
+            index_note(&state, &note).await;
+        }
     }
 
     let _ = app.emit(
@@ -2123,6 +2325,7 @@ async fn try_tool_route(
                         kind,
                         prompt,
                         origin: String::new(),
+                        status: String::new(),
                         created_at: ts,
                         updated_at: ts,
                     };
@@ -2256,6 +2459,7 @@ async fn try_tool_route(
                 kind: "note".into(),
                 prompt: String::new(),
                 origin: String::new(),
+                status: String::new(),
                 created_at: ts,
                 updated_at: ts,
             };
@@ -2805,7 +3009,9 @@ async fn auto_evidence(
             .update_note(&prior.id, &title, &body, now())
             .await?;
         // update_note leaves origin untouched, so the record stays "auto"
-        // and claims accumulate evidence instead of siblings.
+        // and claims accumulate evidence instead of siblings. Fresh evidence
+        // revives a stale/archived record.
+        state.db.set_note_status(&prior.id, "").await?;
         match state.db.get_note(&prior.id).await? {
             Some(n) => {
                 index_note(&state, &n).await;
@@ -2824,6 +3030,7 @@ async fn auto_evidence(
             // The originating question, kept so the record can be rebuilt.
             prompt: question.to_string(),
             origin: "auto".into(),
+            status: String::new(),
             created_at: ts,
             updated_at: ts,
         };
@@ -2934,6 +3141,7 @@ pub async fn create_note(
         kind: "note".into(),
         prompt: String::new(),
         origin: String::new(),
+        status: String::new(),
         created_at: ts,
         updated_at: ts,
     };
@@ -2952,8 +3160,10 @@ pub async fn update_note(
         .db
         .update_note(&id, title.trim(), &content, now())
         .await)?;
-    // A deliberate edit takes ownership: the curator stops managing it.
+    // A deliberate edit takes ownership and revives: the curator stops
+    // managing it, and a stale/archived note comes back to life.
     e(state.db.set_note_origin(&id, "").await)?;
+    e(state.db.set_note_status(&id, "").await)?;
     if let Some(note) = e(state.db.get_note(&id).await)? {
         index_note(&state, &note).await;
     }
@@ -3421,6 +3631,7 @@ pub async fn generate_artifact(
         kind,
         prompt,
         origin: String::new(),
+        status: String::new(),
         created_at: ts,
         updated_at: ts,
     };
@@ -3469,6 +3680,7 @@ pub async fn rebuild_note(
         kind,
         prompt,
         origin: String::new(),
+        status: String::new(),
         created_at: ts,
         updated_at: ts,
     };
@@ -3678,6 +3890,7 @@ pub async fn run_report(
         kind: "report".into(),
         prompt: schedule.prompt.clone(),
         origin: String::new(),
+        status: String::new(),
         created_at: ts,
         updated_at: ts,
     };
@@ -4417,6 +4630,7 @@ async fn import_bundle(
             kind: note_kind_from_label(fm.get("type").map(String::as_str).unwrap_or("Note")),
             prompt: String::new(),
             origin: String::new(),
+            status: String::new(),
             created_at: now(),
             updated_at: now(),
         };
