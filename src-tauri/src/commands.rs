@@ -35,6 +35,8 @@ pub struct AppState {
     pub ai: tokio::sync::RwLock<Ai>,
     pub config_path: PathBuf,
     pub stats_path: PathBuf,
+    /// Local-only retrieval trace JSONL lives here (trace.rs).
+    pub trace_dir: PathBuf,
     pub model_stats: Mutex<HashMap<String, ModelStatAcc>>,
     /// Cancellation tokens for in-flight generations, one per scope ("chat",
     /// "artifact", …) so stopping a chat doesn't kill a running document.
@@ -2881,10 +2883,25 @@ pub async fn send_message(
         let ai = state.ai.read().await;
         e(ai.embed_one(&content).await)?
     };
-    let citations = e(state
+    let search = e(state
         .db
-        .search_chunks(&notebook_id, query_vec, &content, 8, source_ids.as_deref())
+        .search_chunks_trace(&notebook_id, query_vec, &content, 8, source_ids.as_deref())
         .await)?;
+    crate::trace::log(
+        &state.trace_dir,
+        serde_json::json!({
+            "ts": now(),
+            "surface": "chat",
+            "notebookId": notebook_id,
+            "query": content,
+            "vectorHits": search.vector_hits.len(),
+            "ftsHits": search.fts_hits.len(),
+            "fusedHits": search.fused_hits.len(),
+            "warnings": search.warnings,
+            "citations": crate::trace::cite_summaries(&search.final_hits),
+        }),
+    );
+    let citations = search.final_hits;
     bump_note_usage(&state.db, &citations, "retrieval_hits").await;
 
     // Full source manifest (title + url) so corpus-level questions are
@@ -4938,6 +4955,24 @@ pub(crate) async fn retrieve_everything(
             eprintln!("note usage bump (retrieval_hits) failed: {err:#}");
         }
     }
+
+    crate::trace::log(
+        &state.trace_dir,
+        serde_json::json!({
+            "ts": now(),
+            "surface": "meta",
+            "query": question,
+            "deep": deep,
+            "routedNotebooks": routed,
+            "citations": out.iter().enumerate().map(|(rank, c)| serde_json::json!({
+                "rank": rank + 1,
+                "kind": c.kind,
+                "id": c.id,
+                "notebookId": c.notebook_id,
+                "title": c.title,
+            })).collect::<Vec<_>>(),
+        }),
+    );
     Ok(out)
 }
 

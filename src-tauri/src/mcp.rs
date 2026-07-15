@@ -593,6 +593,16 @@ impl AlchemyMcp {
             .search_chunks(&notebook_id, query_vec, &query, k, None)
             .await
             .map_err(internal)?;
+        crate::trace::log(
+            &state.trace_dir,
+            serde_json::json!({
+                "ts": commands::now(),
+                "surface": "mcp",
+                "notebookId": notebook_id,
+                "query": query,
+                "citations": crate::trace::cite_summaries(&citations),
+            }),
+        );
         commands::bump_note_usage(&state.db, &citations, "retrieval_hits").await;
         json_result(&citations)
     }

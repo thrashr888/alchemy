@@ -17,6 +17,7 @@ mod services;
 #[cfg(target_os = "macos")]
 mod spotlight;
 mod templates;
+mod trace;
 mod tts;
 
 #[cfg(test)]
@@ -95,6 +96,7 @@ pub fn run() {
                 ai: tokio::sync::RwLock::new(ai::Ai::new(config, runtime)),
                 config_path,
                 stats_path,
+                trace_dir: data_dir.join("traces"),
                 model_stats: std::sync::Mutex::new(model_stats),
                 cancel: std::sync::Mutex::new(std::collections::HashMap::new()),
                 folder_scan_lock: tokio::sync::Mutex::new(()),
