@@ -16,7 +16,7 @@ use crate::models::Citation;
 /// (title, body) fixture documents: prose for paraphrase queries, tables and
 /// identifiers for exact-match queries, markdown sections for section queries,
 /// and distractors so retrieval has something to get wrong.
-const CORPUS: &[(&str, &str)] = &[
+pub(crate) const CORPUS: &[(&str, &str)] = &[
     (
         "Acme Invoices Q3",
         "# Sheet: Outstanding\n\

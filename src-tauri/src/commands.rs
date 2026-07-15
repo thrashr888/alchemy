@@ -4788,28 +4788,70 @@ pub(crate) async fn retrieve_everything(
         let ai = state.ai.read().await;
         e(ai.embed_one(question).await)?
     };
-    let mut out: Vec<MetaCitation> = e(state.db.search_chunks_all(query_vec, question, k).await)?
-        .into_iter()
-        .map(|(nb, c)| {
-            // Note chunks come back with note_id set (they share the chunk
-            // table); surface them as first-class note citations.
-            let is_note = !c.note_id.is_empty();
-            MetaCitation {
-                kind: if is_note { "note" } else { "source" }.into(),
-                notebook_title: nb_titles.get(&nb).cloned().unwrap_or_default(),
-                notebook_id: nb,
-                id: if is_note { c.note_id } else { c.source_id },
-                title: c.source_title,
-                snippet: c.snippet,
-            }
-        })
-        .collect();
+    // Diversity caps keep one chatty notebook or source from filling the
+    // whole answer with near-duplicates; skipped candidates backfill, so a
+    // single-notebook corpus behaves exactly like the flat search.
+    let opts = crate::db::SearchOptions {
+        pool_multiplier: 4,
+        max_per_source: 2,
+        max_per_notebook: 3,
+        max_notes: 4,
+    };
+    let mut out: Vec<MetaCitation> = e(state
+        .db
+        .search_chunks_all_opts(query_vec, question, k, None, opts)
+        .await)?
+    .into_iter()
+    .map(|(nb, c)| {
+        // Note chunks come back with note_id set (they share the chunk
+        // table); surface them as first-class note citations.
+        let is_note = !c.note_id.is_empty();
+        MetaCitation {
+            kind: if is_note { "note" } else { "source" }.into(),
+            notebook_title: nb_titles.get(&nb).cloned().unwrap_or_default(),
+            notebook_id: nb,
+            id: if is_note { c.note_id } else { c.source_id },
+            title: c.source_title,
+            snippet: c.snippet,
+        }
+    })
+    .collect();
 
-    // Title-match fallback pass: hybrid search covers note bodies now that
-    // notes are embedded, but an exact-title lookup ("the Q3 report note")
-    // can still miss the top k — substring over titles/bodies backstops it.
+    // Title-match fallback passes: hybrid search covers bodies, but an
+    // exact-title lookup ("the contractor agreement", "the Q3 report note")
+    // can still miss the top k — substring over titles backstops it.
     let q = question.trim().to_lowercase();
     let already: std::collections::HashSet<String> = out.iter().map(|c| c.id.clone()).collect();
+
+    // Sources: match when the question names the title (guarded against
+    // tiny titles matching everything) or a short palette-style query is
+    // contained in the title.
+    let mut source_hits = 0;
+    for (id, nb, title) in e(state.db.all_source_meta().await)? {
+        if source_hits >= 3 {
+            break;
+        }
+        if already.contains(&id) {
+            continue;
+        }
+        let t = title.to_lowercase();
+        if (t.chars().count() >= 8 && q.contains(&t)) || t.contains(&q) {
+            let snippet: String = e(state.db.source_content(&id).await)?
+                .chars()
+                .take(400)
+                .collect();
+            source_hits += 1;
+            out.push(MetaCitation {
+                kind: "source".into(),
+                notebook_title: nb_titles.get(&nb).cloned().unwrap_or_default(),
+                notebook_id: nb,
+                id,
+                title,
+                snippet,
+            });
+        }
+    }
+
     let mut note_hits = 0;
     for n in e(state.db.recent_notes(usize::MAX).await)? {
         if note_hits >= 4 {

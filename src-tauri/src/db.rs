@@ -52,6 +52,73 @@ pub struct SearchTrace {
     pub warnings: Vec<String>,
 }
 
+/// Post-fusion shaping for corpus-wide retrieval. Zero means "no cap";
+/// `SearchOptions::default()` reproduces the flat search exactly.
+#[derive(Clone, Copy, Default)]
+pub struct SearchOptions {
+    /// Candidate pool per retrieval side = k * this (0 → 3, the flat default).
+    pub pool_multiplier: usize,
+    /// Max chunks kept per source or note (0 → unlimited).
+    pub max_per_source: usize,
+    /// Max chunks kept per notebook (0 → unlimited).
+    pub max_per_notebook: usize,
+    /// Max note chunks kept in total (0 → unlimited).
+    pub max_notes: usize,
+}
+
+/// Walk the fused pool in score order keeping hits that fit the caps, then
+/// backfill remaining slots from the skipped candidates (still in score
+/// order) so caps trade duplication for breadth, never for count.
+fn apply_diversity(
+    ranked: Vec<(String, Citation)>,
+    k: usize,
+    opts: SearchOptions,
+) -> Vec<(String, Citation)> {
+    let uncapped = opts.max_per_source == 0 && opts.max_per_notebook == 0 && opts.max_notes == 0;
+    if uncapped {
+        return ranked.into_iter().take(k).collect();
+    }
+    let mut per_owner: HashMap<String, usize> = HashMap::new();
+    let mut per_notebook: HashMap<String, usize> = HashMap::new();
+    let mut notes = 0usize;
+    let mut kept: Vec<(String, Citation)> = Vec::with_capacity(k);
+    let mut skipped: Vec<(String, Citation)> = Vec::new();
+    for hit in ranked {
+        if kept.len() >= k {
+            break;
+        }
+        let (nb, c) = &hit;
+        let is_note = !c.note_id.is_empty();
+        let owner = if is_note {
+            format!("{NOTE_CHUNK_PREFIX}{}", c.note_id)
+        } else {
+            c.source_id.clone()
+        };
+        let owner_full = opts.max_per_source > 0
+            && per_owner.get(&owner).copied().unwrap_or(0) >= opts.max_per_source;
+        let nb_full = opts.max_per_notebook > 0
+            && per_notebook.get(nb).copied().unwrap_or(0) >= opts.max_per_notebook;
+        let notes_full = opts.max_notes > 0 && is_note && notes >= opts.max_notes;
+        if owner_full || nb_full || notes_full {
+            skipped.push(hit);
+            continue;
+        }
+        *per_owner.entry(owner).or_default() += 1;
+        *per_notebook.entry(nb.clone()).or_default() += 1;
+        if is_note {
+            notes += 1;
+        }
+        kept.push(hit);
+    }
+    for hit in skipped {
+        if kept.len() >= k {
+            break;
+        }
+        kept.push(hit);
+    }
+    kept
+}
+
 pub struct Db {
     conn: Connection,
 }
@@ -902,16 +969,22 @@ impl Db {
 
     /// BM25-only search across every notebook — no embedding round-trip, so
     /// it's fast enough for as-you-type global search. Returns
-    /// (notebook_id, citation); source titles are the caller's to fill.
-    /// Empty on databases from before the FTS index existed.
     /// Corpus-wide hybrid search — `search_chunks` without the notebook
-    /// filter. Returns (notebook_id, citation), rank-fused across the vector
-    /// and BM25 sides exactly like the per-notebook path.
-    pub async fn search_chunks_all(
+    /// filter; `SearchOptions::default()` gives the flat baseline.
+    /// Returns (notebook_id, citation), rank-fused across the vector and
+    /// BM25 sides exactly like the per-notebook path. `notebook_ids`
+    /// restricts retrieval to those notebooks (None searches all — the flat
+    /// baseline). Diversity caps stop one chatty source or notebook from
+    /// filling the whole top-k with near-duplicates; skipped candidates
+    /// backfill in score order, so this never returns fewer hits than the
+    /// uncapped search would.
+    pub async fn search_chunks_all_opts(
         &self,
         query_vec: Vec<f32>,
         query_text: &str,
         k: usize,
+        notebook_ids: Option<&[String]>,
+        opts: SearchOptions,
     ) -> Result<Vec<(String, Citation)>> {
         if !self.table_exists(T_CHUNKS).await? {
             return Ok(vec![]);
@@ -926,10 +999,26 @@ impl Db {
             titles.insert(format!("{NOTE_CHUNK_PREFIX}{}", n.id), n.title);
         }
         let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
-        let pool = k.max(1) * 3;
+        let pool = k.max(1) * opts.pool_multiplier.max(3);
 
-        let vec_batches = tbl
-            .query()
+        let nb_filter = notebook_ids.map(|ids| {
+            // Some(&[]) matches nothing — '' is never a real notebook id.
+            let list = if ids.is_empty() {
+                "''".to_string()
+            } else {
+                ids.iter()
+                    .map(|id| format!("'{}'", esc(id)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            format!("notebook_id IN ({list})")
+        });
+
+        let mut vec_query = tbl.query();
+        if let Some(f) = &nb_filter {
+            vec_query = vec_query.only_if(f.clone());
+        }
+        let vec_batches = vec_query
             .nearest_to(query_vec)?
             .limit(pool)
             .execute()
@@ -946,8 +1035,11 @@ impl Db {
         let fts_hits = if query_text.trim().is_empty() {
             vec![]
         } else {
-            match tbl
-                .query()
+            let mut fts_query = tbl.query();
+            if let Some(f) = &nb_filter {
+                fts_query = fts_query.only_if(f.clone());
+            }
+            match fts_query
                 .full_text_search(FullTextSearchQuery::new(query_text.to_string()))
                 .limit(pool)
                 .execute()
@@ -976,7 +1068,8 @@ impl Db {
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.0 .1.chunk_id.cmp(&b.0 .1.chunk_id))
         });
-        Ok(merged.into_iter().take(k).map(|(hit, _)| hit).collect())
+        let ranked: Vec<(String, Citation)> = merged.into_iter().map(|(hit, _)| hit).collect();
+        Ok(apply_diversity(ranked, k, opts))
     }
 
     pub async fn search_chunks_fts_all(

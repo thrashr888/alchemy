@@ -16,8 +16,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::db::Db;
-use crate::evals::{builtin_ai, seed_corpus, seed_docs};
+use crate::db::{Db, SearchOptions};
+use crate::evals::{builtin_ai, seed_corpus, seed_docs, CORPUS};
 use crate::models::Citation;
 
 /// Retrieval depth for all metrics; recall is additionally reported at 5.
@@ -465,4 +465,175 @@ async fn eval_retrieval_datasets() {
             hybrid.overall.ndcg_at_10
         );
     }
+}
+
+/// A chatty near-topic source: twelve heading-separated entries about home
+/// networking that embed close to network queries but answer none of them.
+/// Seeded as its own notebook so flat corpus-wide search lets it crowd the
+/// top-k with near-duplicates — the failure mode diversity caps exist for.
+const DOMINATOR: &[(&str, &str)] = &[(
+    "Network Tinkering Log",
+    "# Entry 1\n\nMoved the mesh node off the bookshelf; wifi bars looked the \
+     same in the kitchen but the speed test felt snappier.\n\n\
+     # Entry 2\n\nRebooted the router twice this week. Coverage in the garage \
+     is still spotty; might need another access point.\n\n\
+     # Entry 3\n\nRenamed the network SSIDs so the 2.4GHz and 5GHz bands are \
+     easier to tell apart when connecting new devices.\n\n\
+     # Entry 4\n\nLooked at the port forwarding table and cleaned out two \
+     stale entries from the old console. Everything else untouched.\n\n\
+     # Entry 5\n\nThe smart plugs kept dropping off wifi; pinned them to the \
+     2.4GHz band and they have been stable since.\n\n\
+     # Entry 6\n\nTested wifi throughput near the office window: solid \
+     downstream, weaker upstream. Router placement experiment pending.\n\n\
+     # Entry 7\n\nSwapped the ethernet cable on the desk switch for a shorter \
+     one and tidied the cable run behind the monitor.\n\n\
+     # Entry 8\n\nChecked the router admin page for firmware notes; nothing \
+     new this month, so no update applied.\n\n\
+     # Entry 9\n\nGuest devices seemed slow at the party; probably just \
+     too many phones on the band at once, not a config issue.\n\n\
+     # Entry 10\n\nMapped which wall jacks are live back to the patch panel \
+     and labeled them with tape.\n\n\
+     # Entry 11\n\nThe printer fell off the network again; static DHCP \
+     reservation added so it stops wandering.\n\n\
+     # Entry 12\n\nBrief outage upstream around noon; the ISP status page \
+     confirmed it, nothing local to fix.",
+)];
+
+/// One breadth query for the diversity eval: relevance spans sources in
+/// several notebooks while the dominator crowds the same topic.
+struct MetaGolden {
+    query: &'static str,
+    specs: &'static [(&'static str, &'static str)], // (source_title, must_contain)
+}
+
+const META_GOLDEN: &[MetaGolden] = &[
+    MetaGolden {
+        query: "what do I have set up for wifi networks and port forwarding?",
+        specs: &[
+            ("Home Network Guide", "32400"),
+            ("Office Network Runbook", "8443"),
+            ("Cabin WiFi Setup", "8080"),
+            ("VPN Access Guide", "51820"),
+        ],
+    },
+    MetaGolden {
+        query: "how has the invoice retry error policy changed over time?",
+        specs: &[
+            ("Acme Invoices Q3", "ERR-503-BACKOFF"),
+            ("Acme Invoices Q2 (archive)", "ERR-429-THROTTLE"),
+            ("Acme Invoices Q1 (archive)", "ERR-500-RETRY"),
+        ],
+    },
+    MetaGolden {
+        query: "what oven temperatures and proofing times do my baking notes use?",
+        specs: &[
+            ("Sourdough Notes", "four hundred fifty"),
+            ("Focaccia Experiments", "four hundred twenty five"),
+        ],
+    },
+];
+
+/// Meta-chat (corpus-wide) eval: flat search vs diversity caps over a corpus
+/// where one chatty notebook crowds the topic. Reports spec recall plus
+/// distinct sources/notebooks in the top-k.
+#[tokio::test]
+async fn eval_meta_diversity() {
+    let Some(ai) = builtin_ai().await else { return };
+    let dir = std::env::temp_dir().join(format!("nbl-eval-meta-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    seed_docs(&ai, &db, "meta-a", DOMINATOR, "dom-").await;
+    seed_docs(&ai, &db, "meta-b", CORPUS, "b-").await;
+    seed_docs(&ai, &db, "meta-c", EXTRA_CORPUS, "c-").await;
+
+    let mut titles: HashMap<String, String> = HashMap::new();
+    for nb in ["meta-a", "meta-b", "meta-c"] {
+        for s in db.list_sources(nb).await.expect("list sources") {
+            titles.insert(s.id, s.title);
+        }
+    }
+
+    const K: usize = 8;
+    let diverse_opts = SearchOptions {
+        pool_multiplier: 4,
+        max_per_source: 2,
+        max_per_notebook: 3,
+        max_notes: 4,
+    };
+
+    // Per query: (recall, distinct sources, distinct notebooks) per variant.
+    let mut flat_stats: Vec<(f64, usize, usize)> = Vec::new();
+    let mut diverse_stats: Vec<(f64, usize, usize)> = Vec::new();
+    eprintln!("\nmeta diversity @{K} (recall / distinct sources / distinct notebooks):");
+    for g in META_GOLDEN {
+        let qvec = ai.embed_one(g.query).await.expect("embed query");
+        let specs: Vec<RelevantSpec> = g
+            .specs
+            .iter()
+            .map(|(t, m)| RelevantSpec {
+                source_title: t.to_string(),
+                must_contain: m.to_string(),
+            })
+            .collect();
+        let run = |name: &'static str, hits: Vec<(String, Citation)>| {
+            let nbs: std::collections::HashSet<&String> = hits.iter().map(|(nb, _)| nb).collect();
+            let owners: std::collections::HashSet<&str> = hits
+                .iter()
+                .map(|(_, c)| {
+                    if c.note_id.is_empty() {
+                        c.source_id.as_str()
+                    } else {
+                        c.note_id.as_str()
+                    }
+                })
+                .collect();
+            let cs: Vec<Citation> = hits.iter().map(|(_, c)| c.clone()).collect();
+            let (ranks, _) = matched_ranks(&cs, &titles, &specs);
+            let recall = ranks.len() as f64 / specs.len() as f64;
+            eprintln!(
+                "  {:<8} {:<58} {:.2} / {} / {}",
+                name,
+                g.query.chars().take(58).collect::<String>(),
+                recall,
+                owners.len(),
+                nbs.len()
+            );
+            (recall, owners.len(), nbs.len())
+        };
+        let flat = db
+            .search_chunks_all_opts(qvec.clone(), g.query, K, None, SearchOptions::default())
+            .await
+            .expect("flat search");
+        flat_stats.push(run("flat", flat));
+        let diverse = db
+            .search_chunks_all_opts(qvec, g.query, K, None, diverse_opts)
+            .await
+            .expect("diverse search");
+        diverse_stats.push(run("diverse", diverse));
+    }
+
+    let mean_of = |v: &[(f64, usize, usize)]| {
+        let n = v.len() as f64;
+        (
+            v.iter().map(|s| s.0).sum::<f64>() / n,
+            v.iter().map(|s| s.1 as f64).sum::<f64>() / n,
+            v.iter().map(|s| s.2 as f64).sum::<f64>() / n,
+        )
+    };
+    let (fr, fs, fn_) = mean_of(&flat_stats);
+    let (dr, ds, dn) = mean_of(&diverse_stats);
+    eprintln!("  flat    mean: recall {fr:.2}, sources {fs:.1}, notebooks {fn_:.1}");
+    eprintln!("  diverse mean: recall {dr:.2}, sources {ds:.1}, notebooks {dn:.1}\n");
+
+    assert!(
+        dr >= fr,
+        "diversity caps reduced mean spec recall ({dr:.2} < {fr:.2})"
+    );
+    assert!(
+        ds >= fs,
+        "diversity caps reduced mean distinct sources ({ds:.1} < {fs:.1})"
+    );
+    assert!(
+        dr >= 0.75,
+        "diverse mean spec recall {dr:.2} below 0.75 floor"
+    );
 }
