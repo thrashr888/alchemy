@@ -12,7 +12,7 @@ import { api } from "@/lib/api";
 import { SYSTEM_THEME, THEMES } from "@/lib/themes";
 import { cn } from "@/lib/utils";
 import type { MetaCitation, SearchHit } from "@/lib/types";
-import { ARTIFACTS, AUDIO_OVERVIEW } from "./StudioPanel";
+import { ARTIFACTS, AUDIO_OVERVIEW } from "./studioArtifacts";
 import { Markdown } from "./Markdown";
 import { Spinner, useConfirm } from "./ui";
 import {

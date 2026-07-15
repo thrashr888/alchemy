@@ -72,6 +72,7 @@ export function Reports() {
       <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
         <span>Reports</span>
         <button
+          type="button"
           onClick={toggleOpen}
           className="ml-auto rounded p-0.5 transition-colors hover:text-foreground"
           title={open ? "Hide reports" : "Show reports"}
@@ -80,7 +81,13 @@ export function Reports() {
         >
           {open ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
         </button>
-        <Button variant="ghost" size="icon" onClick={openEditor} title="Schedule a report">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={openEditor}
+          title="Schedule a report"
+          aria-label="Schedule a report"
+        >
           <Plus className="h-4 w-4" />
         </Button>
       </div>
@@ -94,8 +101,11 @@ export function Reports() {
           {schedules.map((r) => (
             <div key={r.id} className="group flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-surface-2">
               <button
+                type="button"
                 onClick={() => update({ ...r, enabled: !r.enabled })}
                 title={r.enabled ? "Enabled — click to pause" : "Paused — click to enable"}
+                aria-label={`${r.enabled ? "Pause" : "Enable"} report "${r.name}"`}
+                aria-pressed={r.enabled}
               >
                 <Power className={cn("h-3.5 w-3.5", r.enabled ? "text-success" : "text-subtle-foreground")} />
               </button>
@@ -111,6 +121,7 @@ export function Reports() {
               </div>
               <div className="hidden items-center gap-0.5 group-hover:flex group-focus-within:flex">
                 <button
+                  type="button"
                   className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
                   onClick={() => runNow(r.id)}
                   disabled={generating}
@@ -120,6 +131,7 @@ export function Reports() {
                   {generating ? <Spinner className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
                 </button>
                 <button
+                  type="button"
                   className="rounded p-1 text-muted-foreground hover:text-foreground"
                   onClick={() => openEdit(r)}
                   title="Edit"
@@ -128,6 +140,7 @@ export function Reports() {
                   <Pencil className="h-3.5 w-3.5" />
                 </button>
                 <button
+                  type="button"
                   className="rounded p-1 text-muted-foreground hover:text-destructive"
                   onClick={() => remove(r.id)}
                   title="Delete"
@@ -157,19 +170,20 @@ export function Reports() {
           }}
           className="flex flex-col gap-3"
         >
-          <Field label="Name">
-            <Input autoFocus placeholder="e.g. Morning briefing" value={name} onChange={(e) => setName(e.target.value)} />
+          <Field label="Name" htmlFor="report-name">
+            <Input id="report-name" name="report-name" autoFocus placeholder="e.g. Morning briefing" value={name} onChange={(e) => setName(e.target.value)} />
           </Field>
-          <Field label="Generator">
-            <Select value={kind} onChange={setKind} options={KINDS} />
+          <Field label="Generator" htmlFor="report-generator">
+            <Select id="report-generator" value={kind} onChange={setKind} options={KINDS} />
           </Field>
           {kind === "custom" && (
-            <Field label="Prompt">
-              <Textarea rows={4} placeholder="What should this report cover?" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+            <Field label="Prompt" htmlFor="report-prompt">
+              <Textarea id="report-prompt" name="report-prompt" rows={4} placeholder="What should this report cover?" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
             </Field>
           )}
-          <Field label="Frequency">
+          <Field label="Frequency" htmlFor="report-frequency">
             <Select
+              id="report-frequency"
               value={String(intervalSecs)}
               onChange={(v) => setIntervalSecs(Number(v))}
               options={INTERVALS.map((i) => ({ value: String(i.secs), label: i.label }))}
@@ -193,26 +207,29 @@ export function Reports() {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, htmlFor, children }: { label: string; htmlFor: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-[12px] font-medium text-foreground">{label}</label>
+      <label htmlFor={htmlFor} className="text-[12px] font-medium text-foreground">{label}</label>
       {children}
     </div>
   );
 }
 
 function Select({
+  id,
   value,
   onChange,
   options,
 }: {
+  id: string;
   value: string;
   onChange: (v: string) => void;
   options: { value: string; label: string }[];
 }) {
   return (
     <select
+      id={id}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       className="w-full rounded-md border border-input bg-surface-2 px-2.5 py-1.5 text-[13px] text-foreground outline-none focus:border-primary/60"
