@@ -13,8 +13,8 @@ use crate::ai::{Ai, AiConfig, GenStats};
 use crate::db::Db;
 use crate::db::NOTEBOOK_PALETTE;
 use crate::models::{
-    FolderScan, Message, ModelHealth, ModelStat, ModelStatus, Note, Notebook, ReportSchedule,
-    Source,
+    Citation, FolderScan, Message, ModelHealth, ModelStat, ModelStatus, Note, Notebook,
+    ReportSchedule, Source,
 };
 use crate::{ingest, rag};
 
@@ -2122,6 +2122,7 @@ async fn try_tool_route(
                         content: body,
                         kind,
                         prompt,
+                        origin: String::new(),
                         created_at: ts,
                         updated_at: ts,
                     };
@@ -2254,6 +2255,7 @@ async fn try_tool_route(
                 content: last.content.clone(),
                 kind: "note".into(),
                 prompt: String::new(),
+                origin: String::new(),
                 created_at: ts,
                 updated_at: ts,
             };
@@ -2508,6 +2510,7 @@ pub async fn send_message(
         .db
         .search_chunks(&notebook_id, query_vec, &content, 8, source_ids.as_deref())
         .await)?;
+    bump_note_usage(&state.db, &citations, "retrieval_hits").await;
 
     // Full source manifest (title + url) so corpus-level questions are
     // answerable regardless of which chunks the top-k search happened to
@@ -2578,9 +2581,17 @@ pub async fn send_message(
         kind: "chat".into(),
         created_at: now(),
     };
+    bump_note_usage(&state.db, &assistant_msg.citations, "cited").await;
     e(state.db.add_message(&assistant_msg).await)?;
     e(state.db.touch_notebook(&notebook_id, now()).await)?;
     let _ = app.emit("chat://done", &assistant_msg);
+    spawn_auto_evidence(
+        &app,
+        &notebook_id,
+        &content,
+        &assistant_msg.content,
+        &assistant_msg.citations,
+    );
     Ok(assistant_msg)
 }
 
@@ -2659,6 +2670,7 @@ pub async fn send_message_agentic(
         kind: "chat".into(),
         created_at: now(),
     };
+    bump_note_usage(&state.db, &assistant_msg.citations, "cited").await;
     e(state.db.add_message(&assistant_msg).await)?;
     e(state.db.touch_notebook(&notebook_id, now()).await)?;
     let _ = app.emit("chat://done", &assistant_msg);
@@ -2686,6 +2698,171 @@ pub async fn list_notes(
     notebook_id: String,
 ) -> Result<Vec<Note>, String> {
     e(state.db.list_notes(&notebook_id).await)
+}
+
+/// Fire-and-forget post-pass after a chat answer (docs/RFC-note-curator.md
+/// phase 3): when the answer synthesized across sources, one model call
+/// decides whether the exchange produced a durable conclusion and saves it
+/// as an `origin: "auto"` evidence note. Conservative by design — cheap
+/// gates first, the model must opt IN, malformed output means skip, and a
+/// failure is only ever a log line.
+fn spawn_auto_evidence(
+    app: &AppHandle,
+    notebook_id: &str,
+    question: &str,
+    answer: &str,
+    citations: &[Citation],
+) {
+    // Gate: a conclusion needs synthesis across 2+ distinct SOURCES. Note
+    // passages don't count — evidence derived from prior conclusions would
+    // be circular. Short answers are lookups, not synthesis.
+    let sources: Vec<Citation> = citations
+        .iter()
+        .filter(|c| !c.source_id.is_empty())
+        .cloned()
+        .collect();
+    let distinct: HashSet<&str> = sources.iter().map(|c| c.source_id.as_str()).collect();
+    if distinct.len() < 2 || answer.chars().count() < 400 {
+        return;
+    }
+    let app = app.clone();
+    let notebook_id = notebook_id.to_string();
+    let question = question.to_string();
+    let answer = answer.to_string();
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = auto_evidence(&app, &notebook_id, &question, &answer, &sources).await {
+            eprintln!("auto evidence pass failed: {err:#}");
+        }
+    });
+}
+
+/// Overlap coefficient of two titles' word sets (lowercased, alphanumeric,
+/// stop-length words dropped) — the cheap same-claim test for deduping auto
+/// evidence notes. Shared words over the SMALLER set, not Jaccard: a title
+/// that restates another with extra qualifiers should still match.
+fn title_overlap(a: &str, b: &str) -> f32 {
+    let words = |s: &str| -> HashSet<String> {
+        s.to_lowercase()
+            .split(|ch: char| !ch.is_alphanumeric())
+            .filter(|w| w.len() > 2)
+            .map(str::to_string)
+            .collect()
+    };
+    let (wa, wb) = (words(a), words(b));
+    if wa.is_empty() || wb.is_empty() {
+        return 0.0;
+    }
+    let shared = wa.intersection(&wb).count() as f32;
+    shared / wa.len().min(wb.len()) as f32
+}
+
+async fn auto_evidence(
+    app: &AppHandle,
+    notebook_id: &str,
+    question: &str,
+    answer: &str,
+    sources: &[Citation],
+) -> anyhow::Result<()> {
+    use tauri::Manager;
+    let state = app.state::<AppState>();
+
+    let draft = {
+        let messages = rag::build_auto_evidence_messages(question, answer, sources, None);
+        let ai = state.ai.read().await;
+        ai.chat(&messages).await?.text
+    };
+    let Some((title, body)) = rag::parse_auto_evidence(&draft) else {
+        return Ok(()); // SKIP — the common case
+    };
+
+    // Same claim already on record? Merge into it instead of a sibling
+    // (Hermes' patch-over-create). Only auto notes merge — owned notes are
+    // the user's, and the pass never touches them.
+    let existing = state
+        .db
+        .list_notes(notebook_id)
+        .await?
+        .into_iter()
+        .filter(|n| n.kind == "evidence" && n.origin == "auto")
+        .find(|n| title_overlap(&n.title, &title) >= 0.6);
+
+    let note = if let Some(prior) = existing {
+        let merged = {
+            let messages = rag::build_auto_evidence_messages(
+                question,
+                answer,
+                sources,
+                Some((&prior.title, &prior.content)),
+            );
+            let ai = state.ai.read().await;
+            ai.chat(&messages).await?.text
+        };
+        let Some((title, body)) = rag::parse_auto_evidence(&merged) else {
+            return Ok(());
+        };
+        state
+            .db
+            .update_note(&prior.id, &title, &body, now())
+            .await?;
+        // update_note leaves origin untouched, so the record stays "auto"
+        // and claims accumulate evidence instead of siblings.
+        match state.db.get_note(&prior.id).await? {
+            Some(n) => {
+                index_note(&state, &n).await;
+                n
+            }
+            None => return Ok(()),
+        }
+    } else {
+        let ts = now();
+        let note = Note {
+            id: new_id(),
+            notebook_id: notebook_id.to_string(),
+            title,
+            content: body,
+            kind: "evidence".into(),
+            // The originating question, kept so the record can be rebuilt.
+            prompt: question.to_string(),
+            origin: "auto".into(),
+            created_at: ts,
+            updated_at: ts,
+        };
+        add_note_indexed(&state, &note).await?;
+        note
+    };
+
+    // Same event the MCP server emits — open windows refresh their notes
+    // list live, with the arrival chime announcing the new record.
+    #[derive(serde::Serialize, Clone)]
+    #[serde(rename_all = "camelCase")]
+    struct Changed<'a> {
+        scope: &'a str,
+        notebook_id: Option<&'a str>,
+    }
+    let _ = app.emit(
+        "mcp://changed",
+        Changed {
+            scope: "notes",
+            notebook_id: Some(&note.notebook_id),
+        },
+    );
+    Ok(())
+}
+
+/// Bump a usage counter for every note among these citations (best-effort;
+/// counters are advisory, never worth failing a chat over).
+pub async fn bump_note_usage(db: &Db, citations: &[Citation], field: &str) {
+    let ids: Vec<String> = citations
+        .iter()
+        .filter(|c| !c.note_id.is_empty())
+        .map(|c| c.note_id.clone())
+        .collect();
+    if ids.is_empty() {
+        return;
+    }
+    if let Err(err) = db.bump_note_usage(&ids, field, now()).await {
+        eprintln!("note usage bump ({field}) failed: {err:#}");
+    }
 }
 
 /// Persist a new note and index it for retrieval. Indexing is best-effort:
@@ -2756,6 +2933,7 @@ pub async fn create_note(
         content,
         kind: "note".into(),
         prompt: String::new(),
+        origin: String::new(),
         created_at: ts,
         updated_at: ts,
     };
@@ -2774,10 +2952,19 @@ pub async fn update_note(
         .db
         .update_note(&id, title.trim(), &content, now())
         .await)?;
+    // A deliberate edit takes ownership: the curator stops managing it.
+    e(state.db.set_note_origin(&id, "").await)?;
     if let Some(note) = e(state.db.get_note(&id).await)? {
         index_note(&state, &note).await;
     }
     Ok(())
+}
+
+/// The frontend calls this when a note is actually opened (not on list
+/// render) — the "reads" counter feeds the curator's staleness pass.
+#[tauri::command]
+pub async fn note_opened(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    e(state.db.bump_note_usage(&[id], "reads", now()).await)
 }
 
 #[tauri::command]
@@ -3233,6 +3420,7 @@ pub async fn generate_artifact(
         content,
         kind,
         prompt,
+        origin: String::new(),
         created_at: ts,
         updated_at: ts,
     };
@@ -3280,6 +3468,7 @@ pub async fn rebuild_note(
         content,
         kind,
         prompt,
+        origin: String::new(),
         created_at: ts,
         updated_at: ts,
     };
@@ -3488,6 +3677,7 @@ pub async fn run_report(
         content,
         kind: "report".into(),
         prompt: schedule.prompt.clone(),
+        origin: String::new(),
         created_at: ts,
         updated_at: ts,
     };
@@ -4226,6 +4416,7 @@ async fn import_bundle(
             content: body,
             kind: note_kind_from_label(fm.get("type").map(String::as_str).unwrap_or("Note")),
             prompt: String::new(),
+            origin: String::new(),
             created_at: now(),
             updated_at: now(),
         };
@@ -4320,6 +4511,21 @@ pub(crate) async fn retrieve_everything(
                 title: n.title,
                 snippet: n.content.chars().take(400).collect(),
             });
+        }
+    }
+
+    let note_ids: Vec<String> = out
+        .iter()
+        .filter(|c| c.kind == "note")
+        .map(|c| c.id.clone())
+        .collect();
+    if !note_ids.is_empty() {
+        if let Err(err) = state
+            .db
+            .bump_note_usage(&note_ids, "retrieval_hits", now())
+            .await
+        {
+            eprintln!("note usage bump (retrieval_hits) failed: {err:#}");
         }
     }
     Ok(out)
@@ -4742,6 +4948,42 @@ pub async fn check_ollama(state: State<'_, AppState>) -> Result<bool, String> {
 #[cfg(test)]
 mod tool_tests {
     use super::*;
+
+    #[test]
+    fn auto_evidence_parsing_is_conservative() {
+        use crate::rag::parse_auto_evidence;
+        // Explicit skip, any casing, with or without trailing prose.
+        assert!(parse_auto_evidence("SKIP").is_none());
+        assert!(parse_auto_evidence("  skip — just a lookup").is_none());
+        // Malformed output (no TITLE line) is a skip, not a bad note.
+        assert!(parse_auto_evidence("Here's a note about deductibles...").is_none());
+        assert!(parse_auto_evidence("TITLE: no body follows").is_none());
+        assert!(parse_auto_evidence("").is_none());
+        // The well-formed case round-trips.
+        let (title, body) = parse_auto_evidence(
+            "TITLE: The hail deductible is $2,500\n\n**Claim:** The deductible is $2,500.\n**Evidence:** \"…\" (Insurance Policy)",
+        )
+        .expect("parses");
+        assert_eq!(title, "The hail deductible is $2,500");
+        assert!(body.starts_with("**Claim:**"));
+    }
+
+    #[test]
+    fn title_overlap_finds_same_claim() {
+        assert!(
+            title_overlap(
+                "The hail deductible is $2,500",
+                "Hail deductible is 2500 dollars"
+            ) >= 0.4
+        );
+        assert!(
+            title_overlap(
+                "The hail deductible is $2,500",
+                "Router firmware updates monthly"
+            ) < 0.2
+        );
+        assert_eq!(title_overlap("", "anything"), 0.0);
+    }
 
     #[test]
     fn context_url_requests_are_detected() {

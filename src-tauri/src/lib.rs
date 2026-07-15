@@ -167,6 +167,7 @@ pub fn run() {
             commands::ask_everything,
             commands::create_note,
             commands::update_note,
+            commands::note_opened,
             commands::delete_note,
             commands::convert_note_to_source,
             commands::generate_artifact,

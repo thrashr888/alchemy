@@ -578,6 +578,7 @@ impl AlchemyMcp {
             .search_chunks(&notebook_id, query_vec, &query, k, None)
             .await
             .map_err(internal)?;
+        commands::bump_note_usage(&state.db, &citations, "retrieval_hits").await;
         json_result(&citations)
     }
 
@@ -611,6 +612,15 @@ impl AlchemyMcp {
             .await
             .map_err(internal)?
             .ok_or_else(|| invalid(format!("no note with id {note_id}")))?;
+        // An agent reading a note counts as a read for the curator.
+        if let Err(err) = self
+            .state()
+            .db
+            .bump_note_usage(std::slice::from_ref(&note.id), "reads", commands::now())
+            .await
+        {
+            eprintln!("note usage bump (reads) failed: {err:#}");
+        }
         json_result(&note)
     }
 
@@ -647,6 +657,7 @@ impl AlchemyMcp {
             content,
             kind: kind.into(),
             prompt: String::new(),
+            origin: String::new(),
             created_at: ts,
             updated_at: ts,
         };
@@ -678,6 +689,12 @@ impl AlchemyMcp {
         state
             .db
             .update_note(&note_id, title.trim(), &content, commands::now())
+            .await
+            .map_err(internal)?;
+        // An agent's deliberate edit takes ownership, same as a human's.
+        state
+            .db
+            .set_note_origin(&note_id, "")
             .await
             .map_err(internal)?;
         if let Ok(Some(updated)) = state.db.get_note(&note_id).await {

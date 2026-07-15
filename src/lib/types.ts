@@ -104,6 +104,9 @@ export interface Note {
   content: string;
   kind: NoteKind;
   prompt: string;
+  /** "" for deliberate notes, "auto" for chat-created evidence records.
+   *  Editing an auto note flips it to "" (user-owned). */
+  origin: string;
   createdAt: number;
   updatedAt: number;
 }

@@ -246,6 +246,7 @@ export function StudioPanel() {
   // opened yet", so it clears here and nowhere else.
   const openNoteCard = (n: Note) => {
     markNotesRead([n.id]);
+    void api.noteOpened(n.id).catch(() => {});
     setViewing(n);
   };
   // The user can hide the live preview without stopping the generation.
@@ -609,6 +610,11 @@ export function StudioPanel() {
                         KIND_LABEL[n.kind].toLowerCase() && (
                         <Badge>{KIND_LABEL[n.kind]}</Badge>
                       )}
+                    {n.origin === "auto" && (
+                      <span title="Chat saved this on its own — editing it makes it yours">
+                        <Badge>auto</Badge>
+                      </span>
+                    )}
                     <span className="text-[11px] text-subtle-foreground">
                       {relativeTime(n.updatedAt)}
                     </span>

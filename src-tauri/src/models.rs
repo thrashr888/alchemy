@@ -200,10 +200,32 @@ pub struct Note {
     /// can be rebuilt with fresh context.
     #[serde(default)]
     pub prompt: String,
+    /// "" for deliberate notes (user-written, Studio-generated, agent-created)
+    /// or "auto" for notes the chat post-pass created on its own
+    /// (docs/RFC-note-curator.md phase 3). The curator only ever touches
+    /// "auto" notes; editing an auto note flips it to "" (user-owned).
+    #[serde(default)]
+    pub origin: String,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
 fn default_note_kind() -> String {
     "note".to_string()
+}
+
+/// Usage counters for one note — the curator's ground truth for staleness
+/// (docs/RFC-note-curator.md phase 2). Notes never used have no row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteUsage {
+    pub note_id: String,
+    /// Times a human or agent opened the note (UI card, MCP get_note).
+    pub reads: i64,
+    /// Times a search surfaced one of its passages (chat retrieval, MCP
+    /// search, meta-chat). Palette as-you-type hits don't count.
+    pub retrieval_hits: i64,
+    /// Times a persisted or streamed answer carried it as a citation.
+    pub cited: i64,
+    pub last_used_at: i64,
 }

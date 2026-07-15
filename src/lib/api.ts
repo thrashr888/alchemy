@@ -241,6 +241,8 @@ export const api = {
   updateNote: (id: string, title: string, content: string) =>
     run(cmd<void>("update_note", { id, title, content })),
   deleteNote: (id: string) => run(cmd<void>("delete_note", { id })),
+  /** Fire-and-forget read counter for the note curator (RFC-note-curator). */
+  noteOpened: (id: string) => run(cmd<void>("note_opened", { id })),
   convertNoteToSource: (noteId: string) =>
     run(ai<Source>("convert_note_to_source", { noteId })),
   generateArtifact: (

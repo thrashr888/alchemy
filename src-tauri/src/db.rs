@@ -18,13 +18,14 @@ use lancedb::index::Index;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::Connection;
 
-use crate::models::{Citation, Message, Note, Notebook, ReportSchedule, Source};
+use crate::models::{Citation, Message, Note, NoteUsage, Notebook, ReportSchedule, Source};
 
 const T_NOTEBOOKS: &str = "notebooks";
 const T_SOURCES: &str = "sources";
 const T_CHUNKS: &str = "chunks";
 const T_MESSAGES: &str = "messages";
 const T_NOTES: &str = "notes";
+const T_NOTE_USAGE: &str = "note_usage";
 const T_REPORTS: &str = "report_schedules";
 /// Note chunks share the chunks table with source chunks, stored under
 /// `source_id = "note:<note_id>"` — real source ids are UUIDs, so the prefix
@@ -168,7 +169,8 @@ impl Db {
             .await?
             .schema()
             .await?;
-        if schema.field_with_name("prompt").is_ok() {
+        let has = |n: &str| schema.field_with_name(n).is_ok();
+        if has("prompt") && has("origin") {
             return Ok(());
         }
         let batches = self.collect(T_NOTES, None).await?;
@@ -181,6 +183,11 @@ impl Db {
             let kind = str_col(b, "kind")?;
             let created = i64_col(b, "created_at")?;
             let updated = i64_col(b, "updated_at")?;
+            let prompt = if has("prompt") {
+                Some(str_col(b, "prompt")?)
+            } else {
+                None
+            };
             for i in 0..b.num_rows() {
                 notes.push(Note {
                     id: id.value(i).to_string(),
@@ -188,7 +195,9 @@ impl Db {
                     title: title.value(i).to_string(),
                     content: content.value(i).to_string(),
                     kind: kind.value(i).to_string(),
-                    prompt: String::new(),
+                    prompt: prompt.map(|p| p.value(i).to_string()).unwrap_or_default(),
+                    // Pre-existing notes are all deliberate — never "auto".
+                    origin: String::new(),
                     created_at: created.value(i),
                     updated_at: updated.value(i),
                 });
@@ -960,6 +969,7 @@ impl Db {
                 content: str_col(b, "content")?.value(0).to_string(),
                 kind: str_col(b, "kind")?.value(0).to_string(),
                 prompt: str_col(b, "prompt")?.value(0).to_string(),
+                origin: str_col(b, "origin")?.value(0).to_string(),
                 created_at: i64_col(b, "created_at")?.value(0),
                 updated_at: i64_col(b, "updated_at")?.value(0),
             }));
@@ -991,8 +1001,23 @@ impl Db {
         Ok(())
     }
 
+    /// Set a note's origin. Used to flip "auto" → "" when a human or agent
+    /// deliberately edits an auto-created note: ownership is the pin — the
+    /// curator never touches owned notes (docs/RFC-note-curator.md).
+    pub async fn set_note_origin(&self, id: &str, origin: &str) -> Result<()> {
+        let tbl = self.conn.open_table(T_NOTES).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(id)))
+            .column("origin", format!("'{}'", esc(origin)))
+            .execute()
+            .await?;
+        Ok(())
+    }
+
     pub async fn delete_note(&self, id: &str) -> Result<()> {
         self.delete_note_chunks(id).await?;
+        self.delete_where(T_NOTE_USAGE, &format!("note_id = '{}'", esc(id)))
+            .await?;
         self.delete_where(T_NOTES, &format!("id = '{}'", esc(id)))
             .await
     }
@@ -1001,6 +1026,76 @@ impl Db {
     pub async fn delete_note_chunks(&self, note_id: &str) -> Result<()> {
         let pred = format!("source_id = '{NOTE_CHUNK_PREFIX}{}'", esc(note_id));
         self.delete_where(T_CHUNKS, &pred).await
+    }
+
+    /// Bump a usage counter for the given notes (deduped — one answer citing
+    /// three passages of a note counts once) and stamp `last_used_at`.
+    /// `field` is one of "reads" | "retrieval_hits" | "cited". This is the
+    /// curator's ground truth (docs/RFC-note-curator.md, phase 2): staleness
+    /// decisions come from these counters, not vibes.
+    pub async fn bump_note_usage(&self, note_ids: &[String], field: &str, ts: i64) -> Result<()> {
+        if !matches!(field, "reads" | "retrieval_hits" | "cited") {
+            return Err(anyhow!("unknown note usage field {field}"));
+        }
+        let ids: std::collections::HashSet<&String> = note_ids.iter().collect();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        self.ensure_table(T_NOTE_USAGE, note_usage_schema()).await?;
+        let tbl = self.conn.open_table(T_NOTE_USAGE).execute().await?;
+        for id in ids {
+            let filter = format!("note_id = '{}'", esc(id));
+            let existing = self.collect(T_NOTE_USAGE, Some(&filter)).await?;
+            if existing.iter().any(|b| b.num_rows() > 0) {
+                tbl.update()
+                    .only_if(filter)
+                    .column(field, format!("{field} + 1"))
+                    .column("last_used_at", ts.to_string())
+                    .execute()
+                    .await?;
+            } else {
+                let usage = NoteUsage {
+                    note_id: id.clone(),
+                    reads: (field == "reads") as i64,
+                    retrieval_hits: (field == "retrieval_hits") as i64,
+                    cited: (field == "cited") as i64,
+                    last_used_at: ts,
+                };
+                let schema = note_usage_schema();
+                let batch = note_usage_batch(&schema, std::slice::from_ref(&usage))?;
+                self.add_batch(T_NOTE_USAGE, schema, batch).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Every note's usage counters (notes never used have no row).
+    /// Production consumer arrives with the curator (RFC-note-curator
+    /// phase 4); until then only the round-trip test reads it.
+    #[allow(dead_code)]
+    pub async fn note_usage(&self) -> Result<Vec<NoteUsage>> {
+        if !self.table_exists(T_NOTE_USAGE).await? {
+            return Ok(vec![]);
+        }
+        let batches = self.collect(T_NOTE_USAGE, None).await?;
+        let mut out = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "note_id")?;
+            let reads = i64_col(b, "reads")?;
+            let hits = i64_col(b, "retrieval_hits")?;
+            let cited = i64_col(b, "cited")?;
+            let used = i64_col(b, "last_used_at")?;
+            for i in 0..b.num_rows() {
+                out.push(NoteUsage {
+                    note_id: id.value(i).to_string(),
+                    reads: reads.value(i),
+                    retrieval_hits: hits.value(i),
+                    cited: cited.value(i),
+                    last_used_at: used.value(i),
+                });
+            }
+        }
+        Ok(out)
     }
 
     /// Note ids that currently have chunks in the retrieval index. Used by
@@ -1137,6 +1232,7 @@ fn notes_from_batches(batches: &[RecordBatch]) -> Result<Vec<Note>> {
         let created = i64_col(b, "created_at")?;
         let updated = i64_col(b, "updated_at")?;
         let prompt = str_col(b, "prompt")?;
+        let origin = str_col(b, "origin")?;
         for i in 0..b.num_rows() {
             notes.push(Note {
                 id: id.value(i).to_string(),
@@ -1145,6 +1241,7 @@ fn notes_from_batches(batches: &[RecordBatch]) -> Result<Vec<Note>> {
                 content: content.value(i).to_string(),
                 kind: kind.value(i).to_string(),
                 prompt: prompt.value(i).to_string(),
+                origin: origin.value(i).to_string(),
                 created_at: created.value(i),
                 updated_at: updated.value(i),
             });
@@ -1358,6 +1455,34 @@ fn messages_schema() -> SchemaRef {
     ]))
 }
 
+fn note_usage_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("note_id", DataType::Utf8, false),
+        Field::new("reads", DataType::Int64, false),
+        Field::new("retrieval_hits", DataType::Int64, false),
+        Field::new("cited", DataType::Int64, false),
+        Field::new("last_used_at", DataType::Int64, false),
+    ]))
+}
+
+fn note_usage_batch(schema: &SchemaRef, rows: &[NoteUsage]) -> Result<RecordBatch> {
+    let i = |f: fn(&NoteUsage) -> i64| {
+        Arc::new(Int64Array::from(rows.iter().map(f).collect::<Vec<_>>())) as ArrayRef
+    };
+    Ok(RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from(
+                rows.iter().map(|x| x.note_id.clone()).collect::<Vec<_>>(),
+            )) as ArrayRef,
+            i(|x| x.reads),
+            i(|x| x.retrieval_hits),
+            i(|x| x.cited),
+            i(|x| x.last_used_at),
+        ],
+    )?)
+}
+
 fn notes_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -1368,6 +1493,7 @@ fn notes_schema() -> SchemaRef {
         Field::new("created_at", DataType::Int64, false),
         Field::new("updated_at", DataType::Int64, false),
         Field::new("prompt", DataType::Utf8, false),
+        Field::new("origin", DataType::Utf8, false),
     ]))
 }
 
@@ -1420,6 +1546,7 @@ fn note_batch(schema: &SchemaRef, notes: &[Note]) -> Result<RecordBatch> {
             i(|x| x.created_at),
             i(|x| x.updated_at),
             s(|x| x.prompt.clone()),
+            s(|x| x.origin.clone()),
         ],
     )?)
 }
