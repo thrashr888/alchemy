@@ -1,7 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useStore } from "@/lib/store";
-import { api } from "@/lib/api";
-import type { BuildInfo } from "@/lib/types";
 import { HomeView } from "@/components/HomeView";
 import { Workspace } from "@/components/Workspace";
 import { SettingsDialog } from "@/components/SettingsDialog";
@@ -12,25 +10,6 @@ import { MigrationOverlay } from "@/components/MigrationOverlay";
 import { NoteWindow } from "@/components/NoteWindow";
 import { Onboarding } from "@/components/Onboarding";
 import { Toaster } from "@/components/ui";
-
-/** Unmissable dev-build marker: dev and the installed app share a data dir
- *  and look identical — this pill is how to tell them apart at a glance.
- *  Non-interactive so it never steals a click from what's underneath. */
-function DevBadge() {
-  const [build, setBuild] = useState<BuildInfo | null>(null);
-  useEffect(() => {
-    api
-      .buildInfo()
-      .then(setBuild)
-      .catch(() => {});
-  }, []);
-  if (build?.profile !== "dev") return null;
-  return (
-    <div className="pointer-events-none fixed right-3 top-3 z-[100] select-none rounded-full border border-[#e8a33d]/40 bg-[#e8a33d]/15 px-2.5 py-1 text-[11px] font-semibold tracking-wide text-[#e8a33d]">
-      DEV · <span className="font-mono font-medium">{build.commit}</span>
-    </div>
-  );
-}
 
 function App() {
   const init = useStore((s) => s.init);
@@ -105,7 +84,6 @@ function App() {
         initialTab={settingsTab}
       />
       <CommandPalette />
-      <DevBadge />
       <ImportOkfModal />
       {/* Always mounted: OKF-bundle drops import from the homepage too. */}
       <FileDrop />
