@@ -201,7 +201,8 @@ export interface AiConfig {
   /** Menu bar extra (tray icon); Settings → General toggles it live. */
   trayEnabled: boolean;
   /** Weekly LLM consolidation of auto-created evidence notes (note curator
-   *  phase 5). Off by default: spends tokens and rewrites note content. */
+   *  phase 5). On by default — idle-gated, capped, fully recoverable; the
+   *  toggle is for cost control. */
   curatorConsolidate: boolean;
 }
 
