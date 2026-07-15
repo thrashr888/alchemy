@@ -46,7 +46,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   }, []);
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
+    <div className="flex h-dvh w-screen flex-col overflow-hidden bg-background text-foreground">
       <header
         data-tauri-drag-region
         className="flex items-center gap-2 h-12 border-b border-border pl-[84px] pr-3"
@@ -92,6 +92,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
             size="icon"
             onClick={onOpenSettings}
             title="Settings"
+            aria-label="Open settings"
           >
             <Settings className="h-4 w-4" />
           </Button>

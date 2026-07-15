@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { isTauri } from "@tauri-apps/api/core";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { SUPPORTED_EXTENSIONS } from "@/lib/utils";
@@ -17,6 +18,7 @@ function ext(path: string): string {
  */
 export function FileDrop() {
   useEffect(() => {
+    if (!isTauri()) return;
     let unlisten: (() => void) | undefined;
     let active = true;
 
@@ -36,6 +38,13 @@ export function FileDrop() {
       .then((fn) => {
         if (active) unlisten = fn;
         else fn();
+      })
+      .catch((error) => {
+        if (!active) return;
+        console.error("file-drop listener failed", error);
+        useStore
+          .getState()
+          .pushToast("error", "File drop is unavailable. Use Add Source instead.");
       });
 
     return () => {

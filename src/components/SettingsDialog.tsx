@@ -1,19 +1,20 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { getVersion } from "@tauri-apps/api/app";
-import { SYSTEM_THEME, THEME_LIST, THEMES } from "@/lib/themes";
 import { playDone } from "@/lib/sound";
 import { checkForUpdates, type UpdateFlow } from "@/lib/updates";
-import { Button, Input, Modal, Spinner, Textarea } from "./ui";
+import { Button, Input, Modal, Spinner } from "./ui";
 import { cn } from "@/lib/utils";
-import { AlchemySymbol } from "./AlchemyHero";
 import { MacConnect } from "./MacConnect";
+import {
+  AboutTab,
+  AppearanceTab,
+  ChatTab,
+  PersonalizationTab,
+  ShortcutsTab,
+} from "./settings/SettingsTabs";
 import type {
   AiConfig,
-  BuildInfo,
-  ChatConfig,
   ConnectorStatus,
   McpStatus,
 } from "@/lib/types";
@@ -21,7 +22,6 @@ import {
   RefreshCw,
   CheckCircle2,
   XCircle,
-  Check,
   Circle,
   Zap,
   Cpu,
@@ -29,7 +29,6 @@ import {
   Palette,
   Keyboard,
   Info,
-  Globe,
   SlidersHorizontal,
   UserRound,
   AudioLines,
@@ -236,8 +235,10 @@ export function SettingsDialog({
         <nav className="flex w-36 shrink-0 flex-col gap-0.5">
           {TABS.map((t) => (
             <button
+              type="button"
               key={t.id}
               onClick={() => setTab(t.id)}
+              aria-current={tab === t.id ? "page" : undefined}
               className={cn(
                 "flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12.5px] transition-colors",
                 tab === t.id
@@ -285,8 +286,10 @@ export function SettingsDialog({
                     },
                   ].map((pv) => (
                     <button
+                      type="button"
                       key={pv.id}
                       onClick={() => setDraft({ ...draft, provider: pv.id })}
+                      aria-pressed={draft.provider === pv.id}
                       className={cn(
                         "flex flex-col items-start gap-0.5 rounded-md border px-3 py-2 text-left transition-colors",
                         draft.provider === pv.id
@@ -312,6 +315,8 @@ export function SettingsDialog({
                     hint="Empty = inferred from your key for OpenAI, Anthropic, OpenRouter, and Groq. Any OpenAI-compatible base URL works (usually ends in /v1)."
                   >
                     <Input
+                      name="gateway-url"
+                      aria-label="Gateway URL"
                       value={draft.openaiBaseUrl}
                       onChange={(e) =>
                         setDraft({ ...draft, openaiBaseUrl: e.target.value })
@@ -325,6 +330,8 @@ export function SettingsDialog({
                   >
                     <Input
                       type="password"
+                      name="gateway-api-key"
+                      aria-label="API key"
                       value={draft.openaiApiKey}
                       onChange={(e) =>
                         setDraft({ ...draft, openaiApiKey: e.target.value })
@@ -343,6 +350,7 @@ export function SettingsDialog({
                     <div className="flex gap-1.5">
                       {gatewayModels.length > 0 ? (
                         <Select
+                          ariaLabel="Gateway chat model"
                           value={draft.openaiChatModel}
                           onChange={(v) =>
                             setDraft({ ...draft, openaiChatModel: v })
@@ -351,6 +359,8 @@ export function SettingsDialog({
                         />
                       ) : (
                         <Input
+                          name="gateway-chat-model"
+                          aria-label="Gateway chat model"
                           value={draft.openaiChatModel}
                           onChange={(e) =>
                             setDraft({
@@ -377,6 +387,8 @@ export function SettingsDialog({
               {draft.provider !== "openai" && (
                 <Field label="Ollama URL">
                   <Input
+                    name="ollama-url"
+                    aria-label="Ollama URL"
                     value={draft.baseUrl}
                     onChange={(e) =>
                       setDraft({ ...draft, baseUrl: e.target.value })
@@ -392,6 +404,7 @@ export function SettingsDialog({
                   hint="Used to answer questions and generate documents. Models tagged nvfp4/mlx run on Ollama's MLX engine (Apple-Silicon accelerated)."
                 >
                   <ModelPicker
+                    label="Chat model"
                     value={draft.chatModel}
                     models={models}
                     onChange={(v) => setDraft({ ...draft, chatModel: v })}
@@ -422,8 +435,10 @@ export function SettingsDialog({
                     },
                   ].map((ev) => (
                     <button
+                      type="button"
                       key={ev.id}
                       onClick={() => setDraft({ ...draft, embedder: ev.id })}
+                      aria-pressed={draft.embedder === ev.id}
                       className={cn(
                         "flex flex-col items-start gap-0.5 rounded-md border px-3 py-2 text-left transition-colors",
                         draft.embedder === ev.id
@@ -448,6 +463,7 @@ export function SettingsDialog({
                   hint="Used to index sources for retrieval. nomic-embed-text is recommended."
                 >
                   <ModelPicker
+                    label="Embedding model"
                     value={draft.embedModel}
                     models={models}
                     onChange={(v) => setDraft({ ...draft, embedModel: v })}
@@ -462,6 +478,7 @@ export function SettingsDialog({
                 >
                   {gatewayModels.length > 0 ? (
                     <Select
+                      ariaLabel="Vision model"
                       value={draft.openaiVisionModel ?? ""}
                       onChange={(v) =>
                         setDraft({ ...draft, openaiVisionModel: v })
@@ -471,6 +488,8 @@ export function SettingsDialog({
                     />
                   ) : (
                     <Input
+                      name="vision-model"
+                      aria-label="Vision model"
                       value={draft.openaiVisionModel ?? ""}
                       onChange={(e) =>
                         setDraft({
@@ -488,6 +507,7 @@ export function SettingsDialog({
                   hint="OCR for image & scanned-PDF sources. Dedicated OCR models (glm-ocr, deepseek-ocr) work best; leave blank to disable."
                 >
                   <ModelPicker
+                    label="Vision model"
                     value={draft.visionModel ?? ""}
                     models={models}
                     onChange={(v) => setDraft({ ...draft, visionModel: v })}
@@ -544,380 +564,6 @@ export function SettingsDialog({
         </div>
       </Modal>
     </Modal>
-  );
-}
-
-const CHAT_STYLES = [
-  {
-    id: "default",
-    label: "Default",
-    hint: "Balanced, grounded answers for research and brainstorming.",
-  },
-  {
-    id: "learning",
-    label: "Learning Guide",
-    hint: "Explains step by step, defines terms, builds intuition.",
-  },
-  {
-    id: "custom",
-    label: "Custom",
-    hint: "Give your own goal, style, or role.",
-  },
-] as const;
-
-const CHAT_LENGTHS = [
-  { id: "default", label: "Default" },
-  { id: "longer", label: "Longer" },
-  { id: "shorter", label: "Shorter" },
-] as const;
-
-const CHAT_FONTS = [
-  { id: "sans", label: "Sans", className: "font-sans" },
-  { id: "serif", label: "Serif", className: "font-serif" },
-  { id: "mono", label: "Mono", className: "font-mono" },
-  { id: "system", label: "System", className: "chat-system" },
-] as const;
-
-const CHAT_SIZES = [
-  { id: "small", label: "Small" },
-  { id: "medium", label: "Medium" },
-  { id: "large", label: "Large" },
-] as const;
-
-const CHAT_ALIGNS = [
-  { id: "natural", label: "Natural" },
-  { id: "justified", label: "Justified" },
-] as const;
-
-/** Chat style & length for the current notebook; applies as you click. */
-function ChatTab() {
-  const chatConfig = useStore((s) => s.chatConfig);
-  const setChatConfig = useStore((s) => s.setChatConfig);
-  const currentId = useStore((s) => s.currentId);
-  const notebook = useStore((s) =>
-    s.notebooks.find((n) => n.id === s.currentId),
-  );
-
-  const apply = (patch: Partial<ChatConfig>) =>
-    setChatConfig({ ...chatConfig, ...patch });
-  const styleHint = CHAT_STYLES.find((s) => s.id === chatConfig.style)?.hint;
-
-  return (
-    <div className="flex flex-col gap-4">
-      <p className="text-[13px] leading-relaxed text-muted-foreground">
-        {currentId ? (
-          <>
-            Tune how the assistant responds in{" "}
-            <span className="font-medium text-foreground">
-              {notebook?.title ?? "this notebook"}
-            </span>
-            . Changes apply immediately.
-          </>
-        ) : (
-          "Open a notebook to tune its chat — each notebook keeps its own style."
-        )}
-      </p>
-
-      <Field label="Conversational goal, style, or role">
-        <div className="flex flex-wrap gap-1.5">
-          {CHAT_STYLES.map((s) => (
-            <Pill
-              key={s.id}
-              active={chatConfig.style === s.id}
-              onClick={() => apply({ style: s.id })}
-            >
-              {s.label}
-            </Pill>
-          ))}
-        </div>
-        {styleHint && (
-          <span className="text-[11px] text-subtle-foreground">
-            {styleHint}
-          </span>
-        )}
-        {chatConfig.style === "custom" && (
-          <Textarea
-            rows={4}
-            className="mt-1"
-            placeholder="e.g. Act as a skeptical peer reviewer; challenge claims and ask for evidence."
-            value={chatConfig.customPrompt}
-            onChange={(e) => apply({ customPrompt: e.target.value })}
-          />
-        )}
-      </Field>
-
-      <Field label="Response length">
-        <div className="flex flex-wrap gap-1.5">
-          {CHAT_LENGTHS.map((l) => (
-            <Pill
-              key={l.id}
-              active={chatConfig.length === l.id}
-              onClick={() => apply({ length: l.id })}
-            >
-              {l.label}
-            </Pill>
-          ))}
-        </div>
-      </Field>
-    </div>
-  );
-}
-
-/** Who the user is — woven into system prompts across chat and generations. */
-function PersonalizationTab() {
-  const aiConfig = useStore((s) => s.aiConfig);
-  const save = useStore((s) => s.saveAiConfig);
-  const [draft, setDraft] = useState({
-    name: "",
-    profession: "",
-    instructions: "",
-  });
-
-  useEffect(() => {
-    if (aiConfig?.profile) setDraft(aiConfig.profile);
-    // Load once per dialog open — refreshing on every aiConfig change would
-    // clobber in-progress typing when a blur-save round-trips.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Fields save when you leave them (blur) — no Save button to remember.
-  const saveOnBlur = () => {
-    if (!aiConfig) return;
-    const p = aiConfig.profile ?? {
-      name: "",
-      profession: "",
-      instructions: "",
-    };
-    const changed =
-      draft.name !== p.name ||
-      draft.profession !== p.profession ||
-      draft.instructions !== p.instructions;
-    if (changed) void save({ ...aiConfig, profile: { ...draft } });
-  };
-
-  return (
-    <div className="flex flex-col gap-4">
-      <p className="text-[13px] leading-relaxed text-muted-foreground">
-        Tell the assistant who you are. This is added to every chat and
-        generated document's system prompt so answers fit you — it is never sent
-        anywhere except your configured model. Changes save automatically.
-      </p>
-
-      <Field label="What should the assistant call you?">
-        <Input
-          placeholder="e.g. Paul"
-          value={draft.name}
-          onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-          onBlur={saveOnBlur}
-        />
-      </Field>
-
-      <Field label="What best describes your work?">
-        <Input
-          placeholder="e.g. Product management"
-          value={draft.profession}
-          onChange={(e) => setDraft({ ...draft, profession: e.target.value })}
-          onBlur={saveOnBlur}
-        />
-      </Field>
-
-      <Field label="Instructions for the assistant">
-        <Textarea
-          rows={8}
-          placeholder={
-            "Preferences it should keep in mind across all notebooks, e.g.\n" +
-            "- I prefer concise answers with tables for comparisons\n" +
-            "- Prices in USD; I'm in the San Francisco Bay Area"
-          }
-          value={draft.instructions}
-          onChange={(e) => setDraft({ ...draft, instructions: e.target.value })}
-          onBlur={saveOnBlur}
-        />
-      </Field>
-    </div>
-  );
-}
-
-/** Appearance: theme + chat reading preferences (font, size, alignment). */
-function AppearanceTab() {
-  const reading = useStore((s) => s.reading);
-  const setReading = useStore((s) => s.setReading);
-  return (
-    <div className="flex flex-col gap-4">
-      <Field label="Theme" hint="Applies immediately.">
-        <ThemePicker />
-      </Field>
-
-      <div className="h-px bg-border" />
-
-      <Field
-        label="Chat font"
-        hint="How chat responses are displayed. Doesn't change the model."
-      >
-        <div className="flex flex-wrap gap-1.5">
-          {CHAT_FONTS.map((f) => (
-            <Pill
-              key={f.id}
-              active={reading.font === f.id}
-              onClick={() => setReading({ font: f.id })}
-            >
-              <span className={f.className}>{f.label}</span>
-            </Pill>
-          ))}
-        </div>
-      </Field>
-
-      <Field label="Text size">
-        <div className="flex flex-wrap gap-1.5">
-          {CHAT_SIZES.map((s) => (
-            <Pill
-              key={s.id}
-              active={reading.fontSize === s.id}
-              onClick={() => setReading({ fontSize: s.id })}
-            >
-              {s.label}
-            </Pill>
-          ))}
-        </div>
-      </Field>
-
-      <Field label="Alignment">
-        <div className="flex flex-wrap gap-1.5">
-          {CHAT_ALIGNS.map((a) => (
-            <Pill
-              key={a.id}
-              active={reading.textAlign === a.id}
-              onClick={() => setReading({ textAlign: a.id })}
-            >
-              {a.label}
-            </Pill>
-          ))}
-        </div>
-      </Field>
-    </div>
-  );
-}
-
-const SHORTCUTS: { keys: string[]; label: string; context?: string }[] = [
-  { keys: ["⌘", "N"], label: "New notebook", context: "Home" },
-  { keys: ["⌘", "N"], label: "New note", context: "Notebook" },
-  { keys: ["⌘", "K"], label: "Open the command menu" },
-  { keys: ["⌘", "F"], label: "Find in source", context: "Reader" },
-  { keys: ["⌘", "1"], label: "Show or hide Sources", context: "Notebook" },
-  { keys: ["⌘", "2"], label: "Show or hide Studio", context: "Notebook" },
-  { keys: ["⌘", ","], label: "Open Settings" },
-  { keys: ["↩"], label: "Send message · next find match" },
-  { keys: ["⇧", "↩"], label: "New line in the composer" },
-  { keys: ["esc"], label: "Close dialog or menu" },
-];
-
-function Kbd({ children }: { children: ReactNode }) {
-  return (
-    <kbd className="inline-flex h-[22px] min-w-[22px] items-center justify-center rounded-md border border-border-strong bg-surface-2 px-1.5 font-sans text-[12px] text-foreground/85 shadow-[0_1px_0_var(--border)]">
-      {children}
-    </kbd>
-  );
-}
-
-/** Read-only reference of the app's keyboard commands. */
-function ShortcutsTab() {
-  return (
-    <div className="flex flex-col gap-1">
-      {SHORTCUTS.map((s, i) => (
-        <div key={i} className="flex items-center gap-3 rounded-md px-1 py-1.5">
-          <div className="flex w-20 shrink-0 items-center gap-1">
-            {s.keys.map((k) => (
-              <Kbd key={k}>{k}</Kbd>
-            ))}
-          </div>
-          <span className="text-[13px] text-foreground/90">{s.label}</span>
-          {s.context && (
-            <span className="ml-auto text-[11px] text-subtle-foreground">
-              {s.context}
-            </span>
-          )}
-        </div>
-      ))}
-      <p className="mt-2 text-[11px] leading-relaxed text-subtle-foreground">
-        On Windows and Linux, use Ctrl in place of ⌘.
-      </p>
-    </div>
-  );
-}
-
-/** App identity, version, and links. */
-function AboutTab() {
-  const [version, setVersion] = useState("");
-  const [build, setBuild] = useState<BuildInfo | null>(null);
-  useEffect(() => {
-    getVersion()
-      .then(setVersion)
-      .catch(() => setVersion(""));
-    api
-      .buildInfo()
-      .then(setBuild)
-      .catch(() => setBuild(null));
-  }, []);
-  return (
-    <div className="flex flex-col items-center gap-1 py-6 text-center">
-      <AlchemySymbol className="h-16 w-16 text-citation/70" />
-      <div className="mt-3 text-[17px] font-semibold tracking-tight">
-        Alchemy
-      </div>
-      <div className="text-[13px] text-muted-foreground">
-        Local-first research notebooks
-      </div>
-      {version && (
-        <div className="mt-2 text-[12px] text-subtle-foreground">
-          Version {version}
-          {build && (
-            <>
-              {" · "}
-              <span className="font-mono">{build.commit}</span>
-              {build.profile === "dev" && (
-                <span className="ml-1.5 rounded bg-primary/15 px-1.5 py-0.5 font-medium text-citation">
-                  dev
-                </span>
-              )}
-            </>
-          )}
-        </div>
-      )}
-      <button
-        className="mt-4 inline-flex items-center gap-1.5 text-[12px] text-citation hover:underline"
-        onClick={() => void openUrl("https://github.com/thrashr888/alchemy")}
-      >
-        <Globe className="h-3.5 w-3.5" />
-        github.com/thrashr888/alchemy
-      </button>
-      <div className="mt-4 text-[12px] text-subtle-foreground">
-        © {new Date().getFullYear()} Paul Thrasher
-      </div>
-    </div>
-  );
-}
-
-function Pill({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "rounded-md border px-3 py-1.5 text-[12px] transition-colors",
-        active
-          ? "border-primary/60 bg-primary/15 text-citation"
-          : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {children}
-    </button>
   );
 }
 
@@ -1017,6 +663,7 @@ function StatusBox({
           onClick={onRefresh}
           loading={loading}
           title="Recheck"
+          aria-label="Recheck model connection"
         >
           {!loading && <RefreshCw className="h-3.5 w-3.5" />}
         </Button>
@@ -1467,8 +1114,10 @@ function AgentsTab() {
 
               {/* Escape hatch: the manual setup, always copyable. */}
               <button
+                type="button"
                 title={`Copy manual setup\n${c.snippet}`}
                 onClick={() => copySnippet(c)}
+                aria-label={`Copy manual setup for ${c.name}`}
                 className="rounded p-1 text-subtle-foreground transition-colors hover:text-foreground"
               >
                 <Copy className="h-3.5 w-3.5" />
@@ -1486,81 +1135,14 @@ function AgentsTab() {
   );
 }
 
-function ThemePicker() {
-  const theme = useStore((s) => s.theme);
-  const setTheme = useStore((s) => s.setTheme);
-  const darkBg = THEMES.midnight.vars.background;
-  const lightBg = THEMES.light.vars.background;
-  return (
-    <div className="grid grid-cols-2 gap-1.5">
-      {/* Follow the OS appearance: Midnight when dark, Light when light. */}
-      <button
-        onClick={() => setTheme(SYSTEM_THEME)}
-        className={cn(
-          "flex items-center gap-2 rounded-md border px-2 py-1.5 text-left text-[12px] transition-colors",
-          theme === SYSTEM_THEME
-            ? "border-primary/60 bg-primary/10 text-foreground"
-            : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
-        )}
-      >
-        <span
-          className="flex h-5 w-5 shrink-0 items-center justify-center rounded border"
-          style={{
-            background: `linear-gradient(135deg, ${darkBg} 50%, ${lightBg} 50%)`,
-            borderColor: THEMES.midnight.vars["border-strong"],
-          }}
-        >
-          <span
-            className="h-2.5 w-2.5 rounded-full"
-            style={{ background: THEMES.midnight.vars.primary }}
-          />
-        </span>
-        <span className="flex-1 truncate">System</span>
-        {theme === SYSTEM_THEME && (
-          <Check className="h-3.5 w-3.5 text-primary" />
-        )}
-      </button>
-      {THEME_LIST.map((t) => {
-        const active = t.id === theme;
-        return (
-          <button
-            key={t.id}
-            onClick={() => setTheme(t.id)}
-            className={cn(
-              "flex items-center gap-2 rounded-md border px-2 py-1.5 text-left text-[12px] transition-colors",
-              active
-                ? "border-primary/60 bg-primary/10 text-foreground"
-                : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {/* Live swatch built from the theme's own tokens. */}
-            <span
-              className="flex h-5 w-5 shrink-0 items-center justify-center rounded border"
-              style={{
-                background: t.vars.background,
-                borderColor: t.vars["border-strong"],
-              }}
-            >
-              <span
-                className="h-2.5 w-2.5 rounded-full"
-                style={{ background: t.vars.primary }}
-              />
-            </span>
-            <span className="flex-1 truncate">{t.label}</span>
-            {active && <Check className="h-3.5 w-3.5 text-primary" />}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 function Select({
+  ariaLabel,
   value,
   onChange,
   options,
   emptyLabel,
 }: {
+  ariaLabel: string;
   value: string;
   onChange: (v: string) => void;
   options: string[];
@@ -1571,6 +1153,7 @@ function Select({
     options.includes(value) || !value ? options : [value, ...options];
   return (
     <select
+      aria-label={ariaLabel}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       className="h-8 w-full appearance-none rounded-md border border-input bg-surface-2 px-2.5 text-[13px] text-foreground outline-none transition-colors focus:border-ring/60"
@@ -1598,7 +1181,7 @@ function Field({
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-[12px] font-medium text-foreground">{label}</label>
+      <div className="text-[12px] font-medium text-foreground">{label}</div>
       {children}
       {hint && (
         <span className="text-[11px] text-subtle-foreground">{hint}</span>
@@ -1608,11 +1191,13 @@ function Field({
 }
 
 function ModelPicker({
+  label,
   value,
   models,
   onChange,
   suggestions = [],
 }: {
+  label: string;
   value: string;
   models: string[];
   onChange: (v: string) => void;
@@ -1624,7 +1209,7 @@ function ModelPicker({
   );
   return (
     <div className="flex flex-col gap-1.5">
-      <Input value={value} onChange={(e) => onChange(e.target.value)} />
+      <Input aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} />
       {models.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {models.map((m) => (

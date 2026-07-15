@@ -102,6 +102,34 @@ export function Spinner({ className }: { className?: string }) {
 }
 
 /**
+ * Full-card primary action for cards that also contain sibling controls.
+ * The button is a sibling, not a wrapper, so menus and checkboxes never become
+ * nested interactive content. Place it inside a `relative` card and keep
+ * secondary controls above it with `relative z-20`.
+ */
+export function CardAction({
+  label,
+  onClick,
+  className,
+}: {
+  label: string;
+  onClick: () => void;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={onClick}
+      className={cn(
+        "absolute inset-0 z-0 rounded-[inherit] outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+        className,
+      )}
+    />
+  );
+}
+
+/**
  * Drag strip on a side panel's inner edge for resizing. The panel must be
  * `position: relative`. Reports the desired panel width on every pointer
  * move; arrow keys nudge, double-click resets to the default width.
@@ -376,7 +404,12 @@ export function Toaster({
     info: "border-border-strong",
   };
   return (
-    <div className="pointer-events-none fixed bottom-4 left-1/2 z-[70] flex -translate-x-1/2 flex-col items-center gap-2">
+    <div
+      role="status"
+      aria-live="polite"
+      aria-atomic="false"
+      className="pointer-events-none fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-1/2 z-[70] flex -translate-x-1/2 flex-col items-center gap-2"
+    >
       {toasts.map((t) => (
         <div
           key={t.id}
@@ -392,6 +425,7 @@ export function Toaster({
           <button
             className="ml-1 rounded p-0.5 text-muted-foreground hover:text-foreground"
             onClick={() => onDismiss(t.id)}
+            aria-label="Dismiss notification"
           >
             <X className="h-3.5 w-3.5" />
           </button>
@@ -426,6 +460,7 @@ export function RowMenu({
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef<HTMLDivElement>(null);
   const menuRef = React.useRef<HTMLDivElement>(null);
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
   // Which way the dropdown unfolds — flipped before first paint when the
   // default (below, left-of-trigger) would land outside the viewport.
   const [flip, setFlip] = React.useState({ up: false, right: false });
@@ -442,6 +477,7 @@ export function RowMenu({
 
   React.useEffect(() => {
     if (!open) return;
+    menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
     // Capture-phase pointerdown: title-bar drag regions swallow clicks, but
     // pointerdown still dispatches first. Blur covers leaving the app.
     const onDown = (e: PointerEvent) => {
@@ -456,6 +492,21 @@ export function RowMenu({
     };
   }, [open]);
 
+  const focusMenuItem = (direction: 1 | -1) => {
+    const items = Array.from(
+      menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [],
+    );
+    if (items.length === 0) return;
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = current < 0 ? 0 : (current + direction + items.length) % items.length;
+    items[next]?.focus();
+  };
+
+  const closeAndRestoreFocus = () => {
+    setOpen(false);
+    requestAnimationFrame(() => triggerRef.current?.focus());
+  };
+
   return (
     <div
       ref={ref}
@@ -467,11 +518,38 @@ export function RowMenu({
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
         e.stopPropagation();
-        if (e.key === "Escape") setOpen(false);
+        if (e.key === "Escape") {
+          e.preventDefault();
+          closeAndRestoreFocus();
+        } else if (e.key === "ArrowDown") {
+          e.preventDefault();
+          focusMenuItem(1);
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          focusMenuItem(-1);
+        } else if (e.key === "Home") {
+          e.preventDefault();
+          menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+        } else if (e.key === "End") {
+          e.preventDefault();
+          const items = Array.from(
+            menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [],
+          );
+          items[items.length - 1]?.focus();
+        } else if (e.key === "Tab") {
+          setOpen(false);
+        }
       }}
     >
       <button
+        ref={triggerRef}
         onClick={() => setOpen((o) => !o)}
+        onKeyDown={(e) => {
+          if (!open && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+            e.preventDefault();
+            setOpen(true);
+          }
+        }}
         title={label}
         aria-label={label}
         aria-haspopup="menu"
@@ -496,7 +574,7 @@ export function RowMenu({
               key={it.label}
               role="menuitem"
               onClick={() => {
-                setOpen(false);
+                closeAndRestoreFocus();
                 it.onClick();
               }}
               className={cn(

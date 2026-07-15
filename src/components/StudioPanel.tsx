@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type ReactNode } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import {
@@ -11,163 +11,36 @@ import {
   ResizeHandle,
   RowMenu,
   Spinner,
+  CardAction,
   useConfirm,
 } from "./ui";
-import { Markdown } from "./Markdown";
-import { MindMap } from "./MindMap";
-import { AudioPlayer, DialogueScript } from "./AudioNote";
 import { Reports } from "./Reports";
 import { RichEditor } from "./RichEditor";
+import { StreamingBody, StudioNoteViewer } from "./StudioNoteViewer";
 import {
-  cardButtonProps,
   cn,
   noteUnread,
   relativeTime,
   shortcutBlocked,
 } from "@/lib/utils";
-import type { Note, NoteKind } from "@/lib/types";
+import type { Note } from "@/lib/types";
 import {
-  Eye,
-  EyeOff,
+  KIND_LABEL,
+  studioArtifacts,
+} from "./studioArtifacts";
+import {
   FileText,
-  HelpCircle,
-  GraduationCap,
-  Newspaper,
-  Clock,
   Plus,
   Trash2,
-  Pencil,
   StickyNote,
   Wand2,
   Square,
   PanelRightClose,
   Copy,
-  Check,
-  ClipboardList,
-  Megaphone,
-  FileCode2,
   FolderOpen,
-  Sparkles,
-  RefreshCw,
-  FileInput,
-  TriangleAlert,
-  MessageSquare,
-  Lightbulb,
-  Quote,
-  Table,
-  Layers,
-  ListChecks,
-  Waypoints,
-  AppWindow,
-  AudioLines,
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
-
-type Artifact = { kind: NoteKind; label: string; icon: ReactNode };
-
-/** Tile tint per generator family — the color IS the section label
- *  (NotebookLM-style), replacing the old uppercase headers. */
-type Tint = { tile: string; icon: string };
-const TINT_GENERATE: Tint = {
-  tile: "border-[#5e9bd2]/20 bg-[#5e9bd2]/10 hover:border-[#5e9bd2]/40 hover:bg-[#5e9bd2]/20",
-  icon: "text-[#5e9bd2]",
-};
-const TINT_LEARNING: Tint = {
-  tile: "border-[#9b87f5]/20 bg-[#9b87f5]/10 hover:border-[#9b87f5]/40 hover:bg-[#9b87f5]/20",
-  icon: "text-[#9b87f5]",
-};
-const TINT_DOCUMENTS: Tint = {
-  tile: "border-[#4cb782]/20 bg-[#4cb782]/10 hover:border-[#4cb782]/40 hover:bg-[#4cb782]/20",
-  icon: "text-[#4cb782]",
-};
-const TINT_TEMPLATES: Tint = {
-  tile: "border-[#e8a33d]/20 bg-[#e8a33d]/10 hover:border-[#e8a33d]/40 hover:bg-[#e8a33d]/20",
-  icon: "text-[#e8a33d]",
-};
-
-/** Shown only once the voice model is downloaded & verified (Settings → Models). */
-export const AUDIO_OVERVIEW: Artifact = {
-  kind: "audio_overview",
-  label: "Audio Overview",
-  icon: <AudioLines className="h-3.5 w-3.5" />,
-};
-
-const SUMMARIES: Artifact[] = [
-  {
-    kind: "summary",
-    label: "Summary",
-    icon: <FileText className="h-3.5 w-3.5" />,
-  },
-  { kind: "faq", label: "FAQ", icon: <HelpCircle className="h-3.5 w-3.5" /> },
-  {
-    kind: "study_guide",
-    label: "Study guide",
-    icon: <GraduationCap className="h-3.5 w-3.5" />,
-  },
-  {
-    kind: "briefing",
-    label: "Briefing",
-    icon: <Newspaper className="h-3.5 w-3.5" />,
-  },
-  {
-    kind: "timeline",
-    label: "Timeline",
-    icon: <Clock className="h-3.5 w-3.5" />,
-  },
-  {
-    kind: "insights",
-    label: "Insights",
-    icon: <Lightbulb className="h-3.5 w-3.5" />,
-  },
-  {
-    kind: "data_table",
-    label: "Data table",
-    icon: <Table className="h-3.5 w-3.5" />,
-  },
-  {
-    kind: "problems",
-    label: "Problems",
-    icon: <TriangleAlert className="h-3.5 w-3.5" />,
-  },
-  {
-    kind: "evidence",
-    label: "Evidence Log",
-    icon: <Quote className="h-3.5 w-3.5" />,
-  },
-];
-
-const LEARNING: Artifact[] = [
-  {
-    kind: "flashcards",
-    label: "Flashcards",
-    icon: <Layers className="h-3.5 w-3.5" />,
-  },
-  { kind: "quiz", label: "Quiz", icon: <ListChecks className="h-3.5 w-3.5" /> },
-  {
-    kind: "mind_map",
-    label: "Mind map",
-    icon: <Waypoints className="h-3.5 w-3.5" />,
-  },
-];
-
-const DOCUMENTS: Artifact[] = [
-  {
-    kind: "prd",
-    label: "PRD",
-    icon: <ClipboardList className="h-3.5 w-3.5" />,
-  },
-  {
-    kind: "prfaq",
-    label: "PR/FAQ",
-    icon: <Megaphone className="h-3.5 w-3.5" />,
-  },
-  { kind: "rfc", label: "RFC", icon: <FileCode2 className="h-3.5 w-3.5" /> },
-  { kind: "skill", label: "Skill", icon: <Sparkles className="h-3.5 w-3.5" /> },
-];
-
-/** Every generator, for surfaces beyond the Studio panel (command menu). */
-export const ARTIFACTS: Artifact[] = [...SUMMARIES, ...LEARNING, ...DOCUMENTS];
 
 /**
  * Card preview text: skip a leading markdown heading (or a first line equal to
@@ -196,28 +69,6 @@ function notePreview(n: Note): string {
     .slice(0, 160);
 }
 
-const KIND_LABEL: Record<NoteKind, string> = {
-  note: "Note",
-  audio_overview: "Audio Overview",
-  summary: "Summary",
-  faq: "FAQ",
-  study_guide: "Study guide",
-  briefing: "Briefing",
-  timeline: "Timeline",
-  insights: "Insights",
-  flashcards: "Flashcards",
-  quiz: "Quiz",
-  mind_map: "Mind map",
-  data_table: "Data table",
-  problems: "Problems",
-  evidence: "Evidence",
-  prd: "PRD",
-  prfaq: "PR/FAQ",
-  rfc: "RFC",
-  skill: "Skill",
-  report: "Report",
-  template: "Template",
-};
 
 /** Notes the curator archived: out of retrieval, collapsed but never gone.
  *  Opening one still works; editing it revives it (see RFC-note-curator). */
@@ -246,11 +97,11 @@ function ArchivedNotes({
       {open && (
         <div className="mt-1 flex flex-col gap-1.5">
           {notes.map((n) => (
-            <div
+            <button
+              type="button"
               key={n.id}
               onClick={() => onOpen(n)}
-              {...cardButtonProps(() => onOpen(n))}
-              className="group cursor-pointer rounded-md border border-border bg-surface-2/40 px-3 py-2 opacity-50 transition-opacity hover:opacity-80"
+              className="group w-full rounded-md border border-border bg-surface-2/40 px-3 py-2 text-left opacity-50 transition-opacity hover:opacity-80"
             >
               <span className="block truncate text-[12px] font-medium text-foreground">
                 {n.title}
@@ -258,7 +109,7 @@ function ArchivedNotes({
               <span className="text-[11px] text-subtle-foreground">
                 {relativeTime(n.updatedAt)} — editing revives it
               </span>
-            </div>
+            </button>
           ))}
         </div>
       )}
@@ -345,28 +196,12 @@ export function StudioPanel() {
   }, [currentId]);
   const [instructions, setInstructions] = useState("");
   const [showInstructions, setShowInstructions] = useState(false);
-  // Generators hidden/shown — persisted so a notes-heavy workflow keeps its room.
-  const [genOpen, setGenOpen] = useState(
-    localStorage.getItem("studioGenOpen") !== "false",
-  );
-  const toggleGenOpen = () => {
-    const v = !genOpen;
-    localStorage.setItem("studioGenOpen", String(v));
-    setGenOpen(v);
-  };
-
-  // Templates beyond the first few collapse behind a More tile so the
-  // generator grid stays short; expansion is per-session.
-  const [templatesExpanded, setTemplatesExpanded] = useState(false);
-  const TEMPLATES_PREVIEW = 3;
-  const collapsible = templates.length > TEMPLATES_PREVIEW + 1;
-  const visibleTemplates =
-    collapsible && !templatesExpanded
-      ? templates.slice(0, TEMPLATES_PREVIEW)
-      : templates;
-  const hiddenTemplateCount = collapsible
-    ? templates.length - TEMPLATES_PREVIEW
-    : 0;
+  // Keep the common generators visible; the long tail and custom templates
+  // share one progressive-disclosure control.
+  const [moreOpen, setMoreOpen] = useState(false);
+  const { primary: primaryArtifacts, secondary: secondaryArtifacts } =
+    studioArtifacts(kokoroReady);
+  const moreCount = secondaryArtifacts.length + templates.length;
 
   const hasSources = sources.length > 0;
   const width = useStore((s) => s.studioWidth);
@@ -395,6 +230,7 @@ export function StudioPanel() {
           className="ml-auto"
           onClick={toggleStudio}
           title="Collapse studio"
+          aria-label="Collapse studio"
         >
           <PanelRightClose className="h-4 w-4" />
         </Button>
@@ -429,29 +265,12 @@ export function StudioPanel() {
             >
               <FolderOpen className="h-3.5 w-3.5" />
             </button>
-            <button
-              onClick={toggleGenOpen}
-              className="rounded p-0.5 transition-colors hover:text-foreground"
-              title={genOpen ? "Hide generators" : "Show generators"}
-              aria-label={genOpen ? "Hide generators" : "Show generators"}
-              aria-expanded={genOpen}
-            >
-              {genOpen ? (
-                <Eye className="h-3.5 w-3.5" />
-              ) : (
-                <EyeOff className="h-3.5 w-3.5" />
-              )}
-            </button>
           </div>
-          {genOpen && (
-            <>
-              {/* One continuous grid — generator families flow into each other
-                and are told apart by tile tint, not headers: blue = generate,
-                violet = learning, green = documents, amber = templates.
-                Templates beyond the first few live behind the More tile. */}
+          <>
+              {/* Keep the frequent actions immediately available; everything
+                  else, including custom templates, lives behind More. */}
               <div className="mt-2 grid grid-cols-2 gap-1.5">
-                {(kokoroReady ? [AUDIO_OVERVIEW, ...SUMMARIES] : SUMMARIES).map(
-                  (a) => (
+                {primaryArtifacts.map((a) => (
                     <GenTile
                       key={a.kind}
                       icon={
@@ -462,13 +281,11 @@ export function StudioPanel() {
                         )
                       }
                       label={a.label}
-                      tint={TINT_GENERATE}
                       disabled={!hasSources || !!generatingKind}
                       onClick={() => generate(a.kind, instructions)}
                     />
-                  ),
-                )}
-                {LEARNING.map((a) => (
+                  ))}
+                {moreOpen && secondaryArtifacts.map((a) => (
                   <GenTile
                     key={a.kind}
                     icon={
@@ -479,28 +296,11 @@ export function StudioPanel() {
                       )
                     }
                     label={a.label}
-                    tint={TINT_LEARNING}
                     disabled={!hasSources || !!generatingKind}
                     onClick={() => generate(a.kind, instructions)}
                   />
                 ))}
-                {DOCUMENTS.map((a) => (
-                  <GenTile
-                    key={a.kind}
-                    icon={
-                      generatingKind === a.kind ? (
-                        <Spinner className="h-3.5 w-3.5" />
-                      ) : (
-                        a.icon
-                      )
-                    }
-                    label={a.label}
-                    tint={TINT_DOCUMENTS}
-                    disabled={!hasSources || !!generatingKind}
-                    onClick={() => generate(a.kind, instructions)}
-                  />
-                ))}
-                {visibleTemplates.map((t) => (
+                {moreOpen && templates.map((t) => (
                   <GenTile
                     key={t.id}
                     icon={
@@ -512,33 +312,27 @@ export function StudioPanel() {
                     }
                     label={t.name}
                     title={t.description || t.name}
-                    tint={TINT_TEMPLATES}
                     disabled={!hasSources || !!generatingKind}
                     onClick={() => generateFromTemplate(t)}
                   />
                 ))}
-                {hiddenTemplateCount > 0 && (
+                {moreCount > 0 && (
                   <GenTile
                     icon={
-                      templatesExpanded ? (
+                      moreOpen ? (
                         <ChevronUp className="h-3.5 w-3.5" />
                       ) : (
                         <ChevronDown className="h-3.5 w-3.5" />
                       )
                     }
-                    label={
-                      templatesExpanded
-                        ? "Less"
-                        : `More (${hiddenTemplateCount})`
-                    }
+                    label={moreOpen ? "Less" : `More (${moreCount})`}
                     title={
-                      templatesExpanded
-                        ? "Show fewer templates"
-                        : `Show ${hiddenTemplateCount} more templates`
+                      moreOpen
+                        ? "Show only common generators"
+                        : `Show ${moreCount} more generators and templates`
                     }
-                    tint={TINT_TEMPLATES}
                     disabled={false}
-                    onClick={() => setTemplatesExpanded((v) => !v)}
+                    onClick={() => setMoreOpen((open) => !open)}
                   />
                 )}
               </div>
@@ -547,6 +341,8 @@ export function StudioPanel() {
                 <Textarea
                   rows={2}
                   autoFocus
+                  name="generation-instructions"
+                  aria-label="Generation instructions"
                   value={instructions}
                   onChange={(e) => setInstructions(e.target.value)}
                   placeholder="Optional instructions applied to the next generation…"
@@ -567,7 +363,6 @@ export function StudioPanel() {
                 </p>
               )}
             </>
-          )}
         </div>
 
         {currentId && <Reports />}
@@ -586,6 +381,7 @@ export function StudioPanel() {
               setComposing(true);
             }}
             title="New note"
+            aria-label="New note"
           >
             <Plus className="h-4 w-4" />
           </Button>
@@ -603,14 +399,16 @@ export function StudioPanel() {
               {notes.filter((n) => n.status !== "archived").map((n) => (
                 <div
                   key={n.id}
-                  onClick={() => openNoteCard(n)}
-                  {...cardButtonProps(() => openNoteCard(n))}
                   className={cn(
-                    "group cursor-pointer rounded-md border border-border bg-surface-2/40 px-3 py-2.5 transition-colors hover:border-border-strong hover:bg-surface-2",
+                    "group relative cursor-pointer rounded-md border border-border bg-surface-2/40 px-3 py-2.5 transition-colors hover:border-border-strong hover:bg-surface-2",
                     n.status === "stale" && "opacity-60",
                   )}
                 >
-                  <div className="flex items-center gap-2">
+                  <CardAction
+                    label={`Open note ${n.title}`}
+                    onClick={() => openNoteCard(n)}
+                  />
+                  <div className="pointer-events-none relative z-10 flex items-center gap-2">
                     <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
                       {n.title}
                     </span>
@@ -622,6 +420,7 @@ export function StudioPanel() {
                       />
                     )}
                     <RowMenu
+                      className="pointer-events-auto z-20"
                       label={`Options for "${n.title}"`}
                       items={[
                         {
@@ -654,7 +453,7 @@ export function StudioPanel() {
                       ]}
                     />
                   </div>
-                  <div className="mt-1 flex items-center gap-1.5">
+                  <div className="pointer-events-none relative z-10 mt-1 flex items-center gap-1.5">
                     {n.kind !== "note" &&
                       n.title.trim().toLowerCase() !==
                         KIND_LABEL[n.kind].toLowerCase() && (
@@ -674,7 +473,7 @@ export function StudioPanel() {
                       {relativeTime(n.updatedAt)}
                     </span>
                   </div>
-                  <p className="mt-1.5 line-clamp-2 text-[12px] leading-relaxed text-muted-foreground">
+                  <p className="pointer-events-none relative z-10 mt-1.5 line-clamp-2 text-[12px] leading-relaxed text-muted-foreground">
                     {notePreview(n)}
                   </p>
                 </div>
@@ -688,7 +487,7 @@ export function StudioPanel() {
         </div>
       </div>
 
-      <NoteViewer note={viewing} onClose={() => setViewing(null)} />
+      <StudioNoteViewer note={viewing} onClose={() => setViewing(null)} />
 
       {/* Live preview of the in-flight generation (rebuilds stream inside the
           note viewer instead, so only show this when no note is open). */}
@@ -738,6 +537,8 @@ export function StudioPanel() {
         >
           <Input
             autoFocus
+            name="note-title"
+            aria-label="Note title"
             placeholder="Title"
             value={draftTitle}
             onChange={(e) => setDraftTitle(e.target.value)}
@@ -772,14 +573,12 @@ function GenTile({
   icon,
   label,
   title,
-  tint,
   disabled,
   onClick,
 }: {
   icon: ReactNode;
   label: string;
   title?: string;
-  tint: Tint;
   disabled: boolean;
   onClick: () => void;
 }) {
@@ -788,232 +587,10 @@ function GenTile({
       disabled={disabled}
       onClick={onClick}
       title={title}
-      className={cn(
-        "flex items-center gap-2 rounded-md border px-2.5 py-2 text-[12px] text-foreground/90 transition-colors disabled:opacity-40 disabled:pointer-events-none",
-        tint.tile,
-      )}
+      className="flex items-center gap-2 rounded-md border border-border bg-surface-2 px-2.5 py-2 text-[12px] text-foreground/90 transition-colors hover:border-border-strong hover:bg-elevated disabled:pointer-events-none disabled:opacity-40"
     >
-      <span className={tint.icon}>{icon}</span>
+      <span className="text-muted-foreground">{icon}</span>
       <span className="truncate">{label}</span>
     </button>
-  );
-}
-
-function CopyButton({
-  text,
-  label,
-  iconOnly,
-  variant = "ghost",
-}: {
-  text: string;
-  label?: string;
-  iconOnly?: boolean;
-  variant?: "ghost" | "secondary";
-}) {
-  const [copied, setCopied] = useState(false);
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable */
-    }
-  }
-  if (iconOnly) {
-    return (
-      <button
-        className="rounded p-1 text-muted-foreground hover:text-foreground"
-        onClick={copy}
-        title="Copy to clipboard"
-      >
-        {copied ? (
-          <Check className="h-3 w-3 text-success" />
-        ) : (
-          <Copy className="h-3 w-3" />
-        )}
-      </button>
-    );
-  }
-  return (
-    <Button variant={variant} onClick={copy}>
-      {copied ? (
-        <Check className="h-3.5 w-3.5 text-success" />
-      ) : (
-        <Copy className="h-3.5 w-3.5" />
-      )}
-      {copied ? "Copied" : (label ?? "Copy")}
-    </Button>
-  );
-}
-
-/** Markdown that follows its own tail while tokens stream in. */
-function StreamingBody({ text }: { text: string }) {
-  const endRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
-  }, [text]);
-  return (
-    <div>
-      <Markdown>{text}</Markdown>
-      <div ref={endRef} />
-    </div>
-  );
-}
-
-function NoteViewer({
-  note,
-  onClose,
-}: {
-  note: Note | null;
-  onClose: () => void;
-}) {
-  const updateNote = useStore((s) => s.updateNote);
-  const rebuildNote = useStore((s) => s.rebuildNote);
-  const convertNoteToSource = useStore((s) => s.convertNoteToSource);
-  const discussNoteInChat = useStore((s) => s.discussNoteInChat);
-  const generatingKind = useStore((s) => s.generatingKind);
-  const artifactStreamText = useStore((s) => s.artifactStreamText);
-  // Track the live note so a rebuild's new content shows without reopening.
-  const live = useStore((s) =>
-    note ? (s.notes.find((n) => n.id === note.id) ?? note) : null,
-  );
-  const [editing, setEditing] = useState(false);
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-
-  function startEdit() {
-    if (!live) return;
-    setTitle(live.title);
-    setBody(live.content);
-    setEditing(true);
-  }
-
-  const rebuilding = !!generatingKind && !!live && live.kind !== "note";
-
-  return (
-    <Modal
-      open={!!note}
-      onClose={() => {
-        setEditing(false);
-        onClose();
-      }}
-      title={live?.title ?? ""}
-      width="max-w-2xl"
-      headerActions={
-        live && (
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => {
-              void api.newWindow(live.notebookId, live.id);
-              onClose();
-            }}
-            title="Open in its own window"
-            aria-label="Open this note in its own window"
-          >
-            <AppWindow className="h-4 w-4" />
-          </Button>
-        )
-      }
-    >
-      {live &&
-        (editing ? (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              updateNote(live.id, title, body);
-              setEditing(false);
-            }}
-            className="flex flex-col gap-3"
-            key={live.id}
-          >
-            <Input value={title} onChange={(e) => setTitle(e.target.value)} />
-            <RichEditor value={body} onChange={setBody} />
-            <div className="flex justify-end gap-2">
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => setEditing(false)}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" variant="primary">
-                Save
-              </Button>
-            </div>
-          </form>
-        ) : (
-          <div className="flex flex-col gap-3">
-            <div className="max-h-[60vh] overflow-y-auto pr-1">
-              {rebuilding && artifactStreamText ? (
-                <StreamingBody text={artifactStreamText} />
-              ) : live.kind === "mind_map" ? (
-                <MindMap content={live.content} />
-              ) : live.kind === "audio_overview" ? (
-                <div className="flex flex-col gap-4">
-                  {/* Key by updatedAt so a rebuild swaps in the new episode. */}
-                  <AudioPlayer
-                    noteId={live.id}
-                    title={live.title}
-                    key={live.updatedAt}
-                  />
-                  <DialogueScript content={live.content} />
-                </div>
-              ) : (
-                <Markdown>{live.content}</Markdown>
-              )}
-            </div>
-            <div className="flex justify-end gap-2 border-t border-border pt-3">
-              {live.kind !== "note" && (
-                <Button
-                  variant="secondary"
-                  onClick={() => rebuildNote(live)}
-                  disabled={rebuilding}
-                  title="Regenerate with the latest sources"
-                >
-                  {rebuilding ? (
-                    <Spinner className="h-3.5 w-3.5" />
-                  ) : (
-                    <RefreshCw className="h-3.5 w-3.5" />
-                  )}
-                  Rebuild
-                </Button>
-              )}
-              <CopyButton
-                text={live.content}
-                variant="secondary"
-                label="Copy"
-              />
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  discussNoteInChat(live.id);
-                  onClose();
-                }}
-                title="Add this note to the chat so you can discuss it"
-              >
-                <MessageSquare className="h-3.5 w-3.5" />
-                Discuss in chat
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  convertNoteToSource(live.id);
-                  onClose();
-                }}
-                title="Turn this note into a source (embedded & searchable)"
-              >
-                <FileInput className="h-3.5 w-3.5" />
-                Convert to source
-              </Button>
-              <Button variant="secondary" onClick={startEdit}>
-                <Pencil className="h-3.5 w-3.5" />
-                Edit
-              </Button>
-            </div>
-          </div>
-        ))}
-    </Modal>
   );
 }
