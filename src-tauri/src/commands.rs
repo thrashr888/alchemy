@@ -45,6 +45,9 @@ impl AppState {
     /// Start a fresh cancellation scope for a new generation, returning its
     /// token. Supersedes any previous token in the same scope.
     pub fn begin_generation(&self, scope: &str) -> tokio_util::sync::CancellationToken {
+        // Every user-initiated generation flows through here — the curator's
+        // idle gate reads this as "the user is around".
+        touch_activity();
         let token = tokio_util::sync::CancellationToken::new();
         self.cancel
             .lock()
@@ -1391,12 +1394,135 @@ pub async fn curate_notes(db: &Db, open_days: &[i64]) -> anyhow::Result<Vec<Cura
     Ok(actions)
 }
 
+/// Last user-initiated action (chat, generation, opening a note). The
+/// consolidation pass rewrites content and spends tokens, so it only runs
+/// when the user has been away a while; the deterministic pass doesn't care.
+static LAST_ACTIVITY_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+pub(crate) fn touch_activity() {
+    LAST_ACTIVITY_MS.store(now(), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn idle_ms() -> i64 {
+    let last = LAST_ACTIVITY_MS.load(std::sync::atomic::Ordering::Relaxed);
+    // No activity since launch = idle (nothing in flight to disturb).
+    if last == 0 {
+        i64::MAX
+    } else {
+        now() - last
+    }
+}
+
+/// Cosine similarity; 0 for degenerate vectors.
+fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        dot / (na * nb)
+    }
+}
+
+/// Index pairs whose vectors clear `threshold`, most similar first, each
+/// index used at most once — consolidation candidates.
+fn similar_pairs(embeds: &[Vec<f32>], threshold: f32) -> Vec<(usize, usize)> {
+    let mut scored = Vec::new();
+    for i in 0..embeds.len() {
+        for j in (i + 1)..embeds.len() {
+            let s = cosine(&embeds[i], &embeds[j]);
+            if s >= threshold {
+                scored.push(((i, j), s));
+            }
+        }
+    }
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let mut used = HashSet::new();
+    let mut out = Vec::new();
+    for ((i, j), _) in scored {
+        if used.contains(&i) || used.contains(&j) {
+            continue;
+        }
+        used.insert(i);
+        used.insert(j);
+        out.push((i, j));
+    }
+    out
+}
+
+/// The LLM consolidation pass (phase 5, off by default): auto evidence
+/// records whose TITLES embed similarly are candidate duplicates; the chat
+/// model judges each pair (KEEP is the instructed default) and writes the
+/// merged record. The older note wins — stable id, existing citations keep
+/// pointing at it — and the newer is archived, never deleted. At most 3
+/// merges per notebook per run: a bad week stays small, and next week's run
+/// catches the rest.
+async fn consolidate_notes(state: &AppState) -> anyhow::Result<Vec<CuratorAction>> {
+    let mut actions = Vec::new();
+    for nb in state.db.list_notebooks().await? {
+        let evid: Vec<Note> = state
+            .db
+            .list_notes(&nb.id)
+            .await?
+            .into_iter()
+            .filter(|n| n.kind == "evidence" && n.origin == "auto" && n.status != "archived")
+            .collect();
+        if evid.len() < 2 {
+            continue;
+        }
+        let titles: Vec<String> = evid.iter().map(|n| n.title.clone()).collect();
+        let embeds = {
+            let ai = state.ai.read().await;
+            ai.embed(&titles).await?
+        };
+        let mut pairs = similar_pairs(&embeds, 0.75);
+        pairs.truncate(3);
+        for (i, j) in pairs {
+            let (a, b) = (&evid[i], &evid[j]);
+            let out = {
+                let messages =
+                    rag::build_consolidate_messages(&a.title, &a.content, &b.title, &b.content);
+                let ai = state.ai.read().await;
+                ai.chat(&messages).await?.text
+            };
+            let Some((title, body)) = rag::parse_auto_evidence(&out) else {
+                continue; // KEEP — distinct claims
+            };
+            let (winner, loser) = if a.created_at <= b.created_at {
+                (a, b)
+            } else {
+                (b, a)
+            };
+            state
+                .db
+                .update_note(&winner.id, &title, &body, now())
+                .await?;
+            state.db.set_note_status(&winner.id, "").await?;
+            if let Some(n) = state.db.get_note(&winner.id).await? {
+                index_note(state, &n).await;
+            }
+            state.db.set_note_status(&loser.id, "archived").await?;
+            state.db.delete_note_chunks(&loser.id).await?;
+            actions.push(CuratorAction {
+                notebook_id: nb.id.clone(),
+                note_id: winner.id.clone(),
+                title: format!("\"{title}\" absorbed \"{}\"", loser.title),
+                action: "merged",
+            });
+        }
+    }
+    Ok(actions)
+}
+
 /// Curator bookkeeping, one JSON file next to the config:
-/// `{"lastRunAt": ms, "openDays": [day numbers]}`.
+/// `{"lastRunAt": ms, "lastConsolidateAt": ms, "openDays": [day numbers]}`.
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct CuratorState {
     #[serde(default)]
     last_run_at: i64,
+    #[serde(default)]
+    last_consolidate_at: i64,
     #[serde(default)]
     open_days: Vec<i64>,
 }
@@ -1426,28 +1552,43 @@ async fn note_curator_tick(app: &AppHandle, state: &AppState) {
     }
 
     const WEEK_MS: i64 = 7 * 86_400_000;
-    if now() - cur.last_run_at < WEEK_MS {
-        return;
-    }
-    cur.last_run_at = now();
-    let _ = std::fs::write(&path, serde_json::to_string(&cur).unwrap_or_default());
+    let mut actions: Vec<CuratorAction> = Vec::new();
 
-    let actions = match curate_notes(&state.db, &cur.open_days).await {
-        Ok(a) => a,
-        Err(err) => {
-            eprintln!("note curator failed: {err:#}");
-            return;
+    // Deterministic pass: free, so it never needs an idle gate.
+    if now() - cur.last_run_at >= WEEK_MS {
+        cur.last_run_at = now();
+        let _ = std::fs::write(&path, serde_json::to_string(&cur).unwrap_or_default());
+        match curate_notes(&state.db, &cur.open_days).await {
+            Ok(a) => actions.extend(a),
+            Err(err) => eprintln!("note curator failed: {err:#}"),
         }
-    };
+        // Revived notes need their chunks back in the index.
+        for a in actions.iter().filter(|a| a.action == "revived") {
+            if let Ok(Some(note)) = state.db.get_note(&a.note_id).await {
+                index_note(state, &note).await;
+            }
+        }
+    }
+
+    // LLM consolidation (phase 5): opt-in, and only when the user has been
+    // away — it spends tokens and rewrites content. Its own weekly stamp, so
+    // a busy week just defers it to the next quiet tick.
+    const CONSOLIDATE_IDLE_MS: i64 = 30 * 60 * 1000;
+    let consolidate_on = { state.ai.read().await.config().curator_consolidate };
+    if consolidate_on
+        && idle_ms() >= CONSOLIDATE_IDLE_MS
+        && now() - cur.last_consolidate_at >= WEEK_MS
+    {
+        cur.last_consolidate_at = now();
+        let _ = std::fs::write(&path, serde_json::to_string(&cur).unwrap_or_default());
+        match consolidate_notes(state).await {
+            Ok(a) => actions.extend(a),
+            Err(err) => eprintln!("note consolidation failed: {err:#}"),
+        }
+    }
+
     if actions.is_empty() {
         return;
-    }
-
-    // Revived notes need their chunks back in the index.
-    for a in actions.iter().filter(|a| a.action == "revived") {
-        if let Ok(Some(note)) = state.db.get_note(&a.note_id).await {
-            index_note(state, &note).await;
-        }
     }
 
     // One living report note per affected notebook, updated in place so the
@@ -1462,7 +1603,8 @@ async fn note_curator_tick(app: &AppHandle, state: &AppState) {
             "# Curator report\n\n_Last run {stamp}. The curator manages auto-created \
              evidence notes only: unused for ~{CURATOR_STALE_OPEN_DAYS} app-open days → stale \
              (dimmed), ~{CURATOR_ARCHIVE_OPEN_DAYS} → archived (out of retrieval, never \
-             deleted). Using or editing a note revives it._\n\n"
+             deleted). Merged records absorb a same-claim sibling, which is archived. \
+             Using or editing a note revives it._\n\n"
         );
         for a in &acts {
             body.push_str(&format!("- **{}**: {}\n", a.action, a.title));
@@ -3174,6 +3316,7 @@ pub async fn update_note(
 /// render) — the "reads" counter feeds the curator's staleness pass.
 #[tauri::command]
 pub async fn note_opened(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    touch_activity();
     e(state.db.bump_note_usage(&[id], "reads", now()).await)
 }
 
@@ -4755,6 +4898,7 @@ pub async fn ask_everything(
     question: String,
     history: Option<Vec<crate::ai::ChatTurn>>,
 ) -> Result<MetaAnswer, String> {
+    touch_activity();
     let question = question.trim().to_string();
     if question.is_empty() {
         return Err("Question is empty".into());
@@ -5180,6 +5324,26 @@ mod tool_tests {
         .expect("parses");
         assert_eq!(title, "The hail deductible is $2,500");
         assert!(body.starts_with("**Claim:**"));
+    }
+
+    #[test]
+    fn similar_pairs_greedy_and_thresholded() {
+        // v0 ≈ v1 (near-duplicates), v2 orthogonal, v3 = v0 exactly.
+        let embeds = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.95, 0.05, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![1.0, 0.0, 0.0],
+        ];
+        let pairs = similar_pairs(&embeds, 0.75);
+        // (0,3) is a perfect match and wins first; 1 then has no free partner
+        // above threshold left besides consumed ones, so exactly one pair…
+        // unless (1, x) still clears 0.75 — v1·v0 ≈ 0.999 but 0 is consumed.
+        assert_eq!(pairs, vec![(0, 3)], "greedy, no index reuse");
+        // Orthogonal vectors never pair.
+        assert!(similar_pairs(&[vec![1.0, 0.0], vec![0.0, 1.0]], 0.75).is_empty());
+        // Degenerate vectors are safe.
+        assert!(similar_pairs(&[vec![0.0, 0.0], vec![0.0, 0.0]], 0.75).is_empty());
     }
 
     #[test]
