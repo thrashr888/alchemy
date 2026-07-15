@@ -17,11 +17,86 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::db::Db;
-use crate::evals::{builtin_ai, seed_corpus};
+use crate::evals::{builtin_ai, seed_corpus, seed_docs};
 use crate::models::Citation;
 
 /// Retrieval depth for all metrics; recall is additionally reported at 5.
 const K: usize = 10;
+
+/// Extra distractors seeded only for the dataset evals, on top of the golden
+/// corpus in evals.rs (which its own test keeps unchanged). Each one crowds a
+/// golden or hard query — look-alike identifiers, near-topic prose, competing
+/// numbers — so top-k is contested and recall/ranking metrics can actually
+/// move.
+const EXTRA_CORPUS: &[(&str, &str)] = &[
+    (
+        "Acme Invoices Q1 (archive)",
+        "# Sheet: Closed\n\
+         invoice | customer | amount | status\n\
+         INV-2023-0087 | Acme Corp | $11,200 | paid\n\
+         INV-2023-0091 | Globex | $6,050 | paid\n\
+         INV-2023-0095 | Initech | $2,750 | paid\n\n\
+         # Sheet: Notes\n\
+         The original retry policy used ERR-500-RETRY with a ten second wait \
+         before the next attempt. Superseded in Q2.",
+    ),
+    (
+        "Vendor Payment Runbook",
+        "# Wires\n\nVendor invoices are paid by wire on net-forty-five terms. \
+         Remittance advice goes out the same day.\n\n\
+         # Disputes\n\nDisputed vendor invoices are escalated to procurement \
+         within five business days.",
+    ),
+    (
+        "Cabin WiFi Setup",
+        "# Router\n\nThe cabin router sits above the wood stove shelf. The guest \
+         passphrase is taped inside the pantry door.\n\n\
+         # Port Forwarding\n\nPort 8080 forwards to the trail camera system. \
+         Everything else stays closed.",
+    ),
+    (
+        "Tokyo Business Trip",
+        "Three nights at a hotel in Shinjuku for the conference. Breakfast at the \
+         station, late ramen most evenings, and one free afternoon in the Meiji \
+         shrine gardens before the flight home.",
+    ),
+    (
+        "Focaccia Experiments",
+        "Overnight cold proof in the fridge, then two hours at room temperature. \
+         Bake at four hundred twenty five degrees on a sheet pan with plenty of \
+         olive oil. Flaky salt goes on after the oven, not before.",
+    ),
+    (
+        "Benefits FAQ",
+        "# Holidays\n\nThe company observes eleven paid holidays per year.\n\n\
+         # Sick Days\n\nSick time is unlimited within reason and does not draw \
+         from vacation balances.\n\n\
+         # Parental Leave\n\nSixteen weeks paid, available after six months of \
+         service.",
+    ),
+    (
+        "Media Server Maintenance",
+        "# Library Scans\n\nThe media server scans its library nightly at 3am. \
+         Transcoding is capped at two simultaneous streams.\n\n\
+         # Restarts\n\nThe server container restarts on the first Sunday of the \
+         month after backups complete.",
+    ),
+    (
+        "Home Insurance Policy",
+        "# Deductibles\n\nThe homeowner's policy deductible is two thousand five \
+         hundred dollars for wind and hail damage, and five hundred dollars for \
+         theft.\n\n\
+         # Claims\n\nClaims are filed through the agent portal within sixty days \
+         of the loss.",
+    ),
+    (
+        "VPN Access Guide",
+        "# WireGuard\n\nThe VPN uses WireGuard listening on port 51820. Peer \
+         configs are issued per device.\n\n\
+         # SSH\n\nShell access to home machines goes over the VPN only; nothing \
+         listens on the public interface.",
+    ),
+];
 
 #[derive(Deserialize)]
 struct Dataset {
@@ -98,14 +173,14 @@ fn load_datasets() -> Vec<Dataset> {
         .collect()
 }
 
-/// Ranks (1-based) at which each spec was first satisfied, in rank order.
-/// Ranks are distinct: a chunk consumes at most one spec, a spec at most one
-/// chunk.
+/// Ranks (1-based) at which each spec was first satisfied, in rank order,
+/// plus the indices of specs nothing satisfied. Ranks are distinct: a chunk
+/// consumes at most one spec, a spec at most one chunk.
 fn matched_ranks(
     hits: &[Citation],
     titles: &HashMap<String, String>,
     specs: &[RelevantSpec],
-) -> Vec<usize> {
+) -> (Vec<usize>, Vec<usize>) {
     let mut open: Vec<bool> = vec![true; specs.len()];
     let mut ranks = Vec::new();
     for (idx, c) in hits.iter().enumerate() {
@@ -124,7 +199,8 @@ fn matched_ranks(
             ranks.push(idx + 1);
         }
     }
-    ranks
+    let unmatched = (0..specs.len()).filter(|&si| open[si]).collect();
+    (ranks, unmatched)
 }
 
 /// Standard binary-relevance metrics from the matched ranks, with
@@ -186,6 +262,7 @@ async fn eval_retrieval_datasets() {
     let db = Db::open(&dir).await.expect("open db");
     let nb = "eval-nb";
     seed_corpus(&ai, &db, nb).await;
+    seed_docs(&ai, &db, nb, EXTRA_CORPUS, "x-").await;
     let titles: HashMap<String, String> = db
         .list_sources(nb)
         .await
@@ -199,6 +276,7 @@ async fn eval_retrieval_datasets() {
     for ds in &datasets {
         // (kind, metrics) per query, per variant.
         let mut rows: HashMap<&str, Vec<(String, Metrics)>> = HashMap::new();
+        let mut misses: Vec<String> = Vec::new();
         for q in &ds.queries {
             let qvec = ai.embed_one(&q.query).await.expect("embed question");
             for variant in VARIANTS {
@@ -219,7 +297,23 @@ async fn eval_retrieval_datasets() {
                         .await
                         .expect("hybrid search"),
                 };
-                let ranks = matched_ranks(&hits, &titles, &q.relevant);
+                let (ranks, unmatched) = matched_ranks(&hits, &titles, &q.relevant);
+                if variant == "hybrid" {
+                    for si in unmatched {
+                        let s = &q.relevant[si];
+                        misses.push(format!(
+                            "[{}] {} — wanted {}{}",
+                            q.kind,
+                            q.query,
+                            s.source_title,
+                            if s.must_contain.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" containing {:?}", s.must_contain)
+                            }
+                        ));
+                    }
+                }
                 rows.entry(variant)
                     .or_default()
                     .push((q.kind.clone(), query_metrics(&ranks, q.relevant.len())));
@@ -265,6 +359,9 @@ async fn eval_retrieval_datasets() {
                         .collect(),
                 },
             );
+        }
+        for m in &misses {
+            eprintln!("  MISS (hybrid @{K}): {m}");
         }
         reports.push(DatasetReport {
             dataset: ds.name.clone(),
