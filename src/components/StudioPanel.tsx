@@ -497,13 +497,21 @@ export function StudioPanel() {
                         KIND_LABEL[n.kind].toLowerCase() && (
                         <Badge>{KIND_LABEL[n.kind]}</Badge>
                       )}
+                    {/* Badges re-enable hit-testing so their explanatory
+                        tooltips still show inside the pointer-events-none row. */}
                     {n.origin === "auto" && (
-                      <span title="Chat saved this on its own — editing it makes it yours">
+                      <span
+                        className="pointer-events-auto"
+                        title="Chat saved this on its own — editing it makes it yours"
+                      >
                         <Badge>auto</Badge>
                       </span>
                     )}
                     {n.status === "stale" && (
-                      <span title="Unused for a while — the curator will archive it eventually; opening or editing revives it">
+                      <span
+                        className="pointer-events-auto"
+                        title="Unused for a while — the curator will archive it eventually; opening or editing revives it"
+                      >
                         <Badge>stale</Badge>
                       </span>
                     )}

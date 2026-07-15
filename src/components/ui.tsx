@@ -503,8 +503,11 @@ export function RowMenu({
   };
 
   const closeAndRestoreFocus = () => {
+    // Focus the trigger before the menu unmounts: once focus falls to <body>
+    // the container loses group-focus-within, goes display:none, and the
+    // trigger becomes unfocusable.
+    triggerRef.current?.focus();
     setOpen(false);
-    requestAnimationFrame(() => triggerRef.current?.focus());
   };
 
   return (

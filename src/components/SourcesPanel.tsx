@@ -392,7 +392,18 @@ export function SourcesPanel() {
                 return (
                   <div
                     key={s.id}
-                    title={readable ? "Read source" : undefined}
+                    // Row content is pointer-events-none (clicks go to the
+                    // CardAction), so the row carries the hover detail the
+                    // truncated children can no longer show.
+                    title={[
+                      s.title,
+                      s.status === "error"
+                        ? s.error || "Import failed"
+                        : s.url || undefined,
+                      readable ? "Read source" : undefined,
+                    ]
+                      .filter(Boolean)
+                      .join("\n")}
                     className={cn(
                       "group relative flex items-start gap-2 rounded-md px-2 py-2 hover:bg-surface-2",
                       s.status === "error" && "bg-destructive/5",

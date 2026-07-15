@@ -567,7 +567,15 @@ function Citations({ citations }: { citations: Citation[] }) {
                   </button>
                 )}
               </div>
-              <p className="pointer-events-none relative z-10 line-clamp-4 text-[12px] leading-relaxed text-muted-foreground selectable">
+              <p
+                // Stays hit-testable so the text can be selected; plain
+                // clicks (no selection) still open the citation target.
+                className="pointer-events-auto relative z-10 line-clamp-4 text-[12px] leading-relaxed text-muted-foreground selectable"
+                onClick={() => {
+                  if (!window.getSelection()?.toString())
+                    openCitationTarget(c);
+                }}
+              >
                 {c.snippet}
               </p>
             </div>
