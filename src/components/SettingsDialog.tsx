@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { playDone } from "@/lib/sound";
@@ -10,6 +10,7 @@ import {
   AboutTab,
   AppearanceTab,
   ChatTab,
+  Field,
   PersonalizationTab,
   ShortcutsTab,
 } from "./settings/SettingsTabs";
@@ -1167,26 +1168,6 @@ function Select({
         </option>
       ))}
     </select>
-  );
-}
-
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="text-[12px] font-medium text-foreground">{label}</div>
-      {children}
-      {hint && (
-        <span className="text-[11px] text-subtle-foreground">{hint}</span>
-      )}
-    </div>
   );
 }
 

@@ -39,11 +39,12 @@ export function noteUnread(
   return n.updatedAt > (reads[n.id] ?? baseline);
 }
 
-/** True when a global shortcut should be ignored: typing in a field or inside an open dialog. */
+/** True when a global shortcut should be ignored: a dialog is open or the user is typing in a field. */
 export function shortcutBlocked(e: { target: EventTarget | null }): boolean {
+  if (document.querySelector('[role="dialog"]')) return true;
   const t = e.target as HTMLElement | null;
   if (!t?.closest) return false;
-  return !!t.closest('[role="dialog"], input, textarea, select, [contenteditable="true"]');
+  return !!t.closest('input, textarea, select, [contenteditable="true"]');
 }
 
 /** Reading-preference classes for the chat message container (see index.css). */

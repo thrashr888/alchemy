@@ -318,7 +318,7 @@ function Pill({ active, onClick, children }: { active: boolean; onClick: () => v
   return <button type="button" aria-pressed={active} onClick={onClick} className={cn("rounded-md border px-3 py-1.5 text-[12px] transition-colors", active ? "border-primary/60 bg-primary/15 text-citation" : "border-border bg-surface-2 text-muted-foreground hover:text-foreground")}>{children}</button>;
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-1.5">
       <div className="text-[12px] font-medium text-foreground">{label}</div>

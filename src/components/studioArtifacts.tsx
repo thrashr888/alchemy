@@ -96,25 +96,17 @@ export function studioArtifacts(kokoroReady: boolean): {
   };
 }
 
+/**
+ * Generator kinds take their label from the Artifact records above, so the
+ * badge label always matches the generator button and the default note title.
+ */
+const GENERATOR_LABELS = Object.fromEntries(
+  [AUDIO_OVERVIEW, ...ARTIFACTS].map((artifact) => [artifact.kind, artifact.label]),
+) as Record<Exclude<NoteKind, "note" | "report" | "template">, string>;
+
 export const KIND_LABEL: Record<NoteKind, string> = {
   note: "Note",
-  audio_overview: "Audio Overview",
-  summary: "Summary",
-  faq: "FAQ",
-  study_guide: "Study guide",
-  briefing: "Briefing",
-  timeline: "Timeline",
-  insights: "Insights",
-  flashcards: "Flashcards",
-  quiz: "Quiz",
-  mind_map: "Mind map",
-  data_table: "Data table",
-  problems: "Problems",
-  evidence: "Evidence",
-  prd: "PRD",
-  prfaq: "PR/FAQ",
-  rfc: "RFC",
-  skill: "Skill",
   report: "Report",
   template: "Template",
+  ...GENERATOR_LABELS,
 };

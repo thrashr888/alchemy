@@ -10,7 +10,7 @@ import { MigrationOverlay } from "@/components/MigrationOverlay";
 import { NoteWindow } from "@/components/NoteWindow";
 import { Onboarding } from "@/components/Onboarding";
 import { Toaster } from "@/components/ui";
-import { ShellIntegrationBoundary } from "@/components/ShellIntegrationBoundary";
+import { shortcutBlocked } from "@/lib/utils";
 
 function App() {
   const init = useStore((s) => s.init);
@@ -41,7 +41,7 @@ function App() {
       if (!(e.metaKey || e.ctrlKey)) return;
       if (e.key === ",") {
         // Don't stack Settings on top of an open dialog (confirms, palette).
-        if (document.querySelector('[role="dialog"]')) return;
+        if (shortcutBlocked(e)) return;
         e.preventDefault();
         openSettings();
       } else if (e.key === "k") {
@@ -90,9 +90,7 @@ function App() {
       <CommandPalette />
       <ImportOkfModal />
       {/* Always mounted: OKF-bundle drops import from the homepage too. */}
-      <ShellIntegrationBoundary name="File drop">
-        <FileDrop />
-      </ShellIntegrationBoundary>
+      <FileDrop />
       <MigrationOverlay />
       {needsSetup && !onboardingDismissed && !settingsOpen && (
         // Onboarding's buttons are model-setup affordances — take them to Models.
