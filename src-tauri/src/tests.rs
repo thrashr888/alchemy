@@ -304,6 +304,7 @@ async fn note_retrieval_round_trip() {
             .into(),
         kind: "evidence".into(),
         prompt: String::new(),
+        origin: String::new(),
         created_at: now(),
         updated_at: now(),
     };
@@ -361,11 +362,43 @@ async fn note_retrieval_round_trip() {
         "source-scoped search returns no note passages"
     );
 
-    // Deleting the note drops its chunks from the index.
+    // Usage counters: first bump inserts, repeat bumps increment, and one
+    // answer citing several passages of a note still counts once (deduped).
+    let ids = vec![note.id.clone(), note.id.clone()];
+    db.bump_note_usage(&ids, "retrieval_hits", now())
+        .await
+        .expect("bump insert");
+    db.bump_note_usage(&ids, "retrieval_hits", now())
+        .await
+        .expect("bump update");
+    db.bump_note_usage(std::slice::from_ref(&note.id), "cited", now())
+        .await
+        .expect("bump cited");
+    assert!(
+        db.bump_note_usage(std::slice::from_ref(&note.id), "nonsense", now())
+            .await
+            .is_err(),
+        "unknown counter field rejected"
+    );
+    let usage = db.note_usage().await.expect("usage");
+    assert_eq!(usage.len(), 1, "one usage row per note");
+    assert_eq!(
+        usage[0].retrieval_hits, 2,
+        "deduped within a call, summed across calls"
+    );
+    assert_eq!(usage[0].cited, 1);
+    assert_eq!(usage[0].reads, 0);
+    assert!(usage[0].last_used_at > 0);
+
+    // Deleting the note drops its chunks and its usage row.
     db.delete_note(&note.id).await.expect("delete note");
     assert!(
         db.indexed_note_ids().await.expect("indexed ids").is_empty(),
         "note chunks removed with the note"
+    );
+    assert!(
+        db.note_usage().await.expect("usage").is_empty(),
+        "usage row removed with the note"
     );
 
     eprintln!("note retrieval round trip OK");
