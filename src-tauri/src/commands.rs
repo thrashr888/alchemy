@@ -4774,10 +4774,16 @@ pub struct MetaAnswer {
 /// every notebook (capped, gateway and local alike) merged with note hits —
 /// notes are often the answer (reports, briefs). Shared by the ask_everything
 /// command and the MCP tool.
+///
+/// `deep` is the deep-search profile: retrieve a 3x candidate pool and let
+/// the chat model rerank it down to k (recall from hybrid retrieval,
+/// precision from the rerank). Any rerank failure falls back to fusion
+/// order, so deep can only reorder-or-equal, never lose the flat result.
 pub(crate) async fn retrieve_everything(
     state: &AppState,
     question: &str,
     k: usize,
+    deep: bool,
 ) -> Result<Vec<MetaCitation>, String> {
     let nb_titles: std::collections::HashMap<String, String> = e(state.db.list_notebooks().await)?
         .into_iter()
@@ -4825,9 +4831,11 @@ pub(crate) async fn retrieve_everything(
         max_per_notebook: 3,
         max_notes: 4,
     };
+    // Deep search retrieves a wider pool for the reranker to pick from.
+    let fetch_k = if deep { k * 3 } else { k };
     let mut out: Vec<MetaCitation> = e(state
         .db
-        .search_chunks_all_opts(query_vec, question, k, routed.as_deref(), opts)
+        .search_chunks_all_opts(query_vec, question, fetch_k, routed.as_deref(), opts)
         .await)?
     .into_iter()
     .map(|(nb, c)| {
@@ -4844,6 +4852,21 @@ pub(crate) async fn retrieve_everything(
         }
     })
     .collect();
+
+    // Deep search: one model call picks the k passages that actually answer
+    // from the wide pool. Failure (model down, unparseable output) degrades
+    // to the fusion-ordered top k — exactly the non-deep result.
+    if deep && out.len() > k {
+        let snippets: Vec<(String, String)> = out
+            .iter()
+            .map(|c| (c.title.clone(), c.snippet.chars().take(300).collect()))
+            .collect();
+        let ai = state.ai.read().await;
+        match crate::agent::rerank_indices(&ai, question, &snippets, k).await {
+            Some(picked) => out = picked.into_iter().map(|i| out[i].clone()).collect(),
+            None => out.truncate(k),
+        }
+    }
 
     // Title-match fallback passes: hybrid search covers bodies, but an
     // exact-title lookup ("the contractor agreement", "the Q3 report note")
@@ -4927,6 +4950,7 @@ pub async fn ask_everything(
     state: State<'_, AppState>,
     question: String,
     history: Option<Vec<crate::ai::ChatTurn>>,
+    deep: Option<bool>,
 ) -> Result<MetaAnswer, String> {
     touch_activity();
     let question = question.trim().to_string();
@@ -4934,7 +4958,14 @@ pub async fn ask_everything(
         return Err("Question is empty".into());
     }
 
-    let passages_raw = retrieve_everything(&state, &question, 16).await?;
+    // Deep search (wide pool + model rerank) defaults on for gateway models,
+    // where the extra rerank call is fast and cheap; local models keep the
+    // low-latency single-pass path unless the caller asks for deep.
+    let deep = match deep {
+        Some(d) => d,
+        None => state.ai.read().await.config().is_gateway(),
+    };
+    let passages_raw = retrieve_everything(&state, &question, 16, deep).await?;
     // References are per SOURCE, not per chunk: several excerpts from one
     // source share a number, and the citation list the UI shows is deduped —
     // otherwise a source that contributed five chunks shows up five times.

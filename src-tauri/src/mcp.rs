@@ -501,7 +501,9 @@ impl AlchemyMcp {
             return Err(invalid("question is empty"));
         }
         let state = self.state();
-        let passages = commands::retrieve_everything(&state, &question, 16)
+        // No deep rerank here: MCP agents synthesize from raw passages and
+        // are better served by fast, wide retrieval they can filter.
+        let passages = commands::retrieve_everything(&state, &question, 16, false)
             .await
             .map_err(internal)?;
         json_result(&passages)

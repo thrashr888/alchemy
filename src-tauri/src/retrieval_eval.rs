@@ -638,6 +638,105 @@ async fn eval_meta_diversity() {
     );
 }
 
+/// Deep-search eval. Deterministic part: how much recall headroom a wide
+/// pool gives a reranker (recall@4 in fusion order vs recall within the
+/// 16-candidate pool — the ceiling a perfect reranker reaches). Ollama-gated
+/// part: run the real rerank over the pool and score it against fusion
+/// order at the same cutoff.
+#[tokio::test]
+async fn eval_deep_rerank() {
+    let Some(ai) = builtin_ai().await else { return };
+    let dir = std::env::temp_dir().join(format!("nbl-eval-deep-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb = "eval-nb";
+    seed_corpus(&ai, &db, nb).await;
+    seed_docs(&ai, &db, nb, EXTRA_CORPUS, "x-").await;
+    let titles: HashMap<String, String> = db
+        .list_sources(nb)
+        .await
+        .expect("list sources")
+        .into_iter()
+        .map(|s| (s.id, s.title))
+        .collect();
+
+    const KEEP: usize = 4;
+    const POOL: usize = 16;
+    let chat = crate::ai::Ai::new(
+        crate::ai::AiConfig {
+            chat_model: "digitsflow/bonsai-8b:latest".into(),
+            ..Default::default()
+        },
+        crate::ai::AiRuntime::default(),
+    );
+    let ollama_up = chat.list_models().await.is_ok();
+    if !ollama_up {
+        eprintln!("NOTE: Ollama not reachable — reporting deterministic headroom only");
+    }
+
+    let mut n = 0usize;
+    let mut fusion_sum = 0.0f64;
+    let mut ceiling_sum = 0.0f64;
+    let mut rerank_sum = 0.0f64;
+    for ds in &load_datasets() {
+        for q in &ds.queries {
+            let qvec = ai.embed_one(&q.query).await.expect("embed query");
+            let pool = db
+                .search_chunks(nb, qvec, &q.query, POOL, None)
+                .await
+                .expect("pool search");
+            let recall_at = |hits: &[Citation], k: usize| {
+                let (ranks, _) = matched_ranks(&hits[..hits.len().min(k)], &titles, &q.relevant);
+                ranks.len() as f64 / q.relevant.len() as f64
+            };
+            n += 1;
+            fusion_sum += recall_at(&pool, KEEP);
+            ceiling_sum += recall_at(&pool, POOL);
+            if ollama_up {
+                let snippets: Vec<(String, String)> = pool
+                    .iter()
+                    .map(|c| {
+                        (
+                            c.source_title.clone(),
+                            c.snippet.chars().take(300).collect(),
+                        )
+                    })
+                    .collect();
+                let reranked: Vec<Citation> =
+                    match crate::agent::rerank_indices(&chat, &q.query, &snippets, KEEP).await {
+                        Some(picked) => picked.into_iter().map(|i| pool[i].clone()).collect(),
+                        None => pool.iter().take(KEEP).cloned().collect(),
+                    };
+                rerank_sum += recall_at(&reranked, KEEP);
+            }
+        }
+    }
+    let fusion = fusion_sum / n as f64;
+    let ceiling = ceiling_sum / n as f64;
+    eprintln!("\ndeep search over {n} queries (keep {KEEP} of pool {POOL}):");
+    eprintln!("  fusion-order recall@{KEEP}   {fusion:.2}");
+    eprintln!(
+        "  pool ceiling recall@{POOL}   {ceiling:.2}   (perfect-reranker headroom {:+.2})",
+        ceiling - fusion
+    );
+    if ollama_up {
+        let rerank = rerank_sum / n as f64;
+        eprintln!(
+            "  LLM rerank   recall@{KEEP}   {rerank:.2}   ({:+.2} vs fusion)\n",
+            rerank - fusion
+        );
+        assert!(
+            rerank >= fusion - 0.1,
+            "rerank recall@{KEEP} {rerank:.2} fell more than 0.1 below fusion {fusion:.2}"
+        );
+    } else {
+        eprintln!();
+    }
+    assert!(
+        ceiling >= fusion,
+        "pool ceiling {ceiling:.2} below fusion recall {fusion:.2} — impossible unless judging broke"
+    );
+}
+
 /// Semantic-router eval: build the notebook router over the three-notebook
 /// corpus, check the index is incremental (second sync is a no-op), measure
 /// routing accuracy on every dataset query, and compare routed retrieval
