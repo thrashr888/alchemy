@@ -1,21 +1,28 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useStore } from "@/lib/store";
 import { DevBadge } from "./DevBadge";
-import { api } from "@/lib/api";
-import { Button, Input, Modal, Badge, EmptyState, useConfirm } from "./ui";
+import {
+  Badge,
+  Button,
+  CardAction,
+  EmptyState,
+  Input,
+  Modal,
+  useConfirm,
+} from "./ui";
 import { AlchemyHero } from "./AlchemyHero";
 import { currentEpigraph } from "@/lib/epigraph";
 import { DitherBackground } from "./DitherBackground";
-import { Markdown } from "./Markdown";
 import { intervalLabel } from "./Reports";
+import { useHomeActivity } from "./useHomeActivity";
+import { AwayDigest, ReportsFeed } from "./HomeReportsFeed";
 import {
   cn,
   noteUnread,
   relativeTime,
-  cardButtonProps,
   shortcutBlocked,
 } from "@/lib/utils";
-import type { CorpusStats, Note, ReportSchedule } from "@/lib/types";
+import type { Note } from "@/lib/types";
 import {
   BookOpen,
   Clock,
@@ -82,32 +89,15 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     localStorage.setItem("lastHomeVisit", String(Date.now()));
   }, []);
 
-  // All scheduled reports, recent documents, and corpus totals across
-  // notebooks — the app's ongoing activity, refreshed with the notebook list.
-  const [allReports, setAllReports] = useState<ReportSchedule[]>([]);
-  const [recentNotes, setRecentNotes] = useState<Note[]>([]);
-  const [stats, setStats] = useState<CorpusStats | null>(null);
-  // Latest generated reports, read in place in the right-hand feed. Fifty
-  // covers the pane's purpose — the notebook holds the full archive.
-  const [reports, setReports] = useState<Note[]>([]);
-  useEffect(() => {
-    api
-      .listAllReportSchedules()
-      .then(setAllReports)
-      .catch(() => setAllReports([]));
-    api
-      .listRecentNotes(5)
-      .then(setRecentNotes)
-      .catch(() => setRecentNotes([]));
-    api
-      .listRecentReports(50)
-      .then(setReports)
-      .catch(() => setReports([]));
-    api
-      .corpusStats()
-      .then(setStats)
-      .catch(() => setStats(null));
-  }, [notebooks]);
+  const {
+    schedules: allReports,
+    recentNotes,
+    stats,
+    reports,
+    loading: activityLoading,
+    error: activityError,
+    refresh: refreshActivity,
+  } = useHomeActivity(notebooks);
   const notebookTitle = new Map(notebooks.map((n) => [n.id, n.title]));
   const notebookColor = new Map(notebooks.map((n) => [n.id, n.color]));
 
@@ -172,7 +162,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   // Backend already returns notebooks sorted by most-recently-updated.
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
+    <div className="flex h-dvh w-screen flex-col overflow-hidden bg-background text-foreground">
       <header
         data-tauri-drag-region
         className="flex items-center gap-2.5 h-12 border-b border-border pl-[84px] pr-5"
@@ -199,6 +189,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             size="icon"
             onClick={onOpenSettings}
             title="Settings"
+            aria-label="Open settings"
           >
             <Settings className="h-4 w-4" />
           </Button>
@@ -315,6 +306,22 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                     Ask
                   </Button>
                 </form>
+                {activityError && (
+                  <div
+                    role="alert"
+                    className="mt-2 flex items-center gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-[12px] text-destructive"
+                  >
+                    <span className="min-w-0 flex-1">{activityError}</span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void refreshActivity()}
+                      loading={activityLoading}
+                    >
+                      Retry
+                    </Button>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
@@ -333,20 +340,25 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 {notebooks.map((nb) => (
                   <div
                     key={nb.id}
-                    onClick={() => open(nb.id)}
-                    {...cardButtonProps(() => open(nb.id))}
+                    // Card content is pointer-events-none, so the hover
+                    // tooltip for the truncated title lives on the card.
+                    title={nb.title}
                     className="group relative flex min-h-[132px] cursor-pointer flex-col rounded-lg border border-border bg-surface p-4 transition-colors hover:border-border-strong hover:bg-surface-2"
                   >
+                    <CardAction
+                      label={`Open notebook ${nb.title}`}
+                      onClick={() => open(nb.id)}
+                    />
                     <span
                       className="pointer-events-none absolute left-0 top-0 h-full w-[3px] rounded-l-lg"
                       style={{
                         backgroundColor: nb.color || NOTEBOOK_PALETTE[0],
                       }}
                     />
-                    <div className="mb-auto flex h-8 w-8 items-center justify-center rounded-lg bg-primary/12 text-primary">
+                    <div className="pointer-events-none relative z-10 mb-auto flex h-8 w-8 items-center justify-center rounded-lg bg-primary/12 text-primary">
                       <BookOpen className="h-4 w-4" />
                     </div>
-                    <div className="mt-3 flex items-center gap-1.5">
+                    <div className="pointer-events-none relative z-10 mt-3 flex items-center gap-1.5">
                       <span
                         className="truncate text-[14px] font-medium"
                         title={nb.title}
@@ -361,7 +373,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                         />
                       )}
                     </div>
-                    <div className="mt-1 flex items-center gap-1.5 text-[11px] text-subtle-foreground">
+                    <div className="pointer-events-none relative z-10 mt-1 flex items-center gap-1.5 text-[11px] text-subtle-foreground">
                       <Badge className="gap-1">
                         <FileText className="h-2.5 w-2.5" />
                         {nb.sourceCount}
@@ -370,7 +382,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                       <span>{relativeTime(nb.updatedAt)}</span>
                     </div>
 
-                    <div className="absolute right-2 top-2 flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+                    <div className="absolute right-2 top-2 z-20 flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
                       <button
                         type="button"
                         className="rounded p-1 text-muted-foreground transition hover:bg-elevated"
@@ -427,7 +439,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                         onClick={(e) => e.stopPropagation()}
                         onPointerDown={(e) => e.stopPropagation()}
                         data-notebook-color-palette
-                        className="absolute right-2 top-10 z-10 flex rounded-md border border-border bg-surface px-2 py-1.5 shadow-sm"
+                        className="absolute right-2 top-10 z-30 flex rounded-md border border-border bg-surface px-2 py-1.5 shadow-sm"
                       >
                         {NOTEBOOK_PALETTE.map((c) => (
                           <button
@@ -459,12 +471,12 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   </div>
                   <div className="flex flex-col gap-1">
                     {recentNotes.map((n) => (
-                      <div
+                      <button
+                        type="button"
                         key={n.id}
                         onClick={() => openNote(n)}
-                        {...cardButtonProps(() => openNote(n))}
                         title={`Open in "${notebookTitle.get(n.notebookId) ?? "notebook"}"`}
-                        className="flex cursor-pointer items-center gap-2.5 rounded-md border border-border bg-surface px-3 py-2 transition-colors hover:border-border-strong hover:bg-surface-2"
+                        className="flex w-full cursor-pointer items-center gap-2.5 rounded-md border border-border bg-surface px-3 py-2 text-left transition-colors hover:border-border-strong hover:bg-surface-2"
                       >
                         <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                         <span className="truncate text-[13px] text-foreground">
@@ -480,7 +492,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                         <span className="ml-auto shrink-0 text-[11px] text-subtle-foreground">
                           {relativeTime(n.updatedAt)}
                         </span>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -502,12 +514,12 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                           : b.lastRunAt - a.lastRunAt,
                       )
                       .map((r) => (
-                        <div
+                        <button
+                          type="button"
                           key={r.id}
                           onClick={() => open(r.notebookId)}
-                          {...cardButtonProps(() => open(r.notebookId))}
                           title={`Open "${notebookTitle.get(r.notebookId) ?? "notebook"}"`}
-                          className="flex cursor-pointer items-center gap-2.5 rounded-md border border-border bg-surface px-3 py-2 transition-colors hover:border-border-strong hover:bg-surface-2"
+                          className="flex w-full cursor-pointer items-center gap-2.5 rounded-md border border-border bg-surface px-3 py-2 text-left transition-colors hover:border-border-strong hover:bg-surface-2"
                         >
                           <Power
                             className={cn(
@@ -537,7 +549,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                             )}
                             {!r.enabled && <span>· paused</span>}
                           </span>
-                        </div>
+                        </button>
                       ))}
                   </div>
                 </div>
@@ -551,17 +563,39 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             {reports.length > 0 ? (
               <ReportsFeed
                 reports={reports}
-                notebookTitle={notebookTitle}
-                notebookColor={notebookColor}
-                onOpen={openNote}
+                  notebookTitle={notebookTitle}
+                  notebookColor={notebookColor}
+                  fallbackColor={NOTEBOOK_PALETTE[0]}
+                  onOpen={openNote}
               />
+            ) : activityLoading ? (
+              <div
+                role="status"
+                className="flex flex-1 items-center justify-center p-8 text-[12px] text-muted-foreground"
+              >
+                Loading reports…
+              </div>
             ) : (
               <div className="flex flex-1 items-center justify-center p-8">
                 <EmptyState
                   icon={<Newspaper className="h-7 w-7" />}
-                  title="Reports land here"
-                  hint="Schedule a recurring report from any notebook's Studio panel — it refreshes the notebook's URL sources, writes a timestamped note, and shows up on this page to read with your coffee."
-                />
+                  title={activityError ? "Reports unavailable" : "Reports land here"}
+                  hint={
+                    activityError
+                      ? "Alchemy couldn’t load recent reports."
+                      : "Schedule a recurring report from a notebook’s Studio panel."
+                  }
+                >
+                  {activityError && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void refreshActivity()}
+                    >
+                      Retry
+                    </Button>
+                  )}
+                </EmptyState>
               </div>
             )}
           </aside>
@@ -583,6 +617,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         >
           <Input
             autoFocus
+            name="notebook-title"
+            aria-label="Notebook title"
             placeholder="Notebook title"
             value={newTitle}
             onChange={(e) => setNewTitle(e.target.value)}
@@ -619,6 +655,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         >
           <Input
             autoFocus
+            name="notebook-title"
+            aria-label="Notebook title"
             value={renaming?.title ?? ""}
             onChange={(e) =>
               setRenaming((r) => (r ? { ...r, title: e.target.value } : r))
@@ -639,204 +677,5 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         </form>
       </Modal>
     </div>
-  );
-}
-
-/** One quiet line: what landed since home was last open. Renders nothing on a
- *  first visit or when nothing happened — silence beats a zero. */
-function AwayDigest({
-  prevVisit,
-  notebooks,
-  reports,
-}: {
-  prevVisit: number;
-  notebooks: { updatedAt: number }[];
-  reports: Note[];
-}) {
-  if (!prevVisit) return null;
-  const newReports = reports.filter((r) => r.updatedAt > prevVisit).length;
-  const updatedNbs = notebooks.filter((n) => n.updatedAt > prevVisit).length;
-  const parts = [
-    newReports > 0 &&
-      `${newReports} new ${newReports === 1 ? "report" : "reports"}`,
-    updatedNbs > 0 &&
-      `${updatedNbs} ${updatedNbs === 1 ? "notebook" : "notebooks"} updated`,
-  ].filter(Boolean);
-  if (parts.length === 0) return null;
-  return (
-    <p className="mt-0.5 text-[12px] text-subtle-foreground">
-      Since you were away: {parts.join(" · ")}
-    </p>
-  );
-}
-
-/**
- * The reports feed: unread reports (newest first), then a Show-more button
- * exposing already-read ones five at a time. Read state lives in localStorage
- * keyed by note id and compared to updatedAt, so a rebuilt report goes unread
- * again; a card becomes read once the user scrolls past its end. Grouping is
- * snapshotted per visit — cards don't jump between groups as you read.
- */
-function ReportsFeed({
-  reports,
-  notebookTitle,
-  notebookColor,
-  onOpen,
-}: {
-  reports: Note[];
-  notebookTitle: Map<string, string>;
-  notebookColor: Map<string, string>;
-  onOpen: (n: Note) => void;
-}) {
-  const reads = useStore((s) => s.noteReads);
-  const baseline = useStore((s) => s.noteReadsBaseline);
-  const markRead = useStore((s) => s.markNotesRead);
-  const isUnread = (n: Note) => noteUnread(n, reads, baseline);
-  const unreadCount = reports.filter(isUnread).length;
-
-  // Group membership freezes on the first render for this set of reports:
-  // marking-as-read updates the badges live, but a card scrolled past must
-  // not vanish into the read fold mid-scroll.
-  const initialReads = useRef<Record<string, number> | null>(null);
-  if (initialReads.current === null) {
-    initialReads.current = { ...reads };
-  }
-  const wasUnread = (n: Note) =>
-    noteUnread(n, initialReads.current ?? {}, baseline);
-  const unread = reports.filter(wasUnread);
-  const read = reports.filter((n) => !wasUnread(n));
-
-  // Read reports stay behind a Show-more fold, five at a time.
-  const [readShown, setReadShown] = useState(0);
-  const visibleRead = read.slice(0, readShown);
-  const remaining = read.length - visibleRead.length;
-
-  return (
-    <>
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-6">
-        <span className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
-          Latest reports
-        </span>
-        {unreadCount > 0 && (
-          <>
-            <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-citation">
-              {unreadCount} unread
-            </span>
-            <button
-              onClick={() =>
-                markRead(reports.filter(isUnread).map((n) => n.id))
-              }
-              className="ml-auto text-[11px] text-muted-foreground transition-colors hover:text-foreground"
-            >
-              Mark all read
-            </button>
-          </>
-        )}
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {unread.length === 0 && (
-          <div className="px-6 py-6 text-center text-[12px] text-subtle-foreground">
-            You're all caught up.
-          </div>
-        )}
-        {[...unread, ...visibleRead].map((n) => (
-          <ReportCard
-            key={n.id}
-            note={n}
-            unread={isUnread(n)}
-            onSeen={() => markRead([n.id])}
-            notebook={notebookTitle.get(n.notebookId) ?? "Unknown notebook"}
-            color={notebookColor.get(n.notebookId) || NOTEBOOK_PALETTE[0]}
-            onOpen={() => {
-              markRead([n.id]);
-              onOpen(n);
-            }}
-          />
-        ))}
-        {remaining > 0 && (
-          <div className="flex justify-center px-6 py-5">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setReadShown((s) => s + 5)}
-            >
-              Load older reports
-            </Button>
-          </div>
-        )}
-      </div>
-    </>
-  );
-}
-
-/** One report in the feed; read once the user has scrolled past its end. */
-function ReportCard({
-  note,
-  unread,
-  onSeen,
-  notebook,
-  color,
-  onOpen,
-}: {
-  note: Note;
-  unread: boolean;
-  onSeen: () => void;
-  notebook: string;
-  color: string;
-  onOpen: () => void;
-}) {
-  // A marker at the card's end: once it enters the pane, the user has reached
-  // (or scrolled past) the end of this report. Short reports fully on screen
-  // are read on sight; the last report is read when the feed bottoms out.
-  const endRef = useRef<HTMLDivElement>(null);
-  const seenRef = useRef(onSeen);
-  seenRef.current = onSeen;
-
-  useEffect(() => {
-    const el = endRef.current;
-    if (!el || !unread) return;
-    const io = new IntersectionObserver(([e]) => {
-      if (e.isIntersecting) seenRef.current();
-    });
-    io.observe(el);
-    return () => io.disconnect();
-  }, [unread]);
-
-  return (
-    <article
-      className={cn(
-        "border-b border-border px-6 py-5",
-        unread && "border-l-2 border-l-primary bg-primary/[0.04]",
-      )}
-    >
-      <div className="flex items-center gap-1.5 text-[11px] text-subtle-foreground">
-        <span
-          className="inline-flex h-2 w-2 shrink-0 rounded-full"
-          style={{ backgroundColor: color }}
-          aria-hidden="true"
-        />
-        <span className="truncate">{notebook}</span>
-        <span>·</span>
-        <span className="shrink-0">{relativeTime(note.updatedAt)}</span>
-        {unread && (
-          <span className="ml-auto shrink-0 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-citation">
-            new
-          </span>
-        )}
-      </div>
-      <button
-        onClick={onOpen}
-        className="mt-1 block w-full text-left"
-        title={`Open in "${notebook}"`}
-      >
-        <h3 className="text-[15px] font-semibold text-foreground hover:underline">
-          {note.title}
-        </h3>
-      </button>
-      <div className="mt-2 text-[13px] leading-relaxed">
-        <Markdown>{note.content}</Markdown>
-      </div>
-      <div ref={endRef} aria-hidden="true" />
-    </article>
   );
 }

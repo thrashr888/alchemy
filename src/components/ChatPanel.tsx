@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
-import { Button, Textarea, useConfirm } from "./ui";
+import { Button, CardAction, Textarea, useConfirm } from "./ui";
 import { Markdown } from "./Markdown";
-import { cn, chatReadingClass, cardButtonProps, isWebUrl } from "@/lib/utils";
+import { cn, chatReadingClass, isWebUrl } from "@/lib/utils";
 import { DitherBackground } from "./DitherBackground";
 import { AlchemySymbol } from "./AlchemyHero";
 import { DEFAULT_VERBS, THEMES, resolveThemeId } from "@/lib/themes";
@@ -335,6 +335,7 @@ export function ChatPanel() {
                   size="icon"
                   onClick={() => cancelGeneration("chat")}
                   title="Stop"
+                  aria-label="Stop generating"
                 >
                   <Square className="h-3.5 w-3.5" />
                 </Button>
@@ -345,6 +346,7 @@ export function ChatPanel() {
                   onClick={submit}
                   disabled={!draft.trim() || !canChat}
                   title="Send"
+                  aria-label="Send message"
                 >
                   <ArrowUp className="h-4 w-4" />
                 </Button>
@@ -530,12 +532,14 @@ function Citations({ citations }: { citations: Citation[] }) {
           {citations.map((c, i) => (
             <div
               key={c.chunkId}
-              onClick={() => openCitationTarget(c)}
-              {...cardButtonProps(() => openCitationTarget(c))}
               title={c.noteId ? "Open the note in Studio" : "Open in the source, highlighted"}
-              className="cursor-pointer rounded-md border border-border bg-surface px-3 py-2 text-left transition-colors hover:border-border-strong hover:bg-surface-2"
+              className="relative cursor-pointer rounded-md border border-border bg-surface px-3 py-2 text-left transition-colors hover:border-border-strong hover:bg-surface-2"
             >
-              <div className="mb-1 flex items-center gap-2 text-[11px]">
+              <CardAction
+                label={`${c.noteId ? "Open note" : "Open source"} ${c.sourceTitle}`}
+                onClick={() => openCitationTarget(c)}
+              />
+              <div className="pointer-events-none relative z-10 mb-1 flex items-center gap-2 text-[11px]">
                 <span className="flex h-4 min-w-4 items-center justify-center rounded bg-primary/15 px-1 font-semibold text-citation">
                   {i + 1}
                 </span>
@@ -551,7 +555,7 @@ function Citations({ citations }: { citations: Citation[] }) {
                 )}
                 {urlOf(c.sourceId) && (
                   <button
-                    className="ml-auto shrink-0 rounded p-0.5 text-citation hover:underline"
+                    className="pointer-events-auto relative z-20 ml-auto shrink-0 rounded p-0.5 text-citation hover:underline"
                     title={`Open ${urlOf(c.sourceId)}`}
                     aria-label={`Open ${urlOf(c.sourceId)} in browser`}
                     onClick={(e) => {
@@ -563,7 +567,15 @@ function Citations({ citations }: { citations: Citation[] }) {
                   </button>
                 )}
               </div>
-              <p className="text-[12px] leading-relaxed text-muted-foreground line-clamp-4 selectable">
+              <p
+                // Stays hit-testable so the text can be selected; plain
+                // clicks (no selection) still open the citation target.
+                className="pointer-events-auto relative z-10 line-clamp-4 text-[12px] leading-relaxed text-muted-foreground selectable"
+                onClick={() => {
+                  if (!window.getSelection()?.toString())
+                    openCitationTarget(c);
+                }}
+              >
                 {c.snippet}
               </p>
             </div>

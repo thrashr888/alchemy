@@ -1,4 +1,4 @@
-![Alchemy — local-first research notebooks](docs/readme-header.png)
+![Alchemy showing grounded research chat, sources, and generated notes](docs/screenshot-chat.png)
 
 # Alchemy
 
@@ -23,8 +23,6 @@ built-in embedder. See
 *One minute of Alchemy — [full demo with sound](demo/alchemy-demo.mp4): an agent fills a
 notebook live over MCP, chat cites exact passages, and the notebook becomes a
 two-host podcast voiced on-device.*
-
-![Grounded chat over your sources — streamed answers with inline citations, an AI notebook summary, and one-click document generators](docs/screenshot-chat.png)
 
 <details>
 <summary>Click a citation to open the source, scrolled to the exact passage</summary>

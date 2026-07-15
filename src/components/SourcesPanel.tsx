@@ -10,9 +10,10 @@ import {
   ResizeHandle,
   RowMenu,
   Spinner,
+  CardAction,
   useConfirm,
 } from "./ui";
-import { cn, cardButtonProps, isWebUrl } from "@/lib/utils";
+import { cn, isWebUrl } from "@/lib/utils";
 import type { Source } from "@/lib/types";
 import {
   FileText,
@@ -264,6 +265,7 @@ export function SourcesPanel() {
             size="icon"
             onClick={toggleSources}
             title="Collapse sources"
+            aria-label="Collapse sources"
           >
             <PanelLeftClose className="h-4 w-4" />
           </Button>
@@ -390,21 +392,32 @@ export function SourcesPanel() {
                 return (
                   <div
                     key={s.id}
-                    onClick={() => {
-                      if (readable) openSourceViewer(s.id, s.title);
-                    }}
-                    {...(readable
-                      ? cardButtonProps(() => openSourceViewer(s.id, s.title))
-                      : {})}
-                    title={readable ? "Read source" : undefined}
+                    // Row content is pointer-events-none (clicks go to the
+                    // CardAction), so the row carries the hover detail the
+                    // truncated children can no longer show.
+                    title={[
+                      s.title,
+                      s.status === "error"
+                        ? s.error || "Import failed"
+                        : s.url || undefined,
+                      readable ? "Read source" : undefined,
+                    ]
+                      .filter(Boolean)
+                      .join("\n")}
                     className={cn(
-                      "group flex items-start gap-2 rounded-md px-2 py-2 hover:bg-surface-2",
+                      "group relative flex items-start gap-2 rounded-md px-2 py-2 hover:bg-surface-2",
                       s.status === "error" && "bg-destructive/5",
                       readable && "cursor-pointer",
                       indent && "ml-5",
                     )}
                   >
-                    <div className="mt-0.5">
+                    {readable && (
+                      <CardAction
+                        label={`Read source ${s.title}`}
+                        onClick={() => openSourceViewer(s.id, s.title)}
+                      />
+                    )}
+                    <div className="pointer-events-none relative z-10 mt-0.5">
                       {s.status === "error" ? (
                         <AlertCircle className="h-3.5 w-3.5 text-destructive" />
                       ) : s.status === "placeholder" ? (
@@ -415,7 +428,7 @@ export function SourcesPanel() {
                         sourceIcon(s.sourceType, s.url)
                       )}
                     </div>
-                    <div className="min-w-0 flex-1">
+                    <div className="pointer-events-none relative z-10 min-w-0 flex-1">
                       {/* The ⋯ menu lives in the title row: hovering shortens the
                       title but never reflows the metadata line below. */}
                       <div className="flex items-center gap-1">
@@ -431,6 +444,7 @@ export function SourcesPanel() {
                           {s.title}
                         </span>
                         <RowMenu
+                          className="pointer-events-auto z-20"
                           label={`Options for "${s.title}"`}
                           items={[
                             // url holds the origin: a web URL, an on-disk path, or
@@ -547,7 +561,7 @@ export function SourcesPanel() {
                     </div>
                     {/* Selection stays at the far right (NotebookLM-style), always
                     visible. */}
-                    <div className="mt-0.5">
+                    <div className="relative z-20 mt-0.5">
                       {isFolder ? (
                         <SelectBox
                           checked={kids.length > 0 && kidsOn === kids.length}
@@ -592,6 +606,8 @@ export function SourcesPanel() {
           {!editing?.macNote && (
             <Input
               autoFocus
+              name="source-title"
+              aria-label="Source title"
               placeholder="Title"
               value={editing?.title ?? ""}
               onChange={(e) =>
@@ -602,6 +618,8 @@ export function SourcesPanel() {
           <Textarea
             autoFocus={editing?.macNote}
             rows={12}
+            name="source-text"
+            aria-label={editing?.macNote ? "Apple Note text" : "Source text"}
             placeholder="Source text…"
             value={editing?.text ?? ""}
             onChange={(e) =>
@@ -676,12 +694,16 @@ function AddReminderForm({
     >
       <Input
         autoFocus
+        name="reminder-title"
+        aria-label="Reminder title"
         placeholder="Remind me to…"
         value={title}
         onChange={(e) => setTitle(e.target.value)}
       />
       <Textarea
         rows={3}
+        name="reminder-notes"
+        aria-label="Reminder notes"
         placeholder="Notes (optional)"
         value={notes}
         onChange={(e) => setNotes(e.target.value)}
