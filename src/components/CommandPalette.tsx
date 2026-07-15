@@ -668,7 +668,18 @@ export function CommandPalette() {
                 )}
                 {askText ? (
                   <div className="text-[13px] leading-relaxed">
-                    <Markdown>{askText}</Markdown>
+                    {/* Citations arrive with the completed answer, so inline
+                        [n] markers turn into clickable chips once streaming
+                        ends; while streaming they render as plain text. */}
+                    <Markdown
+                      citations={askCitations}
+                      onCitation={openCitation}
+                      citationLabel={(c) =>
+                        `${c.title || "Untitled"} · ${c.notebookTitle}`
+                      }
+                    >
+                      {askText}
+                    </Markdown>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 py-4 text-[12px] text-muted-foreground">
