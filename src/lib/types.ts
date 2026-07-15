@@ -107,6 +107,9 @@ export interface Note {
   /** "" for deliberate notes, "auto" for chat-created evidence records.
    *  Editing an auto note flips it to "" (user-owned). */
   origin: string;
+  /** Curator state for auto notes: "" | "stale" (dimmed) | "archived"
+   *  (out of retrieval, collapsed). Use or an edit revives. */
+  status: string;
   createdAt: number;
   updatedAt: number;
 }

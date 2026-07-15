@@ -658,6 +658,7 @@ impl AlchemyMcp {
             kind: kind.into(),
             prompt: String::new(),
             origin: String::new(),
+            status: String::new(),
             created_at: ts,
             updated_at: ts,
         };

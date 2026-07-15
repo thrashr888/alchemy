@@ -77,23 +77,29 @@ the UI's unread-dot cache; the DB is the curator's ground truth.
 ### 4. The curator
 
 Rides the existing once-a-minute frontend tick (the one that runs report
-schedules and folder rescans), self-throttled: runs at most **weekly**,
-and only when the app has been idle **≥30 minutes**. Scope: notes with
-`origin: "auto"` only — user-authored and user-edited notes are
-implicitly pinned (editing an auto note flips it to user-owned).
+schedules and folder rescans), self-throttled to at most **weekly**.
+Scope: notes with `origin: "auto"` only — user-authored and user-edited
+notes are implicitly pinned (editing an auto note flips it to user-owned
+and revives it).
 
-**Phase 1 — deterministic, always on when enabled.** An auto note never
-opened and never retrieved for 30 days is marked `stale` (dimmed in the
-panel); at 90 days it is archived — excluded from the retrieval index and
-collapsed into an Archived section, never deleted.
+**Phase 1 — deterministic, always on.** Staleness counts **app-open
+days** (days the app actually ran, tracked in `curator.json` next to the
+config), not wall days — a month away from the machine must not archive
+everything. An auto note unused for 30 open days is marked `stale`
+(dimmed in the panel, badge explains itself); at 90 it is archived —
+chunks dropped from the retrieval index, card collapsed into an Archived
+section, never deleted. Any use since the last mark revives it (archived
+notes get re-embedded). No idle gate: the pass is milliseconds of DB
+work with zero model calls, so there is nothing to protect the user
+from. Each run updates **one living "Curator report" note per affected
+notebook** (updated in place — the curator must not generate its own
+silt) listing what was staled/archived/revived and why.
 
 **Phase 2 — LLM consolidation, off by default.** With the setting on,
 the curator hands the notebook's auto evidence notes to the chat model
 and lets it merge overlapping records into one canonical note (claims
-accumulate evidence over time instead of accumulating siblings). Every
-run writes a **curator report note** — what was staled, archived,
-merged, with the merged-from titles — so the user audits by reading a
-note, the same way they read everything else.
+accumulate evidence over time instead of accumulating siblings). This
+pass IS gated on idle — it spends tokens and rewrites content.
 
 ## Non-goals (v1)
 
@@ -124,8 +130,9 @@ note, the same way they read everything else.
 - Should retrieval down-weight note chunks vs source chunks, or is the
   citation label enough? Leaning: label only in v1; measure before
   weighting.
-- Stale/archive thresholds: 30/90 days suit Hermes' always-on daemon;
+- ~~Stale/archive thresholds: 30/90 days suit Hermes' always-on daemon;
   notebooks are opened in bursts. Maybe clock in *app-open days* rather
-  than wall days so a month away doesn't archive everything.
+  than wall days so a month away doesn't archive everything.~~ Settled:
+  app-open days (see §4).
 - Does the palette/⌘K need an "auto notes" filter, or is the origin
   badge on cards enough?

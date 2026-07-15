@@ -170,7 +170,7 @@ impl Db {
             .schema()
             .await?;
         let has = |n: &str| schema.field_with_name(n).is_ok();
-        if has("prompt") && has("origin") {
+        if has("prompt") && has("origin") && has("status") {
             return Ok(());
         }
         let batches = self.collect(T_NOTES, None).await?;
@@ -188,6 +188,11 @@ impl Db {
             } else {
                 None
             };
+            let origin = if has("origin") {
+                Some(str_col(b, "origin")?)
+            } else {
+                None
+            };
             for i in 0..b.num_rows() {
                 notes.push(Note {
                     id: id.value(i).to_string(),
@@ -196,8 +201,9 @@ impl Db {
                     content: content.value(i).to_string(),
                     kind: kind.value(i).to_string(),
                     prompt: prompt.map(|p| p.value(i).to_string()).unwrap_or_default(),
-                    // Pre-existing notes are all deliberate — never "auto".
-                    origin: String::new(),
+                    // Notes from before the origin column are all deliberate.
+                    origin: origin.map(|o| o.value(i).to_string()).unwrap_or_default(),
+                    status: String::new(),
                     created_at: created.value(i),
                     updated_at: updated.value(i),
                 });
@@ -970,6 +976,7 @@ impl Db {
                 kind: str_col(b, "kind")?.value(0).to_string(),
                 prompt: str_col(b, "prompt")?.value(0).to_string(),
                 origin: str_col(b, "origin")?.value(0).to_string(),
+                status: str_col(b, "status")?.value(0).to_string(),
                 created_at: i64_col(b, "created_at")?.value(0),
                 updated_at: i64_col(b, "updated_at")?.value(0),
             }));
@@ -1009,6 +1016,17 @@ impl Db {
         tbl.update()
             .only_if(format!("id = '{}'", esc(id)))
             .column("origin", format!("'{}'", esc(origin)))
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    /// Set a note's curator status: "" (active) | "stale" | "archived".
+    pub async fn set_note_status(&self, id: &str, status: &str) -> Result<()> {
+        let tbl = self.conn.open_table(T_NOTES).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(id)))
+            .column("status", format!("'{}'", esc(status)))
             .execute()
             .await?;
         Ok(())
@@ -1070,9 +1088,6 @@ impl Db {
     }
 
     /// Every note's usage counters (notes never used have no row).
-    /// Production consumer arrives with the curator (RFC-note-curator
-    /// phase 4); until then only the round-trip test reads it.
-    #[allow(dead_code)]
     pub async fn note_usage(&self) -> Result<Vec<NoteUsage>> {
         if !self.table_exists(T_NOTE_USAGE).await? {
             return Ok(vec![]);
@@ -1233,6 +1248,7 @@ fn notes_from_batches(batches: &[RecordBatch]) -> Result<Vec<Note>> {
         let updated = i64_col(b, "updated_at")?;
         let prompt = str_col(b, "prompt")?;
         let origin = str_col(b, "origin")?;
+        let status = str_col(b, "status")?;
         for i in 0..b.num_rows() {
             notes.push(Note {
                 id: id.value(i).to_string(),
@@ -1242,6 +1258,7 @@ fn notes_from_batches(batches: &[RecordBatch]) -> Result<Vec<Note>> {
                 kind: kind.value(i).to_string(),
                 prompt: prompt.value(i).to_string(),
                 origin: origin.value(i).to_string(),
+                status: status.value(i).to_string(),
                 created_at: created.value(i),
                 updated_at: updated.value(i),
             });
@@ -1494,6 +1511,7 @@ fn notes_schema() -> SchemaRef {
         Field::new("updated_at", DataType::Int64, false),
         Field::new("prompt", DataType::Utf8, false),
         Field::new("origin", DataType::Utf8, false),
+        Field::new("status", DataType::Utf8, false),
     ]))
 }
 
@@ -1547,6 +1565,7 @@ fn note_batch(schema: &SchemaRef, notes: &[Note]) -> Result<RecordBatch> {
             i(|x| x.updated_at),
             s(|x| x.prompt.clone()),
             s(|x| x.origin.clone()),
+            s(|x| x.status.clone()),
         ],
     )?)
 }

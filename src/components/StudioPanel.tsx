@@ -219,6 +219,53 @@ const KIND_LABEL: Record<NoteKind, string> = {
   template: "Template",
 };
 
+/** Notes the curator archived: out of retrieval, collapsed but never gone.
+ *  Opening one still works; editing it revives it (see RFC-note-curator). */
+function ArchivedNotes({
+  notes,
+  onOpen,
+}: {
+  notes: Note[];
+  onOpen: (n: Note) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  if (notes.length === 0) return null;
+  return (
+    <div className="mt-2 border-t border-border pt-2">
+      <button
+        className="flex w-full items-center gap-1.5 rounded px-1 py-1 text-[11px] font-medium text-subtle-foreground hover:text-foreground transition-colors"
+        onClick={() => setOpen((o) => !o)}
+      >
+        {open ? (
+          <ChevronUp className="h-3 w-3" />
+        ) : (
+          <ChevronDown className="h-3 w-3" />
+        )}
+        Archived ({notes.length})
+      </button>
+      {open && (
+        <div className="mt-1 flex flex-col gap-1.5">
+          {notes.map((n) => (
+            <div
+              key={n.id}
+              onClick={() => onOpen(n)}
+              {...cardButtonProps(() => onOpen(n))}
+              className="group cursor-pointer rounded-md border border-border bg-surface-2/40 px-3 py-2 opacity-50 transition-opacity hover:opacity-80"
+            >
+              <span className="block truncate text-[12px] font-medium text-foreground">
+                {n.title}
+              </span>
+              <span className="text-[11px] text-subtle-foreground">
+                {relativeTime(n.updatedAt)} — editing revives it
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function StudioPanel() {
   const currentId = useStore((s) => s.currentId);
   const sources = useStore((s) => s.sources);
@@ -553,12 +600,15 @@ export function StudioPanel() {
             />
           ) : (
             <div className="flex flex-col gap-1.5">
-              {notes.map((n) => (
+              {notes.filter((n) => n.status !== "archived").map((n) => (
                 <div
                   key={n.id}
                   onClick={() => openNoteCard(n)}
                   {...cardButtonProps(() => openNoteCard(n))}
-                  className="group cursor-pointer rounded-md border border-border bg-surface-2/40 px-3 py-2.5 transition-colors hover:border-border-strong hover:bg-surface-2"
+                  className={cn(
+                    "group cursor-pointer rounded-md border border-border bg-surface-2/40 px-3 py-2.5 transition-colors hover:border-border-strong hover:bg-surface-2",
+                    n.status === "stale" && "opacity-60",
+                  )}
                 >
                   <div className="flex items-center gap-2">
                     <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
@@ -615,6 +665,11 @@ export function StudioPanel() {
                         <Badge>auto</Badge>
                       </span>
                     )}
+                    {n.status === "stale" && (
+                      <span title="Unused for a while — the curator will archive it eventually; opening or editing revives it">
+                        <Badge>stale</Badge>
+                      </span>
+                    )}
                     <span className="text-[11px] text-subtle-foreground">
                       {relativeTime(n.updatedAt)}
                     </span>
@@ -626,6 +681,10 @@ export function StudioPanel() {
               ))}
             </div>
           )}
+          <ArchivedNotes
+            notes={notes.filter((n) => n.status === "archived")}
+            onOpen={openNoteCard}
+          />
         </div>
       </div>
 
