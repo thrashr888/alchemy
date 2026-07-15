@@ -27,6 +27,7 @@ const T_MESSAGES: &str = "messages";
 const T_NOTES: &str = "notes";
 const T_NOTE_USAGE: &str = "note_usage";
 const T_REPORTS: &str = "report_schedules";
+const T_ROUTES: &str = "routes";
 /// Note chunks share the chunks table with source chunks, stored under
 /// `source_id = "note:<note_id>"` — real source ids are UUIDs, so the prefix
 /// can't collide, and every existing notebook/source filter and delete
@@ -50,6 +51,18 @@ pub struct SearchTrace {
     pub fused_hits: Vec<Citation>,
     pub final_hits: Vec<Citation>,
     pub warnings: Vec<String>,
+}
+
+/// One semantic-router entry (docs/RFC-retrieval-maturity.md Phase 4): a
+/// notebook summary embedded so corpus-wide questions can be routed to the
+/// most likely notebooks before chunk search. `kind` is "notebook" today;
+/// the schema leaves room for per-source routes later.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Route {
+    pub id: String,
+    pub kind: String,
+    pub notebook_id: String,
+    pub summary: String,
 }
 
 /// Post-fusion shaping for corpus-wide retrieval. Zero means "no cap";
@@ -970,20 +983,23 @@ impl Db {
     /// BM25-only search across every notebook — no embedding round-trip, so
     /// it's fast enough for as-you-type global search. Returns
     /// Corpus-wide hybrid search — `search_chunks` without the notebook
-    /// filter; `SearchOptions::default()` gives the flat baseline.
-    /// Returns (notebook_id, citation), rank-fused across the vector and
-    /// BM25 sides exactly like the per-notebook path. `notebook_ids`
-    /// restricts retrieval to those notebooks (None searches all — the flat
-    /// baseline). Diversity caps stop one chatty source or notebook from
-    /// filling the whole top-k with near-duplicates; skipped candidates
-    /// backfill in score order, so this never returns fewer hits than the
-    /// uncapped search would.
+    /// filter; `SearchOptions::default()` and no routing give the flat
+    /// baseline. Returns (notebook_id, citation), rank-fused across the
+    /// vector and BM25 sides exactly like the per-notebook path.
+    ///
+    /// `route_notebooks` is a relevance hint, not a boundary: it narrows the
+    /// VECTOR side to the routed notebooks while BM25 stays corpus-wide, so
+    /// an exact identifier the router couldn't see (titles carry no error
+    /// codes) still escapes a routing mistake. Diversity caps stop one
+    /// chatty source or notebook from filling the whole top-k with
+    /// near-duplicates; skipped candidates backfill in score order, so this
+    /// never returns fewer hits than the uncapped search would.
     pub async fn search_chunks_all_opts(
         &self,
         query_vec: Vec<f32>,
         query_text: &str,
         k: usize,
-        notebook_ids: Option<&[String]>,
+        route_notebooks: Option<&[String]>,
         opts: SearchOptions,
     ) -> Result<Vec<(String, Citation)>> {
         if !self.table_exists(T_CHUNKS).await? {
@@ -1001,7 +1017,7 @@ impl Db {
         let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
         let pool = k.max(1) * opts.pool_multiplier.max(3);
 
-        let nb_filter = notebook_ids.map(|ids| {
+        let nb_filter = route_notebooks.map(|ids| {
             // Some(&[]) matches nothing — '' is never a real notebook id.
             let list = if ids.is_empty() {
                 "''".to_string()
@@ -1032,14 +1048,13 @@ impl Db {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
+        // Deliberately unrouted: BM25 stays corpus-wide so exact identifiers
+        // survive a bad route (see the method docs).
         let fts_hits = if query_text.trim().is_empty() {
             vec![]
         } else {
-            let mut fts_query = tbl.query();
-            if let Some(f) = &nb_filter {
-                fts_query = fts_query.only_if(f.clone());
-            }
-            match fts_query
+            match tbl
+                .query()
                 .full_text_search(FullTextSearchQuery::new(query_text.to_string()))
                 .limit(pool)
                 .execute()
@@ -1114,6 +1129,137 @@ impl Db {
                 ));
             }
         }
+        Ok(out)
+    }
+
+    // ---- Semantic router ---------------------------------------------------
+
+    /// All stored router entries (without vectors) — the staleness baseline
+    /// for `router::ensure_router`'s diff.
+    pub async fn list_routes(&self) -> Result<Vec<Route>> {
+        let batches = self.collect(T_ROUTES, None).await?;
+        let mut out = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let kind = str_col(b, "kind")?;
+            let nb = str_col(b, "notebook_id")?;
+            let summary = str_col(b, "summary")?;
+            for i in 0..b.num_rows() {
+                out.push(Route {
+                    id: id.value(i).to_string(),
+                    kind: kind.value(i).to_string(),
+                    notebook_id: nb.value(i).to_string(),
+                    summary: summary.value(i).to_string(),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Insert-or-replace router entries (embeddings parallel to `routes`).
+    /// Creates the routes table on first use with the embedding dimension.
+    pub async fn upsert_routes(&self, routes: &[Route], embeddings: &[Vec<f32>]) -> Result<()> {
+        if routes.is_empty() {
+            return Ok(());
+        }
+        let dim = embeddings
+            .first()
+            .map(|v| v.len())
+            .ok_or_else(|| anyhow!("no embeddings for routes"))? as i32;
+        self.ensure_table(T_ROUTES, routes_schema(dim)).await?;
+        self.delete_routes(&routes.iter().map(|r| r.id.clone()).collect::<Vec<_>>())
+            .await?;
+        let schema = routes_schema(dim);
+        let vectors = FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+            embeddings
+                .iter()
+                .map(|v| Some(v.iter().map(|f| Some(*f)).collect::<Vec<_>>())),
+            dim,
+        );
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(
+                    routes.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    routes.iter().map(|r| r.kind.clone()).collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    routes
+                        .iter()
+                        .map(|r| r.notebook_id.clone())
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    routes.iter().map(|r| r.summary.clone()).collect::<Vec<_>>(),
+                )),
+                Arc::new(vectors),
+            ],
+        )?;
+        self.add_batch(T_ROUTES, schema, batch).await
+    }
+
+    pub async fn delete_routes(&self, ids: &[String]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let list = ids
+            .iter()
+            .map(|id| format!("'{}'", esc(id)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.delete_where(T_ROUTES, &format!("id IN ({list})"))
+            .await
+    }
+
+    /// Nearest router entries to the query, best first, with the vector
+    /// distance (lower = closer). `kind` filters to one entry kind.
+    pub async fn route_search(
+        &self,
+        query_vec: Vec<f32>,
+        kind: Option<&str>,
+        k: usize,
+    ) -> Result<Vec<(Route, f32)>> {
+        if !self.table_exists(T_ROUTES).await? {
+            return Ok(vec![]);
+        }
+        let tbl = self.conn.open_table(T_ROUTES).execute().await?;
+        let mut q = tbl.query();
+        if let Some(kind) = kind {
+            q = q.only_if(format!("kind = '{}'", esc(kind)));
+        }
+        let batches = q
+            .nearest_to(query_vec)?
+            .limit(k.max(1))
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        let mut out = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let rkind = str_col(b, "kind")?;
+            let nb = str_col(b, "notebook_id")?;
+            let summary = str_col(b, "summary")?;
+            let dist = b.column_by_name("_distance").and_then(|c| {
+                c.as_any()
+                    .downcast_ref::<arrow_array::Float32Array>()
+                    .cloned()
+            });
+            for i in 0..b.num_rows() {
+                out.push((
+                    Route {
+                        id: id.value(i).to_string(),
+                        kind: rkind.value(i).to_string(),
+                        notebook_id: nb.value(i).to_string(),
+                        summary: summary.value(i).to_string(),
+                    },
+                    dist.as_ref().map(|d| d.value(i)).unwrap_or(0.0),
+                ));
+            }
+        }
+        out.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         Ok(out)
     }
 
@@ -1609,6 +1755,20 @@ fn chunks_schema(dim: i32) -> SchemaRef {
         Field::new("source_id", DataType::Utf8, false),
         Field::new("ordinal", DataType::Int32, false),
         Field::new("text", DataType::Utf8, false),
+        Field::new(
+            "vector",
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, true)), dim),
+            true,
+        ),
+    ]))
+}
+
+fn routes_schema(dim: i32) -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("kind", DataType::Utf8, false),
+        Field::new("notebook_id", DataType::Utf8, false),
+        Field::new("summary", DataType::Utf8, false),
         Field::new(
             "vector",
             DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, true)), dim),

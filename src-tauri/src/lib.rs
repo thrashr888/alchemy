@@ -11,6 +11,7 @@ mod menu;
 mod models;
 mod pdf;
 mod rag;
+mod router;
 #[cfg(target_os = "macos")]
 mod services;
 #[cfg(target_os = "macos")]

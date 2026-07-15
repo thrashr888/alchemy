@@ -637,3 +637,126 @@ async fn eval_meta_diversity() {
         "diverse mean spec recall {dr:.2} below 0.75 floor"
     );
 }
+
+/// Semantic-router eval: build the notebook router over the three-notebook
+/// corpus, check the index is incremental (second sync is a no-op), measure
+/// routing accuracy on every dataset query, and compare routed retrieval
+/// (top-2 notebooks) against flat.
+#[tokio::test]
+async fn eval_router() {
+    let Some(ai) = builtin_ai().await else { return };
+    let dir = std::env::temp_dir().join(format!("nbl-eval-router-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let notebooks = [
+        ("meta-a", "Network Tinkering", DOMINATOR, "dom-"),
+        ("meta-b", "Personal Reference", CORPUS, "b-"),
+        ("meta-c", "Household Archive", EXTRA_CORPUS, "c-"),
+    ];
+    for (id, title, docs, prefix) in notebooks {
+        db.create_notebook(&crate::models::Notebook {
+            id: id.into(),
+            title: title.into(),
+            created_at: 0,
+            updated_at: 0,
+            color: String::new(),
+            source_count: 0,
+        })
+        .await
+        .expect("create notebook");
+        seed_docs(&ai, &db, id, docs, prefix).await;
+    }
+
+    // Index builds once (one route per source), then syncs are no-ops until
+    // the corpus changes.
+    let n_sources = DOMINATOR.len() + CORPUS.len() + EXTRA_CORPUS.len();
+    let (embedded, deleted) = crate::router::ensure_router(&db, &ai)
+        .await
+        .expect("build router");
+    assert_eq!(
+        (embedded, deleted),
+        (n_sources, 0),
+        "expected one fresh route per source"
+    );
+    let resync = crate::router::ensure_router(&db, &ai)
+        .await
+        .expect("resync router");
+    assert_eq!(resync, (0, 0), "unchanged corpus must re-embed nothing");
+
+    // Source title -> owning notebook, for judging routing accuracy.
+    let mut titles: HashMap<String, String> = HashMap::new();
+    let mut source_nb: HashMap<String, String> = HashMap::new();
+    for (id, _, _, _) in notebooks {
+        for s in db.list_sources(id).await.expect("list sources") {
+            source_nb.insert(s.title.clone(), id.to_string());
+            titles.insert(s.id, s.title);
+        }
+    }
+
+    let datasets = load_datasets();
+    let mut total = 0usize;
+    let mut acc1 = 0usize;
+    let mut acc2 = 0usize;
+    let mut flat_recall_sum = 0.0f64;
+    let mut routed_recall_sum = 0.0f64;
+    for ds in &datasets {
+        for q in &ds.queries {
+            let expected: std::collections::HashSet<&String> = q
+                .relevant
+                .iter()
+                .filter_map(|s| source_nb.get(&s.source_title))
+                .collect();
+            let qvec = ai.embed_one(&q.query).await.expect("embed query");
+            let routes = crate::router::route_notebooks(&db, qvec.clone(), 3)
+                .await
+                .expect("route");
+            total += 1;
+            if expected.iter().all(|nb| routes.first() == Some(*nb)) {
+                acc1 += 1;
+            }
+            if expected
+                .iter()
+                .all(|nb| routes.iter().take(2).any(|r| &r == nb))
+            {
+                acc2 += 1;
+            } else {
+                eprintln!(
+                    "  MISROUTE: {:?} expected {:?}, routed {:?}",
+                    q.query, expected, routes
+                );
+            }
+
+            let judge = |hits: Vec<(String, Citation)>| {
+                let cs: Vec<Citation> = hits.into_iter().map(|(_, c)| c).collect();
+                let (ranks, _) = matched_ranks(&cs, &titles, &q.relevant);
+                ranks.len() as f64 / q.relevant.len() as f64
+            };
+            let flat = db
+                .search_chunks_all_opts(qvec.clone(), &q.query, K, None, SearchOptions::default())
+                .await
+                .expect("flat search");
+            flat_recall_sum += judge(flat);
+            let top2: Vec<String> = routes.into_iter().take(2).collect();
+            let routed = db
+                .search_chunks_all_opts(qvec, &q.query, K, Some(&top2), SearchOptions::default())
+                .await
+                .expect("routed search");
+            routed_recall_sum += judge(routed);
+        }
+    }
+    let acc1 = acc1 as f64 / total as f64;
+    let acc2 = acc2 as f64 / total as f64;
+    let flat_recall = flat_recall_sum / total as f64;
+    let routed_recall = routed_recall_sum / total as f64;
+    eprintln!("\nrouter over {total} dataset queries, 3 notebooks:");
+    eprintln!("  accuracy@1 {acc1:.2}   accuracy@2 {acc2:.2}");
+    eprintln!("  recall@{K}: flat {flat_recall:.2}   routed(top-2) {routed_recall:.2}\n");
+
+    assert!(
+        acc2 >= 0.9,
+        "routing accuracy@2 {acc2:.2} below 0.9 — router summaries too weak"
+    );
+    assert!(
+        routed_recall >= flat_recall - 0.05,
+        "routed recall {routed_recall:.2} fell more than 0.05 below flat {flat_recall:.2}"
+    );
+}

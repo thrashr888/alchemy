@@ -4788,6 +4788,34 @@ pub(crate) async fn retrieve_everything(
         let ai = state.ai.read().await;
         e(ai.embed_one(question).await)?
     };
+    // Semantic routing: with enough notebooks, search the most likely ones
+    // instead of the whole corpus. The index is self-healing and any
+    // failure (or a small corpus) falls back to the flat search; routing
+    // keeps ROUTE_TOP_K notebooks, so corpora at or below that size are
+    // searched in full either way.
+    let routed: Option<Vec<String>> = if nb_titles.len() > crate::router::MIN_NOTEBOOKS_TO_ROUTE {
+        let ai = state.ai.read().await;
+        if let Err(err) = crate::router::ensure_router(&state.db, &ai).await {
+            eprintln!("router refresh failed (falling back to flat): {err:#}");
+        }
+        match crate::router::route_notebooks(
+            &state.db,
+            query_vec.clone(),
+            crate::router::ROUTE_TOP_K,
+        )
+        .await
+        {
+            Ok(ids) if !ids.is_empty() => Some(ids),
+            Ok(_) => None,
+            Err(err) => {
+                eprintln!("notebook routing failed (falling back to flat): {err:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Diversity caps keep one chatty notebook or source from filling the
     // whole answer with near-duplicates; skipped candidates backfill, so a
     // single-notebook corpus behaves exactly like the flat search.
@@ -4799,7 +4827,7 @@ pub(crate) async fn retrieve_everything(
     };
     let mut out: Vec<MetaCitation> = e(state
         .db
-        .search_chunks_all_opts(query_vec, question, k, None, opts)
+        .search_chunks_all_opts(query_vec, question, k, routed.as_deref(), opts)
         .await)?
     .into_iter()
     .map(|(nb, c)| {
