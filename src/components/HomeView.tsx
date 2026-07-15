@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
+import { DevBadge } from "./DevBadge";
 import { api } from "@/lib/api";
 import { Button, Input, Modal, Badge, EmptyState, useConfirm } from "./ui";
 import { AlchemyHero } from "./AlchemyHero";
@@ -206,6 +207,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   : `${provider.label} offline`}
             </span>
           </div>
+          <DevBadge />
           <Button
             variant="ghost"
             size="icon"

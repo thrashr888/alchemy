@@ -11,6 +11,7 @@ import { HealthBanner } from "./HealthBanner";
 import { Button } from "./ui";
 import { shortcutBlocked } from "@/lib/utils";
 import { ChevronLeft, Search, Settings, BookOpen } from "lucide-react";
+import { DevBadge } from "./DevBadge";
 
 export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   const currentId = useStore((s) => s.currentId);
@@ -76,6 +77,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
           </span>
         </div>
         <div className="ml-auto flex items-center gap-1">
+          <DevBadge />
           <Button
             variant="ghost"
             size="icon"
