@@ -405,7 +405,10 @@ export function SourcesPanel() {
                       .filter(Boolean)
                       .join("\n")}
                     className={cn(
-                      "group relative flex items-start gap-2 rounded-md px-2 py-2 hover:bg-surface-2",
+                      // has-: an open row menu must outrank the z-10/z-20
+                      // content of the rows after it (they'd paint over the
+                      // dropdown otherwise — later DOM order wins at equal z).
+                      "group relative flex items-start gap-2 rounded-md px-2 py-2 hover:bg-surface-2 has-[[aria-expanded=true]]:z-30",
                       s.status === "error" && "bg-destructive/5",
                       readable && "cursor-pointer",
                       indent && "ml-5",

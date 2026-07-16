@@ -105,7 +105,10 @@ export function Spinner({ className }: { className?: string }) {
  * Full-card primary action for cards that also contain sibling controls.
  * The button is a sibling, not a wrapper, so menus and checkboxes never become
  * nested interactive content. Place it inside a `relative` card and keep
- * secondary controls above it with `relative z-20`.
+ * secondary controls above it with `relative z-20`. Cards hosting a RowMenu
+ * also need `has-[[aria-expanded=true]]:z-30` — the z-10/z-20 wrappers cap an
+ * open menu inside their stacking context, so without the bump the NEXT
+ * card's content paints over the dropdown.
  */
 export function CardAction({
   label,

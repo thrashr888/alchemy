@@ -438,7 +438,10 @@ export function StudioPanel() {
                 <div
                   key={n.id}
                   className={cn(
-                    "group relative cursor-pointer rounded-md border border-border bg-surface-2/40 px-3 py-2.5 transition-colors hover:border-border-strong hover:bg-surface-2",
+                    // has-: an open row menu must outrank the z-10 content of
+                    // the rows after it (they'd paint over the dropdown
+                    // otherwise — later DOM order wins at equal z).
+                    "group relative cursor-pointer rounded-md border border-border bg-surface-2/40 px-3 py-2.5 transition-colors hover:border-border-strong hover:bg-surface-2 has-[[aria-expanded=true]]:z-30",
                     n.status === "stale" && "opacity-60",
                   )}
                 >
