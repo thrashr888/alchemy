@@ -191,27 +191,21 @@ pub async fn run(
     Ok((outcome.text, gathered, outcome.stats))
 }
 
-/// Rerank a wide retrieval pool down to the SEARCH_K most relevant hits via
-/// one model call. Any failure (model error, unparseable output, bogus
-/// indices) falls back to the fusion order.
-pub(crate) async fn rerank(ai: &Ai, question: &str, hits: Vec<Citation>) -> Vec<Citation> {
-    let top = |hits: Vec<Citation>| hits.into_iter().take(SEARCH_K).collect::<Vec<_>>();
-
-    let snippets: Vec<(String, String)> = hits
-        .iter()
-        .map(|h| (h.source_title.clone(), truncate(&h.snippet, 300)))
-        .collect();
-    let messages = rag::build_rerank_messages(question, &snippets, SEARCH_K);
-    let raw = match ai.chat(&messages).await {
-        Ok(out) => out.text,
-        Err(_) => return top(hits),
-    };
-    let Some(json) = extract_json(&raw) else {
-        return top(hits);
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) else {
-        return top(hits);
-    };
+/// Ask the model which `keep` of the (title, snippet) candidates actually
+/// answer the question. Returns the kept indices in the model's preference
+/// order, or None on any failure (model error, unparseable output, bogus
+/// indices) — callers fall back to fusion order. Shared by the agentic
+/// search loop and the meta-chat deep-search profile.
+pub(crate) async fn rerank_indices(
+    ai: &Ai,
+    question: &str,
+    snippets: &[(String, String)],
+    keep: usize,
+) -> Option<Vec<usize>> {
+    let messages = rag::build_rerank_messages(question, snippets, keep);
+    let raw = ai.chat(&messages).await.ok()?.text;
+    let json = extract_json(&raw)?;
+    let value: serde_json::Value = serde_json::from_str(&json).ok()?;
     let indices: Vec<usize> = value
         .get("keep")
         .and_then(|k| k.as_array())
@@ -224,16 +218,28 @@ pub(crate) async fn rerank(ai: &Ai, question: &str, hits: Vec<Citation>) -> Vec<
         .unwrap_or_default();
 
     let mut used = HashSet::new();
-    let picked: Vec<Citation> = indices
+    let picked: Vec<usize> = indices
         .into_iter()
-        .take(SEARCH_K)
-        .filter(|&i| i < hits.len() && used.insert(i))
-        .map(|i| hits[i].clone())
+        .take(keep)
+        .filter(|&i| i < snippets.len() && used.insert(i))
         .collect();
     if picked.is_empty() {
-        top(hits)
+        None
     } else {
-        picked
+        Some(picked)
+    }
+}
+
+/// Rerank a wide retrieval pool down to the SEARCH_K most relevant hits via
+/// one model call, falling back to fusion order on failure.
+pub(crate) async fn rerank(ai: &Ai, question: &str, hits: Vec<Citation>) -> Vec<Citation> {
+    let snippets: Vec<(String, String)> = hits
+        .iter()
+        .map(|h| (h.source_title.clone(), truncate(&h.snippet, 300)))
+        .collect();
+    match rerank_indices(ai, question, &snippets, SEARCH_K).await {
+        Some(picked) => picked.into_iter().map(|i| hits[i].clone()).collect(),
+        None => hits.into_iter().take(SEARCH_K).collect(),
     }
 }
 

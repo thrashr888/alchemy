@@ -32,6 +32,7 @@ import {
   Settings,
   Sparkles,
   SquarePen,
+  Telescope,
   Upload,
   Wand2,
 } from "lucide-react";
@@ -73,6 +74,10 @@ export function CommandPalette() {
   const [askText, setAskText] = useState("");
   const [askCitations, setAskCitations] = useState<MetaCitation[]>([]);
   const [askLoading, setAskLoading] = useState(false);
+  // Deep search (wider pool + model rerank) — same UX as notebook chat's
+  // deep-research toggle. Starts on the backend's smart default (gateway
+  // models on, local off) so the label is truthful before it's touched.
+  const [askDeep, setAskDeep] = useState(false);
   const askThread = useRef<{ role: string; content: string }[]>([]);
 
   useEffect(() => {
@@ -84,6 +89,7 @@ export function CommandPalette() {
     setAskText("");
     setAskCitations([]);
     setAskLoading(false);
+    setAskDeep(useStore.getState().aiConfig?.provider === "openai");
     askThread.current = [];
     // The homepage's unified ask box seeds a question — open straight into
     // ask mode with it (Esc still drops back to search with it as the query).
@@ -122,7 +128,7 @@ export function CommandPalette() {
     setFollowup("");
     const history = [...askThread.current];
     api
-      .askEverything(q, history)
+      .askEverything(q, history, askDeep)
       .then((res) => {
         setAskText(res.answer);
         setAskCitations(res.citations);
@@ -636,6 +642,21 @@ export function CommandPalette() {
                     : undefined
                 }
               />
+              {mode === "ask" && (
+                <button
+                  onClick={() => setAskDeep((d) => !d)}
+                  title="Deep search: retrieve a wider pool and let the model pick the passages that actually answer — slower, more precise. Applies to the next question."
+                  className={cn(
+                    "inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] transition-colors",
+                    askDeep
+                      ? "border-primary/50 bg-primary/15 text-citation"
+                      : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Telescope className="h-3 w-3" />
+                  {askDeep ? "Deep: on" : "Deep: off"}
+                </button>
+              )}
               <kbd className="shrink-0 rounded border border-border-strong bg-surface-2 px-1.5 py-0.5 text-[10px] text-subtle-foreground">
                 esc
               </kbd>
@@ -668,7 +689,18 @@ export function CommandPalette() {
                 )}
                 {askText ? (
                   <div className="text-[13px] leading-relaxed">
-                    <Markdown>{askText}</Markdown>
+                    {/* Citations arrive with the completed answer, so inline
+                        [n] markers turn into clickable chips once streaming
+                        ends; while streaming they render as plain text. */}
+                    <Markdown
+                      citations={askCitations}
+                      onCitation={openCitation}
+                      citationLabel={(c) =>
+                        `${c.title || "Untitled"} · ${c.notebookTitle}`
+                      }
+                    >
+                      {askText}
+                    </Markdown>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 py-4 text-[12px] text-muted-foreground">

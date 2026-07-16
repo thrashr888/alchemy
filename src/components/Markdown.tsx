@@ -1,7 +1,6 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { Citation } from "@/lib/types";
 
 /** External links must open in the system browser, not navigate the webview. */
 function ExternalLink({
@@ -85,17 +84,27 @@ function ScrollableTable({
   );
 }
 
-export function Markdown({
+/** Chat citations carry `sourceTitle`; meta-chat citations carry `title` —
+ *  the chip works with either, and `citationLabel` overrides the tooltip. */
+export function Markdown<C extends { snippet: string }>({
   children,
   citations,
   onCitation,
+  citationLabel,
 }: {
   children: string;
   /** When present, inline [n] markers become clickable citation chips. */
-  citations?: Citation[];
-  onCitation?: (citation: Citation) => void;
+  citations?: C[];
+  onCitation?: (citation: C) => void;
+  citationLabel?: (citation: C) => string;
 }) {
   const interactive = !!citations?.length && !!onCitation;
+  const label =
+    citationLabel ??
+    ((c: C) => {
+      const t = c as { sourceTitle?: string; title?: string };
+      return t.sourceTitle ?? t.title ?? "";
+    });
   return (
     <div className="prose">
       <ReactMarkdown
@@ -116,7 +125,7 @@ export function Markdown({
                   return (
                     <button
                       onClick={() => onCitation(cite)}
-                      title={`${cite.sourceTitle} — “${cite.snippet.slice(0, 120)}…”`}
+                      title={`${label(cite)} — “${cite.snippet.slice(0, 120)}…”`}
                       className="mx-0.5 inline-flex h-[18px] min-w-[18px] translate-y-[-2px] cursor-pointer items-center justify-center rounded bg-primary/15 px-1 align-baseline text-[11px] font-semibold text-citation transition-colors hover:bg-primary/30"
                     >
                       {linkChildren}

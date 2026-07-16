@@ -27,6 +27,7 @@ const T_MESSAGES: &str = "messages";
 const T_NOTES: &str = "notes";
 const T_NOTE_USAGE: &str = "note_usage";
 const T_REPORTS: &str = "report_schedules";
+const T_ROUTES: &str = "routes";
 /// Note chunks share the chunks table with source chunks, stored under
 /// `source_id = "note:<note_id>"` — real source ids are UUIDs, so the prefix
 /// can't collide, and every existing notebook/source filter and delete
@@ -37,6 +38,99 @@ pub const NOTE_CHUNK_PREFIX: &str = "note:";
 pub const NOTEBOOK_PALETTE: [&str; 8] = [
     "#eb5757", "#e8a33d", "#4cb782", "#5e9bd2", "#9b87f5", "#e274b6", "#4fc1c9", "#98a562",
 ];
+
+/// One hybrid search with the working shown: what each stage saw and any
+/// degradation the production path hides (see `search_chunks_trace`).
+/// `fused_hits` is the full RRF-ordered pool; `final_hits` the top-k slice
+/// production callers get.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchTrace {
+    pub vector_hits: Vec<Citation>,
+    pub fts_hits: Vec<Citation>,
+    pub fused_hits: Vec<Citation>,
+    pub final_hits: Vec<Citation>,
+    pub warnings: Vec<String>,
+}
+
+/// One semantic-router entry (docs/RFC-retrieval-maturity.md Phase 4): a
+/// notebook summary embedded so corpus-wide questions can be routed to the
+/// most likely notebooks before chunk search. `kind` is "notebook" today;
+/// the schema leaves room for per-source routes later.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Route {
+    pub id: String,
+    pub kind: String,
+    pub notebook_id: String,
+    pub summary: String,
+}
+
+/// Post-fusion shaping for corpus-wide retrieval. Zero means "no cap";
+/// `SearchOptions::default()` reproduces the flat search exactly.
+#[derive(Clone, Copy, Default)]
+pub struct SearchOptions {
+    /// Candidate pool per retrieval side = k * this (0 → 3, the flat default).
+    pub pool_multiplier: usize,
+    /// Max chunks kept per source or note (0 → unlimited).
+    pub max_per_source: usize,
+    /// Max chunks kept per notebook (0 → unlimited).
+    pub max_per_notebook: usize,
+    /// Max note chunks kept in total (0 → unlimited).
+    pub max_notes: usize,
+}
+
+/// Walk the fused pool in score order keeping hits that fit the caps, then
+/// backfill remaining slots from the skipped candidates (still in score
+/// order) so caps trade duplication for breadth, never for count.
+fn apply_diversity(
+    ranked: Vec<(String, Citation)>,
+    k: usize,
+    opts: SearchOptions,
+) -> Vec<(String, Citation)> {
+    let uncapped = opts.max_per_source == 0 && opts.max_per_notebook == 0 && opts.max_notes == 0;
+    if uncapped {
+        return ranked.into_iter().take(k).collect();
+    }
+    let mut per_owner: HashMap<String, usize> = HashMap::new();
+    let mut per_notebook: HashMap<String, usize> = HashMap::new();
+    let mut notes = 0usize;
+    let mut kept: Vec<(String, Citation)> = Vec::with_capacity(k);
+    let mut skipped: Vec<(String, Citation)> = Vec::new();
+    for hit in ranked {
+        if kept.len() >= k {
+            break;
+        }
+        let (nb, c) = &hit;
+        let is_note = !c.note_id.is_empty();
+        let owner = if is_note {
+            format!("{NOTE_CHUNK_PREFIX}{}", c.note_id)
+        } else {
+            c.source_id.clone()
+        };
+        let owner_full = opts.max_per_source > 0
+            && per_owner.get(&owner).copied().unwrap_or(0) >= opts.max_per_source;
+        let nb_full = opts.max_per_notebook > 0
+            && per_notebook.get(nb).copied().unwrap_or(0) >= opts.max_per_notebook;
+        let notes_full = opts.max_notes > 0 && is_note && notes >= opts.max_notes;
+        if owner_full || nb_full || notes_full {
+            skipped.push(hit);
+            continue;
+        }
+        *per_owner.entry(owner).or_default() += 1;
+        *per_notebook.entry(nb.clone()).or_default() += 1;
+        if is_note {
+            notes += 1;
+        }
+        kept.push(hit);
+    }
+    for hit in skipped {
+        if kept.len() >= k {
+            break;
+        }
+        kept.push(hit);
+    }
+    kept
+}
 
 pub struct Db {
     conn: Connection,
@@ -644,8 +738,26 @@ impl Db {
         k: usize,
         source_ids: Option<&[String]>,
     ) -> Result<Vec<Citation>> {
+        Ok(self
+            .search_chunks_trace(notebook_id, query_vec, query_text, k, source_ids)
+            .await?
+            .final_hits)
+    }
+
+    /// `search_chunks` with the working shown: per-stage hits plus warnings
+    /// the production path deliberately swallows (an FTS failure degrades to
+    /// vector-only silently for the UI, but debugging and evals need to see
+    /// it). `final_hits` is exactly what `search_chunks` returns.
+    pub async fn search_chunks_trace(
+        &self,
+        notebook_id: &str,
+        query_vec: Vec<f32>,
+        query_text: &str,
+        k: usize,
+        source_ids: Option<&[String]>,
+    ) -> Result<SearchTrace> {
         if !self.table_exists(T_CHUNKS).await? {
-            return Ok(vec![]);
+            return Ok(SearchTrace::default());
         }
         // Map stored owner id -> title for citation labels (notes keyed by
         // their prefixed form, matching what the chunk rows store).
@@ -692,7 +804,9 @@ impl Db {
         });
 
         // BM25 side is best-effort: a database from before the FTS index
-        // existed (or an exotic query string) degrades to vector-only.
+        // existed (or an exotic query string) degrades to vector-only. The
+        // trace records why instead of hiding it.
+        let mut warnings: Vec<String> = Vec::new();
         let fts_hits = if query_text.trim().is_empty() {
             vec![]
         } else {
@@ -706,22 +820,46 @@ impl Db {
             {
                 Ok(stream) => match stream.try_collect::<Vec<_>>().await {
                     Ok(batches) => citations_from_batches(&batches, &titles)?,
-                    Err(_) => vec![],
+                    Err(err) => {
+                        warnings.push(format!("fts collect failed: {err:#}"));
+                        vec![]
+                    }
                 },
-                Err(_) => vec![],
+                Err(err) => {
+                    warnings.push(format!("fts query failed: {err:#}"));
+                    vec![]
+                }
             }
         };
 
         // Reciprocal rank fusion: score = Σ 1/(60 + rank) over both lists.
+        // Exact score ties are common (e.g. a vector-only and an FTS-only
+        // hit at the same rank), and HashMap iteration order is randomized,
+        // so break ties by chunk id to keep results stable across runs.
         let mut fused: HashMap<String, (Citation, f32)> = HashMap::new();
-        for hits in [vec_hits, fts_hits] {
-            for (rank, c) in hits.into_iter().enumerate() {
-                fused.entry(c.chunk_id.clone()).or_insert((c, 0.0)).1 += 1.0 / (60.0 + rank as f32);
+        for hits in [&vec_hits, &fts_hits] {
+            for (rank, c) in hits.iter().enumerate() {
+                fused
+                    .entry(c.chunk_id.clone())
+                    .or_insert((c.clone(), 0.0))
+                    .1 += 1.0 / (60.0 + rank as f32);
             }
         }
         let mut merged: Vec<(Citation, f32)> = fused.into_values().collect();
-        merged.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        Ok(merged.into_iter().take(k).map(|(c, _)| c).collect())
+        merged.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.chunk_id.cmp(&b.0.chunk_id))
+        });
+        let fused_hits: Vec<Citation> = merged.into_iter().map(|(c, _)| c).collect();
+        let final_hits = fused_hits.iter().take(k).cloned().collect();
+        Ok(SearchTrace {
+            vector_hits: vec_hits,
+            fts_hits,
+            fused_hits,
+            final_hits,
+            warnings,
+        })
     }
 
     // ---- Messages --------------------------------------------------------
@@ -844,16 +982,25 @@ impl Db {
 
     /// BM25-only search across every notebook — no embedding round-trip, so
     /// it's fast enough for as-you-type global search. Returns
-    /// (notebook_id, citation); source titles are the caller's to fill.
-    /// Empty on databases from before the FTS index existed.
     /// Corpus-wide hybrid search — `search_chunks` without the notebook
-    /// filter. Returns (notebook_id, citation), rank-fused across the vector
-    /// and BM25 sides exactly like the per-notebook path.
-    pub async fn search_chunks_all(
+    /// filter; `SearchOptions::default()` and no routing give the flat
+    /// baseline. Returns (notebook_id, citation), rank-fused across the
+    /// vector and BM25 sides exactly like the per-notebook path.
+    ///
+    /// `route_notebooks` is a relevance hint, not a boundary: it narrows the
+    /// VECTOR side to the routed notebooks while BM25 stays corpus-wide, so
+    /// an exact identifier the router couldn't see (titles carry no error
+    /// codes) still escapes a routing mistake. Diversity caps stop one
+    /// chatty source or notebook from filling the whole top-k with
+    /// near-duplicates; skipped candidates backfill in score order, so this
+    /// never returns fewer hits than the uncapped search would.
+    pub async fn search_chunks_all_opts(
         &self,
         query_vec: Vec<f32>,
         query_text: &str,
         k: usize,
+        route_notebooks: Option<&[String]>,
+        opts: SearchOptions,
     ) -> Result<Vec<(String, Citation)>> {
         if !self.table_exists(T_CHUNKS).await? {
             return Ok(vec![]);
@@ -868,10 +1015,26 @@ impl Db {
             titles.insert(format!("{NOTE_CHUNK_PREFIX}{}", n.id), n.title);
         }
         let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
-        let pool = k.max(1) * 3;
+        let pool = k.max(1) * opts.pool_multiplier.max(3);
 
-        let vec_batches = tbl
-            .query()
+        let nb_filter = route_notebooks.map(|ids| {
+            // Some(&[]) matches nothing — '' is never a real notebook id.
+            let list = if ids.is_empty() {
+                "''".to_string()
+            } else {
+                ids.iter()
+                    .map(|id| format!("'{}'", esc(id)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            format!("notebook_id IN ({list})")
+        });
+
+        let mut vec_query = tbl.query();
+        if let Some(f) = &nb_filter {
+            vec_query = vec_query.only_if(f.clone());
+        }
+        let vec_batches = vec_query
             .nearest_to(query_vec)?
             .limit(pool)
             .execute()
@@ -885,6 +1048,8 @@ impl Db {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
+        // Deliberately unrouted: BM25 stays corpus-wide so exact identifiers
+        // survive a bad route (see the method docs).
         let fts_hits = if query_text.trim().is_empty() {
             vec![]
         } else {
@@ -903,6 +1068,8 @@ impl Db {
             }
         };
 
+        // Same tie-break-by-chunk-id as search_chunks: RRF score ties are
+        // common and HashMap order is randomized.
         let mut fused: HashMap<String, ((String, Citation), f32)> = HashMap::new();
         for hits in [vec_hits, fts_hits] {
             for (rank, hit) in hits.into_iter().enumerate() {
@@ -911,8 +1078,13 @@ impl Db {
             }
         }
         let mut merged: Vec<((String, Citation), f32)> = fused.into_values().collect();
-        merged.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        Ok(merged.into_iter().take(k).map(|(hit, _)| hit).collect())
+        merged.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0 .1.chunk_id.cmp(&b.0 .1.chunk_id))
+        });
+        let ranked: Vec<(String, Citation)> = merged.into_iter().map(|(hit, _)| hit).collect();
+        Ok(apply_diversity(ranked, k, opts))
     }
 
     pub async fn search_chunks_fts_all(
@@ -957,6 +1129,137 @@ impl Db {
                 ));
             }
         }
+        Ok(out)
+    }
+
+    // ---- Semantic router ---------------------------------------------------
+
+    /// All stored router entries (without vectors) — the staleness baseline
+    /// for `router::ensure_router`'s diff.
+    pub async fn list_routes(&self) -> Result<Vec<Route>> {
+        let batches = self.collect(T_ROUTES, None).await?;
+        let mut out = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let kind = str_col(b, "kind")?;
+            let nb = str_col(b, "notebook_id")?;
+            let summary = str_col(b, "summary")?;
+            for i in 0..b.num_rows() {
+                out.push(Route {
+                    id: id.value(i).to_string(),
+                    kind: kind.value(i).to_string(),
+                    notebook_id: nb.value(i).to_string(),
+                    summary: summary.value(i).to_string(),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Insert-or-replace router entries (embeddings parallel to `routes`).
+    /// Creates the routes table on first use with the embedding dimension.
+    pub async fn upsert_routes(&self, routes: &[Route], embeddings: &[Vec<f32>]) -> Result<()> {
+        if routes.is_empty() {
+            return Ok(());
+        }
+        let dim = embeddings
+            .first()
+            .map(|v| v.len())
+            .ok_or_else(|| anyhow!("no embeddings for routes"))? as i32;
+        self.ensure_table(T_ROUTES, routes_schema(dim)).await?;
+        self.delete_routes(&routes.iter().map(|r| r.id.clone()).collect::<Vec<_>>())
+            .await?;
+        let schema = routes_schema(dim);
+        let vectors = FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+            embeddings
+                .iter()
+                .map(|v| Some(v.iter().map(|f| Some(*f)).collect::<Vec<_>>())),
+            dim,
+        );
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(
+                    routes.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    routes.iter().map(|r| r.kind.clone()).collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    routes
+                        .iter()
+                        .map(|r| r.notebook_id.clone())
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    routes.iter().map(|r| r.summary.clone()).collect::<Vec<_>>(),
+                )),
+                Arc::new(vectors),
+            ],
+        )?;
+        self.add_batch(T_ROUTES, schema, batch).await
+    }
+
+    pub async fn delete_routes(&self, ids: &[String]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let list = ids
+            .iter()
+            .map(|id| format!("'{}'", esc(id)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.delete_where(T_ROUTES, &format!("id IN ({list})"))
+            .await
+    }
+
+    /// Nearest router entries to the query, best first, with the vector
+    /// distance (lower = closer). `kind` filters to one entry kind.
+    pub async fn route_search(
+        &self,
+        query_vec: Vec<f32>,
+        kind: Option<&str>,
+        k: usize,
+    ) -> Result<Vec<(Route, f32)>> {
+        if !self.table_exists(T_ROUTES).await? {
+            return Ok(vec![]);
+        }
+        let tbl = self.conn.open_table(T_ROUTES).execute().await?;
+        let mut q = tbl.query();
+        if let Some(kind) = kind {
+            q = q.only_if(format!("kind = '{}'", esc(kind)));
+        }
+        let batches = q
+            .nearest_to(query_vec)?
+            .limit(k.max(1))
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        let mut out = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let rkind = str_col(b, "kind")?;
+            let nb = str_col(b, "notebook_id")?;
+            let summary = str_col(b, "summary")?;
+            let dist = b.column_by_name("_distance").and_then(|c| {
+                c.as_any()
+                    .downcast_ref::<arrow_array::Float32Array>()
+                    .cloned()
+            });
+            for i in 0..b.num_rows() {
+                out.push((
+                    Route {
+                        id: id.value(i).to_string(),
+                        kind: rkind.value(i).to_string(),
+                        notebook_id: nb.value(i).to_string(),
+                        summary: summary.value(i).to_string(),
+                    },
+                    dist.as_ref().map(|d| d.value(i)).unwrap_or(0.0),
+                ));
+            }
+        }
+        out.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         Ok(out)
     }
 
@@ -1452,6 +1755,20 @@ fn chunks_schema(dim: i32) -> SchemaRef {
         Field::new("source_id", DataType::Utf8, false),
         Field::new("ordinal", DataType::Int32, false),
         Field::new("text", DataType::Utf8, false),
+        Field::new(
+            "vector",
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, true)), dim),
+            true,
+        ),
+    ]))
+}
+
+fn routes_schema(dim: i32) -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("kind", DataType::Utf8, false),
+        Field::new("notebook_id", DataType::Utf8, false),
+        Field::new("summary", DataType::Utf8, false),
         Field::new(
             "vector",
             DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, true)), dim),

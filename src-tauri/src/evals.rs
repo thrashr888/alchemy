@@ -16,7 +16,7 @@ use crate::models::Citation;
 /// (title, body) fixture documents: prose for paraphrase queries, tables and
 /// identifiers for exact-match queries, markdown sections for section queries,
 /// and distractors so retrieval has something to get wrong.
-const CORPUS: &[(&str, &str)] = &[
+pub(crate) const CORPUS: &[(&str, &str)] = &[
     (
         "Acme Invoices Q3",
         "# Sheet: Outstanding\n\
@@ -170,7 +170,7 @@ const GOLDEN: &[Golden] = &[
     },
 ];
 
-async fn builtin_ai() -> Option<Ai> {
+pub(crate) async fn builtin_ai() -> Option<Ai> {
     let ai = Ai::new(
         AiConfig {
             embedder: "builtin".into(),
@@ -187,9 +187,17 @@ async fn builtin_ai() -> Option<Ai> {
     }
 }
 
-/// Ingest the fixture corpus through the real chunk → embed → store path.
-async fn seed_corpus(ai: &Ai, db: &Db, notebook_id: &str) {
-    for (i, (title, body)) in CORPUS.iter().enumerate() {
+/// Ingest fixture documents through the real chunk → embed → store path.
+/// `id_prefix` keeps ids distinct when seeding multiple document sets into
+/// one notebook.
+pub(crate) async fn seed_docs(
+    ai: &Ai,
+    db: &Db,
+    notebook_id: &str,
+    docs: &[(&str, &str)],
+    id_prefix: &str,
+) {
+    for (i, (title, body)) in docs.iter().enumerate() {
         let extracted = ingest::extract_pasted(title, body).expect("extract fixture");
         let chunks = ingest::chunk_text(&extracted.title, &extracted.text);
         let embed_inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
@@ -197,10 +205,10 @@ async fn seed_corpus(ai: &Ai, db: &Db, notebook_id: &str) {
         let tuples: Vec<(String, i32, String)> = chunks
             .iter()
             .enumerate()
-            .map(|(j, c)| (format!("c{i}-{j}"), j as i32, c.text.clone()))
+            .map(|(j, c)| (format!("{id_prefix}c{i}-{j}"), j as i32, c.text.clone()))
             .collect();
         let source = crate::models::Source {
-            id: format!("src-{i}"),
+            id: format!("{id_prefix}src-{i}"),
             notebook_id: notebook_id.to_string(),
             title: extracted.title.clone(),
             source_type: "text".into(),
@@ -218,6 +226,11 @@ async fn seed_corpus(ai: &Ai, db: &Db, notebook_id: &str) {
             .await
             .expect("store fixture");
     }
+}
+
+/// Ingest the golden fixture corpus.
+pub(crate) async fn seed_corpus(ai: &Ai, db: &Db, notebook_id: &str) {
+    seed_docs(ai, db, notebook_id, CORPUS, "").await;
 }
 
 fn hit(citations: &[Citation], expect: &str) -> bool {

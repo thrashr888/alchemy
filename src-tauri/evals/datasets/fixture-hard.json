@@ -1,0 +1,107 @@
+{
+  "name": "fixture-hard",
+  "description": "Harder queries over the golden corpus plus the extra distractor set in retrieval_eval.rs: look-alike identifiers, competing numbers, and cross-document comparisons where naive top-k gets crowded.",
+  "queries": [
+    {
+      "query": "which port does the badge system console use?",
+      "kind": "exact",
+      "relevant": [
+        { "source_title": "Office Network Runbook", "must_contain": "8443" }
+      ]
+    },
+    {
+      "query": "what port does WireGuard listen on?",
+      "kind": "exact",
+      "relevant": [
+        { "source_title": "VPN Access Guide", "must_contain": "51820" }
+      ]
+    },
+    {
+      "query": "how long was the wait after ERR-429-THROTTLE?",
+      "kind": "exact",
+      "relevant": [
+        { "source_title": "Acme Invoices Q2 (archive)", "must_contain": "five second" }
+      ]
+    },
+    {
+      "query": "what's my deductible for hail damage?",
+      "kind": "paraphrase",
+      "relevant": [
+        { "source_title": "Home Insurance Policy", "must_contain": "two thousand five hundred" }
+      ]
+    },
+    {
+      "query": "how long does the dough need to rise?",
+      "kind": "paraphrase",
+      "relevant": [
+        { "source_title": "Sourdough Notes", "must_contain": "four to six hours" }
+      ]
+    },
+    {
+      "query": "what restaurant was recommended on the Osaka trip?",
+      "kind": "paraphrase",
+      "relevant": [
+        { "source_title": "Osaka Weekend Notes", "must_contain": "okonomiyaki" }
+      ]
+    },
+    {
+      "query": "how much parental leave do we get?",
+      "kind": "paraphrase",
+      "relevant": [
+        { "source_title": "Benefits FAQ", "must_contain": "sixteen weeks" }
+      ]
+    },
+    {
+      "query": "when do the office switches get patched?",
+      "kind": "section",
+      "relevant": [
+        { "source_title": "Office Network Runbook", "must_contain": "last friday" }
+      ]
+    },
+    {
+      "query": "what interest accrues on late contractor payments?",
+      "kind": "section",
+      "relevant": [
+        { "source_title": "Contractor Agreement Summary", "must_contain": "one percent" }
+      ]
+    },
+    {
+      "query": "when does the media server restart itself?",
+      "kind": "section",
+      "relevant": [
+        { "source_title": "Media Server Maintenance", "must_contain": "first sunday" }
+      ]
+    },
+    {
+      "query": "which document covers the focaccia baking tests?",
+      "kind": "metadata",
+      "relevant": [
+        { "source_title": "Focaccia Experiments" }
+      ]
+    },
+    {
+      "query": "where is the cabin guest wifi passphrase written down?",
+      "kind": "metadata",
+      "relevant": [
+        { "source_title": "Cabin WiFi Setup", "must_contain": "pantry" }
+      ]
+    },
+    {
+      "query": "compare the sourdough and focaccia oven temperatures",
+      "kind": "multihop",
+      "relevant": [
+        { "source_title": "Sourdough Notes", "must_contain": "four hundred fifty" },
+        { "source_title": "Focaccia Experiments", "must_contain": "four hundred twenty five" }
+      ]
+    },
+    {
+      "query": "how did the invoice retry policy evolve from Q1 through Q3?",
+      "kind": "multihop",
+      "relevant": [
+        { "source_title": "Acme Invoices Q1 (archive)", "must_contain": "ERR-500-RETRY" },
+        { "source_title": "Acme Invoices Q2 (archive)", "must_contain": "ERR-429-THROTTLE" },
+        { "source_title": "Acme Invoices Q3", "must_contain": "ERR-503-BACKOFF" }
+      ]
+    }
+  ]
+}

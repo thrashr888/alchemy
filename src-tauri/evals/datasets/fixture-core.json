@@ -1,0 +1,120 @@
+{
+  "name": "fixture-core",
+  "description": "Golden queries over the built-in fixture corpus in evals.rs: exact identifiers, paraphrase, section-targeted, metadata/title intent, and multi-source (multihop) questions.",
+  "queries": [
+    {
+      "query": "what is the status of INV-2024-0042?",
+      "kind": "exact",
+      "relevant": [
+        { "source_title": "Acme Invoices Q3", "must_contain": "INV-2024-0042" }
+      ]
+    },
+    {
+      "query": "which invoice is overdue for Globex?",
+      "kind": "exact",
+      "relevant": [
+        { "source_title": "Acme Invoices Q3", "must_contain": "INV-2024-0051" }
+      ]
+    },
+    {
+      "query": "what should happen after ERR-503-BACKOFF?",
+      "kind": "exact",
+      "relevant": [
+        { "source_title": "Acme Invoices Q3", "must_contain": "ERR-503-BACKOFF" }
+      ]
+    },
+    {
+      "query": "what service uses port 32400?",
+      "kind": "exact",
+      "relevant": [
+        { "source_title": "Home Network Guide", "must_contain": "32400" }
+      ]
+    },
+    {
+      "query": "how much vacation time do employees earn?",
+      "kind": "paraphrase",
+      "relevant": [
+        { "source_title": "Employee Handbook", "must_contain": "paid time off" }
+      ]
+    },
+    {
+      "query": "where did we stay on the Japan trip?",
+      "kind": "paraphrase",
+      "relevant": [
+        { "source_title": "Kyoto Trip Journal", "must_contain": "ryokan" }
+      ]
+    },
+    {
+      "query": "how do visitors get on the internet at home?",
+      "kind": "paraphrase",
+      "relevant": [
+        { "source_title": "Home Network Guide", "must_contain": "guest network" }
+      ]
+    },
+    {
+      "query": "when do I need to turn in receipts for work purchases?",
+      "kind": "paraphrase",
+      "relevant": [
+        { "source_title": "Employee Handbook", "must_contain": "expense reports" }
+      ]
+    },
+    {
+      "query": "how warm should the oven be for baking bread?",
+      "kind": "paraphrase",
+      "relevant": [
+        { "source_title": "Sourdough Notes", "must_contain": "four hundred fifty" }
+      ]
+    },
+    {
+      "query": "when are router firmware updates applied?",
+      "kind": "section",
+      "relevant": [
+        { "source_title": "Home Network Guide", "must_contain": "first monday" }
+      ]
+    },
+    {
+      "query": "is ssh open to the internet?",
+      "kind": "section",
+      "relevant": [
+        { "source_title": "Home Network Guide", "must_contain": "port 22" }
+      ]
+    },
+    {
+      "query": "what temple did the ryokan owner recommend visiting early?",
+      "kind": "section",
+      "relevant": [
+        { "source_title": "Kyoto Trip Journal", "must_contain": "kiyomizu" }
+      ]
+    },
+    {
+      "query": "which document explains how to feed the sourdough starter?",
+      "kind": "metadata",
+      "relevant": [
+        { "source_title": "Sourdough Notes" }
+      ]
+    },
+    {
+      "query": "where did I write down the contractor payment terms?",
+      "kind": "metadata",
+      "relevant": [
+        { "source_title": "Contractor Agreement Summary", "must_contain": "net-thirty" }
+      ]
+    },
+    {
+      "query": "compare how guests get wifi at home versus in the office",
+      "kind": "multihop",
+      "relevant": [
+        { "source_title": "Home Network Guide", "must_contain": "guest network" },
+        { "source_title": "Office Network Runbook", "must_contain": "captive portal" }
+      ]
+    },
+    {
+      "query": "how did the invoice retry error handling change from Q2 to Q3?",
+      "kind": "multihop",
+      "relevant": [
+        { "source_title": "Acme Invoices Q3", "must_contain": "ERR-503-BACKOFF" },
+        { "source_title": "Acme Invoices Q2 (archive)", "must_contain": "ERR-429-THROTTLE" }
+      ]
+    }
+  ]
+}

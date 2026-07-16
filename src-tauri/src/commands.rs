@@ -35,6 +35,8 @@ pub struct AppState {
     pub ai: tokio::sync::RwLock<Ai>,
     pub config_path: PathBuf,
     pub stats_path: PathBuf,
+    /// Local-only retrieval trace JSONL lives here (trace.rs).
+    pub trace_dir: PathBuf,
     pub model_stats: Mutex<HashMap<String, ModelStatAcc>>,
     /// Cancellation tokens for in-flight generations, one per scope ("chat",
     /// "artifact", …) so stopping a chat doesn't kill a running document.
@@ -2881,10 +2883,25 @@ pub async fn send_message(
         let ai = state.ai.read().await;
         e(ai.embed_one(&content).await)?
     };
-    let citations = e(state
+    let search = e(state
         .db
-        .search_chunks(&notebook_id, query_vec, &content, 8, source_ids.as_deref())
+        .search_chunks_trace(&notebook_id, query_vec, &content, 8, source_ids.as_deref())
         .await)?;
+    crate::trace::log(
+        &state.trace_dir,
+        serde_json::json!({
+            "ts": now(),
+            "surface": "chat",
+            "notebookId": notebook_id,
+            "query": content,
+            "vectorHits": search.vector_hits.len(),
+            "ftsHits": search.fts_hits.len(),
+            "fusedHits": search.fused_hits.len(),
+            "warnings": search.warnings,
+            "citations": crate::trace::cite_summaries(&search.final_hits),
+        }),
+    );
+    let citations = search.final_hits;
     bump_note_usage(&state.db, &citations, "retrieval_hits").await;
 
     // Full source manifest (title + url) so corpus-level questions are
@@ -4774,10 +4791,16 @@ pub struct MetaAnswer {
 /// every notebook (capped, gateway and local alike) merged with note hits —
 /// notes are often the answer (reports, briefs). Shared by the ask_everything
 /// command and the MCP tool.
+///
+/// `deep` is the deep-search profile: retrieve a 3x candidate pool and let
+/// the chat model rerank it down to k (recall from hybrid retrieval,
+/// precision from the rerank). Any rerank failure falls back to fusion
+/// order, so deep can only reorder-or-equal, never lose the flat result.
 pub(crate) async fn retrieve_everything(
     state: &AppState,
     question: &str,
     k: usize,
+    deep: bool,
 ) -> Result<Vec<MetaCitation>, String> {
     let nb_titles: std::collections::HashMap<String, String> = e(state.db.list_notebooks().await)?
         .into_iter()
@@ -4788,28 +4811,115 @@ pub(crate) async fn retrieve_everything(
         let ai = state.ai.read().await;
         e(ai.embed_one(question).await)?
     };
-    let mut out: Vec<MetaCitation> = e(state.db.search_chunks_all(query_vec, question, k).await)?
-        .into_iter()
-        .map(|(nb, c)| {
-            // Note chunks come back with note_id set (they share the chunk
-            // table); surface them as first-class note citations.
-            let is_note = !c.note_id.is_empty();
-            MetaCitation {
-                kind: if is_note { "note" } else { "source" }.into(),
-                notebook_title: nb_titles.get(&nb).cloned().unwrap_or_default(),
-                notebook_id: nb,
-                id: if is_note { c.note_id } else { c.source_id },
-                title: c.source_title,
-                snippet: c.snippet,
+    // Semantic routing: with enough notebooks, search the most likely ones
+    // instead of the whole corpus. The index is self-healing and any
+    // failure (or a small corpus) falls back to the flat search; routing
+    // keeps ROUTE_TOP_K notebooks, so corpora at or below that size are
+    // searched in full either way.
+    let routed: Option<Vec<String>> = if nb_titles.len() > crate::router::MIN_NOTEBOOKS_TO_ROUTE {
+        let ai = state.ai.read().await;
+        if let Err(err) = crate::router::ensure_router(&state.db, &ai).await {
+            eprintln!("router refresh failed (falling back to flat): {err:#}");
+        }
+        match crate::router::route_notebooks(
+            &state.db,
+            query_vec.clone(),
+            crate::router::ROUTE_TOP_K,
+        )
+        .await
+        {
+            Ok(ids) if !ids.is_empty() => Some(ids),
+            Ok(_) => None,
+            Err(err) => {
+                eprintln!("notebook routing failed (falling back to flat): {err:#}");
+                None
             }
-        })
-        .collect();
+        }
+    } else {
+        None
+    };
 
-    // Title-match fallback pass: hybrid search covers note bodies now that
-    // notes are embedded, but an exact-title lookup ("the Q3 report note")
-    // can still miss the top k — substring over titles/bodies backstops it.
+    // Diversity caps keep one chatty notebook or source from filling the
+    // whole answer with near-duplicates; skipped candidates backfill, so a
+    // single-notebook corpus behaves exactly like the flat search.
+    let opts = crate::db::SearchOptions {
+        pool_multiplier: 4,
+        max_per_source: 2,
+        max_per_notebook: 3,
+        max_notes: 4,
+    };
+    // Deep search retrieves a wider pool for the reranker to pick from.
+    let fetch_k = if deep { k * 3 } else { k };
+    let mut out: Vec<MetaCitation> = e(state
+        .db
+        .search_chunks_all_opts(query_vec, question, fetch_k, routed.as_deref(), opts)
+        .await)?
+    .into_iter()
+    .map(|(nb, c)| {
+        // Note chunks come back with note_id set (they share the chunk
+        // table); surface them as first-class note citations.
+        let is_note = !c.note_id.is_empty();
+        MetaCitation {
+            kind: if is_note { "note" } else { "source" }.into(),
+            notebook_title: nb_titles.get(&nb).cloned().unwrap_or_default(),
+            notebook_id: nb,
+            id: if is_note { c.note_id } else { c.source_id },
+            title: c.source_title,
+            snippet: c.snippet,
+        }
+    })
+    .collect();
+
+    // Deep search: one model call picks the k passages that actually answer
+    // from the wide pool. Failure (model down, unparseable output) degrades
+    // to the fusion-ordered top k — exactly the non-deep result.
+    if deep && out.len() > k {
+        let snippets: Vec<(String, String)> = out
+            .iter()
+            .map(|c| (c.title.clone(), c.snippet.chars().take(300).collect()))
+            .collect();
+        let ai = state.ai.read().await;
+        match crate::agent::rerank_indices(&ai, question, &snippets, k).await {
+            Some(picked) => out = picked.into_iter().map(|i| out[i].clone()).collect(),
+            None => out.truncate(k),
+        }
+    }
+
+    // Title-match fallback passes: hybrid search covers bodies, but an
+    // exact-title lookup ("the contractor agreement", "the Q3 report note")
+    // can still miss the top k — substring over titles backstops it.
     let q = question.trim().to_lowercase();
     let already: std::collections::HashSet<String> = out.iter().map(|c| c.id.clone()).collect();
+
+    // Sources: match when the question names the title (guarded against
+    // tiny titles matching everything) or a short palette-style query is
+    // contained in the title.
+    let mut source_hits = 0;
+    for (id, nb, title) in e(state.db.all_source_meta().await)? {
+        if source_hits >= 3 {
+            break;
+        }
+        if already.contains(&id) {
+            continue;
+        }
+        let t = title.to_lowercase();
+        if (t.chars().count() >= 8 && q.contains(&t)) || t.contains(&q) {
+            let snippet: String = e(state.db.source_content(&id).await)?
+                .chars()
+                .take(400)
+                .collect();
+            source_hits += 1;
+            out.push(MetaCitation {
+                kind: "source".into(),
+                notebook_title: nb_titles.get(&nb).cloned().unwrap_or_default(),
+                notebook_id: nb,
+                id,
+                title,
+                snippet,
+            });
+        }
+    }
+
     let mut note_hits = 0;
     for n in e(state.db.recent_notes(usize::MAX).await)? {
         if note_hits >= 4 {
@@ -4845,6 +4955,24 @@ pub(crate) async fn retrieve_everything(
             eprintln!("note usage bump (retrieval_hits) failed: {err:#}");
         }
     }
+
+    crate::trace::log(
+        &state.trace_dir,
+        serde_json::json!({
+            "ts": now(),
+            "surface": "meta",
+            "query": question,
+            "deep": deep,
+            "routedNotebooks": routed,
+            "citations": out.iter().enumerate().map(|(rank, c)| serde_json::json!({
+                "rank": rank + 1,
+                "kind": c.kind,
+                "id": c.id,
+                "notebookId": c.notebook_id,
+                "title": c.title,
+            })).collect::<Vec<_>>(),
+        }),
+    );
     Ok(out)
 }
 
@@ -4857,6 +4985,7 @@ pub async fn ask_everything(
     state: State<'_, AppState>,
     question: String,
     history: Option<Vec<crate::ai::ChatTurn>>,
+    deep: Option<bool>,
 ) -> Result<MetaAnswer, String> {
     touch_activity();
     let question = question.trim().to_string();
@@ -4864,7 +4993,14 @@ pub async fn ask_everything(
         return Err("Question is empty".into());
     }
 
-    let passages_raw = retrieve_everything(&state, &question, 16).await?;
+    // Deep search (wide pool + model rerank) defaults on for gateway models,
+    // where the extra rerank call is fast and cheap; local models keep the
+    // low-latency single-pass path unless the caller asks for deep.
+    let deep = match deep {
+        Some(d) => d,
+        None => state.ai.read().await.config().is_gateway(),
+    };
+    let passages_raw = retrieve_everything(&state, &question, 16, deep).await?;
     // References are per SOURCE, not per chunk: several excerpts from one
     // source share a number, and the citation list the UI shows is deduped —
     // otherwise a source that contributed five chunks shows up five times.

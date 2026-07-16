@@ -56,9 +56,11 @@ two-host podcast voiced on-device.*
 - **Command menu** — press **⌘K** anywhere to search notebooks, add sources, generate
   documents, toggle panels, and switch themes.
 - **Ask everything** — the ⌘K palette (and the homepage ask box) answers questions
-  across **all** notebooks at once: hybrid retrieval corpus-wide, a streamed
-  answer with notebook chips, and citations that jump straight to the passage
-  ("which notebook has the SNDK stock data?"). ⌥Space summons it from anywhere.
+  across **all** notebooks at once: semantic routing to the likely notebooks,
+  hybrid retrieval with diversity caps, optional deep rerank on gateway
+  models, a streamed answer with notebook chips, and citations that jump
+  straight to the passage ("which notebook has the SNDK stock data?").
+  ⌥Space summons it from anywhere.
 - **Part of the Mac** — `alchemy://` deep links, a menu bar extra (ask, add the
   clipboard as a source, recent notebooks), "Add to Alchemy" in every app's
   Services menu, and Spotlight-indexed notebooks and notes.
@@ -131,8 +133,11 @@ two-host podcast voiced on-device.*
 │  ai/ollama.rs  embeddings, streaming chat, OCR over Ollama HTTP              │
 │  agent.rs      agentic "deep research" retrieval loop                        │
 │  rag.rs        retrieval prompt assembly + generator prompts                 │
+│  router.rs     semantic router: routes questions to likely notebooks         │
+│  trace.rs      local retrieval trace JSONL (stages, warnings, citations)     │
 │  db.rs         LanceDB tables: notebooks, sources, chunks(+vectors+FTS),     │
-│                messages, notes, report_schedules; hybrid search (RRF)        │
+│                messages, notes, report_schedules, routes; hybrid search      │
+│                (RRF + tie-break), diversity caps, search traces              │
 └──────────────────────────────────────────────────────────────────────────────┘
                                      │
                               Ollama (localhost:11434)
@@ -141,7 +146,12 @@ two-host podcast voiced on-device.*
 The RAG loop: a question is embedded and the `chunks` table is searched two
 ways — vector similarity (finds paraphrases) and BM25 full-text (finds exact
 names, codes, and numbers that embeddings miss) — with the two result lists
-merged by reciprocal rank fusion. Chunks are structure-aware: whole paragraphs
+merged by reciprocal rank fusion (deterministic: score ties break by chunk id,
+so the same question always cites the same passages). Every retrieval also
+appends a local trace line (stages, warnings, citations) to
+`traces/retrieval.jsonl`, and agents can call the MCP `search_debug` tool to
+see exactly why a passage did or didn't surface. Chunks are structure-aware:
+whole paragraphs
 packed to ~280 words, headings kept with their sections, and each chunk is
 embedded with a `[Doc title › Section]` context prefix (the stored text stays
 verbatim so citation highlighting still works). The top passages become
@@ -208,6 +218,33 @@ and any source that exceeds its allocation gets the same distillation
 treatment — the overflow is distilled against the generation instructions and
 appended, so a big source contributes its relevant passages instead of losing
 everything past the cut.
+
+### Corpus-wide retrieval (Ask Everything)
+
+Meta-chat answers questions across every notebook at once, through a staged
+pipeline where each stage earned its place in the eval harness
+(`cargo test --lib retrieval_eval -- --nocapture`, ranked metrics in
+`docs/RFC-retrieval-maturity.md`):
+
+![Ask Everything retrieval pipeline — semantic routing, hybrid search with a corpus-wide BM25 escape hatch, RRF merge, diversity caps, optional deep rerank, and local trace export](docs/architecture-meta-flow.png)
+
+- **Semantic routing** — one embedded route per source/note title (a notebook
+  ranks as high as its closest item); questions search the top-4 notebooks
+  when the corpus is big enough to benefit. The index self-heals: an
+  unchanged corpus re-embeds nothing.
+- **Hybrid with an escape hatch** — routing narrows only the vector side;
+  BM25 stays corpus-wide, so an exact invoice number or error code the
+  router couldn't see still surfaces. Measured: routed recall equals flat
+  recall with the escape hatch, and drops without it.
+- **Diversity caps** — at most 2 chunks per source, 3 per notebook, 4 notes,
+  with skipped candidates backfilling in score order: one chatty notebook
+  can't crowd out the rest, and shaped search never returns fewer hits than
+  flat.
+- **Deep search** — optionally retrieve a 3× pool and let the chat model keep
+  the passages that actually answer (default on for gateway models, off for
+  local; any failure falls back to fusion order).
+- **Title fallbacks** — "where did I save the contractor agreement?" matches
+  source and note titles directly even when no chunk cracks the top-k.
 
 ### Chat tracing flow
 

@@ -236,7 +236,10 @@ export const api = {
   askEverything: (
     question: string,
     history: { role: string; content: string }[],
-  ) => run(ai<MetaAnswer>("ask_everything", { question, history })),
+    /** Deep search: 3× retrieval pool + model rerank. Omit for the smart
+     *  default (on for gateway models, off for local). */
+    deep?: boolean,
+  ) => run(ai<MetaAnswer>("ask_everything", { question, history, deep: deep ?? null })),
   createNote: (notebookId: string, title: string, content: string) =>
     run(cmd<Note>("create_note", { notebookId, title, content })),
   updateNote: (id: string, title: string, content: string) =>

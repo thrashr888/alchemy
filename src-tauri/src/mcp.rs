@@ -501,7 +501,9 @@ impl AlchemyMcp {
             return Err(invalid("question is empty"));
         }
         let state = self.state();
-        let passages = commands::retrieve_everything(&state, &question, 16)
+        // No deep rerank here: MCP agents synthesize from raw passages and
+        // are better served by fast, wide retrieval they can filter.
+        let passages = commands::retrieve_everything(&state, &question, 16, false)
             .await
             .map_err(internal)?;
         json_result(&passages)
@@ -591,8 +593,69 @@ impl AlchemyMcp {
             .search_chunks(&notebook_id, query_vec, &query, k, None)
             .await
             .map_err(internal)?;
+        crate::trace::log(
+            &state.trace_dir,
+            serde_json::json!({
+                "ts": commands::now(),
+                "surface": "mcp",
+                "notebookId": notebook_id,
+                "query": query,
+                "citations": crate::trace::cite_summaries(&citations),
+            }),
+        );
         commands::bump_note_usage(&state.db, &citations, "retrieval_hits").await;
         json_result(&citations)
+    }
+
+    #[tool(
+        description = "Search with the working shown: the same hybrid retrieval as `search`, but returning every stage — vector hits, BM25 keyword hits, the rank-fused pool, the final top-k, and warnings (e.g. the keyword index failing and degrading to vector-only, which `search` hides). Use when retrieval quality looks wrong and you need to see WHY a passage did or didn't surface. Snippets are truncated; use `search` or get_source for full text."
+    )]
+    async fn search_debug(
+        &self,
+        Parameters(SearchReq {
+            notebook_id,
+            query,
+            max_results,
+        }): Parameters<SearchReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let query = query.trim().to_string();
+        if query.is_empty() {
+            return Err(invalid("query is empty"));
+        }
+        let k = max_results.unwrap_or(6).clamp(1, 20) as usize;
+        let state = self.state();
+        let query_vec = {
+            let ai = state.ai.read().await;
+            ai.embed_one(&query).await.map_err(internal)?
+        };
+        let trace = state
+            .db
+            .search_chunks_trace(&notebook_id, query_vec, &query, k, None)
+            .await
+            .map_err(internal)?;
+        let compact = |hits: &[crate::models::Citation]| -> Vec<serde_json::Value> {
+            hits.iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "chunkId": c.chunk_id,
+                        "sourceId": c.source_id,
+                        "sourceTitle": c.source_title,
+                        "noteId": c.note_id,
+                        "distance": c.distance,
+                        "snippet": c.snippet.chars().take(200).collect::<String>(),
+                    })
+                })
+                .collect()
+        };
+        json_result(&serde_json::json!({
+            "query": query,
+            "k": k,
+            "warnings": trace.warnings,
+            "vectorHits": compact(&trace.vector_hits),
+            "ftsHits": compact(&trace.fts_hits),
+            "fusedHits": compact(&trace.fused_hits),
+            "finalHits": compact(&trace.final_hits),
+        }))
     }
 
     // -- Notes --
