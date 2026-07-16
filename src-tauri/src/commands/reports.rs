@@ -120,6 +120,12 @@ pub async fn run_report(
 
     refresh_notebook_urls(&app, &state, &schedule.notebook_id).await;
 
+    // Collapse before generating so the survivor doubles as the prior run —
+    // its content lets the model report changes since last time (its first
+    // line is the `_Run …_` stamp, so the date travels with it).
+    let existing = e(collapse_report_notes(&state, &schedule.notebook_id, &schedule.name).await)?;
+    let prior_content = existing.as_ref().map(|note| note.content.clone());
+
     let _ = app.emit("report://step", "Generating report".to_string());
     let (_title, content) = e(generate_content(
         &state,
@@ -128,13 +134,13 @@ pub async fn run_report(
         &schedule.kind,
         &schedule.prompt,
         None,
+        prior_content.as_deref(),
     )
     .await)?;
 
     let timestamp = now();
     let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
     let content = format!("_Run {stamp}_\n\n{content}");
-    let existing = e(collapse_report_notes(&state, &schedule.notebook_id, &schedule.name).await)?;
     let note = match existing {
         Some(prior) => {
             e(state

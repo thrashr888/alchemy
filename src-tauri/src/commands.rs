@@ -2506,7 +2506,7 @@ async fn try_tool_route(
                     label: format!("Generating {label}"),
                 },
             );
-            match generate_content(state, None, notebook_id, &kind, &prompt, None).await {
+            match generate_content(state, None, notebook_id, &kind, &prompt, None, None).await {
                 Ok((title, body)) => {
                     let ts = now();
                     let note = Note {
@@ -3656,7 +3656,9 @@ pub async fn convert_note_to_source(
 /// Generate artifact content for a kind (+ optional custom prompt) over all of
 /// a notebook's source text. Returns (title, content). When `app` is given,
 /// tokens stream to the UI as `artifact://token` events. `source_ids` limits
-/// the corpus to those sources; None uses everything.
+/// the corpus to those sources; None uses everything. `prior_report` is the
+/// previous run's output for scheduled reports — included so the model can
+/// report what changed since, instead of apologizing that it can't.
 async fn generate_content(
     state: &AppState,
     app: Option<&AppHandle>,
@@ -3664,10 +3666,11 @@ async fn generate_content(
     kind: &str,
     prompt: &str,
     source_ids: Option<&[String]>,
+    prior_report: Option<&str>,
 ) -> anyhow::Result<(String, String)> {
     // Known kinds use their spec (+ optional extra prompt); "custom"/unknown
     // kinds use the prompt itself as the instruction.
-    let (title, instruction) = match rag::artifact_spec(kind) {
+    let (title, mut instruction) = match rag::artifact_spec(kind) {
         Some((t, base)) => {
             let instr = if prompt.trim().is_empty() {
                 base.to_string()
@@ -3686,6 +3689,14 @@ async fn generate_content(
             ("Report".to_string(), prompt.trim().to_string())
         }
     };
+    if prior_report.is_some() {
+        instruction.push_str(
+            "\n\nThe corpus ends with a \"Previous report run\" section holding this report's \
+             last output (its first line carries the run timestamp). Use it ONLY to identify \
+             what is new, changed, or gone since that run, and call those changes out — do not \
+             treat it as a source of current facts.",
+        );
+    }
 
     let mut sources = state.db.list_sources(notebook_id).await?;
     if sources.is_empty() {
@@ -3756,6 +3767,15 @@ async fn generate_content(
         corpus.push_str(&format!(
             "{heading}\n\n{clipped}\n…[source truncated to fit context; key passages from the \
              remainder:]\n{rescued}\n\n"
+        ));
+    }
+    // The prior run rides outside the source budget with its own cap: it
+    // informs the "what changed" framing but must never crowd out sources.
+    if let Some(prior) = prior_report {
+        let cap = if is_gateway { 40_000 } else { 8_000 };
+        let clipped: String = prior.chars().take(cap).collect();
+        corpus.push_str(&format!(
+            "## Previous report run (for change tracking — not a source)\n\n{clipped}\n\n"
         ));
     }
     let persona = {
@@ -3855,7 +3875,7 @@ pub async fn generate_artifact(
     let prompt = prompt.unwrap_or_default();
     let cancel = state.begin_generation(&format!("artifact:{}", window.label()));
     let produced = tokio::select! {
-        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt, source_ids.as_deref()) => Some(e(r)?),
+        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt, source_ids.as_deref(), None) => Some(e(r)?),
         _ = cancel.cancelled() => None,
     };
     let (title, content) = match produced {
@@ -3898,7 +3918,7 @@ pub async fn rebuild_note(
 ) -> Result<Note, String> {
     let cancel = state.begin_generation(&format!("artifact:{}", window.label()));
     let produced = tokio::select! {
-        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt, None) => Some(e(r)?),
+        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt, None, None) => Some(e(r)?),
         _ = cancel.cancelled() => None,
     };
     let (title, content) = match produced {
@@ -4039,6 +4059,7 @@ pub async fn generate_notebook_summary(
         "custom",
         "Write a 2-4 sentence plain-prose overview of what these sources collectively cover. \
          No lists, headings, or preamble — just the overview.",
+        None,
         None,
     )
     .await)?;
