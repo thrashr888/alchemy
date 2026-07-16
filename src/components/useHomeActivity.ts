@@ -26,21 +26,32 @@ export function useHomeActivity(notebooks: Notebook[]) {
   const refresh = useCallback(async () => {
     const id = ++requestId.current;
     setLoading(true);
-    const results = await Promise.allSettled([
-      api.listAllReportSchedules(),
-      api.listRecentNotes(5),
-      api.listRecentReports(50),
-      api.corpusStats(),
-    ] as const);
+
+    // Commit each slice as it settles so fast slices render without waiting
+    // for the slowest one; failures keep the previous data.
+    const load = <K extends keyof HomeActivityData>(
+      key: K,
+      promise: Promise<HomeActivityData[K]>,
+    ) =>
+      promise.then(
+        (value) => {
+          if (id === requestId.current) {
+            setData((current) => ({ ...current, [key]: value }));
+          }
+          return true;
+        },
+        () => false,
+      );
+
+    const settled = await Promise.all([
+      load("schedules", api.listAllReportSchedules()),
+      load("recentNotes", api.listRecentNotes(5)),
+      load("reports", api.listRecentReports(50)),
+      load("stats", api.corpusStats()),
+    ]);
     if (id !== requestId.current) return;
 
-    setData((current) => ({
-      schedules: results[0].status === "fulfilled" ? results[0].value : current.schedules,
-      recentNotes: results[1].status === "fulfilled" ? results[1].value : current.recentNotes,
-      reports: results[2].status === "fulfilled" ? results[2].value : current.reports,
-      stats: results[3].status === "fulfilled" ? results[3].value : current.stats,
-    }));
-    const failed = results.filter((result) => result.status === "rejected").length;
+    const failed = settled.filter((ok) => !ok).length;
     setError(
       failed > 0
         ? `Couldn’t refresh ${failed === 1 ? "part" : `${failed} parts`} of home activity.`
