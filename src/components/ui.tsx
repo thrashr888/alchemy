@@ -449,7 +449,8 @@ export interface RowMenuItem {
  * The ⋯ options menu for list rows. Lives inside the title row so opening it
  * never reflows the metadata line; hidden until the row is hovered or
  * focused, but stays put while open. Clicks stop at the menu so the row's
- * own click handler never fires.
+ * own click handler never fires. Right-clicking the host row (nearest
+ * `.group` ancestor) opens it too.
  */
 export function RowMenu({
   items,
@@ -477,6 +478,21 @@ export function RowMenu({
     });
     return () => setFlip({ up: false, right: false });
   }, [open]);
+
+  // Right-clicking anywhere on the host row (the nearest `.group` ancestor)
+  // opens the same menu as the ⋯ trigger, replacing the webview's own
+  // context menu on rows.
+  React.useEffect(() => {
+    const row = ref.current?.closest(".group");
+    if (!(row instanceof HTMLElement)) return;
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setOpen(true);
+    };
+    row.addEventListener("contextmenu", onContextMenu);
+    return () => row.removeEventListener("contextmenu", onContextMenu);
+  }, []);
 
   React.useEffect(() => {
     if (!open) return;
