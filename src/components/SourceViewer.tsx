@@ -11,6 +11,7 @@ import {
   ExternalLink,
   FolderOpen,
   MessageSquarePlus,
+  RefreshCw,
   Scale,
   Search,
   Sparkles,
@@ -73,6 +74,8 @@ export function SourceViewer() {
   const sources = useStore((s) => s.sources);
   const sendMessage = useStore((s) => s.sendMessage);
   const sending = useStore((s) => s.sending);
+  const refreshSource = useStore((s) => s.refreshSource);
+  const [syncing, setSyncing] = useState(false);
   const [content, setContent] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -277,7 +280,7 @@ export function SourceViewer() {
                   Open original
                   <ExternalLink className="h-3 w-3" />
                 </button>
-              ) : (
+              ) : source.sourceType !== "mac" ? (
                 <button
                   className="inline-flex items-center gap-1 text-[11px] text-citation hover:underline"
                   onClick={() => void revealItemInDir(source.url)}
@@ -286,7 +289,30 @@ export function SourceViewer() {
                   Show in Finder
                   <FolderOpen className="h-3 w-3" />
                 </button>
-              ))}
+              ) : null)}
+            {source?.url && (
+              <button
+                className="inline-flex items-center gap-1 text-[11px] text-citation hover:underline disabled:opacity-60"
+                disabled={syncing}
+                onClick={() => {
+                  if (syncing) return;
+                  setSyncing(true);
+                  void refreshSource(source.id)
+                    .then(() => api.getSourceContent(source.id))
+                    .then((text) => setContent(text))
+                    .catch(() => undefined)
+                    .finally(() => setSyncing(false));
+                }}
+                title={
+                  source.sourceType === "mac"
+                    ? "Re-fetch from the Mac app and re-embed"
+                    : "Re-fetch this source and re-embed"
+                }
+              >
+                {source.sourceType === "mac" ? "Sync now" : "Refresh"}
+                <RefreshCw className={cn("h-3 w-3", syncing && "animate-spin")} />
+              </button>
+            )}
             <div className="ml-auto flex items-center gap-1.5">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-subtle-foreground" />
