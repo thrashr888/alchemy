@@ -810,19 +810,38 @@ pub async fn add_source_mac(
     label: String,
 ) -> Result<Source, String> {
     let uri = crate::mac::mac_uri(&provider, &collection);
-    for s in e(state.db.list_sources(&notebook_id).await)? {
-        if s.url == uri {
-            return Err(format!(
+    e(ingest_mac(&state, &notebook_id, &uri, &label).await)
+}
+
+/// Connect a cider:// origin as a living Mac source — shared by the
+/// add-source modal (which builds the uri from its picker) and MCP
+/// add_source (which accepts the uri raw from agents).
+pub(crate) async fn ingest_mac(
+    state: &AppState,
+    notebook_id: &str,
+    uri: &str,
+    label: &str,
+) -> anyhow::Result<Source> {
+    for s in state.db.list_sources(notebook_id).await? {
+        if s.url == uri && s.status != "error" {
+            anyhow::bail!(
                 "Already in this notebook as \"{}\" — it re-syncs automatically",
                 s.title
-            ));
+            );
         }
     }
-    let (default_title, text) = e(crate::mac::fetch(&uri).await)?;
+    // Fetching a nonexistent Reminders list "succeeds" with zero rows; catch
+    // the typo here instead of connecting a permanently empty source.
+    if let Some(list) = uri.strip_prefix("cider://reminders/list/") {
+        if !crate::mac::reminders_list_exists(list).await? {
+            anyhow::bail!("No Reminders list named \"{list}\" — check the name in Apple Reminders");
+        }
+    }
+    let (default_title, text) = crate::mac::fetch(uri).await?;
     let title = if label.trim().is_empty() {
         default_title
     } else {
-        label
+        label.to_string()
     };
     // Mac sources carry a content hash in `mtime` (there's no file mtime);
     // store_extracted stamps 0 for a nonexistent path, so set it after.
@@ -830,11 +849,11 @@ pub async fn add_source_mac(
     let extracted = ingest::Extracted {
         title,
         source_type: "mac".to_string(),
-        url: uri,
+        url: uri.to_string(),
         text,
     };
-    let source = e(store_extracted(&state, &notebook_id, extracted).await)?;
-    e(state.db.set_source_mtime(&source.id, stamp).await)?;
+    let source = store_extracted(state, notebook_id, extracted).await?;
+    state.db.set_source_mtime(&source.id, stamp).await?;
     Ok(source)
 }
 
@@ -2815,7 +2834,12 @@ async fn add_url_sources(
                 label: format!("Adding source: {}", host_of(url)),
             },
         );
-        match ingest_url(state, notebook_id, url).await {
+        let result = if crate::mac::is_mac_uri(url) {
+            ingest_mac(state, notebook_id, url, "").await
+        } else {
+            ingest_url(state, notebook_id, url).await
+        };
+        match result {
             Ok(src) if src.status != "error" => added.push(src),
             Ok(src) => failed.push((url.clone(), src.error)),
             Err(err) => failed.push((url.clone(), format!("{err:#}"))),

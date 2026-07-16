@@ -422,6 +422,18 @@ pub fn is_mac_uri(url: &str) -> bool {
     url.starts_with("cider://")
 }
 
+/// A reminders fetch can't tell an empty list from a nonexistent one —
+/// `--list` filtering just yields no rows either way — so adds check the
+/// list's existence explicitly against `reminders lists`.
+pub async fn reminders_list_exists(name: &str) -> anyhow::Result<bool> {
+    let data = cider(&["reminders", "lists"]).await?;
+    Ok(data
+        .as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .any(|l| l.as_str() == Some(name)))
+}
+
 // ---- Write-back ------------------------------------------------------------
 //
 // Sources stay sync-driven (the Mac item is the truth), but the two providers
@@ -515,5 +527,28 @@ mod tests {
     #[test]
     fn plain_stderr_passes_through() {
         assert_eq!(envelope_message("not json at all"), "not json at all");
+    }
+
+    // Agents hand add_source raw cider:// strings (vs the UI's picker), so
+    // the constructors and the recognizer must agree on every provider.
+    #[test]
+    fn mac_uris_round_trip_through_recognizer() {
+        for (provider, collection) in [
+            ("reminders", "Alchemy"),
+            ("calendar", "30"),
+            ("stocks", "My Symbols"),
+            ("notes", "x-coredata://ABC/ICNote/p1"),
+        ] {
+            assert!(is_mac_uri(&mac_uri(provider, collection)));
+        }
+        assert!(!is_mac_uri("https://example.com"));
+    }
+
+    // A malformed origin must fail before any cider subprocess runs, so this
+    // is safe (and meaningful) without cider installed.
+    #[tokio::test]
+    async fn fetch_rejects_unrecognized_origin() {
+        let err = fetch("cider://bogus/thing").await.unwrap_err();
+        assert!(err.to_string().contains("Unrecognized Mac source origin"));
     }
 }

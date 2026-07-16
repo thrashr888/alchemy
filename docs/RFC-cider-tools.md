@@ -83,6 +83,12 @@ get a nicer flow for free.
    followed by a normal re-fetch + re-embed, so Alchemy never holds state
    the app doesn't. Stocks joined as a fourth provider (watchlists +
    cached quotes; strictly read-only).
+   Agent connect (shipped): MCP `add_source` accepts a raw `cider://` origin
+   in its `url` and routes it through the same ingest as the modal, so agents
+   can connect a Mac item without the UI. Reminders adds validate the list
+   name against `reminders lists` first — a fetch of a nonexistent list
+   "succeeds" empty, which would otherwise connect a permanently blank
+   source.
 4. Later: sidecar bundling, Mail/Contacts (privacy story first), chat tools
    if sources prove insufficient.
 

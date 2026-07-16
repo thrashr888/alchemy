@@ -183,7 +183,9 @@ struct RenameNotebookReq {
 struct AddSourceReq {
     /// Notebook to add the source to.
     notebook_id: String,
-    /// Web page URL to fetch and extract (exactly one of url / text / file_path).
+    /// Web page URL to fetch and extract, or a cider:// Mac-item origin
+    /// (e.g. cider://reminders/list/Shopping) to connect as a living source
+    /// (exactly one of url / text / file_path).
     #[serde(default)]
     url: Option<String>,
     /// Raw text/markdown content to store as a source.
@@ -192,7 +194,8 @@ struct AddSourceReq {
     /// Absolute path to a local file (pdf, md, txt, csv, xlsx, docx, images…).
     #[serde(default)]
     file_path: Option<String>,
-    /// Title for `text` sources (ignored for url/file, which derive their own).
+    /// Title for `text` sources and optional label for cider:// sources
+    /// (ignored for web url/file, which derive their own).
     #[serde(default)]
     title: Option<String>,
 }
@@ -408,7 +411,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Add a source to a notebook. Provide exactly one of: url (fetched + article-extracted), text (pasted content; give a title), or file_path (local pdf/md/txt/csv/xlsx/docx/image — images and scanned PDFs are OCR'd when a vision model is configured). Content is chunked and embedded automatically. Duplicate content or an already-added URL is rejected with an error naming the existing source — treat that as already done."
+        description = "Add a source to a notebook. Provide exactly one of: url (fetched + article-extracted), text (pasted content; give a title), or file_path (local pdf/md/txt/csv/xlsx/docx/image — images and scanned PDFs are OCR'd when a vision model is configured). url also accepts a cider:// origin to connect a Mac item as a living, auto-syncing source: cider://reminders/list/<list name>, cider://calendar/upcoming/<days>, cider://notes/note/<note id>, or cider://stocks/watchlist/<name>. Content is chunked and embedded automatically. Duplicate content or an already-added URL is rejected with an error naming the existing source — treat that as already done."
     )]
     async fn add_source(
         &self,
@@ -429,9 +432,17 @@ impl AlchemyMcp {
             return Err(invalid("provide exactly one of url, text, or file_path"));
         }
         let source = if let Some(url) = url {
-            commands::ingest_url(&state, &notebook_id, &url)
-                .await
-                .map_err(internal)?
+            if crate::mac::is_mac_uri(&url) {
+                // Mac items connect as living, auto-syncing sources — never
+                // through the web fetcher, which can't reach cider:// origins.
+                commands::ingest_mac(&state, &notebook_id, &url, title.as_deref().unwrap_or(""))
+                    .await
+                    .map_err(internal)?
+            } else {
+                commands::ingest_url(&state, &notebook_id, &url)
+                    .await
+                    .map_err(internal)?
+            }
         } else if let Some(text) = text {
             let title = title.unwrap_or_else(|| "Untitled source".into());
             let extracted = crate::ingest::extract_pasted(&title, &text).map_err(internal)?;
