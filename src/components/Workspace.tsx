@@ -2,8 +2,8 @@ import { useEffect } from "react";
 import { useStore } from "@/lib/store";
 import { SourcesPanel } from "./SourcesPanel";
 import { ChatPanel } from "./ChatPanel";
+import { CenterModeTabs, ReaderPane } from "./ReaderPane";
 import { StudioPanel } from "./StudioPanel";
-import { SourceViewer } from "./SourceViewer";
 import { AddSourceModal } from "./AddSourceModal";
 import { ExternalAddModal } from "./ExternalAddModal";
 import { SourcesRail, StudioRail } from "./SidebarRails";
@@ -15,6 +15,7 @@ import { DevBadge } from "./DevBadge";
 
 export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   const currentId = useStore((s) => s.currentId);
+  const readerOpen = useStore((s) => s.reader.open);
   const notebooks = useStore((s) => s.notebooks);
   const close = useStore((s) => s.closeNotebook);
   const sourcesOpen = useStore((s) => s.sourcesOpen);
@@ -76,6 +77,9 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
             {notebook?.title ?? "Notebook"}
           </span>
         </div>
+        <div className="mx-2">
+          <CenterModeTabs />
+        </div>
         <div className="ml-auto flex items-center gap-1">
           <DevBadge />
           <Button
@@ -106,11 +110,10 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
 
       <div className="flex flex-1 overflow-hidden">
         {sourcesOpen ? <SourcesPanel /> : <SourcesRail />}
-        <ChatPanel />
+        {readerOpen ? <ReaderPane /> : <ChatPanel />}
         {studioOpen ? <StudioPanel /> : <StudioRail />}
       </div>
 
-      <SourceViewer />
       {/* Global: adding sources works even while the panel is collapsed. */}
       <AddSourceModal />
       <ExternalAddModal />

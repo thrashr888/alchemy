@@ -23,6 +23,14 @@ export interface QueueItem {
   error?: string;
 }
 
+/** One document open (or remembered) in the center-column reader. */
+export interface ReaderDoc {
+  type: "source" | "note";
+  id: string;
+  /** Passage to scroll to and highlight (citation jumps). */
+  highlight?: string;
+}
+
 export interface ExternalAdd {
   files: string[];
   url: string | null;
@@ -96,7 +104,14 @@ export interface AppState {
   audioProgress: { done: number; total: number } | null;
   kokoroStatus: KokoroStatus | null;
   kokoroBusy: boolean;
-  viewingSource: { sourceId: string; title: string; highlight?: string } | null;
+  /** Center-column reader: current doc + browser-style history. `open`
+   *  flips the center column between Chat and Reader; history survives a
+   *  return to chat so the Reader tab can restore where you were. */
+  reader: {
+    open: boolean;
+    history: ReaderDoc[];
+    index: number;
+  };
   folderScan: { done: number; total: number; title: string } | null;
   noteReads: Record<string, number>;
   noteReadsBaseline: number;
@@ -163,6 +178,14 @@ export interface AppState {
   cancelGeneration: (scope?: "chat" | "artifact") => void;
   openSourceViewer: (sourceId: string, title: string, highlight?: string) => void;
   closeSourceViewer: () => void;
+  /** Open a document in the center-column reader (pushes history). */
+  openInReader: (doc: ReaderDoc) => void;
+  /** Leave the reader (back to chat); history survives for the Reader tab. */
+  closeReader: () => void;
+  /** Browser-style back/forward through reader history. */
+  readerNavigate: (delta: 1 | -1) => void;
+  /** Step to the previous/next document in rail order (sources then notes). */
+  readerStep: (dir: 1 | -1) => void;
   appendToken: (token: string) => void;
   appendStep: (label: string) => void;
   toggleAgentMode: () => void;

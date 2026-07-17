@@ -137,6 +137,9 @@ function SelectBox({
 }
 
 export function SourcesPanel() {
+  const notebookColor = useStore(
+    (s) => s.notebooks.find((n) => n.id === s.currentId)?.color,
+  );
   const sources = useStore((s) => s.sources);
   const currentId = useStore((s) => s.currentId);
   const queue = useStore((s) => s.ingestQueue);
@@ -284,12 +287,19 @@ export function SourcesPanel() {
             </span>
           </div>
           <div className="h-1.5 overflow-hidden rounded-full bg-surface-2">
+            {/* The notebook's color carries into its gauge — the one place the
+                color lives inside the workspace besides the title dot. */}
             <div
               className={cn(
                 "h-full rounded-full transition-all",
-                pct > 90 ? "bg-destructive" : "bg-primary",
+                pct > 90 && "bg-destructive",
               )}
-              style={{ width: `${Math.max(2, pct)}%` }}
+              style={{
+                width: `${Math.max(2, pct)}%`,
+                ...(pct <= 90 && notebookColor
+                  ? { backgroundColor: notebookColor }
+                  : {}),
+              }}
             />
           </div>
         </div>

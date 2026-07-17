@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "./Markdown";
 
 /**
@@ -150,7 +150,7 @@ export function MindMap({ content }: { content: string }) {
 
   const nodes = flatten(laid.root);
   return (
-    <div className="overflow-x-auto">
+    <PanCanvas>
       <svg
         width={laid.width + MARGIN * 2}
         height={laid.height + MARGIN * 2}
@@ -202,6 +202,62 @@ export function MindMap({ content }: { content: string }) {
           </g>
         ))}
       </svg>
+    </PanCanvas>
+  );
+}
+
+/** Infinite-canvas panning (Photoshop-style): drag with a grab cursor, or
+ *  two-finger scroll, to move the map inside a clipped viewport. */
+function PanCanvas({ children }: { children: React.ReactNode }) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
+
+  // Native wheel listener: React's synthetic wheel can't preventDefault
+  // (passive), and the page behind must not scroll while panning.
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      setOffset((o) => ({ x: o.x - e.deltaX, y: o.y - e.deltaY }));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  return (
+    <div
+      ref={viewportRef}
+      className="h-full min-h-[320px] w-full cursor-grab touch-none select-none overflow-hidden active:cursor-grabbing"
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        drag.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y };
+        try {
+          (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+        } catch {
+          // Synthetic or already-released pointers can't be captured; the
+          // window-level move/up handlers still end the drag correctly.
+        }
+      }}
+      onPointerMove={(e) => {
+        const d = drag.current;
+        if (!d) return;
+        setOffset({ x: d.ox + (e.clientX - d.x), y: d.oy + (e.clientY - d.y) });
+      }}
+      onPointerUp={() => {
+        drag.current = null;
+      }}
+      onPointerCancel={() => {
+        drag.current = null;
+      }}
+    >
+      <div
+        style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }}
+        className="w-max"
+      >
+        {children}
+      </div>
     </div>
   );
 }

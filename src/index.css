@@ -231,6 +231,22 @@ button {
   padding: 0.35em 0.6em;
   text-align: left;
 }
+.prose details {
+  margin: 0 0 0.7em;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5em 0.8em;
+  background: var(--surface-2);
+}
+.prose summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--foreground);
+  user-select: none;
+}
+.prose details[open] > summary {
+  margin-bottom: 0.5em;
+}
 
 /* Slide deck surface: slides are laid out at a fixed 960×540 design
    resolution (SlideDeck.tsx scales the box with a transform), so these sizes
@@ -410,6 +426,20 @@ button {
 }
 .chat-justify .prose p,
 .chat-justify .prose li {
+  text-align: justify;
+}
+/* The reader's plain-text (exact-match highlight) view honors the same
+   reading preferences as prose. */
+.chat-size-small .reader-plain {
+  font-size: 12px;
+}
+.chat-size-medium .reader-plain {
+  font-size: 13px;
+}
+.chat-size-large .reader-plain {
+  font-size: 15px;
+}
+.chat-justify .reader-plain {
   text-align: justify;
 }
 

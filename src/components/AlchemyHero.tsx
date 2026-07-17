@@ -58,12 +58,17 @@ function shuffled<T>(a: T[]): T[] {
 
 export function AlchemySymbol({
   className,
+  style,
   preferred,
+  strokeWidth = 1,
 }: {
   className?: string;
+  style?: React.CSSProperties;
   /** Sigil index to open on (a theme's preferred circle); the slow cycle
    *  continues from there. Random start if unset. */
   preferred?: number;
+  /** Line weight — notebook-colored contexts use a bolder stroke. */
+  strokeWidth?: number;
 }) {
   const [order] = useState(() => shuffled(SYMBOLS.map((_, i) => i)));
   const [step, setStep] = useState(() =>
@@ -81,14 +86,14 @@ export function AlchemySymbol({
   }, [order.length]);
   const active = order[step];
   return (
-    <div className={cn("relative", className)}>
+    <div className={cn("relative", className)} style={style}>
       {SYMBOLS.map((s, idx) => (
         <svg
           key={idx}
           viewBox="0 0 100 100"
           fill="none"
           stroke="currentColor"
-          strokeWidth="1"
+          strokeWidth={strokeWidth}
           strokeLinejoin="round"
           className="absolute inset-0 h-full w-full transition-opacity duration-[1800ms] ease-in-out"
           style={{ opacity: idx === active ? 1 : 0, animation: "alchemy-spin 90s linear infinite" }}

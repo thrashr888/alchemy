@@ -1,6 +1,19 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { openUrl } from "@tauri-apps/plugin-opener";
+
+/**
+ * GitHub-flavored markdown allows a subset of inline HTML (<details>,
+ * <summary>, <kbd>, <sup>…). rehype-raw parses it and rehype-sanitize clamps
+ * it to GitHub's own allowlist — source content is fetched from the open web,
+ * so nothing executable may pass.
+ */
+const REHYPE_PLUGINS = [
+  rehypeRaw,
+  [rehypeSanitize, defaultSchema],
+] as import("react-markdown").Options["rehypePlugins"];
 
 /** External links must open in the system browser, not navigate the webview. */
 function ExternalLink({
@@ -109,6 +122,7 @@ export function Markdown<C extends { snippet: string }>({
     <div className="prose">
       <ReactMarkdown
         remarkPlugins={interactive ? [remarkGfm, remarkCitations(citations.length)] : [remarkGfm]}
+        rehypePlugins={REHYPE_PLUGINS}
         components={
           interactive
             ? {

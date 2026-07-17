@@ -214,7 +214,7 @@ export const useStore = create<AppState>((set, get) => {
     audioProgress: null,
     kokoroStatus: null,
     kokoroBusy: false,
-    viewingSource: null,
+    reader: { open: false, history: [], index: -1 },
     folderScan: null,
     noteReads: loadNoteReads(),
     noteReadsBaseline: loadNoteReadsBaseline(),
@@ -522,7 +522,7 @@ export const useStore = create<AppState>((set, get) => {
         followups: [],
         chatConfig,
         summary: localStorage.getItem(`summary:${id}`) ?? "",
-        viewingSource: null,
+        reader: { open: false, history: [], index: -1 },
       });
       const nb = get().notebooks.find((n) => n.id === id);
       if (nb) void getCurrentWebviewWindow().setTitle(`${nb.title} — Alchemy`);
@@ -550,7 +550,7 @@ export const useStore = create<AppState>((set, get) => {
         reportSchedules: [],
         ingestQueue: [],
         steps: [],
-        viewingSource: null,
+        reader: { open: false, history: [], index: -1 },
       });
     },
 
@@ -925,9 +925,55 @@ export const useStore = create<AppState>((set, get) => {
       void api.cancelGeneration(scope);
     },
 
-    openSourceViewer: (sourceId, title, highlight) =>
-      set({ viewingSource: { sourceId, title, highlight } }),
-    closeSourceViewer: () => set({ viewingSource: null }),
+    // Every "view this source" path in the app funnels through here, so the
+    // center-column reader picks them all up (citations, rail, palette).
+    openSourceViewer: (sourceId, _title, highlight) =>
+      get().openInReader({ type: "source", id: sourceId, highlight }),
+    closeSourceViewer: () => get().closeReader(),
+
+    openInReader: (doc) => {
+      const { history, index } = get().reader;
+      const current = history[index];
+      // Re-opening the current doc just updates the highlight in place —
+      // clicking three citations into one source is one history entry.
+      if (current && current.type === doc.type && current.id === doc.id) {
+        const next = [...history];
+        next[index] = doc;
+        set({ reader: { open: true, history: next, index } });
+        return;
+      }
+      const next = [...history.slice(0, index + 1), doc];
+      set({ reader: { open: true, history: next, index: next.length - 1 } });
+    },
+
+    closeReader: () =>
+      set((state) => ({ reader: { ...state.reader, open: false } })),
+
+    readerNavigate: (delta) => {
+      const { history, index } = get().reader;
+      const next = index + delta;
+      if (next < 0 || next >= history.length) return;
+      set({ reader: { open: true, history, index: next } });
+    },
+
+    readerStep: (dir) => {
+      const { reader, sources, notes } = get();
+      const current = reader.history[reader.index];
+      if (!current) return;
+      // Rail order: sources (excluding folder placeholders) then notes.
+      const docs: { type: "source" | "note"; id: string }[] = [
+        ...sources
+          .filter((s) => s.status !== "placeholder")
+          .map((s) => ({ type: "source" as const, id: s.id })),
+        ...notes.map((n) => ({ type: "note" as const, id: n.id })),
+      ];
+      const at = docs.findIndex(
+        (d) => d.type === current.type && d.id === current.id,
+      );
+      const target = docs[at + dir];
+      if (at === -1 || !target) return;
+      get().openInReader(target);
+    },
 
     appendToken: (t) => set({ streamingText: get().streamingText + t }),
 

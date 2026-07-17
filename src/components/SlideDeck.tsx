@@ -299,7 +299,7 @@ function DeckView({
       <div className="min-h-0 flex-1">
         <SlideCanvas slide={slides[index]} style={style} />
       </div>
-      <div className="flex shrink-0 items-center justify-center gap-2">
+      <div className="flex shrink-0 flex-wrap items-center justify-center gap-x-2 gap-y-1.5">
         <button
           type="button"
           onClick={() => go(-1)}

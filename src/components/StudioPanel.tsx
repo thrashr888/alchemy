@@ -16,7 +16,7 @@ import {
 } from "./ui";
 import { Reports } from "./Reports";
 import { RichEditor } from "./RichEditor";
-import { StreamingBody, StudioNoteViewer } from "./StudioNoteViewer";
+import { StreamingBody } from "./StudioNoteViewer";
 import {
   cn,
   noteUnread,
@@ -168,15 +168,16 @@ export function StudioPanel() {
   const noteReads = useStore((s) => s.noteReads);
   const noteReadsBaseline = useStore((s) => s.noteReadsBaseline);
   const markNotesRead = useStore((s) => s.markNotesRead);
+  const readerOpen = useStore((s) => s.reader.open);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
-  const [viewing, setViewing] = useState<Note | null>(null);
   // Opening a note is what marks it read — the activity dot means "not
-  // opened yet", so it clears here and nowhere else.
+  // opened yet", so it clears here and nowhere else. Notes read in the
+  // center-column reader (docs/RFC-document-surface.md).
   const openNoteCard = (n: Note) => {
     markNotesRead([n.id]);
     void api.noteOpened(n.id).catch(() => {});
-    setViewing(n);
+    useStore.getState().openInReader({ type: "note", id: n.id });
   };
   // The user can hide the live preview without stopping the generation.
   const [previewHidden, setPreviewHidden] = useState(false);
@@ -536,13 +537,12 @@ export function StudioPanel() {
         </div>
       </div>
 
-      <StudioNoteViewer note={viewing} onClose={() => setViewing(null)} />
 
       {/* Live preview of the in-flight generation (rebuilds stream inside the
           note viewer instead, so only show this when no note is open). */}
       <Modal
         open={
-          !!generatingKind && !viewing && !!artifactStreamText && !previewHidden
+          !!generatingKind && !readerOpen && !!artifactStreamText && !previewHidden
         }
         onClose={() => setPreviewHidden(true)}
         title={

@@ -11,6 +11,7 @@ import { DEFAULT_VERBS, THEMES, resolveThemeId } from "@/lib/themes";
 import { generatedEpigraph } from "@/lib/epigraph";
 import type { Citation, Message } from "@/lib/types";
 import {
+  MessageSquare,
   ArrowDown,
   ArrowUp,
   Square,
@@ -18,7 +19,6 @@ import {
   Quote,
   StickyNote,
   Sparkles,
-  MessageSquare,
   Telescope,
   Check,
   Copy,
@@ -648,6 +648,11 @@ function ChatHero({
   compact: boolean;
 }) {
   const theme = useStore((s) => s.theme);
+  // The sigil takes on the notebook's color — the transmutation circle is
+  // this notebook's mark, not the app's.
+  const notebookColor = useStore(
+    (s) => s.notebooks.find((n) => n.id === s.currentId)?.color,
+  );
   return (
     <div
       className={cn(
@@ -657,9 +662,12 @@ function ChatHero({
     >
       <AlchemySymbol
         className={cn(
-          "text-citation/60 transition-all duration-700",
+          "transition-all duration-700",
+          notebookColor ? "opacity-85" : "text-citation/60",
           compact ? "h-9 w-9" : "h-16 w-16",
         )}
+        style={notebookColor ? { color: notebookColor } : undefined}
+        strokeWidth={notebookColor ? 1.5 : 1}
         preferred={THEMES[resolveThemeId(theme)]?.sigil}
       />
       {!compact && (

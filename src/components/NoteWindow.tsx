@@ -44,7 +44,9 @@ export function NoteWindow({ noteId }: { noteId: string }) {
         className={cn(
           "flex-1",
           // Slides size themselves to the window; everything else scrolls.
-          note?.kind === "slide_deck" ? "min-h-0 overflow-hidden" : "overflow-y-auto",
+          note?.kind === "slide_deck" || note?.kind === "mind_map"
+            ? "min-h-0 overflow-hidden"
+            : "overflow-y-auto",
         )}
       >
         <div
@@ -52,8 +54,8 @@ export function NoteWindow({ noteId }: { noteId: string }) {
             "mx-auto px-8 py-8",
             // Mind maps and slide decks want the full window; prose reads
             // best at column width.
-            note?.kind === "mind_map" && "max-w-none",
-            note?.kind === "slide_deck" && "h-full max-w-none py-6",
+            (note?.kind === "mind_map" || note?.kind === "slide_deck") &&
+              "h-full max-w-none py-6",
             note?.kind !== "mind_map" && note?.kind !== "slide_deck" && "max-w-[760px]",
           )}
         >
