@@ -164,6 +164,7 @@ pub fn run() {
             commands::remove_kokoro,
             commands::export_audio,
             commands::new_window,
+            commands::print_webview,
             commands::rebuild_app_menu,
             commands::search_everything,
             commands::export_notebook_okf_zip,

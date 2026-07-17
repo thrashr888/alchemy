@@ -408,6 +408,51 @@ pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
              No headings, no stage directions, no sound-effect cues, no markdown, no names \
              other than HOST and GUEST. Keep any single turn under 80 words.",
         )),
+        "slide_deck" => Some((
+            "Slide Deck",
+            "Turn the sources below into a presentation deck in Marp-style Markdown, working \
+             like a world-class presentation designer. The deck must tell ONE clear story and \
+             stand on its own without a presenter.\n\
+             Plan silently before writing: decide the single thing a reader should walk away \
+             believing, the 2-4 acts that build to it, and the strongest specific evidence in \
+             the sources for each act — numbers, names, dates, comparisons, quotes. Only then \
+             write slides.\n\
+             Start the output with a front-matter block — a `---` line, `theme: <name>`, \
+             `font: <name>`, and another `---` line. Pick the theme whose mood fits the topic: \
+             sepia (warm paper — essays, history, writing), latte (soft light — friendly, \
+             everyday), github-light (clean light — docs, how-tos), slate (cool neutral — \
+             technical, product), midnight (dark indigo — engineering, systems), nord (icy blue \
+             — science, data, research), gruvbox (earthy retro — nature, craft, outdoors), \
+             dracula (playful dark — community, fun), synthwave (neon dark — bold takes, \
+             launches), matrix (green terminal — security, hacking). Pick the font the same \
+             way: serif (essays, history, humanities), sans (product, business, general), mono \
+             (engineering, terminals, protocols), rounded (friendly, consumer, kids). Slides \
+             are separated by `---` lines.\n\
+             Headlines are ASSERTIONS, not topics: every `##` on a content slide states that \
+             slide's takeaway as a claim a reader could agree or disagree with (\"LanceDB \
+             removes the database server entirely\", never \"Storage\"). One idea per slide. \
+             The body is the evidence for its headline — concrete specifics pulled from the \
+             sources; if a bullet would survive on any other deck about any other topic, it is \
+             filler: cut it.\n\
+             Choose each slide's FORMAT to match what it is saying — a deck of identical \
+             heading-plus-list slides is a failure. The shapes: (1) title slide, first: `# \
+             <deck title>` plus one italic subtitle that promises what the deck answers; (2) \
+             content slide, the workhorse: assertion `## <headline>` with 3-6 parallel bullets \
+             — full clauses of 8-16 words each, 40-80 words per slide; sub-bullets for \
+             supporting detail; (3) section divider, a lone `## <act title>`, opening each act; \
+             (4) statement slide, exactly one — no heading, a single punchy sentence under 20 \
+             words carrying the deck's most surprising fact or number, placed where it lands \
+             hardest; (5) quote slide — a `> blockquote` plus an attribution line — when a \
+             source has a genuinely quotable line; (6) table slide — `## <headline>` plus a \
+             small GFM table (3-5 columns) — for ANY comparison of options, versions, or \
+             trade-offs; tables beat bullets for comparisons every time.\n\
+             Stay faithful: every claim comes from the sources, nothing invented; where sources \
+             disagree, show the disagreement instead of smoothing it over. Cover the whole \
+             corpus in 10-16 slides building from context to specifics, and close with a `## \
+             Takeaways` slide of 3-5 bullets that pays off the title slide's promise and says \
+             what to do next. Output ONLY the deck markdown: no code fences around it, no \
+             speaker notes, no prose outside the slides.",
+        )),
         "mind_map" => Some((
             "Mind Map",
             "Distill the sources below into a mind-map outline. The FIRST line is the central \

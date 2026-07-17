@@ -4114,6 +4114,155 @@ pub fn fix_traffic_lights(window: tauri::WebviewWindow) {
     let _ = window;
 }
 
+/// Export the calling window's print layout as a PDF — the local-first
+/// export path for slide decks and flashcards. With `save_path` the PDF is
+/// written silently to that file (NSPrintSaveJob); without it the native
+/// print dialog opens. (WKWebView ignores JS window.print(), so the
+/// frontend invokes this.)
+///
+/// Runs the PUBLIC `printOperationWithPrintInfo:` (macOS 11+) instead of
+/// wry's `print()`, which drives WKWebView's private print selector and
+/// yields correctly-paginated but BLANK pages. The two load-bearing details:
+/// the operation's view must be given the webview's frame before running,
+/// and the print info carries orientation (landscape for slide decks) and
+/// margins so the print CSS controls the page.
+#[tauri::command]
+pub async fn print_webview(
+    window: tauri::WebviewWindow,
+    landscape: bool,
+    save_path: Option<String>,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+        {
+            let save_path = save_path.clone();
+            window
+                .with_webview(move |wv| {
+                    let result =
+                        unsafe { mac_print_webview(wv.inner().cast(), landscape, save_path) };
+                    let _ = tx.send(result);
+                })
+                .map_err(|e| e.to_string())?;
+        }
+        tauri::async_runtime::spawn_blocking(move || {
+            rx.recv().unwrap_or_else(|e| Err(e.to_string()))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        // The operation runs asynchronously (sheet-modal); for save jobs the
+        // finish signal is the file itself — wait until it exists with a
+        // stable non-zero size. The frontend keeps the print DOM mounted
+        // until this resolves.
+        if let Some(path) = save_path {
+            let mut last: u64 = 0;
+            for _ in 0..300 {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                if size > 0 && size == last {
+                    return Ok(());
+                }
+                last = size;
+            }
+            return Err("PDF export timed out".into());
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (landscape, save_path);
+        window.print().map_err(|e| e.to_string())
+    }
+}
+
+/// The objc recipe for a working WKWebView print (runs on the main thread).
+#[cfg(target_os = "macos")]
+unsafe fn mac_print_webview(
+    webview: *mut objc2::runtime::AnyObject,
+    landscape: bool,
+    save_path: Option<String>,
+) -> Result<(), String> {
+    use objc2::msg_send;
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2_foundation::{NSRect, NSString, NSURL};
+
+    let shared: *mut AnyObject = msg_send![objc2::class!(NSPrintInfo), sharedPrintInfo];
+    if shared.is_null() {
+        return Err("no print info".into());
+    }
+    // Work on a copy — sharedPrintInfo is app-global state, and margins or a
+    // save disposition must not leak into the user's next real print.
+    let print_info: Option<Retained<AnyObject>> = Retained::from_raw(msg_send![shared, copy]);
+    let Some(print_info) = print_info else {
+        return Err("could not copy print info".into());
+    };
+    let print_info: *mut AnyObject = Retained::as_ptr(&print_info) as *mut _;
+
+    // NSPaperOrientationLandscape = 1, portrait = 0. Slide pages run
+    // edge-to-edge (the print CSS owns the layout); card sheets keep a
+    // 16mm-ish margin.
+    let orientation: isize = if landscape { 1 } else { 0 };
+    let _: () = msg_send![print_info, setOrientation: orientation];
+    if landscape {
+        // PDF-only jobs take any paper size: make the page exactly 16:9
+        // (11in wide) so a slide fills it edge to edge with no white band.
+        let size = objc2_foundation::NSSize {
+            width: 792.0,
+            height: 445.5,
+        };
+        let _: () = msg_send![print_info, setPaperSize: size];
+    }
+    let margin: f64 = if landscape { 0.0 } else { 45.0 };
+    let _: () = msg_send![print_info, setTopMargin: margin];
+    let _: () = msg_send![print_info, setBottomMargin: margin];
+    let _: () = msg_send![print_info, setLeftMargin: margin];
+    let _: () = msg_send![print_info, setRightMargin: margin];
+
+    // Silent save-to-PDF: job disposition + target URL instead of a panel.
+    if let Some(path) = &save_path {
+        let disposition = NSString::from_str("NSPrintSaveJob");
+        let _: () = msg_send![print_info, setJobDisposition: &*disposition];
+        let dict: *mut AnyObject = msg_send![print_info, dictionary];
+        let ns_path = NSString::from_str(path);
+        let url = NSURL::fileURLWithPath(&ns_path);
+        let key = NSString::from_str("NSJobSavingURL");
+        let _: () = msg_send![dict, setObject: &*url, forKey: &*key];
+    }
+
+    let op: *mut AnyObject = msg_send![webview, printOperationWithPrintInfo: print_info];
+    if op.is_null() {
+        return Err("webview did not produce a print operation".into());
+    }
+    // Without a real frame on the operation's view, every page prints blank.
+    let bounds: NSRect = msg_send![webview, bounds];
+    let view: *mut AnyObject = msg_send![op, view];
+    let _: () = msg_send![view, setFrame: bounds];
+
+    let panel = save_path.is_none();
+    let _: () = msg_send![op, setShowsPrintPanel: panel];
+    let _: () = msg_send![op, setShowsProgressPanel: panel];
+    // Sheet-modal (returns immediately), NOT the blocking runOperation: a
+    // nested modal run loop inside tao's event handler sends its run-loop
+    // observers into a permanent 100%-CPU spin. Completion is observed by
+    // the caller (save jobs: the output file reaching a stable size).
+    let ns_window: *mut AnyObject = msg_send![webview, window];
+    if ns_window.is_null() {
+        return Err("webview has no window".into());
+    }
+    let no_delegate: *mut AnyObject = std::ptr::null_mut();
+    let no_selector: Option<objc2::runtime::Sel> = None;
+    let no_context: *mut std::ffi::c_void = std::ptr::null_mut();
+    let _: () = msg_send![
+        op,
+        runOperationModalForWindow: ns_window,
+        delegate: no_delegate,
+        didRunSelector: no_selector,
+        contextInfo: no_context
+    ];
+    Ok(())
+}
+
 /// Open another app window — at the home screen, straight into a notebook,
 /// or onto a single note (a document-sized reader window). The boot target
 /// rides an init script (not the URL) so it works identically under the dev

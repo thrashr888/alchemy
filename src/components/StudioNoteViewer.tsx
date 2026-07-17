@@ -3,10 +3,14 @@ import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import type { Note } from "@/lib/types";
 import { AudioPlayer, DialogueScript } from "./AudioNote";
+import { Flashcards } from "./Flashcards";
 import { Markdown } from "./Markdown";
 import { MindMap } from "./MindMap";
+import { QuizView } from "./QuizView";
+import { SlideDeck } from "./SlideDeck";
 import { RichEditor } from "./RichEditor";
 import { Button, Input, Modal, Spinner } from "./ui";
+import { cn } from "@/lib/utils";
 import {
   AppWindow,
   Check,
@@ -66,7 +70,8 @@ export function StudioNoteViewer({
         onClose();
       }}
       title={live?.title ?? ""}
-      width="max-w-2xl"
+      // Slide decks want the whole window; prose reads best at column width.
+      width={live?.kind === "slide_deck" ? "max-w-[min(1280px,94vw)]" : "max-w-2xl"}
       headerActions={
         live && (
           <Button
@@ -111,11 +116,27 @@ export function StudioNoteViewer({
           </form>
         ) : (
           <div className="flex flex-col gap-3">
-            <div className="max-h-[60vh] overflow-y-auto pr-1">
+            <div
+              className={cn(
+                // Slides size themselves to the box (no inner scrolling) —
+                // the height is the Modal's 80vh panel cap minus its header,
+                // body padding, and this dialog's footer row. Prose scrolls
+                // as before.
+                live.kind === "slide_deck"
+                  ? "h-[calc(80vh-150px)] overflow-hidden"
+                  : "max-h-[60vh] overflow-y-auto pr-1",
+              )}
+            >
               {rebuilding && artifactStreamText ? (
                 <StreamingBody text={artifactStreamText} />
               ) : live.kind === "mind_map" ? (
                 <MindMap content={live.content} />
+              ) : live.kind === "flashcards" ? (
+                <Flashcards content={live.content} noteId={live.id} />
+              ) : live.kind === "quiz" ? (
+                <QuizView content={live.content} />
+              ) : live.kind === "slide_deck" ? (
+                <SlideDeck content={live.content} note={live} />
               ) : live.kind === "audio_overview" ? (
                 <div className="flex flex-col gap-4">
                   <AudioPlayer

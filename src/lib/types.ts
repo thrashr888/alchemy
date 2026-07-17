@@ -87,6 +87,7 @@ export type NoteKind =
   | "quiz"
   | "audio_overview"
   | "mind_map"
+  | "slide_deck"
   | "data_table"
   | "problems"
   | "evidence"

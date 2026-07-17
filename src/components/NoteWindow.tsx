@@ -1,8 +1,11 @@
 import { useEffect } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useStore } from "@/lib/store";
+import { Flashcards } from "./Flashcards";
 import { Markdown } from "./Markdown";
 import { MindMap } from "./MindMap";
+import { QuizView } from "./QuizView";
+import { SlideDeck } from "./SlideDeck";
 import { AudioPlayer, DialogueScript } from "./AudioNote";
 import { Spinner } from "./ui";
 import { cn } from "@/lib/utils";
@@ -37,12 +40,21 @@ export function NoteWindow({ noteId }: { noteId: string }) {
           {note?.title ?? "Note"}
         </span>
       </header>
-      <div className="flex-1 overflow-y-auto">
+      <div
+        className={cn(
+          "flex-1",
+          // Slides size themselves to the window; everything else scrolls.
+          note?.kind === "slide_deck" ? "min-h-0 overflow-hidden" : "overflow-y-auto",
+        )}
+      >
         <div
           className={cn(
             "mx-auto px-8 py-8",
-            // Mind maps want the full window; prose reads best at column width.
-            note?.kind === "mind_map" ? "max-w-none" : "max-w-[760px]",
+            // Mind maps and slide decks want the full window; prose reads
+            // best at column width.
+            note?.kind === "mind_map" && "max-w-none",
+            note?.kind === "slide_deck" && "h-full max-w-none py-6",
+            note?.kind !== "mind_map" && note?.kind !== "slide_deck" && "max-w-[760px]",
           )}
         >
           {loading ? (
@@ -55,6 +67,12 @@ export function NoteWindow({ noteId }: { noteId: string }) {
             </div>
           ) : note.kind === "mind_map" ? (
             <MindMap content={note.content} />
+          ) : note.kind === "flashcards" ? (
+            <Flashcards content={note.content} noteId={note.id} />
+          ) : note.kind === "quiz" ? (
+            <QuizView content={note.content} />
+          ) : note.kind === "slide_deck" ? (
+            <SlideDeck content={note.content} note={note} />
           ) : note.kind === "audio_overview" ? (
             <div className="flex flex-col gap-4">
               <AudioPlayer noteId={note.id} title={note.title} key={note.updatedAt} />

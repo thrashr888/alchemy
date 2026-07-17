@@ -13,6 +13,7 @@ import {
   ListChecks,
   Megaphone,
   Newspaper,
+  Presentation,
   Quote,
   Sparkles,
   Table,
@@ -64,6 +65,11 @@ const LEARNING = inFamily("learning", [
   { kind: "flashcards", label: "Flashcards", icon: <Layers className="h-3.5 w-3.5" /> },
   { kind: "quiz", label: "Quiz", icon: <ListChecks className="h-3.5 w-3.5" /> },
   { kind: "mind_map", label: "Mind map", icon: <Waypoints className="h-3.5 w-3.5" /> },
+  {
+    kind: "slide_deck",
+    label: "Slide deck",
+    icon: <Presentation className="h-3.5 w-3.5" />,
+  },
 ]);
 
 const DOCUMENTS = inFamily("documents", [
