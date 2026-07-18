@@ -36,9 +36,15 @@ export function RichEditor({
   onChange,
   fill = false,
   bare = false,
+  insertRef,
 }: {
   value: string;
   onChange: (markdown: string) => void;
+  /** When provided, receives a function that inserts a link at the cursor
+   *  (the ambient rail's insert-reference affordance). */
+  insertRef?: React.MutableRefObject<
+    ((title: string, href: string) => void) | null
+  >;
   /** Stretch to the parent's full height (reader pane) instead of the
    *  self-sizing modal behavior (min 240px, capped at 52vh). */
   fill?: boolean;
@@ -48,7 +54,12 @@ export function RichEditor({
 }) {
   const editor = useEditor({
     extensions: [
-      StarterKit.configure({ link: { openOnClick: false } }),
+      StarterKit.configure({
+        // alchemy:// (note deep links) and cider:// (Mac-item origins) must
+        // survive the link mark's protocol allowlist — inserted references
+        // use them.
+        link: { openOnClick: false, protocols: ["alchemy", "cider"] },
+      }),
       // Reports and agent notes carry GFM tables — without the table nodes
       // the editor would mangle them on load and persist the damage on the
       // next real edit.
@@ -67,6 +78,29 @@ export function RichEditor({
       },
     },
   });
+
+  useEffect(() => {
+    if (!insertRef || !editor) return;
+    insertRef.current = (title, href) => {
+      editor
+        .chain()
+        .focus()
+        .insertContent([
+          {
+            type: "text",
+            text: title,
+            marks: [{ type: "link", attrs: { href } }],
+          },
+          { type: "text", text: " " },
+        ])
+        // Typing after an inserted link must not continue the link.
+        .unsetMark("link")
+        .run();
+    };
+    return () => {
+      insertRef.current = null;
+    };
+  }, [editor, insertRef]);
 
   if (!editor) return null;
   return (

@@ -3,7 +3,7 @@ import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import type { Citation } from "@/lib/types";
 import { sourceIcon } from "./SourcesPanel";
-import { Sparkles, StickyNote } from "lucide-react";
+import { CornerDownLeft, Sparkles, StickyNote } from "lucide-react";
 
 function SourceChip({ c }: { c: Citation }) {
   const source = useStore((s) => s.sources.find((x) => x.id === c.sourceId));
@@ -47,6 +47,7 @@ export function AmbientRail({
   excludeNoteId,
   excludeSourceId,
   emptyState = false,
+  onInsert,
 }: {
   text: string;
   /** The note being edited — its own passages are not "connections". */
@@ -55,6 +56,8 @@ export function AmbientRail({
   excludeSourceId?: string;
   /** Popovers show a quiet placeholder; rails render nothing until hits. */
   emptyState?: boolean;
+  /** Editing context: insert a reference to this passage at the cursor. */
+  onInsert?: (c: Citation) => void;
 }) {
   const notebookId = useStore((s) => s.currentId);
   const [hits, setHits] = useState<Citation[]>([]);
@@ -98,23 +101,35 @@ export function AmbientRail({
         </div>
       ) : (
         hits.map((c) => (
-          <button
-            key={c.chunkId}
-            type="button"
-            onClick={() =>
-              useStore.getState().openInReader({
-                type: c.noteId ? "note" : "source",
-                id: c.noteId || c.sourceId,
-                highlight: c.snippet,
-              })
-            }
-            className="flex flex-col gap-1 rounded-md border border-border/60 bg-elevated/90 p-2 text-left shadow-sm backdrop-blur transition-colors hover:border-border-strong"
-          >
-            <SourceChip c={c} />
-            <span className="line-clamp-4 text-[11px] leading-relaxed text-muted-foreground">
-              {c.snippet}
-            </span>
-          </button>
+          <div key={c.chunkId} className="group/card relative">
+            <button
+              type="button"
+              onClick={() =>
+                useStore.getState().openInReader({
+                  type: c.noteId ? "note" : "source",
+                  id: c.noteId || c.sourceId,
+                  highlight: c.snippet,
+                })
+              }
+              className="flex w-full flex-col gap-1 rounded-md border border-border/60 bg-elevated/90 p-2 text-left shadow-sm backdrop-blur transition-colors hover:border-border-strong"
+            >
+              <SourceChip c={c} />
+              <span className="line-clamp-4 text-[11px] leading-relaxed text-muted-foreground">
+                {c.snippet}
+              </span>
+            </button>
+            {onInsert && (
+              <button
+                type="button"
+                onClick={() => onInsert(c)}
+                title="Insert a reference at the cursor"
+                aria-label="Insert reference"
+                className="absolute right-1.5 top-1.5 hidden rounded border border-border bg-elevated p-1 text-muted-foreground transition-colors hover:text-foreground group-hover/card:block"
+              >
+                <CornerDownLeft className="h-3 w-3" />
+              </button>
+            )}
+          </div>
         ))
       )}
     </div>

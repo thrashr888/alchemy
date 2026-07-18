@@ -382,6 +382,13 @@ button {
   background-color: color-mix(in srgb, var(--primary) 28%, transparent);
   color: var(--foreground);
 }
+::highlight(find) {
+  background-color: color-mix(in srgb, var(--primary) 16%, transparent);
+}
+::highlight(find-active) {
+  background-color: color-mix(in srgb, var(--primary) 45%, transparent);
+  color: var(--foreground);
+}
 
 /* PDF export (printExport.tsx): on screen the print surface renders
    off-viewport — NOT display:none, or the slide canvases would measure 0×0

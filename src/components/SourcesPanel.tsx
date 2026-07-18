@@ -78,7 +78,7 @@ export function sourceIcon(t: Source["sourceType"], url?: string) {
 }
 
 /** Source-domain favicon with a Globe fallback (kept local — no third party). */
-function Favicon({ url }: { url: string }) {
+export function Favicon({ url }: { url: string }) {
   const [failed, setFailed] = useState(false);
   let origin = "";
   try {

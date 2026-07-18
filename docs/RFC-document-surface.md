@@ -195,22 +195,26 @@ autosave on idle. The ambient rail stays up while writing.
 5. Later: PDF page view, agent edit timeline, agent-built live views,
    Mermaid blocks, graph view.
 
-## Remaining (the honest delta, roughly in value order)
+## Remaining — CLOSED (2026-07-18)
 
-- **Reading-mode ambient rail** — the visible section drives
-  `related_passages` while scrolling long documents. Cheap: the command
-  and the rail both exist; needs a scroll-position → section mapper.
-- **TOC rail + per-document scroll memory** — the two reading-comfort
-  items from A/E that didn't ship; both frontend-only.
-- **Visual ⇄ Markdown toggle** — the agent-era affordance from the
-  OpenKnowledge research; cheap (textarea over the same markdown).
-- **docx style mapping** — headings/bold/lists/tables → markdown at
-  extraction; the last flattened-origin format that matters.
-- **Find/highlight on the RENDERED view** — today an active find or
-  citation highlight drops markdown sources to the plain-text view
-  (exact-match honesty); walking the rendered DOM keeps typography.
-- **Ambient insert-reference button** — drop a link at the cursor.
-- Header extras: favicon, tags, copy `alchemy://` deep link.
+Everything below shipped in the final sweep (7b5c3c6 and after):
+reading-mode ambient rail; TOC + per-document scroll memory + citation
+anchors into the rendered view (DocRails: rails hug the text column,
+translucent corner buttons toggle-and-persist, popover fallback at any
+width); find-in-source on the RENDERED view (::highlight ranges, active
+match stepping); docx extraction to markdown (headings, emphasis,
+lists, GFM tables — string-scanned WordprocessingML, no new deps);
+ambient insert-reference (link at the cursor via the rail cards;
+alchemy:// and cider:// join the link-mark protocol allowlist); header
+favicon for web sources and Copy URL / Copy link actions.
+
+Deliberately cut: **tags** (needs a data model + retrieval story — not
+chrome; deserves its own RFC if wanted) and the **Visual ⇄ Markdown
+toggle** (the seamless editor + artifact raw-edit pencil cover the
+practical cases; revisit only if agent-authored markdown makes raw
+editing routine). Phase-5 ideas (PDF page view, agent edit timeline,
+agent-built live views, Mermaid, graph view) move to the ideas list —
+this RFC is complete.
 
 ## Open questions — resolved
 

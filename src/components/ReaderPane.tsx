@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import type { Note, Source } from "@/lib/types";
+import type { Citation, Note, Source } from "@/lib/types";
 import { AmbientRail, activeParagraph } from "./AmbientRail";
 import { AudioPlayer, DialogueScript } from "./AudioNote";
 import { Flashcards } from "./Flashcards";
@@ -12,7 +12,7 @@ import { QuizView } from "./QuizView";
 import { SlideDeck } from "./SlideDeck";
 import { RichEditor } from "./RichEditor";
 import { StreamingBody } from "./StudioNoteViewer";
-import { sourceIcon } from "./SourcesPanel";
+import { Favicon, sourceIcon } from "./SourcesPanel";
 import { Button, Input, RowMenu, Spinner } from "./ui";
 import { chatReadingClass, cn, isWebUrl, shortcutBlocked } from "@/lib/utils";
 import {
@@ -31,6 +31,7 @@ import {
   Pencil,
   RefreshCw,
   Scale,
+  Link2,
   ListTree,
   Search,
   SlidersHorizontal,
@@ -240,6 +241,58 @@ function findTextRange(container: HTMLElement, needle: string): Range | null {
   return range;
 }
 
+/** All occurrences of `query` in the rendered DOM (squashed matching, like
+ *  findTextRange), capped — powers find-in-source on the rendered view. */
+function findAllRanges(container: HTMLElement, query: string): Range[] {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  let hay = "";
+  const map: { node: Text; offset: number }[] = [];
+  while (walker.nextNode()) {
+    const textNode = walker.currentNode as Text;
+    const data = textNode.data;
+    for (let i = 0; i < data.length; i++) {
+      if (!/\s/.test(data[i])) {
+        hay += data[i].toLowerCase();
+        map.push({ node: textNode, offset: i });
+      }
+    }
+  }
+  const target = query.toLowerCase().replace(/\s+/g, "");
+  if (target.length < 2) return [];
+  const out: Range[] = [];
+  let at = hay.indexOf(target);
+  while (at !== -1 && out.length < 300) {
+    const start = map[at];
+    const end = map[at + target.length - 1];
+    const range = document.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset + 1);
+    out.push(range);
+    at = hay.indexOf(target, at + target.length);
+  }
+  return out;
+}
+
+/** Register find highlights (all matches + the active one). */
+function applyFindHighlights(ranges: Range[], active: number): boolean {
+  const registry = (
+    CSS as unknown as { highlights?: Map<string, unknown> }
+  ).highlights;
+  const HighlightCtor = (
+    window as unknown as { Highlight?: new (...r: Range[]) => unknown }
+  ).Highlight;
+  if (!registry || !HighlightCtor) return false;
+  if (ranges.length === 0) {
+    registry.delete("find");
+    registry.delete("find-active");
+    return true;
+  }
+  registry.set("find", new HighlightCtor(...ranges));
+  const current = ranges[Math.min(active, ranges.length - 1)];
+  registry.set("find-active", new HighlightCtor(current));
+  return true;
+}
+
 /** Per-document scroll positions, remembered for the session. */
 const scrollMemory = new Map<string, number>();
 
@@ -442,6 +495,29 @@ export function ReaderPane() {
         onClick: () => void api.newWindow(note.notebookId, note.id),
       }
     : null;
+  const copyLinkAction = note
+    ? {
+        label: "Copy link",
+        icon: <Link2 className="h-3.5 w-3.5" />,
+        onClick: () => {
+          void navigator.clipboard
+            .writeText(`alchemy://note/${note.id}`)
+            .then(() => useStore.getState().pushToast("success", "Link copied"));
+        },
+      }
+    : source?.url
+      ? {
+          label: isWebUrl(source.url) ? "Copy URL" : "Copy file path",
+          icon: <Link2 className="h-3.5 w-3.5" />,
+          onClick: () => {
+            void navigator.clipboard
+              .writeText(source.url)
+              .then(() =>
+                useStore.getState().pushToast("success", "Copied"),
+              );
+          },
+        }
+      : null;
   // Roomy: source actions all inline (no menu at all); notes keep only the
   // rare actions behind the menu. Compact: secondaries fold into the menu.
   const inlineActions = compact
@@ -450,6 +526,7 @@ export function ReaderPane() {
         (a): a is NonNullable<typeof a> => a !== null,
       );
   const overflowItems = [
+    ...(copyLinkAction ? [copyLinkAction] : []),
     ...(compact
       ? [originAction, refreshAction].filter(
           (a): a is NonNullable<typeof a> => a !== null,
@@ -520,7 +597,12 @@ export function ReaderPane() {
           <ArrowRight className="h-3.5 w-3.5" />
         </Button>
         <div className="mx-1.5 flex min-w-0 flex-1 items-center gap-1.5">
-          {source && sourceIcon(source.sourceType, source.url)}
+          {source &&
+            (isWebUrl(source.url) ? (
+              <Favicon url={source.url} />
+            ) : (
+              sourceIcon(source.sourceType, source.url)
+            ))}
           <span
             className="truncate text-[13px] font-medium text-foreground"
             title={source?.title ?? note?.title}
@@ -753,6 +835,7 @@ function DocRails({
   excludeNoteId,
   excludeSourceId,
   width,
+  onInsert,
 }: {
   content: string;
   scrollerRef: React.RefObject<HTMLElement | null>;
@@ -760,6 +843,7 @@ function DocRails({
   excludeNoteId?: string;
   excludeSourceId?: string;
   width: number;
+  onInsert?: (c: Citation) => void;
 }) {
   const showToc = useStore((s) => s.reading.showToc);
   const showRelated = useStore((s) => s.reading.showRelated);
@@ -862,6 +946,7 @@ function DocRails({
             text={relatedText}
             excludeNoteId={excludeNoteId}
             excludeSourceId={excludeSourceId}
+            onInsert={onInsert}
           />
         </div>
       )}
@@ -872,6 +957,7 @@ function DocRails({
             text={relatedText}
             excludeNoteId={excludeNoteId}
             excludeSourceId={excludeSourceId}
+            onInsert={onInsert}
           />
         </div>
       )}
@@ -1061,14 +1147,6 @@ function SourceReader({
     : passage
       ? [passage]
       : [];
-  const activeIdx = query.trim()
-    ? Math.min(active, Math.max(0, matches.length - 1))
-    : 0;
-
-  useEffect(() => {
-    markRef.current?.scrollIntoView({ block: "center" });
-  }, [content, activeIdx, query, passage]);
-
   // Faithful rendering: markdown-shaped sources render as markdown. A find
   // query still uses the plain-text segment view (exact ranges); a citation
   // highlight anchors into the RENDERED view via CSS Custom Highlights,
@@ -1078,8 +1156,51 @@ function SourceReader({
     ((source.sourceType === "text" || source.sourceType === "url") &&
       !!content &&
       looksLikeMarkdown(content));
-  const richMode =
-    markdownShaped && !query.trim() && !(highlight && anchorFailed);
+  const richMode = markdownShaped && !(highlight && anchorFailed);
+
+  // Find-in-source on the RENDERED view: all matches get ::highlight(find),
+  // the active one ::highlight(find-active) and a scroll-to. The plain
+  // segment view keeps its own <mark> path for non-markdown sources.
+  const [domMatchCount, setDomMatchCount] = useState(0);
+  const domRanges = useRef<Range[]>([]);
+  useEffect(() => {
+    if (!richMode || content === null) return;
+    const timer = window.setTimeout(() => {
+      if (!bodyRef.current) return;
+      const ranges = query.trim()
+        ? findAllRanges(bodyRef.current, query.trim())
+        : [];
+      domRanges.current = ranges;
+      setDomMatchCount(ranges.length);
+      applyFindHighlights(ranges, active);
+    }, 120);
+    return () => {
+      window.clearTimeout(timer);
+      applyFindHighlights([], 0);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [richMode, content, query]);
+  // Stepping through matches: retarget the active highlight and scroll.
+  useEffect(() => {
+    if (!richMode || domRanges.current.length === 0) return;
+    const ranges = domRanges.current;
+    const idx = ((active % ranges.length) + ranges.length) % ranges.length;
+    applyFindHighlights(ranges, idx);
+    const rect = ranges[idx].getBoundingClientRect();
+    const body = bodyRef.current?.getBoundingClientRect();
+    if (body && bodyRef.current) {
+      bodyRef.current.scrollTop += rect.top - body.top - bodyRef.current.clientHeight / 3;
+    }
+  }, [active, richMode]);
+
+  const matchTotal = richMode ? domMatchCount : matches.length;
+  const activeIdx = query.trim()
+    ? Math.min(active, Math.max(0, matchTotal - 1))
+    : 0;
+
+  useEffect(() => {
+    markRef.current?.scrollIntoView({ block: "center" });
+  }, [content, activeIdx, query, passage]);
 
   // Citation anchor in the RENDERED view: locate the passage among the text
   // nodes, highlight it (CSS Custom Highlight — no DOM mutation), and scroll
@@ -1111,6 +1232,7 @@ function SourceReader({
   useEffect(() => {
     setAnchorFailed(false);
   }, [highlight, source.id]);
+
 
   // Reading position survives doc-switching (session-scoped); a citation
   // anchor wins over the remembered position.
@@ -1147,8 +1269,8 @@ function SourceReader({
   }, [richMode, content]);
 
   const step = (dir: 1 | -1) => {
-    if (matches.length === 0) return;
-    setActive((a) => (a + dir + matches.length) % matches.length);
+    if (matchTotal === 0) return;
+    setActive((a) => (a + dir + matchTotal) % matchTotal);
   };
 
   // Selection → ask toolbar (window-level mouseup so releasing outside the
@@ -1604,6 +1726,8 @@ function InlineNote({ note }: { note: Note }) {
   const reading = useStore((s) => s.reading);
   const rootRef = useRef<HTMLDivElement>(null);
   const width = useElementWidth(rootRef);
+  const insertRef = useRef<((title: string, href: string) => void) | null>(null);
+  const sources = useStore((s) => s.sources);
   const [title, setTitle] = useState(note.title);
   const [status, setStatus] = useState<"idle" | "dirty" | "saved">("idle");
   const prevBody = useRef(note.content);
@@ -1702,6 +1826,7 @@ function InlineNote({ note }: { note: Note }) {
       >
         <RichEditor
           bare
+          insertRef={insertRef}
           value={note.content}
           onChange={(next) => {
             // TipTap emits one markdown-normalization transaction right
@@ -1729,6 +1854,15 @@ function InlineNote({ note }: { note: Note }) {
         relatedText={activePara}
         excludeNoteId={note.id}
         width={width}
+        onInsert={(c) => {
+          // Reference by the source's own URL/path so the editor's link
+          // routing (wiki-jump) resolves it; notes use their deep link.
+          const src = c.sourceId
+            ? sources.find((x) => x.id === c.sourceId)
+            : null;
+          const href = src?.url || `alchemy://note/${c.noteId}`;
+          insertRef.current?.(c.sourceTitle, href);
+        }}
       />
       <div className="flex shrink-0 items-center gap-2 border-t border-border px-5 py-1.5 text-[11px] tabular-nums text-subtle-foreground">
         <span className="min-w-0 truncate whitespace-nowrap">{countsLine(counts)}</span>

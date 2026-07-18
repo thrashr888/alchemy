@@ -223,15 +223,216 @@ fn read_zip_entry(path: &str, name: &str) -> Result<String> {
     Ok(s)
 }
 
-/// Extract text from a .docx (WordprocessingML).
+/// Extract a .docx (WordprocessingML) to markdown: heading styles become
+/// `#` headings, bold/italic runs keep their emphasis, list paragraphs
+/// become bullets, and tables become GFM tables — so Word documents read
+/// (and chunk) like their origin instead of flattened text.
 fn extract_docx(path: &str) -> Result<String> {
     let xml = read_zip_entry(path, "word/document.xml")?;
-    // Paragraph and break boundaries become newlines; then strip all tags.
-    let xml = xml
-        .replace("</w:p>", "\n")
-        .replace("<w:br/>", "\n")
-        .replace("<w:tab/>", "\t");
-    Ok(strip_html(&xml))
+    Ok(docx_to_markdown(&xml))
+}
+
+fn docx_to_markdown(xml: &str) -> String {
+    let mut out = String::new();
+    let mut i = 0;
+    while i < xml.len() {
+        let rest = &xml[i..];
+        if let Some(tbl_start) = rest.find("<w:tbl>").or_else(|| rest.find("<w:tbl ")) {
+            let p_start = rest.find("<w:p>").or_else(|| rest.find("<w:p "));
+            if p_start.is_none_or(|p| tbl_start < p) {
+                let tbl_rest = &rest[tbl_start..];
+                let end = tbl_rest
+                    .find("</w:tbl>")
+                    .map(|e| e + "</w:tbl>".len())
+                    .unwrap_or(tbl_rest.len());
+                out.push_str(&docx_table(&tbl_rest[..end]));
+                out.push('\n');
+                i += tbl_start + end;
+                continue;
+            }
+        }
+        match rest.find("<w:p>").or_else(|| rest.find("<w:p ")) {
+            Some(p_start) => {
+                let p_rest = &rest[p_start..];
+                let end = p_rest
+                    .find("</w:p>")
+                    .map(|e| e + "</w:p>".len())
+                    .unwrap_or(p_rest.len());
+                let para = docx_paragraph(&p_rest[..end]);
+                if !para.trim().is_empty() {
+                    out.push_str(&para);
+                    out.push('\n');
+                    out.push('\n');
+                }
+                i += p_start + end;
+            }
+            None => break,
+        }
+    }
+    out.trim().to_string()
+}
+
+/// One `<w:p>` → one markdown line: heading prefix from pStyle, list bullet
+/// from numPr, bold/italic from each run's properties.
+fn docx_paragraph(p: &str) -> String {
+    let props = p.find("</w:pPr>").map(|e| &p[..e]).unwrap_or("");
+    let style = props
+        .find("<w:pStyle")
+        .and_then(|at| props[at..].find('>').map(|e| &props[at..at + e]))
+        .and_then(|tag| xml_attr(tag, "w:val"))
+        .unwrap_or("");
+    let prefix = match style {
+        "Title" | "Heading1" => "# ",
+        "Heading2" => "## ",
+        "Heading3" | "Heading4" => "### ",
+        _ if props.contains("<w:numPr>") => "- ",
+        _ => "",
+    };
+    let mut text = String::new();
+    // Merge consecutive same-format runs so split runs don't emit `****`.
+    let mut pending = String::new();
+    let mut pending_fmt = (false, false);
+    let flush = |text: &mut String, seg: &mut String, fmt: (bool, bool)| {
+        if seg.is_empty() {
+            return;
+        }
+        let (bold, italic) = fmt;
+        let wrapped = match (bold, italic) {
+            (true, true) => format!("***{seg}***"),
+            (true, false) => format!("**{seg}**"),
+            (false, true) => format!("*{seg}*"),
+            (false, false) => seg.clone(),
+        };
+        text.push_str(&wrapped);
+        seg.clear();
+    };
+    let mut j = 0;
+    while let Some(r_at) = p[j..].find("<w:r>").or_else(|| p[j..].find("<w:r ")) {
+        let r_rest = &p[j + r_at..];
+        let r_end = r_rest
+            .find("</w:r>")
+            .map(|e| e + "</w:r>".len())
+            .unwrap_or(r_rest.len());
+        let run = &r_rest[..r_end];
+        let rpr = run.find("</w:rPr>").map(|e| &run[..e]).unwrap_or("");
+        let flag = |tag: &str| {
+            rpr.find(&format!("<w:{tag}"))
+                .map(|at| {
+                    let t = &rpr[at..rpr[at..].find('>').map(|e| at + e + 1).unwrap_or(rpr.len())];
+                    !t.contains("w:val=\"0\"") && !t.contains("w:val=\"false\"")
+                })
+                .unwrap_or(false)
+        };
+        let fmt = (flag("b/") || flag("b "), flag("i/") || flag("i "));
+        if fmt != pending_fmt {
+            flush(&mut text, &mut pending, pending_fmt);
+            pending_fmt = fmt;
+        }
+        let mut k = 0;
+        while let Some(t_at) = run[k..].find("<w:t") {
+            let t_rest = &run[k + t_at..];
+            let Some(open_end) = t_rest.find('>') else {
+                break;
+            };
+            let Some(close) = t_rest.find("</w:t>") else {
+                break;
+            };
+            if close > open_end {
+                pending.push_str(&xml_unescape(&t_rest[open_end + 1..close]));
+            }
+            k += t_at + close + "</w:t>".len();
+        }
+        if run.contains("<w:br/>") {
+            pending.push('\n');
+        }
+        if run.contains("<w:tab/>") {
+            pending.push('\t');
+        }
+        j += r_at + r_end;
+    }
+    flush(&mut text, &mut pending, pending_fmt);
+    if text.trim().is_empty() {
+        return String::new();
+    }
+    format!("{prefix}{}", text.trim())
+}
+
+/// One `<w:tbl>` → a GFM table (first row is the header).
+fn docx_table(tbl: &str) -> String {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut i = 0;
+    while let Some(tr_at) = tbl[i..].find("<w:tr>").or_else(|| tbl[i..].find("<w:tr ")) {
+        let tr_rest = &tbl[i + tr_at..];
+        let tr_end = tr_rest
+            .find("</w:tr>")
+            .map(|e| e + "</w:tr>".len())
+            .unwrap_or(tr_rest.len());
+        let tr = &tr_rest[..tr_end];
+        let mut cells: Vec<String> = Vec::new();
+        let mut c = 0;
+        while let Some(tc_at) = tr[c..].find("<w:tc>").or_else(|| tr[c..].find("<w:tc ")) {
+            let tc_rest = &tr[c + tc_at..];
+            let tc_end = tc_rest
+                .find("</w:tc>")
+                .map(|e| e + "</w:tc>".len())
+                .unwrap_or(tc_rest.len());
+            let mut cell = String::new();
+            let mut p_i = 0;
+            let tc = &tc_rest[..tc_end];
+            while let Some(p_at) = tc[p_i..].find("<w:p>").or_else(|| tc[p_i..].find("<w:p ")) {
+                let p_rest = &tc[p_i + p_at..];
+                let p_end = p_rest
+                    .find("</w:p>")
+                    .map(|e| e + "</w:p>".len())
+                    .unwrap_or(p_rest.len());
+                let para = docx_paragraph(&p_rest[..p_end]);
+                if !para.trim().is_empty() {
+                    if !cell.is_empty() {
+                        cell.push(' ');
+                    }
+                    cell.push_str(para.trim_start_matches(['#', ' ', '-']).trim());
+                }
+                p_i += p_at + p_end;
+            }
+            cells.push(cell.replace('|', "\\|"));
+            c += tc_at + tc_end;
+        }
+        if !cells.is_empty() {
+            rows.push(cells);
+        }
+        i += tr_at + tr_end;
+    }
+    if rows.is_empty() {
+        return String::new();
+    }
+    let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    let mut out = String::new();
+    for (idx, row) in rows.iter().enumerate() {
+        out.push('|');
+        for c in 0..cols {
+            out.push(' ');
+            out.push_str(row.get(c).map(String::as_str).unwrap_or(""));
+            out.push_str(" |");
+        }
+        out.push('\n');
+        if idx == 0 {
+            out.push('|');
+            for _ in 0..cols {
+                out.push_str(" --- |");
+            }
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Decode the five XML entities WordprocessingML uses in text nodes.
+fn xml_unescape(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
 }
 
 /// Extract text from a .pptx (PresentationML), one slide at a time, in order.
@@ -1260,6 +1461,39 @@ mod tests {
         assert!(!text.contains("Saved"));
         assert!(!text.contains("-->"));
         assert!(title.is_some(), "article title extracted");
+    }
+
+    // Word documents extract to markdown: headings, emphasis, lists, and
+    // tables all survive instead of flattening to plain text.
+    #[test]
+    fn docx_maps_styles_to_markdown() {
+        let xml = r#"<w:document><w:body>
+<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Quarterly Report</w:t></w:r></w:p>
+<w:p><w:r><w:t>Plain intro with </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>bold words</w:t></w:r><w:r><w:t> and </w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>italic ones</w:t></w:r><w:r><w:t>.</w:t></w:r></w:p>
+<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>Findings</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/></w:numPr></w:pPr><w:r><w:t>First bullet</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/></w:numPr></w:pPr><w:r><w:t>Second bullet &amp; more</w:t></w:r></w:p>
+<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Region</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Revenue</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>West</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>$1.2M</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+</w:body></w:document>"#;
+        let md = docx_to_markdown(xml);
+        assert!(md.contains("# Quarterly Report"), "h1: {md}");
+        assert!(md.contains("**bold words**"), "bold: {md}");
+        assert!(md.contains("*italic ones*"), "italic: {md}");
+        assert!(md.contains("## Findings"), "h2: {md}");
+        assert!(md.contains("- First bullet"), "list: {md}");
+        assert!(md.contains("- Second bullet & more"), "entities: {md}");
+        assert!(md.contains("| Region | Revenue |"), "table header: {md}");
+        assert!(md.contains("| --- | --- |"), "separator: {md}");
+        assert!(md.contains("| West | $1.2M |"), "row: {md}");
+    }
+
+    // Split runs with identical formatting merge — no `****` artifacts.
+    #[test]
+    fn docx_merges_adjacent_same_format_runs() {
+        let xml = r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Hello </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>world</w:t></w:r></w:p>"#;
+        let md = docx_to_markdown(xml);
+        assert_eq!(md, "**Hello world**");
     }
 
     // Articles extract to MARKDOWN so structure and links survive — links
