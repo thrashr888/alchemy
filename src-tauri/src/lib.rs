@@ -165,6 +165,7 @@ pub fn run() {
             commands::export_audio,
             commands::new_window,
             commands::print_webview,
+            commands::source_backlinks,
             commands::rebuild_app_menu,
             commands::search_everything,
             commands::export_notebook_okf_zip,

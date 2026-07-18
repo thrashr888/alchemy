@@ -4114,6 +4114,68 @@ pub fn fix_traffic_lights(window: tauri::WebviewWindow) {
     let _ = window;
 }
 
+/// Documents in this notebook that link to the given source — the reader's
+/// "Linked from" footer. Sources link via absolute URLs (article markdown
+/// keeps them); file sources are also matched by filename, which is how
+/// relative links in sibling documents refer to them. Notebooks are small,
+/// so a content scan per open beats maintaining a link index.
+#[tauri::command]
+pub async fn source_backlinks(
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<Vec<Backlink>, String> {
+    let Some(target) = e(state.db.get_source(&source_id).await)? else {
+        return Ok(vec![]);
+    };
+    let mut needles: Vec<String> = Vec::new();
+    if !target.url.is_empty() {
+        needles.push(target.url.clone());
+        if !target.url.starts_with("http") && !target.url.starts_with("cider://") {
+            // A file path: relative links from siblings use the filename.
+            if let Some(name) = target.url.rsplit('/').next() {
+                if name.len() >= 6 {
+                    needles.push(name.to_string());
+                }
+            }
+        }
+    }
+    if needles.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut out = Vec::new();
+    for s in e(state.db.list_sources(&target.notebook_id).await)? {
+        if s.id == target.id || s.source_type == "folder" {
+            continue;
+        }
+        let content = e(state.db.source_content(&s.id).await)?;
+        if needles.iter().any(|n| content.contains(n.as_str())) {
+            out.push(Backlink {
+                kind: "source".into(),
+                id: s.id,
+                title: s.title,
+            });
+        }
+    }
+    for n in e(state.db.list_notes(&target.notebook_id).await)? {
+        if needles.iter().any(|k| n.content.contains(k.as_str())) {
+            out.push(Backlink {
+                kind: "note".into(),
+                id: n.id,
+                title: n.title,
+            });
+        }
+    }
+    Ok(out)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Backlink {
+    pub kind: String,
+    pub id: String,
+    pub title: String,
+}
+
 /// Export the calling window's print layout as a PDF — the local-first
 /// export path for slide decks and flashcards. With `save_path` the PDF is
 /// written silently to that file (NSPrintSaveJob); without it the native

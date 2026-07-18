@@ -656,7 +656,15 @@ fn readable_text(body: &str, url: &str) -> (Option<String>, String) {
         .ok()
         .and_then(|mut r| r.parse().ok());
     if let Some(article) = article {
-        let text = normalize(&article.text_content);
+        // Prefer the article's HTML converted to markdown: headings, lists,
+        // tables, emphasis, and LINKS survive — links are what the reader's
+        // wiki-jumping and the backlink graph are built from. Fall back to
+        // the plain text extraction when conversion fails or comes up short.
+        let markdown = htmd::convert(&article.content)
+            .ok()
+            .map(|md| tidy_markdown(&md))
+            .filter(|md| md.chars().count() >= 200);
+        let text = markdown.unwrap_or_else(|| normalize(&article.text_content));
         // Same threshold as looks_blocked: shorter than this means the
         // article extraction probably picked the wrong (or no) node, so
         // whole-page extraction is the safer bet.
@@ -888,6 +896,28 @@ fn word_windows(text: &str) -> Vec<String> {
         start += step;
     }
     chunks
+}
+
+/// Cleanup for converted markdown. Markdown is whitespace-significant
+/// (nested lists, code blocks), so unlike `normalize` this keeps leading
+/// indentation — it only trims line ends and collapses runs of blank lines.
+fn tidy_markdown(md: &str) -> String {
+    let mut out = String::with_capacity(md.len());
+    let mut blank = 0;
+    for line in md.lines() {
+        let t = line.trim_end();
+        if t.is_empty() {
+            blank += 1;
+            if blank > 1 {
+                continue;
+            }
+        } else {
+            blank = 0;
+        }
+        out.push_str(t);
+        out.push('\n');
+    }
+    out.trim().to_string()
 }
 
 fn normalize(text: &str) -> String {
@@ -1230,6 +1260,35 @@ mod tests {
         assert!(!text.contains("Saved"));
         assert!(!text.contains("-->"));
         assert!(title.is_some(), "article title extracted");
+    }
+
+    // Articles extract to MARKDOWN so structure and links survive — links
+    // feed the reader's wiki-jumping and the backlink graph.
+    #[test]
+    fn readable_text_preserves_structure_and_links_as_markdown() {
+        let para = "A long enough paragraph about the topic at hand that clears the minimum \
+                    article-length threshold used by the readability extraction fallback logic.";
+        let html = format!(
+            r#"<html><head><title>Linked Article</title></head><body>
+<article><h1>Linked Article</h1>
+<h2>Background</h2>
+<p>{para}</p>
+<p>See <a href="https://example.com/related">the related piece</a> for context.</p>
+<ul><li>First point about it</li><li>Second point about it</li></ul>
+<p>{para}</p>
+</article></body></html>"#
+        );
+        let (_title, text) = readable_text(&html, "https://example.com/linked");
+        assert!(text.contains("## Background"), "heading kept: {text}");
+        assert!(
+            text.contains("[the related piece](https://example.com/related)"),
+            "link kept as markdown: {text}"
+        );
+        assert!(
+            text.lines()
+                .any(|l| l.trim_start().starts_with(['-', '*']) && l.contains("First point")),
+            "list kept: {text}"
+        );
     }
 
     #[test]

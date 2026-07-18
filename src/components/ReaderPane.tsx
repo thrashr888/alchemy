@@ -109,26 +109,47 @@ function normalizePath(path: string): string {
  * (another source's URL or file) open in the reader — early wiki-jumping;
  * everything else goes to the browser or Finder. Returns true when handled.
  */
+/** The notebook source a link resolves to, if any (wiki-jump targets). */
+function resolveInCorpus(
+  rawHref: string,
+  origin: string | undefined,
+): Source | null {
+  if (!rawHref || rawHref.startsWith("#")) return null;
+  const sources = useStore.getState().sources;
+  const byKey = (key: string) =>
+    sources.find((src) => docKey(src.url) === docKey(key)) ?? null;
+  if (/^https?:\/\//.test(rawHref)) return byKey(rawHref);
+  if (!origin) return null;
+  if (/^https?:\/\//.test(origin)) {
+    try {
+      return byKey(new URL(rawHref, origin).toString());
+    } catch {
+      return null;
+    }
+  }
+  if (origin.startsWith("/")) {
+    const dir = origin.slice(0, origin.lastIndexOf("/"));
+    return byKey(normalizePath(`${dir}/${rawHref}`));
+  }
+  return null;
+}
+
 function routeDocLink(rawHref: string, origin: string | undefined): boolean {
   if (!rawHref || rawHref.startsWith("#")) return true; // anchors: no-op for now
   const state = useStore.getState();
-  const bySource = (key: string) => {
-    const hit = state.sources.find((src) => docKey(src.url) === docKey(key));
-    if (hit) {
-      state.openInReader({ type: "source", id: hit.id });
-      return true;
-    }
-    return false;
-  };
+  const hit = resolveInCorpus(rawHref, origin);
+  if (hit) {
+    state.openInReader({ type: "source", id: hit.id });
+    return true;
+  }
   if (/^https?:\/\//.test(rawHref)) {
-    if (!bySource(rawHref)) void openUrl(rawHref);
+    void openUrl(rawHref);
     return true;
   }
   if (!origin) return true;
   if (/^https?:\/\//.test(origin)) {
     try {
-      const abs = new URL(rawHref, origin).toString();
-      if (!bySource(abs)) void openUrl(abs);
+      void openUrl(new URL(rawHref, origin).toString());
     } catch {
       // Unresolvable href — swallow rather than navigating the webview.
     }
@@ -136,8 +157,7 @@ function routeDocLink(rawHref: string, origin: string | undefined): boolean {
   }
   if (origin.startsWith("/")) {
     const dir = origin.slice(0, origin.lastIndexOf("/"));
-    const abs = normalizePath(`${dir}/${rawHref}`);
-    if (!bySource(abs)) void revealItemInDir(abs);
+    void revealItemInDir(normalizePath(`${dir}/${rawHref}`));
     return true;
   }
   return true;
@@ -521,9 +541,63 @@ function SourceReader({
   const [sel, setSel] = useState<{ text: string; top: number; left: number } | null>(
     null,
   );
+  const [backlinks, setBacklinks] = useState<
+    { kind: "source" | "note"; id: string; title: string }[]
+  >([]);
+  const [preview, setPreview] = useState<{
+    source: Source;
+    top: number;
+    left: number;
+  } | null>(null);
+  const previewTimer = useRef<number | null>(null);
   const markRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+
+  // "Linked from" — who in this notebook points at the open document.
+  useEffect(() => {
+    let stale = false;
+    setBacklinks([]);
+    void api
+      .sourceBacklinks(source.id)
+      .then((links) => {
+        if (!stale) setBacklinks(links);
+      })
+      .catch(() => undefined);
+    return () => {
+      stale = true;
+    };
+  }, [source.id]);
+
+  // Wikipedia-style hover previews for links that resolve to another source.
+  function onBodyMouseOver(e: React.MouseEvent) {
+    const a = (e.target as HTMLElement).closest?.("a");
+    if (previewTimer.current) {
+      window.clearTimeout(previewTimer.current);
+      previewTimer.current = null;
+    }
+    if (!a || !bodyRef.current) {
+      setPreview(null);
+      return;
+    }
+    const hit = resolveInCorpus(a.getAttribute("href") ?? "", source.url || undefined);
+    if (!hit) {
+      setPreview(null);
+      return;
+    }
+    const rect = a.getBoundingClientRect();
+    const wrap = bodyRef.current.getBoundingClientRect();
+    previewTimer.current = window.setTimeout(() => {
+      setPreview({
+        source: hit,
+        top: Math.max(rect.top - wrap.top + bodyRef.current!.scrollTop, 40),
+        left: Math.min(
+          Math.max(rect.left - wrap.left + rect.width / 2, 140),
+          Math.max(wrap.width - 140, 140),
+        ),
+      });
+    }, 350);
+  }
 
   useEffect(() => {
     let stale = false;
@@ -740,7 +814,33 @@ function SourceReader({
         ref={bodyRef}
         className="relative min-h-0 flex-1 overflow-y-auto"
         onClickCapture={docLinkClickHandler(source.url || undefined)}
+        onMouseOver={onBodyMouseOver}
+        onScroll={() => setPreview(null)}
       >
+        {preview && (
+          <button
+            type="button"
+            className="absolute z-10 flex w-64 flex-col gap-1 rounded-md border border-border-strong bg-elevated p-2.5 text-left shadow-lg"
+            style={{
+              top: preview.top,
+              left: preview.left,
+              transform: "translate(-50%, calc(-100% - 8px))",
+            }}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() =>
+              useStore.getState().openInReader({ type: "source", id: preview.source.id })
+            }
+          >
+            <span className="flex items-center gap-1.5 text-[12px] font-medium text-foreground">
+              {sourceIcon(preview.source.sourceType, preview.source.url)}
+              <span className="truncate">{preview.source.title}</span>
+            </span>
+            <span className="text-[11px] text-subtle-foreground">
+              In this notebook · {preview.source.chunkCount} chunks ·{" "}
+              {Intl.NumberFormat().format(preview.source.charCount)} chars
+            </span>
+          </button>
+        )}
         {sel && content && (
           <div
             className="absolute z-10 flex items-center gap-0.5 rounded-md border border-border-strong bg-elevated p-0.5 shadow-lg"
@@ -814,8 +914,41 @@ function SourceReader({
         </div>
       </div>
       {content && (
-        <div className="shrink-0 overflow-hidden truncate whitespace-nowrap border-t border-border px-5 py-1.5 text-[11px] tabular-nums text-subtle-foreground">
-          {source.chunkCount} chunks · {countsLine(content)}
+        <div className="flex shrink-0 items-center gap-2 border-t border-border px-5 py-1 text-[11px] tabular-nums text-subtle-foreground">
+          <span className="min-w-0 truncate whitespace-nowrap">
+            {source.chunkCount} chunks · {countsLine(content)}
+          </span>
+          {backlinks.length > 0 && (
+            <span className="group ml-auto flex shrink-0 items-center">
+              <RowMenu
+                // The text link is the visible affordance; the RowMenu's own
+                // trigger only anchors the dropdown.
+                className="!flex [&>button:first-child]:hidden"
+                label={`Linked from ${backlinks.length} ${
+                  backlinks.length === 1 ? "document" : "documents"
+                }`}
+                items={backlinks.map((b) => ({
+                  label: `${b.title}${b.kind === "note" ? " (note)" : ""}`,
+                  icon: <BookOpen className="h-3.5 w-3.5" />,
+                  onClick: () =>
+                    useStore
+                      .getState()
+                      .openInReader({ type: b.kind, id: b.id }),
+                }))}
+              />
+              <button
+                type="button"
+                className="text-citation hover:underline"
+                onClick={(e) => {
+                  const menu = (e.currentTarget.previousElementSibling as HTMLElement)
+                    ?.querySelector("button");
+                  (menu as HTMLButtonElement | null)?.click();
+                }}
+              >
+                ← linked from {backlinks.length}
+              </button>
+            </span>
+          )}
         </div>
       )}
     </>

@@ -70,6 +70,7 @@ hound = "3"
 kokoro-en = { version = "0.1.4", default-features = false }
 tauri-plugin-deep-link = "2.4.9"
 tauri-plugin-global-shortcut = "2.3.2"
+htmd = "0.5.4"
 
 # Already in the tree via tauri/wry — traffic-light insets, the Services
 # provider (services.rs), and Spotlight indexing (spotlight.rs).
