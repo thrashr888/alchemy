@@ -6,6 +6,12 @@
 > no wiki-like jumping between documents. The sources/chat/studio three-pane
 > is an AAA-grade UX; the modals stacked on top of it are not. This revision
 > puts the reader first.
+>
+> Rev 3 (2026-07-18): phases 1-4 are SHIPPED (commits effcd56 → 0ebcd02):
+> reader pane, article-markdown extraction + document graph, ambient rail
+> (editing), seamless edit-in-place with autosave + tables, plus the live
+> web view. Per-section status notes below; the Remaining section at the
+> end is the honest delta.
 
 ## Research: what the best current tools do
 
@@ -111,9 +117,11 @@ Render documents like the thing they came from:
   links open the browser as today.
 - **Hover previews**: in-corpus links show a Wikipedia-style preview card
   (title, favicon, first lines) on hover.
-- **Backlinks**: at ingest, store each source's outgoing URLs (cheap
-  column); the reader footer shows "Linked from N sources · Cited by M
-  notes" (notes' citation metadata already exists), each row jumpable.
+- **Backlinks**: SHIPPED as a per-open scan (`source_backlinks` greps the
+  notebook's contents for the source's URL / filename) instead of an
+  ingest-time column — no schema change, instant at notebook scale. The
+  reader footer shows "← linked from N", each entry jumpable. Revisit the
+  column only if notebooks grow past hundreds of sources.
 - Later: linkify note mentions of source titles; a notebook-level graph
   view once the link data exists.
 
@@ -133,6 +141,12 @@ related passages for **where you are**:
   `db.search_chunks`; cancellable, cached per paragraph hash. Results may
   include notes (badged), not just sources.
 
+> Shipped for WRITING: 800ms debounce on the paragraph being edited
+> (consecutive-state diff), sources ranked ahead of notes, self excluded,
+> floating over the right gutter when the pane is ≥1060px. Still open:
+> the READING variant (visible-section queries while scrolling), the
+> insert-reference-at-cursor button, and per-paragraph result caching.
+
 ### E. Document chrome (match the AAA panel language)
 
 Header: inline-editable title (notes), origin badge + favicon, tags, copy
@@ -140,6 +154,11 @@ Header: inline-editable title (notes), origin badge + favicon, tags, copy
 from headings, scroll-synced, on long documents. Footer: word · char ·
 ~token count (chars/4, honestly labeled). All styled in the existing panel
 idiom — same 11px uppercase labels, same borders, same quiet grays.
+
+> Shipped: inline title, origin actions (open original / Finder /
+> sync), single-line counts footer with the token estimate, responsive
+> toolbar with overflow. Still open: favicon in the header, tags, copy
+> `alchemy://` deep link, and the scroll-synced TOC rail.
 
 ### F. Editing upgrades (after the reader lands)
 
@@ -155,27 +174,48 @@ autosave on idle. The ambient rail stays up while writing.
 > raw-markdown form behind the toolbar pencil. The ambient rail floats
 > over the right gutter (translucent, below the title) and only
 > materializes when the pane is wide enough (≥1060px) that it cannot
-> overlap the text column. Still open here: TipTap extension growth
-> (tables, tasks, callouts, images) and the Visual ⇄ Markdown toggle.
+> overlap the text column. Tables are in (TableKit: GFM tables round-trip
+> losslessly, contextual row/column controls in the toolbar); links follow
+> on plain click through the shared doc-link router (⌘-click to edit);
+> generated reports are read-only records with deliberate editing behind
+> the pencil. Still open: task lists, callouts, images, and the
+> Visual ⇄ Markdown toggle.
 
 ## Phasing
 
-1. **Reader pane**: center-column Chat ⇄ Reader mode, rail-click routing,
-   history + j/k + breadcrumb, markdown sources rendered faithfully,
-   find/highlight ported over. (Biggest UX delta, no schema changes.)
-2. **Extraction upgrade**: URL/HTML → article markdown with links; docx
-   style mapping; in-corpus link resolution + hover previews + backlinks
-   column.
-3. **Ambient rail** (`related_passages` + the rail, reading and editing).
-4. **Editing upgrades** (TipTap extensions, toggle, autosave).
+1. ✅ **Reader pane** (effcd56): Chat ⇄ Reader in the window toolbar,
+   rail-click routing, history + j/k, all note kinds in-pane, modals gone.
+2. ✅ **Extraction upgrade** (fe307c9): URL/HTML → article markdown with
+   links; in-corpus link resolution + hover previews + backlinks (scan,
+   not column). docx style mapping did NOT ship — see Remaining.
+3. ✅ **Ambient rail** (f95e52c): editing variant; reading variant open.
+4. ✅ **Editing upgrades** (0ebcd02): seamless edit-in-place, autosave
+   with real dirty-checking, tables, clickable links, read-only reports.
+   Bonus: ✅ live web view (e8927c8).
 5. Later: PDF page view, agent edit timeline, agent-built live views,
    Mermaid blocks, graph view.
 
-## Open questions
+## Remaining (the honest delta, roughly in value order)
 
-- Does Reader replace chat in the center, or live as a third column state?
-  (Lean: same column, two tabs — preserves the three-pane silhouette.)
-- Note editing in Reader phase 1, or keep the modal until phase 4? (Lean:
-  keep the modal until the editor upgrade; don't ship a worse editor twice.)
-- Refresh-to-upgrade old URL sources: prompt the user, or silently improve
-  on next sweep? (Lean: silent on sweep — content hash changes anyway.)
+- **Reading-mode ambient rail** — the visible section drives
+  `related_passages` while scrolling long documents. Cheap: the command
+  and the rail both exist; needs a scroll-position → section mapper.
+- **TOC rail + per-document scroll memory** — the two reading-comfort
+  items from A/E that didn't ship; both frontend-only.
+- **Visual ⇄ Markdown toggle** — the agent-era affordance from the
+  OpenKnowledge research; cheap (textarea over the same markdown).
+- **docx style mapping** — headings/bold/lists/tables → markdown at
+  extraction; the last flattened-origin format that matters.
+- **Find/highlight on the RENDERED view** — today an active find or
+  citation highlight drops markdown sources to the plain-text view
+  (exact-match honesty); walking the rendered DOM keeps typography.
+- **Ambient insert-reference button** — drop a link at the cursor.
+- Header extras: favicon, tags, copy `alchemy://` deep link.
+
+## Open questions — resolved
+
+- Reader replaces chat in the same center column, two tabs in the window
+  toolbar (HIG: visible-but-disabled before first use). ✓
+- Note editing shipped WITH the reader as a plain form first, then went
+  seamless in phase 4 — shipping the interim editor twice was fine.
+- Old URL sources upgrade silently on refresh/report runs. ✓
