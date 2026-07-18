@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Cause, Duration, Effect, Schedule } from "effect";
 import { describe, IpcError, TimeoutError, type AppError } from "./errors";
 import type {
+  Citation,
   AiConfig,
   BuildInfo,
   ChatConfig,
@@ -128,6 +129,8 @@ export const api = {
     run(ai<Source>("refresh_source_url", { sourceId })),
   getSourceContent: (sourceId: string) =>
     run(query<string>("get_source_content", { sourceId })),
+  relatedPassages: (notebookId: string, text: string, limit?: number) =>
+    run(query<Citation[]>("related_passages", { notebookId, text, limit })),
   sourceBacklinks: (sourceId: string) =>
     run(query<{ kind: "source" | "note"; id: string; title: string }[]>(
       "source_backlinks",

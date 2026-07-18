@@ -3,6 +3,7 @@ import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import type { Note, Source } from "@/lib/types";
+import { AmbientRail, activeParagraph } from "./AmbientRail";
 import { AudioPlayer, DialogueScript } from "./AudioNote";
 import { Flashcards } from "./Flashcards";
 import { Markdown } from "./Markdown";
@@ -999,6 +1000,11 @@ function NoteReader({
   const artifactStreamText = useStore((s) => s.artifactStreamText);
   const [title, setTitle] = useState(note.title);
   const [body, setBody] = useState(note.content);
+  // Ambient rail: diff CONSECUTIVE editor states to find the paragraph being
+  // worked on — diffing against note.content would flag the editor's own
+  // markdown-serialization quirks as "changes" on the first keystroke.
+  const prevBody = useRef(note.content);
+  const [activePara, setActivePara] = useState("");
 
   // Entering edit mode snapshots the note; leaving without saving discards.
   useEffect(() => {
@@ -1029,16 +1035,35 @@ function NoteReader({
           value={title}
           onChange={(event) => setTitle(event.target.value)}
         />
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <RichEditor value={body} onChange={setBody} />
-        </div>
-        <div className="flex shrink-0 justify-end gap-2">
-          <Button type="button" variant="ghost" onClick={() => onEditingChange(false)}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="primary">
-            Save
-          </Button>
+        <div className="flex min-h-0 flex-1 gap-3">
+          <div className="min-h-0 min-w-0 flex-1">
+            <RichEditor
+              fill
+              value={body}
+              onChange={(next) => {
+                setActivePara(activeParagraph(prevBody.current, next));
+                prevBody.current = next;
+                setBody(next);
+              }}
+            />
+          </div>
+          {/* Right column: ambient connections above, actions pinned below —
+              the editor gets the full pane height. */}
+          <div className="flex w-60 shrink-0 flex-col gap-2 border-l border-border pl-3">
+            <AmbientRail text={activePara} excludeNoteId={note.id} />
+            <div className="flex shrink-0 justify-end gap-2 border-t border-border pt-2.5">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => onEditingChange(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" variant="primary">
+                Save
+              </Button>
+            </div>
+          </div>
         </div>
       </form>
     );

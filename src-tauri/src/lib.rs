@@ -166,6 +166,7 @@ pub fn run() {
             commands::new_window,
             commands::print_webview,
             commands::source_backlinks,
+            commands::related_passages,
             commands::rebuild_app_menu,
             commands::search_everything,
             commands::export_notebook_okf_zip,

@@ -28,9 +28,13 @@ function getMarkdown(editor: Editor): string {
 export function RichEditor({
   value,
   onChange,
+  fill = false,
 }: {
   value: string;
   onChange: (markdown: string) => void;
+  /** Stretch to the parent's full height (reader pane) instead of the
+   *  self-sizing modal behavior (min 240px, capped at 52vh). */
+  fill?: boolean;
 }) {
   const editor = useEditor({
     extensions: [
@@ -41,17 +45,26 @@ export function RichEditor({
     onUpdate: ({ editor }) => onChange(getMarkdown(editor)),
     editorProps: {
       attributes: {
-        class:
-          "prose max-w-none min-h-[240px] max-h-[52vh] overflow-y-auto px-3 py-2.5 focus:outline-none",
+        class: fill
+          ? "prose max-w-none h-full overflow-y-auto px-3 py-2.5 focus:outline-none"
+          : "prose max-w-none min-h-[240px] max-h-[52vh] overflow-y-auto px-3 py-2.5 focus:outline-none",
       },
     },
   });
 
   if (!editor) return null;
   return (
-    <div className="overflow-hidden rounded-md border border-input bg-surface-2">
+    <div
+      className={cn(
+        "overflow-hidden rounded-md border border-input bg-surface-2",
+        fill && "flex h-full flex-col",
+      )}
+    >
       <Toolbar editor={editor} />
-      <EditorContent editor={editor} />
+      <EditorContent
+        editor={editor}
+        className={fill ? "min-h-0 flex-1 [&>div]:h-full" : undefined}
+      />
     </div>
   );
 }

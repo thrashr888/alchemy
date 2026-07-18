@@ -4114,6 +4114,38 @@ pub fn fix_traffic_lights(window: tauri::WebviewWindow) {
     let _ = window;
 }
 
+/// Ambient connections: passages related to what the user is writing right
+/// now (docs/RFC-document-surface.md phase 3). Embed-only and quiet — no
+/// chat model in the loop, so it is fast enough to run on a typing debounce.
+#[tauri::command]
+pub async fn related_passages(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    text: String,
+    limit: Option<usize>,
+) -> Result<Vec<Citation>, String> {
+    let text = text.trim().to_string();
+    // Under a couple dozen characters the paragraph has no retrievable
+    // meaning yet — return quietly instead of surfacing noise.
+    if text.chars().count() < 24 {
+        return Ok(vec![]);
+    }
+    let vec = {
+        let ai = state.ai.read().await;
+        e(ai.embed(std::slice::from_ref(&text)).await)?
+    }
+    .into_iter()
+    .next()
+    .unwrap_or_default();
+    if vec.is_empty() {
+        return Ok(vec![]);
+    }
+    e(state
+        .db
+        .search_chunks(&notebook_id, vec, &text, limit.unwrap_or(3).min(8), None)
+        .await)
+}
+
 /// Documents in this notebook that link to the given source — the reader's
 /// "Linked from" footer. Sources link via absolute URLs (article markdown
 /// keeps them); file sources are also matched by filename, which is how
