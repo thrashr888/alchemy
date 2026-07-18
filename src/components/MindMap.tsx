@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Minus, Plus } from "lucide-react";
+import { Minus, Plus, RotateCcw } from "lucide-react";
 import { Markdown } from "./Markdown";
 
 /**
@@ -302,14 +302,9 @@ function PanCanvas({ children }: { children: React.ReactNode }) {
         >
           <Minus className="h-3.5 w-3.5" />
         </button>
-        <button
-          type="button"
-          onClick={() => setView({ x: 0, y: 0, scale: 1 })}
-          title="Reset view"
-          className="min-w-10 rounded px-1 py-0.5 text-center text-[11px] tabular-nums text-muted-foreground transition-colors hover:text-foreground"
-        >
+        <span className="min-w-10 px-1 py-0.5 text-center text-[11px] tabular-nums text-subtle-foreground">
           {Math.round(view.scale * 100)}%
-        </button>
+        </span>
         <button
           type="button"
           onClick={() => zoomAt(1.25, ...center())}
@@ -318,6 +313,15 @@ function PanCanvas({ children }: { children: React.ReactNode }) {
           className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
         >
           <Plus className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => setView({ x: 0, y: 0, scale: 1 })}
+          title="Reset to 100%"
+          aria-label="Reset zoom to 100%"
+          className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
         </button>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
@@ -418,10 +419,19 @@ export function ReaderPane() {
   const [refreshTick, setRefreshTick] = useState(0);
   const [editing, setEditing] = useState(false);
   const [liveMode, setLiveMode] = useState(false);
+  const [imageMode, setImageMode] = useState(true);
   useEffect(() => {
     setFindOpen(false);
     setEditing(false);
-    setLiveMode(false);
+    setImageMode(true);
+    // A web source whose extraction failed has no cached article — open
+    // straight in the Live view instead of a dead "no text" pane.
+    const doc = useStore.getState().reader.history[useStore.getState().reader.index];
+    const src =
+      doc?.type === "source"
+        ? useStore.getState().sources.find((x) => x.id === doc.id)
+        : null;
+    setLiveMode(!!src && src.status === "error" && isWebUrl(src.url));
   }, [current?.id]);
 
   const source =
@@ -616,6 +626,31 @@ export function ReaderPane() {
               <RefreshCw className="h-3.5 w-3.5 animate-spin" />
             </span>
           )}
+          {source && source.sourceType === "image" && source.url && (
+            <div className="mr-1 flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5">
+              {(["image", "text"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setImageMode(mode === "image")}
+                  aria-pressed={imageMode === (mode === "image")}
+                  title={
+                    mode === "image"
+                      ? "The original image"
+                      : "The OCR transcription (searchable)"
+                  }
+                  className={cn(
+                    "rounded-md px-2 py-0.5 text-[11px] font-medium capitalize transition-colors",
+                    imageMode === (mode === "image")
+                      ? "bg-surface-2 text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {mode}
+                </button>
+              ))}
+            </div>
+          )}
           {source && isWebUrl(source.url) && (
             <div className="mr-1 flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5">
               {(["cached", "live"] as const).map((mode) => (
@@ -716,6 +751,7 @@ export function ReaderPane() {
           onFindClose={() => setFindOpen(false)}
           refreshTick={refreshTick}
           live={liveMode}
+          imageView={imageMode}
         />
       ) : note ? (
         <NoteReader
@@ -965,6 +1001,51 @@ function DocRails({
   );
 }
 
+/** The original image behind an image source. WKWebView won't decode
+ *  asset:// URLs in <img> elements (fetch of the same URL works fine), so
+ *  the bytes come in via fetch and render from a blob URL. */
+function ImageView({ url, title }: { url: string; title: string }) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let revoked: string | null = null;
+    let stale = false;
+    setBlobUrl(null);
+    setFailed(false);
+    fetch(convertFileSrc(url))
+      .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`${r.status}`))))
+      .then((blob) => {
+        if (stale) return;
+        revoked = URL.createObjectURL(blob);
+        setBlobUrl(revoked);
+      })
+      .catch(() => {
+        if (!stale) setFailed(true);
+      });
+    return () => {
+      stale = true;
+      if (revoked) URL.revokeObjectURL(revoked);
+    };
+  }, [url]);
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-6">
+      {failed ? (
+        <span className="text-[13px] text-muted-foreground">
+          The original file could not be read — it may have moved.
+        </span>
+      ) : blobUrl ? (
+        <img
+          src={blobUrl}
+          alt={title}
+          className="max-h-full max-w-full rounded-md border border-border object-contain shadow-sm"
+        />
+      ) : (
+        <Spinner className="h-4 w-4" />
+      )}
+    </div>
+  );
+}
+
 /** Full-text source reading: faithful markdown when the content is markdown-
  *  shaped, find-in-source, citation highlight, and select-to-ask. */
 function SourceReader({
@@ -975,6 +1056,7 @@ function SourceReader({
   onFindClose,
   refreshTick,
   live,
+  imageView = false,
 }: {
   source: Source;
   highlight?: string;
@@ -983,6 +1065,7 @@ function SourceReader({
   onFindClose: () => void;
   refreshTick: number;
   live: boolean;
+  imageView?: boolean;
 }) {
   const sendMessage = useStore((s) => s.sendMessage);
   const sending = useStore((s) => s.sending);
@@ -1348,6 +1431,10 @@ function SourceReader({
       segments.push({ text: content.slice(pos), hit: false, current: false });
   }
 
+  if (source.sourceType === "image" && source.url && imageView) {
+    return <ImageView url={source.url} title={source.title} />;
+  }
+
   if (live) {
     return (
       <div className="min-h-0 flex-1 p-3">
@@ -1498,8 +1585,18 @@ function SourceReader({
               <Spinner className="h-3.5 w-3.5" /> Loading source…
             </div>
           ) : content === "" ? (
-            <div className="text-[13px] text-muted-foreground">
-              No text stored for this source.
+            <div className="flex flex-col gap-1.5 text-[13px] text-muted-foreground">
+              <span>No text stored for this source.</span>
+              {source.status === "error" && source.error && (
+                <span className="text-[12px] text-destructive/80">
+                  Import failed: {source.error}
+                </span>
+              )}
+              {isWebUrl(source.url) && (
+                <span className="text-[12px]">
+                  The Live view (toolbar) shows the actual page.
+                </span>
+              )}
             </div>
           ) : richMode ? (
             <div className="selectable">

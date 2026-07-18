@@ -623,14 +623,18 @@ pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
         .await
         .with_context(|| format!("could not reach {url}"))?;
 
+    // The status is advisory, not gating: some sites serve the complete
+    // article with a 500 (broken SSR that still renders — cerebras.ai) or a
+    // 404 (soft-deleted pages with full layouts). Fetch the body regardless
+    // and let readability decide; only give up when there's nothing to read.
     let status = resp.status();
-    if !status.is_success() {
-        return Err(anyhow!("{url} returned HTTP {}", status.as_u16()));
-    }
-    let body = resp.text().await.context("failed to read response body")?;
+    let body = resp.text().await.unwrap_or_default();
 
     let (article_title, text) = readable_text(&body, &url);
     if text.trim().is_empty() {
+        if !status.is_success() {
+            return Err(anyhow!("{url} returned HTTP {}", status.as_u16()));
+        }
         return Err(anyhow!(
             "no readable text found at {url} (the page may be JavaScript-rendered)"
         ));

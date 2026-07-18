@@ -394,7 +394,12 @@ export function SourcesPanel() {
                 const isMacReminders = s.url.startsWith(
                   "cider://reminders/list/",
                 );
-                const readable = s.status === "ready" && !isFolder;
+                // Errored WEB sources still open in the reader: extraction
+                // failed, but the Live view can show the actual page.
+                const readable =
+                  !isFolder &&
+                  (s.status === "ready" ||
+                    (s.status === "error" && isWebUrl(s.url)));
                 const kids = isFolder
                   ? sources.filter((x) => x.parentId === s.id)
                   : [];

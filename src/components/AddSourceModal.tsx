@@ -129,6 +129,9 @@ export function AddSourceModal() {
 
   const back = (
     <button
+      // type matters: an untyped button is a SUBMIT button, so pressing
+      // Enter in the URL input would "click" this and bounce to the hub.
+      type="button"
       onClick={() => setStep("hub")}
       className="mb-3 flex items-center gap-1 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
     >

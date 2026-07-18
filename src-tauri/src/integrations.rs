@@ -52,6 +52,14 @@ fn summon_ask(app: &AppHandle) {
     let _ = app.emit("integrations://ask", ());
 }
 
+/// Summon the window and open the add-source modal at a specific step
+/// ("url" | "text"). The frontend hops to the most recent notebook first
+/// when none is open — capture should never dead-end on the home screen.
+fn summon_add_step(app: &AppHandle, step: &str) {
+    focus_main(app);
+    let _ = app.emit("integrations://add-step", step.to_string());
+}
+
 /// The frontend calls this once its `integrations://url` listener is live;
 /// returns (and clears) anything that arrived before then.
 #[tauri::command]
@@ -226,6 +234,8 @@ pub fn setup(
     let handle = app.handle().clone();
     let recent_menu = SubmenuBuilder::new(app, "Recent Notebooks").build()?;
     crate::menu::fill_recents(&handle, &recent_menu, recents)?;
+    // Capture verbs live here: the menu bar extra is where things get INTO
+    // Alchemy from anywhere; the in-app add modal keeps the full tile set.
     let tray_menu = MenuBuilder::new(app)
         .item(&MenuItemBuilder::with_id("tray:open", "Open Alchemy").build(app)?)
         .item(
@@ -235,6 +245,9 @@ pub fn setup(
         )
         .separator()
         .item(&MenuItemBuilder::with_id("tray:clipboard", "Add Clipboard as Source").build(app)?)
+        .item(&MenuItemBuilder::with_id("tray:add-url", "Add URL Source…").build(app)?)
+        .item(&MenuItemBuilder::with_id("tray:add-text", "Add Text Source…").build(app)?)
+        .separator()
         .item(&recent_menu)
         .build()?;
     app.manage(TrayRecents(recent_menu));
@@ -253,6 +266,8 @@ pub fn setup(
             "tray:open" => focus_main(app),
             "tray:ask" => summon_ask(app),
             "tray:clipboard" => add_clipboard(app),
+            "tray:add-url" => summon_add_step(app, "url"),
+            "tray:add-text" => summon_add_step(app, "text"),
             id if id.starts_with("recent:") => {
                 focus_main(app);
                 crate::menu::handle_event(app, id);

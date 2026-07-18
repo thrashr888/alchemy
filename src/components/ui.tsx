@@ -43,6 +43,9 @@ export function Button({
 }) {
   return (
     <button
+      // Untyped buttons are SUBMIT buttons: inside a form, Enter would
+      // "click" the first one. Callers that mean submit pass type="submit".
+      type="button"
       className={cn(
         "inline-flex items-center whitespace-nowrap font-medium transition-colors select-none outline-none",
         "focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50 disabled:pointer-events-none",
@@ -263,7 +266,11 @@ export function Modal({
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("keydown", onKey);
-      trigger?.focus?.(); // restore focus to whatever opened the dialog
+      // Restore focus to whatever opened the dialog — one tick later, so
+      // the keystroke that closed it (Enter submitting a form) can't land
+      // on the refocused trigger and re-activate it.
+      const t = window.setTimeout(() => trigger?.focus?.(), 0);
+      void t;
     };
   }, [open]);
 

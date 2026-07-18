@@ -30,7 +30,9 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "$APPDATA/audio/**"
+          "$APPDATA/audio/**",
+          "$HOME/**",
+          "$TEMP/**"
         ]
       }
     }

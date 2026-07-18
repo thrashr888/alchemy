@@ -407,6 +407,25 @@ export const useStore = create<AppState>((set, get) => {
         void listen("integrations://ask", () => {
           get().setPaletteOpen(true);
         });
+        void listen<string>("integrations://add-step", (e) => {
+          const step = e.payload === "text" ? "text" : "url";
+          const s = get();
+          if (s.currentId) {
+            s.openAddSource(step);
+            return;
+          }
+          // Capture from the menu bar shouldn't dead-end on the home
+          // screen — hop into the most recent notebook and open there.
+          const recent = s.notebooks[0];
+          if (!recent) {
+            s.pushToast("error", "Create a notebook first, then add sources");
+            return;
+          }
+          void s.selectNotebook(recent.id).then(() => {
+            get().pushToast("info", `Adding to “${recent.title}”`);
+            get().openAddSource(step);
+          });
+        });
         void listen<string>("integrations://toast", (e) => {
           get().pushToast("info", e.payload);
         });
