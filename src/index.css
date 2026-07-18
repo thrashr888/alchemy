@@ -376,6 +376,13 @@ button {
   color: var(--slide-muted);
 }
 
+/* Citation anchors in the rendered reader view (CSS Custom Highlight API —
+   ranges highlighted with no DOM mutation). */
+::highlight(citation) {
+  background-color: color-mix(in srgb, var(--primary) 28%, transparent);
+  color: var(--foreground);
+}
+
 /* PDF export (printExport.tsx): on screen the print surface renders
    off-viewport — NOT display:none, or the slide canvases would measure 0×0
    and print blank — and in print media it replaces the app entirely.

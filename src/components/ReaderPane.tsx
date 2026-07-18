@@ -31,7 +31,9 @@ import {
   Pencil,
   RefreshCw,
   Scale,
+  ListTree,
   Search,
+  SlidersHorizontal,
   Sparkles,
 } from "lucide-react";
 
@@ -184,6 +186,103 @@ function looksLikeMarkdown(text: string): boolean {
 
 /** How much selected text travels into a chat question before truncation. */
 const MAX_PASSAGE_CHARS = 1200;
+
+/** Markdown snippet → plain text, approximating what the rendered DOM shows
+ *  (links keep their text, syntax markers drop). Good enough for matching. */
+function mdToPlain(md: string): string {
+  return md
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^\s*>\s?/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/^\s*\d+\.\s+/gm, "")
+    .replace(/\|/g, " ")
+    .replace(/^[-\s:|]+$/gm, "")
+    .replace(/[*_`~]/g, "");
+}
+
+/**
+ * Locate `needle` (a citation snippet, possibly markdown) inside the rendered
+ * DOM of `container`, whitespace- and syntax-tolerant: both sides are
+ * squashed to lowercase non-whitespace characters, and match offsets map back
+ * to exact text-node positions. Falls back to the snippet's head when chunk
+ * boundaries clip the tail. Returns a Range, or null when the text can't be
+ * found (caller falls back to the plain-text view).
+ */
+function findTextRange(container: HTMLElement, needle: string): Range | null {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  let hay = "";
+  const map: { node: Text; offset: number }[] = [];
+  while (walker.nextNode()) {
+    const textNode = walker.currentNode as Text;
+    const data = textNode.data;
+    for (let i = 0; i < data.length; i++) {
+      if (!/\s/.test(data[i])) {
+        hay += data[i].toLowerCase();
+        map.push({ node: textNode, offset: i });
+      }
+    }
+  }
+  let target = mdToPlain(needle).toLowerCase().replace(/\s+/g, "");
+  if (target.length < 12) return null;
+  let at = hay.indexOf(target);
+  if (at === -1 && target.length > 80) {
+    target = target.slice(0, 80);
+    at = hay.indexOf(target);
+  }
+  if (at === -1) return null;
+  const start = map[at];
+  const end = map[at + target.length - 1];
+  const range = document.createRange();
+  range.setStart(start.node, start.offset);
+  range.setEnd(end.node, end.offset + 1);
+  return range;
+}
+
+/** Per-document scroll positions, remembered for the session. */
+const scrollMemory = new Map<string, number>();
+
+/** Restore (once content is ready) and record a container's scroll position.
+ *  `restore` false records without jumping (e.g. a citation anchor wins). */
+function useScrollMemory(
+  ref: React.RefObject<HTMLElement | null>,
+  key: string,
+  ready: boolean,
+  restore: boolean,
+) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !ready) return;
+    if (restore) {
+      const saved = scrollMemory.get(key);
+      if (saved) el.scrollTop = saved;
+    }
+    const onScroll = () => scrollMemory.set(key, el.scrollTop);
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, ready]);
+}
+
+/** CSS Custom Highlight for citation anchors (no DOM mutation). Returns
+ *  false when unsupported so callers can fall back to the plain view. */
+function applyCitationHighlight(range: Range | null): boolean {
+  const registry = (
+    CSS as unknown as { highlights?: Map<string, unknown> }
+  ).highlights;
+  if (!registry) return false;
+  if (range) {
+    const HighlightCtor = (
+      window as unknown as { Highlight?: new (r: Range) => unknown }
+    ).Highlight;
+    if (!HighlightCtor) return false;
+    registry.set("citation", new HighlightCtor(range));
+  } else {
+    registry.delete("citation");
+  }
+  return true;
+}
 
 /** Observed width of an element (for the toolbar's responsive tiers). */
 function useElementWidth(ref: React.RefObject<HTMLElement | null>): number {
@@ -510,6 +609,15 @@ export function ReaderPane() {
               items={overflowItems}
             />
           )}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => useStore.getState().openSettings("appearance")}
+            title="Reader settings (contents, citation highlights, type)"
+            aria-label="Reader settings"
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5" />
+          </Button>
         </div>
       </div>
       {current === null ? (
@@ -553,6 +661,224 @@ function countsLine(text: string): string {
   )} tokens`;
 }
 
+/** Headings extracted from markdown (fence-aware) for the TOC. */
+function parseHeadings(content: string): { level: number; text: string }[] {
+  const out: { level: number; text: string }[] = [];
+  let inFence = false;
+  for (const line of content.split("\n")) {
+    if (/^```/.test(line.trim())) inFence = !inFence;
+    if (inFence) continue;
+    const m = /^(#{1,3})\s+(.*)$/.exec(line);
+    if (m) out.push({ level: m[1].length, text: mdToPlain(m[2]).trim() });
+  }
+  return out;
+}
+
+/** The TOC list itself: scroll-synced, click-to-jump. Placement (rail or
+ *  popover) belongs to DocRails. */
+function TocList({
+  headings,
+  scrollerRef,
+}: {
+  headings: { level: number; text: string }[];
+  scrollerRef: React.RefObject<HTMLElement | null>;
+}) {
+  const [active, setActive] = useState(0);
+  // Scroll-sync: the active entry is the last heading above the viewport top.
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el || headings.length < 3) return;
+    const sync = () => {
+      const els = el.querySelectorAll("h1, h2, h3");
+      const top = el.getBoundingClientRect().top;
+      let current = 0;
+      els.forEach((h, i) => {
+        if (h.getBoundingClientRect().top <= top + 90) current = i;
+      });
+      setActive(current);
+    };
+    sync();
+    el.addEventListener("scroll", sync, { passive: true });
+    return () => el.removeEventListener("scroll", sync);
+  }, [headings.length, scrollerRef]);
+
+  return (
+    <nav aria-label="Table of contents" className="flex min-h-0 flex-col">
+      <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-subtle-foreground">
+        Contents
+      </div>
+      <div className="flex flex-col overflow-y-auto">
+        {headings.map((h, i) => (
+          <button
+            key={`${i}-${h.text}`}
+            type="button"
+            onClick={() => {
+              const el = scrollerRef.current;
+              if (!el) return;
+              const target = [...el.querySelectorAll("h1, h2, h3")].find(
+                (node) => (node.textContent ?? "").trim() === h.text,
+              );
+              target?.scrollIntoView({ block: "start", behavior: "smooth" });
+            }}
+            className={cn(
+              "truncate rounded px-1.5 py-0.5 text-left text-[11px] leading-relaxed transition-colors",
+              h.level === 2 && "pl-4",
+              h.level === 3 && "pl-6",
+              i === active
+                ? "text-foreground"
+                : "text-subtle-foreground hover:text-muted-foreground",
+            )}
+            title={h.text}
+          >
+            {h.text}
+          </button>
+        ))}
+      </div>
+    </nav>
+  );
+}
+
+/**
+ * The reader's side rails: table of contents (left) and related passages
+ * (right), both hugging the centered text column — never pinned to the
+ * window edge, never overlapping the text. Two translucent corner buttons
+ * are the persistent controls: with room, clicking toggles the rail's
+ * preference (persisted); without room, clicking opens the same content as
+ * a transient popover under the button.
+ */
+function DocRails({
+  content,
+  scrollerRef,
+  relatedText,
+  excludeNoteId,
+  excludeSourceId,
+  width,
+}: {
+  content: string;
+  scrollerRef: React.RefObject<HTMLElement | null>;
+  relatedText: string;
+  excludeNoteId?: string;
+  excludeSourceId?: string;
+  width: number;
+}) {
+  const showToc = useStore((s) => s.reading.showToc);
+  const showRelated = useStore((s) => s.reading.showRelated);
+  const setReading = useStore((s) => s.setReading);
+  const headings = useMemo(() => parseHeadings(content), [content]);
+  const hasToc = headings.length >= 3;
+  // Column is 760px centered; rails need their width + a 20px gap beside it.
+  const tocFits = width >= 760 + 2 * (176 + 20) + 24;
+  const relatedFits = width >= 760 + 2 * (224 + 20) + 24;
+  const [tocPop, setTocPop] = useState(false);
+  const [relPop, setRelPop] = useState(false);
+
+  const button = (
+    side: "left" | "right",
+    icon: React.ReactNode,
+    label: string,
+    railVisible: boolean,
+    enabled: boolean,
+    fits: boolean,
+    togglePref: () => void,
+    popOpen: boolean,
+    setPop: (open: boolean) => void,
+  ) => (
+    <button
+      type="button"
+      onClick={() => {
+        if (fits) {
+          togglePref();
+          setPop(false);
+        } else if (!enabled) {
+          togglePref();
+          setPop(true);
+        } else {
+          setPop(!popOpen);
+        }
+      }}
+      title={
+        fits
+          ? `${railVisible ? "Hide" : "Show"} ${label}`
+          : `${popOpen ? "Hide" : "Show"} ${label}`
+      }
+      aria-label={label}
+      aria-pressed={railVisible || popOpen}
+      className={cn(
+        "absolute top-3 z-20 rounded-md border p-1.5 backdrop-blur transition-colors",
+        side === "left" ? "left-3" : "right-3",
+        railVisible || popOpen
+          ? "border-border-strong bg-elevated/80 text-foreground"
+          : "border-border/50 bg-elevated/50 text-subtle-foreground hover:text-muted-foreground",
+      )}
+    >
+      {icon}
+    </button>
+  );
+
+  return (
+    <>
+      {hasToc &&
+        button(
+          "left",
+          <ListTree className="h-3.5 w-3.5" />,
+          "table of contents",
+          showToc && tocFits,
+          showToc,
+          tocFits,
+          () => setReading({ showToc: !showToc }),
+          tocPop,
+          setTocPop,
+        )}
+      {button(
+        "right",
+        <Sparkles className="h-3.5 w-3.5" />,
+        "related passages",
+        showRelated && relatedFits,
+        showRelated,
+        relatedFits,
+        () => setReading({ showRelated: !showRelated }),
+        relPop,
+        setRelPop,
+      )}
+      {hasToc && showToc && tocFits && (
+        <div
+          className="absolute bottom-10 top-14 z-10 flex w-44 flex-col"
+          style={{ right: "calc(50% + 380px + 20px)" }}
+        >
+          <TocList headings={headings} scrollerRef={scrollerRef} />
+        </div>
+      )}
+      {hasToc && tocPop && !(showToc && tocFits) && (
+        <div className="absolute left-3 top-12 z-20 flex max-h-[70%] w-56 flex-col overflow-y-auto rounded-lg border border-border/60 bg-elevated/95 p-2.5 shadow-lg backdrop-blur">
+          <TocList headings={headings} scrollerRef={scrollerRef} />
+        </div>
+      )}
+      {showRelated && relatedFits && (
+        <div
+          className="absolute bottom-10 top-14 z-10 flex w-56 flex-col overflow-y-auto"
+          style={{ left: "calc(50% + 380px + 20px)" }}
+        >
+          <AmbientRail
+            text={relatedText}
+            excludeNoteId={excludeNoteId}
+            excludeSourceId={excludeSourceId}
+          />
+        </div>
+      )}
+      {relPop && !(showRelated && relatedFits) && (
+        <div className="absolute right-3 top-12 z-20 flex max-h-[70%] w-64 flex-col overflow-y-auto rounded-lg border border-border/60 bg-elevated/95 p-2.5 shadow-lg backdrop-blur">
+          <AmbientRail
+            emptyState
+            text={relatedText}
+            excludeNoteId={excludeNoteId}
+            excludeSourceId={excludeSourceId}
+          />
+        </div>
+      )}
+    </>
+  );
+}
+
 /** Full-text source reading: faithful markdown when the content is markdown-
  *  shaped, find-in-source, citation highlight, and select-to-ask. */
 function SourceReader({
@@ -584,6 +910,12 @@ function SourceReader({
   const [backlinks, setBacklinks] = useState<
     { kind: "source" | "note"; id: string; title: string }[]
   >([]);
+  // Rendered-DOM citation anchoring: when the passage can't be located in
+  // the rendered view (or CSS highlights are unsupported), fall back to the
+  // exact plain-text segment view.
+  const [anchorFailed, setAnchorFailed] = useState(false);
+  // Reading-mode ambient rail: the visible section drives related passages.
+  const [sectionText, setSectionText] = useState("");
   const [preview, setPreview] = useState<{
     source: Source;
     top: number;
@@ -593,6 +925,7 @@ function SourceReader({
   const markRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const paneWidth = useElementWidth(bodyRef);
 
   // Live web view: a native child webview positioned over the placeholder
   // below (see live_view_* commands). Bounds track the placeholder; in-app
@@ -736,6 +1069,83 @@ function SourceReader({
     markRef.current?.scrollIntoView({ block: "center" });
   }, [content, activeIdx, query, passage]);
 
+  // Faithful rendering: markdown-shaped sources render as markdown. A find
+  // query still uses the plain-text segment view (exact ranges); a citation
+  // highlight anchors into the RENDERED view via CSS Custom Highlights,
+  // dropping to the plain view only when the passage can't be located there.
+  const markdownShaped =
+    source.sourceType === "markdown" ||
+    ((source.sourceType === "text" || source.sourceType === "url") &&
+      !!content &&
+      looksLikeMarkdown(content));
+  const richMode =
+    markdownShaped && !query.trim() && !(highlight && anchorFailed);
+
+  // Citation anchor in the RENDERED view: locate the passage among the text
+  // nodes, highlight it (CSS Custom Highlight — no DOM mutation), and scroll
+  // it to a third from the top. Runs after paint so the markdown DOM exists.
+  useEffect(() => {
+    if (!richMode || !highlight || content === null) return;
+    let cancelled = false;
+    // setTimeout, NOT requestAnimationFrame: rAF never fires while the
+    // window is occluded (macOS pauses it), which would silently skip the
+    // anchor. The markdown DOM is already committed when effects run.
+    const timer = window.setTimeout(() => {
+      if (cancelled || !bodyRef.current) return;
+      const range = findTextRange(bodyRef.current, highlight);
+      if (!range || !applyCitationHighlight(range)) {
+        setAnchorFailed(true);
+        return;
+      }
+      const rect = range.getBoundingClientRect();
+      const body = bodyRef.current.getBoundingClientRect();
+      bodyRef.current.scrollTop +=
+        rect.top - body.top - bodyRef.current.clientHeight / 3;
+    });
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      applyCitationHighlight(null);
+    };
+  }, [richMode, highlight, content]);
+  useEffect(() => {
+    setAnchorFailed(false);
+  }, [highlight, source.id]);
+
+  // Reading position survives doc-switching (session-scoped); a citation
+  // anchor wins over the remembered position.
+  useScrollMemory(bodyRef, `source:${source.id}`, content !== null, !highlight);
+
+  // Track the section in view (throttled) for the reading-mode rail.
+  useEffect(() => {
+    if (!richMode || content === null) return;
+    const el = bodyRef.current;
+    if (!el) return;
+    let timer: number | null = null;
+    const compute = () => {
+      timer = null;
+      const blocks = el.querySelectorAll("p, li, h1, h2, h3, blockquote");
+      const top = el.getBoundingClientRect().top;
+      let text = "";
+      for (const b of blocks) {
+        const r = b.getBoundingClientRect();
+        if (r.bottom < top + 40) continue;
+        text += " " + (b.textContent ?? "");
+        if (text.length > 500) break;
+      }
+      setSectionText(text.trim().slice(0, 600));
+    };
+    const onScroll = () => {
+      if (timer === null) timer = window.setTimeout(compute, 350);
+    };
+    compute();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      if (timer !== null) window.clearTimeout(timer);
+      el.removeEventListener("scroll", onScroll);
+    };
+  }, [richMode, content]);
+
   const step = (dir: 1 | -1) => {
     if (matches.length === 0) return;
     setActive((a) => (a + dir + matches.length) % matches.length);
@@ -802,16 +1212,6 @@ function SourceReader({
       pendingInput: `About this passage from "${source.title}":\n"${p}"\n\n`,
     });
   }
-
-  // Faithful rendering: markdown-shaped sources render as markdown UNLESS a
-  // find query or citation highlight is active — those need the plain-text
-  // segment view to mark exact ranges (rendered-DOM highlighting is phase 2).
-  const richMode =
-    (source.sourceType === "markdown" ||
-      ((source.sourceType === "text" || source.sourceType === "url") &&
-        !!content &&
-        looksLikeMarkdown(content))) &&
-    ranges.length === 0;
 
   const segments: { text: string; hit: boolean; current: boolean }[] = [];
   if (content && !richMode) {
@@ -892,9 +1292,19 @@ function SourceReader({
         </div>
       )}
 
+      <div className="relative min-h-0 flex-1">
+        {richMode && content !== null && (
+          <DocRails
+            content={content}
+            scrollerRef={bodyRef}
+            relatedText={sectionText}
+            excludeSourceId={source.id}
+            width={paneWidth}
+          />
+        )}
       <div
         ref={bodyRef}
-        className="relative min-h-0 flex-1 overflow-y-auto"
+        className="relative h-full overflow-y-auto"
         onClickCapture={docLinkClickHandler(source.url || undefined)}
         onMouseOver={onBodyMouseOver}
         onScroll={() => setPreview(null)}
@@ -994,6 +1404,7 @@ function SourceReader({
             </p>
           )}
         </div>
+      </div>
       </div>
       {content && (
         <div className="flex shrink-0 items-center gap-2 border-t border-border px-5 py-1 text-[11px] tabular-nums text-subtle-foreground">
@@ -1193,9 +1604,6 @@ function InlineNote({ note }: { note: Note }) {
   const reading = useStore((s) => s.reading);
   const rootRef = useRef<HTMLDivElement>(null);
   const width = useElementWidth(rootRef);
-  // The floating rail needs real gutter beside the 760px column — below
-  // this it would sit on top of the text, so it stays away entirely.
-  const roomForRail = width >= 1060;
   const [title, setTitle] = useState(note.title);
   const [status, setStatus] = useState<"idle" | "dirty" | "saved">("idle");
   const prevBody = useRef(note.content);
@@ -1241,6 +1649,28 @@ function InlineNote({ note }: { note: Note }) {
       flushRef.current();
     };
   }, []);
+
+  // The editor's scroller is TipTap's own element; find it once mounted so
+  // scroll memory and the TOC can drive it.
+  const scrollerRef = useRef<HTMLElement | null>(null);
+  const [scrollerReady, setScrollerReady] = useState(false);
+  useEffect(() => {
+    const find = () => {
+      const el = rootRef.current?.querySelector<HTMLElement>(".ProseMirror");
+      if (el) {
+        scrollerRef.current = el;
+        setScrollerReady(true);
+        return true;
+      }
+      return false;
+    };
+    if (find()) return;
+    const poll = window.setInterval(() => {
+      if (find()) window.clearInterval(poll);
+    }, 120);
+    return () => window.clearInterval(poll);
+  }, []);
+  useScrollMemory(scrollerRef, `note:${note.id}`, scrollerReady, true);
 
   return (
     <div ref={rootRef} className="relative flex min-h-0 flex-1 flex-col">
@@ -1293,9 +1723,13 @@ function InlineNote({ note }: { note: Note }) {
           }}
         />
       </div>
-      {roomForRail && (
-        <AmbientRail floating text={activePara} excludeNoteId={note.id} />
-      )}
+      <DocRails
+        content={counts}
+        scrollerRef={scrollerRef}
+        relatedText={activePara}
+        excludeNoteId={note.id}
+        width={width}
+      />
       <div className="flex shrink-0 items-center gap-2 border-t border-border px-5 py-1.5 text-[11px] tabular-nums text-subtle-foreground">
         <span className="min-w-0 truncate whitespace-nowrap">{countsLine(counts)}</span>
         <span className="ml-auto shrink-0">

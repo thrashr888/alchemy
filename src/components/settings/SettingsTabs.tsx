@@ -210,6 +210,26 @@ export function AppearanceTab() {
           ))}
         </div>
       </Field>
+      <div className="h-px bg-border" />
+      <Field
+        label="Reader"
+        hint="What the document reader shows around the text."
+      >
+        <div className="flex flex-wrap gap-1.5">
+          <Pill
+            active={reading.showToc}
+            onClick={() => setReading({ showToc: !reading.showToc })}
+          >
+            Table of contents
+          </Pill>
+          <Pill
+            active={reading.showRelated}
+            onClick={() => setReading({ showRelated: !reading.showRelated })}
+          >
+            Related passages
+          </Pill>
+        </div>
+      </Field>
     </div>
   );
 }

@@ -279,10 +279,16 @@ export interface ReadingPrefs {
   font: "sans" | "serif" | "mono" | "system";
   fontSize: "small" | "medium" | "large";
   textAlign: "natural" | "justified";
+  /** Reader: floating table of contents on structured documents. */
+  showToc: boolean;
+  /** Reader: the related-passages rail beside documents and the editor. */
+  showRelated: boolean;
 }
 
 export const DEFAULT_READING_PREFS: ReadingPrefs = {
   font: "sans",
   fontSize: "medium",
   textAlign: "natural",
+  showToc: true,
+  showRelated: true,
 };

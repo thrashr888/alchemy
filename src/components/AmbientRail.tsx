@@ -3,7 +3,6 @@ import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import type { Citation } from "@/lib/types";
 import { sourceIcon } from "./SourcesPanel";
-import { cn } from "@/lib/utils";
 import { Sparkles, StickyNote } from "lucide-react";
 
 function SourceChip({ c }: { c: Citation }) {
@@ -46,14 +45,16 @@ export function activeParagraph(prev: string, next: string): string {
 export function AmbientRail({
   text,
   excludeNoteId,
-  floating = false,
+  excludeSourceId,
+  emptyState = false,
 }: {
   text: string;
   /** The note being edited — its own passages are not "connections". */
   excludeNoteId?: string;
-  /** Float over the surface's right edge, materializing only with hits —
-   *  the seamless editor has no fixed rail column. */
-  floating?: boolean;
+  /** The source being read — likewise excluded from its own results. */
+  excludeSourceId?: string;
+  /** Popovers show a quiet placeholder; rails render nothing until hits. */
+  emptyState?: boolean;
 }) {
   const notebookId = useStore((s) => s.currentId);
   const [hits, setHits] = useState<Citation[]>([]);
@@ -69,7 +70,9 @@ export function AmbientRail({
         .relatedPassages(notebookId, query, 6)
         .then((found) => {
           const usable = found.filter(
-            (c) => !excludeNoteId || c.noteId !== excludeNoteId,
+            (c) =>
+              (!excludeNoteId || c.noteId !== excludeNoteId) &&
+              (!excludeSourceId || c.sourceId !== excludeSourceId),
           );
           // Sources carry the primary evidence — notes only fill leftover
           // slots (they're often derived from the same sources anyway).
@@ -80,17 +83,11 @@ export function AmbientRail({
         .catch(() => undefined);
     }, 800);
     return () => window.clearTimeout(timer);
-  }, [text, notebookId, excludeNoteId]);
+  }, [text, notebookId, excludeNoteId, excludeSourceId]);
 
-  if (floating && hits.length === 0) return null;
+  if (!emptyState && hits.length === 0) return null;
   return (
-    <div
-      className={cn(
-        floating
-          ? "absolute bottom-10 right-3 top-24 z-10 flex w-56 flex-col gap-2 overflow-y-auto"
-          : "flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto",
-      )}
-    >
+    <div className="flex min-h-0 flex-col gap-2">
       <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-subtle-foreground">
         <Sparkles className="h-3 w-3" />
         Related
@@ -111,12 +108,7 @@ export function AmbientRail({
                 highlight: c.snippet,
               })
             }
-            className={cn(
-              "flex flex-col gap-1 rounded-md border p-2 text-left transition-colors",
-              floating
-                ? "border-border/60 bg-elevated/90 shadow-sm backdrop-blur hover:border-border-strong"
-                : "border-border bg-surface-2/40 hover:border-border-strong hover:bg-surface-2",
-            )}
+            className="flex flex-col gap-1 rounded-md border border-border/60 bg-elevated/90 p-2 text-left shadow-sm backdrop-blur transition-colors hover:border-border-strong"
           >
             <SourceChip c={c} />
             <span className="line-clamp-4 text-[11px] leading-relaxed text-muted-foreground">

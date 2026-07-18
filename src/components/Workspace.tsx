@@ -23,6 +23,17 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   const notebook = notebooks.find((n) => n.id === currentId);
 
+  // Dev-only automation hook: lets tauri-browser (and console debugging)
+  // drive the reader through the store, which invoke-level access can't.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    (window as unknown as { __reader?: unknown }).__reader = (doc: {
+      type: "source" | "note";
+      id: string;
+      highlight?: string;
+    }) => useStore.getState().openInReader(doc);
+  }, []);
+
   // Panel + note shortcuts: Cmd+1 sources, Cmd+2 studio, Cmd+N new note
   // (opening the studio panel first when it's collapsed).
   useEffect(() => {
