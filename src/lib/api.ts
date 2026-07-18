@@ -129,6 +129,13 @@ export const api = {
     run(ai<Source>("refresh_source_url", { sourceId })),
   getSourceContent: (sourceId: string) =>
     run(query<string>("get_source_content", { sourceId })),
+  liveViewOpen: (url: string, r: { x: number; y: number; w: number; h: number }) =>
+    run(query<void>("live_view_open", { url, ...r })),
+  liveViewBounds: (r: { x: number; y: number; w: number; h: number }) =>
+    run(query<void>("live_view_bounds", r)),
+  liveViewVisible: (visible: boolean) =>
+    run(query<void>("live_view_visible", { visible })),
+  liveViewClose: () => run(query<void>("live_view_close")),
   relatedPassages: (notebookId: string, text: string, limit?: number) =>
     run(query<Citation[]>("related_passages", { notebookId, text, limit })),
   sourceBacklinks: (sourceId: string) =>

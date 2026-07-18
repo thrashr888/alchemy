@@ -4146,6 +4146,119 @@ pub async fn related_passages(
         .await)
 }
 
+// ---- Live web view (reader pane) -------------------------------------------
+//
+// The reader's Cached ⇄ Live toggle: Live embeds the actual page in a child
+// webview positioned over the reader body (read-it-later style), so
+// JS-heavy pages never bounce to an external browser. The child's label
+// matches no capability pattern ("main"/"win-*"), so it can invoke nothing —
+// it is a plain browser surface outside the app's IPC boundary.
+
+fn live_label(window: &tauri::Window) -> String {
+    format!("live-{}", window.label())
+}
+
+fn live_child(window: &tauri::Window) -> Option<tauri::Webview> {
+    window
+        .webviews()
+        .into_iter()
+        .find(|w| w.label() == live_label(window))
+}
+
+#[tauri::command]
+pub fn live_view_open(
+    window: tauri::Window,
+    url: String,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) -> Result<(), String> {
+    let parsed: tauri::Url = url.parse().map_err(|e| format!("bad url: {e}"))?;
+    if parsed.scheme() != "https" && parsed.scheme() != "http" {
+        return Err("Only web pages can open in the live view".into());
+    }
+    if let Some(existing) = live_child(&window) {
+        existing.navigate(parsed).map_err(|e| e.to_string())?;
+        existing
+            .set_position(tauri::LogicalPosition::new(x, y))
+            .map_err(|e| e.to_string())?;
+        existing
+            .set_size(tauri::LogicalSize::new(w, h))
+            .map_err(|e| e.to_string())?;
+        existing.show().map_err(|e| e.to_string())?;
+        refocus_main(&window);
+        return Ok(());
+    }
+    let builder = tauri::webview::WebviewBuilder::new(
+        live_label(&window),
+        tauri::WebviewUrl::External(parsed),
+    );
+    window
+        .add_child(
+            builder,
+            tauri::LogicalPosition::new(x, y),
+            tauri::LogicalSize::new(w, h),
+        )
+        .map_err(|e| e.to_string())?;
+    refocus_main(&window);
+    Ok(())
+}
+
+/// A freshly created/shown child webview grabs key focus, which would eat
+/// the app's shortcuts (⌘K, Esc, j/k) — hand focus back to the app webview.
+/// The user reclaims the page by clicking into it.
+fn refocus_main(window: &tauri::Window) {
+    if let Some(main) = window
+        .webviews()
+        .into_iter()
+        .find(|w| w.label() == window.label())
+    {
+        let _ = main.set_focus();
+    }
+}
+
+#[tauri::command]
+pub fn live_view_bounds(
+    window: tauri::Window,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) -> Result<(), String> {
+    if let Some(child) = live_child(&window) {
+        child
+            .set_position(tauri::LogicalPosition::new(x, y))
+            .map_err(|e| e.to_string())?;
+        child
+            .set_size(tauri::LogicalSize::new(w, h))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Hide while an in-app overlay (palette, modal, presentation) is up — a
+/// native child webview would otherwise paint over it.
+#[tauri::command]
+pub fn live_view_visible(window: tauri::Window, visible: bool) -> Result<(), String> {
+    if let Some(child) = live_child(&window) {
+        if visible {
+            child.show().map_err(|e| e.to_string())?;
+        } else {
+            child.hide().map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn live_view_close(window: tauri::Window) -> Result<(), String> {
+    if let Some(child) = live_child(&window) {
+        child.close().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Documents in this notebook that link to the given source — the reader's
 /// "Linked from" footer. Sources link via absolute URLs (article markdown
 /// keeps them); file sources are also matched by filename, which is how

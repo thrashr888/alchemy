@@ -265,9 +265,11 @@ export function ReaderPane() {
   const [syncing, setSyncing] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
   const [editing, setEditing] = useState(false);
+  const [liveMode, setLiveMode] = useState(false);
   useEffect(() => {
     setFindOpen(false);
     setEditing(false);
+    setLiveMode(false);
   }, [current?.id]);
 
   const source =
@@ -433,7 +435,32 @@ export function ReaderPane() {
               <RefreshCw className="h-3.5 w-3.5 animate-spin" />
             </span>
           )}
-          {source && (
+          {source && isWebUrl(source.url) && (
+            <div className="mr-1 flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5">
+              {(["cached", "live"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setLiveMode(mode === "live")}
+                  aria-pressed={liveMode === (mode === "live")}
+                  title={
+                    mode === "live"
+                      ? "The actual page, embedded in the reader"
+                      : "The extracted article (fast, offline, searchable)"
+                  }
+                  className={cn(
+                    "rounded-md px-2 py-0.5 text-[11px] font-medium capitalize transition-colors",
+                    liveMode === (mode === "live")
+                      ? "bg-surface-2 text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {mode}
+                </button>
+              ))}
+            </div>
+          )}
+          {source && !liveMode && (
             <Button
               variant="ghost"
               size="icon"
@@ -489,6 +516,7 @@ export function ReaderPane() {
           onFindOpen={() => setFindOpen(true)}
           onFindClose={() => setFindOpen(false)}
           refreshTick={refreshTick}
+          live={liveMode}
         />
       ) : note ? (
         <NoteReader
@@ -525,6 +553,7 @@ function SourceReader({
   onFindOpen,
   onFindClose,
   refreshTick,
+  live,
 }: {
   source: Source;
   highlight?: string;
@@ -532,6 +561,7 @@ function SourceReader({
   onFindOpen: () => void;
   onFindClose: () => void;
   refreshTick: number;
+  live: boolean;
 }) {
   const sendMessage = useStore((s) => s.sendMessage);
   const sending = useStore((s) => s.sending);
@@ -554,6 +584,35 @@ function SourceReader({
   const markRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+
+  // Live web view: a native child webview positioned over the placeholder
+  // below (see live_view_* commands). Bounds track the placeholder; in-app
+  // overlays (palette, modals) hide it so they are never painted over.
+  const liveRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!live) return;
+    const el = liveRef.current;
+    if (!el) return;
+    const rect = () => {
+      const r = el.getBoundingClientRect();
+      return { x: r.x, y: r.y, w: r.width, h: r.height };
+    };
+    void api.liveViewOpen(source.url, rect());
+    const update = () => void api.liveViewBounds(rect());
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    window.addEventListener("resize", update);
+    const overlayCheck = () =>
+      void api.liveViewVisible(!document.querySelector('[role="dialog"]'));
+    const mo = new MutationObserver(overlayCheck);
+    mo.observe(document.body, { childList: true, subtree: true });
+    return () => {
+      ro.disconnect();
+      mo.disconnect();
+      window.removeEventListener("resize", update);
+      void api.liveViewClose();
+    };
+  }, [live, source.url]);
 
   // "Linked from" — who in this notebook points at the open document.
   useEffect(() => {
@@ -756,6 +815,19 @@ function SourceReader({
     });
     if (pos < content.length)
       segments.push({ text: content.slice(pos), hit: false, current: false });
+  }
+
+  if (live) {
+    return (
+      <div className="min-h-0 flex-1 p-3">
+        <div
+          ref={liveRef}
+          className="flex h-full w-full items-center justify-center rounded-md border border-border bg-surface-2/40 text-[12px] text-muted-foreground"
+        >
+          Loading live page…
+        </div>
+      </div>
+    );
   }
 
   return (
