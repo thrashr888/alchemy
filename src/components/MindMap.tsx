@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Minus, Plus } from "lucide-react";
 import { Markdown } from "./Markdown";
 
 /**
@@ -206,44 +207,71 @@ export function MindMap({ content }: { content: string }) {
   );
 }
 
-/** Infinite-canvas panning (Photoshop-style): drag with a grab cursor, or
- *  two-finger scroll, to move the map inside a clipped viewport. */
+/** Infinite-canvas panning and zooming (Photoshop-style): drag with a grab
+ *  cursor or two-finger scroll to move; pinch (ctrl+wheel on macOS) or the
+ *  corner buttons to zoom around the cursor. */
 function PanCanvas({ children }: { children: React.ReactNode }) {
   const viewportRef = useRef<HTMLDivElement>(null);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [view, setView] = useState({ x: 0, y: 0, scale: 1 });
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
 
+  /** Zoom by a factor keeping the given viewport point fixed. */
+  const zoomAt = (factor: number, cx: number, cy: number) => {
+    setView((v) => {
+      const scale = Math.min(3, Math.max(0.25, v.scale * factor));
+      const k = scale / v.scale;
+      return { scale, x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k };
+    });
+  };
+
   // Native wheel listener: React's synthetic wheel can't preventDefault
-  // (passive), and the page behind must not scroll while panning.
+  // (passive), and the page behind must not scroll while panning. Trackpad
+  // pinch arrives as wheel events with ctrlKey set.
   useEffect(() => {
     const el = viewportRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      setOffset((o) => ({ x: o.x - e.deltaX, y: o.y - e.deltaY }));
+      if (e.ctrlKey || e.metaKey) {
+        const rect = el.getBoundingClientRect();
+        setView((v) => {
+          const factor = Math.exp(-e.deltaY * 0.01);
+          const scale = Math.min(3, Math.max(0.25, v.scale * factor));
+          const k = scale / v.scale;
+          const cx = e.clientX - rect.left;
+          const cy = e.clientY - rect.top;
+          return { scale, x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k };
+        });
+      } else {
+        setView((v) => ({ ...v, x: v.x - e.deltaX, y: v.y - e.deltaY }));
+      }
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
+  const center = (): [number, number] => {
+    const r = viewportRef.current?.getBoundingClientRect();
+    return r ? [r.width / 2, r.height / 2] : [0, 0];
+  };
+
   return (
     <div
       ref={viewportRef}
-      className="h-full min-h-[320px] w-full cursor-grab touch-none select-none overflow-hidden active:cursor-grabbing"
+      className="relative h-full min-h-[320px] w-full cursor-grab touch-none select-none overflow-hidden active:cursor-grabbing"
       onPointerDown={(e) => {
         if (e.button !== 0) return;
-        drag.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y };
-        try {
-          (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-        } catch {
-          // Synthetic or already-released pointers can't be captured; the
-          // window-level move/up handlers still end the drag correctly.
-        }
+        drag.current = { x: e.clientX, y: e.clientY, ox: view.x, oy: view.y };
+        (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
       }}
       onPointerMove={(e) => {
         const d = drag.current;
         if (!d) return;
-        setOffset({ x: d.ox + (e.clientX - d.x), y: d.oy + (e.clientY - d.y) });
+        setView((v) => ({
+          ...v,
+          x: d.ox + (e.clientX - d.x),
+          y: d.oy + (e.clientY - d.y),
+        }));
       }}
       onPointerUp={() => {
         drag.current = null;
@@ -253,10 +281,44 @@ function PanCanvas({ children }: { children: React.ReactNode }) {
       }}
     >
       <div
-        style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }}
+        style={{
+          transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+          transformOrigin: "0 0",
+        }}
         className="w-max"
       >
         {children}
+      </div>
+      <div
+        className="absolute bottom-3 right-3 z-10 flex items-center gap-0.5 rounded-md border border-border/60 bg-elevated/80 p-0.5 backdrop-blur"
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          onClick={() => zoomAt(1 / 1.25, ...center())}
+          title="Zoom out"
+          aria-label="Zoom out"
+          className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <Minus className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => setView({ x: 0, y: 0, scale: 1 })}
+          title="Reset view"
+          className="min-w-10 rounded px-1 py-0.5 text-center text-[11px] tabular-nums text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {Math.round(view.scale * 100)}%
+        </button>
+        <button
+          type="button"
+          onClick={() => zoomAt(1.25, ...center())}
+          title="Zoom in"
+          aria-label="Zoom in"
+          className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </button>
       </div>
     </div>
   );

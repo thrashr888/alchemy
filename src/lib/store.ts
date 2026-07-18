@@ -380,6 +380,10 @@ export const useStore = create<AppState>((set, get) => {
           set({ pendingUpdateCheck: true });
           s.openSettings("general");
         } else if (e.payload.id === "menu-new-window") void api.newWindow();
+        else if (e.payload.id === "menu-add-url") {
+          if (get().currentId) s.openAddSource("url");
+          else s.pushToast("info", "Open a notebook first, then add sources");
+        }
         else if (e.payload.id === "menu-export-okf") void s.exportNotebookOkf();
         else if (e.payload.id === "menu-share-okf") void s.shareNotebookOkf();
         else if (e.payload.id === "menu-import-okf")

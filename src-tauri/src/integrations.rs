@@ -80,16 +80,35 @@ pub fn encode(s: &str) -> String {
     utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
 }
 
-/// Tray "Add Clipboard as Source": URL-shaped text becomes a URL source,
-/// anything else a pasted-text source — routed like any other alchemy:// add.
-fn add_clipboard(app: &AppHandle) {
+/// "Add Clipboard as Source" (tray + File menu): copied files become file
+/// sources, a copied image becomes an OCR-able image source, URL-shaped text
+/// a URL source, and anything else pasted text — all routed like any other
+/// alchemy:// add.
+pub(crate) fn add_clipboard(app: &AppHandle) {
+    // Files first: Finder copies put file URLs AND a string form on the
+    // pasteboard; the files are what the user means.
+    let files = read_clipboard_files();
+    if !files.is_empty() {
+        let query: Vec<String> = files
+            .iter()
+            .map(|f| format!("file={}", encode(f)))
+            .collect();
+        route_url(app, format!("alchemy://add?{}", query.join("&")));
+        return;
+    }
+    // A copied image (screenshot, browser right-click-copy) lands as PNG or
+    // TIFF data — write it to a temp file and route it like a dropped image.
+    if let Some(path) = write_clipboard_image() {
+        route_url(app, format!("alchemy://add?file={}", encode(&path)));
+        return;
+    }
     let Some(text) = read_clipboard() else {
-        let _ = app.emit("integrations://toast", "Clipboard has no text");
+        let _ = app.emit("integrations://toast", "Clipboard has nothing usable");
         return;
     };
     let text = text.trim().to_string();
     if text.is_empty() {
-        let _ = app.emit("integrations://toast", "Clipboard has no text");
+        let _ = app.emit("integrations://toast", "Clipboard has nothing usable");
         return;
     }
     let url = if (text.starts_with("http://") || text.starts_with("https://"))
@@ -104,6 +123,63 @@ fn add_clipboard(app: &AppHandle) {
         )
     };
     route_url(app, url);
+}
+
+/// Local file paths on the pasteboard (Finder copy), in order.
+#[cfg(target_os = "macos")]
+fn read_clipboard_files() -> Vec<String> {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use objc2_app_kit::NSPasteboard;
+    unsafe {
+        let pb = NSPasteboard::generalPasteboard();
+        let ty = objc2_foundation::NSString::from_str("NSFilenamesPboardType");
+        let list: *mut AnyObject = msg_send![&*pb, propertyListForType: &*ty];
+        if list.is_null() {
+            return Vec::new();
+        }
+        let count: usize = msg_send![list, count];
+        let mut out = Vec::with_capacity(count);
+        for i in 0..count {
+            let item: *mut AnyObject = msg_send![list, objectAtIndex: i];
+            if item.is_null() {
+                continue;
+            }
+            let s: *mut objc2_foundation::NSString = item.cast();
+            out.push((*s).to_string());
+        }
+        out
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_clipboard_files() -> Vec<String> {
+    Vec::new()
+}
+
+/// Write pasteboard image data (PNG preferred, TIFF fallback) to a temp file.
+#[cfg(target_os = "macos")]
+fn write_clipboard_image() -> Option<String> {
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypePNG, NSPasteboardTypeTIFF};
+    unsafe {
+        let pb = NSPasteboard::generalPasteboard();
+        let (data, ext) = match pb.dataForType(NSPasteboardTypePNG) {
+            Some(d) => (d, "png"),
+            None => (pb.dataForType(NSPasteboardTypeTIFF)?, "tiff"),
+        };
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("alchemy-clipboard-{stamp}.{ext}"));
+        std::fs::write(&path, data.to_vec()).ok()?;
+        Some(path.to_string_lossy().to_string())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn write_clipboard_image() -> Option<String> {
+    None
 }
 
 #[cfg(target_os = "macos")]

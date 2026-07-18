@@ -62,6 +62,12 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
     let new_window = MenuItemBuilder::with_id("menu-new-window", "New Window")
         .accelerator("CmdOrCtrl+Shift+N")
         .build(app)?;
+    let add_url = MenuItemBuilder::with_id("menu-add-url", "Add URL Source…")
+        .accelerator("CmdOrCtrl+Shift+U")
+        .build(app)?;
+    let add_clipboard = MenuItemBuilder::with_id("menu-add-clipboard", "Add Clipboard as Source")
+        .accelerator("CmdOrCtrl+Shift+V")
+        .build(app)?;
     let export_okf = MenuItemBuilder::with_id("menu-export-okf", "Export Notebook as OKF…")
         .accelerator("CmdOrCtrl+Shift+E")
         .build(app)?;
@@ -72,6 +78,9 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
     let file_menu = SubmenuBuilder::new(app, "File")
         .item(&new_window)
         .item(&recent_menu)
+        .separator()
+        .item(&add_url)
+        .item(&add_clipboard)
         .separator()
         .item(&import_okf)
         .item(&export_okf)
@@ -141,6 +150,11 @@ pub fn fill_recents(
 /// Address a menu click to the focused window ("main", then any, as
 /// fallbacks). The event broadcasts, but only the addressed window acts.
 pub fn handle_event(app: &AppHandle, id: &str) {
+    // Clipboard adds run entirely backend-side (pasteboard access).
+    if id == "menu-add-clipboard" {
+        crate::integrations::add_clipboard(app);
+        return;
+    }
     let windows = app.webview_windows();
     let target = windows
         .values()
