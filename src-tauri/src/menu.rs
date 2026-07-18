@@ -65,7 +65,7 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
     let add_url = MenuItemBuilder::with_id("menu-add-url", "Add URL Source…")
         .accelerator("CmdOrCtrl+Shift+U")
         .build(app)?;
-    let add_clipboard = MenuItemBuilder::with_id("menu-add-clipboard", "Add Clipboard as Source")
+    let add_clipboard = MenuItemBuilder::with_id("menu-add-clipboard", "Add Clipboard Source…")
         .accelerator("CmdOrCtrl+Shift+V")
         .build(app)?;
     let export_okf = MenuItemBuilder::with_id("menu-export-okf", "Export Notebook as OKF…")

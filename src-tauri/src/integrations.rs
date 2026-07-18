@@ -88,7 +88,7 @@ pub fn encode(s: &str) -> String {
     utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
 }
 
-/// "Add Clipboard as Source" (tray + File menu): copied files become file
+/// "Add Clipboard Source…" (tray + File menu): copied files become file
 /// sources, a copied image becomes an OCR-able image source, URL-shaped text
 /// a URL source, and anything else pasted text — all routed like any other
 /// alchemy:// add.
@@ -244,7 +244,7 @@ pub fn setup(
                 .build(app)?,
         )
         .separator()
-        .item(&MenuItemBuilder::with_id("tray:clipboard", "Add Clipboard as Source").build(app)?)
+        .item(&MenuItemBuilder::with_id("tray:clipboard", "Add Clipboard Source…").build(app)?)
         .item(&MenuItemBuilder::with_id("tray:add-url", "Add URL Source…").build(app)?)
         .item(&MenuItemBuilder::with_id("tray:add-text", "Add Text Source…").build(app)?)
         .separator()
