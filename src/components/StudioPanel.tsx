@@ -242,7 +242,7 @@ export function StudioPanel() {
   return (
     <div
       style={{ width }}
-      className="relative flex h-full shrink-0 flex-col border-l border-border bg-surface"
+      className="glass-chrome relative flex h-full shrink-0 flex-col border-l border-border bg-surface"
     >
       <ResizeHandle
         edge="left"

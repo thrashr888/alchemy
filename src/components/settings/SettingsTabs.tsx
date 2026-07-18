@@ -230,6 +230,19 @@ export function AppearanceTab() {
           </Pill>
         </div>
       </Field>
+      <Field
+        label="Glass chrome"
+        hint="Experimental: the desktop blurs through the sidebars and titlebar, like native macOS apps."
+      >
+        <div className="flex flex-wrap gap-1.5">
+          <Pill
+            active={reading.glass}
+            onClick={() => setReading({ glass: !reading.glass })}
+          >
+            {reading.glass ? "On" : "Off"}
+          </Pill>
+        </div>
+      </Field>
     </div>
   );
 }

@@ -4321,6 +4321,33 @@ pub struct Backlink {
     pub title: String,
 }
 
+/// Glass chrome (experimental): apply or clear window vibrancy so the
+/// translucent sidebar chrome shows the desktop blurring through, like
+/// native macOS sidebars. The webview windows are configured opaque, so
+/// the effect only reads once the frontend also lifts its backgrounds
+/// (html.glass — see index.css).
+#[tauri::command]
+pub fn set_window_glass(window: tauri::Window, enabled: bool) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use window_vibrancy::{apply_vibrancy, clear_vibrancy, NSVisualEffectMaterial};
+        if enabled {
+            apply_vibrancy(
+                &window,
+                NSVisualEffectMaterial::UnderWindowBackground,
+                None,
+                None,
+            )
+            .map_err(|e| e.to_string())?;
+        } else {
+            clear_vibrancy(&window).map_err(|e| e.to_string())?;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, enabled);
+    Ok(())
+}
+
 /// Export the calling window's print layout as a PDF — the local-first
 /// export path for slide decks and flashcards. With `save_path` the PDF is
 /// written silently to that file (NSPrintSaveJob); without it the native
@@ -4502,6 +4529,9 @@ pub async fn new_window(
             .title("Alchemy")
             .inner_size(w, h)
             .min_inner_size(min_w, min_h)
+            // Transparent like the main window so glass chrome (vibrancy)
+            // works in pop-outs too; opaque themes paint over it anyway.
+            .transparent(true)
             .initialization_script(&boot);
     #[cfg(target_os = "macos")]
     let builder = builder

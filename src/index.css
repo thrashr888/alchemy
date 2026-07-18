@@ -376,6 +376,29 @@ button {
   color: var(--slide-muted);
 }
 
+/* Glass chrome (experimental, Appearance -> Glass chrome): the native
+   vibrancy layer sits UNDER the window, so the effect appears wherever the
+   DOM lets it through. Chrome surfaces (window header, side panels, rails)
+   go translucent; the center content column stays opaque and readable —
+   the Claude-desktop arrangement. */
+.glass body {
+  background: transparent;
+}
+.glass .glass-root {
+  background: transparent;
+}
+.glass .glass-chrome {
+  background: color-mix(in srgb, var(--surface) 62%, transparent) !important;
+  -webkit-backdrop-filter: saturate(1.4);
+  backdrop-filter: saturate(1.4);
+}
+.glass .glass-header {
+  background: color-mix(in srgb, var(--background) 45%, transparent) !important;
+}
+.glass .glass-content {
+  background: var(--background);
+}
+
 /* Citation anchors in the rendered reader view (CSS Custom Highlight API —
    ranges highlighted with no DOM mutation). */
 ::highlight(citation) {

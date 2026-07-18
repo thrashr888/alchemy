@@ -283,6 +283,8 @@ export interface ReadingPrefs {
   showToc: boolean;
   /** Reader: the related-passages rail beside documents and the editor. */
   showRelated: boolean;
+  /** Experimental: window vibrancy behind translucent sidebar chrome. */
+  glass: boolean;
 }
 
 export const DEFAULT_READING_PREFS: ReadingPrefs = {
@@ -291,4 +293,5 @@ export const DEFAULT_READING_PREFS: ReadingPrefs = {
   textAlign: "natural",
   showToc: true,
   showRelated: true,
+  glass: false,
 };

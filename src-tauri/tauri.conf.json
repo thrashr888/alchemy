@@ -22,7 +22,8 @@
         "trafficLightPosition": {
           "x": 20,
           "y": 26
-        }
+        },
+        "transparent": true
       }
     ],
     "security": {
@@ -35,7 +36,8 @@
           "$TEMP/**"
         ]
       }
-    }
+    },
+    "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,

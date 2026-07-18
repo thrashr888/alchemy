@@ -50,6 +50,15 @@ function saveSourceSel(
   else localStorage.setItem(`sourceSel:${notebookId}`, JSON.stringify(sel));
 }
 
+/** Glass chrome: native vibrancy under the window + the html.glass CSS
+ *  switch that lifts panel backgrounds so the blur shows through. */
+function applyGlass(enabled: boolean) {
+  document.documentElement.classList.toggle("glass", enabled);
+  void api.setWindowGlass(enabled).catch(() => {
+    document.documentElement.classList.remove("glass");
+  });
+}
+
 function loadReadingPrefs(): ReadingPrefs {
   try {
     const raw = localStorage.getItem("readingPrefs");
@@ -220,6 +229,7 @@ export const useStore = create<AppState>((set, get) => {
     noteReadsBaseline: loadNoteReadsBaseline(),
 
     init: async () => {
+      if (get().reading.glass) applyGlass(true);
       applyTheme(get().theme);
       // Daily epigraph: regenerate in the background if stale; shows next open.
       void refreshEpigraph(get().theme);
@@ -587,6 +597,7 @@ export const useStore = create<AppState>((set, get) => {
       const reading = { ...get().reading, ...patch };
       localStorage.setItem("readingPrefs", JSON.stringify(reading));
       set({ reading });
+      if ("glass" in patch) applyGlass(reading.glass);
     },
 
     clearQueueItem: (id) =>

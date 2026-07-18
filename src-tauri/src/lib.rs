@@ -165,6 +165,7 @@ pub fn run() {
             commands::export_audio,
             commands::new_window,
             commands::print_webview,
+            commands::set_window_glass,
             commands::source_backlinks,
             commands::related_passages,
             commands::live_view_open,
