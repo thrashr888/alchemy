@@ -27,6 +27,7 @@
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
+    "@tiptap/extension-table": "^3.28.0",
     "@tiptap/pm": "^3.27.1",
     "@tiptap/react": "^3.27.1",
     "@tiptap/starter-kit": "^3.27.1",

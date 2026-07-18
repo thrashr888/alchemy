@@ -35,6 +35,9 @@ importers:
       '@tauri-apps/plugin-updater':
         specifier: ^2.10.1
         version: 2.10.1
+      '@tiptap/extension-table':
+        specifier: ^3.28.0
+        version: 3.28.0(@tiptap/core@3.27.1(@tiptap/pm@3.27.1))(@tiptap/pm@3.27.1)
       '@tiptap/pm':
         specifier: ^3.27.1
         version: 3.27.1
@@ -829,6 +832,12 @@ packages:
     resolution: {integrity: sha512-Y3DW1jlSlCNCyMGHP3+3qBNNPS83wuFz4RTYGjZtvRRTCRh7apZme9XRWMq1rN5mJ2Cr7fKocA2/5Bs13KgN6Q==}
     peerDependencies:
       '@tiptap/core': 3.27.1
+
+  '@tiptap/extension-table@3.28.0':
+    resolution: {integrity: sha512-SX2Uwn/bFyrqjbBo2Hg9wfLT/ofByHm4f80BuG0h5/m89Ve78CgtaK2lGz9jHZRM7rKTG6eqel+PUZQUwcSzOg==}
+    peerDependencies:
+      '@tiptap/core': 3.28.0
+      '@tiptap/pm': 3.28.0
 
   '@tiptap/extension-text@3.27.1':
     resolution: {integrity: sha512-6ZwaZwSrDh+KFFv6V1J79oO37yPs7y1bFxvk1/9Ih2rn3Xr5AWz+eMS+n8RpH3djBVVAQpdIAeYQgcn+VCSsTg==}
@@ -2220,6 +2229,11 @@ snapshots:
   '@tiptap/extension-strike@3.27.1(@tiptap/core@3.27.1(@tiptap/pm@3.27.1))':
     dependencies:
       '@tiptap/core': 3.27.1(@tiptap/pm@3.27.1)
+
+  '@tiptap/extension-table@3.28.0(@tiptap/core@3.27.1(@tiptap/pm@3.27.1))(@tiptap/pm@3.27.1)':
+    dependencies:
+      '@tiptap/core': 3.27.1(@tiptap/pm@3.27.1)
+      '@tiptap/pm': 3.27.1
 
   '@tiptap/extension-text@3.27.1(@tiptap/core@3.27.1(@tiptap/pm@3.27.1))':
     dependencies:

@@ -147,6 +147,17 @@ Edit-in-place on the reader surface (no Save/Cancel modal): TipTap grows
 tables, task lists, images, callouts; **Visual ⇄ Markdown toggle**;
 autosave on idle. The ambient rail stays up while writing.
 
+> Shipped (first pass): prose notes ARE the editor — the reading surface
+> is a bare TipTap over the pane (no boxes, inline transparent title,
+> reading-width column, reading prefs honored), autosaving 1.2s after the
+> last keystroke with a Saved whisper in the counts footer, flushing on
+> doc switch. Save/Cancel are gone for prose; artifact kinds keep their
+> raw-markdown form behind the toolbar pencil. The ambient rail floats
+> over the right gutter (translucent, below the title) and only
+> materializes when the pane is wide enough (≥1060px) that it cannot
+> overlap the text column. Still open here: TipTap extension growth
+> (tables, tasks, callouts, images) and the Visual ⇄ Markdown toggle.
+
 ## Phasing
 
 1. **Reader pane**: center-column Chat ⇄ Reader mode, rail-click routing,

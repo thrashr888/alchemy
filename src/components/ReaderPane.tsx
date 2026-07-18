@@ -471,17 +471,26 @@ export function ReaderPane() {
               <Search className="h-4 w-4" />
             </Button>
           )}
-          {note && !editing && (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setEditing(true)}
-              title="Edit note"
-              aria-label="Edit note"
-            >
-              <Pencil className="h-4 w-4" />
-            </Button>
-          )}
+          {note &&
+            !editing &&
+            [
+              "slide_deck",
+              "mind_map",
+              "quiz",
+              "flashcards",
+              "audio_overview",
+              "report",
+            ].includes(note.kind) && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setEditing(true)}
+                title="Edit the raw markdown"
+                aria-label="Edit note"
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
+            )}
           {inlineActions.map((action) => (
             <Button
               key={action.label}
@@ -1054,9 +1063,12 @@ function SelAction({
   );
 }
 
-/** Notes in the reader: every kind uses its native renderer. Actions live in
- *  the toolbar's overflow menu; artifact kinds that manage their own bottom
- *  controls (deck, mind map) fill the pane with no extra chrome. */
+/** Notes in the reader: every kind uses its native renderer. Prose kinds
+ *  are edit-in-place — the reading surface IS the editor (bare TipTap over
+ *  the pane, reading-width column), autosaving on idle with the ambient
+ *  rail floating alongside. No Save/Cancel. Artifact kinds (deck, quiz,
+ *  flashcards, mind map, audio) keep native renderers plus the raw-markdown
+ *  form behind the toolbar's Edit pencil. */
 function NoteReader({
   note,
   editing,
@@ -1072,13 +1084,8 @@ function NoteReader({
   const artifactStreamText = useStore((s) => s.artifactStreamText);
   const [title, setTitle] = useState(note.title);
   const [body, setBody] = useState(note.content);
-  // Ambient rail: diff CONSECUTIVE editor states to find the paragraph being
-  // worked on — diffing against note.content would flag the editor's own
-  // markdown-serialization quirks as "changes" on the first keystroke.
-  const prevBody = useRef(note.content);
-  const [activePara, setActivePara] = useState("");
 
-  // Entering edit mode snapshots the note; leaving without saving discards.
+  // Entering artifact raw-edit snapshots the note; cancel discards.
   useEffect(() => {
     if (editing) {
       setTitle(note.title);
@@ -1090,6 +1097,21 @@ function NoteReader({
   const rebuilding = !!generatingKind && note.kind !== "note";
   // Kinds that size themselves to the pane and bring their own controls.
   const fillsPane = note.kind === "slide_deck" || note.kind === "mind_map";
+  const artifact =
+    note.kind === "slide_deck" ||
+    note.kind === "mind_map" ||
+    note.kind === "quiz" ||
+    note.kind === "flashcards" ||
+    note.kind === "audio_overview";
+  // Generated reports are records of a moment — read-only in the reader,
+  // with deliberate editing behind the toolbar pencil like artifacts.
+  const readOnly = note.kind === "report";
+
+  // Prose notes: the seamless always-editable surface (streaming rebuilds
+  // still show the raw text flowing in).
+  if (!artifact && !readOnly && !(rebuilding && artifactStreamText)) {
+    return <InlineNote key={note.id} note={note} />;
+  }
 
   if (editing) {
     return (
@@ -1107,35 +1129,16 @@ function NoteReader({
           value={title}
           onChange={(event) => setTitle(event.target.value)}
         />
-        <div className="flex min-h-0 flex-1 gap-3">
-          <div className="min-h-0 min-w-0 flex-1">
-            <RichEditor
-              fill
-              value={body}
-              onChange={(next) => {
-                setActivePara(activeParagraph(prevBody.current, next));
-                prevBody.current = next;
-                setBody(next);
-              }}
-            />
-          </div>
-          {/* Right column: ambient connections above, actions pinned below —
-              the editor gets the full pane height. */}
-          <div className="flex w-60 shrink-0 flex-col gap-2 border-l border-border pl-3">
-            <AmbientRail text={activePara} excludeNoteId={note.id} />
-            <div className="flex shrink-0 justify-end gap-2 border-t border-border pt-2.5">
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => onEditingChange(false)}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" variant="primary">
-                Save
-              </Button>
-            </div>
-          </div>
+        <div className="min-h-0 min-w-0 flex-1">
+          <RichEditor fill value={body} onChange={setBody} />
+        </div>
+        <div className="flex shrink-0 justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={() => onEditingChange(false)}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="primary">
+            Save
+          </Button>
         </div>
       </form>
     );
@@ -1181,5 +1184,124 @@ function NoteReader({
         </div>
       )}
     </>
+  );
+}
+
+/** The seamless prose-note surface: bare editor, inline title, idle
+ *  autosave, floating ambient rail. The document is the whole pane. */
+function InlineNote({ note }: { note: Note }) {
+  const reading = useStore((s) => s.reading);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const width = useElementWidth(rootRef);
+  // The floating rail needs real gutter beside the 760px column — below
+  // this it would sit on top of the text, so it stays away entirely.
+  const roomForRail = width >= 1060;
+  const [title, setTitle] = useState(note.title);
+  const [status, setStatus] = useState<"idle" | "dirty" | "saved">("idle");
+  const prevBody = useRef(note.content);
+  const [activePara, setActivePara] = useState("");
+  const [counts, setCounts] = useState(note.content);
+  // Latest values for the debounced save + unmount flush. `saved` is the
+  // last-persisted snapshot: nothing writes unless content really moved.
+  const pending = useRef({ title: note.title, body: note.content, dirty: false });
+  const saved = useRef({ title: note.title, body: note.content });
+  const mountedAt = useRef(Date.now());
+  const touched = useRef(false);
+  const timer = useRef<number | null>(null);
+
+  const flush = () => {
+    if (!pending.current.dirty) return;
+    pending.current.dirty = false;
+    if (
+      pending.current.body === saved.current.body &&
+      pending.current.title === saved.current.title
+    ) {
+      return;
+    }
+    saved.current = { title: pending.current.title, body: pending.current.body };
+    void useStore
+      .getState()
+      .updateNote(note.id, pending.current.title, pending.current.body);
+    setStatus("saved");
+  };
+  const flushRef = useRef(flush);
+  flushRef.current = flush;
+
+  const queueSave = () => {
+    pending.current.dirty = true;
+    setStatus("dirty");
+    if (timer.current) window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => flushRef.current(), 1200);
+  };
+
+  // Doc switch or leaving the reader saves whatever is pending.
+  useEffect(() => {
+    return () => {
+      if (timer.current) window.clearTimeout(timer.current);
+      flushRef.current();
+    };
+  }, []);
+
+  return (
+    <div ref={rootRef} className="relative flex min-h-0 flex-1 flex-col">
+      <div className="mx-auto w-full max-w-[760px] shrink-0 px-8 pt-6">
+        <input
+          value={title}
+          aria-label="Note title"
+          placeholder="Untitled"
+          onChange={(e) => {
+            setTitle(e.target.value);
+            pending.current.title = e.target.value;
+            queueSave();
+          }}
+          className="w-full bg-transparent text-[22px] font-semibold leading-snug text-foreground outline-none placeholder:text-subtle-foreground"
+        />
+      </div>
+      <div
+        className={cn("min-h-0 flex-1", chatReadingClass(reading))}
+        // Plain click follows a link (in-corpus links jump in the reader);
+        // ⌘/⌥-click places the cursor inside the link text for editing.
+        onClickCapture={(e) => {
+          if (e.metaKey || e.altKey || e.ctrlKey) return;
+          const a = (e.target as HTMLElement).closest?.("a");
+          if (!a) return;
+          e.preventDefault();
+          e.stopPropagation();
+          routeDocLink(a.getAttribute("href") ?? "", undefined);
+        }}
+      >
+        <RichEditor
+          bare
+          value={note.content}
+          onChange={(next) => {
+            // TipTap emits one markdown-normalization transaction right
+            // after mount (its serialization differs slightly from the
+            // stored text). That is not an edit: adopt it as the baseline
+            // so merely opening a note never saves or bumps it.
+            if (!touched.current && Date.now() - mountedAt.current < 400) {
+              saved.current = { ...saved.current, body: next };
+              prevBody.current = next;
+              pending.current.body = next;
+              return;
+            }
+            touched.current = true;
+            setActivePara(activeParagraph(prevBody.current, next));
+            prevBody.current = next;
+            pending.current.body = next;
+            setCounts(next);
+            queueSave();
+          }}
+        />
+      </div>
+      {roomForRail && (
+        <AmbientRail floating text={activePara} excludeNoteId={note.id} />
+      )}
+      <div className="flex shrink-0 items-center gap-2 border-t border-border px-5 py-1.5 text-[11px] tabular-nums text-subtle-foreground">
+        <span className="min-w-0 truncate whitespace-nowrap">{countsLine(counts)}</span>
+        <span className="ml-auto shrink-0">
+          {status === "dirty" ? "Editing…" : status === "saved" ? "Saved" : ""}
+        </span>
+      </div>
+    </div>
   );
 }

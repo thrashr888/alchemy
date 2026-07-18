@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useEditor, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import { TableKit } from "@tiptap/extension-table";
 import { Markdown } from "tiptap-markdown";
 import { cn } from "@/lib/utils";
 import { Modal, Button, Input } from "./ui";
@@ -14,6 +15,11 @@ import {
   Quote,
   Code,
   Link2,
+  Table as TableIcon,
+  BetweenHorizontalEnd,
+  BetweenVerticalEnd,
+  Rows3,
+  Columns3,
   Undo2,
   Redo2,
 } from "lucide-react";
@@ -29,25 +35,35 @@ export function RichEditor({
   value,
   onChange,
   fill = false,
+  bare = false,
 }: {
   value: string;
   onChange: (markdown: string) => void;
   /** Stretch to the parent's full height (reader pane) instead of the
    *  self-sizing modal behavior (min 240px, capped at 52vh). */
   fill?: boolean;
+  /** Seamless document surface: no box, no backgrounds, quiet toolbar,
+   *  reading-width centered column — the pane itself is the paper. */
+  bare?: boolean;
 }) {
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ link: { openOnClick: false } }),
+      // Reports and agent notes carry GFM tables — without the table nodes
+      // the editor would mangle them on load and persist the damage on the
+      // next real edit.
+      TableKit.configure({ table: { resizable: false } }),
       Markdown.configure({ html: false, transformPastedText: true }),
     ],
     content: value,
     onUpdate: ({ editor }) => onChange(getMarkdown(editor)),
     editorProps: {
       attributes: {
-        class: fill
-          ? "prose max-w-none h-full overflow-y-auto px-3 py-2.5 focus:outline-none"
-          : "prose max-w-none min-h-[240px] max-h-[52vh] overflow-y-auto px-3 py-2.5 focus:outline-none",
+        class: bare
+          ? "prose mx-auto h-full max-w-[760px] overflow-y-auto px-8 pb-6 pt-2 focus:outline-none"
+          : fill
+            ? "prose max-w-none h-full overflow-y-auto px-3 py-2.5 focus:outline-none"
+            : "prose max-w-none min-h-[240px] max-h-[52vh] overflow-y-auto px-3 py-2.5 focus:outline-none",
       },
     },
   });
@@ -56,20 +72,22 @@ export function RichEditor({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-md border border-input bg-surface-2",
-        fill && "flex h-full flex-col",
+        bare
+          ? "bg-transparent"
+          : "overflow-hidden rounded-md border border-input bg-surface-2",
+        (fill || bare) && "flex h-full flex-col",
       )}
     >
-      <Toolbar editor={editor} />
+      <Toolbar editor={editor} bare={bare} />
       <EditorContent
         editor={editor}
-        className={fill ? "min-h-0 flex-1 [&>div]:h-full" : undefined}
+        className={fill || bare ? "min-h-0 flex-1 [&>div]:h-full" : undefined}
       />
     </div>
   );
 }
 
-function Toolbar({ editor }: { editor: Editor }) {
+function Toolbar({ editor, bare = false }: { editor: Editor; bare?: boolean }) {
   // Force re-render on each transaction so active states stay in sync.
   const [, bump] = useState(0);
   const [linkOpen, setLinkOpen] = useState(false);
@@ -99,7 +117,14 @@ function Toolbar({ editor }: { editor: Editor }) {
 
   return (
     <>
-    <div className="flex flex-wrap items-center gap-0.5 border-b border-border bg-surface px-1.5 py-1">
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-0.5 px-1.5 py-1",
+        bare
+          ? "mx-auto w-full max-w-[760px] px-8 text-muted-foreground"
+          : "border-b border-border bg-surface",
+      )}
+    >
       <Btn on={editor.isActive("bold")} onClick={() => editor.chain().focus().toggleBold().run()} title="Bold">
         <Bold className="h-3.5 w-3.5" />
       </Btn>
@@ -137,6 +162,50 @@ function Toolbar({ editor }: { editor: Editor }) {
       <Btn on={editor.isActive("link")} onClick={openLink} title="Link">
         <Link2 className="h-3.5 w-3.5" />
       </Btn>
+      <Btn
+        on={editor.isActive("table")}
+        onClick={() =>
+          editor.isActive("table")
+            ? editor.chain().focus().deleteTable().run()
+            : editor
+                .chain()
+                .focus()
+                .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
+                .run()
+        }
+        title={editor.isActive("table") ? "Delete table" : "Insert table"}
+      >
+        <TableIcon className="h-3.5 w-3.5" />
+      </Btn>
+      {editor.isActive("table") && (
+        <>
+          <Sep />
+          <Btn
+            onClick={() => editor.chain().focus().addRowAfter().run()}
+            title="Add row below"
+          >
+            <BetweenHorizontalEnd className="h-3.5 w-3.5" />
+          </Btn>
+          <Btn
+            onClick={() => editor.chain().focus().addColumnAfter().run()}
+            title="Add column right"
+          >
+            <BetweenVerticalEnd className="h-3.5 w-3.5" />
+          </Btn>
+          <Btn
+            onClick={() => editor.chain().focus().deleteRow().run()}
+            title="Delete row"
+          >
+            <Rows3 className="h-3.5 w-3.5" />
+          </Btn>
+          <Btn
+            onClick={() => editor.chain().focus().deleteColumn().run()}
+            title="Delete column"
+          >
+            <Columns3 className="h-3.5 w-3.5" />
+          </Btn>
+        </>
+      )}
       <Sep />
       <Btn onClick={() => editor.chain().focus().undo().run()} title="Undo">
         <Undo2 className="h-3.5 w-3.5" />

@@ -185,6 +185,17 @@ button {
   margin: 0 0 0.7em;
   padding-left: 1.3em;
 }
+/* The preflight reset strips list-style globally; restore real markers
+   (and keep them theme-colored) for rendered markdown and the editor. */
+.prose ul {
+  list-style: disc;
+}
+.prose ol {
+  list-style: decimal;
+}
+.prose li::marker {
+  color: var(--muted-foreground);
+}
 .prose li {
   margin: 0.2em 0;
 }
@@ -230,6 +241,21 @@ button {
   border: 1px solid var(--border);
   padding: 0.35em 0.6em;
   text-align: left;
+}
+/* Editing tables: visible cell selection + a minimum column width so empty
+   cells stay clickable. */
+.prose td.selectedCell,
+.prose th.selectedCell {
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+}
+.prose table p {
+  margin: 0;
+}
+[contenteditable] .prose td,
+[contenteditable] .prose th,
+.prose[contenteditable] td,
+.prose[contenteditable] th {
+  min-width: 3em;
 }
 .prose details {
   margin: 0 0 0.7em;
