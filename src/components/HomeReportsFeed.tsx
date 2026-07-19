@@ -155,7 +155,7 @@ function ReportCard({
     <article
       className={cn(
         "border-b border-border px-6 py-5",
-        unread && "border-l-2 border-l-primary bg-primary/[0.04]",
+        unread && "bg-primary/[0.04]",
       )}
     >
       <div className="flex items-center gap-1.5 text-[11px] text-subtle-foreground">

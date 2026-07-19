@@ -349,13 +349,13 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                       label={`Open notebook ${nb.title}`}
                       onClick={() => open(nb.id)}
                     />
-                    <span
-                      className="pointer-events-none absolute left-0 top-0 h-full w-[3px] rounded-l-lg"
+                    <div
+                      className="pointer-events-none relative z-10 mb-auto flex h-8 w-8 items-center justify-center rounded-lg"
                       style={{
-                        backgroundColor: nb.color || NOTEBOOK_PALETTE[0],
+                        backgroundColor: `color-mix(in srgb, ${nb.color || NOTEBOOK_PALETTE[0]} 16%, transparent)`,
+                        color: nb.color || NOTEBOOK_PALETTE[0],
                       }}
-                    />
-                    <div className="pointer-events-none relative z-10 mb-auto flex h-8 w-8 items-center justify-center rounded-lg bg-primary/12 text-primary">
+                    >
                       <BookOpen className="h-4 w-4" />
                     </div>
                     <div className="pointer-events-none relative z-10 mt-3 flex items-center gap-1.5">

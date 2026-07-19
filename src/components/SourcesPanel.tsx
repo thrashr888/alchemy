@@ -225,7 +225,7 @@ export function SourcesPanel() {
   return (
     <div
       style={{ width }}
-      className="glass-chrome relative flex h-full shrink-0 flex-col border-r border-border bg-surface"
+      className="relative flex h-full shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-background"
     >
       <ResizeHandle
         edge="right"

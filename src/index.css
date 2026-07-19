@@ -381,22 +381,22 @@ button {
    DOM lets it through. Chrome surfaces (window header, side panels, rails)
    go translucent; the center content column stays opaque and readable —
    the Claude-desktop arrangement. */
+/* The workspace chrome: the window frame the content cards float in.
+   Mixing toward the foreground keeps the frame distinct from the white
+   (light) or near-black (dark) cards on every theme; the percentage is
+   the contrast tunable. */
+:root {
+  --chrome: color-mix(in srgb, var(--background) 92%, var(--foreground));
+}
+.app-chrome {
+  background: var(--chrome);
+}
 .glass body {
   background: transparent;
 }
-.glass .glass-root {
-  background: transparent;
-}
-.glass .glass-chrome {
-  background: color-mix(in srgb, var(--surface) 62%, transparent) !important;
-  -webkit-backdrop-filter: saturate(1.4);
-  backdrop-filter: saturate(1.4);
-}
-.glass .glass-header {
-  background: color-mix(in srgb, var(--background) 45%, transparent) !important;
-}
-.glass .glass-content {
-  background: var(--background);
+/* Vibrancy shows through the chrome frame; the cards stay opaque. */
+.glass .app-chrome {
+  background: color-mix(in srgb, var(--chrome) 55%, transparent);
 }
 
 /* Citation anchors in the rendered reader view (CSS Custom Highlight API —
