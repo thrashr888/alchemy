@@ -1639,7 +1639,7 @@ function SourceReader({
             />
           </div>
         )}
-        <div className={cn("mx-auto max-w-[760px] px-8 py-6", chatReadingClass(reading))}>
+        <div className={cn("mx-auto max-w-[760px] px-14 py-6", chatReadingClass(reading))}>
           {!!content && <DocProperties source={source} />}
           {content === null ? (
             <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
@@ -1840,7 +1840,7 @@ function NoteReader({
       <div
         className={cn(
           "min-h-0 flex-1",
-          fillsPane ? "overflow-hidden px-6 py-4" : "overflow-y-auto px-8 py-6",
+          fillsPane ? "overflow-hidden px-6 py-4" : "overflow-y-auto px-14 py-6",
         )}
       >
         <div className={cn("mx-auto h-full", fillsPane ? "max-w-none" : "max-w-[760px]")}>
@@ -1957,7 +1957,7 @@ function InlineNote({ note }: { note: Note }) {
 
   return (
     <div ref={rootRef} className="relative flex min-h-0 flex-1 flex-col">
-      <div className="mx-auto w-full max-w-[760px] shrink-0 px-8 pt-6">
+      <div className="mx-auto w-full max-w-[760px] shrink-0 px-14 pt-6">
         <input
           value={title}
           aria-label="Note title"

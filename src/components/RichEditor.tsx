@@ -71,7 +71,7 @@ export function RichEditor({
     editorProps: {
       attributes: {
         class: bare
-          ? "prose mx-auto h-full max-w-[760px] overflow-y-auto px-8 pb-6 pt-2 focus:outline-none"
+          ? "prose mx-auto h-full max-w-[760px] overflow-y-auto px-14 pb-6 pt-2 focus:outline-none"
           : fill
             ? "prose max-w-none h-full overflow-y-auto px-3 py-2.5 focus:outline-none"
             : "prose max-w-none min-h-[240px] max-h-[52vh] overflow-y-auto px-3 py-2.5 focus:outline-none",
@@ -155,7 +155,7 @@ function Toolbar({ editor, bare = false }: { editor: Editor; bare?: boolean }) {
       className={cn(
         "flex flex-wrap items-center gap-0.5 px-1.5 py-1",
         bare
-          ? "mx-auto w-full max-w-[760px] px-8 text-muted-foreground"
+          ? "mx-auto w-full max-w-[760px] px-14 text-muted-foreground"
           : "border-b border-border bg-surface",
       )}
     >
