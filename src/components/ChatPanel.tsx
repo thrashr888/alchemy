@@ -165,7 +165,7 @@ export function ChatPanel() {
     <div className="relative flex h-full flex-1 flex-col min-w-0">
       {isBlank && (
         <>
-          <div className="pointer-events-none absolute inset-0 z-0">
+          <div className="chat-mist pointer-events-none absolute inset-0 z-0">
             <DitherBackground themeKey={theme} />
           </div>
           <div className="chat-mist-fade pointer-events-none absolute inset-0 z-0" />

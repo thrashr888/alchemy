@@ -415,8 +415,9 @@ button {
   backdrop-filter: blur(24px) saturate(1.6);
 }
 
-/* The blank-chat mist fades into the surface; over glass it feathers
-   into translucency so the shader floats on the material itself. */
+/* The blank-chat mist fades into the surface. Under glass both mist
+   layers go away entirely — the window material IS the ambience, and
+   the shader canvas would otherwise repaint an opaque center. */
 .chat-mist-fade {
   background: radial-gradient(
     ellipse at center,
@@ -424,12 +425,9 @@ button {
     var(--background) 100%
   );
 }
+.glass .chat-mist,
 .glass .chat-mist-fade {
-  background: radial-gradient(
-    ellipse at center,
-    transparent 45%,
-    color-mix(in srgb, var(--background) 40%, transparent) 100%
-  );
+  display: none;
 }
 
 /* Citation anchors in the rendered reader view (CSS Custom Highlight API —

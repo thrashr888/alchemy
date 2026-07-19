@@ -584,7 +584,7 @@ export function ReaderPane() {
       : []),
   ];
   return (
-    <div ref={rootRef} className="relative flex h-full flex-1 flex-col bg-background min-w-0">
+    <div ref={rootRef} className="relative flex h-full flex-1 flex-col min-w-0">
       <div className="relative z-10 flex h-12 shrink-0 items-center gap-0.5 border-b border-border px-3">
         <Button
           variant="ghost"
