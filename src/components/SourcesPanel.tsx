@@ -225,7 +225,7 @@ export function SourcesPanel() {
   return (
     <div
       style={{ width }}
-      className="side-card relative mx-2 mb-2 mt-1 flex shrink-0 flex-col overflow-hidden rounded-xl border border-border"
+      className="side-card relative mx-2 mb-2 mt-1 flex shrink-0 flex-col"
     >
       <ResizeHandle
         edge="right"

@@ -60,6 +60,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const setColor = useStore((s) => s.setNotebookColor);
   const remove = useStore((s) => s.deleteNotebook);
   const theme = useStore((s) => s.theme);
+  // Shader must not mount under glass (rAF keeps running when display:none).
+  const glassOn = useStore((s) => s.reading.glass);
 
   const [creating, setCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
@@ -177,7 +179,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     <div className="app-root flex h-dvh w-screen flex-col overflow-hidden text-foreground">
       <header
         data-tauri-drag-region
-        className="flex items-center gap-2.5 h-12 border-b border-border pl-[84px] pr-5"
+        className="flex h-12 items-center gap-2.5 pl-[84px] pr-5"
       >
         <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/15 text-primary">
           <BookOpen className="h-4 w-4" />
@@ -235,6 +237,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           <div className="relative min-w-0 flex-1 overflow-y-auto">
             {/* The dither shader from the hero, as a banner behind the heading —
             it fades into the background before the notebook grid starts. */}
+            {!glassOn && (
             <div
               className="glass-mist pointer-events-none absolute inset-x-0 top-0 h-64 overflow-hidden"
               aria-hidden="true"
@@ -242,6 +245,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               <DitherBackground themeKey={theme} intensity={2} />
               <div className="absolute inset-0 bg-[linear-gradient(to_bottom,transparent_55%,var(--background)_100%)]" />
             </div>
+            )}
             <div className="relative mx-auto max-w-[960px] px-6 py-10">
               <div className="mb-5 flex items-end justify-between">
                 <div>
@@ -433,19 +437,17 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                             label: "Delete…",
                             icon: <Trash2 className="h-3.5 w-3.5" />,
                             danger: true,
-                            onClick: () => {
-                              void (async () => {
-                                if (
-                                  await confirm({
-                                    title: `Delete "${nb.title}"?`,
-                                    message:
-                                      "This permanently deletes the notebook and all of its sources.",
-                                    confirmLabel: "Delete",
-                                    danger: true,
-                                  })
-                                )
-                                  remove(nb.id);
-                              })();
+                            onClick: async () => {
+                              if (
+                                await confirm({
+                                  title: `Delete "${nb.title}"?`,
+                                  message:
+                                    "This permanently deletes the notebook and all of its sources.",
+                                  confirmLabel: "Delete",
+                                  danger: true,
+                                })
+                              )
+                                remove(nb.id);
                             },
                           },
                         ]}
@@ -577,7 +579,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           {/* Reports feed: unread first as a continuously scrolling read —
             the homepage doubles as the morning-read surface. */}
           {!reportsOpen && (
-            <div className="side-card absolute right-4 top-1 z-20 hidden w-12 flex-col items-center overflow-hidden rounded-xl border border-border py-2 lg:flex">
+            <div className="side-card absolute right-4 top-1 z-20 hidden w-12 flex-col items-center py-2 lg:flex">
               <button
                 type="button"
                 onClick={toggleReports}
@@ -594,7 +596,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           )}
           <aside
             className={cn(
-              "side-card mx-2 mb-2 mt-1 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-border",
+              "side-card mx-2 mb-2 mt-1 min-w-0 flex-1 flex-col",
               reportsOpen ? "hidden lg:flex" : "hidden",
             )}
           >

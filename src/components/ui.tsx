@@ -191,7 +191,10 @@ export function ResizeHandle({
       }}
       className={cn(
         "absolute inset-y-0 z-20 w-1.5 cursor-col-resize transition-colors hover:bg-ring/30 active:bg-ring/40 focus-visible:bg-ring/30",
-        edge === "right" ? "-right-[3px]" : "-left-[3px]",
+        // Fully inside the card edge: the panels clip at their rounded
+        // border (overflow-hidden), so a straddling handle loses its
+        // outer half to hit-testing.
+        edge === "right" ? "right-0" : "left-0",
       )}
     />
   );

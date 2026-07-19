@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useStore } from "@/lib/store";
 import { Button, EmptyState, Input, Textarea, Modal, Spinner } from "./ui";
-import { cn } from "@/lib/utils";
+import { cn, fmtDay } from "@/lib/utils";
 import { Clock, Eye, EyeOff, Plus, Play, Trash2, Power, Pencil } from "lucide-react";
 import type { ReportSchedule } from "@/lib/types";
 
@@ -118,7 +118,7 @@ export function Reports() {
                 <div className="flex items-center gap-1 text-[11px] text-subtle-foreground">
                   <Clock className="h-2.5 w-2.5" />
                   {intervalLabel(r.intervalSecs)}
-                  {r.lastRunAt > 0 && <span>· last {new Date(r.lastRunAt).toLocaleDateString()}</span>}
+                  {r.lastRunAt > 0 && <span>· last {fmtDay(r.lastRunAt)}</span>}
                 </div>
               </div>
               <div className="hidden items-center gap-0.5 group-hover:flex group-focus-within:flex">

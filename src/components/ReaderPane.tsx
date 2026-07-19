@@ -16,7 +16,7 @@ import { StreamingBody } from "./StudioNoteViewer";
 import { KIND_LABEL } from "./studioArtifacts";
 import { Favicon, sourceIcon } from "./SourcesPanel";
 import { Button, Input, RowMenu, Spinner } from "./ui";
-import { chatReadingClass, cn, isWebUrl, shortcutBlocked } from "@/lib/utils";
+import { chatReadingClass, cn, fmtDay, isWebUrl, shortcutBlocked, urlHost } from "@/lib/utils";
 import {
   AppWindow,
   ArrowLeft,
@@ -213,8 +213,21 @@ function mdToPlain(md: string): string {
  * boundaries clip the tail. Returns a Range, or null when the text can't be
  * found (caller falls back to the plain-text view).
  */
+/** TreeWalker filter: skip document-metadata blocks (properties rows) so
+ *  find and citation anchoring only ever match the content itself. */
+const skipDocMeta: NodeFilter = {
+  acceptNode: (n) =>
+    (n as Text).parentElement?.closest("[data-doc-meta]")
+      ? NodeFilter.FILTER_REJECT
+      : NodeFilter.FILTER_ACCEPT,
+};
+
 function findTextRange(container: HTMLElement, needle: string): Range | null {
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  const walker = document.createTreeWalker(
+    container,
+    NodeFilter.SHOW_TEXT,
+    skipDocMeta,
+  );
   let hay = "";
   const map: { node: Text; offset: number }[] = [];
   while (walker.nextNode()) {
@@ -246,7 +259,11 @@ function findTextRange(container: HTMLElement, needle: string): Range | null {
 /** All occurrences of `query` in the rendered DOM (squashed matching, like
  *  findTextRange), capped — powers find-in-source on the rendered view. */
 function findAllRanges(container: HTMLElement, query: string): Range[] {
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  const walker = document.createTreeWalker(
+    container,
+    NodeFilter.SHOW_TEXT,
+    skipDocMeta,
+  );
   let hay = "";
   const map: { node: Text; offset: number }[] = [];
   while (walker.nextNode()) {
@@ -1060,27 +1077,14 @@ const SOURCE_TYPE_LABEL: Record<Source["sourceType"], string> = {
   mac: "Mac app",
 };
 
-function fmtDay(ms: number): string {
-  return new Date(ms).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
 /** Linear-style properties block at the top of a document: quiet
  *  label/value rows that answer "what is this" before the content. */
 function DocProperties({ source, note }: { source?: Source; note?: Note }) {
   const rows: { label: string; value: string }[] = [];
   if (source) {
     rows.push({ label: "Type", value: SOURCE_TYPE_LABEL[source.sourceType] });
-    if (isWebUrl(source.url)) {
-      try {
-        rows.push({ label: "Site", value: new URL(source.url).hostname });
-      } catch {
-        /* malformed url */
-      }
-    }
+    const host = isWebUrl(source.url) ? urlHost(source.url) : null;
+    if (host) rows.push({ label: "Site", value: host });
     rows.push({ label: "Added", value: fmtDay(source.createdAt) });
     rows.push({
       label: "Size",
@@ -1095,7 +1099,9 @@ function DocProperties({ source, note }: { source?: Source; note?: Note }) {
   }
   if (rows.length === 0) return null;
   return (
-    <div className="mb-6 border-b border-border pb-4">
+    // data-doc-meta: excluded from find-in-source and citation anchoring —
+    // matching "example.com" against the Site row would be noise.
+    <div data-doc-meta className="mb-6 border-b border-border pb-4">
       <div className="grid w-fit max-w-full grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-[12px]">
         {rows.map((r) => (
           <Fragment key={r.label}>

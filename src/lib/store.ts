@@ -53,12 +53,19 @@ function saveSourceSel(
 /** Glass chrome: native vibrancy under the window + the html.glass CSS
  *  switch that lifts panel backgrounds so the blur shows through. The
  *  style attribute picks the opacity level (macOS Clear/Tinted). */
-function applyGlass(enabled: boolean, dark: boolean, style: "tinted" | "clear") {
+function applyGlass(
+  enabled: boolean,
+  dark: boolean,
+  style: "tinted" | "clear",
+  pinned: boolean,
+) {
   const root = document.documentElement;
   root.classList.toggle("glass", enabled);
   if (enabled) root.dataset.glass = style;
   else delete root.dataset.glass;
-  void api.setWindowGlass(enabled, dark).catch(() => {
+  // pinned=false for the System theme: appearance pinning is app-global
+  // on macOS and would stop prefers-color-scheme from following the OS.
+  void api.setWindowGlass(enabled, dark, pinned).catch(() => {
     root.classList.remove("glass");
     delete root.dataset.glass;
   });
@@ -238,15 +245,27 @@ export const useStore = create<AppState>((set, get) => {
       // doing its first paint can blank the webview for the whole session
       // (setTimeout, not rAF — rAF stalls in occluded windows).
       if (get().reading.glass)
-        window.setTimeout(
-          () =>
+        window.setTimeout(() => {
+          // Re-check at fire time: the user may have toggled glass off
+          // during the deferral window.
+          const { reading, theme } = get();
+          if (reading.glass)
             applyGlass(
               true,
-              themeIsDark(get().theme),
-              get().reading.glassStyle,
-            ),
-          600,
-        );
+              themeIsDark(theme),
+              reading.glassStyle,
+              theme !== "system",
+            );
+        }, 600);
+      // System theme + glass: the OS appearance flip re-tints the material
+      // (the window itself is unpinned and follows the OS).
+      window
+        .matchMedia("(prefers-color-scheme: dark)")
+        .addEventListener("change", () => {
+          const { reading, theme } = get();
+          if (reading.glass && theme === "system")
+            applyGlass(true, themeIsDark(theme), reading.glassStyle, false);
+        });
       applyTheme(get().theme);
       // Daily epigraph: regenerate in the background if stale; shows next open.
       void refreshEpigraph(get().theme);
@@ -610,7 +629,12 @@ export const useStore = create<AppState>((set, get) => {
       set({ theme });
       // The native glass tint tracks the palette's lightness.
       if (get().reading.glass)
-        applyGlass(true, themeIsDark(theme), get().reading.glassStyle);
+        applyGlass(
+          true,
+          themeIsDark(theme),
+          get().reading.glassStyle,
+          theme !== "system",
+        );
     },
 
     setReading: (patch) => {
@@ -618,7 +642,12 @@ export const useStore = create<AppState>((set, get) => {
       localStorage.setItem("readingPrefs", JSON.stringify(reading));
       set({ reading });
       if ("glass" in patch || "glassStyle" in patch)
-        applyGlass(reading.glass, themeIsDark(get().theme), reading.glassStyle);
+        applyGlass(
+          reading.glass,
+          themeIsDark(get().theme),
+          reading.glassStyle,
+          get().theme !== "system",
+        );
     },
 
     clearQueueItem: (id) =>

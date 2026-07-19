@@ -103,11 +103,23 @@ body {
 }
 
 /* Honor the macOS "Reduce transparency" accessibility setting: drop the
-   frosted-glass blurs (elements keep their near-opaque backgrounds). */
+   frosted-glass blurs AND restore opaque backgrounds on the surfaces that
+   relied on them — translucency without blur is the worst of both. */
 @media (prefers-reduced-transparency: reduce) {
   * {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
+  }
+  .menu-glass {
+    background: var(--elevated) !important;
+  }
+  .glass .side-card,
+  html[data-glass="clear"] .side-card {
+    background: var(--surface) !important;
+  }
+  .glass .app-root,
+  html[data-glass="clear"] .app-root {
+    background: var(--chrome) !important;
   }
 }
 
@@ -387,6 +399,11 @@ button {
    them while the content surface stays opaque; the mix percentage is
    the glassiness tunable. */
 .side-card {
+  /* One shared frame: geometry lives here so the six call sites carry
+     only their layout-specific margins. */
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
   /* Dark themes need a tonal lift for the card to read on near-black. */
   background: color-mix(in srgb, var(--surface) 96%, var(--foreground));
 }
@@ -398,6 +415,14 @@ button {
 }
 .glass body {
   background: transparent;
+}
+/* The chrome tone: --background nudged toward --foreground so the frame
+   reads distinct from content in both schemes (DESIGN.md §2). */
+:root {
+  --chrome: color-mix(in srgb, var(--background) 96%, var(--foreground));
+}
+[data-scheme="dark"] {
+  --chrome: color-mix(in srgb, var(--background) 93%, var(--foreground));
 }
 .glass .app-root {
   /* Tinted (default): a wash of the chrome tone over the material keeps

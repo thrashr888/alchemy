@@ -129,8 +129,8 @@ export const api = {
     run(ai<Source>("refresh_source_url", { sourceId })),
   getSourceContent: (sourceId: string) =>
     run(query<string>("get_source_content", { sourceId })),
-  setWindowGlass: (enabled: boolean, dark: boolean) =>
-    run(query<void>("set_window_glass", { enabled, dark })),
+  setWindowGlass: (enabled: boolean, dark: boolean, pinned: boolean) =>
+    run(query<void>("set_window_glass", { enabled, dark, pinned })),
   liveViewOpen: (url: string, r: { x: number; y: number; w: number; h: number }) =>
     run(query<void>("live_view_open", { url, ...r })),
   liveViewBounds: (r: { x: number; y: number; w: number; h: number }) =>

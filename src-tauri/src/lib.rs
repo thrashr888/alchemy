@@ -48,6 +48,16 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_debug_bridge::init());
 
     builder
+        // Evict per-window glass memos when a window is destroyed so a
+        // recreated window with the same label re-applies from scratch.
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                use tauri::Manager;
+                if let Some(state) = window.app_handle().try_state::<commands::AppState>() {
+                    state.glass_applied.lock().unwrap().remove(window.label());
+                }
+            }
+        })
         .setup(|app| {
             let data_dir = app
                 .path()
@@ -101,6 +111,7 @@ pub fn run() {
                 model_stats: std::sync::Mutex::new(model_stats),
                 cancel: std::sync::Mutex::new(std::collections::HashMap::new()),
                 folder_scan_lock: tokio::sync::Mutex::new(()),
+                glass_applied: std::sync::Mutex::new(std::collections::HashMap::new()),
             });
 
             // Studio templates: write the default pack on first run so

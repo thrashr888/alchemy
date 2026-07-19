@@ -66,6 +66,27 @@ export function providerLabel(config: AiConfig | null): string {
   return config?.provider === "openai" ? "Gateway" : "Ollama";
 }
 
+/** Cached absolute-day formatter — Intl.DateTimeFormat construction is
+ *  expensive and these render in hot paths (properties rows, report meta). */
+const dayFormat = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+});
+export function fmtDay(ms: number): string {
+  return dayFormat.format(ms);
+}
+
+/** Hostname of a URL, or null when it doesn't parse (hand-ingested source
+ *  URLs are resilient-but-messy). */
+export function urlHost(url: string): string | null {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
 export function relativeTime(ms: number): string {
   const diff = Date.now() - ms;
   const s = Math.floor(diff / 1000);

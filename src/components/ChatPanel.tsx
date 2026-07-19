@@ -46,6 +46,9 @@ export function ChatPanel() {
   const appendToken = useStore((s) => s.appendToken);
   const appendStep = useStore((s) => s.appendStep);
   const theme = useStore((s) => s.theme);
+  // Under glass the material is the ambience — the shader must not mount
+  // (display:none alone leaves its rAF/WebGL loop running invisibly).
+  const glassOn = useStore((s) => s.reading.glass);
   const followups = useStore((s) => s.followups);
   const summary = useStore((s) => s.summary);
   const summaryLoading = useStore((s) => s.summaryLoading);
@@ -164,7 +167,7 @@ export function ChatPanel() {
 
   return (
     <div className="relative flex h-full flex-1 flex-col min-w-0">
-      {isBlank && (
+      {isBlank && !glassOn && (
         <>
           <div className="glass-mist pointer-events-none absolute inset-0 z-0">
             <DitherBackground themeKey={theme} />

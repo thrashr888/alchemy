@@ -44,6 +44,9 @@ pub struct AppState {
     /// Serializes folder scans: the periodic rescan tick skips while a manual
     /// folder add/refresh holds it, so the same file is never ingested twice.
     pub folder_scan_lock: tokio::sync::Mutex<()>,
+    /// Last successfully applied glass state per window label
+    /// (enabled, dark, pinned) — evicted on window destroy in lib.rs.
+    pub glass_applied: Mutex<HashMap<String, (bool, bool, bool)>>,
 }
 
 impl AppState {
@@ -4329,34 +4332,30 @@ pub struct Backlink {
 #[tauri::command]
 pub fn set_window_glass(
     window: tauri::Window,
+    state: tauri::State<'_, AppState>,
     enabled: bool,
-    dark: Option<bool>,
+    dark: bool,
+    pinned: bool,
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        use std::collections::HashMap;
-        use std::sync::Mutex;
         use tauri::Manager;
 
         // Re-applying NSGlassEffectView to an already-glassed window stacks
         // a second glass view over the webview and blanks it (frontend
-        // reloads re-run init) — no-op identical requests.
-        type GlassState = HashMap<String, (bool, Option<bool>)>;
-        static APPLIED: Mutex<Option<GlassState>> = Mutex::new(None);
-        {
-            let mut applied = APPLIED.lock().unwrap();
-            let map = applied.get_or_insert_with(HashMap::new);
-            if map.get(window.label()) == Some(&(enabled, dark)) {
-                return Ok(());
-            }
-            map.insert(window.label().to_string(), (enabled, dark));
+        // reloads re-run init) — no-op identical requests. Only SUCCESSFUL
+        // applies are recorded (below), so a failed apply stays retryable.
+        let key = (enabled, dark, pinned);
+        if state.glass_applied.lock().unwrap().get(window.label()) == Some(&key) {
+            return Ok(());
         }
 
-        // The glass material renders in the window's effective appearance,
-        // which follows the SYSTEM unless pinned — a dark theme on a light
-        // system otherwise gets bright glass behind dark-theme text.
-        let _ = window.set_theme(if enabled {
-            Some(if dark.unwrap_or(false) {
+        // Pin the native appearance to the app theme while glass is on so
+        // the material matches the palette. Never pin for the System theme
+        // (pinned=false): set_theme is app-global on macOS and would freeze
+        // prefers-color-scheme, so System must keep following the OS.
+        let _ = window.set_theme(if enabled && pinned {
+            Some(if dark {
                 tauri::Theme::Dark
             } else {
                 tauri::Theme::Light
@@ -4371,9 +4370,10 @@ pub fn set_window_glass(
         // itself falls back to NSVisualEffectView on older systems. Light
         // palettes get a white tint — untinted glass goes smoky over dark
         // wallpapers, which reads wrong under a light UI.
-        let tint = match dark {
-            Some(false) => Some("#FFFFFF99".to_string()),
-            _ => None,
+        let tint = if dark {
+            None
+        } else {
+            Some("#FFFFFF99".to_string())
         };
         let liquid = window
             .app_handle()
@@ -4405,9 +4405,14 @@ pub fn set_window_glass(
                 clear_vibrancy(&window).map_err(|e| e.to_string())?;
             }
         }
+        state
+            .glass_applied
+            .lock()
+            .unwrap()
+            .insert(window.label().to_string(), key);
     }
     #[cfg(not(target_os = "macos"))]
-    let _ = (window, enabled, dark);
+    let _ = (window, state, enabled, dark, pinned);
     Ok(())
 }
 
