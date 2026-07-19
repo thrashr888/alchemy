@@ -365,6 +365,11 @@ export function resolveThemeId(name?: string): string {
   return THEMES[name] ? name : DEFAULT_THEME;
 }
 
+/** Whether a stored theme name resolves to a dark palette right now. */
+export function themeIsDark(name?: string): boolean {
+  return THEMES[resolveThemeId(name)].dark;
+}
+
 export function applyTheme(name: string) {
   const mq = window.matchMedia?.("(prefers-color-scheme: dark)");
   // (Un)subscribe the OS-appearance listener as we enter/leave system mode.

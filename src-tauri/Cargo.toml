@@ -72,6 +72,7 @@ tauri-plugin-deep-link = "2.4.9"
 tauri-plugin-global-shortcut = "2.3.2"
 htmd = "0.5.4"
 window-vibrancy = "0.8.0"
+tauri-plugin-liquid-glass = "0.1.6"
 
 # Already in the tree via tauri/wry — traffic-light insets, the Services
 # provider (services.rs), and Spotlight indexing (spotlight.rs).

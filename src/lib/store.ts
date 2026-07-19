@@ -5,7 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import { SUPPORTED_EXTENSIONS } from "./utils";
-import { applyTheme, SYSTEM_THEME } from "./themes";
+import { applyTheme, SYSTEM_THEME, themeIsDark } from "./themes";
 import { refreshEpigraph } from "./epigraph";
 import { notify } from "./notify";
 import { playArrival, playDone, playError } from "./sound";
@@ -52,9 +52,9 @@ function saveSourceSel(
 
 /** Glass chrome: native vibrancy under the window + the html.glass CSS
  *  switch that lifts panel backgrounds so the blur shows through. */
-function applyGlass(enabled: boolean) {
+function applyGlass(enabled: boolean, dark: boolean) {
   document.documentElement.classList.toggle("glass", enabled);
-  void api.setWindowGlass(enabled).catch(() => {
+  void api.setWindowGlass(enabled, dark).catch(() => {
     document.documentElement.classList.remove("glass");
   });
 }
@@ -229,7 +229,7 @@ export const useStore = create<AppState>((set, get) => {
     noteReadsBaseline: loadNoteReadsBaseline(),
 
     init: async () => {
-      if (get().reading.glass) applyGlass(true);
+      if (get().reading.glass) applyGlass(true, themeIsDark(get().theme));
       applyTheme(get().theme);
       // Daily epigraph: regenerate in the background if stale; shows next open.
       void refreshEpigraph(get().theme);
@@ -591,13 +591,15 @@ export const useStore = create<AppState>((set, get) => {
       localStorage.setItem("theme", theme);
       applyTheme(theme);
       set({ theme });
+      // The native glass tint tracks the palette's lightness.
+      if (get().reading.glass) applyGlass(true, themeIsDark(theme));
     },
 
     setReading: (patch) => {
       const reading = { ...get().reading, ...patch };
       localStorage.setItem("readingPrefs", JSON.stringify(reading));
       set({ reading });
-      if ("glass" in patch) applyGlass(reading.glass);
+      if ("glass" in patch) applyGlass(reading.glass, themeIsDark(get().theme));
     },
 
     clearQueueItem: (id) =>

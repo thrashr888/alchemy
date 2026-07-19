@@ -4327,24 +4327,58 @@ pub struct Backlink {
 /// the effect only reads once the frontend also lifts its backgrounds
 /// (html.glass — see index.css).
 #[tauri::command]
-pub fn set_window_glass(window: tauri::Window, enabled: bool) -> Result<(), String> {
+pub fn set_window_glass(
+    window: tauri::Window,
+    enabled: bool,
+    dark: Option<bool>,
+) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
+        use tauri::Manager;
+        use tauri_plugin_liquid_glass::{LiquidGlassConfig, LiquidGlassExt};
         use window_vibrancy::{apply_vibrancy, clear_vibrancy, NSVisualEffectMaterial};
-        if enabled {
-            apply_vibrancy(
-                &window,
-                NSVisualEffectMaterial::UnderWindowBackground,
-                None,
-                None,
-            )
-            .map_err(|e| e.to_string())?;
-        } else {
-            clear_vibrancy(&window).map_err(|e| e.to_string())?;
+
+        // Prefer the real Liquid Glass material (macOS 26+); the plugin
+        // itself falls back to NSVisualEffectView on older systems. Light
+        // palettes get a white tint — untinted glass goes smoky over dark
+        // wallpapers, which reads wrong under a light UI.
+        let tint = match dark {
+            Some(false) => Some("#FFFFFF99".to_string()),
+            _ => None,
+        };
+        let liquid = window
+            .app_handle()
+            .get_webview_window(window.label())
+            .and_then(|webview| {
+                window
+                    .liquid_glass()
+                    .set_effect(
+                        &webview,
+                        LiquidGlassConfig {
+                            enabled,
+                            tint_color: tint,
+                            ..Default::default()
+                        },
+                    )
+                    .ok()
+            })
+            .is_some();
+        if !liquid {
+            if enabled {
+                apply_vibrancy(
+                    &window,
+                    NSVisualEffectMaterial::UnderWindowBackground,
+                    None,
+                    None,
+                )
+                .map_err(|e| e.to_string())?;
+            } else {
+                clear_vibrancy(&window).map_err(|e| e.to_string())?;
+            }
         }
     }
     #[cfg(not(target_os = "macos"))]
-    let _ = (window, enabled);
+    let _ = (window, enabled, dark);
     Ok(())
 }
 
