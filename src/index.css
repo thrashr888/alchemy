@@ -387,9 +387,14 @@ button {
    them while the content surface stays opaque; the mix percentage is
    the glassiness tunable. */
 .side-card {
-  /* A step deeper than --surface so the card reads against the open
-     background even on near-white light themes. */
+  /* Dark themes need a tonal lift for the card to read on near-black. */
   background: color-mix(in srgb, var(--surface) 96%, var(--foreground));
+}
+/* Light palettes go border-only — white on white with a whisper of
+   lift, the Linear/Vercel treatment; tonal fills read muddy there. */
+[data-scheme="light"] .side-card {
+  background: var(--background);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 .glass body {
   background: transparent;

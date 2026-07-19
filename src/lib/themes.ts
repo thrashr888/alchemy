@@ -387,5 +387,6 @@ export function applyTheme(name: string) {
     root.style.setProperty(`--${key}`, value);
   }
   root.dataset.theme = theme.id;
+  root.dataset.scheme = theme.dark ? "dark" : "light";
   root.style.colorScheme = theme.dark ? "dark" : "light";
 }
