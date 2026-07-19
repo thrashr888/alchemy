@@ -1649,7 +1649,7 @@ function SourceReader({
             <div className="flex flex-col gap-1.5 text-[13px] text-muted-foreground">
               <span>No text stored for this source.</span>
               {source.status === "error" && source.error && (
-                <span className="text-[12px] text-destructive/80">
+                <span className="text-[12px] text-destructive/80 [overflow-wrap:anywhere]">
                   Import failed: {source.error}
                 </span>
               )}

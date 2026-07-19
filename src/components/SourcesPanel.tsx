@@ -544,7 +544,9 @@ export function SourcesPanel() {
                       </div>
                       {s.status === "error" ? (
                         <div
-                          className="text-[11px] leading-snug text-destructive"
+                          // break-anywhere: raw URLs in errors have no
+                          // spaces and would otherwise force the panel wide.
+                          className="line-clamp-3 text-[11px] leading-snug text-destructive [overflow-wrap:anywhere]"
                           title={s.error}
                         >
                           {s.error || "Import failed"}

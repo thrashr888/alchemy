@@ -395,7 +395,7 @@ function MacPicker({
             <FdaHint message={error} />
           </div>
         ) : (
-          <p className="px-2 py-4 text-[12px] text-destructive">{error}</p>
+          <p className="px-2 py-4 text-[12px] text-destructive [overflow-wrap:anywhere]">{error}</p>
         )
       ) : collections === null ? (
         <div className="flex items-center justify-center py-8">
