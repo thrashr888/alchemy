@@ -285,6 +285,8 @@ export interface ReadingPrefs {
   showRelated: boolean;
   /** Experimental: window vibrancy behind translucent sidebar chrome. */
   glass: boolean;
+  /** Glass opacity level, mirroring macOS's Clear/Tinted styles. */
+  glassStyle: "tinted" | "clear";
 }
 
 export const DEFAULT_READING_PREFS: ReadingPrefs = {
@@ -294,4 +296,5 @@ export const DEFAULT_READING_PREFS: ReadingPrefs = {
   showToc: true,
   showRelated: true,
   glass: false,
+  glassStyle: "tinted",
 };

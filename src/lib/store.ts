@@ -51,11 +51,16 @@ function saveSourceSel(
 }
 
 /** Glass chrome: native vibrancy under the window + the html.glass CSS
- *  switch that lifts panel backgrounds so the blur shows through. */
-function applyGlass(enabled: boolean, dark: boolean) {
-  document.documentElement.classList.toggle("glass", enabled);
+ *  switch that lifts panel backgrounds so the blur shows through. The
+ *  style attribute picks the opacity level (macOS Clear/Tinted). */
+function applyGlass(enabled: boolean, dark: boolean, style: "tinted" | "clear") {
+  const root = document.documentElement;
+  root.classList.toggle("glass", enabled);
+  if (enabled) root.dataset.glass = style;
+  else delete root.dataset.glass;
   void api.setWindowGlass(enabled, dark).catch(() => {
-    document.documentElement.classList.remove("glass");
+    root.classList.remove("glass");
+    delete root.dataset.glass;
   });
 }
 
@@ -234,7 +239,12 @@ export const useStore = create<AppState>((set, get) => {
       // (setTimeout, not rAF — rAF stalls in occluded windows).
       if (get().reading.glass)
         window.setTimeout(
-          () => applyGlass(true, themeIsDark(get().theme)),
+          () =>
+            applyGlass(
+              true,
+              themeIsDark(get().theme),
+              get().reading.glassStyle,
+            ),
           600,
         );
       applyTheme(get().theme);
@@ -599,14 +609,16 @@ export const useStore = create<AppState>((set, get) => {
       applyTheme(theme);
       set({ theme });
       // The native glass tint tracks the palette's lightness.
-      if (get().reading.glass) applyGlass(true, themeIsDark(theme));
+      if (get().reading.glass)
+        applyGlass(true, themeIsDark(theme), get().reading.glassStyle);
     },
 
     setReading: (patch) => {
       const reading = { ...get().reading, ...patch };
       localStorage.setItem("readingPrefs", JSON.stringify(reading));
       set({ reading });
-      if ("glass" in patch) applyGlass(reading.glass, themeIsDark(get().theme));
+      if ("glass" in patch || "glassStyle" in patch)
+        applyGlass(reading.glass, themeIsDark(get().theme), reading.glassStyle);
     },
 
     clearQueueItem: (id) =>

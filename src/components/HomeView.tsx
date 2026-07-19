@@ -224,7 +224,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             {/* The dither shader from the hero, as a banner behind the heading —
             it fades into the background before the notebook grid starts. */}
             <div
-              className="pointer-events-none absolute inset-x-0 top-0 h-64 overflow-hidden"
+              className="glass-mist pointer-events-none absolute inset-x-0 top-0 h-64 overflow-hidden"
               aria-hidden="true"
             >
               <DitherBackground themeKey={theme} intensity={2} />
@@ -559,7 +559,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
 
           {/* Reports feed: unread first as a continuously scrolling read —
             the homepage doubles as the morning-read surface. */}
-          <aside className="hidden min-w-0 flex-1 flex-col border-l border-border lg:flex">
+          <aside className="side-card mx-2 mb-2 mt-1 hidden min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-border lg:flex">
             {reports.length > 0 ? (
               <ReportsFeed
                 reports={reports}

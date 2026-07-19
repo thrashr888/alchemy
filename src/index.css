@@ -400,10 +400,18 @@ button {
   background: transparent;
 }
 .glass .app-root {
+  /* Tinted (default): a wash of the chrome tone over the material keeps
+     content legible — the macOS "Tinted" style. Clear drops the wash. */
+  background: color-mix(in srgb, var(--chrome) 45%, transparent);
+}
+html[data-glass="clear"] .app-root {
   background: transparent;
 }
 .glass .side-card {
   /* Enough body to hold a visible edge over the vibrancy. */
+  background: color-mix(in srgb, var(--surface) 84%, transparent);
+}
+html[data-glass="clear"] .side-card {
   background: color-mix(in srgb, var(--surface) 70%, transparent);
 }
 /* Floating menus and popovers: frosted like native macOS menus —
@@ -425,8 +433,7 @@ button {
     var(--background) 100%
   );
 }
-.glass .chat-mist,
-.glass .chat-mist-fade {
+.glass .glass-mist {
   display: none;
 }
 

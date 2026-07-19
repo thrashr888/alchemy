@@ -232,14 +232,26 @@ export function AppearanceTab() {
       </Field>
       <Field
         label="Glass chrome"
-        hint="Experimental: the desktop blurs through the sidebars and titlebar, like native macOS apps."
+        hint="Experimental: the desktop blurs through the chrome like native macOS apps. Tinted keeps more body; Clear lets more through."
       >
         <div className="flex flex-wrap gap-1.5">
           <Pill
-            active={reading.glass}
-            onClick={() => setReading({ glass: !reading.glass })}
+            active={!reading.glass}
+            onClick={() => setReading({ glass: false })}
           >
-            {reading.glass ? "On" : "Off"}
+            Off
+          </Pill>
+          <Pill
+            active={reading.glass && reading.glassStyle === "tinted"}
+            onClick={() => setReading({ glass: true, glassStyle: "tinted" })}
+          >
+            Tinted
+          </Pill>
+          <Pill
+            active={reading.glass && reading.glassStyle === "clear"}
+            onClick={() => setReading({ glass: true, glassStyle: "clear" })}
+          >
+            Clear
           </Pill>
         </div>
       </Field>
