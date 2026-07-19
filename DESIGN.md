@@ -67,13 +67,14 @@ tint their container (`bg-destructive/10`) rather than sitting on plain gray.
 
 Derived materials (defined in `index.css`, never inline):
 
-- `app-root` — the window chrome: `--background` nudged toward
-  `--foreground` (4% light / 7% dark); under `.glass` it drops to 55%
-  opacity over the vibrancy.
+- `--chrome` — the frame tone: `--background` nudged toward
+  `--foreground` (4% light / 7% dark). Under `.glass` the app root washes
+  it at 45% over the material in the Tinted style; Clear drops the wash.
 - `side-card` — panel cards: light schemes are border-only (`--background`
   fill + hairline + 4% shadow, the Vercel/Linear treatment); dark schemes
   get a tonal lift (`--surface` mixed 4% toward foreground); under `.glass`,
-  70% translucent.
+  84% translucent (Tinted) or 70% (Clear). The shared frame (radius,
+  border, overflow) lives in the `.side-card` rule itself.
 - `menu-glass` — every floating surface (row menus, palettes, popovers,
   ⌘K): 72% `--elevated` over `backdrop-blur`, frosted like native macOS
   menus, in and out of glass mode.
