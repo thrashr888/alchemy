@@ -242,7 +242,7 @@ export function StudioPanel() {
   return (
     <div
       style={{ width }}
-      className="relative flex h-full shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-background"
+      className="side-card relative m-2 flex shrink-0 flex-col overflow-hidden rounded-xl border border-border"
     >
       <ResizeHandle
         edge="left"

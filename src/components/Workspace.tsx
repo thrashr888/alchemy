@@ -58,7 +58,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   }, []);
 
   return (
-    <div className="app-chrome flex h-dvh w-screen flex-col overflow-hidden text-foreground">
+    <div className="app-root flex h-dvh w-screen flex-col overflow-hidden bg-background text-foreground">
       <header
         data-tauri-drag-region
         className="flex h-12 items-center gap-2 pl-[84px] pr-3"
@@ -119,9 +119,9 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
         onOpenSettings={() => useStore.getState().openSettings("models")}
       />
 
-      <div className="flex flex-1 gap-2 overflow-hidden px-2 pb-2">
+      <div className="flex flex-1 overflow-hidden">
         {sourcesOpen ? <SourcesPanel /> : <SourcesRail />}
-        <div className="flex min-w-0 flex-1 overflow-hidden rounded-xl border border-border bg-background">
+        <div className="flex min-w-0 flex-1 overflow-hidden bg-background">
           {readerOpen ? <ReaderPane /> : <ChatPanel />}
         </div>
         {studioOpen ? <StudioPanel /> : <StudioRail />}
