@@ -843,6 +843,14 @@ function GeneralTab() {
           >
             Install template files
           </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ml-1.5"
+            onClick={() => void api.openTemplatesFolder()}
+          >
+            Show in Finder
+          </Button>
         </div>
       </div>
 

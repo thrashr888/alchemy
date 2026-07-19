@@ -229,7 +229,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           </AlchemyHero>
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1">
+        <div className="relative flex min-h-0 flex-1">
           {/* Left pane: notebooks & activity. Right pane: the reports feed.
             Two independent scroll regions, same idiom as the notebook view. */}
           <div className="relative min-w-0 flex-1 overflow-y-auto">
@@ -577,7 +577,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           {/* Reports feed: unread first as a continuously scrolling read —
             the homepage doubles as the morning-read surface. */}
           {!reportsOpen && (
-            <div className="side-card mx-2 mb-2 mt-1 hidden w-12 shrink-0 flex-col items-center self-start overflow-hidden rounded-xl border border-border py-2 lg:flex">
+            <div className="side-card absolute right-4 top-1 z-20 hidden w-12 flex-col items-center overflow-hidden rounded-xl border border-border py-2 lg:flex">
               <button
                 type="button"
                 onClick={toggleReports}
