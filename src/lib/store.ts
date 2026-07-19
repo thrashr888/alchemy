@@ -229,7 +229,14 @@ export const useStore = create<AppState>((set, get) => {
     noteReadsBaseline: loadNoteReadsBaseline(),
 
     init: async () => {
-      if (get().reading.glass) applyGlass(true, themeIsDark(get().theme));
+      // Deferred: inserting NSGlassEffectView while WKWebView is still
+      // doing its first paint can blank the webview for the whole session
+      // (setTimeout, not rAF — rAF stalls in occluded windows).
+      if (get().reading.glass)
+        window.setTimeout(
+          () => applyGlass(true, themeIsDark(get().theme)),
+          600,
+        );
       applyTheme(get().theme);
       // Daily epigraph: regenerate in the background if stale; shows next open.
       void refreshEpigraph(get().theme);

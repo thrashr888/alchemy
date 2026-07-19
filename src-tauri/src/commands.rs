@@ -4334,7 +4334,23 @@ pub fn set_window_glass(
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
+        use std::collections::HashMap;
+        use std::sync::Mutex;
         use tauri::Manager;
+
+        // Re-applying NSGlassEffectView to an already-glassed window stacks
+        // a second glass view over the webview and blanks it (frontend
+        // reloads re-run init) — no-op identical requests.
+        type GlassState = HashMap<String, (bool, Option<bool>)>;
+        static APPLIED: Mutex<Option<GlassState>> = Mutex::new(None);
+        {
+            let mut applied = APPLIED.lock().unwrap();
+            let map = applied.get_or_insert_with(HashMap::new);
+            if map.get(window.label()) == Some(&(enabled, dark)) {
+                return Ok(());
+            }
+            map.insert(window.label().to_string(), (enabled, dark));
+        }
         use tauri_plugin_liquid_glass::{LiquidGlassConfig, LiquidGlassExt};
         use window_vibrancy::{apply_vibrancy, clear_vibrancy, NSVisualEffectMaterial};
 
