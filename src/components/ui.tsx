@@ -1,4 +1,5 @@
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import {
   Loader2,
@@ -108,10 +109,8 @@ export function Spinner({ className }: { className?: string }) {
  * Full-card primary action for cards that also contain sibling controls.
  * The button is a sibling, not a wrapper, so menus and checkboxes never become
  * nested interactive content. Place it inside a `relative` card and keep
- * secondary controls above it with `relative z-20`. Cards hosting a RowMenu
- * also need `has-[[aria-expanded=true]]:z-30` — the z-10/z-20 wrappers cap an
- * open menu inside their stacking context, so without the bump the NEXT
- * card's content paints over the dropdown.
+ * secondary controls above it with `relative z-20`. (RowMenu dropdowns
+ * render in a body portal, so no stacking-context bumps are needed.)
  */
 export function CardAction({
   label,
@@ -475,18 +474,36 @@ export function RowMenu({
   const ref = React.useRef<HTMLDivElement>(null);
   const menuRef = React.useRef<HTMLDivElement>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
-  // Which way the dropdown unfolds — flipped before first paint when the
-  // default (below, left-of-trigger) would land outside the viewport.
-  const [flip, setFlip] = React.useState({ up: false, right: false });
+  // The menu renders in a body portal with fixed coordinates: host rows
+  // wrap their content in stacking contexts (and panels clip at rounded
+  // borders), so an in-row absolute menu keeps losing paint-order fights.
+  // Fixed-in-portal escapes every ancestor context and clip.
+  const [pos, setPos] = React.useState<React.CSSProperties | null>(null);
 
   React.useLayoutEffect(() => {
-    if (!open || !menuRef.current) return;
-    const r = menuRef.current.getBoundingClientRect();
-    setFlip({
-      up: r.bottom > window.innerHeight - 8,
-      right: r.left < 8,
-    });
-    return () => setFlip({ up: false, right: false });
+    if (!open || !menuRef.current || !triggerRef.current) {
+      if (!open) setPos(null);
+      return;
+    }
+    const t = triggerRef.current.getBoundingClientRect();
+    const m = menuRef.current.getBoundingClientRect();
+    const up = t.bottom + 4 + m.height > window.innerHeight - 8;
+    const style: React.CSSProperties = up
+      ? { bottom: window.innerHeight - t.top + 4 }
+      : { top: t.bottom + 4 };
+    // Right-align to the trigger; open rightwards when that would clip.
+    const left = t.right - m.width;
+    style.left =
+      left < 8 ? Math.min(t.left, window.innerWidth - m.width - 8) : left;
+    setPos(style);
+  }, [open]);
+
+  // A fixed menu detaches from its trigger on scroll — close instead.
+  React.useEffect(() => {
+    if (!open) return;
+    const onScroll = () => setOpen(false);
+    window.addEventListener("scroll", onScroll, true);
+    return () => window.removeEventListener("scroll", onScroll, true);
   }, [open]);
 
   // Right-clicking anywhere on the host row (the nearest `.group` ancestor)
@@ -510,7 +527,10 @@ export function RowMenu({
     // Capture-phase pointerdown: title-bar drag regions swallow clicks, but
     // pointerdown still dispatches first. Blur covers leaving the app.
     const onDown = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (ref.current?.contains(target) || menuRef.current?.contains(target))
+        return;
+      setOpen(false);
     };
     const onBlur = () => setOpen(false);
     window.addEventListener("pointerdown", onDown, true);
@@ -545,10 +565,7 @@ export function RowMenu({
       className={cn(
         "relative shrink-0",
         className,
-        // While open, the wrapper itself must outrank sibling content
-        // wrappers (z-20 stacking contexts): the menu's own z-30 cannot
-        // escape this wrapper's context, so the wrapper carries it.
-        open ? "z-30 flex" : "hidden group-hover:flex group-focus-within:flex",
+        open ? "flex" : "hidden group-hover:flex group-focus-within:flex",
       )}
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
@@ -593,17 +610,15 @@ export function RowMenu({
       >
         <MoreHorizontal className="h-3.5 w-3.5" />
       </button>
-      {open && (
-        <div
-          ref={menuRef}
-          role="menu"
-          aria-label={label}
-          className={cn(
-            "menu-glass absolute z-30 w-44 overflow-hidden rounded-md py-1 shadow-[0_0_0_0.5px_var(--border-strong),0_8px_24px_-6px_rgba(0,0,0,0.4)]",
-            flip.up ? "bottom-6" : "top-6",
-            flip.right ? "left-0" : "right-0",
-          )}
-        >
+      {open &&
+        createPortal(
+          <div
+            ref={menuRef}
+            role="menu"
+            aria-label={label}
+            style={pos ?? { top: 0, left: 0, visibility: "hidden" }}
+            className="menu-glass fixed z-50 w-44 overflow-hidden rounded-md py-1 shadow-[0_0_0_0.5px_var(--border-strong),0_8px_24px_-6px_rgba(0,0,0,0.4)]"
+          >
           {items.map((it) => (
             <button
               key={it.label}
@@ -629,8 +644,9 @@ export function RowMenu({
               {it.label}
             </button>
           ))}
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

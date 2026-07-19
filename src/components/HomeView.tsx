@@ -361,8 +361,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                     title={nb.title}
                     className={cn(
                       "group relative flex min-h-[132px] cursor-pointer flex-col rounded-lg border border-border bg-surface p-4 transition-colors hover:border-border-strong hover:bg-surface-2",
-                      // An open menu/palette must outrank the next card's
-                      // z-20 action cluster (see CardAction's doc comment).
                       "has-[[aria-expanded=true]]:z-30",
                     )}
                   >
