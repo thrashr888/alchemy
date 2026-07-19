@@ -969,7 +969,7 @@ function DocRails({
         </div>
       )}
       {hasToc && tocPop && !(showToc && tocFits) && (
-        <div className="absolute left-3 top-12 z-20 flex max-h-[70%] w-56 flex-col overflow-y-auto rounded-lg border border-border/60 bg-elevated/95 p-2.5 shadow-lg backdrop-blur">
+        <div className="menu-glass absolute left-3 top-12 z-20 flex max-h-[70%] w-56 flex-col overflow-y-auto rounded-lg border border-border/60 p-2.5 shadow-lg">
           <TocList headings={headings} scrollerRef={scrollerRef} />
         </div>
       )}
@@ -987,7 +987,7 @@ function DocRails({
         </div>
       )}
       {relPop && !(showRelated && relatedFits) && (
-        <div className="absolute right-3 top-12 z-20 flex max-h-[70%] w-64 flex-col overflow-y-auto rounded-lg border border-border/60 bg-elevated/95 p-2.5 shadow-lg backdrop-blur">
+        <div className="menu-glass absolute right-3 top-12 z-20 flex max-h-[70%] w-64 flex-col overflow-y-auto rounded-lg border border-border/60 p-2.5 shadow-lg">
           <AmbientRail
             emptyState
             text={relatedText}
@@ -1521,7 +1521,7 @@ function SourceReader({
         {preview && (
           <button
             type="button"
-            className="absolute z-10 flex w-64 flex-col gap-1 rounded-md border border-border-strong bg-elevated p-2.5 text-left shadow-lg"
+            className="menu-glass absolute z-10 flex w-64 flex-col gap-1 rounded-md border border-border-strong p-2.5 text-left shadow-lg"
             style={{
               top: preview.top,
               left: preview.left,
@@ -1544,7 +1544,7 @@ function SourceReader({
         )}
         {sel && content && (
           <div
-            className="absolute z-10 flex items-center gap-0.5 rounded-md border border-border-strong bg-elevated p-0.5 shadow-lg"
+            className="menu-glass absolute z-10 flex items-center gap-0.5 rounded-md border border-border-strong p-0.5 shadow-lg"
             style={{
               top: sel.top,
               left: sel.left,

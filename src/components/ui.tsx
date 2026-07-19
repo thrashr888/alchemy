@@ -593,7 +593,7 @@ export function RowMenu({
           role="menu"
           aria-label={label}
           className={cn(
-            "absolute z-30 w-44 overflow-hidden rounded-md bg-elevated py-1 shadow-[0_0_0_0.5px_var(--border-strong),0_8px_24px_-6px_rgba(0,0,0,0.4)]",
+            "menu-glass absolute z-30 w-44 overflow-hidden rounded-md py-1 shadow-[0_0_0_0.5px_var(--border-strong),0_8px_24px_-6px_rgba(0,0,0,0.4)]",
             flip.up ? "bottom-6" : "top-6",
             flip.right ? "left-0" : "right-0",
           )}

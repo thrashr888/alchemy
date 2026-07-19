@@ -594,7 +594,7 @@ export function CommandPalette() {
             aria-modal="true"
             aria-label="Command menu"
             className={cn(
-              "flex w-full flex-col overflow-hidden rounded-lg bg-elevated outline-none",
+              "menu-glass flex w-full flex-col overflow-hidden rounded-lg outline-none",
               // Ask mode gets real reading room; search stays launcher-sized.
               mode === "ask"
                 ? "max-h-[78vh] max-w-[780px]"

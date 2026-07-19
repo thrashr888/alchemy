@@ -406,6 +406,15 @@ button {
   /* Enough body to hold a visible edge over the vibrancy. */
   background: color-mix(in srgb, var(--surface) 70%, transparent);
 }
+/* Floating menus and popovers: frosted like native macOS menus —
+   a translucent elevated tone over a backdrop blur of whatever sits
+   beneath, in or out of glass mode. */
+.menu-glass {
+  background: color-mix(in srgb, var(--elevated) 72%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  backdrop-filter: blur(24px) saturate(1.6);
+}
+
 /* The blank-chat mist fades into the surface; over glass it feathers
    into translucency so the shader floats on the material itself. */
 .chat-mist-fade {

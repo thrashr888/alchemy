@@ -439,7 +439,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                         onClick={(e) => e.stopPropagation()}
                         onPointerDown={(e) => e.stopPropagation()}
                         data-notebook-color-palette
-                        className="absolute right-2 top-10 z-30 flex rounded-md border border-border bg-surface px-2 py-1.5 shadow-sm"
+                        className="menu-glass absolute right-2 top-10 z-30 flex rounded-md border border-border px-2 py-1.5 shadow-sm"
                       >
                         {NOTEBOOK_PALETTE.map((c) => (
                           <button
