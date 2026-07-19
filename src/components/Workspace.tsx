@@ -121,7 +121,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
 
       <div className="flex flex-1 overflow-hidden">
         {sourcesOpen ? <SourcesPanel /> : <SourcesRail />}
-        <div className="flex min-w-0 flex-1 overflow-hidden bg-background">
+        <div className="flex min-w-0 flex-1 overflow-hidden pt-1">
           {readerOpen ? <ReaderPane /> : <ChatPanel />}
         </div>
         {studioOpen ? <StudioPanel /> : <StudioRail />}

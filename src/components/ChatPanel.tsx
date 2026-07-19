@@ -162,13 +162,13 @@ export function ChatPanel() {
   }
 
   return (
-    <div className="relative flex h-full flex-1 flex-col bg-background min-w-0">
+    <div className="relative flex h-full flex-1 flex-col min-w-0">
       {isBlank && (
         <>
           <div className="pointer-events-none absolute inset-0 z-0">
             <DitherBackground themeKey={theme} />
           </div>
-          <div className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(ellipse_at_center,transparent_45%,var(--background)_100%)]" />
+          <div className="chat-mist-fade pointer-events-none absolute inset-0 z-0" />
         </>
       )}
       <div className="relative z-10 flex items-center px-5 h-12 border-b border-border">
