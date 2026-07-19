@@ -378,7 +378,13 @@ export function applyTheme(name: string) {
     osListener = null;
   }
   if (name === SYSTEM_THEME && mq) {
-    osListener = () => applyTheme(SYSTEM_THEME);
+    // Re-check the persisted theme at fire time: the glass appearance pin
+    // flips prefers-color-scheme, and (in dev) HMR can leak stale copies
+    // of this listener — both must no-op unless System is still active.
+    osListener = () => {
+      if ((localStorage.getItem("theme") ?? SYSTEM_THEME) === SYSTEM_THEME)
+        applyTheme(SYSTEM_THEME);
+    };
     mq.addEventListener("change", osListener);
   }
   const theme = THEMES[resolveThemeId(name)];
