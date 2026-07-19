@@ -4351,6 +4351,19 @@ pub fn set_window_glass(
             }
             map.insert(window.label().to_string(), (enabled, dark));
         }
+
+        // The glass material renders in the window's effective appearance,
+        // which follows the SYSTEM unless pinned — a dark theme on a light
+        // system otherwise gets bright glass behind dark-theme text.
+        let _ = window.set_theme(if enabled {
+            Some(if dark.unwrap_or(false) {
+                tauri::Theme::Dark
+            } else {
+                tauri::Theme::Light
+            })
+        } else {
+            None
+        });
         use tauri_plugin_liquid_glass::{LiquidGlassConfig, LiquidGlassExt};
         use window_vibrancy::{apply_vibrancy, clear_vibrancy, NSVisualEffectMaterial};
 

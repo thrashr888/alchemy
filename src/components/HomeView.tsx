@@ -162,7 +162,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   // Backend already returns notebooks sorted by most-recently-updated.
   return (
-    <div className="flex h-dvh w-screen flex-col overflow-hidden bg-background text-foreground">
+    <div className="app-root flex h-dvh w-screen flex-col overflow-hidden text-foreground">
       <header
         data-tauri-drag-region
         className="flex items-center gap-2.5 h-12 border-b border-border pl-[84px] pr-5"

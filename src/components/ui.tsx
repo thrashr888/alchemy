@@ -654,14 +654,22 @@ export function EmptyState({
   title,
   hint,
   children,
+  compact = false,
 }: {
   icon?: React.ReactNode;
   title: string;
   hint?: string;
   children?: React.ReactNode;
+  /** Inline section variant: tight vertical rhythm, no icon emphasis. */
+  compact?: boolean;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center text-center gap-2 px-6 py-10">
+    <div
+      className={cn(
+        "flex flex-col items-center justify-center text-center",
+        compact ? "gap-1 px-4 py-3" : "gap-2 px-6 py-10",
+      )}
+    >
       {icon && <div className="text-subtle-foreground mb-1">{icon}</div>}
       <div className="text-[13px] font-medium text-foreground">{title}</div>
       {hint && (

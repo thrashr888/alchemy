@@ -94,7 +94,7 @@ export function Reports() {
 
       {!open ? null : schedules.length === 0 ? (
         <EmptyState
-          icon={<Clock className="h-6 w-6" />}
+          compact
           title="No reports scheduled"
           hint="Reports refresh your URL sources on a schedule, then write a timestamped note."
         />
