@@ -49,29 +49,29 @@ export function sourceIcon(t: Source["sourceType"], url?: string) {
   // modal's provider tiles), in that app's signature color.
   if (t === "mac" && url) {
     if (url.startsWith("cider://calendar/"))
-      return <Calendar className="h-3.5 w-3.5 text-[#eb5757]" />;
+      return <Calendar className="h-3.5 w-3.5 text-muted-foreground" />;
     if (url.startsWith("cider://reminders/"))
-      return <ListChecks className="h-3.5 w-3.5 text-[#e8a33d]" />;
+      return <ListChecks className="h-3.5 w-3.5 text-muted-foreground" />;
     if (url.startsWith("cider://notes/"))
-      return <NotebookText className="h-3.5 w-3.5 text-[#e5c454]" />;
+      return <NotebookText className="h-3.5 w-3.5 text-muted-foreground" />;
     if (url.startsWith("cider://stocks/"))
-      return <TrendingUp className="h-3.5 w-3.5 text-[#4cb782]" />;
+      return <TrendingUp className="h-3.5 w-3.5 text-muted-foreground" />;
   }
   switch (t) {
     case "pdf":
-      return <FileType className="h-3.5 w-3.5 text-[#eb5757]" />;
+      return <FileType className="h-3.5 w-3.5 text-muted-foreground" />;
     case "url":
-      return <Globe className="h-3.5 w-3.5 text-[#5e9bd2]" />;
+      return <Globe className="h-3.5 w-3.5 text-muted-foreground" />;
     case "markdown":
-      return <Hash className="h-3.5 w-3.5 text-[#9b87f5]" />;
+      return <Hash className="h-3.5 w-3.5 text-muted-foreground" />;
     case "image":
-      return <ImageIcon className="h-3.5 w-3.5 text-[#4cb782]" />;
+      return <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />;
     case "folder":
-      return <Folder className="h-3.5 w-3.5 text-[#e8a33d]" />;
+      return <Folder className="h-3.5 w-3.5 text-muted-foreground" />;
     case "mac":
-      return <Command className="h-3.5 w-3.5 text-[#5ec2c2]" />;
+      return <Command className="h-3.5 w-3.5 text-muted-foreground" />;
     case "html":
-      return <CodeXml className="h-3.5 w-3.5 text-[#5e9bd2]" />;
+      return <CodeXml className="h-3.5 w-3.5 text-muted-foreground" />;
     default:
       return <FileText className="h-3.5 w-3.5 text-muted-foreground" />;
   }
@@ -87,7 +87,7 @@ export function Favicon({ url }: { url: string }) {
     /* malformed */
   }
   if (failed || !origin)
-    return <Globe className="h-3.5 w-3.5 text-[#5e9bd2]" />;
+    return <Globe className="h-3.5 w-3.5 text-muted-foreground" />;
   return (
     <img
       src={`${origin}/favicon.ico`}

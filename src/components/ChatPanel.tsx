@@ -12,6 +12,7 @@ import { generatedEpigraph } from "@/lib/epigraph";
 import type { Citation, Message } from "@/lib/types";
 import {
   MessageSquare,
+  Wrench,
   ArrowDown,
   ArrowUp,
   Square,
@@ -415,6 +416,16 @@ function SummaryBanner({
 }
 
 function ChatMessage({ message }: { message: Message }) {
+  // Tool confirmations are process, not conversation: one quiet gray row,
+  // no bubble, no role label — the Claude-desktop "Ran ..." grammar.
+  if (message.kind === "tool") {
+    return (
+      <div className="flex items-start gap-2 py-0.5 text-[12px] text-muted-foreground">
+        <Wrench className="mt-0.5 h-3 w-3 shrink-0 text-subtle-foreground" />
+        <span className="selectable min-w-0">{message.content}</span>
+      </div>
+    );
+  }
   if (message.role === "user") {
     return (
       <div className="flex flex-col items-end gap-1">

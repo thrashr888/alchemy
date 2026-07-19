@@ -50,23 +50,23 @@ const TINT_BY_FAMILY: Record<Artifact["family"], Tint> = {
   generate: {
     tile:
       "border-[#5e9bd2]/20 bg-[#5e9bd2]/10 hover:border-[#5e9bd2]/40 hover:bg-[#5e9bd2]/20",
-    icon: "text-[#5e9bd2]",
+    icon: "text-muted-foreground",
   },
   learning: {
     tile:
       "border-[#9b87f5]/20 bg-[#9b87f5]/10 hover:border-[#9b87f5]/40 hover:bg-[#9b87f5]/20",
-    icon: "text-[#9b87f5]",
+    icon: "text-muted-foreground",
   },
   documents: {
     tile:
       "border-[#4cb782]/20 bg-[#4cb782]/10 hover:border-[#4cb782]/40 hover:bg-[#4cb782]/20",
-    icon: "text-[#4cb782]",
+    icon: "text-muted-foreground",
   },
 };
 const TINT_TEMPLATES: Tint = {
   tile:
     "border-[#e8a33d]/20 bg-[#e8a33d]/10 hover:border-[#e8a33d]/40 hover:bg-[#e8a33d]/20",
-  icon: "text-[#e8a33d]",
+  icon: "text-muted-foreground",
 };
 const TINT_DISCLOSURE: Tint = {
   tile: "border-border bg-surface-2 hover:border-border-strong hover:bg-elevated",

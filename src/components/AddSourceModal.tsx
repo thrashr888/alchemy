@@ -423,7 +423,7 @@ function MacPicker({
                   onClick={() => setNotesFolder(name)}
                   className="flex items-center gap-2 rounded-md px-2 py-2 text-left transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 outline-none"
                 >
-                  <Folder className="h-3.5 w-3.5 shrink-0 text-[#e8a33d]" />
+                  <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                   <span className="min-w-0 truncate text-[13px] text-foreground">
                     {name}
                   </span>

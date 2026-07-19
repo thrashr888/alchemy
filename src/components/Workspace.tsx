@@ -32,6 +32,8 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
       id: string;
       highlight?: string;
     }) => useStore.getState().openInReader(doc);
+    (window as unknown as { __state?: unknown }).__state = () =>
+      useStore.getState();
   }, []);
 
   // Panel + note shortcuts: Cmd+1 sources, Cmd+2 studio, Cmd+N new note

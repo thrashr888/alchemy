@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
@@ -13,6 +13,7 @@ import { QuizView } from "./QuizView";
 import { SlideDeck } from "./SlideDeck";
 import { RichEditor } from "./RichEditor";
 import { StreamingBody } from "./StudioNoteViewer";
+import { KIND_LABEL } from "./studioArtifacts";
 import { Favicon, sourceIcon } from "./SourcesPanel";
 import { Button, Input, RowMenu, Spinner } from "./ui";
 import { chatReadingClass, cn, isWebUrl, shortcutBlocked } from "@/lib/utils";
@@ -1048,6 +1049,65 @@ function ImageView({ url, title }: { url: string; title: string }) {
 
 /** Full-text source reading: faithful markdown when the content is markdown-
  *  shaped, find-in-source, citation highlight, and select-to-ask. */
+const SOURCE_TYPE_LABEL: Record<Source["sourceType"], string> = {
+  pdf: "PDF",
+  text: "Text",
+  markdown: "Markdown",
+  html: "HTML",
+  url: "Web page",
+  image: "Image",
+  folder: "Folder",
+  mac: "Mac app",
+};
+
+function fmtDay(ms: number): string {
+  return new Date(ms).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+/** Linear-style properties block at the top of a document: quiet
+ *  label/value rows that answer "what is this" before the content. */
+function DocProperties({ source, note }: { source?: Source; note?: Note }) {
+  const rows: { label: string; value: string }[] = [];
+  if (source) {
+    rows.push({ label: "Type", value: SOURCE_TYPE_LABEL[source.sourceType] });
+    if (isWebUrl(source.url)) {
+      try {
+        rows.push({ label: "Site", value: new URL(source.url).hostname });
+      } catch {
+        /* malformed url */
+      }
+    }
+    rows.push({ label: "Added", value: fmtDay(source.createdAt) });
+    rows.push({
+      label: "Size",
+      value: `${source.charCount.toLocaleString()} chars · ${source.chunkCount} chunks`,
+    });
+  } else if (note) {
+    rows.push({ label: "Type", value: KIND_LABEL[note.kind] ?? "Note" });
+    if (note.origin === "auto") rows.push({ label: "Origin", value: "From chat" });
+    rows.push({ label: "Created", value: fmtDay(note.createdAt) });
+    if (fmtDay(note.updatedAt) !== fmtDay(note.createdAt))
+      rows.push({ label: "Updated", value: fmtDay(note.updatedAt) });
+  }
+  if (rows.length === 0) return null;
+  return (
+    <div className="mb-6 border-b border-border pb-4">
+      <div className="grid w-fit max-w-full grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-[12px]">
+        {rows.map((r) => (
+          <Fragment key={r.label}>
+            <span className="text-subtle-foreground">{r.label}</span>
+            <span className="min-w-0 truncate text-muted-foreground">{r.value}</span>
+          </Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function SourceReader({
   source,
   highlight,
@@ -1580,6 +1640,7 @@ function SourceReader({
           </div>
         )}
         <div className={cn("mx-auto max-w-[760px] px-8 py-6", chatReadingClass(reading))}>
+          {!!content && <DocProperties source={source} />}
           {content === null ? (
             <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
               <Spinner className="h-3.5 w-3.5" /> Loading source…
@@ -1783,6 +1844,7 @@ function NoteReader({
         )}
       >
         <div className={cn("mx-auto h-full", fillsPane ? "max-w-none" : "max-w-[760px]")}>
+          {!fillsPane && <DocProperties note={note} />}
           {rebuilding && artifactStreamText ? (
             <StreamingBody text={artifactStreamText} />
           ) : note.kind === "mind_map" ? (
@@ -1907,6 +1969,9 @@ function InlineNote({ note }: { note: Note }) {
           }}
           className="w-full bg-transparent text-[22px] font-semibold leading-snug text-foreground outline-none placeholder:text-subtle-foreground"
         />
+        <div className="mt-4">
+          <DocProperties note={note} />
+        </div>
       </div>
       <div
         className={cn("min-h-0 flex-1", chatReadingClass(reading))}

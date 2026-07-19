@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useStore } from "@/lib/store";
-import { Button, Input, Textarea, Modal, Spinner } from "./ui";
+import { Button, EmptyState, Input, Textarea, Modal, Spinner } from "./ui";
 import { cn } from "@/lib/utils";
 import { Clock, Eye, EyeOff, Plus, Play, Trash2, Power, Pencil } from "lucide-react";
 import type { ReportSchedule } from "@/lib/types";
@@ -93,9 +93,11 @@ export function Reports() {
       </div>
 
       {!open ? null : schedules.length === 0 ? (
-        <p className="mt-2 text-[11px] text-subtle-foreground">
-          Schedule recurring reports that refresh your URL sources, then generate a timestamped note.
-        </p>
+        <EmptyState
+          icon={<Clock className="h-6 w-6" />}
+          title="No reports scheduled"
+          hint="Reports refresh your URL sources on a schedule, then write a timestamped note."
+        />
       ) : (
         <div className="mt-2 flex flex-col gap-1">
           {schedules.map((r) => (
