@@ -8,6 +8,7 @@ import {
   EmptyState,
   Input,
   Modal,
+  RowMenu,
   useConfirm,
 } from "./ui";
 import { AlchemyHero } from "./AlchemyHero";
@@ -67,6 +68,16 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     title: string;
   } | null>(null);
   const [colorPickerFor, setColorPickerFor] = useState<string | null>(null);
+  // The reports feed behaves like a sidebar: collapsible, persisted.
+  const [reportsOpen, setReportsOpen] = useState(
+    () => localStorage.getItem("homeReportsOpen") !== "0",
+  );
+  const toggleReports = () => {
+    setReportsOpen((open) => {
+      localStorage.setItem("homeReportsOpen", open ? "0" : "1");
+      return !open;
+    });
+  };
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   // The unified ask box: one input over the WHOLE corpus. Enter hands the
@@ -110,6 +121,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       unreadByNb.set(r.notebookId, (unreadByNb.get(r.notebookId) ?? 0) + 1);
     }
   }
+  const totalUnread = [...unreadByNb.values()].reduce((a, b) => a + b, 0);
 
   // Palette popup stays local to one card and closes on outside interaction or Escape.
   useEffect(() => {
@@ -343,7 +355,12 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                     // Card content is pointer-events-none, so the hover
                     // tooltip for the truncated title lives on the card.
                     title={nb.title}
-                    className="group relative flex min-h-[132px] cursor-pointer flex-col rounded-lg border border-border bg-surface p-4 transition-colors hover:border-border-strong hover:bg-surface-2"
+                    className={cn(
+                      "group relative flex min-h-[132px] cursor-pointer flex-col rounded-lg border border-border bg-surface p-4 transition-colors hover:border-border-strong hover:bg-surface-2",
+                      // An open menu/palette must outrank the next card's
+                      // z-20 action cluster (see CardAction's doc comment).
+                      "has-[[aria-expanded=true]]:z-30",
+                    )}
                   >
                     <CardAction
                       label={`Open notebook ${nb.title}`}
@@ -397,42 +414,42 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                         }}
                         onPointerDown={(e) => e.stopPropagation()}
                         data-notebook-color-trigger
+                        aria-expanded={colorPickerFor === nb.id}
                         aria-label={`Change color for ${nb.title}`}
                         title="Change notebook color"
                       >
                         <span className="relative block h-3 w-3 rounded-full border border-background" />
                       </button>
-                      <button
-                        className="rounded p-1 text-muted-foreground hover:bg-elevated hover:text-foreground"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setRenaming({ id: nb.id, title: nb.title });
-                        }}
-                        title="Rename"
-                        aria-label={`Rename "${nb.title}"`}
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        className="rounded p-1 text-muted-foreground hover:bg-elevated hover:text-destructive"
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          if (
-                            await confirm({
-                              title: `Delete "${nb.title}"?`,
-                              message:
-                                "This permanently deletes the notebook and all of its sources.",
-                              confirmLabel: "Delete",
-                              danger: true,
-                            })
-                          )
-                            remove(nb.id);
-                        }}
-                        title="Delete"
-                        aria-label={`Delete "${nb.title}"`}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      <RowMenu
+                        label={`Options for ${nb.title}`}
+                        items={[
+                          {
+                            label: "Rename",
+                            icon: <Pencil className="h-3.5 w-3.5" />,
+                            onClick: () =>
+                              setRenaming({ id: nb.id, title: nb.title }),
+                          },
+                          {
+                            label: "Delete…",
+                            icon: <Trash2 className="h-3.5 w-3.5" />,
+                            danger: true,
+                            onClick: () => {
+                              void (async () => {
+                                if (
+                                  await confirm({
+                                    title: `Delete "${nb.title}"?`,
+                                    message:
+                                      "This permanently deletes the notebook and all of its sources.",
+                                    confirmLabel: "Delete",
+                                    danger: true,
+                                  })
+                                )
+                                  remove(nb.id);
+                              })();
+                            },
+                          },
+                        ]}
+                      />
                     </div>
                     {colorPickerFor === nb.id && (
                       <div
@@ -559,9 +576,31 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
 
           {/* Reports feed: unread first as a continuously scrolling read —
             the homepage doubles as the morning-read surface. */}
-          <aside className="side-card mx-2 mb-2 mt-1 hidden min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-border lg:flex">
+          {!reportsOpen && (
+            <div className="side-card mx-2 mb-2 mt-1 hidden w-12 shrink-0 flex-col items-center self-start overflow-hidden rounded-xl border border-border py-2 lg:flex">
+              <button
+                type="button"
+                onClick={toggleReports}
+                title="Show latest reports"
+                aria-label="Show the reports feed"
+                className="relative rounded-md p-2 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+              >
+                <Newspaper className="h-4 w-4" />
+                {totalUnread > 0 && (
+                  <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-primary" />
+                )}
+              </button>
+            </div>
+          )}
+          <aside
+            className={cn(
+              "side-card mx-2 mb-2 mt-1 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-border",
+              reportsOpen ? "hidden lg:flex" : "hidden",
+            )}
+          >
             {reports.length > 0 ? (
               <ReportsFeed
+                onCollapse={toggleReports}
                 reports={reports}
                   notebookTitle={notebookTitle}
                   notebookColor={notebookColor}

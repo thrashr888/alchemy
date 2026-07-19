@@ -3,6 +3,7 @@ import { useStore } from "@/lib/store";
 import type { Note } from "@/lib/types";
 import { cn, noteUnread, relativeTime } from "@/lib/utils";
 import { Button } from "./ui";
+import { PanelRight } from "lucide-react";
 import { Markdown } from "./Markdown";
 
 /** One quiet line describing activity since the previous home visit. */
@@ -40,12 +41,15 @@ export function ReportsFeed({
   notebookColor,
   fallbackColor,
   onOpen,
+  onCollapse,
 }: {
   reports: Note[];
   notebookTitle: Map<string, string>;
   notebookColor: Map<string, string>;
   fallbackColor: string;
   onOpen: (note: Note) => void;
+  /** Collapse the feed to its rail (home treats it as a sidebar). */
+  onCollapse?: () => void;
 }) {
   const reads = useStore((state) => state.noteReads);
   const baseline = useStore((state) => state.noteReadsBaseline);
@@ -72,19 +76,32 @@ export function ReportsFeed({
           Latest reports
         </span>
         {unreadCount > 0 && (
-          <>
-            <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-citation">
-              {unreadCount} unread
-            </span>
+          <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-citation">
+            {unreadCount} unread
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-2">
+          {unreadCount > 0 && (
             <button
               type="button"
               onClick={() => markRead(reports.filter(isUnread).map((note) => note.id))}
-              className="ml-auto text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+              className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
             >
               Mark all read
             </button>
-          </>
-        )}
+          )}
+          {onCollapse && (
+            <button
+              type="button"
+              onClick={onCollapse}
+              title="Collapse reports"
+              aria-label="Collapse the reports feed"
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+            >
+              <PanelRight className="h-4 w-4" />
+            </button>
+          )}
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {unread.length === 0 && (
