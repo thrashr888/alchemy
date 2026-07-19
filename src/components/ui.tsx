@@ -544,8 +544,11 @@ export function RowMenu({
       ref={ref}
       className={cn(
         "relative shrink-0",
-        open ? "flex" : "hidden group-hover:flex group-focus-within:flex",
         className,
+        // While open, the wrapper itself must outrank sibling content
+        // wrappers (z-20 stacking contexts): the menu's own z-30 cannot
+        // escape this wrapper's context, so the wrapper carries it.
+        open ? "z-30 flex" : "hidden group-hover:flex group-focus-within:flex",
       )}
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
