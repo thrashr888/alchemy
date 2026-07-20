@@ -68,16 +68,60 @@ const SUGGESTED_VISION = [
 
 /** Known OpenAI-compatible gateways: pick one, the URL fills; the select
  *  derives its value back from the URL so it round-trips. Custom stays for
- *  anything else. (Bob is deliberately absent — its API blocks third-party
- *  clients by vendor policy; one line here if that ever changes.) */
+ *  anything else. Entries with YOUR-… placeholders need the account/resource
+ *  segment edited (the select then correctly shows Custom). Notable
+ *  absences: Bob (blocks third-party clients by vendor policy) and GitHub
+ *  Copilot proper (no plain API key — its subscription rides the copilot
+ *  CLI, i.e. the agent-provider family; GitHub Models below is the
+ *  PAT-keyed cousin). */
 const GATEWAY_PRESETS = [
-  { name: "OpenAI", url: "https://api.openai.com/v1" },
   { name: "Anthropic", url: "https://api.anthropic.com/v1" },
-  { name: "OpenRouter", url: "https://openrouter.ai/api/v1" },
+  {
+    name: "AWS Bedrock (us-east-1)",
+    url: "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1",
+  },
+  {
+    name: "Azure OpenAI (edit resource)",
+    url: "https://YOUR-RESOURCE.openai.azure.com/openai/v1",
+  },
+  { name: "Cerebras", url: "https://api.cerebras.ai/v1" },
+  {
+    name: "Cloudflare Workers AI (edit account)",
+    url: "https://api.cloudflare.com/client/v4/accounts/YOUR-ACCOUNT-ID/ai/v1",
+  },
+  { name: "Cohere", url: "https://api.cohere.ai/compatibility/v1" },
+  { name: "DeepInfra", url: "https://api.deepinfra.com/v1/openai" },
+  { name: "DeepSeek", url: "https://api.deepseek.com/v1" },
+  { name: "DigitalOcean Gradient", url: "https://inference.do-ai.run/v1" },
+  { name: "Fireworks", url: "https://api.fireworks.ai/inference/v1" },
+  { name: "GitHub Models", url: "https://models.github.ai/inference" },
+  {
+    name: "Google Gemini (AI Studio)",
+    url: "https://generativelanguage.googleapis.com/v1beta/openai",
+  },
   { name: "Groq", url: "https://api.groq.com/openai/v1" },
-  { name: "Vercel AI Gateway", url: "https://ai-gateway.vercel.sh/v1" },
-  { name: "Nous (Hermes)", url: "https://inference-api.nousresearch.com/v1" },
+  { name: "Hugging Face", url: "https://router.huggingface.co/v1" },
   { name: "LM Studio (local)", url: "http://localhost:1234/v1" },
+  { name: "Meta Llama API", url: "https://api.llama.com/compat/v1" },
+  { name: "MiniMax", url: "https://api.minimax.io/v1" },
+  { name: "Mistral", url: "https://api.mistral.ai/v1" },
+  { name: "Moonshot (Kimi)", url: "https://api.moonshot.ai/v1" },
+  { name: "Nous (Hermes)", url: "https://inference-api.nousresearch.com/v1" },
+  { name: "Novita", url: "https://api.novita.ai/v3/openai" },
+  { name: "NVIDIA NIM", url: "https://integrate.api.nvidia.com/v1" },
+  { name: "OpenAI", url: "https://api.openai.com/v1" },
+  { name: "OpenCode Zen", url: "https://opencode.ai/zen/v1" },
+  { name: "OpenRouter", url: "https://openrouter.ai/api/v1" },
+  { name: "Perplexity", url: "https://api.perplexity.ai" },
+  {
+    name: "Qwen (DashScope intl)",
+    url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+  },
+  { name: "SambaNova", url: "https://api.sambanova.ai/v1" },
+  { name: "Together", url: "https://api.together.xyz/v1" },
+  { name: "Vercel AI Gateway", url: "https://ai-gateway.vercel.sh/v1" },
+  { name: "xAI (Grok)", url: "https://api.x.ai/v1" },
+  { name: "Z.ai (GLM)", url: "https://api.z.ai/api/paas/v4" },
 ];
 
 const TABS = [
