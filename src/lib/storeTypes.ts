@@ -160,7 +160,7 @@ export interface AppState {
   pickAndAddFolder: () => Promise<void>;
   addSourceFiles: (paths: string[]) => Promise<void>;
   startSourceSync: () => void;
-  addSourceUrl: (url: string) => Promise<void>;
+  addSourceUrl: (url: string, include?: string) => Promise<void>;
   addSourceText: (title: string, text: string) => Promise<void>;
   addSourceMac: (provider: string, collection: string, label: string) => Promise<void>;
   editSourceText: (sourceId: string, title: string, text: string) => Promise<void>;

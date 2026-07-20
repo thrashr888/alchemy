@@ -21,7 +21,16 @@ export interface Source {
   notebookId: string;
   title: string;
   sourceType:
-    "pdf" | "text" | "markdown" | "html" | "url" | "image" | "folder" | "mac";
+    | "pdf"
+    | "text"
+    | "markdown"
+    | "html"
+    | "url"
+    | "image"
+    | "folder"
+    | "mac"
+    | "code"
+    | "git";
   url: string;
   content: string;
   /** "placeholder" = cloud-sync file not downloaded yet; listed, not embedded. */
@@ -214,6 +223,7 @@ export interface AiConfig {
    *  phase 5). On by default — idle-gated, capped, fully recoverable; the
    *  toggle is for cost control. */
   curatorConsolidate: boolean;
+  gitSyncMinutes: number;
 }
 
 /** One passage behind a meta-chat answer: what it is and where it lives. */

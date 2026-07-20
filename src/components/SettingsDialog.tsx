@@ -32,6 +32,8 @@ import {
   Info,
   SlidersHorizontal,
   UserRound,
+  FolderGit2,
+  Wand2,
   AudioLines,
   Trash2,
   Bot,
@@ -66,6 +68,8 @@ const SUGGESTED_VISION = [
 
 const TABS = [
   { id: "general", label: "General", icon: SlidersHorizontal },
+  { id: "sources", label: "Sources", icon: FolderGit2 },
+  { id: "studio", label: "Studio", icon: Wand2 },
   { id: "models", label: "Models", icon: Cpu },
   { id: "chat", label: "Chat", icon: MessageSquare },
   { id: "personalization", label: "Personalization", icon: UserRound },
@@ -255,6 +259,8 @@ export function SettingsDialog({
 
         <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
           {tab === "general" && <GeneralTab />}
+          {tab === "sources" && <SourcesTab />}
+          {tab === "studio" && <StudioTab />}
           {tab === "models" && (
             <>
               <StatusBox
@@ -813,8 +819,48 @@ function GeneralTab() {
         </div>
       </div>
 
+      <PrefToggle
+        storageKey="showNotifications"
+        label="Show notifications"
+        hint="Desktop notification when a document, rebuild, or report finishes."
+      />
+      <PrefToggle
+        storageKey="playSounds"
+        label="Play sounds"
+        hint="Soft event cues: work finishing, new arrivals while the app is in the background, and errors. Never clicks or hovers."
+        onEnable={playDone}
+      />
+      <TrayToggle />
+    </div>
+  );
+}
+
+/** Everything about getting content in: Mac apps, git repositories. */
+function SourcesTab() {
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-1.5">
+        <div className="text-[13px]">Mac apps</div>
+        <p className="text-[11px] leading-relaxed text-subtle-foreground">
+          Calendar, Reminders, and Apple Notes can be added as auto-syncing
+          sources. Connecting here triggers the macOS permission prompts once,
+          so adding them to a notebook later just works.
+        </p>
+        <MacConnect showInstallHint />
+      </div>
+
       <div className="h-px bg-border" />
 
+      <GitSyncSelect />
+    </div>
+  );
+}
+
+/** Everything about generation: templates, the note curator. */
+function StudioTab() {
+  const pushToast = useStore((s) => s.pushToast);
+  return (
+    <div className="flex flex-col gap-5">
       <div className="flex flex-col gap-1.5">
         <div className="text-[13px]">Studio templates</div>
         <p className="text-[11px] leading-relaxed text-subtle-foreground">
@@ -853,33 +899,6 @@ function GeneralTab() {
           </Button>
         </div>
       </div>
-
-      <div className="h-px bg-border" />
-
-      <div className="flex flex-col gap-1.5">
-        <div className="text-[13px]">Mac apps</div>
-        <p className="text-[11px] leading-relaxed text-subtle-foreground">
-          Calendar, Reminders, and Apple Notes can be added as auto-syncing
-          sources. Connecting here triggers the macOS permission prompts once,
-          so adding them to a notebook later just works.
-        </p>
-        <MacConnect showInstallHint />
-      </div>
-
-      <div className="h-px bg-border" />
-
-      <PrefToggle
-        storageKey="showNotifications"
-        label="Show notifications"
-        hint="Desktop notification when a document, rebuild, or report finishes."
-      />
-      <PrefToggle
-        storageKey="playSounds"
-        label="Play sounds"
-        hint="Soft event cues: work finishing, new arrivals while the app is in the background, and errors. Never clicks or hovers."
-        onEnable={playDone}
-      />
-      <TrayToggle />
       <CuratorToggle />
     </div>
   );
@@ -914,6 +933,45 @@ function CuratorToggle() {
         </span>
       </span>
     </label>
+  );
+}
+
+/** Auto-sync cadence for remote git sources (RFC-git-sources §8). Git
+ *  sources themselves are always on — this only paces the network probes.
+ *  Manual Refresh always syncs regardless. */
+function GitSyncSelect() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  if (!aiConfig) return null;
+  return (
+    <div className="flex flex-col gap-1">
+      <label className="flex items-center justify-between gap-3">
+        <span className="text-[13px] text-foreground">
+          Auto-sync git repositories
+        </span>
+        <select
+          value={String(aiConfig.gitSyncMinutes)}
+          onChange={(e) =>
+            void saveAiConfig({
+              ...aiConfig,
+              gitSyncMinutes: Number(e.target.value),
+            })
+          }
+          className="h-8 rounded-md border border-input bg-surface-2 px-2 text-[13px] text-foreground focus:outline-none"
+        >
+          <option value="15">Every 15 minutes</option>
+          <option value="60">Hourly</option>
+          <option value="360">Every 6 hours</option>
+          <option value="1440">Daily</option>
+          <option value="0">Off</option>
+        </select>
+      </label>
+      <span className="text-[11px] leading-relaxed text-subtle-foreground">
+        Remote repos re-fetch when their branch moves, using your own git
+        credentials — Alchemy never stores tokens. Manual Refresh always
+        syncs, even when this is off.
+      </span>
+    </div>
   );
 }
 

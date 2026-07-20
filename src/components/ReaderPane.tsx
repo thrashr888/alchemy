@@ -38,6 +38,10 @@ import {
   Search,
   SlidersHorizontal,
   Sparkles,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  ListOrdered,
 } from "lucide-react";
 
 /**
@@ -1075,16 +1079,50 @@ const SOURCE_TYPE_LABEL: Record<Source["sourceType"], string> = {
   image: "Image",
   folder: "Folder",
   mac: "Mac app",
+  code: "Code",
+  git: "Git repository",
 };
+
+/** Git provenance parsed from the content header line the ingesters write
+ *  (`> origin · branch @ sha · date`) — provenance is content, not schema,
+ *  so the properties block re-reads it rather than growing columns. */
+export function parseGitProvenance(
+  text: string | null | undefined,
+): { origin: string; ref: string; sha: string; date?: string } | null {
+  if (!text) return null;
+  for (const line of text.split("\n", 6)) {
+    const m = line.match(
+      /^> (.+?) · (.+?) @ ([\w-]+)(?: · (\d{4}-\d{2}-\d{2}))?$/,
+    );
+    if (m) return { origin: m[1], ref: m[2], sha: m[3], date: m[4] };
+  }
+  return null;
+}
 
 /** Linear-style properties block at the top of a document: quiet
  *  label/value rows that answer "what is this" before the content. */
-function DocProperties({ source, note }: { source?: Source; note?: Note }) {
+function DocProperties({
+  source,
+  note,
+  git,
+}: {
+  source?: Source;
+  note?: Note;
+  git?: ReturnType<typeof parseGitProvenance>;
+}) {
   const rows: { label: string; value: string }[] = [];
   if (source) {
     rows.push({ label: "Type", value: SOURCE_TYPE_LABEL[source.sourceType] });
     const host = isWebUrl(source.url) ? urlHost(source.url) : null;
     if (host) rows.push({ label: "Site", value: host });
+    if (git) {
+      if (git.origin !== "local repository")
+        rows.push({ label: "Origin", value: git.origin });
+      rows.push({
+        label: "Ref",
+        value: `${git.ref} @ ${git.sha}${git.date ? ` · ${git.date}` : ""}`,
+      });
+    }
     rows.push({ label: "Added", value: fmtDay(source.createdAt) });
     rows.push({
       label: "Size",
@@ -1514,6 +1552,13 @@ function SourceReader({
     );
   }
 
+  // Folder and git parents open as the repo reader (RFC-git-sources §7):
+  // file tree + file pane instead of the flat map text. All hooks above have
+  // run, so the early return is safe.
+  if (source.sourceType === "folder" || source.sourceType === "git") {
+    return <RepoView source={source} map={content} />;
+  }
+
   return (
     <>
       {findOpen && (
@@ -1646,7 +1691,10 @@ function SourceReader({
           </div>
         )}
         <div className={cn("mx-auto max-w-[760px] px-14 py-6", chatReadingClass(reading))}>
-          {!!content && <DocProperties source={source} />}
+          {!!content && <ParentJump source={source} />}
+          {!!content && (
+            <DocProperties source={source} git={parseGitProvenance(content)} />
+          )}
           {content === null ? (
             <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
               <Spinner className="h-3.5 w-3.5" /> Loading source…
@@ -2039,5 +2087,635 @@ function InlineNote({ note }: { note: Note }) {
         </span>
       </div>
     </div>
+  );
+}
+
+// ---- Repo reader (RFC-git-sources §7) --------------------------------------
+
+/** Relative path of a child within its parent's root. Git parents' children
+ *  live in the app-data cache (`…/git/<parent-id>/…`); folder children live
+ *  under the folder path itself. */
+function childRel(parent: Source, child: Source): string {
+  const marker = `/git/${parent.id}/`;
+  const i = child.url.indexOf(marker);
+  if (i !== -1) return child.url.slice(i + marker.length);
+  const root = parent.url.endsWith("/") ? parent.url : parent.url + "/";
+  return child.url.startsWith(root) ? child.url.slice(root.length) : child.url;
+}
+
+type RepoNode = {
+  name: string;
+  path: string;
+  child?: Source;
+  kids: RepoNode[];
+};
+
+function buildRepoTree(pairs: { rel: string; child: Source }[]): RepoNode[] {
+  const root: RepoNode[] = [];
+  for (const { rel, child } of [...pairs].sort((a, b) =>
+    a.rel.localeCompare(b.rel),
+  )) {
+    const parts = rel.split("/").filter(Boolean);
+    let level = root;
+    let path = "";
+    for (let i = 0; i < parts.length; i++) {
+      path = path ? `${path}/${parts[i]}` : parts[i];
+      const isFile = i === parts.length - 1;
+      if (isFile) {
+        level.push({ name: parts[i], path, child, kids: [] });
+      } else {
+        let dir = level.find((n) => !n.child && n.name === parts[i]);
+        if (!dir) {
+          dir = { name: parts[i], path, kids: [] };
+          level.push(dir);
+        }
+        level = dir.kids;
+      }
+    }
+  }
+  return root;
+}
+
+function allDirPaths(nodes: RepoNode[], out: string[] = []): string[] {
+  for (const n of nodes) {
+    if (!n.child) {
+      out.push(n.path);
+      allDirPaths(n.kids, out);
+    }
+  }
+  return out;
+}
+
+/** Entries of the directory at `path` ("" = root) in the built tree. */
+function dirEntries(tree: RepoNode[], path: string): RepoNode[] {
+  if (!path) return tree;
+  let level = tree;
+  for (const part of path.split("/")) {
+    const dir = level.find((n) => !n.child && n.name === part);
+    if (!dir) return [];
+    level = dir.kids;
+  }
+  return level;
+}
+
+function RepoTreeRows({
+  nodes,
+  depth,
+  closed,
+  onToggleDir,
+  selected,
+  onSelect,
+}: {
+  nodes: RepoNode[];
+  depth: number;
+  closed: Set<string>;
+  onToggleDir: (path: string) => void;
+  selected: string | null;
+  onSelect: (child: Source) => void;
+}) {
+  return (
+    <>
+      {nodes.map((n) =>
+        n.child ? (
+          <button
+            key={n.path}
+            type="button"
+            onClick={() => onSelect(n.child!)}
+            title={n.path}
+            className={cn(
+              "flex w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-[3px] text-left text-[12px]",
+              selected === n.child.id
+                ? "bg-surface-2 text-foreground"
+                : "text-muted-foreground hover:bg-surface-2",
+            )}
+            style={{ paddingLeft: `${6 + depth * 12}px` }}
+          >
+            <span
+              className={cn(
+                "h-1.5 w-1.5 shrink-0 rounded-full",
+                n.child.chunkCount > 0
+                  ? "bg-[color:var(--citation)]"
+                  : "border border-subtle-foreground",
+              )}
+              title={n.child.chunkCount > 0 ? "Embedded" : "Search-only"}
+            />
+            <span className="truncate">{n.name}</span>
+          </button>
+        ) : (
+          <Fragment key={n.path}>
+            <button
+              type="button"
+              onClick={() => onToggleDir(n.path)}
+              title={n.path}
+              className="flex w-full min-w-0 items-center gap-1 rounded-md px-1.5 py-[3px] text-left text-[12px] text-muted-foreground hover:bg-surface-2"
+              style={{ paddingLeft: `${4 + depth * 12}px` }}
+              aria-expanded={!closed.has(n.path)}
+            >
+              <ChevronRight
+                className={cn(
+                  "h-3 w-3 shrink-0 text-subtle-foreground transition-transform duration-150",
+                  !closed.has(n.path) && "rotate-90",
+                )}
+              />
+              <span className="truncate">{n.name}/</span>
+            </button>
+            {!closed.has(n.path) && (
+              <RepoTreeRows
+                nodes={n.kids}
+                depth={depth + 1}
+                closed={closed}
+                onToggleDir={onToggleDir}
+                selected={selected}
+                onSelect={onSelect}
+              />
+            )}
+          </Fragment>
+        ),
+      )}
+    </>
+  );
+}
+
+/** Finder-style breadcrumb: each directory segment opens a menu of that
+ *  directory's entries; picking a file opens it, picking a directory expands
+ *  it in the tree. */
+function RepoBreadcrumb({
+  repoTitle,
+  rel,
+  tree,
+  onSelect,
+  onRevealDir,
+}: {
+  repoTitle: string;
+  rel: string;
+  tree: RepoNode[];
+  onSelect: (child: Source) => void;
+  onRevealDir: (path: string) => void;
+}) {
+  const [openAt, setOpenAt] = useState<string | null>(null);
+  const parts = rel.split("/").filter(Boolean);
+  const segs: { label: string; dirPath: string | null }[] = [
+    { label: repoTitle, dirPath: "" },
+    ...parts.map((p, i) => ({
+      label: p,
+      dirPath: i < parts.length - 1 ? parts.slice(0, i + 1).join("/") : null,
+    })),
+  ];
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-0.5 text-[12px]">
+      {segs.map((seg, i) => (
+        <Fragment key={`${seg.label}-${i}`}>
+          {i > 0 && (
+            <ChevronRight className="h-3 w-3 shrink-0 text-subtle-foreground" />
+          )}
+          {seg.dirPath !== null ? (
+            <span className="relative">
+              <button
+                type="button"
+                onClick={() =>
+                  setOpenAt(openAt === seg.dirPath ? null : seg.dirPath)
+                }
+                className="rounded px-1 py-0.5 font-mono text-muted-foreground hover:bg-surface-2 hover:text-foreground"
+              >
+                {seg.label}
+              </button>
+              {openAt === seg.dirPath && (
+                <>
+                  <button
+                    type="button"
+                    aria-label="Close menu"
+                    className="fixed inset-0 z-20 cursor-default"
+                    onClick={() => setOpenAt(null)}
+                  />
+                  <div className="menu-glass absolute left-0 top-full z-30 mt-1 max-h-72 min-w-44 overflow-y-auto rounded-md py-1">
+                    {dirEntries(tree, seg.dirPath).map((n) => (
+                      <button
+                        key={n.path}
+                        type="button"
+                        onClick={() => {
+                          setOpenAt(null);
+                          if (n.child) onSelect(n.child);
+                          else onRevealDir(n.path);
+                        }}
+                        className="flex w-full items-center gap-1.5 px-2.5 py-1 text-left text-[12px] text-foreground hover:bg-surface-2"
+                      >
+                        {n.child ? (
+                          <span
+                            className={cn(
+                              "h-1.5 w-1.5 shrink-0 rounded-full",
+                              n.child.chunkCount > 0
+                                ? "bg-[color:var(--citation)]"
+                                : "border border-subtle-foreground",
+                            )}
+                          />
+                        ) : (
+                          <ChevronRight className="h-3 w-3 shrink-0 text-subtle-foreground" />
+                        )}
+                        <span className="truncate">
+                          {n.name}
+                          {n.child ? "" : "/"}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </span>
+          ) : (
+            <span className="px-1 font-mono text-foreground">{seg.label}</span>
+          )}
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+/** Shiki language ids by extension; anything else renders as plain mono. */
+const SHIKI_LANGS: Record<string, string> = {
+  rs: "rust", ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx",
+  mjs: "javascript", cjs: "javascript", py: "python", go: "go", rb: "ruby",
+  java: "java", kt: "kotlin", swift: "swift", c: "c", h: "c", cc: "cpp",
+  cpp: "cpp", hpp: "cpp", php: "php", sh: "shellscript", bash: "shellscript",
+  zsh: "shellscript", sql: "sql", scala: "scala", lua: "lua", toml: "toml",
+  yaml: "yaml", yml: "yaml", json: "json", jsonc: "jsonc", hcl: "hcl",
+  tf: "hcl", css: "css", scss: "scss", html: "html", xml: "xml",
+  proto: "proto", graphql: "graphql", vue: "vue", svelte: "svelte",
+  dockerfile: "dockerfile", md: "markdown",
+};
+
+// The css-variables theme is built once; colors ride the app tokens (see
+// index.css) so every scheme carries through.
+let shikiThemePromise: Promise<unknown> | null = null;
+
+function CodeView({
+  path,
+  code,
+  lineNums,
+}: {
+  path: string;
+  code: string;
+  lineNums: boolean;
+}) {
+  const [html, setHtml] = useState<string | null>(null);
+  useEffect(() => {
+    let on = true;
+    void (async () => {
+      try {
+        const shiki = await import("shiki");
+        shikiThemePromise ??= Promise.resolve(
+          shiki.createCssVariablesTheme({
+            name: "alchemy",
+            variablePrefix: "--shiki-",
+            fontStyle: true,
+          }),
+        );
+        const theme =
+          (await shikiThemePromise) as import("shiki").ThemeRegistrationAny;
+        const name = path.split("/").pop()?.toLowerCase() ?? "";
+        const ext = name.includes(".") ? name.split(".").pop()! : name;
+        const lang = SHIKI_LANGS[ext] ?? "txt";
+        const out = await shiki.codeToHtml(code, { lang, theme });
+        if (on) setHtml(out);
+      } catch {
+        if (on) setHtml(null);
+      }
+    })();
+    return () => {
+      on = false;
+    };
+  }, [path, code]);
+  if (!html) {
+    return (
+      <pre className="reader-plain selectable overflow-x-auto whitespace-pre font-mono text-[12px] leading-relaxed text-foreground/90">
+        {code}
+      </pre>
+    );
+  }
+  return (
+    <div
+      className={cn(
+        "shiki-view selectable overflow-x-auto text-[12px] leading-relaxed",
+        lineNums && "shiki-nums",
+      )}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
+/** The repo reader: DocProperties, an independently scrolling file tree and
+ *  file pane, Finder-style breadcrumbs, and select-to-chat over code. */
+function RepoView({ source, map }: { source: Source; map: string | null }) {
+  const sources = useStore((s) => s.sources);
+  const sendMessage = useStore((s) => s.sendMessage);
+  const pairs = useMemo(
+    () =>
+      sources
+        .filter((c) => c.parentId === source.id)
+        .map((child) => ({ rel: childRel(source, child), child })),
+    [sources, source],
+  );
+  const tree = useMemo(() => buildRepoTree(pairs), [pairs]);
+  const readme = useMemo(() => {
+    const candidates = pairs
+      .filter(({ rel }) => /(^|\/)readme(\.[a-z]+)?$/i.test(rel))
+      .sort((a, b) => a.rel.split("/").length - b.rel.split("/").length);
+    return candidates[0]?.child ?? null;
+  }, [pairs]);
+  const [sel, setSel] = useState<Source | null>(null);
+  const [selContent, setSelContent] = useState<string | null>(null);
+  const [readmeContent, setReadmeContent] = useState<string | null>(null);
+  const [closed, setClosed] = useState<Set<string>>(new Set());
+  const [lineNums, setLineNums] = useState(true);
+  const [tierBusy, setTierBusy] = useState(false);
+  const [codeSel, setCodeSel] = useState<{
+    text: string;
+    top: number;
+    left: number;
+  } | null>(null);
+  const paneRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!sel) return;
+    let on = true;
+    setSelContent(null);
+    api
+      .getSourceContent(sel.id)
+      .then((c) => on && setSelContent(c))
+      .catch(() => on && setSelContent(""));
+    return () => {
+      on = false;
+    };
+  }, [sel]);
+
+  useEffect(() => {
+    if (!readme) return;
+    let on = true;
+    api
+      .getSourceContent(readme.id)
+      .then((c) => on && setReadmeContent(c))
+      .catch(() => on && setReadmeContent(null));
+    return () => {
+      on = false;
+    };
+  }, [readme]);
+
+  const selRel = sel ? childRel(source, sel) : null;
+  const selIsCode = !!sel && sel.sourceType === "code";
+  const anyClosed = closed.size > 0;
+
+  /** Promote to embedded / demote to search-only (RFC-git-sources §4) —
+   *  persists per file and re-ingests to match. */
+  async function toggleTier() {
+    if (!sel || tierBusy) return;
+    setTierBusy(true);
+    try {
+      const updated = await api.setChildEmbedded(sel.id, !(sel.chunkCount > 0));
+      const id = useStore.getState().currentId;
+      if (id) useStore.setState({ sources: await api.listSources(id) });
+      setSel(updated);
+    } finally {
+      setTierBusy(false);
+    }
+  }
+
+  function captureSelection() {
+    const container = paneRef.current;
+    const s = window.getSelection();
+    if (!container || !s || s.isCollapsed) {
+      setCodeSel(null);
+      return;
+    }
+    const text = s.toString().trim();
+    if (text.length < 4 || !container.contains(s.anchorNode)) {
+      setCodeSel(null);
+      return;
+    }
+    const rect = s.getRangeAt(0).getBoundingClientRect();
+    const host = container.getBoundingClientRect();
+    setCodeSel({
+      text,
+      top: rect.top - host.top + container.scrollTop - 34,
+      left: Math.max(8, rect.left - host.left),
+    });
+  }
+
+  function chatAbout(prefix: string) {
+    if (!codeSel) return;
+    const block = `\`\`\`\n${codeSel.text}\n\`\`\``;
+    setCodeSel(null);
+    useStore.getState().closeReader();
+    void sendMessage(
+      `${prefix} \`${selRel}\` in "${source.title}":\n\n${block}`,
+    );
+  }
+
+  function askCodeCustom() {
+    if (!codeSel) return;
+    const block = `\`\`\`\n${codeSel.text}\n\`\`\``;
+    setCodeSel(null);
+    useStore.getState().closeReader();
+    useStore.setState({
+      pendingInput: `About this code from \`${selRel}\` in "${source.title}":\n${block}\n\n`,
+    });
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col px-8 py-5">
+      <DocProperties source={source} git={parseGitProvenance(map)} />
+      <div className="flex min-h-0 flex-1">
+        <div className="flex w-[240px] shrink-0 flex-col border-r border-border">
+          <div className="flex items-center justify-between pb-1 pr-2">
+            <button
+              type="button"
+              onClick={() => setSel(null)}
+              className={cn(
+                "flex items-center gap-1.5 rounded-md px-1.5 py-[3px] text-left text-[12px]",
+                sel === null
+                  ? "bg-surface-2 text-foreground"
+                  : "text-muted-foreground hover:bg-surface-2",
+              )}
+            >
+              <ListTree className="h-3 w-3 shrink-0" />
+              Overview
+            </button>
+            <button
+              type="button"
+              title={anyClosed ? "Expand all" : "Collapse all"}
+              aria-label={anyClosed ? "Expand all folders" : "Collapse all folders"}
+              onClick={() =>
+                setClosed(anyClosed ? new Set() : new Set(allDirPaths(tree)))
+              }
+              className="rounded p-1 text-subtle-foreground hover:bg-surface-2 hover:text-foreground"
+            >
+              {anyClosed ? (
+                <ChevronsUpDown className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronsDownUp className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto py-1 pr-2">
+            <RepoTreeRows
+              nodes={tree}
+              depth={0}
+              closed={closed}
+              onToggleDir={(p) =>
+                setClosed((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(p)) next.delete(p);
+                  else next.add(p);
+                  return next;
+                })
+              }
+              selected={sel?.id ?? null}
+              onSelect={setSel}
+            />
+          </div>
+        </div>
+        <div
+          ref={paneRef}
+          onMouseUp={captureSelection}
+          className="relative min-w-0 flex-1 overflow-y-auto py-1 pl-6"
+        >
+          {codeSel && (
+            <div
+              className="menu-glass absolute z-30 flex items-center gap-0.5 rounded-md px-1 py-0.5"
+              style={{ top: Math.max(0, codeSel.top), left: codeSel.left }}
+            >
+              <SelAction
+                icon={<Sparkles className="h-3.5 w-3.5" />}
+                label="Explain this"
+                onClick={() => chatAbout("Explain this code from")}
+              />
+              <SelAction
+                icon={<MessageSquarePlus className="h-3.5 w-3.5" />}
+                label="Ask…"
+                onClick={askCodeCustom}
+              />
+            </div>
+          )}
+          {sel === null ? (
+            map === null ? (
+              <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+                <Spinner className="h-3.5 w-3.5" /> Loading…
+              </div>
+            ) : (
+              <div className="selectable">
+                {readme && readmeContent && (
+                  <>
+                    <div className="mb-2 flex items-center gap-2">
+                      <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+                        Readme
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setSel(readme)}
+                        className="text-[11px] text-citation hover:underline"
+                      >
+                        Open file →
+                      </button>
+                    </div>
+                    <Markdown>{readmeContent}</Markdown>
+                    <div className="my-5 h-px bg-border" />
+                    <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+                      Map
+                    </div>
+                  </>
+                )}
+                <Markdown>{map}</Markdown>
+              </div>
+            )
+          ) : (
+            <>
+              <div className="sticky top-0 z-10 -ml-1 flex items-center gap-2 bg-background/85 py-1 pl-1 backdrop-blur">
+                <RepoBreadcrumb
+                  repoTitle={source.title}
+                  rel={selRel ?? ""}
+                  tree={tree}
+                  onSelect={setSel}
+                  onRevealDir={(p) =>
+                    setClosed((prev) => {
+                      const next = new Set(prev);
+                      next.delete(p);
+                      return next;
+                    })
+                  }
+                />
+                <button
+                  type="button"
+                  onClick={() => void toggleTier()}
+                  disabled={tierBusy}
+                  title={
+                    sel.chunkCount > 0
+                      ? "Demote: keep the file searchable but stop embedding it"
+                      : "Promote: embed this file so hybrid retrieval sees it"
+                  }
+                  className={cn(
+                    "flex shrink-0 items-center gap-1 rounded-full border border-border px-2 py-px text-[11px] hover:border-border-strong hover:bg-surface-2",
+                    sel.chunkCount > 0 ? "text-citation" : "text-muted-foreground",
+                  )}
+                >
+                  {tierBusy && <Spinner className="h-2.5 w-2.5" />}
+                  {sel.chunkCount > 0 ? "Embedded" : "Search-only"}
+                </button>
+                <span className="flex-1" />
+                {selIsCode && (
+                  <button
+                    type="button"
+                    title={lineNums ? "Hide line numbers" : "Show line numbers"}
+                    aria-label={
+                      lineNums ? "Hide line numbers" : "Show line numbers"
+                    }
+                    onClick={() => setLineNums((v) => !v)}
+                    className={cn(
+                      "rounded p-1 hover:bg-surface-2",
+                      lineNums
+                        ? "text-citation"
+                        : "text-subtle-foreground hover:text-foreground",
+                    )}
+                  >
+                    <ListOrdered className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+              {selContent === null ? (
+                <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+                  <Spinner className="h-3.5 w-3.5" /> Loading file…
+                </div>
+              ) : selIsCode ? (
+                <CodeView
+                  path={selRel ?? ""}
+                  code={selContent}
+                  lineNums={lineNums}
+                />
+              ) : (
+                <div className="selectable">
+                  <Markdown>{selContent}</Markdown>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** For folder/repo children: a quiet jump back to the parent's repo reader. */
+function ParentJump({ source }: { source: Source }) {
+  const parent = useStore((s) =>
+    source.parentId ? s.sources.find((x) => x.id === source.parentId) : undefined,
+  );
+  const openSourceViewer = useStore((s) => s.openSourceViewer);
+  if (!parent) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => openSourceViewer(parent.id, parent.title)}
+      className="mb-2 flex items-center gap-1 text-[12px] text-muted-foreground hover:text-citation"
+    >
+      <ChevronRight className="h-3 w-3 rotate-180" />
+      in {parent.title}
+    </button>
   );
 }

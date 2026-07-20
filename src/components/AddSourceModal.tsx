@@ -31,6 +31,47 @@ type MacProvider = (typeof MAC_PROVIDERS)[number];
 
 type Step = "hub" | "url" | "text" | "mac";
 
+/** Client-side mirror of the backend's git URL grammar (RFC-git-sources §1)
+ *  — just enough shape detection to show the include ladder before import.
+ *  Conservative on unknown hosts: only unambiguous shapes (clone URLs,
+ *  /tree, /blob) light up; the backend's host probe decides the rest. */
+type GitShape = "repo" | "tree" | "blob" | "clone" | null;
+function gitShape(raw: string): GitShape {
+  const u = raw.trim().replace(/\/+$/, "");
+  if (/^git@[^/]+:/.test(u) || u.startsWith("ssh://") || /\.git$/.test(u))
+    return "clone";
+  const m = u.match(/^https?:\/\/(?:www\.)?([^/?#]+)\/([^/?#]+)\/([^/?#]+)(?:\/(.*))?$/);
+  if (!m) return null;
+  const [, host, owner, , rest] = m;
+  if (!host.includes(".")) return null;
+  const reserved = [
+    "orgs", "organizations", "settings", "marketplace", "topics", "search",
+    "login", "features", "about", "pricing", "explore", "sponsors",
+    "notifications", "issues", "pulls", "collections", "events", "trending",
+  ];
+  if (reserved.includes(owner.toLowerCase())) return null;
+  if (rest?.startsWith("tree/")) return "tree";
+  if (rest?.startsWith("blob/")) return "blob";
+  if (rest) return null;
+  return host === "github.com" ? "repo" : null;
+}
+
+/** Ladder rungs offered per shape; first entry is the shape's default. */
+function includeOptions(shape: GitShape) {
+  if (shape === "repo")
+    return [
+      { v: "readme", label: "README" },
+      { v: "docs", label: "Docs" },
+      { v: "full", label: "Everything" },
+    ];
+  if (shape === "tree" || shape === "clone")
+    return [
+      { v: "full", label: "Everything" },
+      { v: "docs", label: "Docs" },
+    ];
+  return [];
+}
+
 /** One tile on the hub: icon over label, same visual weight as the old menu rows. */
 function Tile({
   icon,
@@ -79,6 +120,8 @@ export function AddSourceModal() {
 
   const [step, setStep] = useState<Step>("hub");
   const [url, setUrl] = useState("");
+  /** Include-ladder choice for git-shaped URLs; null = the shape's default. */
+  const [include, setInclude] = useState<string | null>(null);
   const [pasteTitle, setPasteTitle] = useState("");
   const [pasteText, setPasteText] = useState("");
   const [provider, setProvider] = useState<MacProvider>(MAC_PROVIDERS[0]);
@@ -213,6 +256,10 @@ export function AddSourceModal() {
               onClick={() => setStep("text")}
             />
           </div>
+          <p className="text-[11px] leading-relaxed text-subtle-foreground">
+            URLs cover web pages, Google Docs, and GitHub or git repositories
+            — repos import as living sources that re-sync automatically.
+          </p>
 
           {macAvailable === true && (
             <div className="grid grid-cols-4 gap-2">
@@ -242,7 +289,12 @@ export function AddSourceModal() {
           onSubmit={async (e) => {
             e.preventDefault();
             closeAddSource();
-            await addUrl(url);
+            const shape = gitShape(url);
+            const opts = includeOptions(shape);
+            await addUrl(
+              url,
+              opts.length > 0 ? (include ?? opts[0].v) : undefined,
+            );
           }}
           className="flex flex-col gap-3"
         >
@@ -251,12 +303,47 @@ export function AddSourceModal() {
             autoFocus
             placeholder="https://example.com/article"
             value={url}
-            onChange={(e) => setUrl(e.target.value)}
+            onChange={(e) => {
+              setUrl(e.target.value);
+              setInclude(null);
+            }}
           />
-          <p className="text-[11px] leading-relaxed text-subtle-foreground">
-            Google Docs, Sheets, and Slides links work too — share them as
-            “Anyone with the link” first.
-          </p>
+          {includeOptions(gitShape(url)).length > 0 ? (
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+                  Import
+                </span>
+                {includeOptions(gitShape(url)).map((o) => {
+                  const active = (include ?? includeOptions(gitShape(url))[0].v) === o.v;
+                  return (
+                    <button
+                      key={o.v}
+                      type="button"
+                      onClick={() => setInclude(o.v)}
+                      className={
+                        active
+                          ? "rounded-full bg-primary/15 px-2.5 py-0.5 text-[12px] text-citation"
+                          : "rounded-full px-2.5 py-0.5 text-[12px] text-muted-foreground hover:bg-surface-2"
+                      }
+                    >
+                      {o.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] leading-relaxed text-subtle-foreground">
+                A git repository — import just the README, prose docs, or docs
+                and code. Re-syncs automatically with your own git
+                credentials; widen it later from the source's Refresh.
+              </p>
+            </div>
+          ) : (
+            <p className="text-[11px] leading-relaxed text-subtle-foreground">
+              Google Docs, Sheets, and Slides links work too — share them as
+              “Anyone with the link” first.
+            </p>
+          )}
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={closeAddSource}>
               Cancel

@@ -17,6 +17,16 @@ export const SUPPORTED_EXTENSIONS = [
   "gdoc", "gsheet", "gslides",
   "png", "jpg", "jpeg", "jpe", "webp", "gif", "bmp", "tif", "tiff",
   "heic", "heif", "avif", "ico", "jp2",
+  // Code and config (mirrors CODE_EXTENSIONS in src-tauri/src/ingest.rs) —
+  // ingested verbatim and chunked code-aware.
+  "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "go", "rb", "java",
+  "kt", "kts", "swift", "c", "h", "cc", "cpp", "hpp", "hh", "m", "mm",
+  "php", "sh", "bash", "zsh", "fish", "sql", "scala", "lua", "r", "ex",
+  "exs", "erl", "zig", "nix", "proto", "graphql", "vue", "svelte",
+  "css", "scss", "less", "toml", "yaml", "yml", "json", "jsonc", "hcl",
+  "tf", "tfvars", "ini", "cfg", "conf", "env", "xml", "plist", "gradle",
+  "cmake", "asm", "s", "d", "dart", "hs", "ml", "clj", "cljs", "el",
+  "vim", "ps1", "bat", "cmd",
 ];
 
 /**

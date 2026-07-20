@@ -119,8 +119,10 @@ export const api = {
   addSourceFolder: (notebookId: string, path: string) =>
     run(slow<Source>("add_source_folder", { notebookId, path })),
   resyncSources: () => run(slow<FolderScan>("resync_sources")),
-  addSourceUrl: (notebookId: string, url: string) =>
-    run(ai<Source>("add_source_url", { notebookId, url })),
+  addSourceUrl: (notebookId: string, url: string, include?: string) =>
+    run(ai<Source>("add_source_url", { notebookId, url, include })),
+  setChildEmbedded: (sourceId: string, embed: boolean) =>
+    run(ai<Source>("set_child_embedded", { sourceId, embed })),
   addSourceText: (notebookId: string, title: string, text: string) =>
     run(ai<Source>("add_source_text", { notebookId, title, text })),
   updateSourceText: (sourceId: string, title: string, text: string) =>

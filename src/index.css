@@ -630,3 +630,44 @@ input.select-quiet:checked {
 input.select-quiet:indeterminate {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M4 7h6' fill='none' stroke='%23989da6' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E");
 }
+
+/* Shiki code view (repo reader, RFC-git-sources §7): syntax colors ride the
+   semantic tokens so all schemes carry through; background stays the paper. */
+:root {
+  --shiki-foreground: var(--foreground);
+  --shiki-background: transparent;
+  --shiki-token-constant: var(--citation);
+  --shiki-token-string: var(--success);
+  --shiki-token-comment: var(--subtle-foreground);
+  --shiki-token-keyword: var(--primary);
+  --shiki-token-parameter: var(--foreground);
+  --shiki-token-function: var(--citation);
+  --shiki-token-string-expression: var(--success);
+  --shiki-token-punctuation: var(--muted-foreground);
+  --shiki-token-link: var(--citation);
+}
+.shiki-view pre {
+  background: transparent !important;
+  margin: 0;
+  padding: 0;
+}
+.shiki-view code {
+  font-family: "SF Mono", ui-monospace, monospace;
+}
+
+/* Optional line numbers on the Shiki view (repo reader toggle): CSS counters
+   over shiki's per-line spans; numbers stay unselectable so copied code is
+   clean. */
+.shiki-nums code {
+  counter-reset: line;
+}
+.shiki-nums code .line::before {
+  counter-increment: line;
+  content: counter(line);
+  display: inline-block;
+  width: 2.5em;
+  margin-right: 1.25em;
+  text-align: right;
+  color: var(--subtle-foreground);
+  user-select: none;
+}

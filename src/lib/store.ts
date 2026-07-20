@@ -805,7 +805,7 @@ export const useStore = create<AppState>((set, get) => {
       }
     },
 
-    addSourceUrl: async (url) => {
+    addSourceUrl: async (url, include?: string) => {
       const id = get().currentId;
       if (!id) return;
       const item: QueueItem = {
@@ -814,7 +814,7 @@ export const useStore = create<AppState>((set, get) => {
         status: "pending",
       };
       set({ ingestQueue: [...get().ingestQueue, item], error: null });
-      await runQueued(get, set, item, () => api.addSourceUrl(id, url));
+      await runQueued(get, set, item, () => api.addSourceUrl(id, url, include));
       if (get().currentId === id) set({ sources: await api.listSources(id) });
     },
 

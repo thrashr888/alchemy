@@ -16,8 +16,11 @@ import {
 import { cn, isWebUrl } from "@/lib/utils";
 import type { Source } from "@/lib/types";
 import {
+  ChevronRight,
+  FileCode,
   FileText,
   FileType,
+  GitBranch,
   Globe,
   Hash,
   Plus,
@@ -58,6 +61,10 @@ export function sourceIcon(t: Source["sourceType"], url?: string) {
       return <TrendingUp className="h-3.5 w-3.5 text-muted-foreground" />;
   }
   switch (t) {
+    case "git":
+      return <GitBranch className="h-3.5 w-3.5 text-muted-foreground" />;
+    case "code":
+      return <FileCode className="h-3.5 w-3.5 text-muted-foreground" />;
     case "pdf":
       return <FileType className="h-3.5 w-3.5 text-muted-foreground" />;
     case "url":
@@ -188,14 +195,26 @@ export function SourcesPanel() {
   const pct = Math.min(100, (totalChars / MAX_NOTEBOOK_CHARS) * 100);
 
   // Folder children render indented under their folder; everything else is a
-  // flat top-level row.
+  // flat top-level row. Parents with many children start collapsed — a repo
+  // shouldn't wall the panel — and the chevron remembers the user's choice
+  // for the session.
+  const [collapsedParents, setCollapsedParents] = useState<
+    Record<string, boolean>
+  >({});
+  const isCollapsed = (id: string, kidCount: number) =>
+    collapsedParents[id] ?? kidCount > 8;
+  const toggleCollapsed = (id: string, kidCount: number) =>
+    setCollapsedParents((m) => ({ ...m, [id]: !isCollapsed(id, kidCount) }));
   const rows: { s: Source; indent: boolean }[] = [];
   for (const s of sources) {
     if (s.parentId) continue;
     rows.push({ s, indent: false });
-    if (s.sourceType === "folder") {
-      for (const c of sources.filter((x) => x.parentId === s.id)) {
-        rows.push({ s: c, indent: true });
+    if (s.sourceType === "folder" || s.sourceType === "git") {
+      const kids = sources.filter((x) => x.parentId === s.id);
+      if (!isCollapsed(s.id, kids.length)) {
+        for (const c of kids) {
+          rows.push({ s: c, indent: true });
+        }
       }
     }
   }
@@ -389,17 +408,18 @@ export function SourcesPanel() {
             </div>
             <div className="flex flex-col gap-0.5">
               {rows.map(({ s, indent }) => {
-                const isFolder = s.sourceType === "folder";
+                const isFolder =
+                  s.sourceType === "folder" || s.sourceType === "git";
                 const isMacNote = s.url.startsWith("cider://notes/note/");
                 const isMacReminders = s.url.startsWith(
                   "cider://reminders/list/",
                 );
                 // Errored WEB sources still open in the reader: extraction
-                // failed, but the Live view can show the actual page.
+                // failed, but the Live view can show the actual page. Folder
+                // and git parents open as the repo reader.
                 const readable =
-                  !isFolder &&
-                  (s.status === "ready" ||
-                    (s.status === "error" && isWebUrl(s.url)));
+                  s.status === "ready" ||
+                  (s.status === "error" && isWebUrl(s.url));
                 const kids = isFolder
                   ? sources.filter((x) => x.parentId === s.id)
                   : [];
@@ -434,17 +454,50 @@ export function SourcesPanel() {
                         onClick={() => openSourceViewer(s.id, s.title)}
                       />
                     )}
-                    <div className="pointer-events-none relative z-10 mt-0.5">
-                      {s.status === "error" ? (
-                        <AlertCircle className="h-3.5 w-3.5 text-destructive" />
-                      ) : s.status === "placeholder" ? (
-                        <Cloud className="h-3.5 w-3.5 text-subtle-foreground" />
-                      ) : s.sourceType === "url" && s.url ? (
-                        <Favicon url={s.url} />
-                      ) : (
-                        sourceIcon(s.sourceType, s.url)
-                      )}
-                    </div>
+                    {isFolder && kids.length > 0 ? (
+                      // Notion/Arc pattern: the type icon at rest, a rotating
+                      // disclosure caret replacing it on hover or keyboard
+                      // focus. The button toggles collapse; the rest of the
+                      // row opens the repo reader. State stays legible at
+                      // rest — expanded parents show indented children,
+                      // collapsed ones their count badge.
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleCollapsed(s.id, kids.length);
+                        }}
+                        aria-expanded={!isCollapsed(s.id, kids.length)}
+                        aria-label={
+                          isCollapsed(s.id, kids.length)
+                            ? `Show ${kids.length} files in ${s.title}`
+                            : `Hide files in ${s.title}`
+                        }
+                        className="pointer-events-auto relative z-20 mt-0.5 shrink-0 cursor-pointer"
+                      >
+                        <span className="group-hover:hidden group-focus-within:hidden">
+                          {sourceIcon(s.sourceType, s.url)}
+                        </span>
+                        <ChevronRight
+                          className={cn(
+                            "hidden h-3.5 w-3.5 text-muted-foreground transition-transform duration-150 group-hover:block group-focus-within:block",
+                            !isCollapsed(s.id, kids.length) && "rotate-90",
+                          )}
+                        />
+                      </button>
+                    ) : (
+                      <div className="pointer-events-none relative z-10 mt-0.5">
+                        {s.status === "error" ? (
+                          <AlertCircle className="h-3.5 w-3.5 text-destructive" />
+                        ) : s.status === "placeholder" ? (
+                          <Cloud className="h-3.5 w-3.5 text-subtle-foreground" />
+                        ) : s.sourceType === "url" && s.url ? (
+                          <Favicon url={s.url} />
+                        ) : (
+                          sourceIcon(s.sourceType, s.url)
+                        )}
+                      </div>
+                    )}
                     <div className="pointer-events-none relative z-10 min-w-0 flex-1">
                       {/* The ⋯ menu lives in the title row: hovering shortens the
                       title but never reflows the metadata line below. */}
