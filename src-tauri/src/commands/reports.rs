@@ -69,7 +69,7 @@ async fn refresh_notebook_urls(app: &AppHandle, state: &AppState, notebook_id: &
         let _ = app.emit("report://step", format!("Refreshing: {}", source.title));
         if let Ok(Some(existing)) = state.db.get_source(&source.id).await {
             if let Ok(extracted) = crate::capture::extract_url_rescued(&existing.url).await {
-                let _ = reingest(state, &existing, extracted).await;
+                let _ = reingest(state, &existing, extracted, None, true).await;
             }
         }
     }

@@ -51,6 +51,13 @@ tokio-util = { version = "0.7.18", default-features = false }
 dom_smoothie = "0.18"
 csv = "1"
 percent-encoding = "2"
+# Folder scanning for all folder sources (docs/RFC-git-sources.md): ripgrep's
+# own walker — .gitignore/.ignore-aware, symlink-safe, prunes dot-dirs.
+ignore = "0.4"
+# Query-time exact-match retrieval leg over repo-backed sources — ripgrep's
+# engine, in-process (RFC-git-sources §6).
+grep-regex = "0.1"
+grep-searcher = "0.1"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
 
@@ -73,6 +80,8 @@ tauri-plugin-global-shortcut = "2.3.2"
 htmd = "0.5.4"
 window-vibrancy = "0.8.0"
 tauri-plugin-liquid-glass = "0.1.6"
+ast-grep-language = { version = "0.44.1", default-features = false, features = ["builtin-parser", "tree-sitter-rust", "tree-sitter-typescript", "tree-sitter-javascript", "tree-sitter-python", "tree-sitter-go", "tree-sitter-ruby", "tree-sitter-java", "tree-sitter-swift", "tree-sitter-c", "tree-sitter-cpp", "tree-sitter-php", "tree-sitter-html", "tree-sitter-bash", "tree-sitter-hcl"] }
+ast-grep-core = "0.44.1"
 
 # Already in the tree via tauri/wry — traffic-light insets, the Services
 # provider (services.rs), and Spotlight indexing (spotlight.rs).

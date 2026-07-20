@@ -285,20 +285,29 @@ pub(crate) async fn store_extracted(
     } else {
         0
     };
-    store_new_source(state, notebook_id, extracted, "", mtime).await
+    store_new_source(state, notebook_id, extracted, "", mtime, None, true).await
 }
 
 /// Chunk, embed, classify, and persist a new source row. `parent_id` is set
 /// for folder children (which dedup by path, not content); `mtime` for any
-/// file-backed source.
+/// file-backed source; `code_ctx` is the "repo › path" retrieval context for
+/// code chunks when the caller knows it.
 async fn store_new_source(
     state: &AppState,
     notebook_id: &str,
     extracted: ingest::Extracted,
     parent_id: &str,
     mtime: i64,
+    code_ctx: Option<&str>,
+    embed: bool,
 ) -> anyhow::Result<Source> {
-    let chunks = ingest::chunk_text(&extracted.title, &extracted.text);
+    // Repository-tier code children store their content but skip embedding —
+    // the ripgrep leg reaches them at query time (RFC-git-sources §4).
+    let chunks = if embed {
+        ingest::chunk_source(&extracted, code_ctx)
+    } else {
+        Vec::new()
+    };
     let embed_inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
     let embeddings = {
         let ai = state.ai.read().await;
@@ -456,6 +465,11 @@ async fn extract_pdf_ocr(state: &AppState, path: &str) -> anyhow::Result<ingest:
 /// title. Best-effort — any failure keeps the filename, titling must never
 /// break an import.
 pub(crate) async fn friendly_title(state: &AppState, extracted: &mut ingest::Extracted) {
+    // Code files are their own best titles (db.rs IS the name) — and a repo
+    // add would otherwise fire one model call per file.
+    if extracted.source_type == "code" {
+        return;
+    }
     // A title containing spaces is usually already human-written.
     if extracted.title.contains(char::is_whitespace) {
         return;
@@ -557,8 +571,9 @@ pub async fn add_source_url(
     state: State<'_, AppState>,
     notebook_id: String,
     url: String,
+    include: Option<String>,
 ) -> Result<Source, String> {
-    e(ingest_url(&state, &notebook_id, &url).await)
+    e(ingest_url(&state, &notebook_id, &url, include.as_deref()).await)
 }
 
 /// Fetch a URL into a source. Hard failures (network / HTTP / empty) still
@@ -567,6 +582,7 @@ pub(crate) async fn ingest_url(
     state: &AppState,
     notebook_id: &str,
     url: &str,
+    include: Option<&str>,
 ) -> anyhow::Result<Source> {
     // Same URL twice is always a mistake — fail fast before fetching.
     let normalized = ingest::normalize_url(url);
@@ -579,10 +595,245 @@ pub(crate) async fn ingest_url(
             );
         }
     }
+    // Git-shaped URLs become git sources (docs/RFC-git-sources.md): repo
+    // homes as README, /blob files, /tree subtrees, clone URLs as whole
+    // repos — always on; the smarter thing is the only thing. Detection is
+    // URL shape plus one remembered host probe; when it says no, the URL
+    // falls through to page capture. `include` is the add-modal ladder rung
+    // ("readme" | "docs" | "full"); None = the URL shape's default.
+    if let Some(target) = crate::git::detect_target(&app_data_dir(state), url).await {
+        return match ingest_git(state, notebook_id, url, target, include).await {
+            Ok(src) => Ok(src),
+            Err(err) => store_failed_url(state, notebook_id, url.trim(), err.to_string()).await,
+        };
+    }
     match crate::capture::extract_url_rescued(url).await {
         Ok(extracted) => store_extracted(state, notebook_id, extracted).await,
         Err(err) => store_failed_url(state, notebook_id, url.trim(), err.to_string()).await,
     }
+}
+
+/// App data dir (`config_path`'s parent) — capture memory, git host memory,
+/// and git cache checkouts live here.
+fn app_data_dir(state: &AppState) -> std::path::PathBuf {
+    state
+        .config_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
+/// Ingest a remote git target. Singles (README default, blob URLs) land as
+/// one source; subtrees and whole repos land as a `git` parent whose
+/// children come from the shared folder rescan over a shallow cache
+/// checkout under `<app-data>/git/<source-id>`.
+pub(crate) async fn ingest_git(
+    state: &AppState,
+    notebook_id: &str,
+    url: &str,
+    target: crate::git::GitTarget,
+    include: Option<&str>,
+) -> anyhow::Result<Source> {
+    let data_dir = app_data_dir(state);
+    // Resolve the ladder rung: the URL shape's default unless the add modal
+    // chose otherwise. A repo home widened past README clones like a whole
+    // repo (the stored url stays the one the user pasted).
+    let rung = include.unwrap_or(match &target {
+        crate::git::GitTarget::RepoHome { .. } => "readme",
+        _ => "full",
+    });
+    let target = match (&target, rung) {
+        (crate::git::GitTarget::RepoHome { remote }, "docs" | "full") => {
+            crate::git::GitTarget::CloneAll {
+                remote: remote.clone(),
+            }
+        }
+        _ => target,
+    };
+    let staged = crate::git::clone_target(&data_dir, &target).await?;
+    let label = target.repo_label();
+    let stored_url = url.trim().trim_end_matches('/').to_string();
+    match &staged.kind {
+        crate::git::StagedKind::Single { file_rel } => {
+            let abs = staged.dir.join(file_rel);
+            let mut extracted = ingest::extract_file(&abs.to_string_lossy())?;
+            if matches!(target, crate::git::GitTarget::RepoHome { .. }) {
+                // The repo is the identity, not the filename README.md.
+                extracted.title = label.clone();
+            }
+            if let Some(line) = crate::git::provenance_header(&staged.dir).await {
+                extracted.text = format!("{line}\n\n{}", extracted.text);
+            }
+            extracted.url = stored_url;
+            let ctx = (extracted.source_type == "code").then(|| format!("{label} › {file_rel}"));
+            let src = store_new_source(state, notebook_id, extracted, "", 0, ctx.as_deref(), true)
+                .await?;
+            if let Err(err) = crate::git::adopt_cache(&staged.dir, &data_dir, &src.id) {
+                // The source still works; it just can't re-sync until re-added.
+                eprintln!("git: failed to adopt cache for {}: {err:#}", src.id);
+            }
+            let stamp = crate::mac::content_stamp(&staged.sha);
+            state.db.set_source_mtime(&src.id, stamp).await?;
+            Ok(Source {
+                mtime: stamp,
+                ..src
+            })
+        }
+        crate::git::StagedKind::Tree => {
+            let parent = Source {
+                id: new_id(),
+                notebook_id: notebook_id.to_string(),
+                title: label,
+                source_type: "git".to_string(),
+                url: stored_url,
+                content: String::new(),
+                char_count: 0,
+                chunk_count: 0,
+                created_at: now(),
+                status: "ready".to_string(),
+                error: String::new(),
+                parent_id: String::new(),
+                mtime: crate::mac::content_stamp(&staged.sha),
+            };
+            state.db.insert_source(&parent, &[], &[]).await?;
+            crate::git::adopt_cache(&staged.dir, &data_dir, &parent.id)
+                .map_err(|e| anyhow::anyhow!("failed to adopt git cache: {e}"))?;
+            if rung == "docs" {
+                // Recorded before the first rescan so the filter applies
+                // from the very first scan.
+                crate::git::record_include(&crate::git::cache_dir(&data_dir, &parent.id), "docs");
+            }
+            let _guard = state.folder_scan_lock.lock().await;
+            rescan_one_folder(None, state, &parent, true).await?;
+            state.db.touch_notebook(notebook_id, now()).await?;
+            Ok(Source {
+                content: String::new(),
+                ..parent
+            })
+        }
+    }
+}
+
+/// Re-read a git-backed single source (README/blob) from its cache checkout
+/// and re-embed, stamping the given sha.
+async fn reextract_git_single(
+    state: &AppState,
+    existing: &Source,
+    sha: &str,
+) -> anyhow::Result<Source> {
+    let data_dir = app_data_dir(state);
+    let file = crate::git::checkout_root(&data_dir, &existing.id);
+    if !file.is_file() {
+        anyhow::bail!(
+            "git cache for \"{}\" is missing — remove and re-add the source",
+            existing.title
+        );
+    }
+    let dir = crate::git::cache_dir(&data_dir, &existing.id);
+    let mut extracted = ingest::extract_file(&file.to_string_lossy())?;
+    if let Some(line) = crate::git::provenance_header(&dir).await {
+        extracted.text = format!("{line}\n\n{}", extracted.text);
+    }
+    extracted.title = existing.title.clone();
+    extracted.url = existing.url.clone();
+    let ctx = (extracted.source_type == "code")
+        .then(|| crate::git::parse_git_url(&existing.url).map(|t| t.repo_label()))
+        .flatten()
+        .zip(file.strip_prefix(&dir).ok())
+        .map(|(label, rel)| format!("{label} › {}", rel.to_string_lossy()));
+    let mut ex = existing.clone();
+    ex.mtime = crate::mac::content_stamp(sha);
+    reingest(state, &ex, extracted, ctx.as_deref(), true).await
+}
+
+/// The exact-match retrieval leg (RFC-git-sources §6): when the query
+/// carries code-shaped tokens, grep the notebook's repo-backed children
+/// directly (no walking — the scan already chose the files) and return the
+/// best line windows as ordinary citations pointing at the child sources.
+/// The notebook's repo- and folder-backed child files as
+/// (abs path, source id, title) — shared by the chat grep leg and the MCP
+/// grep/ast tools. Capped; respects the source selection when given.
+pub(crate) async fn repo_backed_files(
+    state: &AppState,
+    notebook_id: &str,
+    selection: Option<&[String]>,
+) -> Vec<(String, String, String)> {
+    let Ok(sources) = state.db.list_sources(notebook_id).await else {
+        return Vec::new();
+    };
+    let parents: HashSet<&str> = sources
+        .iter()
+        .filter(|s| (s.source_type == "folder" || s.source_type == "git") && s.parent_id.is_empty())
+        .map(|s| s.id.as_str())
+        .collect();
+    let selected = |id: &str| selection.is_none_or(|ids| ids.iter().any(|x| x == id));
+    sources
+        .iter()
+        .filter(|s| parents.contains(s.parent_id.as_str()))
+        .filter(|s| s.status == "ready" && !s.url.is_empty())
+        .filter(|s| selected(&s.id))
+        .map(|s| (s.url.clone(), s.id.clone(), s.title.clone()))
+        .take(800)
+        .collect()
+}
+
+async fn grep_leg(
+    state: &AppState,
+    notebook_id: &str,
+    query: &str,
+    selection: Option<&[String]>,
+) -> Vec<Citation> {
+    let tokens = crate::grepsearch::code_tokens(query);
+    if tokens.is_empty() {
+        return Vec::new();
+    }
+    let files = repo_backed_files(state, notebook_id, selection).await;
+    if files.is_empty() {
+        return Vec::new();
+    }
+    let paths: Vec<String> = files.iter().map(|f| f.0.clone()).collect();
+    let hits =
+        tokio::task::spawn_blocking(move || crate::grepsearch::search_files(&tokens, &paths, 4))
+            .await
+            .unwrap_or_default();
+    hits.into_iter()
+        .map(|h| {
+            let (_, id, title) = &files[h.file_index];
+            Citation {
+                chunk_id: format!("grep:{}:{}", id, h.first_line),
+                source_id: id.clone(),
+                source_title: title.clone(),
+                note_id: String::new(),
+                ordinal: 0,
+                snippet: h.window,
+                // Not a vector hit — match count carried the ranking; the
+                // field only feeds trace summaries.
+                distance: 0.0,
+            }
+        })
+        .collect()
+}
+
+/// Reciprocal-rank fusion of the hybrid citations with the grep windows —
+/// same constant as the vector/BM25 fusion, deterministic tie-break, capped
+/// grep contribution so a hot identifier can't flood the excerpt list.
+fn fuse_grep_hits(db_hits: Vec<Citation>, grep_hits: Vec<Citation>, k: usize) -> Vec<Citation> {
+    if grep_hits.is_empty() {
+        return db_hits;
+    }
+    let mut scored: Vec<(f32, Citation)> = Vec::new();
+    for (rank, c) in db_hits.into_iter().enumerate() {
+        scored.push((1.0 / (60.0 + rank as f32), c));
+    }
+    for (rank, c) in grep_hits.into_iter().enumerate().take(4) {
+        scored.push((1.0 / (60.0 + rank as f32), c));
+    }
+    scored.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.1.chunk_id.cmp(&b.1.chunk_id))
+    });
+    scored.into_iter().map(|(_, c)| c).take(k).collect()
 }
 
 #[tauri::command]
@@ -596,13 +847,22 @@ pub async fn add_source_text(
     e(store_extracted(&state, &notebook_id, extracted).await)
 }
 
-/// Re-chunk, re-embed, and replace a source's content in place (edit / refresh).
+/// Re-chunk, re-embed, and replace a source's content in place (edit /
+/// refresh). `code_ctx` as in `store_new_source`.
 async fn reingest(
     state: &AppState,
     existing: &Source,
     extracted: ingest::Extracted,
+    code_ctx: Option<&str>,
+    embed: bool,
 ) -> anyhow::Result<Source> {
-    let chunks = ingest::chunk_text(&extracted.title, &extracted.text);
+    // Repository-tier code children store their content but skip embedding —
+    // the ripgrep leg reaches them at query time (RFC-git-sources §4).
+    let chunks = if embed {
+        ingest::chunk_source(&extracted, code_ctx)
+    } else {
+        Vec::new()
+    };
     let embed_inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
     let embeddings = {
         let ai = state.ai.read().await;
@@ -688,7 +948,7 @@ pub async fn update_source_text(
     let existing =
         e(state.db.get_source(&source_id).await)?.ok_or_else(|| "Source not found".to_string())?;
     let extracted = e(ingest::extract_pasted(&title, &text))?;
-    e(reingest(&state, &existing, extracted).await)
+    e(reingest(&state, &existing, extracted, None, true).await)
 }
 
 /// Does this source origin point at the web (vs. a local file path)?
@@ -707,9 +967,22 @@ pub async fn refresh_source_url(
     if existing.url.is_empty() {
         return Err("This source has no URL or file path to refresh from".into());
     }
-    if existing.source_type == "folder" {
+    if existing.source_type == "folder" || existing.source_type == "git" {
+        // Git parents force a remote sync first so the rescan sees fresh
+        // files; local folders scan the disk as-is.
+        if existing.source_type == "git" {
+            let dir = crate::git::cache_dir(&app_data_dir(&state), &existing.id);
+            match crate::git::sync_remote(&dir).await {
+                Ok(Some(sha)) => {
+                    let stamp = crate::mac::content_stamp(&sha);
+                    e(state.db.set_source_mtime(&existing.id, stamp).await)?;
+                }
+                Ok(None) => {}
+                Err(err) => return Err(format!("git sync failed: {err:#}")),
+            }
+        }
         let _guard = state.folder_scan_lock.lock().await;
-        e(rescan_one_folder(&app, &state, &existing).await)?;
+        e(rescan_one_folder(Some(&app), &state, &existing, true).await)?;
         let folder = e(state.db.get_source(&source_id).await)?
             .ok_or_else(|| "Source not found".to_string())?;
         return Ok(Source {
@@ -730,11 +1003,25 @@ pub async fn refresh_source_url(
             url: existing.url.clone(),
             text,
         };
-        return e(reingest(&state, &existing, extracted).await);
+        return e(reingest(&state, &existing, extracted, None, true).await);
+    }
+    // Git-backed singles (README/blob) refresh from their cache clone — the
+    // cache dir is the definitive marker; page captures of github.com URLs
+    // parse git-shaped too but have no clone.
+    let git_dir = crate::git::cache_dir(&app_data_dir(&state), &existing.id);
+    if git_dir.exists() {
+        if let Err(err) = crate::git::sync_remote(&git_dir).await {
+            return Err(format!("git sync failed: {err:#}"));
+        }
+        let sha = crate::git::detect_repo(&git_dir)
+            .await
+            .map(|r| r.sha)
+            .unwrap_or_default();
+        return e(reextract_git_single(&state, &existing, &sha).await);
     }
     if is_web_url(&existing.url) {
         return match crate::capture::extract_url_rescued(&existing.url).await {
-            Ok(extracted) => e(reingest(&state, &existing, extracted).await),
+            Ok(extracted) => e(reingest(&state, &existing, extracted, None, true).await),
             Err(err) => e(mark_source_failed(&state, &existing, err.to_string()).await),
         };
     }
@@ -774,7 +1061,7 @@ pub async fn refresh_source_url(
     // Stamp the on-disk mtime, or the next folder rescan would see a mismatch
     // and re-embed this file a second time.
     existing.mtime = file_mtime(std::path::Path::new(&existing.url));
-    e(reingest(&state, &existing, extracted).await)
+    e(reingest(&state, &existing, extracted, None, true).await)
 }
 
 #[tauri::command]
@@ -787,9 +1074,9 @@ pub async fn get_source_content(
 
 #[tauri::command]
 pub async fn delete_source(state: State<'_, AppState>, source_id: String) -> Result<(), String> {
-    // Deleting a folder removes its children (and their chunks) with it.
+    // Deleting a folder or repo removes its children (and their chunks).
     if let Some(src) = e(state.db.get_source(&source_id).await)? {
-        if src.source_type == "folder" {
+        if src.source_type == "folder" || src.source_type == "git" {
             for child in e(state.db.list_sources(&src.notebook_id).await)? {
                 if child.parent_id == source_id {
                     e(state.db.delete_source(&child.id).await)?;
@@ -797,7 +1084,10 @@ pub async fn delete_source(state: State<'_, AppState>, source_id: String) -> Res
             }
         }
     }
-    e(state.db.delete_source(&source_id).await)
+    e(state.db.delete_source(&source_id).await)?;
+    // Git-backed sources leave a cache checkout behind — a no-op otherwise.
+    crate::git::remove_cache(&app_data_dir(&state), &source_id);
+    Ok(())
 }
 
 // ---- Mac sources (cider) ---------------------------------------------------
@@ -913,30 +1203,110 @@ pub(crate) async fn resync_mac_source(
         url: existing.url.clone(),
         text,
     };
-    e(reingest(state, &existing, extracted).await)
+    e(reingest(state, &existing, extracted, None, true).await)
 }
 
 // ---- Folder sources --------------------------------------------------------
 
-/// Extensions worth ingesting from a folder scan (mirrors the frontend's
-/// SUPPORTED_EXTENSIONS in src/lib/utils.ts).
-const FOLDER_EXTENSIONS: &[&str] = &[
+/// Rich formats with dedicated extractors — PDF, Office, images, saved pages
+/// (mirrors the frontend's SUPPORTED_EXTENSIONS in src/lib/utils.ts). Code
+/// and unknown-but-textual files are admitted separately below.
+const RICH_EXTENSIONS: &[&str] = &[
     "pdf", "txt", "text", "md", "markdown", "html", "htm", "xhtml", "docx", "pptx", "epub", "xlsx",
     "xls", "xlsm", "ods", "csv", "tsv", "gdoc", "gsheet", "gslides", "png", "jpg", "jpeg", "jpe",
     "webp", "gif", "bmp", "tif", "tiff", "heic", "heif", "avif", "ico", "jp2",
 ];
 
-/// How deep a folder scan descends. Research folders are shallow; the cap only
-/// guards against pathological trees.
-const FOLDER_MAX_DEPTH: usize = 6;
+/// How deep a folder scan descends. Repos nest deeper than research folders;
+/// the walker's ignore rules do the real filtering — this only guards
+/// pathological trees.
+const FOLDER_MAX_DEPTH: usize = 12;
 
-fn folder_ingestable(path: &std::path::Path) -> bool {
+/// Per-file byte cap for code and sniffed text (rich types keep their own
+/// extractors' behavior). Oversized files land in the map's skip list.
+const TEXT_MAX_BYTES: u64 = 200 * 1024;
+
+/// Above this many eligible files a scope is repository-tier: prose and the
+/// map embed, code stores content only and is reached by the ripgrep leg
+/// (RFC-git-sources §4). Below it, everything embeds — it's a document.
+const REPO_TIER_FILES: usize = 50;
+
+/// Bytes read to decide whether an unknown extension holds text.
+const SNIFF_BYTES: usize = 8 * 1024;
+
+/// Vendored/generated directories pruned even when a repo forgot to
+/// gitignore them.
+const SKIP_DIRS: &[&str] = &[
+    "node_modules",
+    "vendor",
+    "third_party",
+    "__snapshots__",
+    "__pycache__",
+];
+
+/// Name-based skip rules: files that are technically text but poison
+/// retrieval. The reason string lands in the folder map's skip list.
+fn name_skip_reason(name: &str) -> Option<&'static str> {
+    let lower = name.to_lowercase();
+    const LOCKFILES: &[&str] = &[
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "bun.lockb",
+        "composer.lock",
+        "go.sum",
+        "flake.lock",
+    ];
+    if LOCKFILES.contains(&lower.as_str()) || lower.ends_with(".lock") {
+        return Some("lockfile");
+    }
+    if lower.ends_with(".min.js") || lower.ends_with(".min.css") {
+        return Some("minified");
+    }
+    if lower.ends_with(".map") {
+        return Some("source map");
+    }
+    if lower.ends_with(".snap") {
+        return Some("test snapshot");
+    }
+    if lower.ends_with(".svg") {
+        return Some("vector asset");
+    }
+    None
+}
+
+fn rich_ingestable(path: &std::path::Path) -> bool {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
-    FOLDER_EXTENSIONS.contains(&ext.as_str())
+    RICH_EXTENSIONS.contains(&ext.as_str())
+}
+
+/// First-8KB sniff for unknown extensions: UTF-8 with no NUL byte. A
+/// multibyte char split at the buffer boundary is fine; a decode error
+/// mid-buffer means binary.
+fn sniff_is_text(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut buf = [0u8; SNIFF_BYTES];
+    let Ok(n) = f.read(&mut buf) else {
+        return false;
+    };
+    if n == 0 {
+        return false;
+    }
+    let buf = &buf[..n];
+    if buf.contains(&0) {
+        return false;
+    }
+    match std::str::from_utf8(buf) {
+        Ok(_) => true,
+        Err(e) => e.error_len().is_none(),
+    }
 }
 
 /// File mtime in unix millis (0 when unavailable).
@@ -976,66 +1346,148 @@ fn is_evicted(meta: &std::fs::Metadata) -> bool {
     meta.len() == 0
 }
 
-/// Recursively collect ingestable files under `root`, sorted by path. Skips
-/// hidden entries and symlinks (cycle safety). Cloud-evicted files come back
-/// as placeholders rather than being dropped.
-fn scan_folder(root: &std::path::Path) -> Vec<ScanEntry> {
-    fn walk(dir: &std::path::Path, depth: usize, out: &mut Vec<ScanEntry>) {
-        if depth > FOLDER_MAX_DEPTH {
-            return;
-        }
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let path = entry.path();
-            if name.starts_with('.') {
-                // iCloud Drive evicts files by replacing them with a hidden
-                // `.name.icloud` stub — surface it under the real filename so
-                // it upgrades in place once downloaded.
-                if let Some(real) = name
-                    .strip_prefix('.')
-                    .and_then(|n| n.strip_suffix(".icloud"))
-                    .filter(|n| !n.is_empty())
+/// Everything a folder scan learned: ingestable files (sorted by path) plus
+/// the files it deliberately left out, with reasons, for the folder map.
+#[derive(Default)]
+struct ScanOutcome {
+    entries: Vec<ScanEntry>,
+    /// (folder-relative path, reason)
+    skipped: Vec<(String, String)>,
+}
+
+/// Collect ingestable files under `root` with ripgrep's walker — respects
+/// .gitignore/.ignore inside repos, skips dot-entries (except iCloud eviction
+/// stubs) and symlinks, prunes vendored dirs. Rich types route by extension,
+/// code by `ingest::is_code_path`, and unknown extensions by a text sniff.
+/// Cloud-evicted files come back as placeholders rather than being dropped —
+/// except unknown ones, which can't be sniffed without forcing a download.
+fn scan_folder(root: &std::path::Path) -> ScanOutcome {
+    let pruned: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+    let pruned_rec = pruned.clone();
+    let root_owned = root.to_path_buf();
+    let mut builder = ignore::WalkBuilder::new(root);
+    builder
+        .hidden(false)
+        .max_depth(Some(FOLDER_MAX_DEPTH))
+        .follow_links(false)
+        .filter_entry(move |e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if let Some(rest) = name.strip_prefix('.') {
+                // Dot entries stay hidden (what hidden(true) would do), except
+                // iCloud stubs — surfaced as placeholders in the loop below.
+                return !is_dir && rest.ends_with(".icloud") && rest.len() > ".icloud".len();
+            }
+            if is_dir && SKIP_DIRS.contains(&name.to_lowercase().as_str()) {
+                if let (Ok(rel), Ok(mut rec)) =
+                    (e.path().strip_prefix(&root_owned), pruned_rec.lock())
                 {
-                    let real_path = dir.join(real);
-                    if folder_ingestable(&real_path) && !real_path.exists() {
-                        out.push(ScanEntry {
-                            path: real_path.to_string_lossy().to_string(),
-                            mtime: file_mtime(&path),
-                            placeholder: true,
-                        });
-                    }
+                    rec.push(format!("{}/", rel.to_string_lossy()));
                 }
-                continue;
+                return false;
             }
-            let Ok(ft) = entry.file_type() else { continue };
-            if ft.is_symlink() {
-                continue;
+            true
+        });
+
+    let mut out = ScanOutcome::default();
+    for dent in builder.build() {
+        let Ok(dent) = dent else { continue };
+        if dent.depth() == 0 {
+            continue;
+        }
+        let Some(ft) = dent.file_type() else { continue };
+        if ft.is_dir() || ft.is_symlink() {
+            continue;
+        }
+        let path = dent.path();
+        let name = dent.file_name().to_string_lossy().to_string();
+
+        // iCloud Drive evicts files by replacing them with a hidden
+        // `.name.icloud` stub — surface it under the real filename so it
+        // upgrades in place once downloaded.
+        if name.starts_with('.') {
+            if let Some(real) = name
+                .strip_prefix('.')
+                .and_then(|n| n.strip_suffix(".icloud"))
+                .filter(|n| !n.is_empty())
+            {
+                let Some(dir) = path.parent() else { continue };
+                let real_path = dir.join(real);
+                let real_str = real_path.to_string_lossy().to_string();
+                if (rich_ingestable(&real_path) || ingest::is_code_path(&real_str))
+                    && !real_path.exists()
+                {
+                    out.entries.push(ScanEntry {
+                        path: real_str,
+                        mtime: file_mtime(path),
+                        placeholder: true,
+                    });
+                }
             }
-            if ft.is_dir() {
-                walk(&path, depth + 1, out);
-            } else if folder_ingestable(&path) {
-                let Ok(meta) = entry.metadata() else { continue };
-                out.push(ScanEntry {
-                    path: path.to_string_lossy().to_string(),
-                    mtime: file_mtime(&path),
-                    placeholder: is_evicted(&meta),
+            continue;
+        }
+
+        let rel = path
+            .strip_prefix(root)
+            .map(|r| r.to_string_lossy().to_string())
+            .unwrap_or_else(|_| name.clone());
+        if let Some(reason) = name_skip_reason(&name) {
+            out.skipped.push((rel, reason.to_string()));
+            continue;
+        }
+        let Ok(meta) = dent.metadata() else { continue };
+        let evicted = is_evicted(&meta);
+        let path_str = path.to_string_lossy().to_string();
+        let too_large = meta.len() > TEXT_MAX_BYTES;
+        if rich_ingestable(path) {
+            out.entries.push(ScanEntry {
+                path: path_str,
+                mtime: file_mtime(path),
+                placeholder: evicted,
+            });
+        } else if ingest::is_code_path(&path_str) {
+            if !evicted && too_large {
+                out.skipped
+                    .push((rel, format!("too large ({} KB)", meta.len() / 1024)));
+            } else {
+                out.entries.push(ScanEntry {
+                    path: path_str,
+                    mtime: file_mtime(path),
+                    placeholder: evicted,
                 });
             }
+        } else if evicted {
+            out.skipped.push((rel, "not downloaded".to_string()));
+        } else if too_large {
+            out.skipped
+                .push((rel, format!("too large ({} KB)", meta.len() / 1024)));
+        } else if sniff_is_text(path) {
+            out.entries.push(ScanEntry {
+                path: path_str,
+                mtime: file_mtime(path),
+                placeholder: false,
+            });
+        } else {
+            out.skipped.push((rel, "binary".to_string()));
         }
     }
-    let mut out = Vec::new();
-    walk(root, 0, &mut out);
-    out.sort_by(|a, b| a.path.cmp(&b.path));
+
+    if let Ok(mut rec) = pruned.lock() {
+        for dir in rec.drain(..) {
+            out.skipped.push((dir, "vendored directory".to_string()));
+        }
+    }
+    out.entries.sort_by(|a, b| a.path.cmp(&b.path));
+    out.skipped.sort();
     out
 }
 
 /// Source type for a file we haven't read yet (placeholder rows), so the list
 /// shows the right icon.
 fn source_type_for_path(path: &str) -> &'static str {
-    if ingest::is_pdf(path) {
+    if ingest::is_code_path(path) {
+        "code"
+    } else if ingest::is_pdf(path) {
         "pdf"
     } else if ingest::is_image(path) {
         "image"
@@ -1113,15 +1565,114 @@ async fn store_placeholder_child(
     state.db.insert_source(&source, &[], &[]).await
 }
 
+/// "folder title › relative/path" — the retrieval context embedded into a
+/// code child's chunks (None for non-code files).
+/// Per-file promote/demote choices from the repo reader (RFC-git-sources
+/// §4). Kept in app data — never inside a user's repo — keyed by parent
+/// source id; rescans consult them before the tier rule.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+pub(crate) struct EmbedOverrides {
+    pub embed: Vec<String>,
+    pub unembed: Vec<String>,
+}
+
+fn embed_overrides_path(data_dir: &std::path::Path, parent_id: &str) -> std::path::PathBuf {
+    data_dir
+        .join("embed_overrides")
+        .join(format!("{parent_id}.json"))
+}
+
+pub(crate) fn load_embed_overrides(data_dir: &std::path::Path, parent_id: &str) -> EmbedOverrides {
+    std::fs::read_to_string(embed_overrides_path(data_dir, parent_id))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_embed_overrides(data_dir: &std::path::Path, parent_id: &str, ov: &EmbedOverrides) {
+    let path = embed_overrides_path(data_dir, parent_id);
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(ov) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+/// Promote a repo child into the embedded tier or demote it to search-only,
+/// persist the choice, and re-ingest the file to match.
+#[tauri::command]
+pub async fn set_child_embedded(
+    state: State<'_, AppState>,
+    source_id: String,
+    embed: bool,
+) -> Result<Source, String> {
+    let child =
+        e(state.db.get_source(&source_id).await)?.ok_or_else(|| "Source not found".to_string())?;
+    if child.parent_id.is_empty() {
+        return Err("Only files inside a folder or repo can be promoted".into());
+    }
+    let parent = e(state.db.get_source(&child.parent_id).await)?
+        .ok_or_else(|| "Parent source not found".to_string())?;
+    let data_dir = app_data_dir(&state);
+    let root_buf = if parent.source_type == "git" {
+        crate::git::checkout_root(&data_dir, &parent.id)
+    } else {
+        std::path::PathBuf::from(&parent.url)
+    };
+    let rel = std::path::Path::new(&child.url)
+        .strip_prefix(&root_buf)
+        .map(|r| r.to_string_lossy().to_string())
+        .unwrap_or_else(|_| child.url.clone());
+
+    let mut ov = load_embed_overrides(&data_dir, &parent.id);
+    ov.embed.retain(|r| r != &rel);
+    ov.unembed.retain(|r| r != &rel);
+    if embed {
+        ov.embed.push(rel.clone());
+    } else {
+        ov.unembed.push(rel.clone());
+    }
+    save_embed_overrides(&data_dir, &parent.id, &ov);
+
+    let mut extracted = e(extract_any_file(&state, &child.url).await)?;
+    extracted.title = child.title.clone();
+    let ctx = code_context(&parent.title, &root_buf, &child.url);
+    let mut existing = child;
+    existing.mtime = file_mtime(std::path::Path::new(&existing.url));
+    e(reingest(&state, &existing, extracted, ctx.as_deref(), embed).await)
+}
+
+fn code_context(folder_title: &str, root: &std::path::Path, path: &str) -> Option<String> {
+    if !ingest::is_code_path(path) {
+        return None;
+    }
+    let rel = std::path::Path::new(path)
+        .strip_prefix(root)
+        .map(|r| r.to_string_lossy().to_string())
+        .unwrap_or_else(|_| path.to_string());
+    Some(format!("{folder_title} › {rel}"))
+}
+
 /// Reconcile one folder source with the directory on disk: ingest new files,
-/// re-ingest changed ones (by mtime), and drop children whose file is gone.
+/// re-ingest changed ones (by mtime), drop children whose file is gone, and
+/// keep the parent's folder/repo map current. `force_map` re-renders the map
+/// even when the scan found no changes (manual refresh, first scan).
 async fn rescan_one_folder(
-    app: &AppHandle,
+    app: Option<&AppHandle>,
     state: &AppState,
     folder: &Source,
+    force_map: bool,
 ) -> anyhow::Result<FolderScan> {
     let mut scan = FolderScan::default();
-    let root = std::path::Path::new(&folder.url);
+    // Git parents scan their cache checkout (plus sparse scope); local
+    // folders scan the path in `url` directly.
+    let root_buf = if folder.source_type == "git" {
+        crate::git::checkout_root(&app_data_dir(state), &folder.id)
+    } else {
+        std::path::PathBuf::from(&folder.url)
+    };
+    let root = root_buf.as_path();
     if !root.is_dir() {
         // Folder vanished (unmounted / renamed / not yet synced). Keep the
         // children — their text is still usable — but flag the folder row.
@@ -1157,9 +1708,57 @@ async fn rescan_one_folder(
         .iter()
         .filter(|s| s.parent_id == folder.id)
         .collect();
-    let mut on_disk = scan_folder(root);
+    let outcome = scan_folder(root);
+    let mut on_disk = outcome.entries;
+    let mut skipped = outcome.skipped;
     on_disk.retain(|e| !claimed.contains(e.path.as_str()));
+    // The include ladder (RFC-git-sources §1): a "Docs" source lists prose
+    // only — code is out of scope entirely, not merely unembedded.
+    if folder.source_type == "git"
+        && crate::git::read_include(&app_data_dir(state), &folder.id).as_deref() == Some("docs")
+    {
+        on_disk.retain(|e| !ingest::is_code_path(&e.path));
+    }
     let by_path: HashMap<&str, &Source> = children.iter().map(|c| (c.url.as_str(), *c)).collect();
+
+    // The tier decision (RFC-git-sources §4): document-sized scopes embed
+    // everything; repository-sized scopes embed the knowledge layer (prose,
+    // the map) while code children store content only — the ripgrep leg
+    // reaches them at query time, and at rest they cost nothing.
+    let repo_tier = on_disk.len() > REPO_TIER_FILES;
+    let rel_of = |p: &str| {
+        std::path::Path::new(p)
+            .strip_prefix(root)
+            .map(|r| r.to_string_lossy().to_string())
+            .unwrap_or_else(|_| p.to_string())
+    };
+    // Per-file promote/demote overrides (repo reader) beat the tier rule.
+    let overrides = load_embed_overrides(&app_data_dir(state), &folder.id);
+    let embed_file = |path: &str| {
+        let rel = rel_of(path);
+        if overrides.embed.iter().any(|r| r == &rel) {
+            return true;
+        }
+        if overrides.unembed.iter().any(|r| r == &rel) {
+            return false;
+        }
+        !repo_tier || !ingest::is_code_path(path)
+    };
+    // Repository-tier images are almost always assets (icons, logos) — OCR
+    // noise, tree noise. Diagrams under docs/ keep their OCR value.
+    if repo_tier {
+        let mut kept = Vec::with_capacity(on_disk.len());
+        for e in on_disk {
+            let rel = rel_of(&e.path);
+            if ingest::is_image(&e.path) && !rel.starts_with("docs/") && !rel.contains("/docs/") {
+                skipped.push((rel, "image asset".to_string()));
+            } else {
+                kept.push(e);
+            }
+        }
+        on_disk = kept;
+        skipped.sort();
+    }
 
     // Decide the work list up front so progress events get a meaningful total.
     // An evicted file next to a ready child is NOT work: the text we embedded
@@ -1176,14 +1775,16 @@ async fn rescan_one_folder(
     for (done, entry) in work.iter().enumerate() {
         let path = entry.path.as_str();
         let mtime = entry.mtime;
-        let _ = app.emit(
-            "folder://progress",
-            FolderProgress {
-                done: done as u32,
-                total,
-                title: ingest::file_title(path),
-            },
-        );
+        if let Some(app) = app {
+            let _ = app.emit(
+                "folder://progress",
+                FolderProgress {
+                    done: done as u32,
+                    total,
+                    title: ingest::file_title(path),
+                },
+            );
+        }
         match by_path.get(path) {
             // New but not downloaded — list it, label it, embed nothing.
             None if entry.placeholder => {
@@ -1194,8 +1795,17 @@ async fn rescan_one_folder(
             None => match extract_any_file(state, path).await {
                 Ok(mut extracted) => {
                     friendly_title(state, &mut extracted).await;
-                    store_new_source(state, &folder.notebook_id, extracted, &folder.id, mtime)
-                        .await?;
+                    let ctx = code_context(&folder.title, root, path);
+                    store_new_source(
+                        state,
+                        &folder.notebook_id,
+                        extracted,
+                        &folder.id,
+                        mtime,
+                        ctx.as_deref(),
+                        embed_file(path),
+                    )
+                    .await?;
                     scan.added += 1;
                 }
                 Err(err) => {
@@ -1217,7 +1827,15 @@ async fn rescan_one_folder(
                         // file. (A failed child keeps its filename title.)
                         extracted.title = existing.title.clone();
                     }
-                    reingest(state, &existing, extracted).await?;
+                    let ctx = code_context(&folder.title, root, path);
+                    reingest(
+                        state,
+                        &existing,
+                        extracted,
+                        ctx.as_deref(),
+                        embed_file(path),
+                    )
+                    .await?;
                     scan.updated += 1;
                 }
                 Err(err) if child.status == "placeholder" => {
@@ -1245,14 +1863,16 @@ async fn rescan_one_folder(
 
     if total > 0 {
         // Final tick so the UI can clear its progress indicator.
-        let _ = app.emit(
-            "folder://progress",
-            FolderProgress {
-                done: total,
-                total,
-                title: String::new(),
-            },
-        );
+        if let Some(app) = app {
+            let _ = app.emit(
+                "folder://progress",
+                FolderProgress {
+                    done: total,
+                    total,
+                    title: String::new(),
+                },
+            );
+        }
     }
 
     // Files that disappeared from disk take their sources with them.
@@ -1261,6 +1881,84 @@ async fn rescan_one_folder(
         if !disk_paths.contains(child.url.as_str()) {
             state.db.delete_source(&child.id).await?;
             scan.removed += 1;
+        }
+    }
+
+    // The parent's content is a folder/repo map: git provenance (when the
+    // root sits in a working tree), the file tree, and the skip list — so
+    // nothing the scan left out is silently absent. Rendering is cheap; the
+    // git subprocesses are gated to changes, first scans, manual refreshes,
+    // and a 15-minute provenance probe.
+    if scan.changed() || force_map || folder.char_count == 0 || crate::git::probe_due(&folder.id) {
+        let repo = crate::git::detect_repo(root).await;
+        let files: Vec<crate::git::MapFile> = on_disk
+            .iter()
+            .map(|e| crate::git::MapFile {
+                rel: std::path::Path::new(&e.path)
+                    .strip_prefix(root)
+                    .map(|r| r.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| e.path.clone()),
+                ingested: !e.placeholder,
+                outline: String::new(),
+            })
+            .collect();
+        // Symbol outlines (RFC-git-sources §5): parse code files with the
+        // bundled tree-sitter grammars so definitions stay retrievable by
+        // name through the embedded map — even for grep-tier files that
+        // never embed themselves. Bounded, and off the async runtime.
+        let files = {
+            let root_owned = root.to_path_buf();
+            tokio::task::spawn_blocking(move || {
+                let mut files = files;
+                let mut outlined = 0usize;
+                for f in files.iter_mut() {
+                    if outlined >= 300 || !ingest::is_code_path(&f.rel) {
+                        continue;
+                    }
+                    let abs = root_owned.join(&f.rel);
+                    if let Ok(src) = std::fs::read_to_string(&abs) {
+                        f.outline = crate::outline::suffix(&crate::outline::outline(&f.rel, &src));
+                        outlined += 1;
+                    }
+                }
+                files
+            })
+            .await
+            .unwrap_or_default()
+        };
+        let map = crate::git::render_map(
+            &folder.title,
+            repo.as_ref(),
+            root,
+            &files,
+            &skipped,
+            if repo_tier {
+                on_disk
+                    .iter()
+                    .filter(|e| ingest::is_code_path(&e.path))
+                    .count()
+            } else {
+                0
+            },
+        );
+        let current = state
+            .db
+            .source_content(&folder.id)
+            .await
+            .unwrap_or_default();
+        if map != current {
+            let extracted = ingest::Extracted {
+                title: folder.title.clone(),
+                source_type: folder.source_type.clone(),
+                url: folder.url.clone(),
+                text: map,
+            };
+            let fresh = Source {
+                status: "ready".to_string(),
+                error: String::new(),
+                ..folder.clone()
+            };
+            reingest(state, &fresh, extracted, None, true).await?;
         }
     }
 
@@ -1311,7 +2009,7 @@ pub async fn add_source_folder(
         mtime: 0,
     };
     e(state.db.insert_source(&folder, &[], &[]).await)?;
-    e(rescan_one_folder(&app, &state, &folder).await)?;
+    e(rescan_one_folder(Some(&app), &state, &folder, true).await)?;
     e(state.db.touch_notebook(&notebook_id, now()).await)?;
     Ok(folder)
 }
@@ -1739,8 +2437,28 @@ pub async fn resync_sources(
     };
     let mut total = FolderScan::default();
     let mut per_notebook: HashMap<String, FolderScan> = HashMap::new();
+    // The auto-sync cadence setting: minutes between remote probes, 0 = off
+    // (manual Refresh still syncs).
+    let sync_minutes = { state.ai.read().await.config().git_sync_minutes };
     for folder in e(state.db.all_folder_sources().await)? {
-        match rescan_one_folder(&app, &state, &folder).await {
+        // Remote repos: one cheap ls-remote per cadence tick; a moved branch
+        // refetches the cache so the ordinary rescan below sees fresh
+        // mtimes. Never runs against user repos — only our own clones.
+        if folder.source_type == "git"
+            && sync_minutes > 0
+            && crate::git::remote_probe_due(&folder.id, sync_minutes)
+        {
+            let dir = crate::git::cache_dir(&app_data_dir(&state), &folder.id);
+            match crate::git::sync_remote(&dir).await {
+                Ok(Some(sha)) => {
+                    let stamp = crate::mac::content_stamp(&sha);
+                    let _ = state.db.set_source_mtime(&folder.id, stamp).await;
+                }
+                Ok(None) => {}
+                Err(err) => eprintln!("git resync: {} failed: {err:#}", folder.url),
+            }
+        }
+        match rescan_one_folder(Some(&app), &state, &folder, false).await {
             Ok(scan) => {
                 per_notebook
                     .entry(folder.notebook_id.clone())
@@ -1758,7 +2476,36 @@ pub async fn resync_sources(
     // Loose file sources (added or dropped individually) re-embed when their
     // file changes. Deleted files leave the source untouched; cloud-evicted
     // files aren't read (that would force a download).
+    let data_dir = app_data_dir(&state);
     for src in e(state.db.all_loose_sources().await)? {
+        // Git-backed singles (README/blob) sync hourly from their cache
+        // clone. The cache dir is the definitive marker — plain page
+        // captures of github.com URLs parse git-shaped too, but have none.
+        if crate::git::cache_dir(&data_dir, &src.id).exists() {
+            if sync_minutes == 0 || !crate::git::remote_probe_due(&src.id, sync_minutes) {
+                continue;
+            }
+            let dir = crate::git::cache_dir(&data_dir, &src.id);
+            match crate::git::sync_remote(&dir).await {
+                Ok(Some(sha)) => {
+                    let scan = per_notebook.entry(src.notebook_id.clone()).or_default();
+                    match reextract_git_single(&state, &src, &sha).await {
+                        Ok(_) => {
+                            scan.updated += 1;
+                            total.updated += 1;
+                        }
+                        Err(err) => {
+                            eprintln!("git resync: failed to re-embed {}: {err:#}", src.url);
+                            scan.failed += 1;
+                            total.failed += 1;
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => eprintln!("git resync: {} failed: {err:#}", src.url),
+            }
+            continue;
+        }
         if src.url.is_empty() || is_web_url(&src.url) {
             continue;
         }
@@ -1783,7 +2530,7 @@ pub async fn resync_sources(
                         text,
                     };
                     let scan = per_notebook.entry(src.notebook_id.clone()).or_default();
-                    match reingest(&state, &existing, extracted).await {
+                    match reingest(&state, &existing, extracted, None, true).await {
                         Ok(_) => {
                             scan.updated += 1;
                             total.updated += 1;
@@ -1827,7 +2574,7 @@ pub async fn resync_sources(
                 existing.mtime = mtime;
                 // Content changed, not the file's name — keep the stored title.
                 extracted.title = existing.title.clone();
-                match reingest(&state, &existing, extracted).await {
+                match reingest(&state, &existing, extracted, None, true).await {
                     Ok(_) => {
                         scan.updated += 1;
                         total.updated += 1;
@@ -2596,7 +3343,7 @@ async fn try_tool_route(
                         .await?
                         .ok_or_else(|| anyhow::anyhow!("source vanished"))?;
                     let extracted = crate::capture::extract_url_rescued(&existing.url).await?;
-                    reingest(state, &existing, extracted).await
+                    reingest(state, &existing, extracted, None, true).await
                 }
                 .await;
                 match result {
@@ -2840,7 +3587,7 @@ async fn add_url_sources(
         let result = if crate::mac::is_mac_uri(url) {
             ingest_mac(state, notebook_id, url, "").await
         } else {
-            ingest_url(state, notebook_id, url).await
+            ingest_url(state, notebook_id, url, None).await
         };
         match result {
             Ok(src) if src.status != "error" => added.push(src),
@@ -2914,6 +3661,10 @@ pub async fn send_message(
         .db
         .search_chunks_trace(&notebook_id, query_vec, &content, 8, source_ids.as_deref())
         .await)?;
+    // The ripgrep leg (RFC-git-sources §6): code-shaped queries also
+    // exact-match over the notebook's repo-backed files, and the windows
+    // join the fusion as ordinary citations.
+    let grep_hits = grep_leg(&state, &notebook_id, &content, source_ids.as_deref()).await;
     crate::trace::log(
         &state.trace_dir,
         serde_json::json!({
@@ -2924,11 +3675,12 @@ pub async fn send_message(
             "vectorHits": search.vector_hits.len(),
             "ftsHits": search.fts_hits.len(),
             "fusedHits": search.fused_hits.len(),
+            "grepHits": grep_hits.len(),
             "warnings": search.warnings,
             "citations": crate::trace::cite_summaries(&search.final_hits),
         }),
     );
-    let citations = search.final_hits;
+    let citations = fuse_grep_hits(search.final_hits, grep_hits, 8);
     bump_note_usage(&state.db, &citations, "retrieval_hits").await;
 
     // Full source manifest (title + url) so corpus-level questions are

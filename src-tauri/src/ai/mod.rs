@@ -57,6 +57,15 @@ pub struct AiConfig {
     /// fully recoverable, so the toggle exists for cost control, not safety.
     #[serde(default = "default_true")]
     pub curator_consolidate: bool,
+    /// Minutes between remote git re-sync probes (docs/RFC-git-sources.md
+    /// §8); 0 disables auto-sync (manual Refresh always works). Git sources
+    /// themselves have no off switch — the smarter thing is the only thing.
+    #[serde(default = "default_git_sync_minutes")]
+    pub git_sync_minutes: u32,
+}
+
+fn default_git_sync_minutes() -> u32 {
+    60
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -108,6 +117,7 @@ impl Default for AiConfig {
             mcp_port: default_mcp_port(),
             tray_enabled: default_true(),
             curator_consolidate: default_true(),
+            git_sync_minutes: default_git_sync_minutes(),
         }
     }
 }

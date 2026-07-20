@@ -231,6 +231,29 @@ struct AddReminderReq {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+struct GrepReq {
+    /// Notebook whose repo- and folder-backed files to search.
+    notebook_id: String,
+    /// Regular expression (Rust regex syntax); plain literal text works too.
+    pattern: String,
+    /// Max file windows to return (default 6, max 20).
+    #[serde(default)]
+    max_results: Option<u32>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct AstReq {
+    /// Notebook whose repo- and folder-backed files to search.
+    notebook_id: String,
+    /// ast-grep structural pattern, e.g. `fn $NAME($$$) { $$$ }` or
+    /// `$OBJ.unwrap()`. `$NAME` matches one node, `$$$` any number.
+    pattern: String,
+    /// Max matches to return (default 10, max 30).
+    #[serde(default)]
+    max_results: Option<u32>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 struct SearchReq {
     /// Notebook to search.
     notebook_id: String,
@@ -439,7 +462,7 @@ impl AlchemyMcp {
                     .await
                     .map_err(internal)?
             } else {
-                commands::ingest_url(&state, &notebook_id, &url)
+                commands::ingest_url(&state, &notebook_id, &url, None)
                     .await
                     .map_err(internal)?
             }
@@ -616,6 +639,89 @@ impl AlchemyMcp {
         );
         commands::bump_note_usage(&state.db, &citations, "retrieval_hits").await;
         json_result(&citations)
+    }
+
+    #[tool(
+        description = "Exact-match search (ripgrep's engine, in-process) over the notebook's repo- and folder-backed files — the full working trees, not just embedded passages. Use for identifiers, error strings, or regex; use `search` for concepts and prose. Returns ranked file windows with sourceId/sourceTitle/path/line/window; get_source fetches a hit's stored text."
+    )]
+    async fn grep_sources(
+        &self,
+        Parameters(GrepReq {
+            notebook_id,
+            pattern,
+            max_results,
+        }): Parameters<GrepReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let files = commands::repo_backed_files(&state, &notebook_id, None).await;
+        if files.is_empty() {
+            return Err(invalid(
+                "this notebook has no repo- or folder-backed files to grep",
+            ));
+        }
+        let k = max_results.unwrap_or(6).clamp(1, 20) as usize;
+        let paths: Vec<String> = files.iter().map(|f| f.0.clone()).collect();
+        let hits = tokio::task::spawn_blocking(move || {
+            crate::grepsearch::search_pattern(&pattern, &paths, k)
+        })
+        .await
+        .map_err(internal)?
+        .map_err(invalid)?;
+        let payload: Vec<serde_json::Value> = hits
+            .into_iter()
+            .map(|h| {
+                let (path, id, title) = &files[h.file_index];
+                serde_json::json!({
+                    "sourceId": id,
+                    "sourceTitle": title,
+                    "path": path,
+                    "line": h.first_line,
+                    "window": h.window,
+                })
+            })
+            .collect();
+        json_result(&payload)
+    }
+
+    #[tool(
+        description = "Structural code search (ast-grep) over the notebook's repo- and folder-backed files: match syntax, not text — `fn $NAME($$$) { $$$ }` finds every function, `$X.unwrap()` every unwrap call, across Rust/TS/Python/Go/Ruby/Java and the other bundled grammars. `$NAME` matches one node, `$$$` any number. Use grep_sources for plain text or regex."
+    )]
+    async fn ast_search(
+        &self,
+        Parameters(AstReq {
+            notebook_id,
+            pattern,
+            max_results,
+        }): Parameters<AstReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let files = commands::repo_backed_files(&state, &notebook_id, None).await;
+        if files.is_empty() {
+            return Err(invalid(
+                "this notebook has no repo- or folder-backed files to search",
+            ));
+        }
+        let k = max_results.unwrap_or(10).clamp(1, 30) as usize;
+        let paths: Vec<String> = files.iter().map(|f| f.0.clone()).collect();
+        let hits = tokio::task::spawn_blocking(move || {
+            crate::outline::ast_search_files(&pattern, &paths, k)
+        })
+        .await
+        .map_err(internal)?;
+        let payload: Vec<serde_json::Value> = hits
+            .into_iter()
+            .map(|h| {
+                let (path, id, title) = &files[h.file_index];
+                serde_json::json!({
+                    "sourceId": id,
+                    "sourceTitle": title,
+                    "path": path,
+                    "line": h.line,
+                    "text": h.text,
+                })
+            })
+            .collect();
+        json_result(&payload)
     }
 
     #[tool(

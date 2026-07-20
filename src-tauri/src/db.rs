@@ -570,15 +570,28 @@ impl Db {
     /// Every folder source across all notebooks (cheap — folders carry no
     /// content). Drives the periodic auto-refresh rescan.
     pub async fn all_folder_sources(&self) -> Result<Vec<Source>> {
-        self.query_sources(Some("source_type = 'folder'"), false)
-            .await
+        // Two queries, not one OR predicate: the disjunction scan missed a
+        // freshly `update()`d git row that matched either arm alone —
+        // sidestep the pushdown rather than debug it at notebook scale.
+        let mut out = self
+            .query_sources(Some("source_type = 'folder'"), false)
+            .await?;
+        out.extend(
+            self.query_sources(Some("source_type = 'git'"), false)
+                .await?,
+        );
+        Ok(out)
     }
 
-    /// Top-level ready sources that aren't folders — the resync sweep filters
-    /// these down to file-backed ones and re-embeds any whose file changed.
+    /// Top-level ready sources that aren't folder-like parents (folders and
+    /// git repos sweep via rescan) — the resync sweep filters these down to
+    /// file- or git-backed ones and re-embeds any whose backing changed.
     pub async fn all_loose_sources(&self) -> Result<Vec<Source>> {
         self.query_sources(
-            Some("parent_id = '' AND source_type != 'folder' AND status = 'ready'"),
+            Some(
+                "parent_id = '' AND source_type != 'folder' AND source_type != 'git' \
+                 AND status = 'ready'",
+            ),
             false,
         )
         .await

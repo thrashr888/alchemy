@@ -44,6 +44,50 @@ pub fn is_image(path: &str) -> bool {
     )
 }
 
+/// Source-code and config extensions ingested verbatim (no whitespace
+/// normalization — indentation is structure) and chunked by `chunk_code`.
+/// Prose formats (md/txt) deliberately stay on the document path.
+const CODE_EXTENSIONS: &[&str] = &[
+    "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "go", "rb", "java", "kt", "kts", "swift",
+    "c", "h", "cc", "cpp", "hpp", "hh", "m", "mm", "php", "sh", "bash", "zsh", "fish", "sql",
+    "scala", "lua", "r", "ex", "exs", "erl", "zig", "nix", "proto", "graphql", "vue", "svelte",
+    "css", "scss", "less", "toml", "yaml", "yml", "json", "jsonc", "hcl", "tf", "tfvars", "ini",
+    "cfg", "conf", "env", "xml", "plist", "gradle", "cmake", "asm", "s", "d", "dart", "hs", "ml",
+    "clj", "cljs", "el", "vim", "ps1", "bat", "cmd",
+];
+
+/// Extension-less files that are still code/config by convention.
+const CODE_FILENAMES: &[&str] = &[
+    "dockerfile",
+    "makefile",
+    "justfile",
+    "rakefile",
+    "gemfile",
+    "procfile",
+    "brewfile",
+    "vagrantfile",
+];
+
+/// Is this path source code (or code-shaped config) that should skip prose
+/// normalization and use the code chunker?
+pub fn is_code_path(path: &str) -> bool {
+    let p = Path::new(path);
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if CODE_EXTENSIONS.contains(&ext.as_str()) {
+        return true;
+    }
+    let name = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    CODE_FILENAMES.contains(&name.as_str())
+}
+
 /// Is this path a PDF?
 pub fn is_pdf(path: &str) -> bool {
     Path::new(path)
@@ -75,6 +119,26 @@ pub fn extract_file(path: &str) -> Result<Extracted> {
         .and_then(|s| s.to_str())
         .unwrap_or("Untitled")
         .to_string();
+
+    // Code reads verbatim: normalize() strips the indentation that makes
+    // code legible and retrievable, and chunk_code needs real lines. The
+    // filename keeps its extension — `db.rs` and `db.ts` are different files.
+    if is_code_path(path) {
+        let text = read_text_lossy(path)?.replace('\r', "");
+        if text.trim().is_empty() {
+            return Err(anyhow!("no extractable text found in {path}"));
+        }
+        return Ok(Extracted {
+            title: p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("Untitled")
+                .to_string(),
+            source_type: "code".to_string(),
+            url: String::new(),
+            text,
+        });
+    }
 
     let (source_type, text) = match ext.as_str() {
         "html" | "htm" | "xhtml" => {
@@ -1138,6 +1202,126 @@ fn split_oversized(p: &str) -> Vec<String> {
     out
 }
 
+/// Chunk dispatch: code sources keep whitespace and split on block
+/// boundaries; everything else uses the prose chunker. `code_ctx` is the
+/// retrieval context for code chunks — "repo › relative/path.rs" when the
+/// caller knows it (folder children), falling back to the title.
+pub fn chunk_source(extracted: &Extracted, code_ctx: Option<&str>) -> Vec<Chunk> {
+    if extracted.source_type == "code" {
+        chunk_code(code_ctx.unwrap_or(&extracted.title), &extracted.text)
+    } else {
+        chunk_text(&extracted.title, &extracted.text)
+    }
+}
+
+/// How many trailing lines of one code chunk repeat at the start of the next
+/// when a single block is bigger than a whole chunk — continuity without
+/// prose-style word overlap.
+const CODE_OVERLAP_LINES: usize = 8;
+
+/// Split code into chunks on blank-line block boundaries, packing blocks up
+/// to ~CHUNK_WORDS. Text is verbatim — indentation intact, so citations show
+/// real code — and `embed_text` carries a `[context]` path header, the
+/// highest-leverage retrieval trick for code (exact file-name hits for BM25,
+/// orientation for the embedder). Oversized blocks fall back to line windows,
+/// never sentence splits.
+pub fn chunk_code(context: &str, text: &str) -> Vec<Chunk> {
+    let make = |body: &str| -> Chunk {
+        let body = body.trim_end().to_string();
+        let ctx = context.trim();
+        let embed_text = if ctx.is_empty() {
+            body.clone()
+        } else {
+            format!("[{ctx}]\n{body}")
+        };
+        Chunk {
+            text: body,
+            embed_text,
+        }
+    };
+
+    // Group lines into blocks separated by blank lines.
+    let mut blocks: Vec<(String, usize)> = Vec::new(); // (block text, word count)
+    let mut cur = String::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            if !cur.is_empty() {
+                let words = word_count(&cur);
+                blocks.push((std::mem::take(&mut cur), words));
+            }
+            continue;
+        }
+        if !cur.is_empty() {
+            cur.push('\n');
+        }
+        cur.push_str(line);
+    }
+    if !cur.is_empty() {
+        let words = word_count(&cur);
+        blocks.push((cur, words));
+    }
+
+    let mut chunks: Vec<Chunk> = Vec::new();
+    let mut pending = String::new();
+    let mut pending_words = 0usize;
+    for (block, words) in blocks {
+        // A single block bigger than a whole chunk: flush and line-window it.
+        if words > CHUNK_WORDS {
+            if !pending.is_empty() {
+                chunks.push(make(&pending));
+                pending.clear();
+                pending_words = 0;
+            }
+            for piece in line_windows(&block) {
+                chunks.push(make(&piece));
+            }
+            continue;
+        }
+        if pending_words + words > CHUNK_WORDS && !pending.is_empty() {
+            chunks.push(make(&pending));
+            pending.clear();
+            pending_words = 0;
+        }
+        if !pending.is_empty() {
+            pending.push_str("\n\n");
+        }
+        pending.push_str(&block);
+        pending_words += words;
+    }
+    if !pending.trim().is_empty() {
+        chunks.push(make(&pending));
+    }
+    chunks
+}
+
+/// Split one oversized code block into line runs of ~CHUNK_WORDS with a few
+/// lines of overlap for continuity.
+fn line_windows(block: &str) -> Vec<String> {
+    let lines: Vec<&str> = block.lines().collect();
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    while start < lines.len() {
+        let mut end = start;
+        let mut words = 0usize;
+        while end < lines.len() {
+            let w = word_count(lines[end]);
+            // Always take at least one line, however wide (minified guards
+            // live upstream in the folder scan's size cap).
+            if end > start && words + w > CHUNK_WORDS {
+                break;
+            }
+            words += w;
+            end += 1;
+        }
+        out.push(lines[start..end].join("\n"));
+        if end == lines.len() {
+            break;
+        }
+        start = end.saturating_sub(CODE_OVERLAP_LINES).max(start + 1);
+    }
+    out
+}
+
 /// Last-resort overlapping word windows for boundary-free text.
 fn word_windows(text: &str) -> Vec<String> {
     let words: Vec<&str> = text.split_whitespace().collect();
@@ -1411,6 +1595,100 @@ fn extract_title(html: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn code_paths_detected_by_extension_and_name() {
+        assert!(is_code_path("/repo/src/db.rs"));
+        assert!(is_code_path("/repo/src/lib/utils.ts"));
+        assert!(is_code_path("/repo/Dockerfile"));
+        assert!(is_code_path("/repo/Makefile"));
+        assert!(is_code_path("/repo/config.toml"));
+        assert!(!is_code_path("/repo/README.md"));
+        assert!(!is_code_path("/repo/notes.txt"));
+        assert!(!is_code_path("/repo/paper.pdf"));
+        assert!(!is_code_path("/repo/LICENSE"));
+    }
+
+    #[test]
+    fn chunk_code_preserves_whitespace_and_prefixes_context() {
+        let code = "fn main() {\n    let x = 1;\n    println!(\"{x}\");\n}\n\nfn helper() {\n    todo!()\n}\n";
+        let chunks = chunk_code("alchemy › src/main.rs", code);
+        assert_eq!(chunks.len(), 1);
+        // Indentation survives verbatim in the citation text…
+        assert!(chunks[0].text.contains("    let x = 1;"));
+        // …blocks are joined with a single blank line…
+        assert!(chunks[0].text.contains("}\n\nfn helper()"));
+        // …and the embed text carries the path header while the citation
+        // text stays clean.
+        assert!(chunks[0]
+            .embed_text
+            .starts_with("[alchemy › src/main.rs]\nfn main()"));
+        assert!(!chunks[0].text.starts_with('['));
+    }
+
+    #[test]
+    fn chunk_code_splits_on_block_boundaries_at_budget() {
+        // Many small blocks that can't all fit one chunk: splits happen at
+        // blank lines, never mid-block.
+        let block = "fn f() {\n    a_line_of_code();\n    another_line_here();\n}";
+        let code = vec![block; 60].join("\n\n");
+        let chunks = chunk_code("ctx", &code);
+        assert!(chunks.len() > 1);
+        for c in &chunks {
+            assert!(c.text.starts_with("fn f()"));
+            assert!(c.text.ends_with('}'));
+        }
+    }
+
+    #[test]
+    fn chunk_code_line_windows_oversized_blocks() {
+        // One giant block with no blank lines falls back to line windows —
+        // every chunk still holds whole lines.
+        let code = (0..600)
+            .map(|i| format!("    call_number_{i}(with, some, args);"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let chunks = chunk_code("ctx", &code);
+        assert!(chunks.len() > 1);
+        for c in &chunks {
+            assert!(c.text.lines().all(|l| l.starts_with("    call_number_")));
+        }
+        // Overlap: the second chunk re-starts before the first one ended.
+        let first_last: &str = chunks[0].text.lines().last().unwrap();
+        let second_first: &str = chunks[1].text.lines().next().unwrap();
+        let n = |l: &str| -> usize {
+            l.trim_start()
+                .trim_start_matches("call_number_")
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse()
+                .unwrap()
+        };
+        assert!(n(second_first) <= n(first_last));
+    }
+
+    #[test]
+    fn chunk_source_dispatches_on_source_type() {
+        let code = Extracted {
+            title: "main.rs".into(),
+            source_type: "code".into(),
+            url: String::new(),
+            text: "fn main() {\n    body();\n}".into(),
+        };
+        let got = chunk_source(&code, None);
+        assert!(got[0].text.contains("    body();"));
+        assert!(got[0].embed_text.starts_with("[main.rs]\n"));
+
+        let prose = Extracted {
+            title: "Notes".into(),
+            source_type: "text".into(),
+            url: String::new(),
+            text: "One paragraph of ordinary prose.".into(),
+        };
+        let got = chunk_source(&prose, None);
+        assert!(got[0].embed_text.starts_with("[Notes]\n"));
+    }
 
     #[test]
     fn provenance_line_formats_and_filters() {
