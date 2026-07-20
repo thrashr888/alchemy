@@ -149,6 +149,14 @@ the user captures what they can already see.
    result.
 2. **Completeness + memory** — scroll/unlazify pass, metadata payload,
    per-domain capture memory, re-sync tier reuse.
+   *Shipped.* Capture memory works end-to-end (`capture_domains.json`;
+   re-syncs of a rendered-winning domain go webview-first, 30-day TTL);
+   byline/date land as a `> By … · Published …` provenance line when the
+   page exposes them. Two honest limits surfaced: virtualized feeds (x.com)
+   scroll an inner container, so window-scroll steps don't paginate them
+   (`scrollSteps:0` in telemetry), and listing grids (dupont) render fully
+   but extract thin because readability is article-shaped — more content
+   needs a listing-aware extraction mode, not more scrolling.
 3. **Assisted capture** — the visible window flow, "needs a hand" source
    state, capture-profile management (clear/reset setting).
 

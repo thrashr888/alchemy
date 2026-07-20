@@ -46,6 +46,16 @@ const DEGRADED_DWELL: Duration = Duration::from_millis(3500);
 const SETTLE_CAP: Duration = Duration::from_secs(10);
 /// Hard ceiling on one whole capture, teardown included.
 const TOTAL_CAP: Duration = Duration::from_secs(30);
+/// Completeness pass: at most this many viewport-sized scroll steps (so
+/// infinite feeds terminate), pausing between steps for lazy-loaders.
+const SCROLL_STEPS_MAX: u32 = 5;
+const SCROLL_PAUSE: Duration = Duration::from_millis(400);
+/// Short re-settle after the scroll pass — the page is already hydrated,
+/// we only wait out the stragglers the scroll just triggered.
+const RESETTLE_CAP: Duration = Duration::from_secs(2);
+/// A domain-memory entry older than this is re-probed via the fast path —
+/// sites change, and a stale "rendered" marker would tax every add.
+const MEMORY_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 
 /// Injected before any page script runs (WKUserScript at document start, so
 /// it re-arms across redirects). Counts in-flight fetch/XHR for a network-
@@ -107,13 +117,74 @@ const POLL_JS: &str = r#"
 })();
 "#;
 
-/// Serialize the rendered DOM plus the bits readability can't recover.
+/// Completeness pass, part 2 (RFC §3): after the scroll steps, wake lazy
+/// images (`data-src`/`data-srcset`), drop full-viewport fixed/sticky
+/// overlays (consent scrims sit over the article and readability sometimes
+/// keeps them), and park scroll back at the top for a clean extraction.
+const FINALIZE_JS: &str = r#"
+(() => {
+  try {
+    let unlazy = 0, overlays = 0;
+    for (const img of Array.from(document.querySelectorAll('img')).slice(0, 500)) {
+      const src = img.getAttribute('data-src') || img.getAttribute('data-lazy-src');
+      const srcset = img.getAttribute('data-srcset');
+      if (src && !img.src) { img.src = src; unlazy++; }
+      if (srcset && !img.getAttribute('srcset')) { img.setAttribute('srcset', srcset); unlazy++; }
+      if (img.loading === 'lazy') img.loading = 'eager';
+    }
+    const vw = window.innerWidth || 1280, vh = window.innerHeight || 900;
+    let seen = 0;
+    for (const el of document.querySelectorAll('body *')) {
+      if (++seen > 2500) break;
+      const cs = getComputedStyle(el);
+      if (cs.position !== 'fixed' && cs.position !== 'sticky') continue;
+      const r = el.getBoundingClientRect();
+      if (r.width * r.height > vw * vh * 0.55) { el.remove(); overlays++; }
+    }
+    window.scrollTo(0, 0);
+    return JSON.stringify({ unlazy, overlays });
+  } catch (e) { return '{}'; }
+})();
+"#;
+
+/// Serialize the rendered DOM plus the bits readability can't recover:
+/// the live `document.title`, and byline/date metadata from meta tags and
+/// JSON-LD, which feed the source's provenance line.
 const EXTRACT_JS: &str = r#"
 (() => {
   try {
+    const pick = (sel, attr) => {
+      const el = document.querySelector(sel);
+      if (!el) return '';
+      return ((attr ? el.getAttribute(attr) : el.textContent) || '').trim();
+    };
+    let byline = pick('meta[name="author"]', 'content') ||
+                 pick('meta[property="article:author"]', 'content');
+    let published = pick('meta[property="article:published_time"]', 'content') ||
+                    pick('meta[name="date"]', 'content') ||
+                    pick('time[datetime]', 'datetime');
+    for (const s of Array.from(document.querySelectorAll('script[type="application/ld+json"]')).slice(0, 5)) {
+      if (byline && published) break;
+      try {
+        const d = JSON.parse(s.textContent);
+        const nodes = Array.isArray(d) ? d : (d['@graph'] || [d]);
+        for (const n of nodes) {
+          if (!n || typeof n !== 'object') continue;
+          if (!published && n.datePublished) published = String(n.datePublished);
+          const a = n.author;
+          if (!byline && a) {
+            byline = Array.isArray(a) ? a.map(x => x && x.name || '').filter(Boolean).join(', ')
+                                      : String((a && a.name) || '');
+          }
+        }
+      } catch (e) {}
+    }
     return JSON.stringify({
       ok: true,
       title: document.title || '',
+      ogTitle: pick('meta[property="og:title"]', 'content'),
+      byline: byline || '',
+      published: published || '',
       html: document.documentElement ? document.documentElement.outerHTML : ''
     });
   } catch (e) {
@@ -151,26 +222,113 @@ struct ExtractPayload {
     ok: bool,
     #[serde(default)]
     title: String,
+    #[serde(default, rename = "ogTitle")]
+    og_title: String,
+    #[serde(default)]
+    byline: String,
+    #[serde(default)]
+    published: String,
     #[serde(default)]
     html: String,
     #[serde(default)]
     error: String,
 }
 
+#[derive(serde::Deserialize, Default)]
+struct FinalizeStats {
+    #[serde(default)]
+    unlazy: u32,
+    #[serde(default)]
+    overlays: u32,
+}
+
+/// One scroll-step probe: where the viewport is and how tall the page is.
+#[derive(serde::Deserialize, Default)]
+struct ScrollProbe {
+    #[serde(default)]
+    sh: f64,
+    #[serde(default)]
+    ih: f64,
+}
+
 struct Ctx {
     app: AppHandle,
     trace_dir: PathBuf,
+    memory_path: PathBuf,
 }
 
 static CTX: OnceLock<Ctx> = OnceLock::new();
 static SEQ: AtomicU64 = AtomicU64::new(0);
 /// One capture at a time — a re-sync sweep must not open a window per source.
 static SLOT: Semaphore = Semaphore::const_new(1);
+/// Capture memory (RFC §4): domain → unix-seconds of the last successful
+/// rendered capture. Only rendered-winning domains are listed; everything
+/// else defaults to the fast path. Loaded lazily, persisted best-effort.
+static MEMORY: OnceLock<std::sync::Mutex<std::collections::HashMap<String, u64>>> = OnceLock::new();
 
 /// Called once from setup. Until then (and in tests) escalation is silently
 /// unavailable and `extract_url_rescued` behaves exactly like `extract_url`.
-pub fn init(app: AppHandle, trace_dir: PathBuf) {
-    let _ = CTX.set(Ctx { app, trace_dir });
+pub fn init(app: AppHandle, data_dir: PathBuf) {
+    let _ = CTX.set(Ctx {
+        app,
+        trace_dir: data_dir.join("traces"),
+        memory_path: data_dir.join("capture_domains.json"),
+    });
+}
+
+fn memory() -> &'static std::sync::Mutex<std::collections::HashMap<String, u64>> {
+    MEMORY.get_or_init(|| {
+        let loaded = CTX
+            .get()
+            .and_then(|ctx| std::fs::read_to_string(&ctx.memory_path).ok())
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        std::sync::Mutex::new(loaded)
+    })
+}
+
+/// Is this URL's domain remembered as webview-first (and not stale)?
+fn remembered_rendered(url: &str) -> bool {
+    let Some(domain) = domain_of(url) else {
+        return false;
+    };
+    memory()
+        .lock()
+        .map(|m| {
+            m.get(&domain)
+                .is_some_and(|ts| unix_now().saturating_sub(*ts) < MEMORY_TTL_SECS)
+        })
+        .unwrap_or(false)
+}
+
+/// Record (or clear) a domain's rendered-first standing and persist.
+fn remember(url: &str, rendered_won: bool) {
+    let Some(domain) = domain_of(url) else { return };
+    let Ok(mut m) = memory().lock() else { return };
+    let changed = if rendered_won {
+        // Insert or refresh — the timestamp is the TTL clock either way.
+        m.insert(domain, unix_now());
+        true
+    } else {
+        m.remove(&domain).is_some()
+    };
+    if !changed {
+        return;
+    }
+    let snapshot = m.clone();
+    drop(m);
+    if let (Some(ctx), Ok(json)) = (CTX.get(), serde_json::to_string_pretty(&snapshot)) {
+        if let Err(err) = std::fs::write(&ctx.memory_path, json) {
+            eprintln!("capture memory write failed: {err}");
+        }
+    }
+}
+
+fn domain_of(url: &str) -> Option<String> {
+    url.parse::<tauri::Url>()
+        .ok()?
+        .host_str()
+        .map(|h| h.to_ascii_lowercase())
 }
 
 /// Below this many extracted chars a URL "success" is treated as suspect and
@@ -186,13 +344,28 @@ const THIN_CHARS: usize = 500;
 /// the fast path's length, so a failed rescue never makes a source worse
 /// than the fast path left it.
 pub async fn extract_url_rescued(url: &str) -> Result<Extracted> {
-    let fast = ingest::extract_url(url).await;
     // Google export endpoints are authoritative plain text — rendering
     // docs.google.com without login can't beat them (assisted capture is
     // phase 3).
     if ingest::is_google_doc_url(url) {
-        return fast;
+        return ingest::extract_url(url).await;
     }
+    // Capture memory (RFC §4): a domain that last won via rendering skips
+    // the doomed fast fetch and goes straight to the webview. A rendered
+    // miss falls through to the fast path, and a fast win clears the marker.
+    if CTX.get().is_some() && remembered_rendered(url) {
+        let t0 = Instant::now();
+        match tokio::time::timeout(TOTAL_CAP, rendered_capture(url)).await {
+            Ok(Ok(rendered)) if ingest::looks_blocked(&rendered.extracted.text).is_none() => {
+                let chars = rendered.extracted.text.chars().count();
+                remember(url, true);
+                log_capture(url, "rendered_first", "domain memory", &rendered, t0, chars);
+                return Ok(rendered.extracted);
+            }
+            _ => {}
+        }
+    }
+    let fast = ingest::extract_url(url).await;
     let fast_chars = fast.as_ref().map(|ex| ex.text.chars().count()).unwrap_or(0);
     let trigger = match &fast {
         Ok(ex) => match ingest::looks_blocked(&ex.text) {
@@ -200,7 +373,10 @@ pub async fn extract_url_rescued(url: &str) -> Result<Extracted> {
             None if fast_chars < THIN_CHARS => {
                 format!("Only {fast_chars} characters extracted — thin for a real page.")
             }
-            None => return fast,
+            None => {
+                remember(url, false);
+                return fast;
+            }
         },
         Err(err) => format!("{err:#}"),
     };
@@ -222,6 +398,7 @@ pub async fn extract_url_rescued(url: &str) -> Result<Extracted> {
                 log_capture(url, "not_better", &trigger, &rendered, t0, chars);
                 fast
             } else {
+                remember(url, true);
                 log_capture(url, "rescued", &trigger, &rendered, t0, chars);
                 Ok(rendered.extracted)
             }
@@ -246,6 +423,12 @@ struct Rendered {
     saw_state: bool,
     /// Last observed `document.readyState` — diagnostic context for misses.
     ready_state: String,
+    /// Completeness pass: scroll steps taken, whether the page grew while
+    /// scrolling (lazy content actually loaded), and finalize counts.
+    scroll_steps: u32,
+    grew: bool,
+    unlazy: u32,
+    overlays: u32,
 }
 
 /// Drive one hidden-webview capture: create the window, wait for settle,
@@ -310,6 +493,53 @@ async fn drive(window: &tauri::WebviewWindow, url: &str) -> Result<Rendered> {
     }
     let settle_ms = started.elapsed().as_millis();
 
+    // Completeness pass (RFC §3): step-scroll toward the bottom so
+    // IntersectionObserver lazy-loaders and infinite feeds fire, capped so
+    // endless timelines terminate. Growth in scrollHeight tells us whether
+    // anything actually loaded.
+    let mut scroll_steps: u32 = 0;
+    let mut grew = false;
+    let mut probe = scroll_probe(window, 1).await.unwrap_or_default();
+    let initial_sh = probe.sh;
+    if probe.sh > probe.ih && probe.ih > 0.0 {
+        for step in 1..=SCROLL_STEPS_MAX {
+            let y = probe.ih * step as f64;
+            scroll_steps = step;
+            tokio::time::sleep(SCROLL_PAUSE).await;
+            match scroll_probe(window, step + 1).await {
+                Ok(next) => {
+                    grew |= next.sh > initial_sh + 1.0;
+                    let done = y >= next.sh;
+                    probe = next;
+                    if done {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    }
+    let finalize: FinalizeStats = eval_string(window, FINALIZE_JS)
+        .await
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+    // Give the lazy content a short re-settle before serializing; the full
+    // dwell machinery isn't needed — the page is already hydrated.
+    let resettle_started = Instant::now();
+    while resettle_started.elapsed() < RESETTLE_CAP {
+        tokio::time::sleep(POLL).await;
+        let Ok(raw) = eval_string(window, POLL_JS).await else {
+            continue;
+        };
+        let Ok(state) = serde_json::from_str::<SettleState>(&raw) else {
+            continue;
+        };
+        if state.settled() {
+            break;
+        }
+    }
+
     let raw = eval_string(window, EXTRACT_JS)
         .await
         .context("extraction script failed")?;
@@ -317,23 +547,44 @@ async fn drive(window: &tauri::WebviewWindow, url: &str) -> Result<Rendered> {
         serde_json::from_str(&raw).context("unexpected extraction payload")?;
     anyhow::ensure!(payload.ok, "extraction failed in page: {}", payload.error);
     anyhow::ensure!(!payload.html.trim().is_empty(), "rendered DOM was empty");
+    let meta = ingest::PageMeta {
+        og_title: payload.og_title,
+        byline: payload.byline,
+        published: payload.published,
+    };
     Ok(Rendered {
-        extracted: ingest::extracted_from_html(&payload.html, url, &payload.title),
+        extracted: ingest::extracted_from_html(&payload.html, url, &payload.title, &meta),
         settled,
         settle_ms,
         saw_state,
         ready_state,
+        scroll_steps,
+        grew,
+        unlazy: finalize.unlazy,
+        overlays: finalize.overlays,
     })
+}
+
+/// Scroll to `step × viewport` and report the page geometry afterward.
+async fn scroll_probe(window: &tauri::WebviewWindow, step: u32) -> Result<ScrollProbe> {
+    let js = format!(
+        "(() => {{ const ih = window.innerHeight || 900; \
+         window.scrollTo(0, {step} * ih); \
+         return JSON.stringify({{ sh: document.body ? document.body.scrollHeight : 0, ih }}); }})();"
+    );
+    let raw = eval_string(window, js).await?;
+    serde_json::from_str(&raw).context("bad scroll probe")
 }
 
 /// Evaluate JS in the capture webview and return its string result via the
 /// native WKWebView completion handler (same objc recipe as print/spotlight).
-async fn eval_string(window: &tauri::WebviewWindow, js: &'static str) -> Result<String> {
+async fn eval_string(window: &tauri::WebviewWindow, js: impl Into<String>) -> Result<String> {
+    let js: String = js.into();
     #[cfg(target_os = "macos")]
     {
         let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
         window
-            .with_webview(move |wv| unsafe { mac_eval(wv.inner().cast(), js, tx) })
+            .with_webview(move |wv| unsafe { mac_eval(wv.inner().cast(), &js, tx) })
             .map_err(|e| anyhow!("webview gone: {e}"))?;
         tauri::async_runtime::spawn_blocking(move || {
             rx.recv_timeout(Duration::from_secs(15))
@@ -412,6 +663,10 @@ fn log_capture(
             "settleMs": rendered.settle_ms,
             "totalMs": t0.elapsed().as_millis(),
             "chars": chars,
+            "scrollSteps": rendered.scroll_steps,
+            "grew": rendered.grew,
+            "unlazy": rendered.unlazy,
+            "overlays": rendered.overlays,
         }),
     );
 }
@@ -473,10 +728,24 @@ mod tests {
     }
 
     #[test]
+    fn domain_memory_round_trips() {
+        // No CTX in tests: the map lives in memory only, which is exactly
+        // what we want to exercise.
+        assert!(!remembered_rendered("https://memtest-a.example/x"));
+        remember("https://memtest-a.example/x", true);
+        assert!(remembered_rendered("https://memtest-a.example/y"));
+        remember("https://memtest-a.example/z", false);
+        assert!(!remembered_rendered("https://memtest-a.example/x"));
+        // Not a URL → never remembered, never panics.
+        remember("not a url", true);
+        assert!(!remembered_rendered("not a url"));
+    }
+
+    #[test]
     fn injected_scripts_are_iifes() {
         // A stray top-level `return` or unbalanced brace would make every
         // capture fail at runtime; keep the scripts shaped like expressions.
-        for js in [INIT_JS, POLL_JS, EXTRACT_JS] {
+        for js in [INIT_JS, POLL_JS, EXTRACT_JS, FINALIZE_JS] {
             let trimmed = js.trim();
             assert!(
                 trimmed.starts_with("(() => {"),

@@ -881,22 +881,62 @@ fn readable_text(body: &str, url: &str) -> (Option<String>, String) {
     (None, normalize(&strip_html(body)))
 }
 
+/// Page metadata the webview capture recovers from the live DOM (meta tags
+/// + JSON-LD) that static readability can't always see.
+#[derive(Default)]
+pub struct PageMeta {
+    pub og_title: String,
+    pub byline: String,
+    pub published: String,
+}
+
 /// Build an `Extracted` from already-rendered HTML — the webview capture
 /// path (capture.rs). Same readability pipeline as fetched URLs and saved
-/// pages; the live DOM's `document.title` fills in when the markup carries
-/// no usable one (SPAs often set it only via JS).
-pub fn extracted_from_html(html: &str, url: &str, dom_title: &str) -> Extracted {
+/// pages; the live DOM's `document.title` and OpenGraph title fill in when
+/// the markup carries no usable one (SPAs often set titles only via JS),
+/// and byline/date become a one-line provenance header so retrieval knows
+/// who wrote it and when.
+pub fn extracted_from_html(html: &str, url: &str, dom_title: &str, meta: &PageMeta) -> Extracted {
     let (article_title, text) = readable_text(html, url);
     let title = article_title
         .or_else(|| extract_title(html))
+        .or_else(|| Some(meta.og_title.trim().to_string()).filter(|t| !t.is_empty()))
         .or_else(|| Some(dom_title.trim().to_string()).filter(|t| !t.is_empty()))
         .unwrap_or_else(|| url.to_string());
+    let text = match provenance_line(meta) {
+        Some(line) if !text.trim().is_empty() => format!("{line}\n\n{text}"),
+        _ => text,
+    };
     Extracted {
         title,
         source_type: "url".to_string(),
         url: url.to_string(),
         text,
     }
+}
+
+/// `> By Jane Doe · Published 2024-03-12` — compact, only when known.
+/// ISO timestamps are trimmed to the date; junk-length bylines dropped.
+fn provenance_line(meta: &PageMeta) -> Option<String> {
+    let byline = meta.byline.split_whitespace().collect::<Vec<_>>().join(" ");
+    let byline = (!byline.is_empty() && byline.chars().count() <= 80).then_some(byline.as_str());
+    let published = meta.published.trim();
+    let published = published
+        .split_once('T')
+        .map(|(d, _)| d)
+        .unwrap_or(published);
+    let published = (!published.is_empty() && published.chars().count() <= 32).then_some(published);
+    let parts: Vec<String> = [
+        byline.map(|b| format!("By {b}")),
+        published.map(|p| format!("Published {p}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if parts.is_empty() {
+        return None;
+    }
+    Some(format!("> {}", parts.join(" · ")))
 }
 
 /// Heuristic: does this extracted text look like a bot wall / login page /
@@ -1371,6 +1411,57 @@ fn extract_title(html: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provenance_line_formats_and_filters() {
+        let meta = PageMeta {
+            byline: "Jane  Doe".into(),
+            published: "2024-03-12T10:00:00Z".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            provenance_line(&meta).as_deref(),
+            Some("> By Jane Doe · Published 2024-03-12")
+        );
+        // Date only.
+        let meta = PageMeta {
+            published: "2023-01-05".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            provenance_line(&meta).as_deref(),
+            Some("> Published 2023-01-05")
+        );
+        // Nothing known → no line; junk-length byline dropped.
+        assert_eq!(provenance_line(&PageMeta::default()), None);
+        let meta = PageMeta {
+            byline: "x".repeat(200),
+            ..Default::default()
+        };
+        assert_eq!(provenance_line(&meta), None);
+    }
+
+    #[test]
+    fn extracted_from_html_titles_and_provenance() {
+        let body = "Real content sentence. ".repeat(20);
+        let html = format!("<html><body><div>{body}</div></body></html>");
+        // No <title>, no og:title → live DOM title wins.
+        let ex = extracted_from_html(&html, "https://e.com/a", "DOM Title", &PageMeta::default());
+        assert_eq!(ex.title, "DOM Title");
+        assert!(ex.text.contains("Real content"));
+        // og:title beats the DOM title fallback.
+        let meta = PageMeta {
+            og_title: "OG Title".into(),
+            byline: "Jane".into(),
+            ..Default::default()
+        };
+        let ex = extracted_from_html(&html, "https://e.com/a", "DOM Title", &meta);
+        assert_eq!(ex.title, "OG Title");
+        assert!(ex.text.starts_with("> By Jane\n\n"), "got: {:.60}", ex.text);
+        // Empty extraction never gets a dangling provenance header.
+        let ex = extracted_from_html("<html></html>", "https://e.com/a", "", &meta);
+        assert!(!ex.text.starts_with(">"));
+    }
 
     #[test]
     fn chunk_text_packs_paragraphs_and_prefixes_context() {
