@@ -264,7 +264,9 @@ impl AgentCli {
                 } else {
                     format!("{system}\n\n---\n\n{prompt}")
                 };
-                cmd.args(["exec", "--json", &full]);
+                // --skip-git-repo-check: bundled apps run outside any repo
+                // and codex refuses non-repo cwds without it.
+                cmd.args(["exec", "--json", "--skip-git-repo-check", &full]);
             }
             AgentKind::Cursor => {
                 // cursor-agent print mode speaks claude-shaped stream-json;
@@ -400,7 +402,7 @@ impl AgentCli {
                         // codex exec --json: items complete whole; the
                         // agent_message item carries the reply text.
                         if v["type"].as_str() == Some("item.completed")
-                            && v["item"]["item_type"].as_str() == Some("agent_message")
+                            && v["item"]["type"].as_str() == Some("agent_message")
                         {
                             if let Some(t) = v["item"]["text"].as_str() {
                                 text.push_str(t);
@@ -450,6 +452,20 @@ impl AgentCli {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Live smoke test against the real codex CLI — run explicitly:
+    ///   cargo test agent_cli_codex_smoke -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn agent_cli_codex_smoke() {
+        let cli = AgentCli::new(AgentKind::Codex);
+        let messages = vec![
+            ChatTurn::system("Answer with exactly one word."),
+            ChatTurn::user("What is 2+2? Reply with only the number."),
+        ];
+        let out = cli.chat(&messages).await.expect("codex chat failed");
+        assert!(out.text.contains('4'), "unexpected: {}", out.text);
+    }
 
     /// Live smoke test against the real claude CLI — run explicitly:
     ///   cargo test agent_cli_claude_smoke -- --ignored --nocapture

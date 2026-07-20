@@ -536,36 +536,107 @@ export function SettingsDialog({
                 </div>
               </Field>
               <Field
-                label="Use for"
-                hint="Chat answers questions; Studio writes artifacts and reports."
+                label="Main model"
+                hint="Answers notebook chat. Auxiliary tasks follow it unless overridden."
               >
-                <div className="grid grid-cols-2 gap-1.5">
-                  {(
-                    [
-                      ["chatProvider", "Chat"],
-                      ["studioProvider", "Studio"],
-                    ] as const
-                  ).map(([field, label]) => (
-                    <label key={field} className="flex flex-col gap-1">
-                      <span className="text-[11px] text-subtle-foreground">
-                        {label}
-                      </span>
-                      <select
-                        aria-label={`Provider for ${label}`}
-                        value={draft[field]}
-                        onChange={(e) =>
-                          setDraft({ ...draft, [field]: e.target.value })
-                        }
-                        className="h-8 rounded-md border border-input bg-surface-2 px-2 text-[13px] text-foreground focus:outline-none"
-                      >
-                        {draft.providers.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ))}
+                <div className="flex items-center gap-1.5">
+                  <select
+                    aria-label="Main provider"
+                    value={draft.chatProvider}
+                    onChange={(e) =>
+                      setDraft({ ...draft, chatProvider: e.target.value })
+                    }
+                    className="h-8 flex-1 rounded-md border border-input bg-surface-2 px-2 text-[13px] text-foreground focus:outline-none"
+                  >
+                    {draft.providers.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.label}
+                        {p.chatModel ? ` · ${p.chatModel}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    variant="secondary"
+                    onClick={() => selectForEdit(draft.chatProvider)}
+                    title="Edit this provider's connection and model"
+                  >
+                    Edit
+                  </Button>
+                </div>
+              </Field>
+              <Field
+                label="Auxiliary models"
+                hint="Helper tasks run on the main model by default; override any of them."
+              >
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="w-24 shrink-0 text-[12.5px] text-foreground">
+                      Studio
+                    </span>
+                    {draft.studioProvider === "" ? (
+                      <>
+                        <span className="flex-1 text-[12px] text-subtle-foreground">
+                          use main model
+                        </span>
+                        <Button
+                          variant="ghost"
+                          onClick={() =>
+                            setDraft({
+                              ...draft,
+                              studioProvider: draft.chatProvider,
+                            })
+                          }
+                        >
+                          Change
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <select
+                          aria-label="Studio provider"
+                          value={draft.studioProvider}
+                          onChange={(e) =>
+                            setDraft({
+                              ...draft,
+                              studioProvider: e.target.value,
+                            })
+                          }
+                          className="h-7 flex-1 rounded-md border border-input bg-surface-2 px-2 text-[12.5px] text-foreground focus:outline-none"
+                        >
+                          {draft.providers.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.label}
+                              {p.chatModel ? ` · ${p.chatModel}` : ""}
+                            </option>
+                          ))}
+                        </select>
+                        <Button
+                          variant="ghost"
+                          onClick={() =>
+                            setDraft({ ...draft, studioProvider: "" })
+                          }
+                        >
+                          Set to main
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-24 shrink-0 text-[12.5px] text-foreground">
+                      Titles
+                    </span>
+                    <span className="flex-1 text-[12px] text-subtle-foreground">
+                      on-device Apple model · automatic, falls back to main
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-24 shrink-0 text-[12.5px] text-foreground">
+                      Embeddings
+                    </span>
+                    <span className="flex-1 text-[12px] text-subtle-foreground">
+                      configured below · never follows chat (index-coupled)
+                    </span>
+                  </div>
                 </div>
               </Field>
 
