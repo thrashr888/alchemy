@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { playDone } from "@/lib/sound";
@@ -158,13 +158,32 @@ export function SettingsDialog({
     setGatewayError(null);
     try {
       const gateway = await api.listGatewayModels(url, key);
-      setGatewayModels([...gateway].sort((a, b) => a.localeCompare(b)));
+      const sorted = [...gateway].sort((a, b) => a.localeCompare(b));
+      setGatewayModels(sorted);
+      // A model the new gateway doesn't know is a stale leftover from the
+      // previous one — clear it so Save auto-picks or the user chooses.
+      setDraft((d) =>
+        d && d.openaiChatModel && sorted.length > 0 && !sorted.includes(d.openaiChatModel)
+          ? { ...d, openaiChatModel: "" }
+          : d,
+      );
     } catch (e) {
       setGatewayModels([]);
       setGatewayError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoadingGateway(false);
     }
+  }
+
+  // Switching gateways should refresh the model list by itself — debounce
+  // URL/key edits so half-typed values don't spam the endpoint.
+  const gatewayDebounce = useRef<number | null>(null);
+  function queueGatewayRefresh(url: string, key: string) {
+    if (gatewayDebounce.current) window.clearTimeout(gatewayDebounce.current);
+    if (!url.trim() && !key.trim()) return;
+    gatewayDebounce.current = window.setTimeout(() => {
+      void loadGatewayModels(url, key);
+    }, 700);
   }
 
   const embedChanged =
@@ -342,8 +361,13 @@ export function SettingsDialog({
                           ?.url ?? "custom"
                       }
                       onChange={(e) => {
-                        if (e.target.value !== "custom")
+                        if (e.target.value !== "custom") {
                           setDraft({ ...draft, openaiBaseUrl: e.target.value });
+                          void loadGatewayModels(
+                            e.target.value,
+                            draft.openaiApiKey,
+                          );
+                        }
                       }}
                       className="h-8 w-full rounded-md border border-input bg-surface-2 px-2 text-[13px] text-foreground focus:outline-none"
                     >
@@ -363,9 +387,10 @@ export function SettingsDialog({
                       name="gateway-url"
                       aria-label="Gateway URL"
                       value={draft.openaiBaseUrl}
-                      onChange={(e) =>
-                        setDraft({ ...draft, openaiBaseUrl: e.target.value })
-                      }
+                      onChange={(e) => {
+                        setDraft({ ...draft, openaiBaseUrl: e.target.value });
+                        queueGatewayRefresh(e.target.value, draft.openaiApiKey);
+                      }}
                       placeholder="https://api.example.com/v1"
                     />
                   </Field>
@@ -378,9 +403,10 @@ export function SettingsDialog({
                       name="gateway-api-key"
                       aria-label="API key"
                       value={draft.openaiApiKey}
-                      onChange={(e) =>
-                        setDraft({ ...draft, openaiApiKey: e.target.value })
-                      }
+                      onChange={(e) => {
+                        setDraft({ ...draft, openaiApiKey: e.target.value });
+                        queueGatewayRefresh(draft.openaiBaseUrl, e.target.value);
+                      }}
                       placeholder="sk-… or your gateway's key format"
                     />
                   </Field>
