@@ -3659,7 +3659,16 @@ pub async fn send_message(
     };
     let search = e(state
         .db
-        .search_chunks_trace(&notebook_id, query_vec, &content, 8, source_ids.as_deref())
+        .search_chunks_trace(
+            &notebook_id,
+            query_vec,
+            &content,
+            {
+                let ai = state.ai.read().await;
+                ai.profile(crate::inference::Role::Chat).retrieve_k
+            },
+            source_ids.as_deref(),
+        )
         .await)?;
     // The ripgrep leg (RFC-git-sources §6): code-shaped queries also
     // exact-match over the notebook's repo-backed files, and the windows

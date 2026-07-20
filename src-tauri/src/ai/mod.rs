@@ -1,15 +1,13 @@
-//! AI provider abstraction. `Ai` routes each capability to a backend:
-//! chat/generation goes to Ollama or an OpenAI-compatible gateway (LM Studio,
-//! vLLM, LiteLLM, Ollama's own /v1); embeddings, OCR, and model listing stay
-//! on Ollama for now.
+//! App-facing AI facade. `AiConfig` is the persisted settings shape; `Ai`
+//! delegates every capability through the inference router
+//! (docs/RFC-inference-providers.md) — engines and chat types live in
+//! `crate::inference`, re-exported here so call sites keep their imports.
 
-mod local_embed;
-mod ollama;
-mod openai;
-
-pub use local_embed::{EmbedderProgress, LocalEmbedder};
-pub use ollama::Ollama;
-pub use openai::OpenAiClient;
+use crate::inference::{ChatEngine, Embedder, Role, Router};
+pub use crate::inference::{
+    ChatOutcome, ChatTurn, EmbedderProgress, GenStats, LocalEmbedder, Ollama, OllamaConfig,
+    OpenAiClient,
+};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -122,73 +120,6 @@ impl Default for AiConfig {
     }
 }
 
-/// A single chat turn handed to the model.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatTurn {
-    pub role: String,
-    pub content: String,
-}
-
-impl ChatTurn {
-    pub fn system(content: impl Into<String>) -> Self {
-        Self {
-            role: "system".into(),
-            content: content.into(),
-        }
-    }
-    pub fn user(content: impl Into<String>) -> Self {
-        Self {
-            role: "user".into(),
-            content: content.into(),
-        }
-    }
-    #[allow(dead_code)]
-    pub fn assistant(content: impl Into<String>) -> Self {
-        Self {
-            role: "assistant".into(),
-            content: content.into(),
-        }
-    }
-}
-
-/// Generation stats for one completion. Ollama reports true decode duration;
-/// OpenAI-style gateways report token counts, timed by wall clock instead.
-#[derive(Clone, Copy, Default)]
-pub struct GenStats {
-    pub eval_count: u64,
-    pub eval_duration_ns: u64,
-}
-
-impl GenStats {
-    pub fn tokens_per_sec(&self) -> f64 {
-        if self.eval_duration_ns == 0 {
-            0.0
-        } else {
-            self.eval_count as f64 / (self.eval_duration_ns as f64 / 1e9)
-        }
-    }
-
-    pub(crate) fn from_parts(count: Option<u64>, duration: Option<u64>) -> Option<Self> {
-        match (count, duration) {
-            (Some(eval_count), Some(eval_duration_ns))
-                if eval_count > 0 && eval_duration_ns > 0 =>
-            {
-                Some(GenStats {
-                    eval_count,
-                    eval_duration_ns,
-                })
-            }
-            _ => None,
-        }
-    }
-}
-
-/// Result of a chat: the assistant text plus optional generation stats.
-pub struct ChatOutcome {
-    pub text: String,
-    pub stats: Option<GenStats>,
-}
-
 /// Host context for Ai: where to keep downloaded assets and how to report
 /// embedder download progress to the UI.
 #[derive(Default, Clone)]
@@ -197,13 +128,26 @@ pub struct AiRuntime {
     pub embedder_progress: Option<EmbedderProgress>,
 }
 
-/// Capability router. One instance lives in AppState behind a RwLock and is
-/// rebuilt whenever the config is saved.
+/// App-facing capability facade over the inference Router. One instance
+/// lives in AppState behind a RwLock and is rebuilt whenever the config is
+/// saved.
 pub struct Ai {
     config: AiConfig,
+    router: Router,
+    /// Ollama retained directly for the capabilities that haven't joined the
+    /// router yet (OCR fallback, model listing).
     ollama: Ollama,
+    /// Gateway client retained for vision + model listing when configured.
     openai: Option<OpenAiClient>,
-    local_embed: Option<LocalEmbedder>,
+}
+
+fn ollama_config(config: &AiConfig) -> OllamaConfig {
+    OllamaConfig {
+        base_url: config.base_url.clone(),
+        chat_model: config.chat_model.clone(),
+        embed_model: config.embed_model.clone(),
+        vision_model: config.vision_model.clone(),
+    }
 }
 
 impl Ai {
@@ -215,20 +159,37 @@ impl Ai {
                 &config.openai_chat_model,
             )
         });
-        let ollama = Ollama::new(config.clone());
+        let chat = match &openai {
+            Some(gw) => ChatEngine::Gateway(gw.clone()),
+            None => ChatEngine::Ollama(Ollama::new(ollama_config(&config))),
+        };
         let data_dir = if runtime.data_dir.as_os_str().is_empty() {
             std::env::temp_dir().join("alchemy")
         } else {
             runtime.data_dir.clone()
         };
-        let local_embed = (config.embedder == "builtin")
-            .then(|| LocalEmbedder::new(data_dir, runtime.embedder_progress.clone()));
+        let embedder = if config.embedder == "builtin" {
+            Embedder::Builtin(LocalEmbedder::new(
+                data_dir,
+                runtime.embedder_progress.clone(),
+            ))
+        } else {
+            Embedder::Ollama(Ollama::new(ollama_config(&config)))
+        };
+        let router = Router::new(chat, embedder);
+        let ollama = Ollama::new(ollama_config(&config));
         Self {
             config,
+            router,
             ollama,
             openai,
-            local_embed,
         }
+    }
+
+    /// Retrieval/context parameters for a role, resolved by the router
+    /// against the active model tier (RFC-inference-providers §2).
+    pub fn profile(&self, role: Role) -> crate::inference::ContextProfile {
+        self.router.profile(role)
     }
 
     pub fn config(&self) -> &AiConfig {
@@ -244,20 +205,17 @@ impl Ai {
     }
 
     pub async fn chat(&self, messages: &[ChatTurn]) -> Result<ChatOutcome> {
-        match &self.openai {
-            Some(gw) => gw.chat(messages).await,
-            None => self.ollama.chat(messages).await,
-        }
+        self.router.chat_engine(Role::Chat).chat(messages).await
     }
 
     pub async fn chat_stream<F>(&self, messages: &[ChatTurn], on_token: F) -> Result<ChatOutcome>
     where
         F: FnMut(&str),
     {
-        match &self.openai {
-            Some(gw) => gw.chat_stream(messages, on_token).await,
-            None => self.ollama.chat_stream(messages, on_token).await,
-        }
+        self.router
+            .chat_engine(Role::Chat)
+            .chat_stream(messages, on_token)
+            .await
     }
 
     /// Gateway model listing (provider == "openai"); Err when not applicable.
@@ -268,12 +226,10 @@ impl Ai {
         }
     }
 
-    // Embeddings route to the built-in Model2Vec embedder or Ollama.
+    // Embeddings route through the router's dedicated embedder — never a
+    // preference ladder (vectors are index-coupled).
     pub async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        match &self.local_embed {
-            Some(le) => le.embed(texts).await,
-            None => self.ollama.embed(texts).await,
-        }
+        self.router.embedder().embed(texts).await
     }
     pub async fn embed_one(&self, text: &str) -> Result<Vec<f32>> {
         let mut v = self.embed(std::slice::from_ref(&text.to_string())).await?;
@@ -281,10 +237,7 @@ impl Ai {
             .ok_or_else(|| anyhow::anyhow!("embedder returned no vector"))
     }
     pub async fn test_embed(&self) -> Result<usize> {
-        match &self.local_embed {
-            Some(le) => le.test_embed().await,
-            None => self.ollama.test_embed().await,
-        }
+        self.router.embedder().test_embed().await
     }
     pub async fn ocr(&self, image_base64: &str) -> Result<String> {
         match &self.openai {

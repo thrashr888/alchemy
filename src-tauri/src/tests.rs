@@ -4,7 +4,7 @@
 //!
 //! Run with:  cargo test --lib rag_round_trip -- --nocapture
 
-use crate::ai::{AiConfig, Ollama};
+use crate::ai::{Ollama, OllamaConfig};
 use crate::db::Db;
 use crate::ingest;
 use crate::models::{Notebook, Source};
@@ -16,13 +16,12 @@ fn now() -> i64 {
 
 #[tokio::test]
 async fn rag_round_trip() {
-    let ai = Ollama::new(AiConfig {
+    let ai = Ollama::new(OllamaConfig {
         base_url: "http://localhost:11434".into(),
         // Small local model to keep the chat step fast.
         chat_model: "digitsflow/bonsai-8b:latest".into(),
         embed_model: "nomic-embed-text".into(),
         vision_model: String::new(),
-        ..Default::default()
     });
     if ai.list_models().await.is_err() {
         eprintln!("SKIP: Ollama not reachable on localhost:11434");
@@ -147,7 +146,7 @@ async fn rag_round_trip() {
 async fn openai_gateway_round_trip() {
     use crate::ai::{ChatTurn, OpenAiClient};
 
-    let probe = Ollama::new(AiConfig::default());
+    let probe = Ollama::new(OllamaConfig::default());
     let Ok(models) = probe.list_models().await else {
         eprintln!("SKIP: Ollama not reachable on localhost:11434");
         return;

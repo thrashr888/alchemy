@@ -6,6 +6,7 @@ mod connectors;
 mod db;
 mod git;
 mod grepsearch;
+mod inference;
 mod ingest;
 mod integrations;
 mod mac;

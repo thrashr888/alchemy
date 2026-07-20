@@ -5,12 +5,12 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{AiConfig, ChatOutcome, ChatTurn, GenStats};
+use super::{ChatOutcome, ChatTurn, GenStats, OllamaConfig};
 
 #[derive(Clone)]
 pub struct Ollama {
     http: reqwest::Client,
-    config: AiConfig,
+    config: OllamaConfig,
 }
 
 #[derive(Deserialize)]
@@ -62,7 +62,7 @@ struct ChatMessageDelta {
 }
 
 impl Ollama {
-    pub fn new(config: AiConfig) -> Self {
+    pub fn new(config: OllamaConfig) -> Self {
         let http = reqwest::Client::builder()
             // Local models can take a while on the first token; be patient.
             .timeout(std::time::Duration::from_secs(600))
