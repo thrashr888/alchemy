@@ -881,6 +881,24 @@ fn readable_text(body: &str, url: &str) -> (Option<String>, String) {
     (None, normalize(&strip_html(body)))
 }
 
+/// Build an `Extracted` from already-rendered HTML — the webview capture
+/// path (capture.rs). Same readability pipeline as fetched URLs and saved
+/// pages; the live DOM's `document.title` fills in when the markup carries
+/// no usable one (SPAs often set it only via JS).
+pub fn extracted_from_html(html: &str, url: &str, dom_title: &str) -> Extracted {
+    let (article_title, text) = readable_text(html, url);
+    let title = article_title
+        .or_else(|| extract_title(html))
+        .or_else(|| Some(dom_title.trim().to_string()).filter(|t| !t.is_empty()))
+        .unwrap_or_else(|| url.to_string());
+    Extracted {
+        title,
+        source_type: "url".to_string(),
+        url: url.to_string(),
+        text,
+    }
+}
+
 /// Heuristic: does this extracted text look like a bot wall / login page /
 /// JS-only shell rather than real article content? Returns a reason if so.
 pub fn looks_blocked(text: &str) -> Option<String> {

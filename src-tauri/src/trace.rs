@@ -15,23 +15,30 @@ use std::path::Path;
 /// per retrieval that is months of history without unbounded growth.
 const MAX_BYTES: u64 = 5 * 1024 * 1024;
 const FILE: &str = "retrieval.jsonl";
-const ROTATED: &str = "retrieval.1.jsonl";
 
-/// Append one trace record. Infallible by design — see module docs.
+/// Append one retrieval trace record. Infallible by design — see module docs.
 pub fn log(dir: &Path, record: serde_json::Value) {
-    if let Err(err) = try_log(dir, &record) {
-        eprintln!("retrieval trace write failed: {err}");
+    log_file(dir, FILE, record);
+}
+
+/// Append one record to an arbitrary JSONL trace file in `dir` — same
+/// rotation rules and swallow-after-stderr contract as retrieval traces.
+/// Page capture telemetry (capture.rs) writes `capture.jsonl` through this.
+pub fn log_file(dir: &Path, file: &str, record: serde_json::Value) {
+    if let Err(err) = try_log(dir, file, &record) {
+        eprintln!("{file} trace write failed: {err}");
     }
 }
 
-fn try_log(dir: &Path, record: &serde_json::Value) -> std::io::Result<()> {
+fn try_log(dir: &Path, file: &str, record: &serde_json::Value) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    let path = dir.join(FILE);
+    let path = dir.join(file);
     if std::fs::metadata(&path)
         .map(|m| m.len() > MAX_BYTES)
         .unwrap_or(false)
     {
-        let _ = std::fs::rename(&path, dir.join(ROTATED));
+        let rotated = file.replace(".jsonl", ".1.jsonl");
+        let _ = std::fs::rename(&path, dir.join(rotated));
     }
     let mut f = std::fs::OpenOptions::new()
         .create(true)

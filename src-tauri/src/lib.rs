@@ -1,5 +1,6 @@
 mod agent;
 mod ai;
+mod capture;
 mod commands;
 mod connectors;
 mod db;
@@ -117,6 +118,10 @@ pub fn run() {
             // Studio templates: write the default pack on first run so
             // ~/Documents/Alchemy/templates exists before anything lists it.
             templates::seed_on_startup(&data_dir);
+
+            // Rendered page capture needs an app handle to open its hidden
+            // webview windows (docs/RFC-page-capture.md).
+            capture::init(app.handle().clone(), data_dir.join("traces"));
 
             // Spotlight needs AppState (it reads the db to build the index).
             #[cfg(target_os = "macos")]

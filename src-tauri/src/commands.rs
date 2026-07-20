@@ -579,7 +579,7 @@ pub(crate) async fn ingest_url(
             );
         }
     }
-    match ingest::extract_url(url).await {
+    match crate::capture::extract_url_rescued(url).await {
         Ok(extracted) => store_extracted(state, notebook_id, extracted).await,
         Err(err) => store_failed_url(state, notebook_id, url.trim(), err.to_string()).await,
     }
@@ -733,7 +733,7 @@ pub async fn refresh_source_url(
         return e(reingest(&state, &existing, extracted).await);
     }
     if is_web_url(&existing.url) {
-        return match ingest::extract_url(&existing.url).await {
+        return match crate::capture::extract_url_rescued(&existing.url).await {
             Ok(extracted) => e(reingest(&state, &existing, extracted).await),
             Err(err) => e(mark_source_failed(&state, &existing, err.to_string()).await),
         };
@@ -2595,7 +2595,7 @@ async fn try_tool_route(
                         .get_source(&src.id)
                         .await?
                         .ok_or_else(|| anyhow::anyhow!("source vanished"))?;
-                    let extracted = ingest::extract_url(&existing.url).await?;
+                    let extracted = crate::capture::extract_url_rescued(&existing.url).await?;
                     reingest(state, &existing, extracted).await
                 }
                 .await;
