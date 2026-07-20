@@ -234,11 +234,104 @@ export function SettingsDialog({
     }, 700);
   }
 
-  function agentNote(id: string, fallback: string) {
-    const cli = agentClis.find((c) => c.id === id);
-    if (!cli) return fallback;
-    return cli.installed ? `${fallback} · ${cli.detail}` : "Not installed";
+  // Which configured provider's connection fields are loaded into the flat
+  // draft fields below (the editing bridge: entry → flat on select, flat →
+  // entry on Save via syncEntriesIntoDraft).
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const editingKind =
+    draft?.providers?.find((p) => p.id === editingId)?.kind ?? null;
+  const chatKind =
+    draft?.providers?.find((p) => p.id === draft.chatProvider)?.kind ??
+    (draft?.provider === "openai" ? "gateway" : "ollama");
+
+  function selectForEdit(id: string) {
+    if (!draft) return;
+    const entry = draft.providers.find((p) => p.id === id);
+    if (!entry) return;
+    setEditingId(id);
+    if (entry.kind === "gateway") {
+      setDraft({
+        ...draft,
+        openaiBaseUrl: entry.baseUrl,
+        openaiApiKey: entry.apiKey,
+        openaiChatModel: entry.chatModel,
+      });
+      if (entry.apiKey) void loadGatewayModels(entry.baseUrl, entry.apiKey);
+    } else if (entry.kind === "ollama") {
+      setDraft({
+        ...draft,
+        baseUrl: entry.baseUrl || draft.baseUrl,
+        chatModel: entry.chatModel || draft.chatModel,
+      });
+    }
   }
+
+  /** Flat fields → the entry being edited; called before save. */
+  function syncEntriesIntoDraft(d: AiConfig): AiConfig {
+    if (!editingId) return d;
+    return {
+      ...d,
+      providers: d.providers.map((p) => {
+        if (p.id !== editingId) return p;
+        if (p.kind === "gateway") {
+          const preset = GATEWAY_PRESETS.find(
+            (g) => g.url === d.openaiBaseUrl.trim(),
+          );
+          return {
+            ...p,
+            label: preset?.name ?? p.label,
+            baseUrl: d.openaiBaseUrl,
+            apiKey: d.openaiApiKey,
+            chatModel: d.openaiChatModel,
+          };
+        }
+        if (p.kind === "ollama")
+          return { ...p, baseUrl: d.baseUrl, chatModel: d.chatModel };
+        return p;
+      }),
+    };
+  }
+
+  function addProvider(kind: string, label: string) {
+    if (!draft) return;
+    // Agent CLIs are singletons; gateways/ollama can repeat (work + personal).
+    const singleton = kind !== "gateway" && kind !== "ollama";
+    if (singleton && draft.providers.some((p) => p.kind === kind)) return;
+    const id = singleton ? kind : `p${Date.now().toString(36)}`;
+    const entry = {
+      id,
+      kind,
+      label,
+      baseUrl: kind === "ollama" ? draft.baseUrl : "",
+      apiKey: "",
+      chatModel: "",
+    };
+    setDraft({ ...draft, providers: [...draft.providers, entry] });
+    if (!singleton) setEditingId(id);
+  }
+
+  function removeProvider(id: string) {
+    if (!draft) return;
+    const providers = draft.providers.filter((p) => p.id !== id);
+    const fallback = providers[0]?.id ?? "";
+    setDraft({
+      ...draft,
+      providers,
+      chatProvider: draft.chatProvider === id ? fallback : draft.chatProvider,
+      studioProvider:
+        draft.studioProvider === id ? fallback : draft.studioProvider,
+    });
+    if (editingId === id) setEditingId(null);
+  }
+
+  function providerDetail(p: { id: string; kind: string; chatModel: string }) {
+    if (p.kind === "gateway")
+      return p.chatModel || "no model picked";
+    if (p.kind === "ollama") return p.chatModel || draft?.chatModel || "";
+    const cli = agentClis.find((c) => c.id === p.kind);
+    return cli ? (cli.installed ? cli.detail : "Not installed") : "…";
+  }
+
 
   const embedChanged =
     !!draft &&
@@ -254,7 +347,7 @@ export function SettingsDialog({
       return;
     }
     setSaving(true);
-    let toSave = draft;
+    let toSave = syncEntriesIntoDraft(draft);
     // Gateway provider with no model picked: ask the gateway and take the first.
     if (draft.provider === "openai" && !draft.openaiChatModel.trim()) {
       try {
@@ -367,52 +460,116 @@ export function SettingsDialog({
               />
 
               <Field
-                label="AI provider"
-                hint="Where chat and document generation run."
+                label="Providers"
+                hint="Add the engines you use; click a row to edit its connection. Agent CLIs need no setup — their login is the credential."
               >
-                <div className="grid grid-cols-2 gap-1.5">
-                  {[
-                    { id: "ollama", label: "Ollama", note: "Local & private" },
-                    {
-                      id: "openai",
-                      label: "OpenAI-compatible",
-                      note: "Cloud or enterprise gateway",
-                    },
-                    {
-                      id: "claude",
-                      label: "Claude Code",
-                      note: agentNote("claude-code", "Your Claude subscription"),
-                    },
-                    {
-                      id: "codex",
-                      label: "Codex",
-                      note: agentNote("codex", "Your ChatGPT subscription"),
-                    },
-                  ].map((pv) => (
-                    <button
-                      type="button"
-                      key={pv.id}
-                      onClick={() => setDraft({ ...draft, provider: pv.id })}
-                      aria-pressed={draft.provider === pv.id}
+                <div className="flex flex-col gap-1">
+                  {draft.providers.map((p) => (
+                    <div
+                      key={p.id}
                       className={cn(
-                        "flex flex-col items-start gap-0.5 rounded-md border px-3 py-2 text-left transition-colors",
-                        draft.provider === pv.id
-                          ? "border-primary/60 bg-primary/10 text-foreground"
-                          : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
+                        "group flex items-center gap-2 rounded-md border px-2.5 py-1.5",
+                        editingId === p.id
+                          ? "border-primary/60 bg-primary/10"
+                          : "border-border bg-surface-2",
                       )}
                     >
-                      <span className="text-[12.5px] font-medium">
-                        {pv.label}
-                      </span>
+                      <button
+                        type="button"
+                        onClick={() => selectForEdit(p.id)}
+                        className="flex min-w-0 flex-1 flex-col items-start text-left"
+                      >
+                        <span className="text-[12.5px] font-medium text-foreground">
+                          {p.label}
+                        </span>
+                        <span className="max-w-full truncate text-[11px] text-subtle-foreground">
+                          {providerDetail(p)}
+                        </span>
+                      </button>
+                      {draft.chatProvider === p.id && (
+                        <span className="shrink-0 rounded-full bg-primary/15 px-2 py-px text-[11px] text-citation">
+                          Chat
+                        </span>
+                      )}
+                      {draft.studioProvider === p.id && (
+                        <span className="shrink-0 rounded-full border border-border px-2 py-px text-[11px] text-muted-foreground">
+                          Studio
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        aria-label={`Remove ${p.label}`}
+                        onClick={() => removeProvider(p.id)}
+                        className="rounded p-1 text-subtle-foreground opacity-0 hover:bg-surface-2 hover:text-destructive group-focus-within:opacity-100 group-hover:opacity-100"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                  <div className="flex flex-wrap gap-1 pt-0.5">
+                    {[
+                      { kind: "ollama", label: "Ollama" },
+                      { kind: "gateway", label: "Gateway" },
+                      { kind: "claude-code", label: "Claude Code" },
+                      { kind: "codex", label: "Codex" },
+                      { kind: "gemini-cli", label: "Gemini CLI" },
+                      { kind: "cursor-cli", label: "Cursor CLI" },
+                      { kind: "bob-shell", label: "Bob Shell" },
+                    ]
+                      .filter(
+                        (k) =>
+                          k.kind === "gateway" ||
+                          k.kind === "ollama" ||
+                          !draft.providers.some((p) => p.kind === k.kind),
+                      )
+                      .map((k) => (
+                        <button
+                          type="button"
+                          key={k.kind}
+                          onClick={() => addProvider(k.kind, k.label)}
+                          className="rounded-full border border-border px-2.5 py-0.5 text-[11.5px] text-muted-foreground hover:bg-surface-2 hover:text-foreground"
+                        >
+                          + {k.label}
+                        </button>
+                      ))}
+                  </div>
+                </div>
+              </Field>
+              <Field
+                label="Use for"
+                hint="Chat answers questions; Studio writes artifacts and reports."
+              >
+                <div className="grid grid-cols-2 gap-1.5">
+                  {(
+                    [
+                      ["chatProvider", "Chat"],
+                      ["studioProvider", "Studio"],
+                    ] as const
+                  ).map(([field, label]) => (
+                    <label key={field} className="flex flex-col gap-1">
                       <span className="text-[11px] text-subtle-foreground">
-                        {pv.note}
+                        {label}
                       </span>
-                    </button>
+                      <select
+                        aria-label={`Provider for ${label}`}
+                        value={draft[field]}
+                        onChange={(e) =>
+                          setDraft({ ...draft, [field]: e.target.value })
+                        }
+                        className="h-8 rounded-md border border-input bg-surface-2 px-2 text-[13px] text-foreground focus:outline-none"
+                      >
+                        {draft.providers.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                   ))}
                 </div>
               </Field>
 
-              {draft.provider === "openai" && (
+              {editingKind === "gateway" && (
                 <>
                   <Field
                     label="Gateway"
@@ -519,7 +676,7 @@ export function SettingsDialog({
                 </>
               )}
 
-              {draft.provider !== "openai" && (
+              {editingKind === "ollama" && (
                 <Field label="Ollama URL">
                   <Input
                     name="ollama-url"
@@ -533,7 +690,7 @@ export function SettingsDialog({
                 </Field>
               )}
 
-              {draft.provider !== "openai" && (
+              {editingKind === "ollama" && (
                 <Field
                   label="Chat model"
                   hint="Used to answer questions and generate documents. Models tagged nvfp4/mlx run on Ollama's MLX engine (Apple-Silicon accelerated)."
@@ -606,7 +763,7 @@ export function SettingsDialog({
                 </Field>
               )}
 
-              {draft.provider === "openai" ? (
+              {chatKind === "gateway" ? (
                 <Field
                   label="Vision model"
                   hint="Pick a vision-capable model (e.g. gpt-4o or a Claude model) to enable OCR for images & scanned PDFs."

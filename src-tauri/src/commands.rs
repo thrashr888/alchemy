@@ -150,20 +150,21 @@ pub struct AgentCliStatus {
 #[tauri::command]
 pub async fn agent_cli_status() -> Result<Vec<AgentCliStatus>, String> {
     tokio::task::spawn_blocking(|| {
-        [
-            crate::inference::AgentKind::Claude,
-            crate::inference::AgentKind::Codex,
-        ]
-        .into_iter()
-        .map(|kind| {
-            let (installed, detail) = crate::inference::agent_status(kind);
-            AgentCliStatus {
-                id: kind.id().to_string(),
-                installed,
-                detail,
-            }
-        })
-        .collect()
+        crate::inference::AgentKind::ALL
+            .into_iter()
+            .map(|kind| {
+                let (installed, detail) = crate::inference::agent_status(kind);
+                AgentCliStatus {
+                    id: kind.id().to_string(),
+                    installed,
+                    detail: if installed {
+                        format!("{} · {}", kind.label(), detail)
+                    } else {
+                        detail
+                    },
+                }
+            })
+            .collect()
     })
     .await
     .map_err(|e| e.to_string())
@@ -4641,7 +4642,7 @@ async fn run_generation_chat(
         let out = match app {
             Some(app) => {
                 let app = app.clone();
-                ai.chat_stream(messages, move |tok| {
+                ai.chat_role_stream(crate::inference::Role::Generate, messages, move |tok| {
                     let _ = app.emit(
                         "artifact://token",
                         TokenEvent {
@@ -6685,8 +6686,10 @@ pub async fn get_ai_config(state: State<'_, AppState>) -> Result<AiConfig, Strin
 pub async fn set_ai_config(
     app: AppHandle,
     state: State<'_, AppState>,
-    config: AiConfig,
+    mut config: AiConfig,
 ) -> Result<(), String> {
+    // Keep the provider list and flat legacy fields coherent on every save.
+    config.normalize();
     let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     std::fs::write(&state.config_path, json).map_err(|e| e.to_string())?;
     let (mcp_enabled, mcp_port) = (config.mcp_enabled, config.mcp_port);

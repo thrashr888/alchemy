@@ -28,13 +28,31 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 pub enum AgentKind {
     Claude,
     Codex,
+    Gemini,
+    Cursor,
+    /// IBM Bob via its own bobshell CLI — the sanctioned client itself, not a
+    /// session workaround (Paul's call, 2026-07-20; API-key/session mimicry
+    /// stays out per policy). Known wart: `bob -p` prints its thinking
+    /// before the answer, and v1 passes output through as-is.
+    Bob,
 }
 
 impl AgentKind {
+    pub const ALL: [AgentKind; 5] = [
+        AgentKind::Claude,
+        AgentKind::Codex,
+        AgentKind::Gemini,
+        AgentKind::Cursor,
+        AgentKind::Bob,
+    ];
+
     pub fn binary_name(&self) -> &'static str {
         match self {
             AgentKind::Claude => "claude",
             AgentKind::Codex => "codex",
+            AgentKind::Gemini => "gemini",
+            AgentKind::Cursor => "cursor-agent",
+            AgentKind::Bob => "bob",
         }
     }
 
@@ -42,6 +60,23 @@ impl AgentKind {
         match self {
             AgentKind::Claude => "claude-code",
             AgentKind::Codex => "codex",
+            AgentKind::Gemini => "gemini-cli",
+            AgentKind::Cursor => "cursor-cli",
+            AgentKind::Bob => "bob-shell",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<AgentKind> {
+        Self::ALL.into_iter().find(|k| k.id() == id)
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            AgentKind::Claude => "Claude Code",
+            AgentKind::Codex => "Codex",
+            AgentKind::Gemini => "Gemini CLI",
+            AgentKind::Cursor => "Cursor CLI",
+            AgentKind::Bob => "Bob Shell",
         }
     }
 
@@ -49,6 +84,9 @@ impl AgentKind {
         match self {
             AgentKind::Claude => "npm install -g @anthropic-ai/claude-code",
             AgentKind::Codex => "npm install -g @openai/codex",
+            AgentKind::Gemini => "npm install -g @google/gemini-cli",
+            AgentKind::Cursor => "curl https://cursor.com/install -fsS | bash",
+            AgentKind::Bob => "curl -fsSL https://bob.ibm.com/download/bobshell.sh | sh",
         }
     }
 }
@@ -74,6 +112,10 @@ fn load_shell_env() -> HashMap<String, String> {
     // The CLI's own login is the credential — always.
     env.remove("ANTHROPIC_API_KEY");
     env.remove("OPENAI_API_KEY");
+    env.remove("GEMINI_API_KEY");
+    env.remove("GOOGLE_API_KEY");
+    env.remove("CURSOR_API_KEY");
+    env.remove("BOBSHELL_API_KEY");
     env
 }
 
@@ -117,6 +159,14 @@ pub fn agent_status(kind: AgentKind) -> (bool, String) {
             (true, version)
         }
         None => (false, format!("Install with: {}", kind.install_hint())),
+    }
+}
+
+fn fold_system(system: &str, prompt: &str) -> String {
+    if system.is_empty() {
+        prompt.to_string()
+    } else {
+        format!("{system}\n\n---\n\n{prompt}")
     }
 }
 
@@ -216,10 +266,34 @@ impl AgentCli {
                 };
                 cmd.args(["exec", "--json", &full]);
             }
+            AgentKind::Cursor => {
+                // cursor-agent print mode speaks claude-shaped stream-json;
+                // the lenient parser treats non-JSON lines as raw text so
+                // plain-text builds still work. No system flag — folded
+                // into the prompt below. Prompt over stdin.
+                cmd.args(["-p", "--output-format", "stream-json"]);
+            }
+            AgentKind::Gemini => {
+                // Plain-text CLI reading the prompt from stdin; stdout
+                // chunks stream through as tokens. No system flag — folded.
+            }
+            AgentKind::Bob => {
+                // bobshell takes -p <prompt> as argv (no stdin mode known);
+                // guard oversized stuffed contexts against ARG_MAX.
+                let full = fold_system(&system, &prompt);
+                if full.len() > 150_000 {
+                    return Err(anyhow!(
+                        "context too large for bob's argv-based prompt — \
+                         trim source selection or use another provider"
+                    ));
+                }
+                cmd.args(["-p", &full]);
+            }
         }
         let stdin_payload = match self.kind {
             AgentKind::Claude => Some(prompt.clone()),
-            AgentKind::Codex => None,
+            AgentKind::Cursor | AgentKind::Gemini => Some(fold_system(&system, &prompt)),
+            AgentKind::Codex | AgentKind::Bob => None,
         };
         cmd.stdin(if stdin_payload.is_some() {
             Stdio::piped()
@@ -267,10 +341,27 @@ impl AgentCli {
             let mut errored: Option<String> = None;
             while let Some(line) = lines.next_line().await? {
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
+                    // Plain-text CLIs (gemini, bob) and stream-json builds
+                    // that print bare text: pass the line through verbatim.
+                    if matches!(kind, AgentKind::Gemini | AgentKind::Bob | AgentKind::Cursor) {
+                        if !text.is_empty() {
+                            text.push('\n');
+                            on_token("\n");
+                        }
+                        text.push_str(&line);
+                        on_token(&line);
+                    }
                     continue;
                 };
                 match kind {
-                    AgentKind::Claude => match v["type"].as_str() {
+                    AgentKind::Gemini | AgentKind::Bob => {
+                        // JSON on stdout from a plain-text CLI is unexpected;
+                        // stringify it into the transcript rather than drop.
+                        let t = v.to_string();
+                        text.push_str(&t);
+                        on_token(&t);
+                    }
+                    AgentKind::Claude | AgentKind::Cursor => match v["type"].as_str() {
                         // Per-token deltas from --include-partial-messages.
                         Some("stream_event") => {
                             if let Some(delta) = v["event"]["delta"]["text"].as_str() {

@@ -217,22 +217,29 @@ pub struct Router {
     /// Small-role engine when one is available (the FM sidecar today).
     /// Callers fall through to `chat` when it is None or errors.
     small: Option<ChatEngine>,
+    /// Generate-role engine when the studio provider differs from chat.
+    generate: Option<ChatEngine>,
 }
 
 impl Router {
-    pub fn new(chat: ChatEngine, embedder: Embedder, small: Option<ChatEngine>) -> Self {
+    pub fn new(
+        chat: ChatEngine,
+        embedder: Embedder,
+        small: Option<ChatEngine>,
+        generate: Option<ChatEngine>,
+    ) -> Self {
         Self {
             chat,
             embedder,
             small,
+            generate,
         }
     }
 
     pub fn chat_engine(&self, role: Role) -> &ChatEngine {
         match role {
             Role::Small => self.small.as_ref().unwrap_or(&self.chat),
-            // Chat | Agent | Generate resolve to the one configured chat
-            // engine until the MLX and agent families land.
+            Role::Generate => self.generate.as_ref().unwrap_or(&self.chat),
             _ => &self.chat,
         }
     }

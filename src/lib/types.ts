@@ -199,7 +199,20 @@ export interface ReportSchedule {
   createdAt: number;
 }
 
+/** One configured inference provider (list entry in Settings → Models). */
+export interface ProviderEntry {
+  id: string;
+  kind: string;
+  label: string;
+  baseUrl: string;
+  apiKey: string;
+  chatModel: string;
+}
+
 export interface AiConfig {
+  providers: ProviderEntry[];
+  chatProvider: string;
+  studioProvider: string;
   /** Chat backend: "ollama" | "openai" (any OpenAI-compatible gateway). */
   provider: string;
   /** Embedding backend: "ollama" | "builtin". */

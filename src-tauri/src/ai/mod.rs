@@ -5,6 +5,7 @@
 
 pub use crate::inference::Role;
 use crate::inference::{AgentCli, AgentKind, ChatEngine, Embedder, FmEngine, Router};
+
 pub use crate::inference::{
     ChatOutcome, ChatTurn, EmbedderProgress, GenStats, LocalEmbedder, Ollama, OllamaConfig,
     OpenAiClient,
@@ -13,9 +14,34 @@ pub use crate::inference::{
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+/// One configured inference provider (RFC-inference-providers §8: a list,
+/// not a form). `kind` picks the engine family; gateway/ollama entries carry
+/// connection fields, agent entries need none (the CLI is the credential).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ProviderEntry {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub chat_model: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiConfig {
+    /// Configured providers; empty on legacy configs until `normalize`
+    /// synthesizes entries from the flat fields below.
+    #[serde(default)]
+    pub providers: Vec<ProviderEntry>,
+    /// Provider id answering notebook chat.
+    #[serde(default)]
+    pub chat_provider: String,
+    /// Provider id for studio generation (artifacts, reports, audio
+    /// scripts) — the Generate role.
+    #[serde(default)]
+    pub studio_provider: String,
     /// Chat/generation backend: "ollama" | "openai".
     #[serde(default = "default_provider")]
     pub provider: String,
@@ -95,11 +121,105 @@ impl AiConfig {
     pub fn is_gateway(&self) -> bool {
         self.provider == "openai"
     }
+
+    pub fn provider_by_id(&self, id: &str) -> Option<&ProviderEntry> {
+        self.providers.iter().find(|p| p.id == id)
+    }
+
+    /// Bring any config into list shape: legacy flat fields synthesize
+    /// entries once, and the flat fields are re-mirrored from the selected
+    /// chat provider so every existing call site (`is_gateway`, context
+    /// budgets, gateway model listing) keeps working unchanged.
+    pub fn normalize(&mut self) {
+        if self.providers.is_empty() {
+            self.providers.push(ProviderEntry {
+                id: "ollama".into(),
+                kind: "ollama".into(),
+                label: "Ollama".into(),
+                base_url: self.base_url.clone(),
+                api_key: String::new(),
+                chat_model: self.chat_model.clone(),
+            });
+            if !self.openai_base_url.trim().is_empty() || !self.openai_api_key.is_empty() {
+                self.providers.push(ProviderEntry {
+                    id: "gateway".into(),
+                    kind: "gateway".into(),
+                    label: "Gateway".into(),
+                    base_url: self.openai_base_url.clone(),
+                    api_key: self.openai_api_key.clone(),
+                    chat_model: self.openai_chat_model.clone(),
+                });
+            }
+            for agent in ["claude", "codex"] {
+                if self.provider == agent {
+                    self.providers.push(ProviderEntry {
+                        id: agent.into(),
+                        kind: if agent == "claude" {
+                            "claude-code".into()
+                        } else {
+                            "codex".into()
+                        },
+                        label: if agent == "claude" {
+                            "Claude Code".into()
+                        } else {
+                            "Codex".into()
+                        },
+                        ..Default::default()
+                    });
+                }
+            }
+            self.chat_provider = match self.provider.as_str() {
+                "openai" => "gateway".into(),
+                "claude" | "codex" => self.provider.clone(),
+                _ => "ollama".into(),
+            };
+        }
+        if self.chat_provider.is_empty() || self.provider_by_id(&self.chat_provider).is_none() {
+            self.chat_provider = self
+                .providers
+                .first()
+                .map(|p| p.id.clone())
+                .unwrap_or_else(|| "ollama".into());
+        }
+        if self.studio_provider.is_empty() || self.provider_by_id(&self.studio_provider).is_none() {
+            self.studio_provider = self.chat_provider.clone();
+        }
+        // Mirror the selected chat entry back into the flat legacy fields.
+        if let Some(entry) = self.provider_by_id(&self.chat_provider).cloned() {
+            match entry.kind.as_str() {
+                "gateway" => {
+                    self.provider = "openai".into();
+                    self.openai_base_url = entry.base_url;
+                    self.openai_api_key = entry.api_key;
+                    self.openai_chat_model = entry.chat_model;
+                }
+                "ollama" => {
+                    self.provider = "ollama".into();
+                    if !entry.base_url.trim().is_empty() {
+                        self.base_url = entry.base_url;
+                    }
+                    if !entry.chat_model.trim().is_empty() {
+                        self.chat_model = entry.chat_model;
+                    }
+                }
+                kind => {
+                    self.provider = match kind {
+                        "claude-code" => "claude".into(),
+                        "codex" => "codex".into(),
+                        other => other.to_string(),
+                    };
+                }
+            }
+        }
+    }
 }
 
 impl Default for AiConfig {
     fn default() -> Self {
         Self {
+            providers: Vec::new(),
+            chat_provider: String::new(),
+            studio_provider: String::new(),
             provider: default_provider(),
             embedder: default_provider(),
             base_url: "http://localhost:11434".to_string(),
@@ -164,13 +284,42 @@ impl Ai {
                 &config.openai_chat_model,
             )
         });
-        let chat = match (config.provider.as_str(), &openai) {
-            ("openai", Some(gw)) => ChatEngine::Gateway(gw.clone()),
-            // Family B: the vendor CLI carries the subscription (RFC §5).
-            ("claude", _) => ChatEngine::Agent(AgentCli::new(AgentKind::Claude)),
-            ("codex", _) => ChatEngine::Agent(AgentCli::new(AgentKind::Codex)),
-            _ => ChatEngine::Ollama(Ollama::new(ollama_config(&config))),
+        let engine_for = |entry: &ProviderEntry| -> ChatEngine {
+            match entry.kind.as_str() {
+                "gateway" => ChatEngine::Gateway(OpenAiClient::new(
+                    entry.base_url.trim(),
+                    &entry.api_key,
+                    &entry.chat_model,
+                )),
+                kind => match AgentKind::from_id(kind) {
+                    // Family B: the vendor CLI carries the subscription.
+                    Some(agent) => ChatEngine::Agent(AgentCli::new(agent)),
+                    None => {
+                        let mut oc = ollama_config(&config);
+                        if !entry.base_url.trim().is_empty() {
+                            oc.base_url = entry.base_url.clone();
+                        }
+                        if !entry.chat_model.trim().is_empty() {
+                            oc.chat_model = entry.chat_model.clone();
+                        }
+                        ChatEngine::Ollama(Ollama::new(oc))
+                    }
+                },
+            }
         };
+        let chat = config
+            .provider_by_id(&config.chat_provider)
+            .map(&engine_for)
+            .unwrap_or_else(|| ChatEngine::Ollama(Ollama::new(ollama_config(&config))));
+        // Studio (Generate role) gets its own engine only when it differs —
+        // same-provider stays one engine, one stats key.
+        let generate = (config.studio_provider != config.chat_provider)
+            .then(|| {
+                config
+                    .provider_by_id(&config.studio_provider)
+                    .map(&engine_for)
+            })
+            .flatten();
         let data_dir = if runtime.data_dir.as_os_str().is_empty() {
             std::env::temp_dir().join("alchemy")
         } else {
@@ -193,7 +342,7 @@ impl Ai {
             .as_ref()
             .filter(|p| p.exists())
             .map(|p| ChatEngine::FoundationModels(FmEngine::new(p.clone())));
-        let router = Router::new(chat, embedder, small);
+        let router = Router::new(chat, embedder, small, generate);
         let ollama = Ollama::new(ollama_config(&config));
         Self {
             config,
@@ -215,11 +364,18 @@ impl Ai {
 
     /// The model name answering chats right now (stats keying, health display).
     pub fn active_chat_model(&self) -> String {
-        match self.config.provider.as_str() {
-            "openai" => self.config.openai_chat_model.clone(),
-            "claude" => "claude-code".to_string(),
-            "codex" => "codex".to_string(),
-            _ => self.config.chat_model.clone(),
+        match self
+            .config
+            .provider_by_id(&self.config.chat_provider)
+            .map(|p| (p.kind.clone(), p.chat_model.clone()))
+        {
+            Some((kind, model)) => match kind.as_str() {
+                "gateway" | "ollama" if !model.trim().is_empty() => model,
+                "gateway" => self.config.openai_chat_model.clone(),
+                "ollama" => self.config.chat_model.clone(),
+                other => other.to_string(),
+            },
+            None => self.config.chat_model.clone(),
         }
     }
 
@@ -232,6 +388,9 @@ impl Ai {
     /// chat engine answers instead — one log line, never a dead call.
     pub async fn chat_role(&self, role: Role, messages: &[ChatTurn]) -> Result<ChatOutcome> {
         let engine = self.router.chat_engine(role);
+        if role == Role::Generate {
+            return engine.chat(messages).await;
+        }
         if self.router.has_small() && role == Role::Small {
             if let ChatEngine::FoundationModels(fm) = engine {
                 if fm.available().await {
@@ -253,6 +412,22 @@ impl Ai {
     {
         self.router
             .chat_engine(Role::Chat)
+            .chat_stream(messages, on_token)
+            .await
+    }
+
+    /// Streaming, role-routed (studio generation → the Generate provider).
+    pub async fn chat_role_stream<F>(
+        &self,
+        role: Role,
+        messages: &[ChatTurn],
+        on_token: F,
+    ) -> Result<ChatOutcome>
+    where
+        F: FnMut(&str),
+    {
+        self.router
+            .chat_engine(role)
             .chat_stream(messages, on_token)
             .await
     }

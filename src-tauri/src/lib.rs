@@ -74,10 +74,13 @@ pub fn run() {
             let config_path = data_dir.join("ai_config.json");
             let stats_path = data_dir.join("model_stats.json");
 
-            let config = std::fs::read_to_string(&config_path)
+            let mut config = std::fs::read_to_string(&config_path)
                 .ok()
                 .and_then(|s| serde_json::from_str::<ai::AiConfig>(&s).ok())
                 .unwrap_or_default();
+            // Legacy flat configs become provider lists; flat fields stay
+            // mirrored for the call sites that key off them.
+            config.normalize();
 
             let model_stats = std::fs::read_to_string(&stats_path)
                 .ok()
