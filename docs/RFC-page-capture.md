@@ -152,13 +152,27 @@ the user captures what they can already see.
    *Shipped.* Capture memory works end-to-end (`capture_domains.json`;
    re-syncs of a rendered-winning domain go webview-first, 30-day TTL);
    byline/date land as a `> By … · Published …` provenance line when the
-   page exposes them. Two honest limits surfaced: virtualized feeds (x.com)
-   scroll an inner container, so window-scroll steps don't paginate them
-   (`scrollSteps:0` in telemetry), and listing grids (dupont) render fully
-   but extract thin because readability is article-shaped — more content
-   needs a listing-aware extraction mode, not more scrolling.
-3. **Assisted capture** — the visible window flow, "needs a hand" source
-   state, capture-profile management (clear/reset setting).
+   page exposes them; the scroll pass moves the dominant inner scroll
+   container as well as the window, so `overflow:auto` feeds fire their
+   lazy-loaders (a bare `window.scrollTo` never budges them).
+
+   *Correction — the two "thin page" gaps were misdiagnosed.* Phase 2 read
+   dupont and classic.com as listing grids readability under-extracted.
+   Direct DOM inspection disproved that: dupont's Ferrari-328 search has
+   **no results** (a 1,054-char body of chrome — nothing to extract), and
+   classic.com renders a 1,344-char Cloudflare-limited shell with no market
+   data, no `<main>`, no tables. x.com's timeline is login-walled after a
+   few tweets. All three are **wall / empty-result** cases — phase 3
+   territory — not extraction failures. A speculative link-list extractor
+   was built and cut: it turned footer nav into fake "content" on
+   classic.com and, on a genuine listing (npm search), locked onto the
+   keyword-filter sidebar over the real results. A robust general listing
+   extractor is its own project and needs a validated beneficial case
+   before it ships; none of these pages is one. Net phase-2 change kept:
+   inner-container scrolling, which is a safe strict improvement.
+3. **Assisted capture** *(not planned)* — the visible login/challenge
+   window is where the three misdiagnosed gaps above actually get solved,
+   but it's explicitly out of scope for now.
 
 ## Explicitly skipped
 

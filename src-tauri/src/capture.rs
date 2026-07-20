@@ -148,8 +148,8 @@ const FINALIZE_JS: &str = r#"
 "#;
 
 /// Serialize the rendered DOM plus the bits readability can't recover:
-/// the live `document.title`, and byline/date metadata from meta tags and
-/// JSON-LD, which feed the source's provenance line.
+/// the live `document.title` and OpenGraph title for SPA title gaps, and
+/// byline/date metadata (meta tags + JSON-LD) for the provenance line.
 const EXTRACT_JS: &str = r#"
 (() => {
   try {
@@ -242,7 +242,8 @@ struct FinalizeStats {
     overlays: u32,
 }
 
-/// One scroll-step probe: where the viewport is and how tall the page is.
+/// One scroll step's page geometry — how far the scrollable content extends
+/// versus the viewport, so we know when we've reached the bottom.
 #[derive(serde::Deserialize, Default)]
 struct ScrollProbe {
     #[serde(default)]
@@ -495,18 +496,19 @@ async fn drive(window: &tauri::WebviewWindow, url: &str) -> Result<Rendered> {
 
     // Completeness pass (RFC §3): step-scroll toward the bottom so
     // IntersectionObserver lazy-loaders and infinite feeds fire, capped so
-    // endless timelines terminate. Growth in scrollHeight tells us whether
-    // anything actually loaded.
+    // endless timelines terminate. Each step scrolls the dominant inner
+    // container as well as the window — a bare `window.scrollTo` never moves
+    // an `overflow:auto` feed, so its lazy content would otherwise stay dark.
     let mut scroll_steps: u32 = 0;
     let mut grew = false;
-    let mut probe = scroll_probe(window, 1).await.unwrap_or_default();
+    let mut probe = scroll_step(window, 1).await.unwrap_or_default();
     let initial_sh = probe.sh;
     if probe.sh > probe.ih && probe.ih > 0.0 {
-        for step in 1..=SCROLL_STEPS_MAX {
-            let y = probe.ih * step as f64;
-            scroll_steps = step;
+        for step in 2..=SCROLL_STEPS_MAX + 1 {
+            scroll_steps = step - 1;
+            let y = probe.ih * (step - 1) as f64;
             tokio::time::sleep(SCROLL_PAUSE).await;
-            match scroll_probe(window, step + 1).await {
+            match scroll_step(window, step).await {
                 Ok(next) => {
                     grew |= next.sh > initial_sh + 1.0;
                     let done = y >= next.sh;
@@ -565,12 +567,34 @@ async fn drive(window: &tauri::WebviewWindow, url: &str) -> Result<Rendered> {
     })
 }
 
-/// Scroll to `step × viewport` and report the page geometry afterward.
-async fn scroll_probe(window: &tauri::WebviewWindow, step: u32) -> Result<ScrollProbe> {
+/// Scroll to `step × viewport` — moving both the window and the dominant
+/// inner scroll container (feeds and panes live in an `overflow:auto`
+/// element a bare `window.scrollTo` never budges) — then report page
+/// geometry so the caller knows when the bottom is reached.
+async fn scroll_step(window: &tauri::WebviewWindow, step: u32) -> Result<ScrollProbe> {
     let js = format!(
-        "(() => {{ const ih = window.innerHeight || 900; \
-         window.scrollTo(0, {step} * ih); \
-         return JSON.stringify({{ sh: document.body ? document.body.scrollHeight : 0, ih }}); }})();"
+        r#"(() => {{
+  const ih = window.innerHeight || 900;
+  // Dominant inner scroller: the tallest overflow-scroll element. Scanning
+  // a bounded slice keeps this cheap on huge DOMs.
+  let sc = null, best = 0, k = 0;
+  for (const el of document.querySelectorAll('*')) {{
+    if (++k > 4000) break;
+    const over = el.scrollHeight - el.clientHeight;
+    if (over < ih) continue;
+    const oy = getComputedStyle(el).overflowY;
+    if (oy !== 'auto' && oy !== 'scroll') continue;
+    if (over > best) {{ best = over; sc = el; }}
+  }}
+  const y = {step} * ih;
+  window.scrollTo(0, y);
+  if (sc) sc.scrollTop = y;
+  const sh = Math.max(
+    document.body ? document.body.scrollHeight : 0,
+    sc ? sc.scrollHeight : 0
+  );
+  return JSON.stringify({{ sh, ih }});
+}})();"#
     );
     let raw = eval_string(window, js).await?;
     serde_json::from_str(&raw).context("bad scroll probe")
