@@ -66,6 +66,20 @@ const SUGGESTED_VISION = [
   { name: "minimax-m3", note: "vision · 1M context (general)" },
 ];
 
+/** Known OpenAI-compatible gateways: pick one, the URL fills; the select
+ *  derives its value back from the URL so it round-trips. Custom stays for
+ *  anything else. (Bob is deliberately absent — its API blocks third-party
+ *  clients by vendor policy; one line here if that ever changes.) */
+const GATEWAY_PRESETS = [
+  { name: "OpenAI", url: "https://api.openai.com/v1" },
+  { name: "Anthropic", url: "https://api.anthropic.com/v1" },
+  { name: "OpenRouter", url: "https://openrouter.ai/api/v1" },
+  { name: "Groq", url: "https://api.groq.com/openai/v1" },
+  { name: "Vercel AI Gateway", url: "https://ai-gateway.vercel.sh/v1" },
+  { name: "Nous (Hermes)", url: "https://inference-api.nousresearch.com/v1" },
+  { name: "LM Studio (local)", url: "http://localhost:1234/v1" },
+];
+
 const TABS = [
   { id: "general", label: "General", icon: SlidersHorizontal },
   { id: "sources", label: "Sources", icon: FolderGit2 },
@@ -317,6 +331,30 @@ export function SettingsDialog({
 
               {draft.provider === "openai" && (
                 <>
+                  <Field
+                    label="Gateway"
+                    hint="Pick a known provider to fill the URL, or Custom for any OpenAI-compatible endpoint."
+                  >
+                    <select
+                      aria-label="Gateway preset"
+                      value={
+                        GATEWAY_PRESETS.find((p) => p.url === draft.openaiBaseUrl.trim())
+                          ?.url ?? "custom"
+                      }
+                      onChange={(e) => {
+                        if (e.target.value !== "custom")
+                          setDraft({ ...draft, openaiBaseUrl: e.target.value });
+                      }}
+                      className="h-8 w-full rounded-md border border-input bg-surface-2 px-2 text-[13px] text-foreground focus:outline-none"
+                    >
+                      {GATEWAY_PRESETS.map((p) => (
+                        <option key={p.url} value={p.url}>
+                          {p.name}
+                        </option>
+                      ))}
+                      <option value="custom">Custom…</option>
+                    </select>
+                  </Field>
                   <Field
                     label="Gateway URL"
                     hint="Empty = inferred from your key for OpenAI, Anthropic, OpenRouter, and Groq. Any OpenAI-compatible base URL works (usually ends in /v1)."
