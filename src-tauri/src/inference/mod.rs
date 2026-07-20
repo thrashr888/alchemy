@@ -9,11 +9,13 @@
 //! OpenAI-compatible gateways. Streaming is an invariant: chat-shaped
 //! engines expose `chat_stream`; plain `chat` is just the collected stream.
 
+mod agent_cli;
 mod fm;
 mod gateway;
 mod local_embed;
 mod ollama;
 
+pub use agent_cli::{agent_status, AgentCli, AgentKind};
 pub use fm::FmEngine;
 pub use gateway::OpenAiClient;
 pub use local_embed::{EmbedderProgress, LocalEmbedder};
@@ -142,6 +144,8 @@ pub enum ChatEngine {
     Gateway(OpenAiClient),
     /// Apple's on-device system model via the alchemy-fm sidecar (macOS 26+).
     FoundationModels(FmEngine),
+    /// A subscription-carrying agent CLI run headless (claude, codex).
+    Agent(AgentCli),
 }
 
 impl ChatEngine {
@@ -153,6 +157,7 @@ impl ChatEngine {
             ChatEngine::Ollama(_) => "ollama",
             ChatEngine::Gateway(_) => "gateway",
             ChatEngine::FoundationModels(_) => "foundation-models",
+            ChatEngine::Agent(a) => a.kind().id(),
         }
     }
 
@@ -165,6 +170,7 @@ impl ChatEngine {
             ChatEngine::Ollama(o) => o.chat_stream(messages, on_token).await,
             ChatEngine::Gateway(g) => g.chat_stream(messages, on_token).await,
             ChatEngine::FoundationModels(f) => f.chat_stream(messages, on_token).await,
+            ChatEngine::Agent(a) => a.chat_stream(messages, on_token).await,
         }
     }
 
@@ -173,6 +179,7 @@ impl ChatEngine {
             ChatEngine::Ollama(o) => o.chat(messages).await,
             ChatEngine::Gateway(g) => g.chat(messages).await,
             ChatEngine::FoundationModels(f) => f.chat(messages).await,
+            ChatEngine::Agent(a) => a.chat(messages).await,
         }
     }
 }

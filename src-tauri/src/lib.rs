@@ -159,6 +159,7 @@ pub fn run() {
             mac::open_privacy_settings,
             mac::mac_connect,
             mac::list_mac_collections,
+            commands::agent_cli_status,
             commands::resync_sources,
             commands::add_source_url,
             commands::add_source_text,

@@ -119,6 +119,8 @@ export const api = {
   addSourceFolder: (notebookId: string, path: string) =>
     run(slow<Source>("add_source_folder", { notebookId, path })),
   resyncSources: () => run(slow<FolderScan>("resync_sources")),
+  agentCliStatus: () =>
+    run(ai<{ id: string; installed: boolean; detail: string }[]>("agent_cli_status", {})),
   addSourceUrl: (notebookId: string, url: string, include?: string) =>
     run(ai<Source>("add_source_url", { notebookId, url, include })),
   setChildEmbedded: (sourceId: string, embed: boolean) =>

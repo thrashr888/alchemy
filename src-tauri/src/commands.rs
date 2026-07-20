@@ -137,6 +137,38 @@ fn find_fm_sidecar(app: &AppHandle) -> Option<std::path::PathBuf> {
     None
 }
 
+/// Agent-CLI availability for the provider tiles (claude, codex): probed
+/// off the main thread — discovery may fall through to a login-shell which.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCliStatus {
+    pub id: String,
+    pub installed: bool,
+    pub detail: String,
+}
+
+#[tauri::command]
+pub async fn agent_cli_status() -> Result<Vec<AgentCliStatus>, String> {
+    tokio::task::spawn_blocking(|| {
+        [
+            crate::inference::AgentKind::Claude,
+            crate::inference::AgentKind::Codex,
+        ]
+        .into_iter()
+        .map(|kind| {
+            let (installed, detail) = crate::inference::agent_status(kind);
+            AgentCliStatus {
+                id: kind.id().to_string(),
+                installed,
+                detail,
+            }
+        })
+        .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 pub fn ai_runtime(app: AppHandle, data_dir: std::path::PathBuf) -> crate::ai::AiRuntime {
     let fm_sidecar = find_fm_sidecar(&app);
     #[derive(serde::Serialize, Clone)]

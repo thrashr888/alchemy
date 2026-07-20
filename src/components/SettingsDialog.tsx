@@ -162,6 +162,9 @@ export function SettingsDialog({
   const [saving, setSaving] = useState(false);
   const [confirmReembed, setConfirmReembed] = useState(false);
   const [gatewayModels, setGatewayModels] = useState<string[]>([]);
+  const [agentClis, setAgentClis] = useState<
+    { id: string; installed: boolean; detail: string }[]
+  >([]);
   const [gatewayError, setGatewayError] = useState<string | null>(null);
   const [loadingGateway, setLoadingGateway] = useState(false);
 
@@ -177,6 +180,7 @@ export function SettingsDialog({
       if (aiConfig.provider === "openai" && aiConfig.openaiApiKey) {
         void loadGatewayModels(aiConfig.openaiBaseUrl, aiConfig.openaiApiKey);
       }
+      void api.agentCliStatus().then(setAgentClis).catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, aiConfig]);
@@ -228,6 +232,12 @@ export function SettingsDialog({
     gatewayDebounce.current = window.setTimeout(() => {
       void loadGatewayModels(url, key);
     }, 700);
+  }
+
+  function agentNote(id: string, fallback: string) {
+    const cli = agentClis.find((c) => c.id === id);
+    if (!cli) return fallback;
+    return cli.installed ? `${fallback} · ${cli.detail}` : "Not installed";
   }
 
   const embedChanged =
@@ -367,6 +377,16 @@ export function SettingsDialog({
                       id: "openai",
                       label: "OpenAI-compatible",
                       note: "Cloud or enterprise gateway",
+                    },
+                    {
+                      id: "claude",
+                      label: "Claude Code",
+                      note: agentNote("claude-code", "Your Claude subscription"),
+                    },
+                    {
+                      id: "codex",
+                      label: "Codex",
+                      note: agentNote("codex", "Your ChatGPT subscription"),
                     },
                   ].map((pv) => (
                     <button

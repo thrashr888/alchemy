@@ -4,7 +4,7 @@
 //! `crate::inference`, re-exported here so call sites keep their imports.
 
 pub use crate::inference::Role;
-use crate::inference::{ChatEngine, Embedder, FmEngine, Router};
+use crate::inference::{AgentCli, AgentKind, ChatEngine, Embedder, FmEngine, Router};
 pub use crate::inference::{
     ChatOutcome, ChatTurn, EmbedderProgress, GenStats, LocalEmbedder, Ollama, OllamaConfig,
     OpenAiClient,
@@ -164,9 +164,12 @@ impl Ai {
                 &config.openai_chat_model,
             )
         });
-        let chat = match &openai {
-            Some(gw) => ChatEngine::Gateway(gw.clone()),
-            None => ChatEngine::Ollama(Ollama::new(ollama_config(&config))),
+        let chat = match (config.provider.as_str(), &openai) {
+            ("openai", Some(gw)) => ChatEngine::Gateway(gw.clone()),
+            // Family B: the vendor CLI carries the subscription (RFC §5).
+            ("claude", _) => ChatEngine::Agent(AgentCli::new(AgentKind::Claude)),
+            ("codex", _) => ChatEngine::Agent(AgentCli::new(AgentKind::Codex)),
+            _ => ChatEngine::Ollama(Ollama::new(ollama_config(&config))),
         };
         let data_dir = if runtime.data_dir.as_os_str().is_empty() {
             std::env::temp_dir().join("alchemy")
@@ -212,9 +215,11 @@ impl Ai {
 
     /// The model name answering chats right now (stats keying, health display).
     pub fn active_chat_model(&self) -> String {
-        match &self.openai {
-            Some(_) => self.config.openai_chat_model.clone(),
-            None => self.config.chat_model.clone(),
+        match self.config.provider.as_str() {
+            "openai" => self.config.openai_chat_model.clone(),
+            "claude" => "claude-code".to_string(),
+            "codex" => "codex".to_string(),
+            _ => self.config.chat_model.clone(),
         }
     }
 
