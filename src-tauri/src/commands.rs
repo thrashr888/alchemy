@@ -114,7 +114,31 @@ impl AppState {
 
 /// Build the Ai runtime: app data dir + embedder download progress events
 /// (`embedder://progress` with {label, done, total}).
+/// Locate the alchemy-fm sidecar: bundled resource first (release), then
+/// the in-repo Swift build (dev). None disables the Foundation Models rung.
+fn find_fm_sidecar(app: &AppHandle) -> Option<std::path::PathBuf> {
+    use tauri::path::BaseDirectory;
+    use tauri::Manager;
+    if let Ok(p) = app
+        .path()
+        .resolve("binaries/alchemy-fm", BaseDirectory::Resource)
+    {
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    if cfg!(debug_assertions) {
+        let dev = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../sidecar/alchemy-fm/.build/release/alchemy-fm");
+        if dev.exists() {
+            return Some(dev);
+        }
+    }
+    None
+}
+
 pub fn ai_runtime(app: AppHandle, data_dir: std::path::PathBuf) -> crate::ai::AiRuntime {
+    let fm_sidecar = find_fm_sidecar(&app);
     #[derive(serde::Serialize, Clone)]
     struct EmbedderProgressEvent {
         label: String,
@@ -134,6 +158,7 @@ pub fn ai_runtime(app: AppHandle, data_dir: std::path::PathBuf) -> crate::ai::Ai
     crate::ai::AiRuntime {
         data_dir,
         embedder_progress: Some(progress),
+        fm_sidecar,
     }
 }
 
@@ -500,7 +525,7 @@ pub(crate) async fn friendly_title(state: &AppState, extracted: &mut ingest::Ext
     ];
     let out = {
         let ai = state.ai.read().await;
-        ai.chat(&messages).await
+        ai.chat_role(crate::inference::Role::Small, &messages).await
     };
     if let Ok(out) = out {
         let t = out

@@ -3,7 +3,8 @@
 //! (docs/RFC-inference-providers.md) — engines and chat types live in
 //! `crate::inference`, re-exported here so call sites keep their imports.
 
-use crate::inference::{ChatEngine, Embedder, Role, Router};
+pub use crate::inference::Role;
+use crate::inference::{ChatEngine, Embedder, FmEngine, Router};
 pub use crate::inference::{
     ChatOutcome, ChatTurn, EmbedderProgress, GenStats, LocalEmbedder, Ollama, OllamaConfig,
     OpenAiClient,
@@ -126,6 +127,10 @@ impl Default for AiConfig {
 pub struct AiRuntime {
     pub data_dir: std::path::PathBuf,
     pub embedder_progress: Option<EmbedderProgress>,
+    /// Path to the alchemy-fm sidecar binary when the host resolved one
+    /// (bundled resource in release, repo build in dev). None = no
+    /// Foundation Models rung; Small falls through to the chat engine.
+    pub fm_sidecar: Option<std::path::PathBuf>,
 }
 
 /// App-facing capability facade over the inference Router. One instance
@@ -176,7 +181,16 @@ impl Ai {
         } else {
             Embedder::Ollama(Ollama::new(ollama_config(&config)))
         };
-        let router = Router::new(chat, embedder);
+        // Small-role rung: the FM sidecar when the host found the binary.
+        // Availability (macOS version, Apple Intelligence state) is probed
+        // lazily on first use; unavailable probes make chat_role fall
+        // through, so constructing the engine here is always safe.
+        let small = runtime
+            .fm_sidecar
+            .as_ref()
+            .filter(|p| p.exists())
+            .map(|p| ChatEngine::FoundationModels(FmEngine::new(p.clone())));
+        let router = Router::new(chat, embedder, small);
         let ollama = Ollama::new(ollama_config(&config));
         Self {
             config,
@@ -205,6 +219,26 @@ impl Ai {
     }
 
     pub async fn chat(&self, messages: &[ChatTurn]) -> Result<ChatOutcome> {
+        self.router.chat_engine(Role::Chat).chat(messages).await
+    }
+
+    /// Role-routed chat with failure fallthrough (RFC-inference-providers
+    /// §7): if the role's engine is unavailable or errors, the configured
+    /// chat engine answers instead — one log line, never a dead call.
+    pub async fn chat_role(&self, role: Role, messages: &[ChatTurn]) -> Result<ChatOutcome> {
+        let engine = self.router.chat_engine(role);
+        if self.router.has_small() && role == Role::Small {
+            if let ChatEngine::FoundationModels(fm) = engine {
+                if fm.available().await {
+                    match engine.chat(messages).await {
+                        Ok(out) => return Ok(out),
+                        Err(err) => {
+                            eprintln!("small-role engine failed, falling through: {err:#}");
+                        }
+                    }
+                }
+            }
+        }
         self.router.chat_engine(Role::Chat).chat(messages).await
     }
 

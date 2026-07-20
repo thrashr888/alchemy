@@ -110,11 +110,18 @@ second consumer in another repo.** Until then it's a module, not a crate.
 - **Builtin embedder** — shipped (model2vec potion-base-8M). The
   download-on-first-use pattern here and in Kokoro is the template.
 - **Builtin chat via MLX** — the new piece, and the zero-setup story.
-  mlx-rs is maintained bindings to Apple MLX (v0.25.x) whose `mlx-lm`
-  does real text generation over pretrained models. In-process: no
-  daemon, no sidecar, no setup — Alchemy works on a Mac with nothing
-  installed, and Ollama demotes from prerequisite to upgrade. Two rules
-  keep this from forking the ecosystem further:
+  *Ecosystem reality check (2026-07-20, phase-2 implementation):* mlx-rs
+  0.25.3 (bindings) is solid, but the generation layer above it is not
+  there yet — upstream `mlx-lm`'s generate module is commented out, and
+  the greenfield `mlx-lm-rs` (0.0.1) streams real Qwen3 inference but
+  **bf16 only, no quantized models** — ~8 GB of weights for a 4B model,
+  which defeats the 16 GB tier this engine exists to serve. So the
+  builtin-MLX rung *waits for quantized support* (or we contribute it
+  upstream — a well-shaped, high-leverage OSS contribution that fits the
+  fix-upstream ethos), and **phase 2's vehicle becomes the first-party
+  path below**, whose system model is quantized, pre-downloaded, and
+  Apple-managed. Two rules keep MLX from forking the ecosystem further
+  when it does land:
   - **The model store is the shared Hugging Face hub cache**
     (`HF_HOME`, `~/.cache/huggingface/hub`) — never an Alchemy-private
     folder. mlx-community models are HF repos; mlx-lm and the
@@ -260,10 +267,16 @@ flow.
    providers (builtin embed, Ollama, gateway) rehomed behind it. Pure
    refactor: zero behavior change, `AiConfig` seeds prefs. Proves the
    boundary before anything new plugs in.
-2. **Builtin MLX chat** — mlx-rs engine, default-model download flow,
-   `Small` routing (titles/summaries off the big model). Measure: tok/s,
-   RAM, and whether ingest latency drops as expected. This phase is the
-   perf fix *and* the zero-setup fix.
+2. **Foundation Models sidecar for `Small`** *(reordered on evidence —
+   see §4's ecosystem check)*: a zero-dependency Swift sidecar speaking
+   NDJSON over stdio to the on-device `SystemLanguageModel` (base API is
+   macOS **26**+, wider than Golden Gate), `FmEngine` in `inference/`
+   with probe + streaming + fallthrough, and `Role::Small` routed to it
+   (`friendly_title` first — the ingest-latency hot path). Zero download:
+   the system model is already on disk. Measure ingest latency before/
+   after. **2b, gated on upstream quantization**: the mlx-rs builtin
+   engine as originally scoped — still the zero-setup story for
+   pre-macOS-26 and non-Apple-Intelligence Macs.
 3. **Agent CLIs** — claude + codex adapters first (the two with proven
    wrappings), event normalization, allowlist containment, provider
    attribution in the message footer. opencode/hermes/copilot/gemini-cli

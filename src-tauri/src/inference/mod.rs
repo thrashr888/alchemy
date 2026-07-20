@@ -9,10 +9,12 @@
 //! OpenAI-compatible gateways. Streaming is an invariant: chat-shaped
 //! engines expose `chat_stream`; plain `chat` is just the collected stream.
 
+mod fm;
 mod gateway;
 mod local_embed;
 mod ollama;
 
+pub use fm::FmEngine;
 pub use gateway::OpenAiClient;
 pub use local_embed::{EmbedderProgress, LocalEmbedder};
 pub use ollama::Ollama;
@@ -138,6 +140,8 @@ pub struct OllamaConfig {
 pub enum ChatEngine {
     Ollama(Ollama),
     Gateway(OpenAiClient),
+    /// Apple's on-device system model via the alchemy-fm sidecar (macOS 26+).
+    FoundationModels(FmEngine),
 }
 
 impl ChatEngine {
@@ -148,6 +152,7 @@ impl ChatEngine {
         match self {
             ChatEngine::Ollama(_) => "ollama",
             ChatEngine::Gateway(_) => "gateway",
+            ChatEngine::FoundationModels(_) => "foundation-models",
         }
     }
 
@@ -159,6 +164,7 @@ impl ChatEngine {
         match self {
             ChatEngine::Ollama(o) => o.chat_stream(messages, on_token).await,
             ChatEngine::Gateway(g) => g.chat_stream(messages, on_token).await,
+            ChatEngine::FoundationModels(f) => f.chat_stream(messages, on_token).await,
         }
     }
 
@@ -166,6 +172,7 @@ impl ChatEngine {
         match self {
             ChatEngine::Ollama(o) => o.chat(messages).await,
             ChatEngine::Gateway(g) => g.chat(messages).await,
+            ChatEngine::FoundationModels(f) => f.chat(messages).await,
         }
     }
 }
@@ -200,17 +207,32 @@ impl Embedder {
 pub struct Router {
     chat: ChatEngine,
     embedder: Embedder,
+    /// Small-role engine when one is available (the FM sidecar today).
+    /// Callers fall through to `chat` when it is None or errors.
+    small: Option<ChatEngine>,
 }
 
 impl Router {
-    pub fn new(chat: ChatEngine, embedder: Embedder) -> Self {
-        Self { chat, embedder }
+    pub fn new(chat: ChatEngine, embedder: Embedder, small: Option<ChatEngine>) -> Self {
+        Self {
+            chat,
+            embedder,
+            small,
+        }
     }
 
-    pub fn chat_engine(&self, _role: Role) -> &ChatEngine {
-        // Chat | Agent | Generate | Small all resolve to the one configured
-        // chat engine until the MLX and agent families land.
-        &self.chat
+    pub fn chat_engine(&self, role: Role) -> &ChatEngine {
+        match role {
+            Role::Small => self.small.as_ref().unwrap_or(&self.chat),
+            // Chat | Agent | Generate resolve to the one configured chat
+            // engine until the MLX and agent families land.
+            _ => &self.chat,
+        }
+    }
+
+    /// Whether Small currently has its own engine (vs falling through).
+    pub fn has_small(&self) -> bool {
+        self.small.is_some()
     }
 
     pub fn embedder(&self) -> &Embedder {

@@ -29,3 +29,4 @@ src/target
 
 # Fetched on first build by scripts/fetch-pdfium.sh (see build.rs)
 src-tauri/libs/*.dylib
+sidecar/alchemy-fm/.build/
