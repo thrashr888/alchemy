@@ -151,7 +151,7 @@ impl OpenAiClient {
             .json(&json!({ "model": self.model, "messages": messages, "stream": false }))
             .send()
             .await
-            .context("gateway chat request failed — check the base URL")?;
+            .context("Couldn't reach the provider — check the base URL and your connection")?;
 
         if !resp.status().is_success() {
             return Err(gateway_error(resp).await);
@@ -191,7 +191,7 @@ impl OpenAiClient {
             }))
             .send()
             .await
-            .context("gateway chat request failed — check the base URL")?;
+            .context("Couldn't reach the provider — check the base URL and your connection")?;
 
         if !resp.status().is_success() {
             return Err(gateway_error(resp).await);
@@ -404,17 +404,57 @@ fn looks_like_jwt(key: &str) -> bool {
 async fn gateway_error(resp: reqwest::Response) -> anyhow::Error {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
-    let hint = match status.as_u16() {
-        401 | 403 => " (check the API key and that it has the Inference scope)",
+    // Providers wrap a perfectly good sentence in JSON ("Insufficient
+    // balance or no resource package. Please recharge."); surface that
+    // sentence, never the wire format.
+    let provider_msg = serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| {
+            [
+                v["error"]["message"].clone(),
+                v["message"].clone(),
+                v["detail"].clone(),
+                v["title"].clone(),
+            ]
+            .into_iter()
+            .find_map(|f| f.as_str().map(str::to_string))
+        })
+        .unwrap_or_else(|| truncate(body.trim(), 160));
+
+    let lower = body.to_lowercase();
+    let advice = match status.as_u16() {
+        401 | 403 => "This provider rejected the API key — check it in Settings → Models.",
+        402 => "This account needs credit — add funds with the provider.",
         // A 404 naming a function/model means auth worked and the model id
         // is stale or not enabled for this account — a bare 404 is a URL.
-        404 if body.contains("unction") || body.contains("model") => {
-            " (the selected model isn't available on this account — pick another in Settings)"
+        404 if lower.contains("function") || lower.contains("model") => {
+            "The selected model isn't available on this account — pick another in Settings → Models."
         }
-        404 => " (check the base URL — it usually ends in /v1)",
+        404 => "Nothing answered at this address — the base URL usually ends in /v1.",
+        429 if ["balance", "recharge", "credit", "quota", "billing"]
+            .iter()
+            .any(|w| lower.contains(w)) =>
+        {
+            "This account is out of credit — top up with the provider, or pick a free-tier model."
+        }
+        429 => "Rate limited — wait a moment and try again.",
+        500..=599 => "The provider is having trouble — try again shortly.",
         _ => "",
     };
-    anyhow!("gateway {}{}: {}", status, hint, truncate(&body, 300))
+
+    if advice.is_empty() {
+        anyhow!(
+            "The provider returned {status}: {}",
+            truncate(&provider_msg, 200)
+        )
+    } else if provider_msg.is_empty() {
+        anyhow!("{advice} ({status})")
+    } else {
+        anyhow!(
+            "{advice} The provider said: “{}” ({status})",
+            truncate(&provider_msg, 140)
+        )
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
