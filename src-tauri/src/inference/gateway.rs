@@ -28,14 +28,17 @@ struct TeamContext {
 impl OpenAiClient {
     pub fn new(base_url: &str, api_key: &str, model: &str) -> Self {
         // 600s total covers long generations, but a throttled/hung gateway
-        // must fail fast, never spin: connect in 10s, and no more than 25s
-        // between bytes once connected (streams tick every token, so a
-        // quiet 25s is a dead or tar-pitted connection, not a slow model —
-        // the user-visible wait stays under thirty seconds).
+        // must fail fast, never spin: connect in 10s, and a bounded quiet
+        // window between bytes (streams tick every token). Local servers
+        // get 25s — a silent LM Studio/vLLM is dead, and a model load shows
+        // no bytes but shouldn't strand the user past half a minute. Remote
+        // providers get 60s: serverless cold starts (NVIDIA NIM functions)
+        // legitimately sit quiet before the first token.
+        let read_secs = if is_local_host(base_url) { 25 } else { 60 };
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(600))
             .connect_timeout(std::time::Duration::from_secs(10))
-            .read_timeout(std::time::Duration::from_secs(25))
+            .read_timeout(std::time::Duration::from_secs(read_secs))
             .build()
             .expect("failed to build reqwest client");
         // An empty base is inferred from the key format for well-known
@@ -443,6 +446,22 @@ fn default_base_for_key(key: &str) -> Option<&'static str> {
 }
 
 /// Three dot-separated non-empty segments — the shape of a JWT.
+/// Local inference servers (LM Studio, vLLM, Ollama's /v1) vs hosted
+/// providers — used to pick the quiet-stream deadline.
+fn is_local_host(base_url: &str) -> bool {
+    let host = reqwest::Url::parse(base_url.trim())
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_lowercase))
+        .unwrap_or_default();
+    host == "localhost"
+        || host == "0.0.0.0"
+        || host == "::1"
+        || host.starts_with("127.")
+        || host.starts_with("192.168.")
+        || host.starts_with("10.")
+        || host.ends_with(".local")
+}
+
 fn looks_like_jwt(key: &str) -> bool {
     let parts: Vec<&str> = key.split('.').collect();
     parts.len() == 3 && parts.iter().all(|p| !p.is_empty())

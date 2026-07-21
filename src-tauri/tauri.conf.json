@@ -43,7 +43,8 @@
     "active": true,
     "targets": "all",
     "resources": [
-      "libs/libpdfium.dylib"
+      "libs/libpdfium.dylib",
+      "binaries/alchemy-fm"
     ],
     "icon": [
       "icons/32x32.png",

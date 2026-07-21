@@ -53,6 +53,9 @@ jobs:
       - name: Fetch PDFium (scanned-PDF OCR)
         run: scripts/fetch-pdfium.sh
 
+      - name: Build FM sidecar (on-device model)
+        run: scripts/build-fm-sidecar.sh
+
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
@@ -93,6 +96,11 @@ jobs:
           codesign --force --timestamp --options runtime \
             --sign "$IDENTITY" src-tauri/libs/libpdfium.dylib
           codesign -dvv src-tauri/libs/libpdfium.dylib 2>&1 | grep -E 'Authority|Timestamp' | head -3
+          # The FM sidecar is a nested executable in Resources — same
+          # notarization rules as the dylib.
+          codesign --force --timestamp --options runtime \
+            --sign "$IDENTITY" src-tauri/binaries/alchemy-fm
+          codesign -dvv src-tauri/binaries/alchemy-fm 2>&1 | grep -E 'Authority|Timestamp' | head -3
 
       - name: Keep signing keychain unlocked
         env:

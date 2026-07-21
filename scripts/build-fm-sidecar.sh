@@ -1,9 +1,14 @@
 #!/bin/sh
 # Build the Foundation Models sidecar (RFC-inference-providers) and stage it
-# where dev builds resolve it. Release bundling: copy the binary into the
-# app's resources as binaries/alchemy-fm (and codesign it — see the PDFium
-# precedent in release.sh) when wiring externalBin.
+# at src-tauri/binaries/alchemy-fm, which is both where dev resolves it
+# (BaseDirectory::Resource maps to src-tauri in dev) and what
+# tauri.conf.json bundles into release Resources. Release flows re-sign the
+# staged binary with the Developer ID (PDFium precedent) before bundling.
+# macOS-only; a no-op elsewhere.
 set -eu
-cd "$(dirname "$0")/../sidecar/alchemy-fm"
-swift build -c release
-echo "built: $(pwd)/.build/release/alchemy-fm"
+[ "$(uname -s)" = "Darwin" ] || exit 0
+cd "$(dirname "$0")/.."
+(cd sidecar/alchemy-fm && swift build -c release)
+mkdir -p src-tauri/binaries
+cp sidecar/alchemy-fm/.build/release/alchemy-fm src-tauri/binaries/alchemy-fm
+echo "staged: src-tauri/binaries/alchemy-fm"

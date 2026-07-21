@@ -73,12 +73,15 @@ pnpm exec tsc --noEmit
 )
 
 # --- Build + sign ------------------------------------------------------------
-# The bundled PDFium dylib ships ad-hoc-signed; fetch it (idempotent) then give
-# it our Developer ID + secure timestamp so notarization accepts it. It's
-# gitignored, so signing it never touches the working tree.
-echo "==> Signing PDFium dylib + building"
+# The bundled PDFium dylib and the FM sidecar ship ad-hoc-signed; fetch/build
+# them (idempotent) then give each our Developer ID + secure timestamp so
+# notarization accepts them. Both are gitignored, so signing never touches
+# the working tree.
+echo "==> Signing PDFium dylib + FM sidecar + building"
 scripts/fetch-pdfium.sh
+scripts/build-fm-sidecar.sh
 codesign --force --timestamp --options runtime --sign "$SIGNING_IDENTITY" "$DYLIB"
+codesign --force --timestamp --options runtime --sign "$SIGNING_IDENTITY" src-tauri/binaries/alchemy-fm
 APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY" pnpm tauri build --target "$TARGET"
 [ -f "$DMG" ] || { echo "DMG not produced: $DMG" >&2; exit 1; }
 [ -f "$UPDATER_TGZ" ] || { echo "Updater artifact not produced: $UPDATER_TGZ" >&2; exit 1; }
