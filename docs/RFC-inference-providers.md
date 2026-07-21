@@ -281,7 +281,12 @@ flow.
    wrappings), event normalization, allowlist containment, provider
    attribution in the message footer. opencode/hermes/copilot/gemini-cli
    follow as detection rows, cheap once the family exists.
-4. **Foundation Models sidecar** — the first-party convergence path:
+4. **Foundation Models sidecar** — *(shipped for Small + On-this-Mac
+   chat with the k=4 profile; eval_context_profiles gates the tight
+   profile at ≥75% recall retention — 100% on current datasets. The PCC
+   rung is blocked on the macOS 27 SDK: typecheck probes confirm SDK
+   26.5 exposes only the base SystemLanguageModel API — revisit at the
+   next Xcode.)* — the first-party convergence path:
    `MLXLanguageModel` for the same shared-cache models, the free
    on-device model for `Small`, PCC as an opt-in rung. macOS 27-gated
    with fallbacks (per the Golden Gate policy: ship gated, don't wait

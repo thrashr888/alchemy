@@ -859,3 +859,83 @@ async fn eval_router() {
         "routed recall {routed_recall:.2} fell more than 0.05 below flat {flat_recall:.2}"
     );
 }
+
+/// Context-profile eval (RFC-inference-providers §2): the on-device model's
+/// tight profile retrieves k=4 where the default retrieves k=8 — measure how
+/// much relevant-source coverage the small profile keeps, so "decent results
+/// for everything" is a number, not a vibe. Records both recalls and gates
+/// on retention: the k=4 profile must keep ≥75% of k=8's hits.
+#[tokio::test]
+async fn eval_context_profiles() {
+    let Some(ai) = builtin_ai().await else { return };
+    let datasets = load_datasets();
+    assert!(!datasets.is_empty(), "no datasets in evals/datasets/");
+
+    let dir = std::env::temp_dir().join(format!("nbl-eval-prof-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb = "eval-nb-prof";
+    seed_corpus(&ai, &db, nb).await;
+    seed_docs(&ai, &db, nb, EXTRA_CORPUS, "x-").await;
+    let titles: HashMap<String, String> = db
+        .list_sources(nb)
+        .await
+        .expect("list sources")
+        .into_iter()
+        .map(|s| (s.id, s.title))
+        .collect();
+
+    let profiles: [(usize, &str); 2] = [
+        (
+            crate::inference::ContextProfile::default().retrieve_k,
+            "default",
+        ),
+        (4, "on-device"),
+    ];
+    let mut hits_at: HashMap<&str, (f64, f64)> = HashMap::new(); // name -> (hit, total)
+    for ds in &datasets {
+        let query_texts: Vec<String> = ds.queries.iter().map(|q| q.query.clone()).collect();
+        let qvecs = ai.embed(&query_texts).await.expect("embed queries");
+        for (q, qvec) in ds.queries.iter().zip(&qvecs) {
+            for (k, name) in profiles {
+                let hits = db
+                    .search_chunks(nb, qvec.clone(), &q.query, k, None)
+                    .await
+                    .expect("profile search");
+                let found: std::collections::HashSet<&str> = hits
+                    .iter()
+                    .filter_map(|c| titles.get(&c.source_id))
+                    .map(String::as_str)
+                    .collect();
+                for rel in &q.relevant {
+                    let e = hits_at.entry(name).or_insert((0.0, 0.0));
+                    e.1 += 1.0;
+                    if found.contains(rel.source_title.as_str()) {
+                        e.0 += 1.0;
+                    }
+                }
+            }
+        }
+    }
+    let recall = |name: &str| {
+        let (h, t) = hits_at[name];
+        if t == 0.0 {
+            0.0
+        } else {
+            h / t
+        }
+    };
+    let (full, tight) = (recall("default"), recall("on-device"));
+    let retention = if full == 0.0 { 1.0 } else { tight / full };
+    println!(
+        "context profiles: default k={} recall {:.3} · on-device k=4 recall {:.3} · retention {:.1}%",
+        crate::inference::ContextProfile::default().retrieve_k,
+        full,
+        tight,
+        retention * 100.0
+    );
+    assert!(
+        retention >= 0.75,
+        "on-device profile keeps only {:.1}% of default-profile recall",
+        retention * 100.0
+    );
+}
