@@ -139,7 +139,24 @@ function resolveInCorpus(
   }
   if (origin.startsWith("/")) {
     const dir = origin.slice(0, origin.lastIndexOf("/"));
-    return byKey(normalizePath(`${dir}/${rawHref}`));
+    const direct = byKey(normalizePath(`${dir}/${rawHref}`));
+    if (direct) return direct;
+    // Obsidian shortest-path rule: a bare [[Note]] target resolves anywhere
+    // in the vault, not just beside the linking file — fall back to a
+    // filename-stem match across local sources.
+    if (!rawHref.includes("/")) {
+      const stem = rawHref.replace(/\.md$/i, "").toLowerCase();
+      return (
+        sources.find(
+          (src) =>
+            src.url.startsWith("/") &&
+            (src.url.split("/").pop() ?? "")
+              .replace(/\.[a-z0-9]{1,5}$/i, "")
+              .toLowerCase() === stem,
+        ) ?? null
+      );
+    }
+    return null;
   }
   return null;
 }
@@ -1715,7 +1732,7 @@ function SourceReader({
             </div>
           ) : richMode ? (
             <div className="selectable">
-              <Markdown>{content}</Markdown>
+              <Markdown wikilinks>{content}</Markdown>
             </div>
           ) : (
             <p className="reader-plain whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/90 selectable">
