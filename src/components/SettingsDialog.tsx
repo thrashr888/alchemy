@@ -190,9 +190,10 @@ export function SettingsDialog({
         ) : undefined
       }
     >
-      {/* Fixed height: the nav stays put and only the tab content scrolls
-          (also keeps the modal from resizing as tabs change). */}
-      <div className="flex h-[calc(88vh-7.5rem)] gap-5">
+      {/* Content-sized up to the window: short tabs (About) sit at the nav's
+          natural height, long tabs (Models, Appearance) grow to the cap and
+          scroll only past it. Per-tab heights are deliberate. */}
+      <div className="flex max-h-[calc(88vh-7.5rem)] gap-5">
         <nav className="flex w-36 shrink-0 flex-col gap-0.5">
           {TABS.map((t) => (
             <button
