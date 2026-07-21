@@ -209,6 +209,43 @@ pub fn agent_status(kind: AgentKind) -> (bool, String) {
     }
 }
 
+/// When an agent CLI fails in an auth-shaped way, append the one command
+/// that fixes it — expired OAuth needs the vendor's own interactive login
+/// (a browser round-trip we can't do headlessly), so the error row must be
+/// the instruction sheet.
+fn auth_fix_hint(kind: AgentKind, error_text: &str) -> Option<String> {
+    let t = error_text.to_lowercase();
+    let authish = [
+        "oauth",
+        "authenticat",
+        "unauthorized",
+        "signed out",
+        "not logged in",
+        "login",
+        "log in",
+        "credential",
+        "api key",
+        "session expired",
+        "401",
+    ]
+    .iter()
+    .any(|w| t.contains(w));
+    if !authish {
+        return None;
+    }
+    let fix = match kind {
+        AgentKind::Claude => "run `claude` and let it refresh your sign-in",
+        AgentKind::Codex => "run `codex login`",
+        AgentKind::Gemini => "run `gemini` and choose “Log in with Google”",
+        AgentKind::Cursor => "run `cursor-agent login`",
+        AgentKind::Opencode => "run `opencode auth login`",
+        AgentKind::Copilot => "run `copilot` and follow its sign-in",
+        AgentKind::Hermes => "run `hermes` and follow its sign-in",
+        AgentKind::Bob => "run `bob` and follow its sign-in",
+    };
+    Some(format!("Fix: open Terminal, {fix}, then retry here."))
+}
+
 fn fold_system(system: &str, prompt: &str) -> String {
     if system.is_empty() {
         prompt.to_string()
@@ -607,10 +644,14 @@ impl AgentCli {
             )),
             Ok(Err(e)) => {
                 let tail = err_tail.await.unwrap_or_default();
-                if tail.is_empty() {
-                    Err(e)
+                let base = if tail.is_empty() {
+                    format!("{e:#}")
                 } else {
-                    Err(anyhow!("{e:#}: {tail}"))
+                    format!("{e:#}: {tail}")
+                };
+                match auth_fix_hint(self.kind, &base) {
+                    Some(hint) => Err(anyhow!("{base} — {hint}")),
+                    None => Err(anyhow!("{base}")),
                 }
             }
             Ok(ok) => ok,
