@@ -30,6 +30,7 @@ import {
   ExternalLink,
   SlidersHorizontal,
   ChevronDown,
+  AlertTriangle,
 } from "lucide-react";
 
 export function ChatPanel() {
@@ -438,6 +439,26 @@ function ChatMessage({ message }: { message: Message }) {
       <div className="flex flex-col items-end gap-1">
         <div className="max-w-[85%] rounded-lg rounded-br-sm bg-surface-2 px-3.5 py-2 text-[13px] selectable border border-border">
           {message.content}
+        </div>
+      </div>
+    );
+  }
+  // Provider failures are part of the conversation record: a quiet danger
+  // wash naming the provider, so an unanswered question is never a mystery.
+  if (message.kind === "error") {
+    return (
+      <div className="flex flex-col gap-1.5">
+        <RoleLabel role="assistant" />
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3.5 py-2.5">
+          <div className="flex items-start gap-2 text-[13px] text-foreground">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
+            <span className="selectable min-w-0">{message.content}</span>
+          </div>
+          {message.model && (
+            <div className="mt-1.5 text-[11px] text-subtle-foreground">
+              {message.model}
+            </div>
+          )}
         </div>
       </div>
     );

@@ -141,17 +141,43 @@ impl OpenAiClient {
         req.bearer_auth(key)
     }
 
+    /// Rate limits and provider blips shouldn't kill a whole run — agentic
+    /// mode fires many rapid calls and trial-tier gateways 429 easily. Two
+    /// short waits (honoring Retry-After when sent) before giving up.
+    async fn backoff_if_retryable(resp: &reqwest::Response, attempt: u32) -> bool {
+        let code = resp.status().as_u16();
+        if attempt >= 2 || !(code == 429 || (500..=503).contains(&code)) {
+            return false;
+        }
+        let wait = resp
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(2 + 4 * attempt as u64)
+            .min(30);
+        tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+        true
+    }
+
     /// Non-streaming completion. Token throughput is wall-clock based since
     /// OpenAI-style responses carry token counts but not decode duration.
     pub async fn chat(&self, messages: &[ChatTurn]) -> Result<ChatOutcome> {
         let started = std::time::Instant::now();
-        let resp = self
-            .with_team_headers(self.request("/chat/completions"))
-            .await
-            .json(&json!({ "model": self.model, "messages": messages, "stream": false }))
-            .send()
-            .await
-            .context("Couldn't reach the provider — check the base URL and your connection")?;
+        let mut attempt = 0;
+        let resp = loop {
+            let resp = self
+                .with_team_headers(self.request("/chat/completions"))
+                .await
+                .json(&json!({ "model": self.model, "messages": messages, "stream": false }))
+                .send()
+                .await
+                .context("Couldn't reach the provider — check the base URL and your connection")?;
+            if resp.status().is_success() || !Self::backoff_if_retryable(&resp, attempt).await {
+                break resp;
+            }
+            attempt += 1;
+        };
 
         if !resp.status().is_success() {
             return Err(gateway_error(resp).await);
@@ -192,13 +218,20 @@ impl OpenAiClient {
         if self.base_url.contains("integrate.api.nvidia.com") {
             body.as_object_mut().unwrap().remove("stream_options");
         }
-        let resp = self
-            .with_team_headers(self.request("/chat/completions"))
-            .await
-            .json(&body)
-            .send()
-            .await
-            .context("Couldn't reach the provider — check the base URL and your connection")?;
+        let mut attempt = 0;
+        let resp = loop {
+            let resp = self
+                .with_team_headers(self.request("/chat/completions"))
+                .await
+                .json(&body)
+                .send()
+                .await
+                .context("Couldn't reach the provider — check the base URL and your connection")?;
+            if resp.status().is_success() || !Self::backoff_if_retryable(&resp, attempt).await {
+                break resp;
+            }
+            attempt += 1;
+        };
 
         if !resp.status().is_success() {
             return Err(gateway_error(resp).await);

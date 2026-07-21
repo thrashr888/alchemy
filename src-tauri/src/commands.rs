@@ -3018,7 +3018,12 @@ async fn recent_context_urls(state: &AppState, notebook_id: &str) -> Vec<String>
 
     let mut seen = HashSet::new();
     let mut urls = Vec::new();
-    for m in history.iter().rev().filter(|m| m.kind != "tool").take(6) {
+    for m in history
+        .iter()
+        .rev()
+        .filter(|m| m.kind != "tool" && m.kind != "error")
+        .take(6)
+    {
         let texts = std::iter::once(m.content.as_str())
             .chain(m.citations.iter().map(|c| c.snippet.as_str()));
         for text in texts {
@@ -3539,7 +3544,7 @@ async fn try_tool_route(
             let Some(last) = history
                 .iter()
                 .rev()
-                .find(|m| m.role == "assistant" && m.kind != "tool")
+                .find(|m| m.role == "assistant" && m.kind != "tool" && m.kind != "error")
             else {
                 return Some(
                     "There's no previous answer to save yet — ask something first.".to_string(),
@@ -3876,7 +3881,7 @@ pub async fn send_message(
     let history = e(state.db.list_messages(&notebook_id).await)?;
     let history_turns: Vec<crate::ai::ChatTurn> = history
         .iter()
-        .filter(|m| m.id != user_msg.id && m.kind != "tool")
+        .filter(|m| m.id != user_msg.id && m.kind != "tool" && m.kind != "error")
         .map(|m| crate::ai::ChatTurn {
             role: m.role.clone(),
             content: m.content.clone(),
@@ -3903,7 +3908,7 @@ pub async fn send_message(
     let cancel = state.begin_generation(&format!("chat:{}", window.label()));
     let partial = Arc::new(Mutex::new(String::new()));
     let partial_cb = partial.clone();
-    let (answer, stats, cost_usd, model) = {
+    let (answer, kind, stats, cost_usd, model) = {
         let ai = state.ai.read().await.clone();
         let model = ai.active_chat_model();
         let streamed = tokio::select! {
@@ -3913,12 +3918,16 @@ pub async fn send_message(
                     "chat://token",
                     TokenEvent { content: tok.to_string() },
                 );
-            }) => Some(e(out)?),
+            }) => Some(out),
             _ = cancel.cancelled() => None,
         };
         match streamed {
-            Some(out) => (out.text, out.stats, out.cost_usd, model),
-            None => (partial.lock().unwrap().clone(), None, None, model),
+            Some(Ok(out)) => (out.text, "chat", out.stats, out.cost_usd, model),
+            // A provider failure becomes a durable transcript row instead of
+            // a vanishing toast: the stored user turn would otherwise sit
+            // unanswered in history with no trace of why.
+            Some(Err(err)) => (format!("{err:#}"), "error", None, None, model),
+            None => (partial.lock().unwrap().clone(), "chat", None, None, model),
         }
     };
     state.record_chat_stats(&model, stats);
@@ -3928,8 +3937,8 @@ pub async fn send_message(
         notebook_id: notebook_id.clone(),
         role: "assistant".into(),
         content: answer,
-        citations,
-        kind: "chat".into(),
+        citations: if kind == "error" { vec![] } else { citations },
+        kind: kind.into(),
         model: model_caption(&model, cost_usd),
         created_at: now(),
     };
@@ -3937,13 +3946,15 @@ pub async fn send_message(
     e(state.db.add_message(&assistant_msg).await)?;
     e(state.db.touch_notebook(&notebook_id, now()).await)?;
     let _ = app.emit("chat://done", &assistant_msg);
-    spawn_auto_evidence(
-        &app,
-        &notebook_id,
-        &content,
-        &assistant_msg.content,
-        &assistant_msg.citations,
-    );
+    if assistant_msg.kind != "error" {
+        spawn_auto_evidence(
+            &app,
+            &notebook_id,
+            &content,
+            &assistant_msg.content,
+            &assistant_msg.citations,
+        );
+    }
     Ok(assistant_msg)
 }
 
@@ -3983,7 +3994,7 @@ pub async fn send_message_agentic(
     let history = e(state.db.list_messages(&notebook_id).await)?;
     let history_turns: Vec<crate::ai::ChatTurn> = history
         .iter()
-        .filter(|m| m.id != user_msg.id && m.kind != "tool")
+        .filter(|m| m.id != user_msg.id && m.kind != "tool" && m.kind != "error")
         .map(|m| crate::ai::ChatTurn {
             role: m.role.clone(),
             content: m.content.clone(),
@@ -3991,7 +4002,7 @@ pub async fn send_message_agentic(
         .collect();
 
     let cancel = state.begin_generation(&format!("chat:{}", window.label()));
-    let (answer, citations, stats, model) = {
+    let (answer, kind, citations, stats, model) = {
         let ai = state.ai.read().await.clone();
         let model = ai.active_chat_model();
         let out = tokio::select! {
@@ -4004,12 +4015,15 @@ pub async fn send_message_agentic(
                 &history_turns,
                 &extra,
                 source_ids.as_deref(),
-            ) => Some(e(r)?),
+            ) => Some(r),
             _ = cancel.cancelled() => None,
         };
         match out {
-            Some((answer, citations, stats)) => (answer, citations, stats, model),
-            None => ("_(Stopped.)_".to_string(), vec![], None, model),
+            Some(Ok((answer, citations, stats))) => (answer, "chat", citations, stats, model),
+            // Durable transcript row for a failed run — same contract as the
+            // direct chat path.
+            Some(Err(err)) => (format!("{err:#}"), "error", vec![], None, model),
+            None => ("_(Stopped.)_".to_string(), "chat", vec![], None, model),
         }
     };
     state.record_chat_stats(&model, stats);
@@ -4020,7 +4034,7 @@ pub async fn send_message_agentic(
         role: "assistant".into(),
         content: answer,
         citations,
-        kind: "chat".into(),
+        kind: kind.into(),
         model: model_caption(&model, None),
         created_at: now(),
     };
@@ -4028,13 +4042,15 @@ pub async fn send_message_agentic(
     e(state.db.add_message(&assistant_msg).await)?;
     e(state.db.touch_notebook(&notebook_id, now()).await)?;
     let _ = app.emit("chat://done", &assistant_msg);
-    spawn_auto_evidence(
-        &app,
-        &notebook_id,
-        &content,
-        &assistant_msg.content,
-        &assistant_msg.citations,
-    );
+    if assistant_msg.kind != "error" {
+        spawn_auto_evidence(
+            &app,
+            &notebook_id,
+            &content,
+            &assistant_msg.content,
+            &assistant_msg.citations,
+        );
+    }
     Ok(assistant_msg)
 }
 
@@ -4939,7 +4955,10 @@ pub async fn suggest_followups(
     if history.is_empty() {
         return Ok(vec![]);
     }
-    let chat_only: Vec<&Message> = history.iter().filter(|m| m.kind != "tool").collect();
+    let chat_only: Vec<&Message> = history
+        .iter()
+        .filter(|m| m.kind != "tool" && m.kind != "error")
+        .collect();
     let start = chat_only.len().saturating_sub(4);
     let mut convo = String::new();
     for m in &chat_only[start..] {
