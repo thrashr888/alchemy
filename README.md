@@ -4,14 +4,28 @@
 
 A local-first, privacy-respecting desktop app inspired by
 [NotebookLM](https://notebooklm.google/). Import your sources, chat with them
-grounded in citations, and generate documents — all running **100% on your
-machine** via [Ollama](https://ollama.com). No API keys, no cloud, nothing
-leaves your laptop.
+grounded in citations, and generate documents — running **100% on your
+machine** when you want it to. No accounts, no cloud requirement, nothing
+leaves your laptop by default.
 
-Prefer a cloud LLM (or can't run local models)? Alchemy also routes chat through
-any OpenAI-compatible gateway — while keeping your sources on-device via a
-built-in embedder. See
-[Using a cloud LLM](#using-a-cloud-llm-any-openai-compatible-gateway).
+Chat with any model you already have (see
+[docs/RFC-inference-providers.md](docs/RFC-inference-providers.md)):
+
+- **On this Mac** — Apple's on-device model on macOS 26 with Apple
+  Intelligence: fully offline, no setup, retrieval auto-tuned to its window.
+- **Local servers** — [Ollama](https://ollama.com), LM Studio, vLLM, or any
+  OpenAI-compatible localhost endpoint.
+- **Subscriptions you already pay for** — Claude Code, Codex, Gemini CLI,
+  Cursor, OpenCode, GitHub Copilot, Hermes, and IBM Bob run headless through
+  their own CLIs; your existing sign-ins carry the bill and answers are
+  captioned with the model (and metered cost when reported).
+- **API gateways** — 30+ presets (OpenAI, Anthropic, NVIDIA, OpenRouter,
+  Groq, …) or any custom OpenAI-compatible URL. See
+  [Using a cloud LLM](#using-a-cloud-llm-any-openai-compatible-gateway).
+
+Whatever answers, your sources stay on-device: embeddings default to the
+built-in private embedder, podcast audio is voiced locally by Kokoro, and
+image OCR runs through your own Ollama vision model.
 
 > Built with **Tauri 2 + React** front-end, a **Rust** backend, **LanceDB** for
 > embedded vector + relational storage, and a **Linear-inspired** UI with 20 themes.

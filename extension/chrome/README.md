@@ -46,8 +46,33 @@ extension card.
 6. Updates: bump `version` in `manifest.json`, re-zip, upload on the same
    dashboard item.
 
-## Safari / Firefox later
+## Firefox
 
-The manifest is WebExtensions-standard; Firefox needs only a
-`browser_specific_settings.gecko.id` block, and Safari can wrap it with
-`xcrun safari-web-extension-converter`. Both are follow-ups, not forks.
+The same folder loads in Firefox as-is: the manifest carries
+`browser_specific_settings.gecko.id` (`clipper@alchemy.thrasher.dev`,
+min 121.0) and `background.scripts` alongside `service_worker`, so each
+browser picks its supported key. Test via `about:debugging` → This
+Firefox → Load Temporary Add-on → pick `manifest.json`. Publish the
+identical zip at https://addons.mozilla.org/developers/ (free account,
+no fee; copy lives in STORE.md).
+
+## Safari
+
+Safari wraps WebExtensions in an app via Xcode:
+
+```sh
+xcrun safari-web-extension-converter extension/chrome \
+  --project-location extension/safari --app-name "Alchemy Web Clipper"
+```
+
+Open the generated project, run it once, then enable the extension in
+Safari → Settings → Extensions (allow unsigned extensions under the
+Develop menu during testing). Distribution requires an Apple Developer
+membership — the same one that signs Alchemy releases.
+
+## Store assets
+
+`store/` holds the listing art, rendered from the homepage's design
+grammar: two 1280×800 screenshots, the 440×280 small tile, and the
+1400×560 marquee. Listing copy and privacy-form answers are in
+`STORE.md`.
