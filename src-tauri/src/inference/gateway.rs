@@ -27,8 +27,15 @@ struct TeamContext {
 
 impl OpenAiClient {
     pub fn new(base_url: &str, api_key: &str, model: &str) -> Self {
+        // 600s total covers long generations, but a throttled/hung gateway
+        // must fail fast, never spin: connect in 10s, and no more than 25s
+        // between bytes once connected (streams tick every token, so a
+        // quiet 25s is a dead or tar-pitted connection, not a slow model —
+        // the user-visible wait stays under thirty seconds).
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(600))
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .read_timeout(std::time::Duration::from_secs(25))
             .build()
             .expect("failed to build reqwest client");
         // An empty base is inferred from the key format for well-known
