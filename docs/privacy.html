@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy — Alchemy</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='27' fill='none' stroke='%239a9ca5' stroke-width='2'/%3E%3Cpath d='M32 12 L52 46 L12 46 Z' fill='none' stroke='%239a9ca5' stroke-width='2'/%3E%3C/svg%3E">
+<style>
+  * { margin: 0; box-sizing: border-box; }
+  :root { color-scheme: dark light; }
+  body {
+    background: #08090a; color: #e8e9ec;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Helvetica, Arial, sans-serif;
+    line-height: 1.65; padding: 48px 24px 96px;
+  }
+  @media (prefers-color-scheme: light) {
+    body { background: #fafafa; color: #17181c; }
+    .muted { color: #5c5f6a !important; }
+    a { color: #4c56b8 !important; }
+    hr { border-color: rgba(0,0,0,.12) !important; }
+  }
+  main { max-width: 68ch; margin: 0 auto; }
+  a { color: #7c88e8; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wordmark { font-weight: 700; letter-spacing: -.01em; font-size: 15px; }
+  h1 { font-size: 34px; letter-spacing: -.02em; margin: 40px 0 8px; }
+  h2 { font-size: 19px; letter-spacing: -.01em; margin: 36px 0 10px; }
+  p, li { font-size: 15.5px; }
+  ul { padding-left: 22px; margin: 10px 0; }
+  li { margin: 6px 0; }
+  .muted { color: #9a9ca5; }
+  hr { border: 0; border-top: 1px solid rgba(255,255,255,.09); margin: 36px 0; }
+</style>
+</head>
+<body>
+<main>
+  <a class="wordmark" href="./">Alchemy</a>
+  <h1>Privacy</h1>
+  <p class="muted">Applies to the Alchemy app for macOS and the Alchemy Web
+  Clipper browser extension. Last updated July 21, 2026.</p>
+
+  <h2>The short version</h2>
+  <p>Alchemy is local-first software. There are no accounts, no telemetry,
+  no analytics, and no servers of ours to send anything to. Your data lives
+  in files on your Mac, and the only network requests made are the ones you
+  configure it to make.</p>
+
+  <h2>The browser extension</h2>
+  <ul>
+    <li>Collects nothing and stores nothing.</li>
+    <li>Has no host permissions and makes no network requests of any kind.</li>
+    <li>When you click its button or menu items, it reads the current tab's
+      URL, title, or your selected text — and passes them directly to the
+      Alchemy app on your Mac via an <code>alchemy://</code> link. That
+      hand-off is the extension's entire function.</li>
+  </ul>
+
+  <h2>The app</h2>
+  <ul>
+    <li><strong>Your sources</strong> (documents, pages, repositories, notes,
+      chats) are stored in a local database under
+      <code>~/Library/Application&nbsp;Support</code>. Search indexing and
+      embeddings run on-device by default.</li>
+    <li><strong>Network requests happen only at your direction:</strong>
+      fetching a URL or repository you add, and talking to AI providers you
+      explicitly configure. If you configure a cloud provider, the text
+      needed to answer your question is sent to that provider under their
+      privacy terms; if you use local or on-device models, nothing leaves
+      the machine.</li>
+    <li><strong>API keys</strong> are stored locally in the app's config
+      file and sent only to the provider they belong to. Subscription CLIs
+      (Claude Code, Codex, and similar) use their own sign-ins; Alchemy
+      never sees or stores those credentials.</li>
+    <li><strong>Software updates</strong> check GitHub Releases for new
+      signed builds. No identifiers are sent beyond an ordinary HTTP
+      request.</li>
+  </ul>
+
+  <h2>What we can see</h2>
+  <p>Nothing. We operate no backend, so there is nothing for us to log,
+  aggregate, sell, or lose. This policy can only change alongside the
+  source code — both are public at
+  <a href="https://github.com/thrashr888/alchemy">github.com/thrashr888/alchemy</a>.</p>
+
+  <h2>Contact</h2>
+  <p>Questions or concerns: open an issue at
+  <a href="https://github.com/thrashr888/alchemy/issues">github.com/thrashr888/alchemy/issues</a>.</p>
+
+  <hr>
+  <p class="muted">Alchemy is free and open source software (MPL-2.0).</p>
+</main>
+</body>
+</html>

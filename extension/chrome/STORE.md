@@ -42,6 +42,12 @@ https://thrashr888.github.io/alchemy/
 
 Productivity · English
 
+## URLs for the listing form
+
+- Homepage: https://thrashr888.github.io/alchemy/
+- Support: https://github.com/thrashr888/alchemy/issues
+- Privacy policy: https://thrashr888.github.io/alchemy/privacy.html
+
 ## Privacy questionnaire answers
 
 - Single purpose: send the current page URL, a link URL, or selected text
