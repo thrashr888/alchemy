@@ -82,6 +82,10 @@ pub struct AiConfig {
     /// fully recoverable, so the toggle exists for cost control, not safety.
     #[serde(default = "default_true")]
     pub curator_consolidate: bool,
+    /// Which engine runs image OCR: "" (off) | "ollama" | "gateway".
+    /// Deliberately independent of chat — vision has its own requirements.
+    #[serde(default)]
+    pub vision_provider: String,
     /// First-run model chooser dismissed (chosen or skipped) — the three-door
     /// pane shows until this flips.
     #[serde(default)]
@@ -202,6 +206,24 @@ impl AiConfig {
         if self.studio_provider.is_empty() || self.provider_by_id(&self.studio_provider).is_none() {
             self.studio_provider = self.chat_provider.clone();
         }
+        if self.vision_provider.is_empty() {
+            if self.is_gateway() && !self.openai_vision_model.trim().is_empty() {
+                self.vision_provider = "gateway".into();
+            } else if !self.vision_model.trim().is_empty() {
+                self.vision_provider = "ollama".into();
+            }
+        }
+        // A config that already has real setup predates the first-run pane —
+        // never show onboarding to a configured install (the flag ships
+        // false in old configs).
+        if !self.setup_seen {
+            let configured = self.providers.iter().any(|p| {
+                !p.api_key.is_empty() || crate::inference::AgentKind::from_id(&p.kind).is_some()
+            });
+            if configured || self.provider != "ollama" {
+                self.setup_seen = true;
+            }
+        }
         // Mirror the selected chat entry back into the flat legacy fields.
         if let Some(entry) = self.provider_by_id(&self.chat_provider).cloned() {
             match entry.kind.as_str() {
@@ -254,6 +276,7 @@ impl Default for AiConfig {
             mcp_port: default_mcp_port(),
             tray_enabled: default_true(),
             curator_consolidate: default_true(),
+            vision_provider: String::new(),
             setup_seen: false,
             git_sync_minutes: default_git_sync_minutes(),
         }
@@ -480,17 +503,25 @@ impl Ai {
         self.router.embedder().test_embed().await
     }
     pub async fn ocr(&self, image_base64: &str) -> Result<String> {
-        match &self.openai {
-            Some(gw) => {
+        match self.config.vision_provider.as_str() {
+            "gateway" => {
                 let model = self.config.openai_vision_model.trim();
                 if model.is_empty() {
                     anyhow::bail!(
                         "no vision model configured — set one in Settings → Models to enable OCR"
                     );
                 }
+                let gw = self.openai.clone().unwrap_or_else(|| {
+                    OpenAiClient::new(
+                        self.config.openai_base_url.trim(),
+                        &self.config.openai_api_key,
+                        &self.config.openai_chat_model,
+                    )
+                });
                 gw.ocr(image_base64, model).await
             }
-            None => self.ollama.ocr(image_base64).await,
+            "ollama" => self.ollama.ocr(image_base64).await,
+            _ => anyhow::bail!("OCR is off — pick a vision engine in Settings → Models → Advanced"),
         }
     }
     pub async fn list_models(&self) -> Result<Vec<String>> {

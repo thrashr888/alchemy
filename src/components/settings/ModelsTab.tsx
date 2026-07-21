@@ -144,9 +144,6 @@ export function ModelsTab({
     choose({ providers, chatProvider: best.id });
   }
 
-  const chatKind =
-    draft.providers.find((p) => p.id === draft.chatProvider)?.kind ?? "ollama";
-
   if (!draft.setupSeen) {
     return (
       <div className="flex flex-col gap-3">
@@ -290,12 +287,13 @@ export function ModelsTab({
                 </button>
                 <span
                   className={cn(
-                    "shrink-0 text-[11px]",
+                    "w-20 shrink-0 text-right text-[11px]",
                     r?.ready ? "text-success" : "text-subtle-foreground",
                   )}
                 >
                   {r ? (r.ready ? "ready" : "unavailable") : ""}
                 </span>
+                <span className="flex w-[52px] shrink-0 items-center justify-end gap-0.5">
                 {(p.kind === "gateway" || p.kind === "ollama") && (
                   <button
                     type="button"
@@ -333,6 +331,7 @@ export function ModelsTab({
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 )}
+                </span>
               </div>
             );
           })}
@@ -461,27 +460,48 @@ export function ModelsTab({
             </Field>
             <Field
               label="Vision (OCR)"
-              hint="Reads images and scanned PDFs. Empty disables OCR."
+              hint={
+                draft.visionProvider === "ollama"
+                  ? "Needs Ollama running with this model pulled."
+                  : draft.visionProvider === "gateway"
+                    ? "Uses your gateway key; pick a vision-capable model."
+                    : "Reads images and scanned PDFs. Off means image sources are listed, not read."
+              }
             >
-              {chatKind === "gateway" ? (
-                <Input
-                  aria-label="Vision model"
-                  value={draft.openaiVisionModel}
+              <div className="flex flex-col gap-1.5">
+                <select
+                  aria-label="Vision engine"
+                  value={draft.visionProvider}
                   onChange={(e) =>
-                    setDraft({ ...draft, openaiVisionModel: e.target.value })
+                    setDraft({ ...draft, visionProvider: e.target.value })
                   }
-                  placeholder="a vision-capable gateway model"
-                />
-              ) : (
-                <Input
-                  aria-label="Vision model"
-                  value={draft.visionModel}
-                  onChange={(e) =>
-                    setDraft({ ...draft, visionModel: e.target.value })
-                  }
-                  placeholder="glm-ocr · deepseek-ocr · gemma4:12b-mlx"
-                />
-              )}
+                  className="h-8 rounded-md border border-input bg-surface-2 px-2 text-[13px] text-foreground focus:outline-none"
+                >
+                  <option value="">Off</option>
+                  <option value="ollama">Ollama model</option>
+                  <option value="gateway">Gateway model</option>
+                </select>
+                {draft.visionProvider === "ollama" && (
+                  <Input
+                    aria-label="Vision model"
+                    value={draft.visionModel}
+                    onChange={(e) =>
+                      setDraft({ ...draft, visionModel: e.target.value })
+                    }
+                    placeholder="glm-ocr · deepseek-ocr · gemma4:12b-mlx"
+                  />
+                )}
+                {draft.visionProvider === "gateway" && (
+                  <Input
+                    aria-label="Vision model"
+                    value={draft.openaiVisionModel}
+                    onChange={(e) =>
+                      setDraft({ ...draft, openaiVisionModel: e.target.value })
+                    }
+                    placeholder="a vision-capable gateway model"
+                  />
+                )}
+              </div>
             </Field>
           </div>
         )}

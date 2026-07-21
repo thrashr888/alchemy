@@ -196,7 +196,15 @@ pub async fn provider_readiness(
                     if fm.available().await {
                         (true, "Apple on-device · private, no setup".to_string())
                     } else {
-                        (false, "needs macOS 26+ with Apple Intelligence".to_string())
+                        let detail = fm.probe_detail().await;
+                        if detail.contains("modelNotReady") {
+                            (
+                                false,
+                                "downloading — macOS is fetching the on-device model".to_string(),
+                            )
+                        } else {
+                            (false, "needs macOS 26+ with Apple Intelligence".to_string())
+                        }
                     }
                 }
                 None => (false, "not available in this build".to_string()),

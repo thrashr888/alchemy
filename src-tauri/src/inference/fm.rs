@@ -21,6 +21,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct FmEngine {
     binary: PathBuf,
+    probe_detail: OnceCell<String>,
     /// Probed once per engine build (one `--probe` spawn); `false` means the
     /// model is unavailable (old macOS, Apple Intelligence off, model not
     /// downloaded) and callers should fall through.
@@ -32,7 +33,15 @@ impl FmEngine {
         Self {
             binary,
             available: OnceCell::new(),
+            probe_detail: OnceCell::new(),
         }
+    }
+
+    /// The probe's reason string (availability enum text from the sidecar) —
+    /// lets the UI distinguish "downloading" from "unsupported".
+    pub async fn probe_detail(&self) -> String {
+        self.available().await; // ensure the probe ran
+        self.probe_detail.get().cloned().unwrap_or_default()
     }
 
     /// One cached availability probe per engine lifetime.
@@ -52,10 +61,21 @@ impl FmEngine {
                 )
                 .await;
                 match out {
-                    Ok(Ok(o)) => String::from_utf8_lossy(&o.stdout)
-                        .lines()
-                        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-                        .any(|v| v["available"].as_bool() == Some(true)),
+                    Ok(Ok(o)) => {
+                        let mut ok = false;
+                        for v in String::from_utf8_lossy(&o.stdout)
+                            .lines()
+                            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+                        {
+                            if v["available"].as_bool() == Some(true) {
+                                ok = true;
+                            }
+                            if let Some(d) = v["detail"].as_str() {
+                                let _ = self.probe_detail.set(d.to_string());
+                            }
+                        }
+                        ok
+                    }
                     _ => false,
                 }
             })
