@@ -142,6 +142,7 @@ pub async fn run(
                         source_id: source_id.clone(),
                         source_title: title,
                         note_id: String::new(),
+                        gist: false,
                         ordinal: 0,
                         snippet: evidence,
                         distance: 0.0,

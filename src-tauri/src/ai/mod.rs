@@ -82,6 +82,12 @@ pub struct AiConfig {
     /// fully recoverable, so the toggle exists for cost control, not safety.
     #[serde(default = "default_true")]
     pub curator_consolidate: bool,
+    /// Background source-gist distillation (docs/RFC-infinite-context.md
+    /// Phase 1). On by default — smart defaults over opt-ins; the sweep is
+    /// budgeted, gated, and self-healing, so the toggle exists for cost
+    /// control, not safety.
+    #[serde(default = "default_true")]
+    pub source_gists: bool,
     /// Which engine runs image OCR: "" (off) | "ollama" | "gateway".
     /// Deliberately independent of chat — vision has its own requirements.
     #[serde(default)]
@@ -276,6 +282,7 @@ impl Default for AiConfig {
             mcp_port: default_mcp_port(),
             tray_enabled: default_true(),
             curator_consolidate: default_true(),
+            source_gists: default_true(),
             vision_provider: String::new(),
             setup_seen: false,
             git_sync_minutes: default_git_sync_minutes(),

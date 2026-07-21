@@ -558,6 +558,7 @@ async fn eval_meta_diversity() {
         max_per_source: 2,
         max_per_notebook: 3,
         max_notes: 4,
+        max_gists: 2,
     };
 
     // Per query: (recall, distinct sources, distinct notebooks) per variant.
@@ -938,4 +939,173 @@ async fn eval_context_profiles() {
         "on-device profile keeps only {:.1}% of default-profile recall",
         retention * 100.0
     );
+}
+
+/// Handwritten gist fixtures (RFC-infinite-context §1). The eval seeds
+/// these as stored gist rows exactly as the production sweep would write
+/// them — generation quality is gated and unit-tested in `gist.rs`; this
+/// eval covers what stored gists do to retrieval: overview queries find
+/// them, exact-identifier queries are not displaced by them, and the
+/// `max_gists` cap holds.
+const GIST_FIXTURES: &[(&str, &str)] = &[
+    (
+        "Media Server Maintenance",
+        "This runbook describes the routine upkeep of the home media server: \
+         when the library scan runs, how many transcode streams are allowed \
+         at once, and the monthly restart schedule tied to backups. It can \
+         answer when scans happen, what the transcoding cap is, and when the \
+         server container restarts. Key terms: media server, library scan, \
+         transcoding, restarts",
+    ),
+    (
+        "Home Insurance Policy",
+        "This policy document lays out the homeowner's coverage terms: the \
+         deductibles that apply to wind, hail, and theft losses, and the \
+         claims process with its filing window. It can answer how large each \
+         deductible is and how and when to file a claim through the agent \
+         portal. Key terms: deductible, wind and hail, theft, claims, agent \
+         portal",
+    ),
+    (
+        "Vendor Payment Runbook",
+        "This runbook covers how vendor invoices get paid: wire payments on \
+         net-forty-five terms with same-day remittance advice, and the \
+         escalation path for disputed invoices through procurement. It can \
+         answer how vendors are paid, on what terms, and what happens when \
+         an invoice is disputed. Key terms: wires, net-forty-five, \
+         remittance advice, disputes, procurement",
+    ),
+];
+
+/// Seed one stored gist row the way `gist::ensure_gists` writes them:
+/// verbatim gist in `text`, title-context prefix on the embedded form, and
+/// the source's content hash in `ordinal`.
+async fn seed_gist(ai: &crate::ai::Ai, db: &Db, notebook_id: &str, title: &str, gist: &str) {
+    let sources = db.list_sources(notebook_id).await.expect("list sources");
+    let s = sources
+        .iter()
+        .find(|s| s.title == title)
+        .unwrap_or_else(|| panic!("gist fixture names unknown source {title:?}"));
+    let full = db
+        .get_source(&s.id)
+        .await
+        .expect("get source")
+        .expect("source exists");
+    let embed_input = format!("[{} — overview]\n{gist}", s.title);
+    let embeddings = ai.embed(&[embed_input]).await.expect("embed gist");
+    db.add_chunks(
+        notebook_id,
+        &format!("{}{}", crate::db::GIST_CHUNK_PREFIX, s.id),
+        &[(
+            format!("gist-{}", s.id),
+            crate::gist::content_hash(&full.content),
+            gist.to_string(),
+        )],
+        &embeddings,
+    )
+    .await
+    .expect("write gist row");
+}
+
+/// Corpus-wide retrieval with stored gists (RFC-infinite-context §1):
+/// overview questions surface the gist row; exact-identifier questions keep
+/// their verbatim winner; the gist class cap holds; and every corpus-wide
+/// read (including FTS-only) returns filled titles — the shared
+/// title-filling pass this RFC required.
+#[tokio::test]
+async fn eval_gist_rows() {
+    let Some(ai) = builtin_ai().await else { return };
+    let dir = std::env::temp_dir().join(format!("nbl-eval-gist-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    seed_docs(&ai, &db, "gist-a", CORPUS, "a-").await;
+    seed_docs(&ai, &db, "gist-b", EXTRA_CORPUS, "b-").await;
+    let gist_notebook = |title: &str| {
+        if CORPUS.iter().any(|(t, _)| *t == title) {
+            "gist-a"
+        } else {
+            "gist-b"
+        }
+    };
+    for (title, gist) in GIST_FIXTURES {
+        seed_gist(&ai, &db, gist_notebook(title), title, gist).await;
+    }
+
+    const K: usize = 8;
+    let opts = SearchOptions {
+        pool_multiplier: 4,
+        max_per_source: 2,
+        max_per_notebook: 3,
+        max_notes: 4,
+        max_gists: 2,
+    };
+    // Overview intent → the gist row surfaces, titled after its source.
+    let q = "which document explains how the media server is maintained overall?";
+    let qv = ai.embed_one(q).await.expect("embed");
+    let hits = db
+        .search_chunks_all_opts(qv, q, K, None, opts)
+        .await
+        .expect("search");
+    let gist_rank = hits
+        .iter()
+        .position(|(_, c)| c.gist && c.source_title == "Media Server Maintenance");
+    eprintln!(
+        "gist eval: overview query gist rank = {:?} of {}",
+        gist_rank.map(|r| r + 1),
+        hits.len()
+    );
+    assert!(
+        gist_rank.is_some_and(|r| r < 5),
+        "media-server gist should rank in the top 5 for an overview query"
+    );
+
+    // Exact identifier → verbatim chunk stays the winner (the fence: gists
+    // must never displace exact evidence).
+    let q = "what is the status of INV-2024-0042?";
+    let qv = ai.embed_one(q).await.expect("embed");
+    let hits = db
+        .search_chunks_all_opts(qv, q, K, None, opts)
+        .await
+        .expect("search");
+    let top = &hits.first().expect("hits").1;
+    assert!(
+        !top.gist && top.snippet.contains("INV-2024-0042"),
+        "exact-identifier winner must be a verbatim chunk, got gist={} snippet={:?}",
+        top.gist,
+        top.snippet.chars().take(60).collect::<String>()
+    );
+
+    // Cap: an all-overviews query keeps at most `max_gists` gist rows.
+    let q = "give me an overview of what these documents cover";
+    let qv = ai.embed_one(q).await.expect("embed");
+    let hits = db
+        .search_chunks_all_opts(qv, q, K, None, opts)
+        .await
+        .expect("search");
+    let gist_hits = hits.iter().filter(|(_, c)| c.gist).count();
+    eprintln!(
+        "gist eval: overview-of-everything gist hits = {gist_hits}/{}",
+        hits.len()
+    );
+    assert!(
+        gist_hits <= 2,
+        "max_gists=2 must cap gist rows, got {gist_hits}"
+    );
+
+    // FTS-only corpus-wide read fills titles for every row kind — the
+    // empty-title gap this RFC's Phase 1 required fixed.
+    let fts = db
+        .search_chunks_fts_all("remittance", K)
+        .await
+        .expect("fts all");
+    assert!(
+        !fts.is_empty(),
+        "fts should match the vendor runbook corpus"
+    );
+    for (_, c) in &fts {
+        assert!(
+            !c.source_title.is_empty(),
+            "corpus-wide FTS returned an empty title for chunk {}",
+            c.chunk_id
+        );
+    }
 }

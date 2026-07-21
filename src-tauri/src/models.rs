@@ -157,6 +157,12 @@ pub struct Citation {
     /// and chat can recall prior conclusions (docs/RFC-note-curator.md).
     #[serde(default)]
     pub note_id: String,
+    /// True when this row is a source gist — a distilled overview row
+    /// (docs/RFC-infinite-context.md Phase 1) rather than a verbatim
+    /// passage. `source_id` still names the gisted source; `ordinal` holds
+    /// the content hash the gist was distilled from, not a position.
+    #[serde(default)]
+    pub gist: bool,
     pub ordinal: i32,
     pub snippet: String,
     pub distance: f32,

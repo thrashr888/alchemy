@@ -545,6 +545,12 @@ async fn store_new_source(
         .await?;
     state.db.touch_notebook(notebook_id, now()).await?;
 
+    // Kick the gist sweep (RFC-infinite-context §1) — fire-and-forget, so
+    // the import returns before any distillation happens.
+    if embed {
+        crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
+    }
+
     // Don't ship the full content back in the list payload.
     Ok(Source {
         content: String::new(),
@@ -1007,6 +1013,7 @@ async fn grep_leg(
                 source_id: id.clone(),
                 source_title: title.clone(),
                 note_id: String::new(),
+                gist: false,
                 ordinal: 0,
                 snippet: h.window,
                 // Not a vector hit — match count carried the ranking; the
@@ -1113,6 +1120,8 @@ async fn reingest(
         .db
         .touch_notebook(&existing.notebook_id, now())
         .await?;
+    // Refreshed content means a changed hash — let the sweep re-gist it.
+    crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
     Ok(Source {
         content: String::new(),
         ..updated
@@ -6307,6 +6316,10 @@ pub(crate) async fn retrieve_everything(
     // searched in full either way.
     let routed: Option<Vec<String>> = if nb_titles.len() > crate::router::MIN_NOTEBOOKS_TO_ROUTE {
         let ai = state.ai.read().await.clone();
+        // Piggyback the gist sweep on the same self-heal moment the router
+        // uses — catches sources imported before gisting existed (or while
+        // the app was quitting mid-backfill).
+        crate::gist::spawn_sweep(state.db.clone(), ai.clone());
         if let Err(err) = crate::router::ensure_router(&state.db, &ai).await {
             eprintln!("router refresh failed (falling back to flat): {err:#}");
         }
@@ -6336,6 +6349,10 @@ pub(crate) async fn retrieve_everything(
         max_per_source: 2,
         max_per_notebook: 3,
         max_notes: 4,
+        // Gists are overview evidence: useful on synthesis questions, but
+        // two is plenty — verbatim passages carry the specifics
+        // (RFC-infinite-context §1).
+        max_gists: 2,
     };
     // Deep search retrieves a wider pool for the reranker to pick from.
     let fetch_k = if deep { k * 3 } else { k };

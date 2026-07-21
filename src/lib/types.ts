@@ -68,6 +68,11 @@ export interface Citation {
   sourceTitle: string;
   /** Non-empty when the passage came from a note: the note's id. */
   noteId: string;
+  /**
+   * True for source-gist rows (distilled overview evidence, RFC-infinite-
+   * context §1). Optional: citations persisted before gists existed lack it.
+   */
+  gist?: boolean;
   ordinal: number;
   snippet: string;
   distance: number;

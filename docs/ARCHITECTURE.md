@@ -51,21 +51,36 @@ each decision):
   hits, FTS hits, fused pool, final top-k) plus warnings for degradations
   the production path tolerates silently (e.g. FTS failure → vector-only).
 - `search_chunks_all_opts` — the corpus-wide variant behind meta-chat, with
-  `SearchOptions` diversity caps (max per source / notebook / notes) applied
-  post-fusion in score order with backfill, and an optional routing hint that
+  `SearchOptions` diversity caps (max per source / notebook / notes / gists)
+  applied post-fusion in score order with backfill (skipped gists rejoin
+  last — they're redundant with their source's verbatim chunks, so the gist
+  cap stays real), and an optional routing hint that
   narrows the **vector side only** — BM25 stays corpus-wide so an exact
   identifier always escapes a routing mistake.
 - `route_search` / `upsert_routes` — the semantic-router index used by
   `router.rs`.
 
 ### `router.rs` — semantic router
-One embedded route per source/note title. `ensure_router` diffs desired
+One embedded route per source/note — the title, or `title — gist` once a
+source has a gist. `ensure_router` diffs desired
 summaries against stored ones and re-embeds only what changed (a no-op string
 compare on the common path), so the index self-heals without hooks in every
 write path. `route_notebooks` ranks notebooks by their closest item —
 per-item routes measurably beat one-summary-per-notebook for topically
 diverse notebooks. Meta-chat routes when the corpus has >5 notebooks and
 falls back to flat search on any failure.
+
+### `gist.rs` — source gists
+One distilled overview row per source (docs/RFC-infinite-context.md Phase 1),
+stored in `chunks` as `source_id = "gist:<id>"` with the source's content
+hash in `ordinal`. A router-style self-healing sweep (`ensure_gists` —
+budgeted, fire-and-forget after imports, refreshes, and meta-asks) generates
+gists on the Small role and gates output before storing: length bounds, a
+degeneracy check, and every identifier must appear verbatim in the source —
+a hallucinated code is dropped, never stored. Gists join corpus-wide fusion
+as a capped class (`max_gists`), upgrade router summaries to `title — gist`,
+and stay out of per-notebook chat until the citation reader renders them.
+Toggle: `AiConfig.source_gists` (default ON).
 
 ### `trace.rs` — local retrieval traces
 One JSONL line per retrieval (query, surface, stage hit counts, warnings,
