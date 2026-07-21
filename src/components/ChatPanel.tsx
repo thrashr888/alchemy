@@ -452,6 +452,25 @@ function ChatMessage({ message }: { message: Message }) {
       message.content,
     )?.[1];
     const pointsAtSettings = message.content.includes("Settings → Models");
+    // Resend the question this row failed to answer: both rows leave the
+    // transcript and the normal send pipeline owns the fresh attempt.
+    const retry = async () => {
+      const msgs = useStore.getState().messages;
+      const i = msgs.findIndex((m) => m.id === message.id);
+      const prevUser = msgs
+        .slice(0, Math.max(i, 0))
+        .reverse()
+        .find((m) => m.role === "user");
+      if (!prevUser || useStore.getState().sending) return;
+      await api.deleteMessage(message.id);
+      await api.deleteMessage(prevUser.id);
+      useStore.setState({
+        messages: msgs.filter(
+          (m) => m.id !== message.id && m.id !== prevUser.id,
+        ),
+      });
+      void useStore.getState().sendMessage(prevUser.content);
+    };
     return (
       <div className="flex flex-col gap-1.5">
         <RoleLabel role="assistant" />
@@ -460,9 +479,12 @@ function ChatMessage({ message }: { message: Message }) {
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
             <span className="selectable min-w-0">{message.content}</span>
           </div>
-          {(fixCmd || pointsAtSettings) && (
-            <div className="mt-2 flex items-center gap-2">
-              {fixCmd && (
+          <div className="mt-2 flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={() => void retry()}>
+              <RefreshCw className="h-3.5 w-3.5" />
+              Retry
+            </Button>
+            {fixCmd && (
                 <Button
                   variant="ghost"
                   size="sm"
@@ -481,8 +503,7 @@ function ChatMessage({ message }: { message: Message }) {
                   Model settings…
                 </Button>
               )}
-            </div>
-          )}
+          </div>
           {message.model && (
             <div className="mt-1.5 text-[11px] text-subtle-foreground">
               {message.model}

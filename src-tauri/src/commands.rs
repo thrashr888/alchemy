@@ -295,6 +295,13 @@ pub fn ai_runtime(app: AppHandle, data_dir: std::path::PathBuf) -> crate::ai::Ai
     }
 }
 
+/// Retry support: drop a message row (the failed answer, then its question)
+/// so the resend owns a clean slot in the transcript.
+#[tauri::command]
+pub async fn delete_message(state: State<'_, AppState>, message_id: String) -> Result<(), String> {
+    e(state.db.delete_message(&message_id).await)
+}
+
 /// Launch Terminal.app running one of the known agent sign-in commands (the
 /// "Fix:" hints on error rows). Strictly allowlisted: the command string
 /// travels through model-adjacent error text, so nothing outside this fixed

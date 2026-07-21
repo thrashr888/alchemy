@@ -217,6 +217,8 @@ export const api = {
     ),
   openInTerminal: (command: string) =>
     run(cmd<void>("open_in_terminal", { command })),
+  deleteMessage: (messageId: string) =>
+    run(cmd<void>("delete_message", { messageId })),
   cancelGeneration: (scope?: "chat" | "artifact" | "tts" | "meta") =>
     run(cmd<void>("cancel_generation", { scope })),
   suggestFollowups: (notebookId: string) =>

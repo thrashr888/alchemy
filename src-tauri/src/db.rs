@@ -1358,6 +1358,13 @@ impl Db {
         Ok(())
     }
 
+    /// Remove one chat message (retry flow: the failed answer and its
+    /// question are deleted before the resend).
+    pub async fn delete_message(&self, id: &str) -> Result<()> {
+        self.delete_where(T_MESSAGES, &format!("id = '{}'", esc(id)))
+            .await
+    }
+
     pub async fn delete_note(&self, id: &str) -> Result<()> {
         self.delete_note_chunks(id).await?;
         self.delete_where(T_NOTE_USAGE, &format!("note_id = '{}'", esc(id)))

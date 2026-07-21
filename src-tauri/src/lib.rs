@@ -180,6 +180,7 @@ pub fn run() {
             commands::send_message_agentic,
             commands::cancel_generation,
             commands::open_in_terminal,
+            commands::delete_message,
             commands::list_notes,
             commands::list_recent_notes,
             commands::list_recent_reports,
