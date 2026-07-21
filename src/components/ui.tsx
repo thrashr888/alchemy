@@ -285,7 +285,7 @@ export function Modal({
     <div
       className={cn(
         "fixed inset-0 z-50 flex items-start justify-center bg-black/40 backdrop-blur-[2px] animate-in fade-in duration-150",
-        tall ? "pt-[6vh]" : "pt-[12vh]",
+        tall ? "pt-[4vh]" : "pt-[12vh]",
       )}
       onMouseDown={onClose}
     >
@@ -296,7 +296,7 @@ export function Modal({
         aria-labelledby={titleId}
         tabIndex={-1}
         className={cn(
-          tall ? "max-h-[88vh]" : "max-h-[80vh]",
+          tall ? "max-h-[92vh]" : "max-h-[80vh]",
           "flex w-full flex-col rounded-lg bg-elevated outline-none animate-in zoom-in-95 duration-150",
           "shadow-[0_0_0_0.5px_var(--border-strong),0_16px_48px_-8px_rgba(0,0,0,0.45)]",
           width,

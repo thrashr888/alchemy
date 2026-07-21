@@ -193,7 +193,7 @@ export function SettingsDialog({
       {/* Content-sized up to the window: short tabs (About) sit at the nav's
           natural height, long tabs (Models, Appearance) grow to the cap and
           scroll only past it. Per-tab heights are deliberate. */}
-      <div className="flex max-h-[calc(88vh-7.5rem)] gap-5">
+      <div className="flex max-h-[calc(92vh-7.5rem)] gap-5">
         <nav className="flex w-36 shrink-0 flex-col gap-0.5">
           {TABS.map((t) => (
             <button
