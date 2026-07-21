@@ -209,6 +209,7 @@ export function Modal({
   footer,
   headerActions,
   width = "max-w-md",
+  tall = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -218,6 +219,9 @@ export function Modal({
   /** Icon buttons rendered in the title bar, left of the close X. */
   headerActions?: React.ReactNode;
   width?: string;
+  /** Fill most of the window height (settings-style panes) instead of the
+   *  compact dialog default. */
+  tall?: boolean;
 }) {
   const panelRef = React.useRef<HTMLDivElement>(null);
   const titleId = React.useMemo(() => `modal-title-${++modalSeq}`, []);
@@ -279,7 +283,10 @@ export function Modal({
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 backdrop-blur-[2px] pt-[12vh] animate-in fade-in duration-150"
+      className={cn(
+        "fixed inset-0 z-50 flex items-start justify-center bg-black/40 backdrop-blur-[2px] animate-in fade-in duration-150",
+        tall ? "pt-[6vh]" : "pt-[12vh]",
+      )}
       onMouseDown={onClose}
     >
       <div
@@ -289,7 +296,8 @@ export function Modal({
         aria-labelledby={titleId}
         tabIndex={-1}
         className={cn(
-          "flex max-h-[80vh] w-full flex-col rounded-lg bg-elevated outline-none animate-in zoom-in-95 duration-150",
+          tall ? "max-h-[88vh]" : "max-h-[80vh]",
+          "flex w-full flex-col rounded-lg bg-elevated outline-none animate-in zoom-in-95 duration-150",
           "shadow-[0_0_0_0.5px_var(--border-strong),0_16px_48px_-8px_rgba(0,0,0,0.45)]",
           width,
         )}

@@ -176,6 +176,7 @@ export function SettingsDialog({
       onClose={onClose}
       title="Settings"
       width="max-w-2xl"
+      tall
       footer={
         tab === "models" ? (
           <div className="flex justify-end gap-2">
@@ -191,7 +192,7 @@ export function SettingsDialog({
     >
       {/* Fixed height: the nav stays put and only the tab content scrolls
           (also keeps the modal from resizing as tabs change). */}
-      <div className="flex h-[60vh] gap-5">
+      <div className="flex h-[calc(88vh-7.5rem)] gap-5">
         <nav className="flex w-36 shrink-0 flex-col gap-0.5">
           {TABS.map((t) => (
             <button
