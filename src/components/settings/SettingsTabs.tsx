@@ -368,7 +368,7 @@ export function Field({ label, hint, children }: { label: string; hint?: string;
     <section className="flex flex-col gap-1.5">
       <div className="text-[12px] font-medium text-foreground">{label}</div>
       {children}
-      {hint && <div className="text-pretty text-[11px] text-subtle-foreground">{hint}</div>}
+      {hint && <div className="text-pretty text-[12px] text-subtle-foreground">{hint}</div>}
     </section>
   );
 }

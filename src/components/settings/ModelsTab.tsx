@@ -151,7 +151,7 @@ export function ModelsTab({
           <div className="text-[15px] font-semibold text-foreground">
             How should Alchemy answer?
           </div>
-          <p className="mt-0.5 text-[11.5px] text-subtle-foreground">
+          <p className="mt-0.5 text-[12px] text-subtle-foreground">
             It already works — this just picks the brain. Change it anytime
             from the chat box.
           </p>
@@ -209,7 +209,7 @@ export function ModelsTab({
         <button
           type="button"
           onClick={() => choose({})}
-          className="mt-1 text-center text-[11.5px] text-subtle-foreground hover:text-muted-foreground"
+          className="mt-1 text-center text-[12px] text-subtle-foreground hover:text-muted-foreground"
         >
           Skip — keep the automatic choice
         </button>
@@ -591,7 +591,7 @@ function FirstRunDoor({
             recommended
           </span>
         )}
-        <span className="block text-[11.5px] text-muted-foreground">
+        <span className="block text-[12px] text-muted-foreground">
           {subtitle}
         </span>
         {note && (
@@ -954,7 +954,7 @@ function ProviderWizard({
               <span className="text-[13px] font-medium text-foreground">
                 {added.label} added
               </span>
-              <span className="block text-[11.5px] text-subtle-foreground">
+              <span className="block text-[12px] text-subtle-foreground">
                 signed in as you · nothing to configure
               </span>
             </span>
