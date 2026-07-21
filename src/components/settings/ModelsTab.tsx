@@ -77,7 +77,21 @@ const RECOMMENDED_MODELS: Record<string, string> = {
   Anthropic: "claude-sonnet-5",
   Groq: "llama-4.1-70b",
   OpenRouter: "openrouter/auto",
+  "NVIDIA NIM": "meta/llama-3.3-70b-instruct",
 };
+
+/** Fallback pick when no recommendation matches: catalogs like NVIDIA's list
+ *  hundreds of models where the alphabetical first is a retired function that
+ *  404s — prefer a current instruct model from a major namespace instead. */
+function fallbackModel(sorted: string[]): string {
+  const major = /^(meta|nvidia|mistralai|qwen|openai|google)\//;
+  return (
+    sorted.find((m) => major.test(m) && /instruct/i.test(m)) ??
+    sorted.find((m) => /instruct|chat/i.test(m)) ??
+    sorted[0] ??
+    ""
+  );
+}
 
 const AGENT_LABELS: Record<string, string> = {
   "claude-code": "Claude Code",
@@ -675,7 +689,7 @@ function ProviderWizard({
               (RECOMMENDED_MODELS[service] &&
               sorted.includes(RECOMMENDED_MODELS[service])
                 ? RECOMMENDED_MODELS[service]
-                : (sorted[0] ?? "")),
+                : fallbackModel(sorted)),
           );
         })
         .catch((e) => {

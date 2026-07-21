@@ -406,6 +406,11 @@ async fn gateway_error(resp: reqwest::Response) -> anyhow::Error {
     let body = resp.text().await.unwrap_or_default();
     let hint = match status.as_u16() {
         401 | 403 => " (check the API key and that it has the Inference scope)",
+        // A 404 naming a function/model means auth worked and the model id
+        // is stale or not enabled for this account — a bare 404 is a URL.
+        404 if body.contains("unction") || body.contains("model") => {
+            " (the selected model isn't available on this account — pick another in Settings)"
+        }
         404 => " (check the base URL — it usually ends in /v1)",
         _ => "",
     };
