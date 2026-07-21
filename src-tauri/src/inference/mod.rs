@@ -120,10 +120,13 @@ impl GenStats {
     }
 }
 
-/// Result of a chat: the assistant text plus optional generation stats.
+/// Result of a chat: the assistant text plus optional generation stats and,
+/// for metered providers (agent CLIs report it), the dollar cost.
+#[derive(Default)]
 pub struct ChatOutcome {
     pub text: String,
     pub stats: Option<GenStats>,
+    pub cost_usd: Option<f64>,
 }
 
 /// The slice of app config an Ollama engine needs — inference stays free of

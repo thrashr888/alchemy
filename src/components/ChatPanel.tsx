@@ -452,6 +452,11 @@ function ChatMessage({ message }: { message: Message }) {
         {message.content}
       </Markdown>
       {message.citations.length > 0 && <Citations citations={message.citations} />}
+      {message.model && (
+        <div className="mt-1 text-[11px] text-subtle-foreground">
+          {message.model}
+        </div>
+      )}
       <MessageActions content={message.content} />
     </div>
   );

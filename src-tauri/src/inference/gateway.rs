@@ -162,7 +162,11 @@ impl OpenAiClient {
             .unwrap_or_default()
             .to_string();
         let stats = wall_clock_stats(&value, started);
-        Ok(ChatOutcome { text, stats })
+        Ok(ChatOutcome {
+            text,
+            stats,
+            cost_usd: None,
+        })
     }
 
     /// Streaming completion via SSE `data:` lines.
@@ -214,7 +218,11 @@ impl OpenAiClient {
                         eval_count: t,
                         eval_duration_ns: started.elapsed().as_nanos() as u64,
                     });
-                    return Ok(ChatOutcome { text: full, stats });
+                    return Ok(ChatOutcome {
+                        text: full,
+                        stats,
+                        cost_usd: None,
+                    });
                 }
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
                     continue;
@@ -234,7 +242,11 @@ impl OpenAiClient {
             eval_count: t,
             eval_duration_ns: started.elapsed().as_nanos() as u64,
         });
-        Ok(ChatOutcome { text: full, stats })
+        Ok(ChatOutcome {
+            text: full,
+            stats,
+            cost_usd: None,
+        })
     }
 
     /// OCR an image via a vision-capable chat model (OpenAI image_url parts;

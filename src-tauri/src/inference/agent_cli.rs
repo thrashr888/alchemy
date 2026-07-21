@@ -30,6 +30,9 @@ pub enum AgentKind {
     Codex,
     Gemini,
     Cursor,
+    Opencode,
+    Copilot,
+    Hermes,
     /// IBM Bob via its own bobshell CLI — the sanctioned client itself, not a
     /// session workaround (Paul's call, 2026-07-20; API-key/session mimicry
     /// stays out per policy). Known wart: `bob -p` prints its thinking
@@ -38,11 +41,14 @@ pub enum AgentKind {
 }
 
 impl AgentKind {
-    pub const ALL: [AgentKind; 5] = [
+    pub const ALL: [AgentKind; 8] = [
         AgentKind::Claude,
         AgentKind::Codex,
         AgentKind::Gemini,
         AgentKind::Cursor,
+        AgentKind::Opencode,
+        AgentKind::Copilot,
+        AgentKind::Hermes,
         AgentKind::Bob,
     ];
 
@@ -52,6 +58,9 @@ impl AgentKind {
             AgentKind::Codex => "codex",
             AgentKind::Gemini => "gemini",
             AgentKind::Cursor => "cursor-agent",
+            AgentKind::Opencode => "opencode",
+            AgentKind::Copilot => "copilot",
+            AgentKind::Hermes => "hermes",
             AgentKind::Bob => "bob",
         }
     }
@@ -62,6 +71,9 @@ impl AgentKind {
             AgentKind::Codex => "codex",
             AgentKind::Gemini => "gemini-cli",
             AgentKind::Cursor => "cursor-cli",
+            AgentKind::Opencode => "opencode",
+            AgentKind::Copilot => "copilot",
+            AgentKind::Hermes => "hermes",
             AgentKind::Bob => "bob-shell",
         }
     }
@@ -76,6 +88,9 @@ impl AgentKind {
             AgentKind::Codex => "Codex",
             AgentKind::Gemini => "Gemini CLI",
             AgentKind::Cursor => "Cursor CLI",
+            AgentKind::Opencode => "OpenCode",
+            AgentKind::Copilot => "GitHub Copilot",
+            AgentKind::Hermes => "Hermes",
             AgentKind::Bob => "Bob Shell",
         }
     }
@@ -86,6 +101,9 @@ impl AgentKind {
             AgentKind::Codex => "npm install -g @openai/codex",
             AgentKind::Gemini => "npm install -g @google/gemini-cli",
             AgentKind::Cursor => "curl https://cursor.com/install -fsS | bash",
+            AgentKind::Opencode => "brew install sst/tap/opencode",
+            AgentKind::Copilot => "npm install -g @github/copilot",
+            AgentKind::Hermes => "pipx install hermes-agent",
             AgentKind::Bob => "curl -fsSL https://bob.ibm.com/download/bobshell.sh | sh",
         }
     }
@@ -279,6 +297,36 @@ impl AgentCli {
                 // Plain-text CLI reading the prompt from stdin; stdout
                 // chunks stream through as tokens. No system flag — folded.
             }
+            AgentKind::Opencode => {
+                // Verified live: `run --format json` emits step_start / text
+                // / step_finish events; text parts carry the reply. Prompt
+                // is positional (argv-guarded below).
+                let full = fold_system(&system, &prompt);
+                if full.len() > 150_000 {
+                    return Err(anyhow!(
+                        "context too large for opencode's argv-based prompt"
+                    ));
+                }
+                cmd.args(["run", "--format", "json", &full]);
+            }
+            AgentKind::Copilot => {
+                // Best-known programmatic flags; unverifiable until installed
+                // (detection gates selection). Plain-text output parse.
+                let full = fold_system(&system, &prompt);
+                if full.len() > 150_000 {
+                    return Err(anyhow!("context too large for copilot's argv-based prompt"));
+                }
+                cmd.args(["-p", &full]);
+            }
+            AgentKind::Hermes => {
+                // Verified live: `hermes -z <prompt>` prints the reply as
+                // plain text.
+                let full = fold_system(&system, &prompt);
+                if full.len() > 150_000 {
+                    return Err(anyhow!("context too large for hermes's argv-based prompt"));
+                }
+                cmd.args(["-z", &full]);
+            }
             AgentKind::Bob => {
                 // bobshell takes -p <prompt> as argv (no stdin mode known);
                 // guard oversized stuffed contexts against ARG_MAX.
@@ -295,7 +343,11 @@ impl AgentCli {
         let stdin_payload = match self.kind {
             AgentKind::Claude => Some(prompt.clone()),
             AgentKind::Cursor | AgentKind::Gemini => Some(fold_system(&system, &prompt)),
-            AgentKind::Codex | AgentKind::Bob => None,
+            AgentKind::Codex
+            | AgentKind::Bob
+            | AgentKind::Opencode
+            | AgentKind::Copilot
+            | AgentKind::Hermes => None,
         };
         cmd.stdin(if stdin_payload.is_some() {
             Stdio::piped()
@@ -341,11 +393,19 @@ impl AgentCli {
             let mut on_token = on_token;
             let mut text = String::new();
             let mut errored: Option<String> = None;
+            let mut cost_usd: Option<f64> = None;
             while let Some(line) = lines.next_line().await? {
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
                     // Plain-text CLIs (gemini, bob) and stream-json builds
                     // that print bare text: pass the line through verbatim.
-                    if matches!(kind, AgentKind::Gemini | AgentKind::Bob | AgentKind::Cursor) {
+                    if matches!(
+                        kind,
+                        AgentKind::Gemini
+                            | AgentKind::Bob
+                            | AgentKind::Cursor
+                            | AgentKind::Copilot
+                            | AgentKind::Hermes
+                    ) {
                         if !text.is_empty() {
                             text.push('\n');
                             on_token("\n");
@@ -356,7 +416,16 @@ impl AgentCli {
                     continue;
                 };
                 match kind {
-                    AgentKind::Gemini | AgentKind::Bob => {
+                    AgentKind::Opencode => {
+                        // Verified live: text parts stream the reply.
+                        if v["type"].as_str() == Some("text") {
+                            if let Some(t) = v["part"]["text"].as_str() {
+                                text.push_str(t);
+                                on_token(t);
+                            }
+                        }
+                    }
+                    AgentKind::Gemini | AgentKind::Bob | AgentKind::Copilot | AgentKind::Hermes => {
                         // JSON on stdout from a plain-text CLI is unexpected;
                         // stringify it into the transcript rather than drop.
                         let t = v.to_string();
@@ -386,6 +455,7 @@ impl AgentCli {
                             }
                         }
                         Some("result") => {
+                            cost_usd = cost_usd.or_else(|| v["total_cost_usd"].as_f64());
                             if v["is_error"].as_bool() == Some(true) {
                                 let msg = v["result"].as_str().unwrap_or("agent error");
                                 errored = Some(msg.to_string());
@@ -420,7 +490,11 @@ impl AgentCli {
                 // lines — only decide after the stream closes.
                 Some(msg) if text.is_empty() => Err(anyhow!("{msg}")),
                 _ if text.is_empty() => Err(anyhow!("agent produced no output")),
-                _ => Ok(ChatOutcome { text, stats: None }),
+                _ => Ok(ChatOutcome {
+                    text,
+                    stats: None,
+                    cost_usd,
+                }),
             }
         };
 
@@ -485,5 +559,34 @@ mod tests {
             .expect("claude chat failed");
         assert!(out.text.contains('4'), "unexpected: {}", out.text);
         assert!(!streamed.is_empty(), "no tokens streamed");
+    }
+}
+
+#[cfg(test)]
+mod live_smokes {
+    use super::*;
+
+    /// cargo test agent_cli_opencode_smoke -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn agent_cli_opencode_smoke() {
+        let cli = AgentCli::new(AgentKind::Opencode);
+        let out = cli
+            .chat(&[ChatTurn::user("What is 2+2? Reply with only the number.")])
+            .await
+            .expect("opencode chat failed");
+        assert!(out.text.contains('4'), "unexpected: {}", out.text);
+    }
+
+    /// cargo test agent_cli_hermes_smoke -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn agent_cli_hermes_smoke() {
+        let cli = AgentCli::new(AgentKind::Hermes);
+        let out = cli
+            .chat(&[ChatTurn::user("What is 2+2? Reply with only the number.")])
+            .await
+            .expect("hermes chat failed");
+        assert!(out.text.contains('4'), "unexpected: {}", out.text);
     }
 }

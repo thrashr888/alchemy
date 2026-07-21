@@ -81,6 +81,9 @@ export interface Message {
   citations: Citation[];
   /** "chat" for real answers, "tool" for tool confirmations. */
   kind: "chat" | "tool";
+  /** Provider attribution caption ("Claude Code · $0.04"); empty for user
+   *  turns and pre-existing rows. */
+  model: string;
   createdAt: number;
 }
 

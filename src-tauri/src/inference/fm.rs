@@ -140,7 +140,10 @@ impl FmEngine {
                         on_token(t);
                     }
                     Some("done") => {
-                        return Ok(ChatOutcome { text, stats: None });
+                        return Ok(ChatOutcome {
+                            text,
+                            ..Default::default()
+                        });
                     }
                     Some("error") => {
                         let msg = v["message"].as_str().unwrap_or("sidecar error");
@@ -152,7 +155,10 @@ impl FmEngine {
             if text.is_empty() {
                 Err(anyhow!("sidecar closed without output"))
             } else {
-                Ok(ChatOutcome { text, stats: None })
+                Ok(ChatOutcome {
+                    text,
+                    ..Default::default()
+                })
             }
         };
 

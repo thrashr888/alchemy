@@ -952,6 +952,7 @@ export const useStore = create<AppState>((set, get) => {
         content,
         citations: [],
         kind: "chat",
+        model: "",
         createdAt: Date.now(),
       };
       set({

@@ -176,6 +176,10 @@ pub struct Message {
     /// Tool messages are excluded from model context windows.
     #[serde(default = "default_message_kind")]
     pub kind: String,
+    /// Which provider answered (assistant messages), e.g. "Claude Code ·
+    /// $0.04" — display caption, empty for user/tool turns and old rows.
+    #[serde(default)]
+    pub model: String,
     pub created_at: i64,
 }
 

@@ -219,9 +219,10 @@ impl Db {
             .await?
             .schema()
             .await?;
-        if schema.field_with_name("kind").is_ok() {
+        if schema.field_with_name("kind").is_ok() && schema.field_with_name("model").is_ok() {
             return Ok(());
         }
+        let has_kind = schema.field_with_name("kind").is_ok();
         let batches = self.collect(T_MESSAGES, None).await?;
         let mut messages = Vec::new();
         for b in &batches {
@@ -230,6 +231,7 @@ impl Db {
             let role = str_col(b, "role")?;
             let content = str_col(b, "content")?;
             let citations = str_col(b, "citations")?;
+            let kind = has_kind.then(|| str_col(b, "kind")).transpose()?;
             let created = i64_col(b, "created_at")?;
             for i in 0..b.num_rows() {
                 messages.push(Message {
@@ -238,7 +240,10 @@ impl Db {
                     role: role.value(i).to_string(),
                     content: content.value(i).to_string(),
                     citations: serde_json::from_str(citations.value(i)).unwrap_or_default(),
-                    kind: "chat".to_string(),
+                    kind: kind
+                        .map(|k| k.value(i).to_string())
+                        .unwrap_or_else(|| "chat".to_string()),
+                    model: String::new(),
                     created_at: created.value(i),
                 });
             }
@@ -888,6 +893,9 @@ impl Db {
             let content = str_col(b, "content")?;
             let citations = str_col(b, "citations")?;
             let kind = str_col(b, "kind")?;
+            let model = b
+                .column_by_name("model")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>());
             let created = i64_col(b, "created_at")?;
             for i in 0..b.num_rows() {
                 let cites: Vec<Citation> =
@@ -899,6 +907,7 @@ impl Db {
                     content: content.value(i).to_string(),
                     citations: cites,
                     kind: kind.value(i).to_string(),
+                    model: model.map(|m| m.value(i).to_string()).unwrap_or_default(),
                     created_at: created.value(i),
                 });
             }
@@ -919,6 +928,7 @@ impl Db {
                 Arc::new(StringArray::from(vec![msg.content.clone()])),
                 Arc::new(StringArray::from(vec![citations])),
                 Arc::new(StringArray::from(vec![msg.kind.clone()])),
+                Arc::new(StringArray::from(vec![msg.model.clone()])),
                 Arc::new(Int64Array::from(vec![msg.created_at])),
             ],
         )?;
@@ -1798,6 +1808,7 @@ fn messages_schema() -> SchemaRef {
         Field::new("content", DataType::Utf8, false),
         Field::new("citations", DataType::Utf8, false),
         Field::new("kind", DataType::Utf8, false),
+        Field::new("model", DataType::Utf8, false),
         Field::new("created_at", DataType::Int64, false),
     ]))
 }

@@ -84,6 +84,9 @@ const AGENT_LABELS: Record<string, string> = {
   codex: "Codex",
   "gemini-cli": "Gemini CLI",
   "cursor-cli": "Cursor CLI",
+  opencode: "OpenCode",
+  copilot: "GitHub Copilot",
+  hermes: "Hermes",
   "bob-shell": "Bob Shell",
 };
 

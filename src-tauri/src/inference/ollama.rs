@@ -201,7 +201,11 @@ impl Ollama {
             value.get("eval_count").and_then(|v| v.as_u64()),
             value.get("eval_duration").and_then(|v| v.as_u64()),
         );
-        Ok(ChatOutcome { text, stats })
+        Ok(ChatOutcome {
+            text,
+            stats,
+            cost_usd: None,
+        })
     }
 
     /// Streaming chat. `on_token` is called for each content delta as it arrives.
@@ -256,7 +260,11 @@ impl Ollama {
                     }
                     if parsed.done {
                         let stats = GenStats::from_parts(parsed.eval_count, parsed.eval_duration);
-                        return Ok(ChatOutcome { text: full, stats });
+                        return Ok(ChatOutcome {
+                            text: full,
+                            stats,
+                            cost_usd: None,
+                        });
                     }
                 }
             }
@@ -264,6 +272,7 @@ impl Ollama {
         Ok(ChatOutcome {
             text: full,
             stats: None,
+            cost_usd: None,
         })
     }
 

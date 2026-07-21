@@ -295,6 +295,15 @@ pub fn ai_runtime(app: AppHandle, data_dir: std::path::PathBuf) -> crate::ai::Ai
     }
 }
 
+/// Message-footer attribution: which provider answered, with metered cost
+/// when the engine reported one ("Claude Code · $0.04").
+fn model_caption(model: &str, cost_usd: Option<f64>) -> String {
+    match cost_usd {
+        Some(c) if c > 0.0 => format!("{model} · ${c:.2}"),
+        _ => model.to_string(),
+    }
+}
+
 pub(crate) fn now() -> i64 {
     Utc::now().timestamp_millis()
 }
@@ -2871,6 +2880,7 @@ pub async fn add_note_to_chat(
         content: format!("**{}**\n\n{}", note.title, note.content),
         citations: Vec::new(),
         kind: "chat".to_string(),
+        model: String::new(),
         created_at: now(),
     };
     e(state.db.add_message(&msg).await)?;
@@ -3047,6 +3057,7 @@ async fn finish_tool_reply(
         content,
         citations: vec![],
         kind: "tool".into(),
+        model: String::new(),
         created_at: now(),
     };
     e(state.db.add_message(&msg).await)?;
@@ -3801,6 +3812,7 @@ pub async fn send_message(
         content: content.clone(),
         citations: vec![],
         kind: "chat".into(),
+        model: String::new(),
         created_at: now(),
     };
     e(state.db.add_message(&user_msg).await)?;
@@ -3890,7 +3902,7 @@ pub async fn send_message(
     let cancel = state.begin_generation(&format!("chat:{}", window.label()));
     let partial = Arc::new(Mutex::new(String::new()));
     let partial_cb = partial.clone();
-    let (answer, stats, model) = {
+    let (answer, stats, cost_usd, model) = {
         let ai = state.ai.read().await;
         let model = ai.active_chat_model();
         let streamed = tokio::select! {
@@ -3904,8 +3916,8 @@ pub async fn send_message(
             _ = cancel.cancelled() => None,
         };
         match streamed {
-            Some(out) => (out.text, out.stats, model),
-            None => (partial.lock().unwrap().clone(), None, model),
+            Some(out) => (out.text, out.stats, out.cost_usd, model),
+            None => (partial.lock().unwrap().clone(), None, None, model),
         }
     };
     state.record_chat_stats(&model, stats);
@@ -3917,6 +3929,7 @@ pub async fn send_message(
         content: answer,
         citations,
         kind: "chat".into(),
+        model: model_caption(&model, cost_usd),
         created_at: now(),
     };
     bump_note_usage(&state.db, &assistant_msg.citations, "cited").await;
@@ -3956,6 +3969,7 @@ pub async fn send_message_agentic(
         content: content.clone(),
         citations: vec![],
         kind: "chat".into(),
+        model: String::new(),
         created_at: now(),
     };
     e(state.db.add_message(&user_msg).await)?;
@@ -4006,6 +4020,7 @@ pub async fn send_message_agentic(
         content: answer,
         citations,
         kind: "chat".into(),
+        model: model_caption(&model, None),
         created_at: now(),
     };
     bump_note_usage(&state.db, &assistant_msg.citations, "cited").await;

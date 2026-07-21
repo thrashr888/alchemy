@@ -138,6 +138,14 @@ second consumer in another repo.** Until then it's a module, not a crate.
     pre-Golden-Gate Apple silicon, reading the same shared cache. One
     model on disk, two loaders, converging to Apple's as OS adoption
     catches up.
+- **Fixed model picks (decided 2026-07-20: one per type, not
+  user-configurable)** — when the MLX engines land, Alchemy ships one
+  good default each and no picker: **chat + vision:**
+  `mlx-community/Qwen3.5-4B-MLX-4bit` (~2.3 GB, multimodal — one model,
+  two roles; verify the vision path at build time), **STT:**
+  `mlx-community/whisper-large-v3-turbo` 4-bit (feeds RFC-voice-chat).
+  The mlx-community org converts ~4,800 models with a reliable
+  `-4bit` naming rule if a pick ever needs to move.
 - **RAM-tiered defaults** — one default model is wrong when the fleet
   spans 16 GB to 128 GB. Detect physical RAM and tier the default:
   ~16 GB → 4B-class 4-bit (honest messaging: local will be serviceable,
@@ -221,6 +229,11 @@ OpenAI-shaped lives here. No per-vendor SDKs.
 - **Probing**: at startup and on Settings-open, probe availability —
   binary checks and one-RTT HTTP pings, cached with a short TTL. Never
   block a chat on probing; stale-good beats slow.
+- *Superseded in implementation (2026-07-20): automatic preference
+  ladders gave way to explicit selection — the provider ready-list +
+  first-run doors + composer pill, per the provider-list UX decision.
+  Availability still gates what's offered; nothing silently reorders.
+  The ladder text below stands as design history.*
 - **Assignment**: per-role ladders (§2 table) filtered by availability,
   reordered by the user's preference list, overridable per role in
   advanced settings. Zero-config result on a bare Mac: builtin embedder +
