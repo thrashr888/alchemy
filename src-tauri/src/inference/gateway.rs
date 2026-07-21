@@ -179,16 +179,23 @@ impl OpenAiClient {
         F: FnMut(&str),
     {
         let started = std::time::Instant::now();
+        let mut body = json!({
+            "model": self.model,
+            "messages": messages,
+            "stream": true,
+            // Most gateways honor this; ones that don't just omit usage.
+            "stream_options": { "include_usage": true },
+        });
+        // NVIDIA NIM (integrate.api.nvidia.com) hangs the stream — zero
+        // bytes, no error — when stream_options is present (verified live
+        // 2026-07-20). Wall-clock stats cover the loss.
+        if self.base_url.contains("integrate.api.nvidia.com") {
+            body.as_object_mut().unwrap().remove("stream_options");
+        }
         let resp = self
             .with_team_headers(self.request("/chat/completions"))
             .await
-            .json(&json!({
-                "model": self.model,
-                "messages": messages,
-                "stream": true,
-                // Most gateways honor this; ones that don't just omit usage.
-                "stream_options": { "include_usage": true },
-            }))
+            .json(&body)
             .send()
             .await
             .context("Couldn't reach the provider — check the base URL and your connection")?;

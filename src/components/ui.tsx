@@ -210,6 +210,7 @@ export function Modal({
   headerActions,
   width = "max-w-md",
   tall = false,
+  bodyScroll = true,
 }: {
   open: boolean;
   onClose: () => void;
@@ -222,6 +223,9 @@ export function Modal({
   /** Fill most of the window height (settings-style panes) instead of the
    *  compact dialog default. */
   tall?: boolean;
+  /** Set false when the content manages its own scroll region (settings'
+   *  fixed-sidebar layout) — nested scrollbars otherwise. */
+  bodyScroll?: boolean;
 }) {
   const panelRef = React.useRef<HTMLDivElement>(null);
   const titleId = React.useMemo(() => `modal-title-${++modalSeq}`, []);
@@ -322,7 +326,14 @@ export function Modal({
             </Button>
           </div>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">{children}</div>
+        <div
+          className={cn(
+            "min-h-0 flex-1 p-4",
+            bodyScroll ? "overflow-y-auto" : "overflow-hidden",
+          )}
+        >
+          {children}
+        </div>
         {footer && (
           <div className="shrink-0 border-t border-border px-4 py-3">
             {footer}

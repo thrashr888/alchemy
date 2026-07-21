@@ -298,6 +298,7 @@ pub struct AiRuntime {
 /// App-facing capability facade over the inference Router. One instance
 /// lives in AppState behind a RwLock and is rebuilt whenever the config is
 /// saved.
+#[derive(Clone)]
 pub struct Ai {
     config: AiConfig,
     router: Router,

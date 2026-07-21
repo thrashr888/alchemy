@@ -477,7 +477,7 @@ async fn store_new_source(
     };
     let embed_inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
     let embeddings = {
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         ai.embed(&embed_inputs).await?
     };
 
@@ -582,7 +582,7 @@ async fn extract_image(state: &AppState, path: &str) -> anyhow::Result<ingest::E
     let bytes = image_bytes_for_ocr(path)?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     let text = {
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         ai.ocr(&b64).await?
     };
     if text.trim().is_empty() {
@@ -608,7 +608,7 @@ async fn extract_pdf_ocr(state: &AppState, path: &str) -> anyhow::Result<ingest:
     for (i, png) in pages.iter().enumerate() {
         let b64 = base64::engine::general_purpose::STANDARD.encode(png);
         let page_text = {
-            let ai = state.ai.read().await;
+            let ai = state.ai.read().await.clone();
             ai.ocr(&b64).await?
         };
         let page_text = page_text.trim();
@@ -666,7 +666,7 @@ pub(crate) async fn friendly_title(state: &AppState, extracted: &mut ingest::Ext
         )),
     ];
     let out = {
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         ai.chat_role(crate::inference::Role::Small, &messages).await
     };
     if let Ok(out) = out {
@@ -1032,7 +1032,7 @@ async fn reingest(
     };
     let embed_inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
     let embeddings = {
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         ai.embed(&embed_inputs).await?
     };
     let chunk_tuples: Vec<(String, i32, String)> = chunks
@@ -2388,7 +2388,7 @@ async fn consolidate_notes(state: &AppState) -> anyhow::Result<Vec<CuratorAction
         }
         let titles: Vec<String> = evid.iter().map(|n| n.title.clone()).collect();
         let embeds = {
-            let ai = state.ai.read().await;
+            let ai = state.ai.read().await.clone();
             ai.embed(&titles).await?
         };
         let mut pairs = similar_pairs(&embeds, 0.75);
@@ -2398,7 +2398,7 @@ async fn consolidate_notes(state: &AppState) -> anyhow::Result<Vec<CuratorAction
             let out = {
                 let messages =
                     rag::build_consolidate_messages(&a.title, &a.content, &b.title, &b.content);
-                let ai = state.ai.read().await;
+                let ai = state.ai.read().await.clone();
                 ai.chat(&messages).await?.text
             };
             let Some((title, body)) = rag::parse_auto_evidence(&out) else {
@@ -2802,7 +2802,7 @@ pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u
     // can recreate the table cleanly.
     e(state.db.clear_all_chunks().await)?;
 
-    let ai = state.ai.read().await;
+    let ai = state.ai.read().await.clone();
     for (i, (notebook_id, owner_id, content, title)) in owners.iter().enumerate() {
         let _ = app.emit(
             "migrate://progress",
@@ -3190,7 +3190,7 @@ async fn route_tool(state: &AppState, sources: &[Source], content: &str) -> Tool
         )),
     ];
     let raw = {
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         match ai.chat(&messages).await {
             Ok(o) => o.text,
             Err(_) => return ToolAction::Chat,
@@ -3824,7 +3824,7 @@ pub async fn send_message(
 
     // Retrieve relevant chunks.
     let (query_vec, profile) = {
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         (
             e(ai.embed_one(&content).await)?,
             ai.profile(crate::inference::Role::Chat),
@@ -3883,7 +3883,7 @@ pub async fn send_message(
         })
         .collect();
     let persona = {
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         rag::persona_block(&ai.config().profile)
     };
     let messages = rag::build_chat_messages(
@@ -3904,7 +3904,7 @@ pub async fn send_message(
     let partial = Arc::new(Mutex::new(String::new()));
     let partial_cb = partial.clone();
     let (answer, stats, cost_usd, model) = {
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         let model = ai.active_chat_model();
         let streamed = tokio::select! {
             out = ai.chat_stream(&messages, |tok| {
@@ -3992,7 +3992,7 @@ pub async fn send_message_agentic(
 
     let cancel = state.begin_generation(&format!("chat:{}", window.label()));
     let (answer, citations, stats, model) = {
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         let model = ai.active_chat_model();
         let out = tokio::select! {
             r = crate::agent::run(
@@ -4134,7 +4134,7 @@ async fn auto_evidence(
 
     let draft = {
         let messages = rag::build_auto_evidence_messages(question, answer, sources, None);
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         ai.chat(&messages).await?.text
     };
     let Some((title, body)) = rag::parse_auto_evidence(&draft) else {
@@ -4174,7 +4174,7 @@ async fn auto_evidence(
                 sources,
                 Some((&prior.title, &prior.content)),
             );
-            let ai = state.ai.read().await;
+            let ai = state.ai.read().await.clone();
             ai.chat(&messages).await?.text
         };
         let Some((title, body)) = rag::parse_auto_evidence(&merged) else {
@@ -4280,7 +4280,7 @@ async fn try_index_note(state: &AppState, note: &Note) -> anyhow::Result<()> {
     }
     let inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
     let embeddings = {
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         ai.embed(&inputs).await?
     };
     let tuples: Vec<(String, i32, String)> = chunks
@@ -4699,7 +4699,7 @@ async fn generate_content(
         let clipped: String = full.chars().take(alloc[i]).collect();
         let tail: String = full.chars().skip(alloc[i]).take(distill_cap).collect();
         let rescued = {
-            let ai = state.ai.read().await;
+            let ai = state.ai.read().await.clone();
             crate::agent::distill(&ai, &instruction, heading, &tail).await
         };
         corpus.push_str(&format!(
@@ -4717,7 +4717,7 @@ async fn generate_content(
         ));
     }
     let persona = {
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         rag::persona_block(&ai.config().profile)
     };
     let messages = rag::build_artifact_messages(&instruction, &corpus, &persona);
@@ -4754,7 +4754,7 @@ async fn run_generation_chat(
     messages: &[crate::ai::ChatTurn],
 ) -> anyhow::Result<String> {
     let (text, stats, model) = {
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         let out = match app {
             Some(app) => {
                 let app = app.clone();
@@ -4954,7 +4954,7 @@ pub async fn suggest_followups(
         crate::ai::ChatTurn::user(format!("Conversation so far:\n{convo}\nJSON array:")),
     ];
     let out = {
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         e(ai.chat(&messages).await)?.text
     };
     let mut qs = parse_string_array(&out);
@@ -4978,7 +4978,7 @@ pub async fn generate_epigraph(state: State<'_, AppState>, mood: String) -> Resu
         crate::ai::ChatTurn::user(format!("Mood: {mood}")),
     ];
     let out = {
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         e(ai.chat(&messages).await)?.text
     };
     Ok(out.trim().to_string())
@@ -5069,7 +5069,7 @@ pub async fn related_passages(
         return Ok(vec![]);
     }
     let vec = {
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         e(ai.embed(std::slice::from_ref(&text)).await)?
     }
     .into_iter()
@@ -6242,7 +6242,7 @@ pub(crate) async fn retrieve_everything(
         .collect();
 
     let query_vec = {
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         e(ai.embed_one(question).await)?
     };
     // Semantic routing: with enough notebooks, search the most likely ones
@@ -6251,7 +6251,7 @@ pub(crate) async fn retrieve_everything(
     // keeps ROUTE_TOP_K notebooks, so corpora at or below that size are
     // searched in full either way.
     let routed: Option<Vec<String>> = if nb_titles.len() > crate::router::MIN_NOTEBOOKS_TO_ROUTE {
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         if let Err(err) = crate::router::ensure_router(&state.db, &ai).await {
             eprintln!("router refresh failed (falling back to flat): {err:#}");
         }
@@ -6312,7 +6312,7 @@ pub(crate) async fn retrieve_everything(
             .iter()
             .map(|c| (c.title.clone(), c.snippet.chars().take(300).collect()))
             .collect();
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         match crate::agent::rerank_indices(&ai, question, &snippets, k).await {
             Some(picked) => out = picked.into_iter().map(|i| out[i].clone()).collect(),
             None => out.truncate(k),
@@ -6461,7 +6461,7 @@ pub async fn ask_everything(
     }
 
     let persona = {
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         rag::persona_block(&ai.config().profile)
     };
     let messages = rag::build_meta_messages(
@@ -6478,7 +6478,7 @@ pub async fn ask_everything(
     let partial = Arc::new(Mutex::new(String::new()));
     let partial_cb = partial.clone();
     let (answer, stats, model) = {
-        let ai = state.ai.read().await;
+        let ai = state.ai.read().await.clone();
         let model = ai.active_chat_model();
         let streamed = tokio::select! {
             out = ai.chat_stream(&messages, |tok| {
@@ -6618,7 +6618,7 @@ pub async fn list_gateway_models(base_url: String, api_key: String) -> Result<Ve
 
 #[tauri::command]
 pub async fn check_models(state: State<'_, AppState>) -> Result<ModelHealth, String> {
-    let ai = state.ai.read().await;
+    let ai = state.ai.read().await.clone();
     let cfg = ai.config().clone();
     let norm = |m: &str| m.trim_end_matches(":latest").to_string();
 
@@ -6794,7 +6794,7 @@ pub async fn check_models(state: State<'_, AppState>) -> Result<ModelHealth, Str
 
 #[tauri::command]
 pub async fn get_ai_config(state: State<'_, AppState>) -> Result<AiConfig, String> {
-    let ai = state.ai.read().await;
+    let ai = state.ai.read().await.clone();
     Ok(ai.config().clone())
 }
 
@@ -6825,13 +6825,13 @@ pub async fn set_ai_config(
 
 #[tauri::command]
 pub async fn list_models(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    let ai = state.ai.read().await;
+    let ai = state.ai.read().await.clone();
     e(ai.list_models().await)
 }
 
 #[tauri::command]
 pub async fn check_ollama(state: State<'_, AppState>) -> Result<bool, String> {
-    let ai = state.ai.read().await;
+    let ai = state.ai.read().await.clone();
     Ok(ai.list_models().await.is_ok())
 }
 

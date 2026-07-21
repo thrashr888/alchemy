@@ -619,7 +619,7 @@ impl AlchemyMcp {
         let k = max_results.unwrap_or(6).clamp(1, 20) as usize;
         let state = self.state();
         let query_vec = {
-            let ai = state.ai.read().await;
+            let ai = state.ai.read().await.clone();
             ai.embed_one(&query).await.map_err(internal)?
         };
         let citations = state
@@ -742,7 +742,7 @@ impl AlchemyMcp {
         let k = max_results.unwrap_or(6).clamp(1, 20) as usize;
         let state = self.state();
         let query_vec = {
-            let ai = state.ai.read().await;
+            let ai = state.ai.read().await.clone();
             ai.embed_one(&query).await.map_err(internal)?
         };
         let trace = state

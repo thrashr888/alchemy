@@ -108,6 +108,14 @@ const AGENT_LABELS: Record<string, string> = {
 type Readiness = { id: string; ready: boolean; detail: string };
 type CliStatus = { id: string; installed: boolean; detail: string };
 
+// Last probe results, kept for the app's lifetime: the tab renders instantly
+// from these and refreshes in the background (agent probes spawn CLIs and
+// take seconds — that wait belongs behind a spinner, not in front of paint).
+const statusCache: { readiness: Readiness[]; clis: CliStatus[] } = {
+  readiness: [],
+  clis: [],
+};
+
 /** Settings → Model: first-run doors, the ready-list, the add wizard, and
  *  Advanced (studio/titles routing, embeddings, vision). Plumbing lives in
  *  the inference router; this pane is presentation over draft config. */
@@ -125,15 +133,35 @@ export function ModelsTab({
   /** Ollama's local model list (for the local-server editor). */
   models: string[];
 }) {
-  const [readiness, setReadiness] = useState<Readiness[]>([]);
-  const [clis, setClis] = useState<CliStatus[]>([]);
+  const [readiness, setReadiness] = useState<Readiness[]>(
+    statusCache.readiness,
+  );
+  const [clis, setClis] = useState<CliStatus[]>(statusCache.clis);
+  const [checkingStatus, setCheckingStatus] = useState(false);
   const [wizard, setWizard] = useState<null | { editId?: string }>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   useEffect(() => {
-    void api.providerReadiness().then(setReadiness).catch(() => {});
-    void api.agentCliStatus().then(setClis).catch(() => {});
+    setCheckingStatus(true);
+    void Promise.allSettled([
+      api.providerReadiness().then((r) => {
+        statusCache.readiness = r;
+        setReadiness(r);
+      }),
+      api.agentCliStatus().then((c) => {
+        statusCache.clis = c;
+        setClis(c);
+      }),
+    ]).finally(() => setCheckingStatus(false));
   }, [draft.providers.length]);
+
+  // The chosen provider reads from the top; captured once per open so rows
+  // don't jump under the pointer when picking a different one.
+  const [initialChoice] = useState(() => draft.chatProvider);
+  const orderedProviders = [
+    ...draft.providers.filter((p) => p.id === initialChoice),
+    ...draft.providers.filter((p) => p.id !== initialChoice),
+  ];
 
   const readyOf = (id: string) => readiness.find((r) => r.id === id);
   const installedClis = clis.filter((c) => c.installed);
@@ -258,7 +286,7 @@ export function ModelsTab({
           onKeyDown={(e) => {
             if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
             e.preventDefault();
-            const ids = draft.providers.map((p) => p.id);
+            const ids = orderedProviders.map((p) => p.id);
             const i = ids.indexOf(draft.chatProvider);
             const next =
               ids[
@@ -267,7 +295,7 @@ export function ModelsTab({
             setDraft({ ...draft, chatProvider: next });
           }}
         >
-          {draft.providers.map((p) => {
+          {orderedProviders.map((p) => {
             const r = readyOf(p.id);
             const selected = draft.chatProvider === p.id;
             return (
@@ -353,16 +381,24 @@ export function ModelsTab({
               </div>
             );
           })}
-          <button
-            type="button"
-            onClick={() => setWizard({})}
-            className="mt-0.5 self-start text-[12px] text-citation hover:underline"
-          >
-            + Add a provider…
-            <span className="ml-1.5 text-[11px] text-subtle-foreground no-underline">
-              subscriptions, keys, local servers
-            </span>
-          </button>
+          <div className="mt-0.5 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setWizard({})}
+              className="text-[12px] text-citation hover:underline"
+            >
+              + Add a provider…
+              <span className="ml-1.5 text-[11px] text-subtle-foreground no-underline">
+                subscriptions, keys, local servers
+              </span>
+            </button>
+            {checkingStatus && (
+              <span className="flex items-center gap-1 text-[12px] text-subtle-foreground">
+                <RefreshCw className="h-3 w-3 animate-spin" />
+                Checking availability…
+              </span>
+            )}
+          </div>
         </div>
       </Field>
 

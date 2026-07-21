@@ -153,6 +153,7 @@ pub struct OllamaConfig {
 /// Chat-capable engines. Enum dispatch rather than `dyn Trait` because
 /// `chat_stream` is generic over its token sink; new families (MLX, agent
 /// CLIs) become variants here.
+#[derive(Clone)]
 pub enum ChatEngine {
     Ollama(Ollama),
     Gateway(OpenAiClient),
@@ -200,6 +201,7 @@ impl ChatEngine {
 
 /// Embedding engines. Kept apart from chat: vectors are coupled to the
 /// index, so `Embed` never falls through a preference ladder.
+#[derive(Clone)]
 pub enum Embedder {
     Builtin(LocalEmbedder),
     Ollama(Ollama),
@@ -225,6 +227,7 @@ impl Embedder {
 /// engine serves every chat-shaped role and profiles are uniform. The
 /// preference ladders, availability probing, and per-tier profiles land with
 /// the new engine families.
+#[derive(Clone)]
 pub struct Router {
     chat: ChatEngine,
     embedder: Embedder,

@@ -137,6 +137,28 @@ fn load_shell_env() -> HashMap<String, String> {
     env
 }
 
+/// Process-lifetime discovery cache. Engine construction happens under the
+/// config write lock on every save; the login-shell `which` fallback costs
+/// seconds per missing CLI, so construction reads this cache and only the
+/// explicit status probe (`agent_status`) pays for a fresh look.
+fn binary_cache() -> &'static std::sync::Mutex<HashMap<String, Option<PathBuf>>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Option<PathBuf>>>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+fn find_binary_cached(name: &str) -> Option<PathBuf> {
+    if let Some(hit) = binary_cache().lock().unwrap().get(name) {
+        return hit.clone();
+    }
+    let found = find_binary(name);
+    binary_cache()
+        .lock()
+        .unwrap()
+        .insert(name.to_string(), found.clone());
+    found
+}
+
 /// Find the CLI: well-known install dirs first, then the login shell's
 /// `which` (slow path). Argos's discovery order.
 fn find_binary(name: &str) -> Option<PathBuf> {
@@ -164,8 +186,15 @@ fn find_binary(name: &str) -> Option<PathBuf> {
 }
 
 /// Availability for the settings tiles: (installed, version-or-hint).
+/// Always a fresh look — a user who just installed a CLI should see it —
+/// and the result refreshes the construction cache.
 pub fn agent_status(kind: AgentKind) -> (bool, String) {
-    match find_binary(kind.binary_name()) {
+    let fresh = find_binary(kind.binary_name());
+    binary_cache()
+        .lock()
+        .unwrap()
+        .insert(kind.binary_name().to_string(), fresh.clone());
+    match fresh {
         Some(bin) => {
             let version = std::process::Command::new(&bin)
                 .arg("--version")
@@ -188,6 +217,7 @@ fn fold_system(system: &str, prompt: &str) -> String {
     }
 }
 
+#[derive(Clone)]
 pub struct AgentCli {
     kind: AgentKind,
     binary: Option<PathBuf>,
@@ -197,7 +227,7 @@ impl AgentCli {
     pub fn new(kind: AgentKind) -> Self {
         Self {
             kind,
-            binary: find_binary(kind.binary_name()),
+            binary: find_binary_cached(kind.binary_name()),
         }
     }
 

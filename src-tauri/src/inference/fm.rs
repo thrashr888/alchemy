@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -19,21 +20,24 @@ use super::{ChatOutcome, ChatTurn};
 /// sidecar, not a slow model.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
+#[derive(Clone)]
 pub struct FmEngine {
     binary: PathBuf,
-    probe_detail: OnceCell<String>,
+    // Arc'd so clones share one probe (requests snapshot the engine and
+    // stream outside the config lock — same pattern as LocalEmbedder).
+    probe_detail: Arc<OnceCell<String>>,
     /// Probed once per engine build (one `--probe` spawn); `false` means the
     /// model is unavailable (old macOS, Apple Intelligence off, model not
     /// downloaded) and callers should fall through.
-    available: OnceCell<bool>,
+    available: Arc<OnceCell<bool>>,
 }
 
 impl FmEngine {
     pub fn new(binary: PathBuf) -> Self {
         Self {
             binary,
-            available: OnceCell::new(),
-            probe_detail: OnceCell::new(),
+            available: Arc::new(OnceCell::new()),
+            probe_detail: Arc::new(OnceCell::new()),
         }
     }
 
