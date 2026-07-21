@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button, Input, Modal } from "../ui";
 import { Field } from "./SettingsTabs";
@@ -700,6 +701,15 @@ function ProviderWizard({
     }, 600);
   }
 
+  // Editing an existing gateway: probe right away so the model field is the
+  // same populated dropdown the add flow gets, not a bare text input.
+  useEffect(() => {
+    if (editing && editing.kind === "gateway") {
+      probeKey(editing.baseUrl, editing.apiKey);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function finishAdd(entry: ProviderEntry, answerWithIt: boolean) {
     const providers = editing
       ? draft.providers.map((p) => (p.id === entry.id ? entry : p))
@@ -867,21 +877,34 @@ function ProviderWizard({
             />
           </Field>
           <Field label="Model" hint="Picked for you — change it if you like.">
-            {found.length > 0 ? (
-              <Select
-                ariaLabel="Model"
-                value={model}
-                onChange={setModel}
-                options={found}
-              />
-            ) : (
-              <Input
-                aria-label="Model"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder="model id"
-              />
-            )}
+            <div className="flex items-center gap-1.5">
+              {found.length > 0 ? (
+                <Select
+                  ariaLabel="Model"
+                  value={model}
+                  onChange={setModel}
+                  options={found}
+                />
+              ) : (
+                <Input
+                  aria-label="Model"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder="model id"
+                />
+              )}
+              <Button
+                variant="ghost"
+                aria-label="Refresh model list"
+                title="Refresh model list"
+                disabled={checking || !key.trim() || !baseUrl.trim()}
+                onClick={() => probeKey(baseUrl, key)}
+              >
+                <RefreshCw
+                  className={cn("h-3.5 w-3.5", checking && "animate-spin")}
+                />
+              </Button>
+            </div>
           </Field>
           <div className="flex items-center justify-between pt-1">
             <Button variant="ghost" onClick={() => (editing ? onClose() : setStep("door"))}>
