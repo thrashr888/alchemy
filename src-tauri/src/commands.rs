@@ -170,6 +170,98 @@ pub async fn agent_cli_status() -> Result<Vec<AgentCliStatus>, String> {
     .map_err(|e| e.to_string())
 }
 
+/// Live readiness for every configured provider row (the ready-list chips):
+/// fm probes the sidecar, ollama pings its server, gateways report keyed
+/// state, agent CLIs report install/version.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderReadiness {
+    pub id: String,
+    pub ready: bool,
+    pub detail: String,
+}
+
+#[tauri::command]
+pub async fn provider_readiness(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<ProviderReadiness>, String> {
+    let config = { state.ai.read().await.config().clone() };
+    let mut out = Vec::new();
+    for entry in &config.providers {
+        let (ready, detail) = match entry.kind.as_str() {
+            "fm" => match find_fm_sidecar(&app) {
+                Some(bin) => {
+                    let fm = crate::inference::FmEngine::new(bin);
+                    if fm.available().await {
+                        (true, "Apple on-device · private, no setup".to_string())
+                    } else {
+                        (false, "needs macOS 26+ with Apple Intelligence".to_string())
+                    }
+                }
+                None => (false, "not available in this build".to_string()),
+            },
+            "gateway" => {
+                if entry.api_key.is_empty() {
+                    (false, "no key yet".to_string())
+                } else {
+                    let model = if entry.chat_model.is_empty() {
+                        "model picked on first use".to_string()
+                    } else {
+                        entry.chat_model.clone()
+                    };
+                    (true, format!("{model} · your key"))
+                }
+            }
+            "ollama" => {
+                let mut cfg = crate::inference::OllamaConfig {
+                    base_url: config.base_url.clone(),
+                    chat_model: config.chat_model.clone(),
+                    embed_model: config.embed_model.clone(),
+                    vision_model: config.vision_model.clone(),
+                };
+                if !entry.base_url.trim().is_empty() {
+                    cfg.base_url = entry.base_url.clone();
+                }
+                let model = if entry.chat_model.trim().is_empty() {
+                    cfg.chat_model.clone()
+                } else {
+                    entry.chat_model.clone()
+                };
+                let ping = tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    crate::inference::Ollama::new(cfg).list_models(),
+                )
+                .await;
+                match ping {
+                    Ok(Ok(_)) => (true, format!("{model} · running")),
+                    _ => (false, "server not running".to_string()),
+                }
+            }
+            kind => match crate::inference::AgentKind::from_id(kind) {
+                Some(agent) => {
+                    let (installed, detail) =
+                        tokio::task::spawn_blocking(move || crate::inference::agent_status(agent))
+                            .await
+                            .map_err(|e| e.to_string())?;
+                    if installed {
+                        (true, format!("your subscription · {detail}"))
+                    } else {
+                        (false, detail)
+                    }
+                }
+                None => (false, "unknown provider".to_string()),
+            },
+        };
+        out.push(ProviderReadiness {
+            id: entry.id.clone(),
+            ready,
+            detail,
+        });
+    }
+    Ok(out)
+}
+
 pub fn ai_runtime(app: AppHandle, data_dir: std::path::PathBuf) -> crate::ai::AiRuntime {
     let fm_sidecar = find_fm_sidecar(&app);
     #[derive(serde::Serialize, Clone)]

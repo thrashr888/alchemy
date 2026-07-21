@@ -82,6 +82,10 @@ pub struct AiConfig {
     /// fully recoverable, so the toggle exists for cost control, not safety.
     #[serde(default = "default_true")]
     pub curator_consolidate: bool,
+    /// First-run model chooser dismissed (chosen or skipped) — the three-door
+    /// pane shows until this flips.
+    #[serde(default)]
+    pub setup_seen: bool,
     /// Minutes between remote git re-sync probes (docs/RFC-git-sources.md
     /// §8); 0 disables auto-sync (manual Refresh always works). Git sources
     /// themselves have no off switch — the smarter thing is the only thing.
@@ -131,7 +135,21 @@ impl AiConfig {
     /// chat provider so every existing call site (`is_gateway`, context
     /// budgets, gateway model listing) keeps working unchanged.
     pub fn normalize(&mut self) {
-        if self.providers.is_empty() {
+        // "On this Mac" is always listed; readiness is probed live by the
+        // UI, and selecting it on an unsupported Mac falls back to Ollama.
+        let has_fm = self.providers.iter().any(|p| p.kind == "fm");
+        if !has_fm {
+            self.providers.insert(
+                0,
+                ProviderEntry {
+                    id: "on-device".into(),
+                    kind: "fm".into(),
+                    label: "On this Mac".into(),
+                    ..Default::default()
+                },
+            );
+        }
+        if self.providers.iter().all(|p| p.kind == "fm") {
             self.providers.push(ProviderEntry {
                 id: "ollama".into(),
                 kind: "ollama".into(),
@@ -236,6 +254,7 @@ impl Default for AiConfig {
             mcp_port: default_mcp_port(),
             tray_enabled: default_true(),
             curator_consolidate: default_true(),
+            setup_seen: false,
             git_sync_minutes: default_git_sync_minutes(),
         }
     }
@@ -284,8 +303,15 @@ impl Ai {
                 &config.openai_chat_model,
             )
         });
+        let fm_path = runtime.fm_sidecar.clone();
         let engine_for = |entry: &ProviderEntry| -> ChatEngine {
             match entry.kind.as_str() {
+                "fm" => match fm_path.as_ref().filter(|p| p.exists()) {
+                    Some(p) => ChatEngine::FoundationModels(FmEngine::new(p.clone())),
+                    // Sidecar missing (pre-26 macOS, unbundled build): fall
+                    // back to Ollama so a stale selection can't dead-end.
+                    None => ChatEngine::Ollama(Ollama::new(ollama_config(&config))),
+                },
                 "gateway" => ChatEngine::Gateway(OpenAiClient::new(
                     entry.base_url.trim(),
                     &entry.api_key,

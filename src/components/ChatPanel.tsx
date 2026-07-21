@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
+import { api } from "@/lib/api";
 import { Button, CardAction, Textarea, useConfirm } from "./ui";
 import { Markdown } from "./Markdown";
 import { cn, chatReadingClass, isWebUrl } from "@/lib/utils";
@@ -28,6 +29,7 @@ import {
   CornerDownRight,
   ExternalLink,
   SlidersHorizontal,
+  ChevronDown,
 } from "lucide-react";
 
 export function ChatPanel() {
@@ -319,7 +321,7 @@ export function ChatPanel() {
                 }
               }}
             />
-            <div className="flex items-center justify-between px-1.5 pt-1">
+            <div className="flex items-center gap-1.5 px-1.5 pt-1">
               <button
                 onClick={toggleAgentMode}
                 title="Agentic mode: the model plans multiple searches over your sources before answering"
@@ -333,6 +335,8 @@ export function ChatPanel() {
                 <Telescope className="h-3 w-3" />
                 {agentMode ? "Deep research: on" : "Deep research: off"}
               </button>
+              <ModelPill />
+              <span className="flex-1" />
               {sending ? (
                 <Button
                   variant="secondary"
@@ -725,5 +729,115 @@ function RotatingQuote({ theme }: { theme: string }) {
     <p className="max-w-[360px] animate-[quote-fade_0.8s_ease] text-[13px] text-muted-foreground">
       {gen ? `“${gen}”` : QUOTE}
     </p>
+  );
+}
+
+
+/** Composer model pill: which brain answers this notebook. Lists only
+ *  providers that are ready right now; settings stay a click away. */
+function ModelPill() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  const openSettings = useStore((s) => s.openSettings);
+  const [open, setOpen] = useState(false);
+  const [ready, setReady] = useState<
+    { id: string; ready: boolean; detail: string }[]
+  >([]);
+
+  useEffect(() => {
+    if (open) void api.providerReadiness().then(setReady).catch(() => {});
+  }, [open]);
+
+  if (!aiConfig) return null;
+  const active = aiConfig.providers.find((p) => p.id === aiConfig.chatProvider);
+
+  return (
+    <span className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        title="Which model answers this notebook"
+        className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+      >
+        {active?.label ?? "Model"}
+        <ChevronDown className="h-3 w-3" />
+      </button>
+      {open && (
+        <>
+          <button
+            type="button"
+            aria-label="Close model menu"
+            className="fixed inset-0 z-20 cursor-default"
+            onClick={() => setOpen(false)}
+          />
+          <div
+            role="menu"
+            aria-label="Answer with"
+            className="menu-glass absolute bottom-full left-0 z-30 mb-1.5 min-w-52 rounded-md py-1"
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.stopPropagation();
+                setOpen(false);
+              }
+            }}
+          >
+            <div className="px-2.5 py-1 text-[11px] text-subtle-foreground">
+              Answer with
+            </div>
+            {aiConfig.providers.map((p) => {
+              const r = ready.find((x) => x.id === p.id);
+              const selectable = r ? r.ready : true;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  role="menuitem"
+                  autoFocus={p.id === aiConfig.chatProvider}
+                  disabled={!selectable}
+                  onClick={() => {
+                    setOpen(false);
+                    void saveAiConfig({ ...aiConfig, chatProvider: p.id });
+                  }}
+                  className={cn(
+                    "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12.5px]",
+                    selectable
+                      ? "text-foreground hover:bg-surface-2"
+                      : "cursor-default text-subtle-foreground",
+                  )}
+                >
+                  <span className="min-w-0 flex-1 truncate">
+                    {p.label}
+                    {p.chatModel ? (
+                      <span className="text-subtle-foreground">
+                        {" "}
+                        · {p.chatModel}
+                      </span>
+                    ) : null}
+                  </span>
+                  {aiConfig.chatProvider === p.id ? (
+                    <Check className="h-3.5 w-3.5 text-citation" />
+                  ) : !selectable ? (
+                    <span className="text-[11px]">unavailable</span>
+                  ) : null}
+                </button>
+              );
+            })}
+            <div className="mx-2 my-1 h-px bg-border" />
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                openSettings("models");
+              }}
+              className="w-full px-2.5 py-1.5 text-left text-[12px] text-muted-foreground hover:bg-surface-2 hover:text-foreground"
+            >
+              Model settings…
+            </button>
+          </div>
+        </>
+      )}
+    </span>
   );
 }

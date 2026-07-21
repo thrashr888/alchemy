@@ -253,7 +253,12 @@ impl Router {
         &self.embedder
     }
 
-    pub fn profile(&self, _role: Role) -> ContextProfile {
-        ContextProfile::default()
+    pub fn profile(&self, role: Role) -> ContextProfile {
+        // The on-device model's small context wants fewer, tighter passages
+        // (RFC §2: retrieval tunes to the resolved model).
+        match self.chat_engine(role) {
+            ChatEngine::FoundationModels(_) => ContextProfile { retrieve_k: 4 },
+            _ => ContextProfile::default(),
+        }
     }
 }

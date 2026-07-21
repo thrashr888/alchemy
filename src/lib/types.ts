@@ -236,6 +236,7 @@ export interface AiConfig {
    *  phase 5). On by default — idle-gated, capped, fully recoverable; the
    *  toggle is for cost control. */
   curatorConsolidate: boolean;
+  setupSeen: boolean;
   gitSyncMinutes: number;
 }
 
