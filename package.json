@@ -1,7 +1,7 @@
 {
   "name": "alchemy",
   "private": true,
-  "version": "0.21.0",
+  "version": "0.22.0",
   "description": "Local-first research notebook inspired by NotebookLM — RAG over your sources, powered by Ollama",
   "license": "MPL-2.0",
   "author": "Paul Thrasher",
