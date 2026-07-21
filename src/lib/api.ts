@@ -215,6 +215,8 @@ export const api = {
         sourceIds,
       }),
     ),
+  openInTerminal: (command: string) =>
+    run(cmd<void>("open_in_terminal", { command })),
   cancelGeneration: (scope?: "chat" | "artifact" | "tts" | "meta") =>
     run(cmd<void>("cancel_generation", { scope })),
   suggestFollowups: (notebookId: string) =>

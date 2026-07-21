@@ -445,7 +445,13 @@ function ChatMessage({ message }: { message: Message }) {
   }
   // Provider failures are part of the conversation record: a quiet danger
   // wash naming the provider, so an unanswered question is never a mystery.
+  // When the advice names a fix, it becomes a button: launch Terminal with
+  // the sign-in command (backend allowlists the set), or jump to Settings.
   if (message.kind === "error") {
+    const fixCmd = /Fix: open Terminal, run `([^`]+)`/.exec(
+      message.content,
+    )?.[1];
+    const pointsAtSettings = message.content.includes("Settings → Models");
     return (
       <div className="flex flex-col gap-1.5">
         <RoleLabel role="assistant" />
@@ -454,6 +460,29 @@ function ChatMessage({ message }: { message: Message }) {
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
             <span className="selectable min-w-0">{message.content}</span>
           </div>
+          {(fixCmd || pointsAtSettings) && (
+            <div className="mt-2 flex items-center gap-2">
+              {fixCmd && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void api.openInTerminal(fixCmd)}
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  Open Terminal: {fixCmd}
+                </Button>
+              )}
+              {pointsAtSettings && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => useStore.getState().openSettings("models")}
+                >
+                  Model settings…
+                </Button>
+              )}
+            </div>
+          )}
           {message.model && (
             <div className="mt-1.5 text-[11px] text-subtle-foreground">
               {message.model}

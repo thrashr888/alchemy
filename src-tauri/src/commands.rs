@@ -295,6 +295,35 @@ pub fn ai_runtime(app: AppHandle, data_dir: std::path::PathBuf) -> crate::ai::Ai
     }
 }
 
+/// Launch Terminal.app running one of the known agent sign-in commands (the
+/// "Fix:" hints on error rows). Strictly allowlisted: the command string
+/// travels through model-adjacent error text, so nothing outside this fixed
+/// set may ever reach a shell.
+#[tauri::command]
+pub fn open_in_terminal(command: String) -> Result<(), String> {
+    const ALLOWED: [&str; 8] = [
+        "claude",
+        "codex login",
+        "gemini",
+        "cursor-agent login",
+        "opencode auth login",
+        "copilot",
+        "hermes",
+        "bob",
+    ];
+    if !ALLOWED.contains(&command.as_str()) {
+        return Err("unsupported command".into());
+    }
+    let script =
+        format!("tell application \"Terminal\"\nactivate\ndo script \"{command}\"\nend tell");
+    std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Message-footer attribution: which provider answered, with metered cost
 /// when the engine reported one ("Claude Code · $0.04").
 fn model_caption(model: &str, cost_usd: Option<f64>) -> String {
