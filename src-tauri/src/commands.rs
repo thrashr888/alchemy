@@ -3823,9 +3823,12 @@ pub async fn send_message(
     }
 
     // Retrieve relevant chunks.
-    let query_vec = {
+    let (query_vec, profile) = {
         let ai = state.ai.read().await;
-        e(ai.embed_one(&content).await)?
+        (
+            e(ai.embed_one(&content).await)?,
+            ai.profile(crate::inference::Role::Chat),
+        )
     };
     let search = e(state
         .db
@@ -3833,10 +3836,7 @@ pub async fn send_message(
             &notebook_id,
             query_vec,
             &content,
-            {
-                let ai = state.ai.read().await;
-                ai.profile(crate::inference::Role::Chat).retrieve_k
-            },
+            profile.retrieve_k,
             source_ids.as_deref(),
         )
         .await)?;
@@ -3893,6 +3893,7 @@ pub async fn send_message(
         &source_manifest,
         &extra,
         &persona,
+        &profile,
     );
 
     // Stream the answer, emitting tokens to the frontend. Race against the

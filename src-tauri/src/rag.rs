@@ -109,6 +109,7 @@ pub fn build_chat_messages(
     sources: &[(String, String)],
     extra_system: &str,
     persona: &str,
+    profile: &crate::inference::ContextProfile,
 ) -> Vec<ChatTurn> {
     let mut context = String::new();
     if citations.is_empty() {
@@ -144,27 +145,40 @@ pub fn build_chat_messages(
         system.push_str(&format!("\n\n{persona}"));
     }
     let mut messages = vec![ChatTurn::system(system)];
-    // Keep a short rolling window of prior turns for conversational context.
-    let start = history.len().saturating_sub(6);
+    // Keep a short rolling window of prior turns for conversational context;
+    // tight profiles (the on-device model) carry fewer turns.
+    let start = history.len().saturating_sub(profile.history_turns);
     messages.extend(history[start..].iter().cloned());
 
     // A manifest of every source in the notebook. The excerpts below are only
     // the top matches for THIS question; this list is the whole corpus, so
     // "which documents are here?" is answerable without relying on retrieval.
+    // Bounded by the profile's char budget — a git-repo notebook can hold
+    // hundreds of file sources — with an explicit count for what's elided.
     let manifest = if sources.is_empty() {
         "(none)".to_string()
     } else {
-        sources
-            .iter()
-            .map(|(title, url)| {
-                if url.is_empty() {
-                    format!("- {title}")
-                } else {
-                    format!("- {title} — {url}")
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        let mut out = String::new();
+        let mut shown = 0usize;
+        for (title, url) in sources {
+            let line = if url.is_empty() {
+                format!("- {title}")
+            } else {
+                format!("- {title} — {url}")
+            };
+            if !out.is_empty() && out.len() + line.len() + 1 > profile.manifest_chars {
+                break;
+            }
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&line);
+            shown += 1;
+        }
+        if shown < sources.len() {
+            out.push_str(&format!("\n- …and {} more sources", sources.len() - shown));
+        }
+        out
     };
 
     messages.push(ChatTurn::user(format!(

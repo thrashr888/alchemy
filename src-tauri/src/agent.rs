@@ -168,6 +168,8 @@ pub async fn run(
         .map(|s| (s.title.clone(), s.url.clone()))
         .collect();
     let persona = rag::persona_block(&ollama.config().profile);
+    // The agentic loop always drives a full-size model; the default profile's
+    // budgets are the right shape here.
     let messages = rag::build_chat_messages(
         history,
         question,
@@ -175,6 +177,7 @@ pub async fn run(
         &source_manifest,
         extra_system,
         &persona,
+        &crate::inference::ContextProfile::default(),
     );
     let app_cb = app.clone();
     let outcome = ollama

@@ -416,12 +416,16 @@ impl Ai {
         match self
             .config
             .provider_by_id(&self.config.chat_provider)
-            .map(|p| (p.kind.clone(), p.chat_model.clone()))
+            .map(|p| (p.kind.clone(), p.chat_model.clone(), p.label.clone()))
         {
-            Some((kind, model)) => match kind.as_str() {
+            Some((kind, model, label)) => match kind.as_str() {
                 "gateway" | "ollama" if !model.trim().is_empty() => model,
                 "gateway" => self.config.openai_chat_model.clone(),
                 "ollama" => self.config.chat_model.clone(),
+                // Agent CLIs and the on-device model have no user-facing
+                // model name; the provider label ("Claude Code", "On this
+                // Mac") is the honest caption, not the kind id ("fm").
+                _ if !label.trim().is_empty() => label,
                 other => other.to_string(),
             },
             None => self.config.chat_model.clone(),

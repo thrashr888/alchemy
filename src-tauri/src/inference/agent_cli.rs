@@ -377,15 +377,67 @@ impl AgentCli {
         // (tradr's scar); keep the tail for error messages.
         let stderr = child.stderr.take();
         let err_tail = tokio::spawn(async move {
-            let mut tail = String::new();
+            // Vendors put the cause on the first line and decoration after
+            // ("must specify GEMINI_API_KEY" … "Update your environment…"),
+            // so keep first + last non-empty lines, not just the last.
+            let mut first = String::new();
+            let mut last = String::new();
             if let Some(e) = stderr {
                 let mut lines = BufReader::new(e).lines();
                 while let Ok(Some(l)) = lines.next_line().await {
-                    tail = l;
+                    if l.trim().is_empty() {
+                        continue;
+                    }
+                    if first.is_empty() {
+                        first = l.clone();
+                    }
+                    last = l;
                 }
             }
-            tail
+            if last == first {
+                first
+            } else if first.is_empty() {
+                last
+            } else {
+                format!("{first} — {last}")
+            }
         });
+
+        fn strip_thinking(line: &str, in_thinking: &mut bool) -> Option<String> {
+            // Stateful across lines: `<thinking>` opens, `</thinking>` closes,
+            // tags may share a line with kept text. Lines that were entirely
+            // reasoning vanish; genuine blank lines in the answer survive.
+            let mut out = String::new();
+            let mut rest = line;
+            loop {
+                if *in_thinking {
+                    match rest.find("</thinking>") {
+                        Some(i) => {
+                            rest = &rest[i + "</thinking>".len()..];
+                            *in_thinking = false;
+                        }
+                        None => break,
+                    }
+                } else {
+                    match rest.find("<thinking>") {
+                        Some(i) => {
+                            out.push_str(&rest[..i]);
+                            rest = &rest[i + "<thinking>".len()..];
+                            *in_thinking = true;
+                        }
+                        None => {
+                            out.push_str(rest);
+                            break;
+                        }
+                    }
+                }
+            }
+            if out.trim().is_empty() && (*in_thinking || line != out) {
+                None
+            } else {
+                Some(out)
+            }
+        }
 
         let kind = self.kind;
         let run = async move {
@@ -394,6 +446,7 @@ impl AgentCli {
             let mut text = String::new();
             let mut errored: Option<String> = None;
             let mut cost_usd: Option<f64> = None;
+            let mut in_thinking = false;
             while let Some(line) = lines.next_line().await? {
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
                     // Plain-text CLIs (gemini, bob) and stream-json builds
@@ -406,12 +459,28 @@ impl AgentCli {
                             | AgentKind::Copilot
                             | AgentKind::Hermes
                     ) {
+                        // bobshell prints its reasoning as a <thinking> block
+                        // and wraps the reply in tool-call scaffolding
+                        // ("[using tool …]", "---output---" fences); all of
+                        // that is process, not reply.
+                        let kept = if kind == AgentKind::Bob {
+                            let t = line.trim();
+                            if t.starts_with("[using tool ") || t == "---output---" {
+                                continue;
+                            }
+                            match strip_thinking(&line, &mut in_thinking) {
+                                Some(k) => k,
+                                None => continue,
+                            }
+                        } else {
+                            line
+                        };
                         if !text.is_empty() {
                             text.push('\n');
                             on_token("\n");
                         }
-                        text.push_str(&line);
-                        on_token(&line);
+                        text.push_str(&kept);
+                        on_token(&kept);
                     }
                     continue;
                 };

@@ -75,11 +75,22 @@ failures never break retrieval. This is the raw data for future retrieval
 tuning.
 
 ### `ingest.rs` — extraction & chunking
-- **PDF** via `pdf-extract`, **text/markdown** via filesystem read, **URL** via
-  `reqwest` + naive tag stripping, **pasted text** directly.
-- Text is normalized (whitespace collapsed, paragraphs preserved) then split into
-  **~280-word windows with ~40-word overlap** — model-agnostic and good enough
-  for retrieval.
+- Extraction dispatches on type: **PDF** via `pdf-extract` (scanned/image PDFs
+  rejected with an OCR hint), **URL/HTML** via readability extraction (article
+  body kept, nav/boilerplate dropped, byline + publish date preserved as a
+  provenance line), **xlsx/csv/docx/pptx/epub** via dedicated extractors that
+  emit `# Sheet:` / `# Slide N` heading markers, **code files** verbatim
+  (indentation intact), **markdown/text/pasted** directly.
+- Prose chunking (`chunk_text`) is structure-aware: whole paragraphs packed up
+  to ~280 words, markdown-style headings start a new chunk and become section
+  context, oversized paragraphs fall back to sentence splits and then
+  overlapping word windows (280/40) as a last resort.
+- Code chunking (`chunk_code`) packs blank-line blocks and splits oversized
+  blocks into line windows with 8-line overlap — never sentence splits.
+- Every chunk carries two texts: `text`, the verbatim slice (stored, shown as
+  the citation snippet, matched for click-to-highlight), and `embed_text`, the
+  same slice prefixed with `[title › section]` context (file path for code) so
+  the vector carries topical signal the raw words may lack.
 
 ### `ai/` — provider
 `AiConfig` (base URL + chat/embed model) and an `Ollama` HTTP client:

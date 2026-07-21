@@ -51,11 +51,22 @@ pub enum Role {
 pub struct ContextProfile {
     /// Top-k passages retrieved for chat grounding.
     pub retrieve_k: usize,
+    /// Char budget for the full-corpus source manifest in the chat prompt.
+    /// Big notebooks (hundreds of git-source files) would otherwise stuff
+    /// tens of KB of titles into every prompt — fatal for the ~4k-token
+    /// on-device model, waste for everyone else.
+    pub manifest_chars: usize,
+    /// Rolling window of prior conversation turns included in the prompt.
+    pub history_turns: usize,
 }
 
 impl Default for ContextProfile {
     fn default() -> Self {
-        Self { retrieve_k: 8 }
+        Self {
+            retrieve_k: 8,
+            manifest_chars: 24_000,
+            history_turns: 6,
+        }
     }
 }
 
@@ -260,7 +271,14 @@ impl Router {
         // The on-device model's small context wants fewer, tighter passages
         // (RFC §2: retrieval tunes to the resolved model).
         match self.chat_engine(role) {
-            ChatEngine::FoundationModels(_) => ContextProfile { retrieve_k: 4 },
+            // On-device model: ~4k-token window. k=4 holds ≥75% recall in
+            // eval_context_profiles; the tight manifest/history budgets keep
+            // big notebooks from overflowing the window before the question.
+            ChatEngine::FoundationModels(_) => ContextProfile {
+                retrieve_k: 4,
+                manifest_chars: 2_000,
+                history_turns: 2,
+            },
             _ => ContextProfile::default(),
         }
     }

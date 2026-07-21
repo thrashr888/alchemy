@@ -132,6 +132,7 @@ async fn rag_round_trip() {
         &[("src-1".to_string(), String::new())],
         "",
         "",
+        &crate::inference::ContextProfile::default(),
     );
     let answer = ai.chat(&messages).await.expect("chat").text;
     eprintln!("answer: {answer}");

@@ -152,14 +152,14 @@ impl FmEngine {
                     _ => {}
                 }
             }
-            if text.is_empty() {
-                Err(anyhow!("sidecar closed without output"))
-            } else {
-                Ok(ChatOutcome {
-                    text,
-                    ..Default::default()
-                })
-            }
+            // EOF before a done/error event means the sidecar died mid-stream
+            // (a crash, not a completion). Returning the partial text as
+            // success once masked a per-token SIGABRT as a 5-char answer —
+            // fail loudly instead so the chat surface shows a real error.
+            Err(anyhow!(
+                "foundation models sidecar exited mid-stream ({} chars in)",
+                text.len()
+            ))
         };
 
         let outcome = tokio::time::timeout(REQUEST_TIMEOUT, run)

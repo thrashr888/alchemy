@@ -33,7 +33,9 @@ func emit(_ obj: [String: Any]) {
         let line = String(data: data, encoding: .utf8)
     else { return }
     print(line)
-    FileHandle.standardOutput.synchronizeFile()
+    // fflush only: stdout is a pipe when the app drives us, and
+    // synchronizeFile() (fsync) on a pipe raises NSFileHandleOperationException
+    // → SIGABRT after the first token. fsync is for files; pipes need none.
     fflush(stdout)
 }
 
