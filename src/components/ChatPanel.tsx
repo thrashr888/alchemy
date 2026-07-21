@@ -424,6 +424,11 @@ function SummaryBanner({
 }
 
 function ChatMessage({ message }: { message: Message }) {
+  // Retry only makes sense on the latest exchange — resending an older
+  // question would teleport it to the bottom of the transcript.
+  const isLast = useStore(
+    (s) => s.messages[s.messages.length - 1]?.id === message.id,
+  );
   // Tool confirmations are process, not conversation: one quiet gray row,
   // no bubble, no role label — the Claude-desktop "Ran ..." grammar.
   if (message.kind === "tool") {
@@ -480,10 +485,12 @@ function ChatMessage({ message }: { message: Message }) {
             <span className="selectable min-w-0">{message.content}</span>
           </div>
           <div className="mt-2 flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={() => void retry()}>
-              <RefreshCw className="h-3.5 w-3.5" />
-              Retry
-            </Button>
+            {isLast && (
+              <Button variant="ghost" size="sm" onClick={() => void retry()}>
+                <RefreshCw className="h-3.5 w-3.5" />
+                Retry
+              </Button>
+            )}
             {fixCmd && (
                 <Button
                   variant="ghost"
