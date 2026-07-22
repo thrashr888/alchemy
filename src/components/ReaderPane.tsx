@@ -1099,6 +1099,7 @@ const SOURCE_TYPE_LABEL: Record<Source["sourceType"], string> = {
   code: "Code",
   git: "Git repository",
   notion: "Notion pages",
+  obsidian: "Obsidian vault",
 };
 
 /** Git provenance parsed from the content header line the ingesters write
@@ -1573,7 +1574,7 @@ function SourceReader({
   // Folder, git, and Notion parents open as the repo reader (RFC-git-sources
   // §7): file tree + file pane instead of the flat map text. All hooks above
   // have run, so the early return is safe.
-  if (["folder", "git", "notion"].includes(source.sourceType)) {
+  if (["folder", "git", "notion", "obsidian"].includes(source.sourceType)) {
     return <RepoView source={source} map={content} />;
   }
 
@@ -2707,8 +2708,13 @@ function RepoView({ source, map }: { source: Source; map: string | null }) {
                   lineNums={lineNums}
                 />
               ) : (
-                <div className="selectable">
-                  <Markdown>{selContent}</Markdown>
+                // Vault/folder notes render [[wikilinks]] as hops, routed
+                // through the selected file's path as the link origin.
+                <div
+                  className="selectable"
+                  onClickCapture={docLinkClickHandler(sel?.url || undefined)}
+                >
+                  <Markdown wikilinks>{selContent}</Markdown>
                 </div>
               )}
             </>

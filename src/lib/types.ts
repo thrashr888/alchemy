@@ -31,7 +31,8 @@ export interface Source {
     | "mac"
     | "code"
     | "git"
-    | "notion";
+    | "notion"
+    | "obsidian";
   url: string;
   content: string;
   /** "placeholder" = cloud-sync file not downloaded yet; listed, not embedded. */

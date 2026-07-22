@@ -1030,7 +1030,10 @@ pub(crate) async fn repo_backed_files(
     let parents: HashSet<&str> = sources
         .iter()
         .filter(|s| {
-            matches!(s.source_type.as_str(), "folder" | "git" | "notion") && s.parent_id.is_empty()
+            matches!(
+                s.source_type.as_str(),
+                "folder" | "obsidian" | "git" | "notion"
+            ) && s.parent_id.is_empty()
         })
         .map(|s| s.id.as_str())
         .collect();
@@ -1235,7 +1238,10 @@ pub async fn refresh_source_url(
     if existing.url.is_empty() {
         return Err("This source has no URL or file path to refresh from".into());
     }
-    if matches!(existing.source_type.as_str(), "folder" | "git" | "notion") {
+    if matches!(
+        existing.source_type.as_str(),
+        "folder" | "obsidian" | "git" | "notion"
+    ) {
         // Notion parents re-export changed pages before the rescan.
         if existing.source_type == "notion" {
             let token = { state.ai.read().await.config().notion_token.clone() };
@@ -1364,7 +1370,10 @@ pub async fn get_source_content(
 pub async fn delete_source(state: State<'_, AppState>, source_id: String) -> Result<(), String> {
     // Deleting a folder or repo removes its children (and their chunks).
     if let Some(src) = e(state.db.get_source(&source_id).await)? {
-        if matches!(src.source_type.as_str(), "folder" | "git" | "notion") {
+        if matches!(
+            src.source_type.as_str(),
+            "folder" | "obsidian" | "git" | "notion"
+        ) {
             for child in e(state.db.list_sources(&src.notebook_id).await)? {
                 if child.parent_id == source_id {
                     e(state.db.delete_source(&child.id).await)?;
@@ -1965,6 +1974,12 @@ async fn rescan_one_folder(
         _ => std::path::PathBuf::from(&folder.url),
     };
     let root = root_buf.as_path();
+    // Upgrade a plain local folder to an Obsidian vault when `.obsidian/`
+    // appears (covers folders added before vault detection existed). One
+    // column flip; the rest of the scan is identical for both types.
+    if folder.source_type == "folder" && root.join(".obsidian").is_dir() {
+        let _ = state.db.set_source_type(&folder.id, "obsidian").await;
+    }
     if !root.is_dir() {
         // Folder vanished (unmounted / renamed / not yet synced). Keep the
         // children — their text is still usable — but flag the folder row.
@@ -2273,7 +2288,7 @@ pub async fn add_source_folder(
     }
     let _guard = state.folder_scan_lock.lock().await;
     for s in e(state.db.list_sources(&notebook_id).await)? {
-        if s.source_type == "folder" && s.url == path {
+        if matches!(s.source_type.as_str(), "folder" | "obsidian") && s.url == path {
             return Err(format!(
                 "Folder already added as \"{}\" — it refreshes automatically",
                 s.title
@@ -2285,11 +2300,19 @@ pub async fn add_source_folder(
         .and_then(|s| s.to_str())
         .unwrap_or("Folder")
         .to_string();
+    // An `.obsidian/` config dir marks the folder as an Obsidian vault
+    // (RFC-obsidian-notion §3): same folder machinery, distinct identity, and
+    // the reader renders its wikilinks as hops.
+    let source_type = if root.join(".obsidian").is_dir() {
+        "obsidian"
+    } else {
+        "folder"
+    };
     let folder = Source {
         id: new_id(),
         notebook_id: notebook_id.clone(),
         title,
-        source_type: "folder".to_string(),
+        source_type: source_type.to_string(),
         url: path,
         content: String::new(),
         char_count: 0,
@@ -5398,7 +5421,7 @@ pub async fn source_backlinks(
     }
     let mut out = Vec::new();
     for s in e(state.db.list_sources(&target.notebook_id).await)? {
-        if s.id == target.id || s.source_type == "folder" {
+        if s.id == target.id || matches!(s.source_type.as_str(), "folder" | "obsidian") {
             continue;
         }
         let content = e(state.db.source_content(&s.id).await)?;
