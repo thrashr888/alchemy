@@ -1128,6 +1128,261 @@ async fn eval_gist_rows() {
     }
 }
 
+// ---- Global source selection (RFC-infinite-context §4) --------------------
+//
+// The global answer route retrieves the standing gist layer corpus-wide, then
+// fans out per source. This eval covers the retrieval half — `search_gists` —
+// with handwritten gists: a global question must cover the sources it touches
+// while the per-notebook cap keeps one notebook from owning the fan-out.
+// Extract quality is a live-model concern, out of the deterministic suite.
+
+/// Network-heavy notebook: four network sources plus a baking distractor, so
+/// the per-notebook gist cap has a fifth candidate to trim.
+const GLOBAL_NET: &[(&str, &str)] = &[
+    (
+        "Home Network Guide",
+        "The home router lives in the hallway closet. Port 32400 forwards to \
+         the Plex media server. The guest WiFi is isolated from home devices \
+         and rotates its passphrase every quarter.",
+    ),
+    (
+        "Office Network Runbook",
+        "Office switches are patched on the last Friday of the quarter. Port \
+         8443 forwards to the badge system console. The conference network \
+         uses a captive portal with a daily rotating code.",
+    ),
+    (
+        "Cabin WiFi Setup",
+        "The cabin router sits above the wood stove shelf. Port 8080 forwards \
+         to the trail camera system. The guest passphrase is taped inside the \
+         pantry door.",
+    ),
+    (
+        "VPN Access Guide",
+        "The VPN uses WireGuard listening on port 51820. Shell access to home \
+         machines goes over the VPN only; nothing listens on the public \
+         interface.",
+    ),
+    (
+        "Sourdough Notes",
+        "Feed the starter twice daily at room temperature. Bulk fermentation \
+         runs four to six hours. A dutch oven preheated to four hundred fifty \
+         degrees gives the best oven spring.",
+    ),
+];
+
+/// Payments notebook: exactly the sources the payments query expects, so the
+/// cap returns all of them and recall does not hinge on a ranking tie-break.
+const GLOBAL_PAY: &[(&str, &str)] = &[
+    (
+        "Acme Invoices Q3",
+        "INV-2024-0042 for Acme Corp is paid; INV-2024-0051 for Globex is \
+         overdue. Retries that fail with ERR-503-BACKOFF wait sixty seconds. \
+         Contact billing for escalations.",
+    ),
+    (
+        "Vendor Payment Runbook",
+        "Vendor invoices are paid by wire on net-forty-five terms with \
+         same-day remittance advice. Disputed invoices escalate to \
+         procurement within five business days.",
+    ),
+    (
+        "Contractor Agreement Summary",
+        "Contractors invoice monthly on net-thirty terms. Late payments \
+         accrue one percent interest per month. Unlogged hours past thirty \
+         days are not billable.",
+    ),
+];
+
+/// Benefits notebook: exactly the two sources the benefits query expects.
+const GLOBAL_LIFE: &[(&str, &str)] = &[
+    (
+        "Employee Handbook",
+        "Employees accrue one and a half days of paid time off per month, \
+         available after the first ninety days. Expense reports are due by \
+         the fifth business day of the following month.",
+    ),
+    (
+        "Benefits FAQ",
+        "The company observes eleven paid holidays per year. Sick time is \
+         unlimited within reason. Parental leave is sixteen weeks paid after \
+         six months of service.",
+    ),
+];
+
+/// One handwritten gist per source, keyed by title — seeded exactly as the
+/// production sweep writes them via `seed_gist`.
+const GLOBAL_GISTS: &[(&str, &str)] = &[
+    (
+        "Home Network Guide",
+        "This guide covers the home network: where the router lives, the Plex \
+         port forward on 32400, and the isolated guest WiFi. Key terms: \
+         router, port 32400, guest WiFi.",
+    ),
+    (
+        "Office Network Runbook",
+        "This runbook covers the office network: the switch patching cadence, \
+         the badge console port forward on 8443, and the conference captive \
+         portal. Key terms: switches, port 8443, captive portal.",
+    ),
+    (
+        "Cabin WiFi Setup",
+        "This note covers the cabin network: the router location, the \
+         trail-camera port forward on 8080, and the guest passphrase. Key \
+         terms: cabin router, port 8080, trail camera.",
+    ),
+    (
+        "VPN Access Guide",
+        "This guide covers remote access: the WireGuard VPN on port 51820 and \
+         SSH restricted to the VPN. Key terms: WireGuard, port 51820, SSH.",
+    ),
+    (
+        "Sourdough Notes",
+        "These notes cover sourdough baking: starter feeding, bulk \
+         fermentation timing, and oven temperature. Key terms: starter, \
+         fermentation, oven spring.",
+    ),
+    (
+        "Acme Invoices Q3",
+        "This sheet lists Q3 invoices and their status, plus the \
+         ERR-503-BACKOFF retry wait. It can answer which invoices are paid or \
+         overdue. Key terms: INV-2024-0042, ERR-503-BACKOFF, billing.",
+    ),
+    (
+        "Vendor Payment Runbook",
+        "This runbook covers vendor payments: wire payments on net-forty-five \
+         terms and the dispute escalation path. Key terms: wires, \
+         net-forty-five, procurement.",
+    ),
+    (
+        "Contractor Agreement Summary",
+        "This summary covers contractor payment terms: monthly net-thirty \
+         invoicing, late-payment interest, and time-tracking rules. Key \
+         terms: net-thirty, interest, time tracking.",
+    ),
+    (
+        "Employee Handbook",
+        "This handbook covers time off and expenses: paid-time-off accrual \
+         and the expense-report deadline. Key terms: paid time off, expense \
+         reports.",
+    ),
+    (
+        "Benefits FAQ",
+        "This FAQ covers employee benefits: paid holidays, sick time, and \
+         parental leave. Key terms: holidays, sick time, parental leave.",
+    ),
+];
+
+/// One global question and the source titles it should cover.
+struct GlobalCase {
+    query: &'static str,
+    expected: &'static [&'static str],
+}
+
+const GLOBAL_CASES: &[GlobalCase] = &[
+    GlobalCase {
+        query: "compare all my invoice and payment terms across my notebooks",
+        expected: &[
+            "Acme Invoices Q3",
+            "Vendor Payment Runbook",
+            "Contractor Agreement Summary",
+        ],
+    },
+    GlobalCase {
+        query: "what do all my sources say about employee time off and benefits?",
+        expected: &["Employee Handbook", "Benefits FAQ"],
+    },
+];
+
+/// Corpus-wide gist selection (RFC-infinite-context §4): a global question
+/// covers the labeled sources it touches, and the per-notebook cap trims a
+/// notebook that over-supplies. Deterministic (builtin embedder + handwritten
+/// gists), so a failure is a selection regression, not flakiness.
+#[tokio::test]
+async fn eval_global_source_selection() {
+    let Some(ai) = builtin_ai().await else { return };
+    let dir = std::env::temp_dir().join(format!("nbl-eval-global-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    seed_docs(&ai, &db, "glob-net", GLOBAL_NET, "gn-").await;
+    seed_docs(&ai, &db, "glob-pay", GLOBAL_PAY, "gp-").await;
+    seed_docs(&ai, &db, "glob-life", GLOBAL_LIFE, "gl-").await;
+    let notebook_of = |title: &str| -> &'static str {
+        if GLOBAL_NET.iter().any(|(t, _)| *t == title) {
+            "glob-net"
+        } else if GLOBAL_PAY.iter().any(|(t, _)| *t == title) {
+            "glob-pay"
+        } else {
+            "glob-life"
+        }
+    };
+    for (title, gist) in GLOBAL_GISTS {
+        seed_gist(&ai, &db, notebook_of(title), title, gist).await;
+    }
+
+    const MAX_PER_NB: usize = 3;
+    let select = |q: &'static str| async {
+        let qv = ai.embed_one(q).await.expect("embed query");
+        db.search_gists(qv, 12)
+            .await
+            .expect("search gists")
+            .into_iter()
+            .map(|(nb, c)| (nb, c.source_title))
+            .collect::<Vec<_>>()
+    };
+    let cap_holds = |sel: &[(String, String)]| {
+        let mut per_nb: HashMap<&str, usize> = HashMap::new();
+        for (nb, _) in sel {
+            *per_nb.entry(nb.as_str()).or_default() += 1;
+        }
+        per_nb.values().all(|&n| n <= MAX_PER_NB)
+    };
+
+    eprintln!("\nglobal source selection (search_gists, cap {MAX_PER_NB}/notebook):");
+    for c in GLOBAL_CASES {
+        let sel = select(c.query).await;
+        assert!(cap_holds(&sel), "per-notebook cap exceeded: {sel:?}");
+        let titles: std::collections::HashSet<&str> = sel.iter().map(|(_, t)| t.as_str()).collect();
+        let missing: Vec<&str> = c
+            .expected
+            .iter()
+            .copied()
+            .filter(|t| !titles.contains(t))
+            .collect();
+        eprintln!(
+            "  {:<58} covered {}/{}",
+            c.query.chars().take(58).collect::<String>(),
+            c.expected.len() - missing.len(),
+            c.expected.len()
+        );
+        assert!(
+            missing.is_empty(),
+            "global selection for {:?} missed {missing:?}; got {sel:?}",
+            c.query
+        );
+    }
+
+    // Cap-trim query: five gists in glob-net, only three come back, and the
+    // baking distractor never displaces a network source.
+    let q = "summarize everything about my home, office, cabin, and vpn networks";
+    let sel = select(q).await;
+    assert!(cap_holds(&sel), "per-notebook cap exceeded: {sel:?}");
+    let net: Vec<&str> = sel
+        .iter()
+        .filter(|(nb, _)| nb == "glob-net")
+        .map(|(_, t)| t.as_str())
+        .collect();
+    eprintln!("  network query → glob-net kept {net:?}");
+    assert_eq!(
+        net.len(),
+        MAX_PER_NB,
+        "cap should trim glob-net's five gists to {MAX_PER_NB}, got {net:?}"
+    );
+    assert!(
+        !net.contains(&"Sourdough Notes"),
+        "cap kept the baking distractor over a network source: {net:?}"
+    );
+}
+
 // ---- Scale fence (RFC-infinite-context §3) --------------------------------
 //
 // Deterministic synthetic corpora at 1M/3M (and, behind --ignored, 10M)

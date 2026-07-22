@@ -46,6 +46,70 @@ Rules:\n\
 - If the excerpts do not contain the answer, say so plainly. Do not fabricate.\n\
 - Be concise — this answer renders in a small palette, not a document. Short paragraphs, no headers.";
 
+/// Classify a corpus-wide question as global (docs/RFC-infinite-context.md
+/// Phase 4): enumerative/comparative/overview intent that needs coverage, not
+/// a top-k of the closest chunks. Pure heuristics, no model call. Deliberately
+/// conservative — a pointed question misrouted as global costs latency and
+/// answer focus, so the marker set errs toward false negatives: only
+/// distinctive breadth words fire, matched on word boundaries so "all" never
+/// triggers on "call" or "smallest".
+pub fn is_global_query(q: &str) -> bool {
+    // An identifier-shaped token (error code, invoice number, port,
+    // snake/camel compound) is a pointed lookup no matter how the sentence
+    // around it reads: the pointed path's corpus-wide BM25 finds it exactly,
+    // while the global route's gist vectors may not carry it at all — the
+    // same escape-hatch rule that keeps BM25 unrouted in meta search.
+    let identifierish = q
+        .split(|c: char| c.is_whitespace() || ",;()[]{}\"'`?".contains(c))
+        .map(|t| t.trim_matches(|c: char| ".:!".contains(c)))
+        .filter(|t| t.chars().count() >= 4)
+        .any(|t| {
+            t.chars().any(|c| c.is_ascii_digit())
+                || t.contains('_')
+                || (t.contains('-') && !t.ends_with('-'))
+        });
+    if identifierish {
+        return false;
+    }
+    let lower = q.to_lowercase();
+    // Multi-word markers are distinctive enough for a plain substring test.
+    const PHRASES: &[&str] = &[
+        "how many",
+        "what do my",
+        "what are my",
+        "my sources",
+        "my notebooks",
+        "my documents",
+        "disagree",
+        "differ",
+        "in common",
+    ];
+    if PHRASES.iter().any(|p| lower.contains(p)) {
+        return true;
+    }
+    const WORDS: &[&str] = &[
+        "all",
+        "every",
+        "everything",
+        "each",
+        "overview",
+        "summarize",
+        "summarise",
+        "summary",
+        "themes",
+        "theme",
+        "compare",
+        "comparison",
+        "contrast",
+        "recurring",
+        "across",
+        "throughout",
+    ];
+    lower
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|tok| WORDS.contains(&tok))
+}
+
 /// One passage feeding a meta-chat answer (see commands::MetaCitation).
 /// `number` is the SOURCE's reference number — several excerpts from the
 /// same source share it, so the model's [n] citations line up with the
@@ -697,6 +761,47 @@ mod tests {
             ordinal: 0,
             snippet: snippet.into(),
             distance: 0.0,
+        }
+    }
+
+    /// The classifier stays pointed on specific look-ups and fires only on
+    /// genuine breadth intent (RFC-infinite-context §4). False negatives are
+    /// cheaper than false positives, so pointed questions must never route
+    /// global even when they brush a topic word.
+    #[test]
+    fn global_query_classifier_separates_pointed_from_global() {
+        let pointed = [
+            "what is the status of INV-2024-0042?",
+            "how much vacation time do employees earn?",
+            "where did we stay on the Japan trip?",
+            "when are router firmware updates applied?",
+            "what should happen after ERR-503-BACKOFF?",
+            "which invoice is overdue for Globex?",
+            "what temple did the ryokan owner recommend?",
+            "how warm should the oven be for baking bread?",
+            "what port forwards to the media server?",
+            // Identifier guard: breadth words lose to an identifier-shaped
+            // token — exact lookups must keep the BM25 escape hatch.
+            "which of my sources mentions ERR-9917-FROST?",
+            "compare all occurrences of INV-2077-0420",
+            "summarize everything about CKPT_PREFETCH",
+        ];
+        for q in pointed {
+            assert!(!is_global_query(q), "pointed misrouted as global: {q:?}");
+        }
+        let global = [
+            "summarize the themes across all my notebooks",
+            "what do my sources disagree on?",
+            "give me an overview of everything I have",
+            "compare the retry policies in my invoices",
+            "how many of my notebooks mention networking?",
+            "what are the recurring themes in my research?",
+            "across all my documents, what patterns emerge?",
+            "what do all my sources say about payments?",
+            "contrast the different network setups I have",
+        ];
+        for q in global {
+            assert!(is_global_query(q), "global not detected: {q:?}");
         }
     }
 

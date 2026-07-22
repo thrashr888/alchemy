@@ -6498,6 +6498,128 @@ pub(crate) async fn retrieve_everything(
     Ok(out)
 }
 
+/// Small-role extract calls per global answer, run sequentially — the fan-out
+/// bound and the single-tenant budget for local engines
+/// (docs/RFC-infinite-context.md Phase 4).
+const GLOBAL_FAN_OUT: usize = 6;
+
+/// One Small-role extract for the global route: pull only what answers the
+/// question out of one source's content. Returns None on any failure, an
+/// explicit SKIP, empty output, or output past the length bound — the caller
+/// then falls back to that source's gist text, never dropping the source.
+async fn global_extract(ai: &Ai, question: &str, content: &str) -> Option<String> {
+    // Same head-cap convention as the gist prompt (gist.rs PROMPT_HEAD_CHARS).
+    const HEAD_CHARS: usize = 10_000;
+    const EXTRACT_MAX_CHARS: usize = 2_000;
+    let head: String = content.chars().take(HEAD_CHARS).collect();
+    let messages = [
+        crate::ai::ChatTurn::system(
+            "You extract only what is relevant. Reply with 2-5 tight bullet points, \
+             or exactly SKIP if nothing applies.",
+        ),
+        crate::ai::ChatTurn::user(format!("Question: {question}\n\nSource:\n---\n{head}")),
+    ];
+    let text = ai
+        .chat_role(crate::ai::Role::Small, &messages)
+        .await
+        .ok()?
+        .text;
+    let text = text.trim();
+    let skipped = text
+        .lines()
+        .next()
+        .is_none_or(|l| l.trim().eq_ignore_ascii_case("SKIP"));
+    if skipped || text.chars().count() > EXTRACT_MAX_CHARS {
+        return None;
+    }
+    Some(text.to_string())
+}
+
+/// The global answer route (docs/RFC-infinite-context.md Phase 4): a lazy
+/// map-reduce over the standing gist layer. Retrieve the gist rows the
+/// question touches, extract per source on the Small role (falling back to the
+/// gist text on any per-source failure), and hand source-granular passages +
+/// citations to the shared meta synthesis path. Returns None when the route
+/// does not apply (no gists, nothing retrieved) or ANY step failed — the
+/// caller then takes the pointed path unchanged.
+async fn global_meta_route(
+    state: &AppState,
+    question: &str,
+) -> anyhow::Result<Option<(Vec<MetaCitation>, Vec<rag::MetaPassage>)>> {
+    if state.db.list_gists().await?.is_empty() {
+        return Ok(None);
+    }
+    let query_vec = {
+        let ai = state.ai.read().await.clone();
+        ai.embed_one(question).await?
+    };
+    let selected: Vec<(String, Citation)> = state
+        .db
+        .search_gists(query_vec, 12)
+        .await?
+        .into_iter()
+        .take(GLOBAL_FAN_OUT)
+        .collect();
+    if selected.is_empty() {
+        return Ok(None);
+    }
+
+    let nb_titles: std::collections::HashMap<String, String> = state
+        .db
+        .list_notebooks()
+        .await?
+        .into_iter()
+        .map(|n| (n.id, n.title))
+        .collect();
+
+    // One source → one passage → one citation, so numbers line up 1:1 (the
+    // pointed path dedupes several chunks per source; here each source is
+    // distinct already). Small-role calls run sequentially: local engines are
+    // single-tenant.
+    let ai = state.ai.read().await.clone();
+    let mut citations: Vec<MetaCitation> = Vec::with_capacity(selected.len());
+    let mut passages: Vec<rag::MetaPassage> = Vec::with_capacity(selected.len());
+    let mut fallbacks: Vec<bool> = Vec::with_capacity(selected.len());
+    for (i, (nb_id, gist)) in selected.iter().enumerate() {
+        let notebook_title = nb_titles.get(nb_id).cloned().unwrap_or_default();
+        // The gist row's snippet IS the distilled overview — the guaranteed
+        // fallback for this source when the extract fails or SKIPs.
+        let content = state.db.source_content(&gist.source_id).await?;
+        let (snippet, fell_back) = match global_extract(&ai, question, &content).await {
+            Some(extract) => (extract, false),
+            None => (gist.snippet.clone(), true),
+        };
+        fallbacks.push(fell_back);
+        passages.push(rag::MetaPassage {
+            number: i + 1,
+            kind: "source".into(),
+            notebook_title: notebook_title.clone(),
+            title: gist.source_title.clone(),
+            snippet,
+        });
+        citations.push(MetaCitation {
+            kind: "source".into(),
+            notebook_title,
+            notebook_id: nb_id.clone(),
+            id: gist.source_id.clone(),
+            title: gist.source_title.clone(),
+            snippet: gist.snippet.clone(),
+        });
+    }
+
+    crate::trace::log(
+        &state.trace_dir,
+        serde_json::json!({
+            "ts": now(),
+            "surface": "meta-global",
+            "query": question,
+            "fanOut": selected.len(),
+            "fallbacks": fallbacks,
+        }),
+    );
+    Ok(Some((citations, passages)))
+}
+
 /// Answer a question across the ENTIRE corpus, streaming tokens as
 /// meta://token events. See docs/RFC-meta-chat.md.
 #[tauri::command]
@@ -6522,31 +6644,52 @@ pub async fn ask_everything(
         Some(d) => d,
         None => state.ai.read().await.config().is_gateway(),
     };
-    let passages_raw = retrieve_everything(&state, &question, 16, deep).await?;
+    // Global route (RFC-infinite-context §4): enumerative/comparative
+    // questions want coverage of the gist layer, not a top-k of chunks. The
+    // classifier is pure; ANY failure inside the route degrades to None, so
+    // the pointed path below runs unchanged whenever the route doesn't fire.
+    let global = if rag::is_global_query(&question) {
+        match global_meta_route(&state, &question).await {
+            Ok(g) => g,
+            Err(err) => {
+                eprintln!("meta-global route failed, falling back to pointed: {err:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // References are per SOURCE, not per chunk: several excerpts from one
     // source share a number, and the citation list the UI shows is deduped —
     // otherwise a source that contributed five chunks shows up five times.
-    let mut citations: Vec<MetaCitation> = Vec::new();
-    let mut passages: Vec<rag::MetaPassage> = Vec::new();
-    for c in &passages_raw {
-        let number = match citations
-            .iter()
-            .position(|u| u.kind == c.kind && u.id == c.id)
-        {
-            Some(i) => i + 1,
-            None => {
-                citations.push(c.clone());
-                citations.len()
-            }
-        };
-        passages.push(rag::MetaPassage {
-            number,
-            kind: c.kind.clone(),
-            notebook_title: c.notebook_title.clone(),
-            title: c.title.clone(),
-            snippet: c.snippet.clone(),
-        });
-    }
+    let (citations, passages) = if let Some(g) = global {
+        g
+    } else {
+        let passages_raw = retrieve_everything(&state, &question, 16, deep).await?;
+        let mut citations: Vec<MetaCitation> = Vec::new();
+        let mut passages: Vec<rag::MetaPassage> = Vec::new();
+        for c in &passages_raw {
+            let number = match citations
+                .iter()
+                .position(|u| u.kind == c.kind && u.id == c.id)
+            {
+                Some(i) => i + 1,
+                None => {
+                    citations.push(c.clone());
+                    citations.len()
+                }
+            };
+            passages.push(rag::MetaPassage {
+                number,
+                kind: c.kind.clone(),
+                notebook_title: c.notebook_title.clone(),
+                title: c.title.clone(),
+                snippet: c.snippet.clone(),
+            });
+        }
+        (citations, passages)
+    };
 
     let persona = {
         let ai = state.ai.read().await.clone();

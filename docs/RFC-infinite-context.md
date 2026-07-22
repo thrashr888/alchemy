@@ -196,6 +196,23 @@ Eval: global-question dataset scored on citation precision/recall against
 labeled source sets (objective — no LLM-judge theater), plus a small
 hand-checked answer set.
 
+Status: **implemented**. Classifier (`rag::is_global_query`): pure
+heuristics, word-boundary matched, conservative — and any
+identifier-shaped token (digits, snake/kebab compounds) forces the pointed
+route regardless of breadth words, the same escape-hatch rule that keeps
+BM25 unrouted. Gist-wide retrieval (`Db::search_gists`, per-notebook cap
+3). The global route (`commands::global_meta_route`): `search_gists` → top
+`GLOBAL_FAN_OUT = 6` sources → one sequential `Role::Small` extract each
+(gist-text fallback on failure/SKIP/oversize — a source is never dropped
+silently) → synthesis through the existing `build_meta_messages`/streaming
+path, cited 1:1 at source granularity; traced as `surface: "meta-global"`
+with per-source fallback flags. Degradation is the guardrail: any failure
+falls through to the pointed path, byte-for-byte. Eval:
+`eval_global_source_selection` scores `search_gists` on citation coverage
+(selected ⊇ labeled sources) and the notebook cap over handwritten gists;
+extract quality stays out of the deterministic suite (evals have no chat
+model). Dataset report byte-identical across the change.
+
 ## Phase 5: model-tiered evidence shaping
 
 Extend `ContextProfile` (inference RFC §2) with evidence-shape parameters:

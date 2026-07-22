@@ -1187,6 +1187,56 @@ impl Db {
         nb_citations_from_batches(&batches, &titles)
     }
 
+    /// Vector search over the gist rows only (docs/RFC-infinite-context.md
+    /// Phase 4): the standing distilled-overview layer, retrieved corpus-wide
+    /// to seed the global answer route. Restricted to `gist:%` owners, decoded
+    /// through the shared title pass (so each hit is titled after its source),
+    /// then capped to `MAX_GISTS_PER_NOTEBOOK` per notebook — walked in score
+    /// order like `apply_diversity`, kept local and simple — so one chatty
+    /// notebook can't own the whole fan-out. Returns (notebook_id, citation).
+    pub async fn search_gists(
+        &self,
+        query_vec: Vec<f32>,
+        k: usize,
+    ) -> Result<Vec<(String, Citation)>> {
+        if !self.table_exists(T_CHUNKS).await? {
+            return Ok(vec![]);
+        }
+        let (titles, _) = self.corpus_meta().await?;
+        let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
+        let batches = tbl
+            .query()
+            .only_if(format!("source_id LIKE '{GIST_CHUNK_PREFIX}%'"))
+            .nearest_to(query_vec)?
+            .limit(k.max(1) * 3)
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        let mut hits = nb_citations_from_batches(&batches, &titles)?;
+        hits.sort_by(|a, b| {
+            a.1.distance
+                .partial_cmp(&b.1.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        const MAX_GISTS_PER_NOTEBOOK: usize = 3;
+        let mut per_notebook: HashMap<String, usize> = HashMap::new();
+        let mut out: Vec<(String, Citation)> = Vec::with_capacity(k);
+        for hit in hits {
+            if out.len() >= k {
+                break;
+            }
+            let n = per_notebook.entry(hit.0.clone()).or_default();
+            if *n >= MAX_GISTS_PER_NOTEBOOK {
+                continue;
+            }
+            *n += 1;
+            out.push(hit);
+        }
+        Ok(out)
+    }
+
     /// Corpus-wide owner metadata in one sources+notes scan: stored-owner-id
     /// → display title (the uniform title-filling pass shared by all
     /// corpus-wide reads; gist rows display their source's title), plus the
