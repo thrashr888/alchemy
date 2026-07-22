@@ -125,10 +125,14 @@ async fn rag_round_trip() {
     );
 
     // 4. Grounded chat
+    let no_expansion = std::collections::HashMap::new();
     let messages = rag::build_chat_messages(
         &[],
         "Where do the light-dependent reactions occur?",
-        &citations,
+        rag::Excerpts {
+            citations: &citations,
+            expanded: &no_expansion,
+        },
         &[("src-1".to_string(), String::new())],
         "",
         "",

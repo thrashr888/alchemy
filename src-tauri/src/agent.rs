@@ -171,10 +171,16 @@ pub async fn run(
     let persona = rag::persona_block(&ollama.config().profile);
     // The agentic loop always drives a full-size model; the default profile's
     // budgets are the right shape here.
+    // Agentic reads are already whole-document distillates — no neighbor
+    // expansion to apply.
+    let no_expansion = std::collections::HashMap::new();
     let messages = rag::build_chat_messages(
         history,
         question,
-        &gathered,
+        rag::Excerpts {
+            citations: &gathered,
+            expanded: &no_expansion,
+        },
         &source_manifest,
         extra_system,
         &persona,

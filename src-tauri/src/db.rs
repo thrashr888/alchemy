@@ -821,13 +821,17 @@ impl Db {
             return Ok(SearchTrace::default());
         }
         // Map stored owner id -> title for citation labels (notes keyed by
-        // their prefixed form, matching what the chunk rows store).
+        // their prefixed form, matching what the chunk rows store), plus
+        // owner recency for the fusion tie-break.
         let mut titles: HashMap<String, String> = HashMap::new();
+        let mut recency: HashMap<String, i64> = HashMap::new();
         for s in self.list_sources(notebook_id).await? {
+            recency.insert(s.id.clone(), s.created_at);
             titles.insert(s.id, s.title);
         }
         for n in self.list_notes(notebook_id).await? {
             titles.insert(format!("{NOTE_CHUNK_PREFIX}{}", n.id), n.title);
+            recency.insert(format!("{NOTE_CHUNK_PREFIX}{}", n.id), n.created_at);
         }
 
         // Gist rows are corpus-wide evidence (meta-chat, MCP search); the
@@ -913,10 +917,12 @@ impl Db {
             }
         }
         let mut merged: Vec<(Citation, f32)> = fused.into_values().collect();
+        let at = |c: &Citation| owner_recency(&recency, c);
         merged.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0.chunk_id.cmp(&b.0.chunk_id))
+            fused_cmp(
+                (a.1, at(&a.0), &a.0.chunk_id),
+                (b.1, at(&b.0), &b.0.chunk_id),
+            )
         });
         let fused_hits: Vec<Citation> = merged.into_iter().map(|(c, _)| c).collect();
         let final_hits = fused_hits.iter().take(k).cloned().collect();
@@ -1018,20 +1024,22 @@ impl Db {
         Ok(notes)
     }
 
-    /// (id, notebook_id, title) for every source — lightweight lookups without
-    /// dragging full content across.
-    pub async fn all_source_meta(&self) -> Result<Vec<(String, String, String)>> {
+    /// (id, notebook_id, title, created_at) for every source — lightweight
+    /// lookups without dragging full content across.
+    pub async fn all_source_meta(&self) -> Result<Vec<(String, String, String, i64)>> {
         let batches = self.collect(T_SOURCES, None).await?;
         let mut out = Vec::new();
         for b in &batches {
             let id = str_col(b, "id")?;
             let nb = str_col(b, "notebook_id")?;
             let title = str_col(b, "title")?;
+            let created = i64_col(b, "created_at")?;
             for i in 0..b.num_rows() {
                 out.push((
                     id.value(i).to_string(),
                     nb.value(i).to_string(),
                     title.value(i).to_string(),
+                    created.value(i),
                 ));
             }
         }
@@ -1077,7 +1085,7 @@ impl Db {
         if !self.table_exists(T_CHUNKS).await? {
             return Ok(vec![]);
         }
-        let titles = self.corpus_titles().await?;
+        let (titles, recency) = self.corpus_meta().await?;
         let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
         let pool = k.max(1) * opts.pool_multiplier.max(3);
 
@@ -1142,10 +1150,12 @@ impl Db {
             }
         }
         let mut merged: Vec<((String, Citation), f32)> = fused.into_values().collect();
+        let at = |c: &Citation| owner_recency(&recency, c);
         merged.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0 .1.chunk_id.cmp(&b.0 .1.chunk_id))
+            fused_cmp(
+                (a.1, at(&a.0 .1), &a.0 .1.chunk_id),
+                (b.1, at(&b.0 .1), &b.0 .1.chunk_id),
+            )
         });
         let ranked: Vec<(String, Citation)> = merged.into_iter().map(|(hit, _)| hit).collect();
         Ok(apply_diversity(ranked, k, opts))
@@ -1162,7 +1172,7 @@ impl Db {
         // Same uniform title pass as the hybrid path — this previously
         // returned note chunks with empty titles (the known gap from
         // RFC-retrieval-maturity Phase 2).
-        let titles = self.corpus_titles().await?;
+        let (titles, _) = self.corpus_meta().await?;
         let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
         let batches = match tbl
             .query()
@@ -1177,19 +1187,24 @@ impl Db {
         nb_citations_from_batches(&batches, &titles)
     }
 
-    /// Stored-owner-id → display title for every source, note, and gist row
-    /// in the corpus: the uniform title-filling pass shared by all
-    /// corpus-wide reads. Gist rows display their source's title.
-    async fn corpus_titles(&self) -> Result<HashMap<String, String>> {
+    /// Corpus-wide owner metadata in one sources+notes scan: stored-owner-id
+    /// → display title (the uniform title-filling pass shared by all
+    /// corpus-wide reads; gist rows display their source's title), plus the
+    /// recency map fusion uses as a tie-break. Recency keys: plain source id
+    /// (gists resolve to their source before lookup) and `note:<id>`.
+    async fn corpus_meta(&self) -> Result<(HashMap<String, String>, HashMap<String, i64>)> {
         let mut titles: HashMap<String, String> = HashMap::new();
-        for (id, _nb, title) in self.all_source_meta().await? {
+        let mut recency: HashMap<String, i64> = HashMap::new();
+        for (id, _nb, title, created_at) in self.all_source_meta().await? {
             titles.insert(format!("{GIST_CHUNK_PREFIX}{id}"), title.clone());
+            recency.insert(id.clone(), created_at);
             titles.insert(id, title);
         }
         for n in self.recent_notes(usize::MAX).await? {
             titles.insert(format!("{NOTE_CHUNK_PREFIX}{}", n.id), n.title);
+            recency.insert(format!("{NOTE_CHUNK_PREFIX}{}", n.id), n.created_at);
         }
-        Ok(titles)
+        Ok((titles, recency))
     }
 
     // ---- Semantic router ---------------------------------------------------
@@ -1449,6 +1464,93 @@ impl Db {
         self.delete_where(T_CHUNKS, &pred).await
     }
 
+    /// Post-rank neighbor expansion (RFC-infinite-context §3): for each
+    /// cited source chunk, widen the PROMPT excerpt to include its ordinal
+    /// ±1 neighbors so a section split by chunking reaches the model whole.
+    /// Returns chunk_id → expanded text for the citations that grew;
+    /// persisted citations keep their verbatim snippet (click-to-highlight
+    /// depends on it) — only prompt assembly reads this map. Higher-ranked
+    /// citations claim neighbors first, and an ordinal already cited (or
+    /// claimed) is never included twice.
+    pub async fn expand_neighbor_excerpts(
+        &self,
+        citations: &[Citation],
+    ) -> Result<HashMap<String, String>> {
+        let mut claimed: HashMap<&str, std::collections::HashSet<i32>> = HashMap::new();
+        for c in citations {
+            if c.note_id.is_empty() && !c.gist && !c.source_id.is_empty() {
+                claimed.entry(&c.source_id).or_default().insert(c.ordinal);
+            }
+        }
+        let mut out = HashMap::new();
+        for c in citations {
+            // Notes and gists have no meaningful neighbors; grep/read
+            // pseudo-citations carry ordinals that aren't chunk positions.
+            if !c.note_id.is_empty() || c.gist || c.source_id.is_empty() {
+                continue;
+            }
+            if c.chunk_id.starts_with("grep:") || c.chunk_id.starts_with("read:") {
+                continue;
+            }
+            let taken = claimed.entry(&c.source_id).or_default();
+            let want: Vec<i32> = [c.ordinal - 1, c.ordinal + 1]
+                .into_iter()
+                .filter(|o| *o >= 0 && !taken.contains(o))
+                .collect();
+            if want.is_empty() {
+                continue;
+            }
+            let texts = self.chunk_texts_by_ordinal(&c.source_id, &want).await?;
+            if texts.is_empty() {
+                continue;
+            }
+            for o in texts.keys() {
+                taken.insert(*o);
+            }
+            let mut parts: Vec<&str> = Vec::with_capacity(3);
+            if let Some(prev) = texts.get(&(c.ordinal - 1)) {
+                parts.push(prev);
+            }
+            parts.push(&c.snippet);
+            if let Some(next) = texts.get(&(c.ordinal + 1)) {
+                parts.push(next);
+            }
+            if parts.len() > 1 {
+                out.insert(c.chunk_id.clone(), parts.join("\n\n"));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Verbatim chunk texts for specific ordinals of one source — the
+    /// neighbor-expansion fetch. Gist rows can't collide: their stored
+    /// owner id is prefixed, so the equality filter never matches them.
+    async fn chunk_texts_by_ordinal(
+        &self,
+        source_id: &str,
+        ordinals: &[i32],
+    ) -> Result<HashMap<i32, String>> {
+        if ordinals.is_empty() || !self.table_exists(T_CHUNKS).await? {
+            return Ok(HashMap::new());
+        }
+        let list = ordinals
+            .iter()
+            .map(|o| o.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let filter = format!("source_id = '{}' AND ordinal IN ({list})", esc(source_id));
+        let batches = self.collect(T_CHUNKS, Some(&filter)).await?;
+        let mut out = HashMap::new();
+        for b in &batches {
+            let ord = i32_col(b, "ordinal")?;
+            let text = str_col(b, "text")?;
+            for i in 0..b.num_rows() {
+                out.insert(ord.value(i), text.value(i).to_string());
+            }
+        }
+        Ok(out)
+    }
+
     /// Bump a usage counter for the given notes (deduped — one answer citing
     /// three passages of a note counts once) and stamp `last_used_at`.
     /// `field` is one of "reads" | "retrieval_hits" | "cited". This is the
@@ -1687,6 +1789,32 @@ fn nb_citations_from_batches(
         }
     }
     Ok(out)
+}
+
+/// Fused-pool ordering (RFC-infinite-context §3): RRF score descending,
+/// then owner recency descending — when two hits score identically (the
+/// classic case: a vector-only and an FTS-only hit at the same rank), the
+/// newer owner answers — then chunk id ascending as the deterministic
+/// floor. Extracted so the rule is unit-testable; both fusion paths use it.
+fn fused_cmp(a: (f32, i64, &str), b: (f32, i64, &str)) -> std::cmp::Ordering {
+    b.0.partial_cmp(&a.0)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| b.1.cmp(&a.1))
+        .then_with(|| a.2.cmp(b.2))
+}
+
+/// A hit's owner recency for the fusion tie-break. Notes key by their
+/// prefixed form; gists were resolved to their source id at decode time, so
+/// they inherit the source's timestamp. Unknown owners sort oldest.
+fn owner_recency(recency: &HashMap<String, i64>, c: &Citation) -> i64 {
+    if c.note_id.is_empty() {
+        recency.get(&c.source_id).copied().unwrap_or(0)
+    } else {
+        recency
+            .get(&format!("{NOTE_CHUNK_PREFIX}{}", c.note_id))
+            .copied()
+            .unwrap_or(0)
+    }
 }
 
 /// Decode a stored chunk owner id into (source_id, note_id, is_gist).
@@ -1991,4 +2119,145 @@ fn note_batch(schema: &SchemaRef, notes: &[Note]) -> Result<RecordBatch> {
             s(|x| x.status.clone()),
         ],
     )?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cmp::Ordering;
+
+    /// The RRF tie case that motivated the recency tie-break: a vector-only
+    /// and an FTS-only hit at the same rank score identically. Newer owner
+    /// wins the tie; id order decides only when recency ties too — and the
+    /// fixtures make id order vote the other way, so a pass proves recency
+    /// actually outranks it.
+    #[test]
+    fn fused_cmp_breaks_score_ties_by_recency_then_id() {
+        let tie = 1.0 / 60.0;
+        // Score dominates everything.
+        assert_eq!(
+            fused_cmp((0.9, 0, "z"), (0.1, 999, "a")),
+            Ordering::Less,
+            "higher score ranks first regardless of recency and id"
+        );
+        // Equal score → newer owner first, even though "a" < "z".
+        assert_eq!(
+            fused_cmp((tie, 2_000, "z"), (tie, 1_000, "a")),
+            Ordering::Less
+        );
+        assert_eq!(
+            fused_cmp((tie, 1_000, "a"), (tie, 2_000, "z")),
+            Ordering::Greater
+        );
+        // Equal score and recency → id ascending keeps determinism.
+        assert_eq!(fused_cmp((tie, 5, "a"), (tie, 5, "b")), Ordering::Less);
+        assert_eq!(fused_cmp((tie, 5, "b"), (tie, 5, "a")), Ordering::Greater);
+        assert_eq!(fused_cmp((tie, 5, "a"), (tie, 5, "a")), Ordering::Equal);
+    }
+
+    #[test]
+    fn owner_recency_resolves_notes_and_unknowns() {
+        let mut recency = HashMap::new();
+        recency.insert("src-1".to_string(), 111i64);
+        recency.insert(format!("{NOTE_CHUNK_PREFIX}n-1"), 222i64);
+        let source_hit = Citation {
+            chunk_id: "c1".into(),
+            source_id: "src-1".into(),
+            source_title: String::new(),
+            note_id: String::new(),
+            gist: false,
+            ordinal: 0,
+            snippet: String::new(),
+            distance: 0.0,
+        };
+        // Gist rows reach the comparator with source_id already resolved,
+        // so they inherit the source's timestamp through the same key.
+        let gist_hit = Citation {
+            gist: true,
+            ..source_hit.clone()
+        };
+        let note_hit = Citation {
+            source_id: String::new(),
+            note_id: "n-1".into(),
+            ..source_hit.clone()
+        };
+        let unknown = Citation {
+            source_id: "src-gone".into(),
+            ..source_hit.clone()
+        };
+        assert_eq!(owner_recency(&recency, &source_hit), 111);
+        assert_eq!(owner_recency(&recency, &gist_hit), 111);
+        assert_eq!(owner_recency(&recency, &note_hit), 222);
+        assert_eq!(
+            owner_recency(&recency, &unknown),
+            0,
+            "unknown owners sort oldest"
+        );
+    }
+
+    /// Neighbor expansion widens prompt excerpts with ordinal ±1 text,
+    /// never double-includes an ordinal another citation already carries,
+    /// and skips notes/gists. Fake 4-dim vectors — no embedder involved.
+    #[tokio::test]
+    async fn expand_neighbor_excerpts_widens_and_dedupes() {
+        let dir = std::env::temp_dir().join(format!("nbl-db-expand-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+        let rows: Vec<(String, i32, String)> = [
+            "alpha section text",
+            "bravo section text",
+            "charlie section text",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (format!("c{i}"), i as i32, t.to_string()))
+        .collect();
+        let vecs: Vec<Vec<f32>> = vec![vec![0.0; 4]; rows.len()];
+        db.add_chunks("nb", "src-1", &rows, &vecs)
+            .await
+            .expect("add");
+
+        let cite = |chunk_id: &str, ordinal: i32, snippet: &str| Citation {
+            chunk_id: chunk_id.into(),
+            source_id: "src-1".into(),
+            source_title: "Doc".into(),
+            note_id: String::new(),
+            gist: false,
+            ordinal,
+            snippet: snippet.into(),
+            distance: 0.0,
+        };
+        // Both middle and last chunks are cited: the middle one may claim
+        // only the uncited ordinal 0; the last one has no free neighbors
+        // (1 is cited, 3 does not exist) so it must not expand.
+        let citations = vec![
+            cite("c1", 1, "bravo section text"),
+            cite("c2", 2, "charlie section text"),
+        ];
+        let expanded = db
+            .expand_neighbor_excerpts(&citations)
+            .await
+            .expect("expand");
+        let widened = expanded.get("c1").expect("middle chunk widens");
+        assert_eq!(widened, "alpha section text\n\nbravo section text");
+        assert!(
+            !expanded.contains_key("c2"),
+            "no free neighbors means no expansion entry"
+        );
+
+        // Notes and gists never expand.
+        let note_hit = Citation {
+            note_id: "n1".into(),
+            source_id: String::new(),
+            ..cite("c9", 0, "note text")
+        };
+        let gist_hit = Citation {
+            gist: true,
+            ..cite("c1", 1, "gist text")
+        };
+        let none = db
+            .expand_neighbor_excerpts(&[note_hit, gist_hit])
+            .await
+            .expect("expand");
+        assert!(none.is_empty());
+    }
 }

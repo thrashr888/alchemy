@@ -96,8 +96,17 @@ pub fn build_meta_messages(
     messages
 }
 
-/// Build the chat message list from the retrieved citations and the question.
-/// The citation list passed in becomes excerpts [1..n] in order. `sources` is
+/// The evidence block for a chat prompt: ranked citations plus optional
+/// neighbor-expanded prompt bodies keyed by chunk id
+/// (RFC-infinite-context §3). Citations stay verbatim — expansion changes
+/// only what the model reads, never what gets persisted or highlighted.
+pub struct Excerpts<'a> {
+    pub citations: &'a [Citation],
+    pub expanded: &'a std::collections::HashMap<String, String>,
+}
+
+/// Build the chat message list from the retrieved excerpts and the question.
+/// The citation list becomes excerpts [1..n] in order. `sources` is
 /// the full (title, url) list for the notebook — url empty for local files —
 /// so the model can answer corpus-level questions ("what documents do we
 /// have?") even when top-k retrieval only surfaced chunks from a few of them,
@@ -105,12 +114,13 @@ pub fn build_meta_messages(
 pub fn build_chat_messages(
     history: &[ChatTurn],
     question: &str,
-    citations: &[Citation],
+    excerpts: Excerpts<'_>,
     sources: &[(String, String)],
     extra_system: &str,
     persona: &str,
     profile: &crate::inference::ContextProfile,
 ) -> Vec<ChatTurn> {
+    let citations = excerpts.citations;
     let mut context = String::new();
     if citations.is_empty() {
         context.push_str("(No source excerpts matched this question.)");
@@ -123,12 +133,19 @@ pub fn build_chat_messages(
             } else {
                 "from note"
             };
+            // Neighbor-expanded excerpts widen what the model reads; the
+            // citation itself stays verbatim.
+            let body = excerpts
+                .expanded
+                .get(&c.chunk_id)
+                .map(String::as_str)
+                .unwrap_or(&c.snippet);
             context.push_str(&format!(
                 "[{}] ({} \"{}\")\n{}\n\n",
                 i + 1,
                 tier,
                 c.source_title,
-                c.snippet.trim()
+                body.trim()
             ));
         }
     }
@@ -663,4 +680,68 @@ pub fn build_artifact_messages(instruction: &str, corpus: &str, persona: &str) -
         ChatTurn::system(system),
         ChatTurn::user(format!("{instruction}\n\n--- SOURCES ---\n\n{corpus}")),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn cite(chunk_id: &str, snippet: &str) -> Citation {
+        Citation {
+            chunk_id: chunk_id.into(),
+            source_id: "s1".into(),
+            source_title: "Doc".into(),
+            note_id: String::new(),
+            gist: false,
+            ordinal: 0,
+            snippet: snippet.into(),
+            distance: 0.0,
+        }
+    }
+
+    /// Expanded excerpts reach the prompt; the citation list itself is
+    /// untouched (persisted snippets are what click-to-highlight matches).
+    #[test]
+    fn chat_prompt_prefers_expanded_excerpts() {
+        let citations = vec![
+            cite("c1", "the core snippet"),
+            cite("c2", "unexpanded snippet"),
+        ];
+        let mut expanded = HashMap::new();
+        expanded.insert(
+            "c1".to_string(),
+            "preceding context\n\nthe core snippet\n\nfollowing context".to_string(),
+        );
+        let messages = build_chat_messages(
+            &[],
+            "what does the doc say?",
+            Excerpts {
+                citations: &citations,
+                expanded: &expanded,
+            },
+            &[],
+            "",
+            "",
+            &crate::inference::ContextProfile::default(),
+        );
+        let prompt = messages
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            prompt.contains("preceding context"),
+            "expanded body reaches the prompt"
+        );
+        assert!(prompt.contains("following context"));
+        assert!(
+            prompt.contains("unexpanded snippet"),
+            "unexpanded citations keep their snippet"
+        );
+        assert_eq!(
+            citations[0].snippet, "the core snippet",
+            "citation stays verbatim"
+        );
+    }
 }

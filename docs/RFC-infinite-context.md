@@ -148,6 +148,20 @@ clean sets (regression fence).
   anonymized real notebooks. The "infinite" claim made falsifiable:
   recall@k curves must stay flat (±5%) across the three sizes.
 
+Status: **partially implemented** — adaptive k
+(`ContextProfile::retrieve_k_for`: +1 per doubling past ~200k chars, capped
+by `retrieve_k_max`; 16 default, 6 on-device), post-rank neighbor expansion
+(`Db::expand_neighbor_excerpts`: prompt-only, profile-gated, higher ranks
+claim neighbors first, cited/claimed ordinals never included twice), and
+the recency tie-break (`fused_cmp`: score → owner recency → chunk id; gists
+inherit their source's timestamp) are in with unit tests, and the dataset
+report is byte-identical across the change. One honesty note: a true RRF
+tie is a vector-only vs FTS-only hit at equal rank — constructing that end
+to end is fixture-fragile, so the recency rule is proven at the extracted
+comparator, not through the full stack. Remaining: the scale corpora, the
+flat-recall fence, and the corpus-wide dataset runner (which also unblocks
+`gist`/`global` dataset kinds from Phase 1).
+
 ## Phase 4: global answers (lazy map-reduce)
 
 Classify the query (heuristics first: enumerative/comparative markers;

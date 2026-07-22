@@ -3872,7 +3872,9 @@ pub async fn send_message(
         return finish_tool_reply(&app, &state, &notebook_id, reply).await;
     }
 
-    // Retrieve relevant chunks.
+    // Retrieve relevant chunks. The selected sources are fetched first so
+    // retrieval depth can scale with how much text is actually in play
+    // (RFC-infinite-context §3) and the manifest reuses the same rows.
     let (query_vec, profile) = {
         let ai = state.ai.read().await.clone();
         (
@@ -3880,15 +3882,15 @@ pub async fn send_message(
             ai.profile(crate::inference::Role::Chat),
         )
     };
+    let selected_sources: Vec<Source> = e(state.db.list_sources(&notebook_id).await)?
+        .into_iter()
+        .filter(|s| source_ids.as_ref().is_none_or(|ids| ids.contains(&s.id)))
+        .collect();
+    let notebook_chars: i64 = selected_sources.iter().map(|s| s.char_count).sum();
+    let k = profile.retrieve_k_for(notebook_chars);
     let search = e(state
         .db
-        .search_chunks_trace(
-            &notebook_id,
-            query_vec,
-            &content,
-            profile.retrieve_k,
-            source_ids.as_deref(),
-        )
+        .search_chunks_trace(&notebook_id, query_vec, &content, k, source_ids.as_deref())
         .await)?;
     // The ripgrep leg (RFC-git-sources §6): code-shaped queries also
     // exact-match over the notebook's repo-backed files, and the windows
@@ -3909,16 +3911,27 @@ pub async fn send_message(
             "citations": crate::trace::cite_summaries(&search.final_hits),
         }),
     );
-    let citations = fuse_grep_hits(search.final_hits, grep_hits, 8);
+    let citations = fuse_grep_hits(search.final_hits, grep_hits, k);
     bump_note_usage(&state.db, &citations, "retrieval_hits").await;
+
+    // Widen prompt excerpts to ordinal neighbors where the model's window
+    // affords it; persisted citations stay verbatim.
+    let expanded = if profile.neighbor_expansion {
+        state
+            .db
+            .expand_neighbor_excerpts(&citations)
+            .await
+            .unwrap_or_default()
+    } else {
+        std::collections::HashMap::new()
+    };
 
     // Full source manifest (title + url) so corpus-level questions are
     // answerable regardless of which chunks the top-k search happened to
     // surface, and the model can propose new addable URLs. Respects the
     // source selection so deselected sources stay out of the prompt.
-    let source_manifest: Vec<(String, String)> = e(state.db.list_sources(&notebook_id).await)?
+    let source_manifest: Vec<(String, String)> = selected_sources
         .into_iter()
-        .filter(|s| source_ids.as_ref().is_none_or(|ids| ids.contains(&s.id)))
         .map(|s| (s.title, s.url))
         .collect();
 
@@ -3939,7 +3952,10 @@ pub async fn send_message(
     let messages = rag::build_chat_messages(
         &history_turns,
         &content,
-        &citations,
+        rag::Excerpts {
+            citations: &citations,
+            expanded: &expanded,
+        },
         &source_manifest,
         &extra,
         &persona,
@@ -6401,7 +6417,7 @@ pub(crate) async fn retrieve_everything(
     // tiny titles matching everything) or a short palette-style query is
     // contained in the title.
     let mut source_hits = 0;
-    for (id, nb, title) in e(state.db.all_source_meta().await)? {
+    for (id, nb, title, _) in e(state.db.all_source_meta().await)? {
         if source_hits >= 3 {
             break;
         }
@@ -6600,11 +6616,11 @@ pub async fn search_everything(
     let meta = e(state.db.all_source_meta().await)?;
     let title_of: std::collections::HashMap<&str, (&str, &str)> = meta
         .iter()
-        .map(|(id, nb, title)| (id.as_str(), (nb.as_str(), title.as_str())))
+        .map(|(id, nb, title, _)| (id.as_str(), (nb.as_str(), title.as_str())))
         .collect();
 
     let mut hits = Vec::new();
-    for (id, nb, title) in &meta {
+    for (id, nb, title, _) in &meta {
         if title.to_lowercase().contains(&q) {
             hits.push(SearchHit {
                 kind: "source".into(),

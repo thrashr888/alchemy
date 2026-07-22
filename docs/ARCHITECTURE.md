@@ -127,9 +127,13 @@ behind the same surface.
 ### `commands.rs` — IPC surface
 All `#[tauri::command]`s. Notable flow — **`send_message`**:
 1. Persist the user turn.
-2. Embed the question, hybrid-search chunks (k=8, vector + BM25 + RRF) scoped
-   to the notebook, logging the search trace.
-3. Build the grounded prompt with history.
+2. Embed the question, hybrid-search chunks (vector + BM25 + RRF; k scales
+   with the selected sources' total chars inside the model profile's budget,
+   ties break score → owner recency → chunk id) scoped to the notebook,
+   logging the search trace.
+3. Build the grounded prompt with history, widening excerpts to ordinal ±1
+   neighbors when the model profile allows — persisted citations stay
+   verbatim; only the prompt sees the expansion.
 4. Stream the answer, emitting `chat://token` events to the UI.
 5. Persist the assistant turn (with citations) and emit `chat://done`.
 
