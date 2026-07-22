@@ -217,6 +217,8 @@ export const api = {
     ),
   openInTerminal: (command: string) =>
     run(cmd<void>("open_in_terminal", { command })),
+  /** Validate a Notion integration token; resolves to the workspace label. */
+  notionCheck: (token: string) => run(cmd<string>("notion_check", { token })),
   deleteMessage: (messageId: string) =>
     run(cmd<void>("delete_message", { messageId })),
   cancelGeneration: (scope?: "chat" | "artifact" | "tts" | "meta") =>

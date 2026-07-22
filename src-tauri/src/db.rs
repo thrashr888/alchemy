@@ -585,6 +585,10 @@ impl Db {
             self.query_sources(Some("source_type = 'git'"), false)
                 .await?,
         );
+        out.extend(
+            self.query_sources(Some("source_type = 'notion'"), false)
+                .await?,
+        );
         Ok(out)
     }
 

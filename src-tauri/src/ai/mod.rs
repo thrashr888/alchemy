@@ -95,6 +95,10 @@ pub struct AiConfig {
     /// themselves have no off switch — the smarter thing is the only thing.
     #[serde(default = "default_git_sync_minutes")]
     pub git_sync_minutes: u32,
+    /// Notion internal-integration token (`ntn_…`) — sent only to
+    /// api.notion.com; empty means Notion URLs fall through to page capture.
+    #[serde(default)]
+    pub notion_token: String,
 }
 
 fn default_git_sync_minutes() -> u32 {
@@ -260,6 +264,7 @@ impl Default for AiConfig {
             providers: Vec::new(),
             chat_provider: String::new(),
             studio_provider: String::new(),
+            notion_token: String::new(),
             provider: default_provider(),
             embedder: default_provider(),
             base_url: "http://localhost:11434".to_string(),

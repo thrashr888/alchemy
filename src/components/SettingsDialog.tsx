@@ -3,7 +3,8 @@ import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { playDone } from "@/lib/sound";
 import { checkForUpdates, type UpdateFlow } from "@/lib/updates";
-import { Button, Modal, Spinner } from "./ui";
+import { Button, Input, Modal, Spinner } from "./ui";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "@/lib/utils";
 import { MacConnect } from "./MacConnect";
 import {
@@ -417,6 +418,101 @@ function SourcesTab() {
       <div className="h-px bg-border" />
 
       <GitSyncSelect />
+
+      <div className="h-px bg-border" />
+
+      <NotionTokenField />
+    </div>
+  );
+}
+
+/** Notion internal-integration token — pasting one makes notion.so URLs
+ *  import as living page trees instead of one-shot page captures. The token
+ *  is validated against the API on entry so the user sees it work. */
+function NotionTokenField() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [check, setCheck] = useState<
+    | { state: "idle" | "checking" }
+    | { state: "ok"; workspace: string }
+    | { state: "error"; message: string }
+  >({ state: "idle" });
+
+  // Validate whatever token is currently saved when the field mounts, so a
+  // returning user sees the green check without re-typing.
+  useEffect(() => {
+    const saved = useStore.getState().aiConfig?.notionToken ?? "";
+    if (saved) void verify(saved);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function verify(token: string) {
+    const t = token.trim();
+    if (!t) {
+      setCheck({ state: "idle" });
+      return;
+    }
+    setCheck({ state: "checking" });
+    try {
+      const workspace = await api.notionCheck(t);
+      setCheck({ state: "ok", workspace });
+    } catch (e) {
+      setCheck({ state: "error", message: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  if (!aiConfig) return null;
+  const value = draft ?? aiConfig.notionToken;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="text-[13px]">Notion</div>
+      <Input
+        type="password"
+        aria-label="Notion integration token"
+        placeholder="ntn_… integration token"
+        value={value}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          setCheck({ state: "idle" });
+        }}
+        onBlur={() => {
+          if (draft !== null && draft.trim() !== aiConfig.notionToken) {
+            void saveAiConfig({ ...aiConfig, notionToken: draft.trim() });
+            void verify(draft);
+          }
+          setDraft(null);
+        }}
+      />
+      {check.state === "checking" && (
+        <span className="flex items-center gap-1.5 text-[12px] text-subtle-foreground">
+          <Spinner className="h-3 w-3" /> Checking the token…
+        </span>
+      )}
+      {check.state === "ok" && (
+        <span className="flex items-center gap-1.5 text-[12px] text-success">
+          <CheckCircle2 className="h-3.5 w-3.5" /> Connected to {check.workspace}
+        </span>
+      )}
+      {check.state === "error" && (
+        <span className="text-[12px] leading-relaxed text-destructive/90">
+          {check.message}
+        </span>
+      )}
+      <span className="text-[12px] leading-relaxed text-subtle-foreground">
+        Create an internal integration at{" "}
+        <button
+          type="button"
+          onClick={() => void openUrl("https://www.notion.so/my-integrations")}
+          className="text-citation hover:underline"
+        >
+          notion.so/my-integrations
+        </button>
+        , then share pages with it in Notion (••• → Connections). Pasting a
+        page URL here after that imports the page and its children as a living
+        source that re-syncs on the cadence above. Stored locally; sent only to
+        Notion.
+      </span>
     </div>
   );
 }

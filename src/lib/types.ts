@@ -30,7 +30,8 @@ export interface Source {
     | "folder"
     | "mac"
     | "code"
-    | "git";
+    | "git"
+    | "notion";
   url: string;
   content: string;
   /** "placeholder" = cloud-sync file not downloaded yet; listed, not embedded. */
@@ -242,6 +243,7 @@ export interface AiConfig {
   visionProvider: string;
   setupSeen: boolean;
   gitSyncMinutes: number;
+  notionToken: string;
 }
 
 /** One passage behind a meta-chat answer: what it is and where it lives. */

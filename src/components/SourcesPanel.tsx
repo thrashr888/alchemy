@@ -18,6 +18,7 @@ import type { Source } from "@/lib/types";
 import {
   ChevronRight,
   FileCode,
+  Blocks,
   FileText,
   FileType,
   GitBranch,
@@ -63,6 +64,8 @@ export function sourceIcon(t: Source["sourceType"], url?: string) {
   switch (t) {
     case "git":
       return <GitBranch className="h-3.5 w-3.5 text-muted-foreground" />;
+    case "notion":
+      return <Blocks className="h-3.5 w-3.5 text-muted-foreground" />;
     case "code":
       return <FileCode className="h-3.5 w-3.5 text-muted-foreground" />;
     case "pdf":
@@ -209,7 +212,7 @@ export function SourcesPanel() {
   for (const s of sources) {
     if (s.parentId) continue;
     rows.push({ s, indent: false });
-    if (s.sourceType === "folder" || s.sourceType === "git") {
+    if (["folder", "git", "notion"].includes(s.sourceType)) {
       const kids = sources.filter((x) => x.parentId === s.id);
       if (!isCollapsed(s.id, kids.length)) {
         for (const c of kids) {
@@ -408,8 +411,9 @@ export function SourcesPanel() {
             </div>
             <div className="flex flex-col gap-0.5">
               {rows.map(({ s, indent }) => {
-                const isFolder =
-                  s.sourceType === "folder" || s.sourceType === "git";
+                const isFolder = ["folder", "git", "notion"].includes(
+                  s.sourceType,
+                );
                 const isMacNote = s.url.startsWith("cider://notes/note/");
                 const isMacReminders = s.url.startsWith(
                   "cider://reminders/list/",

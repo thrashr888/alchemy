@@ -1098,6 +1098,7 @@ const SOURCE_TYPE_LABEL: Record<Source["sourceType"], string> = {
   mac: "Mac app",
   code: "Code",
   git: "Git repository",
+  notion: "Notion pages",
 };
 
 /** Git provenance parsed from the content header line the ingesters write
@@ -1569,10 +1570,10 @@ function SourceReader({
     );
   }
 
-  // Folder and git parents open as the repo reader (RFC-git-sources §7):
-  // file tree + file pane instead of the flat map text. All hooks above have
-  // run, so the early return is safe.
-  if (source.sourceType === "folder" || source.sourceType === "git") {
+  // Folder, git, and Notion parents open as the repo reader (RFC-git-sources
+  // §7): file tree + file pane instead of the flat map text. All hooks above
+  // have run, so the early return is safe.
+  if (["folder", "git", "notion"].includes(source.sourceType)) {
     return <RepoView source={source} map={content} />;
   }
 
