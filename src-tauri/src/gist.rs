@@ -39,7 +39,7 @@ use crate::models::Source;
 
 /// Gate bounds for a stored gist (RFC-infinite-context §1).
 const GIST_MIN_CHARS: usize = 200;
-const GIST_MAX_CHARS: usize = 1200;
+const GIST_MAX_CHARS: usize = 2000;
 /// Sources shorter than this are their own gist — distilling them adds a
 /// worse duplicate, not signal.
 const MIN_SOURCE_CHARS: i64 = 600;
@@ -116,36 +116,38 @@ fn build_messages(title: &str, source_type: &str, text: &str) -> Vec<ChatTurn> {
     ]
 }
 
-/// Identifier-ish tokens: the strings that would mislead retrieval if
-/// hallucinated — codes and names the model must not invent, as opposed to
-/// prose it is free to paraphrase. Flagged when a token carries a digit, an
-/// underscore, or an internal capital (CamelCase, `GitHub`, `X-Forwarded`).
+/// Identifier-ish tokens: the exact strings a search would target, which the
+/// model must not invent — as opposed to prose it is free to paraphrase. A
+/// token qualifies as an identifier when it is snake_case (`thread_8f42`), a
+/// letter-led token carrying a digit (`ERR-500`, `Kimi-K2.6`, `v1.0`), or
+/// CamelCase with no hyphen (`CheckpointLoader`, `OpenAI`).
 ///
-/// A bare hyphenated *lowercase* word is deliberately NOT flagged: summaries
-/// are full of "rust-based", "command-line", "open-source", "well-documented"
-/// — adjectives, not identifiers, that rarely appear verbatim in the source
-/// and would otherwise reject nearly every gist for a repo or article. Real
-/// kebab identifiers still carry a digit (`ERR-500`, `net-45`) or an internal
-/// capital, so they stay caught.
+/// Deliberately NOT flagged (common in summaries, rarely verbatim): hyphenated
+/// lowercase adjectives (`rust-based`); acronym-adjectives (`LLM-based`,
+/// `AI-driven`), where the hyphen rules out the CamelCase branch; and
+/// number-led prose (`3-point`, `2-week`, a bare hex `8b95e6`), since a real
+/// code leads with a letter. Unicode dashes are treated as word separators so
+/// "UI—along" is two words, and markdown emphasis is stripped from token
+/// boundaries so "**Studio**" / "_v:1_" verify as the bare word.
 fn identifier_tokens(text: &str) -> Vec<String> {
-    text.split(|ch: char| ch.is_whitespace() || ",;()[]{}\"'`".contains(ch))
-        // Strip markdown emphasis / heading markers from token boundaries: a
-        // model that writes "**Studio**" or "_v:1_" means the bare word, and
-        // the wrapper would otherwise fail the verbatim source check. Internal
-        // underscores (snake_case) survive — trim only touches the ends.
-        .map(|t| t.trim_matches(|ch: char| ".:!?*_~#".contains(ch)))
-        .filter(|t| t.chars().count() >= 4)
-        .filter(|t| {
-            let has_digit = t.chars().any(|c| c.is_ascii_digit());
-            let has_underscore = t.contains('_');
-            // Internal capital with lowercase present = CamelCase, not an
-            // all-caps acronym (README, HTTP) or a sentence-leading capital.
-            let camel = t.chars().skip(1).any(|c| c.is_ascii_uppercase())
-                && t.chars().any(|c| c.is_ascii_lowercase());
-            has_digit || has_underscore || camel
-        })
-        .map(str::to_string)
-        .collect()
+    text.split(|ch: char| {
+        ch.is_whitespace()
+            || ",;()[]{}\"'`".contains(ch)
+            || matches!(ch, '\u{2014}' | '\u{2013}' | '\u{2012}')
+    })
+    .map(|t| t.trim_matches(|ch: char| ".:!?*_~#".contains(ch)))
+    .filter(|t| t.chars().count() >= 4)
+    .filter(|t| {
+        let has_underscore = t.contains('_');
+        let lettered_code = t.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            && t.chars().any(|c| c.is_ascii_digit());
+        let camel = !t.contains('-')
+            && t.chars().skip(1).any(|c| c.is_ascii_uppercase())
+            && t.chars().any(|c| c.is_ascii_lowercase());
+        has_underscore || lettered_code || camel
+    })
+    .map(str::to_string)
+    .collect()
 }
 
 /// Accept or reject a generated gist. `Err(reason)` means "store nothing" —
@@ -260,7 +262,12 @@ pub async fn ensure_gists(db: &Db, ai: &Ai) -> Result<(usize, usize)> {
                 break;
             }
         };
-        let gist = match gate(&reply, &source.content) {
+        // Verify identifiers against the title too, not just the body: a
+        // model naturally names something from the title ("Kimi-K2.6" lives in
+        // the source's title, not its prose), and readability extraction can
+        // drop it from the content.
+        let haystack = format!("{}\n{}", source.title, source.content);
+        let gist = match gate(&reply, &haystack) {
             Ok(g) => g,
             Err(reason) => {
                 eprintln!("gist: gate rejected \"{}\": {reason}", source.title);
@@ -614,7 +621,7 @@ mod tests {
     fn gate_rejects_out_of_bounds_lengths() {
         let raw = "Anything at all.";
         assert!(gate("too short", raw).is_err());
-        let long = "word ".repeat(400);
+        let long = "word ".repeat(500); // 2500 chars, past GIST_MAX_CHARS
         assert!(gate(&long, raw).is_err());
     }
 
@@ -726,6 +733,39 @@ mod tests {
             gate(&bad, raw).is_err(),
             "hallucinated wrapped code must reject"
         );
+    }
+
+    /// Regression for the false-positive classes seen on the first real
+    /// corpus: em-dash word joins, acronym-adjectives, and number-led prose.
+    #[test]
+    fn identifier_tokens_ignore_prose_lookalikes() {
+        // Em-dash is a separator, not part of an identifier ("UI—along").
+        let toks = identifier_tokens("The UI—along with the panel—stays inline.");
+        assert!(!toks.iter().any(|t| t.contains('\u{2014}')), "got {toks:?}");
+        // Acronym-adjectives and number-led prose are not codes.
+        let toks =
+            identifier_tokens("An LLM-based, AI-driven, 3-point plan over 2-week sprints in 2026.");
+        assert!(
+            toks.is_empty(),
+            "prose look-alikes must not flag, got {toks:?}"
+        );
+        // A letter-led token with a digit is still a real code and enforced.
+        let codes = identifier_tokens("Runs GLM-5.1 and Kimi-K2.6 today.");
+        assert!(codes.contains(&"GLM-5.1".to_string()), "got {codes:?}");
+        assert!(codes.contains(&"Kimi-K2.6".to_string()), "got {codes:?}");
+    }
+
+    /// A code that lives only in the source *title* verifies: the sweep passes
+    /// title + body as the haystack, so a gist naming it clears the gate.
+    #[test]
+    fn gate_verifies_identifiers_present_only_in_title() {
+        let title = "GitHub - ollama/ollama: running Kimi-K2.6 and GLM-5.1";
+        let body = "This project lets you run open models locally with one command.";
+        let haystack = format!("{title}\n{body}");
+        let gist = "This page documents the ollama project and how it runs models like \
+                    Kimi-K2.6 and GLM-5.1 locally, so it can answer which models are \
+                    supported and how to get them running from a single command line here.";
+        assert!(gate(gist, &haystack).is_ok(), "{:?}", gate(gist, &haystack));
     }
 
     /// Regression: hyphenated lowercase adjectives are prose, not identifiers.
