@@ -161,6 +161,13 @@ fn apply_diversity(
 
 pub struct Db {
     conn: Connection,
+    /// Serializes chunk BM25-index rebuilds. `add_chunks` rebuilds the whole
+    /// full-text index on every write; the background gist/enrichment sweep
+    /// (RFC-infinite-context) made those writes concurrent with foreground
+    /// imports, and two overlapping Lance `CreateIndex` transactions preempt
+    /// each other (a retryable commit conflict). One rebuild at a time — plus
+    /// the bounded retry in `rebuild_chunks_fts` — removes the race.
+    fts_lock: tokio::sync::Mutex<()>,
 }
 
 /// One stored source-gist row (docs/RFC-infinite-context.md Phase 1).
@@ -185,7 +192,10 @@ impl Db {
             .execute()
             .await
             .context("failed to open LanceDB")?;
-        let db = Self { conn };
+        let db = Self {
+            conn,
+            fts_lock: tokio::sync::Mutex::new(()),
+        };
         db.ensure_table(T_NOTEBOOKS, notebooks_schema()).await?;
         db.migrate_notebooks().await?;
         db.ensure_table(T_SOURCES, sources_schema()).await?;
@@ -711,13 +721,44 @@ impl Db {
 
         // Keep the BM25 side of hybrid search current. Rebuilding on every
         // write is fine at personal-corpus scale (thousands of rows, ms-level).
-        let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
-        tbl.create_index(&["text"], Index::FTS(FtsIndexBuilder::default()))
-            .replace(true)
-            .execute()
-            .await
-            .context("failed to build full-text index on chunks")?;
-        Ok(())
+        self.rebuild_chunks_fts().await
+    }
+
+    /// Rebuild the chunks full-text index, serialized process-wide and retried
+    /// on Lance's retryable `CreateIndex` commit conflict. Two overlapping
+    /// full-index rebuilds — the background gist/enrichment sweep racing a
+    /// foreground import — otherwise preempt each other; the lock keeps them
+    /// one-at-a-time and the retry absorbs any conflict from outside this
+    /// process (e.g. a stray build kicked off before the lock was taken).
+    async fn rebuild_chunks_fts(&self) -> Result<()> {
+        let _guard = self.fts_lock.lock().await;
+        let mut attempt = 0u32;
+        loop {
+            let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
+            match tbl
+                .create_index(&["text"], Index::FTS(FtsIndexBuilder::default()))
+                .replace(true)
+                .execute()
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    let msg = e.to_string();
+                    let retryable = msg.contains("Retryable")
+                        || msg.contains("commit conflict")
+                        || msg.contains("preempted");
+                    if retryable && attempt < 5 {
+                        attempt += 1;
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            40 * u64::from(attempt),
+                        ))
+                        .await;
+                        continue;
+                    }
+                    return Err(e).context("failed to build full-text index on chunks");
+                }
+            }
+        }
     }
 
     /// All sources across every notebook, with full content (for re-embedding).

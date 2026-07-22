@@ -117,33 +117,44 @@ fn build_messages(title: &str, source_type: &str, text: &str) -> Vec<ChatTurn> {
 }
 
 /// Identifier-ish tokens: the strings that would mislead retrieval if
-/// hallucinated — anything carrying a digit, an underscore/hyphen compound,
-/// or mixed-case beyond a leading capital. Plain prose words are the
-/// model's to paraphrase; identifiers are not.
+/// hallucinated — codes and names the model must not invent, as opposed to
+/// prose it is free to paraphrase. Flagged when a token carries a digit, an
+/// underscore, or an internal capital (CamelCase, `GitHub`, `X-Forwarded`).
+///
+/// A bare hyphenated *lowercase* word is deliberately NOT flagged: summaries
+/// are full of "rust-based", "command-line", "open-source", "well-documented"
+/// — adjectives, not identifiers, that rarely appear verbatim in the source
+/// and would otherwise reject nearly every gist for a repo or article. Real
+/// kebab identifiers still carry a digit (`ERR-500`, `net-45`) or an internal
+/// capital, so they stay caught.
 fn identifier_tokens(text: &str) -> Vec<String> {
     text.split(|ch: char| ch.is_whitespace() || ",;()[]{}\"'`".contains(ch))
         .map(|t| t.trim_matches(|ch: char| ".:!?".contains(ch)))
         .filter(|t| t.chars().count() >= 4)
         .filter(|t| {
             let has_digit = t.chars().any(|c| c.is_ascii_digit());
-            let compound = t.contains('_') || (t.contains('-') && !t.ends_with('-'));
-            let mixed_case = t
-                .chars()
-                .skip(1)
-                .any(|c| c.is_uppercase() && t.chars().any(|c2| c2.is_lowercase()));
-            has_digit || compound || mixed_case
+            let has_underscore = t.contains('_');
+            // Internal capital with lowercase present = CamelCase, not an
+            // all-caps acronym (README, HTTP) or a sentence-leading capital.
+            let camel = t.chars().skip(1).any(|c| c.is_ascii_uppercase())
+                && t.chars().any(|c| c.is_ascii_lowercase());
+            has_digit || has_underscore || camel
         })
         .map(str::to_string)
         .collect()
 }
 
-/// Accept or reject a generated gist. `None` means "store nothing" — the
-/// caller falls back to prefix-only retrieval, which is today's behavior.
-pub fn gate(candidate: &str, raw: &str) -> Option<String> {
+/// Accept or reject a generated gist. `Err(reason)` means "store nothing" —
+/// the caller falls back to prefix-only retrieval (today's behavior) and
+/// logs the reason, so a run of rejections is diagnosable instead of opaque.
+pub fn gate(candidate: &str, raw: &str) -> Result<String, String> {
     let gist = candidate.trim();
     let n = gist.chars().count();
-    if !(GIST_MIN_CHARS..=GIST_MAX_CHARS).contains(&n) {
-        return None;
+    if n < GIST_MIN_CHARS {
+        return Err(format!("too short ({n} chars)"));
+    }
+    if n > GIST_MAX_CHARS {
+        return Err(format!("too long ({n} chars)"));
     }
     // Degeneracy: a looping model repeats lines; real prose doesn't.
     let lines: Vec<&str> = gist
@@ -153,17 +164,17 @@ pub fn gate(candidate: &str, raw: &str) -> Option<String> {
         .collect();
     let distinct: HashSet<&&str> = lines.iter().collect();
     if lines.len() >= 4 && distinct.len() * 2 < lines.len() {
-        return None;
+        return Err("degenerate (repeated lines)".into());
     }
     // Every identifier in the gist must appear in the source (case-blind).
     // One invented error code poisons exact-match retrieval forever.
     let raw_lower = raw.to_lowercase();
     for tok in identifier_tokens(gist) {
         if !raw_lower.contains(&tok.to_lowercase()) {
-            return None;
+            return Err(format!("unverified identifier {tok:?}"));
         }
     }
-    Some(gist.to_string())
+    Ok(gist.to_string())
 }
 
 /// Bring gist rows in line with the corpus, at most `SWEEP_BUDGET`
@@ -245,14 +256,13 @@ pub async fn ensure_gists(db: &Db, ai: &Ai) -> Result<(usize, usize)> {
                 break;
             }
         };
-        let Some(gist) = gate(&reply, &source.content) else {
-            eprintln!(
-                "gist: gate rejected output for \"{}\" ({} chars)",
-                source.title,
-                reply.trim().chars().count()
-            );
-            remember_refusal(&want.source_id, hash);
-            continue;
+        let gist = match gate(&reply, &source.content) {
+            Ok(g) => g,
+            Err(reason) => {
+                eprintln!("gist: gate rejected \"{}\": {reason}", source.title);
+                remember_refusal(&want.source_id, hash);
+                continue;
+            }
         };
 
         // Same two-text scheme as regular chunks: verbatim gist in `text`
@@ -599,9 +609,9 @@ mod tests {
     #[test]
     fn gate_rejects_out_of_bounds_lengths() {
         let raw = "Anything at all.";
-        assert!(gate("too short", raw).is_none());
+        assert!(gate("too short", raw).is_err());
         let long = "word ".repeat(400);
-        assert!(gate(&long, raw).is_none());
+        assert!(gate(&long, raw).is_err());
     }
 
     #[test]
@@ -615,9 +625,9 @@ mod tests {
              and which component performs loading. {}Key terms: ERR-500-RETRY, CheckpointLoader",
             ""
         );
-        assert!(gate(&good, raw).is_some());
+        assert!(gate(&good, raw).is_ok());
         let bad = good.replace("ERR-500-RETRY", "ERR-404-RETRY");
-        assert!(gate(&bad, raw).is_none(), "invented code must be rejected");
+        assert!(gate(&bad, raw).is_err(), "invented code must be rejected");
     }
 
     #[test]
@@ -627,7 +637,7 @@ mod tests {
             "This document describes vendor payments in detail for the team.\n{}",
             line.repeat(8)
         );
-        assert!(gate(&looped, "vendor payments").is_none());
+        assert!(gate(&looped, "vendor payments").is_err());
     }
 
     #[test]
@@ -682,5 +692,35 @@ mod tests {
         assert!(toks.contains(&"CheckpointLoader".to_string()));
         assert!(toks.contains(&"net-45".to_string()));
         assert!(!toks.iter().any(|t| t == "Vendor" || t == "runbook"));
+    }
+
+    /// Regression: hyphenated lowercase adjectives are prose, not identifiers.
+    /// Flagging them made the identifier gate reject nearly every real gist
+    /// for a repo or article (the words rarely appear verbatim in the source).
+    #[test]
+    fn identifier_tokens_ignore_hyphenated_adjectives() {
+        let toks = identifier_tokens(
+            "A rust-based command-line tool that is open-source, cross-platform, \
+             and well-documented for end-users.",
+        );
+        assert!(
+            toks.is_empty(),
+            "hyphenated adjectives must not be treated as identifiers, got {toks:?}"
+        );
+        // A gist describing such a project passes the identifier gate even
+        // though the adjectives never appear verbatim in the source (long
+        // enough here to clear the length gate and isolate the identifier
+        // check).
+        let raw = "This project is written in Rust. It ships a CLI. The code is public.";
+        let gist = "This project provides a rust-based command-line tool that is \
+                    open-source and cross-platform. The write-up is well-documented and \
+                    beginner-friendly, so it can answer questions about installation, \
+                    day-to-day usage, configuration, and troubleshooting for the new \
+                    contributors who are getting started with the codebase and its docs.";
+        assert!(
+            gate(gist, raw).is_ok(),
+            "adjective-heavy prose should clear the identifier gate: {:?}",
+            gate(gist, raw)
+        );
     }
 }
