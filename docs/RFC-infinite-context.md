@@ -148,19 +148,33 @@ clean sets (regression fence).
   anonymized real notebooks. The "infinite" claim made falsifiable:
   recall@k curves must stay flat (±5%) across the three sizes.
 
-Status: **partially implemented** — adaptive k
-(`ContextProfile::retrieve_k_for`: +1 per doubling past ~200k chars, capped
-by `retrieve_k_max`; 16 default, 6 on-device), post-rank neighbor expansion
-(`Db::expand_neighbor_excerpts`: prompt-only, profile-gated, higher ranks
-claim neighbors first, cited/claimed ordinals never included twice), and
-the recency tie-break (`fused_cmp`: score → owner recency → chunk id; gists
-inherit their source's timestamp) are in with unit tests, and the dataset
-report is byte-identical across the change. One honesty note: a true RRF
-tie is a vector-only vs FTS-only hit at equal rank — constructing that end
-to end is fixture-fragile, so the recency rule is proven at the extracted
-comparator, not through the full stack. Remaining: the scale corpora, the
-flat-recall fence, and the corpus-wide dataset runner (which also unblocks
-`gist`/`global` dataset kinds from Phase 1).
+Status: **implemented**.
+
+- Adaptive k (`ContextProfile::retrieve_k_for`: +1 per doubling past ~200k
+  chars, capped by `retrieve_k_max`; 16 default, 6 on-device), post-rank
+  neighbor expansion (`Db::expand_neighbor_excerpts`: prompt-only,
+  profile-gated, higher ranks claim neighbors first, no ordinal included
+  twice), and the recency tie-break (`fused_cmp`: score → owner recency →
+  chunk id; gists inherit their source's timestamp) are in with unit
+  tests; the dataset report was byte-identical across those changes. One
+  honesty note: a true RRF tie is a vector-only vs FTS-only hit at equal
+  rank — constructing that end to end is fixture-fragile, so the recency
+  rule is proven at the extracted comparator, not through the full stack.
+- The scale fence (`eval_scale_fence`): deterministic synthetic corpora
+  (xorshift-seeded distractor binders, identifier spaces disjoint from 12
+  fixed needles). Measured: **1M chars exact 1.00 / paraphrase 1.00
+  (k=10) · 3M exact 1.00 / paraphrase 1.00 (k=11)** — recall flat across a
+  tripling, adaptive k growing as designed. Ignored by default (per-doc
+  LanceDB seeding ≈ 10 min); run on retrieval changes with
+  `cargo test --lib eval_scale_fence -- --ignored --nocapture`; the 10M
+  variant is `eval_scale_fence_10m`. A bulk-insert seeding path would move
+  it into the default suite — noted as follow-up, not blocking.
+- The dataset runner gained a **meta** variant (corpus-wide
+  `search_chunks_all_opts` with production caps): additive report change,
+  existing variants byte-identical; meta scores R@10 1.00 / nDCG 0.95
+  (core) and 1.00 / 0.92 (hard) — the corpus-wide surface is on par with
+  per-notebook retrieval on the fixtures, and `gist`/`global` dataset
+  kinds now have a runner to land in.
 
 ## Phase 4: global answers (lazy map-reduce)
 

@@ -281,7 +281,18 @@ async fn eval_retrieval_datasets() {
         .collect();
     let title_set: std::collections::HashSet<&str> = titles.values().map(String::as_str).collect();
 
-    const VARIANTS: [&str; 3] = ["vector", "fts", "hybrid"];
+    // "meta" is the corpus-wide path (search_chunks_all_opts with the
+    // production meta-chat caps) — the surface gists and cross-notebook
+    // questions ride. Here it runs over the same single-notebook corpus, so
+    // its numbers are directly comparable to the per-notebook variants.
+    const VARIANTS: [&str; 4] = ["vector", "fts", "hybrid", "meta"];
+    let meta_opts = SearchOptions {
+        pool_multiplier: 4,
+        max_per_source: 2,
+        max_per_notebook: 3,
+        max_notes: 4,
+        max_gists: 2,
+    };
     let mut reports = Vec::new();
     for ds in &datasets {
         // Fail loudly on dataset authoring errors: an empty query list or a
@@ -305,7 +316,7 @@ async fn eval_retrieval_datasets() {
         let qvecs = ai.embed(&query_texts).await.expect("embed queries");
 
         // (kind, metrics) per query, indexed parallel to VARIANTS.
-        let mut rows: [Vec<(String, Metrics)>; 3] = Default::default();
+        let mut rows: [Vec<(String, Metrics)>; 4] = Default::default();
         let mut misses: Vec<String> = Vec::new();
         for (q, qvec) in ds.queries.iter().zip(&qvecs) {
             let vector = db
@@ -326,7 +337,14 @@ async fn eval_retrieval_datasets() {
             );
             let fts: Vec<Citation> = trace.fts_hits.into_iter().take(K).collect();
             let hybrid = trace.final_hits;
-            for (vi, hits) in [vector, fts, hybrid].into_iter().enumerate() {
+            let meta: Vec<Citation> = db
+                .search_chunks_all_opts(qvec.clone(), &q.query, K, None, meta_opts)
+                .await
+                .expect("meta search")
+                .into_iter()
+                .map(|(_, c)| c)
+                .collect();
+            for (vi, hits) in [vector, fts, hybrid, meta].into_iter().enumerate() {
                 let (ranks, unmatched) = matched_ranks(&hits, &titles, &q.relevant);
                 for si in unmatched {
                     let s = &q.relevant[si];
@@ -1108,4 +1126,424 @@ async fn eval_gist_rows() {
             c.chunk_id
         );
     }
+}
+
+// ---- Scale fence (RFC-infinite-context §3) --------------------------------
+//
+// Deterministic synthetic corpora at 1M/3M (and, behind --ignored, 10M)
+// chars, with 12 fixed needle documents planted among distractor docs whose
+// identifier spaces are disjoint from every needle. The fence that makes
+// "infinite context" falsifiable: exact-identifier recall stays 1.00 at
+// every size, and mean recall must not sag as the corpus grows.
+
+/// xorshift64 — deterministic distractor generation without a rand dep.
+/// (`Date`/`rand` would make corpora differ across runs; the whole point is
+/// a byte-stable corpus per size.)
+struct XorShift(u64);
+
+impl XorShift {
+    fn next(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n.max(1)
+    }
+    fn pick<'a>(&mut self, xs: &'a [&'a str]) -> &'a str {
+        xs[self.below(xs.len() as u64) as usize]
+    }
+}
+
+const SCALE_HOSTS: &[&str] = &[
+    "maple", "birch", "walnut", "aspen", "cedar", "willow", "rowan", "alder",
+];
+const SCALE_CUSTOMERS: &[&str] = &[
+    "Acme Corp",
+    "Globex",
+    "Initech",
+    "Umbrella",
+    "Stark Industrial",
+    "Wayne Logistics",
+];
+const SCALE_SERVICES: &[&str] = &[
+    "billing",
+    "ingest",
+    "metrics",
+    "auth",
+    "search",
+    "archive",
+    "reporting",
+    "queue",
+];
+
+/// One large distractor document (~24k chars, ten sections) — long enough
+/// that a 3M-char corpus is ~125 inserts, structured like the real PDFs and
+/// runbooks users import. Identifier spaces are deliberately disjoint from
+/// every needle: invoices 2015–2023, errors ERR-100..899, ports below
+/// 50000, project codes PRJ-1000..6999, hosts from the tree word bank.
+fn scale_doc(rng: &mut XorShift, i: usize) -> (String, String) {
+    let mut body = String::with_capacity(26_000);
+    for sec in 0..10 {
+        match rng.below(4) {
+            0 => {
+                body.push_str(&format!("# Invoice batch {sec}\n\n"));
+                for _ in 0..6 {
+                    body.push_str(&format!(
+                        "INV-20{}-{:04} | {} | ${},{:03} | {}\n",
+                        15 + rng.below(9),
+                        rng.below(9000) + 100,
+                        rng.pick(SCALE_CUSTOMERS),
+                        rng.below(40) + 1,
+                        rng.below(1000),
+                        if rng.below(3) == 0 { "overdue" } else { "paid" },
+                    ));
+                }
+                body.push_str(&format!(
+                    "\nRetries for this batch use ERR-{}-BACKOFF with a {} second wait.\n\n",
+                    rng.below(800) + 100,
+                    rng.below(50) + 5
+                ));
+            }
+            1 => {
+                body.push_str(&format!("# Service runbook section {sec}\n\n"));
+                body.push_str(&format!(
+                    "The {} service listens on port {} of host {}-{:02}. Deploys roll \
+                     Tuesday; on-call rotates weekly. Health checks poll every {} \
+                     seconds and page after three consecutive failures. Project code \
+                     PRJ-{}.\n\n",
+                    rng.pick(SCALE_SERVICES),
+                    rng.below(46_000) + 3_000,
+                    rng.pick(SCALE_HOSTS),
+                    rng.below(90) + 1,
+                    rng.below(50) + 10,
+                    rng.below(6_000) + 1_000,
+                ));
+            }
+            2 => {
+                body.push_str(&format!("# Meeting notes, week {sec}\n\n"));
+                body.push_str(&format!(
+                    "Attendees reviewed the {} migration and agreed to defer the \
+                     {} cleanup until after the freeze. Action items: audit the \
+                     {} dashboards, refresh the {} credentials, and close out \
+                     stale tickets older than {} days.\n\n",
+                    rng.pick(SCALE_SERVICES),
+                    rng.pick(SCALE_SERVICES),
+                    rng.pick(SCALE_SERVICES),
+                    rng.pick(SCALE_SERVICES),
+                    rng.below(90) + 30,
+                ));
+            }
+            _ => {
+                body.push_str(&format!("# Policy appendix {sec}\n\n"));
+                body.push_str(&format!(
+                    "Expense reports above ${} require director approval and are \
+                     reimbursed within {} business days. Travel booked through the \
+                     portal earns no points but is covered by the corporate policy \
+                     for {} staff.\n\n",
+                    (rng.below(40) + 1) * 250,
+                    rng.below(20) + 3,
+                    rng.pick(SCALE_SERVICES),
+                ));
+            }
+        }
+    }
+    (format!("Corpus binder {i:04}"), body)
+}
+
+/// Fixed needle documents. Every identifier here is outside the distractor
+/// generator's ranges, so exactly one document in any corpus answers each
+/// query — recall is unambiguous at every size.
+const SCALE_NEEDLES: &[(&str, &str)] = &[
+    (
+        "Zephyr Project Charter",
+        "Project PRJ-7741-ZEPHYR covers the migration of archival storage to \
+         cold tier. The charter owner is the platform group and the budget \
+         line closes at fiscal year end.",
+    ),
+    (
+        "Invoice Exceptions 2077",
+        "INV-2077-0420 for Vandelay Import/Export remains disputed at \
+         $83,000. The exception ages out of the ledger after two quarters.",
+    ),
+    (
+        "Frost Incident Postmortem",
+        "The outage tracked as ERR-9917-FROST began with a stuck mutex in \
+         the scheduler and was mitigated by draining the standby pool.",
+    ),
+    (
+        "Kestrel Host Bringup",
+        "Host kestrel-40k exposes the debug console on port 55731. Serial \
+         access requires the lab bastion and a hardware token.",
+    ),
+    (
+        "Vulnerability Note 31337",
+        "CVE-2099-31337 affects the legacy image resizer; the fix pins the \
+         codec and disables remote profile loading.",
+    ),
+    (
+        "Aurora Contract Rider",
+        "The Aurora rider sets penalty clause AUR-2088-PENALTY at twelve \
+         percent for missed delivery windows in winter months.",
+    ),
+    (
+        "Solar Array Field Report",
+        "Solar array output peaked at 4.2 kilowatts during the June heat \
+         wave, and the inverter clipped for two afternoons in a row.",
+    ),
+    (
+        "Beekeeping Season Log",
+        "The north hive swarmed in late spring; a captured swarm was rehomed \
+         into the cedar box and accepted the new queen within a week.",
+    ),
+    (
+        "Sourdough Hydration Study",
+        "Raising hydration to eighty two percent opened the crumb \
+         dramatically but made shaping harder on warm days.",
+    ),
+    (
+        "Glacier Hike Journal",
+        "The crossing took nine hours with crampons required above the \
+         moraine; the hut warden stamped permits at the saddle.",
+    ),
+    (
+        "Cello Practice Plan",
+        "Thumb position drills come before the Elgar concerto excerpts; \
+         scales run three octaves with a drone on the open string.",
+    ),
+    (
+        "Heirloom Tomato Trial",
+        "The Cherokee Purple plants outyielded the Brandywine rows despite \
+         later transplanting and half the fertilizer.",
+    ),
+];
+
+struct ScaleQuery {
+    query: &'static str,
+    kind: &'static str, // "exact" | "paraphrase"
+    title: &'static str,
+}
+
+const SCALE_QUERIES: &[ScaleQuery] = &[
+    ScaleQuery {
+        query: "what is PRJ-7741-ZEPHYR about?",
+        kind: "exact",
+        title: "Zephyr Project Charter",
+    },
+    ScaleQuery {
+        query: "what is the status of INV-2077-0420?",
+        kind: "exact",
+        title: "Invoice Exceptions 2077",
+    },
+    ScaleQuery {
+        query: "what caused ERR-9917-FROST?",
+        kind: "exact",
+        title: "Frost Incident Postmortem",
+    },
+    ScaleQuery {
+        query: "which host uses port 55731?",
+        kind: "exact",
+        title: "Kestrel Host Bringup",
+    },
+    ScaleQuery {
+        query: "what does CVE-2099-31337 affect?",
+        kind: "exact",
+        title: "Vulnerability Note 31337",
+    },
+    ScaleQuery {
+        query: "what is the AUR-2088-PENALTY clause?",
+        kind: "exact",
+        title: "Aurora Contract Rider",
+    },
+    ScaleQuery {
+        query: "how much power did the panels produce at their peak?",
+        kind: "paraphrase",
+        title: "Solar Array Field Report",
+    },
+    ScaleQuery {
+        query: "what happened when the bees swarmed?",
+        kind: "paraphrase",
+        title: "Beekeeping Season Log",
+    },
+    ScaleQuery {
+        query: "what did the wetter bread dough change?",
+        kind: "paraphrase",
+        title: "Sourdough Hydration Study",
+    },
+    ScaleQuery {
+        query: "how long did the glacier crossing take?",
+        kind: "paraphrase",
+        title: "Glacier Hike Journal",
+    },
+    ScaleQuery {
+        query: "what should I practice before the concerto?",
+        kind: "paraphrase",
+        title: "Cello Practice Plan",
+    },
+    ScaleQuery {
+        query: "which tomato variety produced more fruit?",
+        kind: "paraphrase",
+        title: "Heirloom Tomato Trial",
+    },
+];
+
+/// Build a corpus of ~`target_chars`, run the needle queries corpus-wide at
+/// the adaptive k, and return (exact recall, paraphrase recall, k used).
+async fn run_scale(ai: &crate::ai::Ai, target_chars: usize) -> (f64, f64, usize) {
+    let dir = std::env::temp_dir().join(format!("nbl-eval-scale-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let mut rng = XorShift(0x5EED_0000 + target_chars as u64);
+
+    // Generate distractors up to the target, needles interleaved evenly.
+    let mut docs: Vec<(String, String)> = Vec::new();
+    let mut chars = 0usize;
+    let mut i = 0usize;
+    while chars < target_chars {
+        let (t, b) = scale_doc(&mut rng, i);
+        chars += b.chars().count();
+        docs.push((t, b));
+        i += 1;
+    }
+    let stride = (docs.len() / SCALE_NEEDLES.len()).max(1);
+    for (ni, (t, b)) in SCALE_NEEDLES.iter().enumerate() {
+        let at = (ni * stride + stride / 2).min(docs.len());
+        docs.insert(at, (t.to_string(), b.to_string()));
+    }
+
+    // Chunk everything, embed in large batches, insert per doc.
+    let notebooks = ["s-a", "s-b", "s-c", "s-d", "s-e", "s-f", "s-g", "s-h"];
+    let mut total_chars = 0i64;
+    let mut pending: Vec<(usize, crate::ingest::Chunk)> = Vec::new(); // (doc idx, chunk)
+    let chunked: Vec<Vec<crate::ingest::Chunk>> = docs
+        .iter()
+        .map(|(t, b)| crate::ingest::chunk_text(t, &normalize_ws(b)))
+        .collect();
+    for (di, chunks) in chunked.iter().enumerate() {
+        for c in chunks {
+            pending.push((
+                di,
+                crate::ingest::Chunk {
+                    text: c.text.clone(),
+                    embed_text: c.embed_text.clone(),
+                },
+            ));
+        }
+    }
+    let inputs: Vec<String> = pending.iter().map(|(_, c)| c.embed_text.clone()).collect();
+    let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(inputs.len());
+    for batch in inputs.chunks(256) {
+        vectors.extend(ai.embed(&batch.to_vec()).await.expect("embed scale corpus"));
+    }
+    let mut cursor = 0usize;
+    for (di, (title, body)) in docs.iter().enumerate() {
+        let n = chunked[di].len();
+        let tuples: Vec<(String, i32, String)> = chunked[di]
+            .iter()
+            .enumerate()
+            .map(|(ci, c)| (format!("d{di}-c{ci}"), ci as i32, c.text.clone()))
+            .collect();
+        let vecs = vectors[cursor..cursor + n].to_vec();
+        cursor += n;
+        let source = crate::models::Source {
+            id: format!("scale-src-{di}"),
+            notebook_id: notebooks[di % notebooks.len()].to_string(),
+            title: title.clone(),
+            source_type: "text".into(),
+            url: String::new(),
+            content: body.clone(),
+            char_count: body.chars().count() as i64,
+            chunk_count: n as i64,
+            created_at: 1_700_000_000_000 + di as i64,
+            status: "ready".into(),
+            error: String::new(),
+            parent_id: String::new(),
+            mtime: 0,
+        };
+        total_chars += source.char_count;
+        db.insert_source(&source, &tuples, &vecs)
+            .await
+            .expect("insert scale doc");
+    }
+
+    let k = crate::inference::ContextProfile::default().retrieve_k_for(total_chars);
+    let opts = SearchOptions {
+        pool_multiplier: 4,
+        max_per_source: 2,
+        max_per_notebook: 3,
+        max_notes: 4,
+        max_gists: 2,
+    };
+    let queries: Vec<String> = SCALE_QUERIES.iter().map(|q| q.query.to_string()).collect();
+    let qvecs = ai.embed(&queries).await.expect("embed scale queries");
+    let (mut exact_hit, mut exact_n, mut para_hit, mut para_n) = (0f64, 0f64, 0f64, 0f64);
+    for (q, qv) in SCALE_QUERIES.iter().zip(qvecs) {
+        let hits = db
+            .search_chunks_all_opts(qv, q.query, k, None, opts)
+            .await
+            .expect("scale search");
+        let found = hits.iter().any(|(_, c)| c.source_title == q.title);
+        if q.kind == "exact" {
+            exact_n += 1.0;
+            exact_hit += found as u8 as f64;
+        } else {
+            para_n += 1.0;
+            para_hit += found as u8 as f64;
+        }
+        if !found {
+            eprintln!(
+                "  scale MISS ({} chars, {}): {}",
+                total_chars, q.kind, q.query
+            );
+        }
+    }
+    (exact_hit / exact_n, para_hit / para_n, k)
+}
+
+/// Collapse the escaped-continuation whitespace in generated bodies so the
+/// chunker sees ordinary paragraphs.
+fn normalize_ws(s: &str) -> String {
+    s.replace("  ", " ")
+}
+
+/// The fence at 1M and 3M chars (10M below): exact recall holds at 1.00 at
+/// every size, and recall does not sag with scale. Last verified run:
+/// 1M exact 1.00 / para 1.00 (k=10) · 3M exact 1.00 / para 1.00 (k=11).
+/// Ignored by default: per-doc LanceDB inserts put seeding at ~10 minutes —
+/// run on retrieval changes via
+/// `cargo test --lib eval_scale_fence -- --ignored --nocapture`
+/// (a bulk-insert seeding path would bring this into the default suite).
+#[tokio::test]
+#[ignore = "scale corpus seeding takes ~10 minutes; run explicitly on retrieval changes"]
+async fn eval_scale_fence() {
+    let Some(ai) = builtin_ai().await else { return };
+    let (e1, p1, k1) = run_scale(&ai, 1_000_000).await;
+    let (e3, p3, k3) = run_scale(&ai, 3_000_000).await;
+    eprintln!("scale fence: 1M exact {e1:.2} para {p1:.2} (k={k1}) · 3M exact {e3:.2} para {p3:.2} (k={k3})");
+    assert!(
+        k3 > k1,
+        "adaptive k must grow with the corpus ({k1} → {k3})"
+    );
+    assert_eq!(e1, 1.0, "1M: every exact-identifier needle must be found");
+    assert_eq!(e3, 1.0, "3M: every exact-identifier needle must be found");
+    assert!(
+        (p1 + e1) / 2.0 - (p3 + e3) / 2.0 <= 0.05,
+        "recall sagged with corpus growth: 1M mean {:.2} → 3M mean {:.2}",
+        (p1 + e1) / 2.0,
+        (p3 + e3) / 2.0
+    );
+}
+
+/// The 10M-char fence — minutes of embedding, so opt-in:
+/// `cargo test --lib eval_scale_fence_10m -- --ignored --nocapture`
+#[tokio::test]
+#[ignore = "10M-char corpus takes minutes to embed; run explicitly"]
+async fn eval_scale_fence_10m() {
+    let Some(ai) = builtin_ai().await else { return };
+    let (e10, p10, k10) = run_scale(&ai, 10_000_000).await;
+    eprintln!("scale fence: 10M exact {e10:.2} para {p10:.2} (k={k10})");
+    assert_eq!(e10, 1.0, "10M: every exact-identifier needle must be found");
+    assert!(p10 >= 0.5, "10M: paraphrase recall collapsed to {p10:.2}");
 }
