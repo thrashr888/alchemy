@@ -47,6 +47,28 @@ import {
 // ~1M chars ≈ ~250k tokens — generous for local RAG over many documents.
 const MAX_NOTEBOOK_CHARS = 1_000_000;
 
+// Folder tree open/closed state persists across restarts, keyed by folder
+// source id (only ids the user has explicitly toggled are stored; unseen
+// folders keep the collapsed-when-many default).
+const FOLDERS_COLLAPSED_KEY = "foldersCollapsed";
+
+function loadFoldersCollapsed(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(FOLDERS_COLLAPSED_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveFoldersCollapsed(state: Record<string, boolean>) {
+  try {
+    localStorage.setItem(FOLDERS_COLLAPSED_KEY, JSON.stringify(state));
+  } catch {
+    /* storage full or unavailable — collapse state is best-effort */
+  }
+}
+
 export function sourceIcon(t: Source["sourceType"], url?: string) {
   // Mac sources show the app they mirror (same icons as the add-source
   // modal's provider tiles), in that app's signature color.
@@ -150,6 +172,7 @@ export function SourcesPanel() {
   const sources = useStore((s) => s.sources);
   const currentId = useStore((s) => s.currentId);
   const queue = useStore((s) => s.ingestQueue);
+  const importingFolders = useStore((s) => s.importingFolders);
   const clearQueueItem = useStore((s) => s.clearQueueItem);
   const openAddSource = useStore((s) => s.openAddSource);
   const folderScan = useStore((s) => s.folderScan);
@@ -197,14 +220,20 @@ export function SourcesPanel() {
   // Folder children render indented under their folder; everything else is a
   // flat top-level row. Parents with many children start collapsed — a repo
   // shouldn't wall the panel — and the chevron remembers the user's choice
-  // for the session.
+  // across restarts (persisted to localStorage, keyed by folder source id,
+  // mirroring the other UI-state keys in store.ts).
   const [collapsedParents, setCollapsedParents] = useState<
     Record<string, boolean>
-  >({});
+  >(loadFoldersCollapsed);
   const isCollapsed = (id: string, kidCount: number) =>
     collapsedParents[id] ?? kidCount > 8;
   const toggleCollapsed = (id: string, kidCount: number) =>
-    setCollapsedParents((m) => ({ ...m, [id]: !isCollapsed(id, kidCount) }));
+    setCollapsedParents((m) => {
+      const cur = m[id] ?? kidCount > 8;
+      const next = { ...m, [id]: !cur };
+      saveFoldersCollapsed(next);
+      return next;
+    });
   const rows: { s: Source; indent: boolean }[] = [];
   for (const s of sources) {
     if (s.parentId) continue;
@@ -414,12 +443,16 @@ export function SourcesPanel() {
                 const isMacReminders = s.url.startsWith(
                   "cider://reminders/list/",
                 );
+                // A folder inserted optimistically while its children embed:
+                // shown right away with a loading affordance, not yet openable.
+                const importing = isFolder && importingFolders.includes(s.id);
                 // Errored WEB sources still open in the reader: extraction
                 // failed, but the Live view can show the actual page. Folder
                 // and git parents open as the repo reader.
                 const readable =
-                  s.status === "ready" ||
-                  (s.status === "error" && isWebUrl(s.url));
+                  !importing &&
+                  (s.status === "ready" ||
+                    (s.status === "error" && isWebUrl(s.url)));
                 const kids = isFolder
                   ? sources.filter((x) => x.parentId === s.id)
                   : [];
@@ -487,7 +520,9 @@ export function SourcesPanel() {
                       </button>
                     ) : (
                       <div className="pointer-events-none relative z-10 mt-0.5">
-                        {s.status === "error" ? (
+                        {importing ? (
+                          <Spinner className="h-3.5 w-3.5 text-muted-foreground" />
+                        ) : s.status === "error" ? (
                           <AlertCircle className="h-3.5 w-3.5 text-destructive" />
                         ) : s.status === "placeholder" ? (
                           <Cloud className="h-3.5 w-3.5 text-subtle-foreground" />
@@ -513,6 +548,7 @@ export function SourcesPanel() {
                         >
                           {s.title}
                         </span>
+                        {!importing && (
                         <RowMenu
                           className="pointer-events-auto z-20"
                           label={`Options for "${s.title}"`}
@@ -593,8 +629,18 @@ export function SourcesPanel() {
                             },
                           ]}
                         />
+                        )}
                       </div>
-                      {s.status === "error" ? (
+                      {importing ? (
+                        <div className="truncate text-[11px] text-subtle-foreground">
+                          {folderScan
+                            ? `Embedding ${Math.min(
+                                folderScan.done + 1,
+                                folderScan.total,
+                              )}/${folderScan.total}…`
+                            : "Adding folder…"}
+                        </div>
+                      ) : s.status === "error" ? (
                         <div
                           // break-anywhere: raw URLs in errors have no
                           // spaces and would otherwise force the panel wide.
@@ -633,7 +679,7 @@ export function SourcesPanel() {
                     {/* Selection stays at the far right (NotebookLM-style), always
                     visible. */}
                     <div className="relative z-20 mt-0.5">
-                      {isFolder ? (
+                      {importing ? null : isFolder ? (
                         <SelectBox
                           checked={kids.length > 0 && kidsOn === kids.length}
                           indeterminate={kidsOn > 0 && kidsOn < kids.length}

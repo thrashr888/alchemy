@@ -1344,6 +1344,17 @@ function SourceReader({
       !!content &&
       looksLikeMarkdown(content));
   const richMode = markdownShaped && !(highlight && anchorFailed);
+  // Code-file sources render with the same shiki view the repo reader uses
+  // (CodeView). Shiki swaps the code block's DOM in asynchronously, which
+  // would detach a citation Range anchored before the swap — so when a
+  // citation highlight is active we fall back to the exact plain-text view
+  // (verbatim, synchronously highlighted, like before). The normal open gets
+  // syntax colors; find-in-source over the colored view re-anchors on the
+  // rendered DOM each keystroke.
+  const codeMode = source.sourceType === "code" && !highlight;
+  // "DOM-rendered": find walks text nodes instead of painting the plain
+  // <mark> segments. True for both the markdown and code (shiki) views.
+  const domMode = richMode || codeMode;
 
   // Find-in-source on the RENDERED view: all matches get ::highlight(find),
   // the active one ::highlight(find-active) and a scroll-to. The plain
@@ -1351,7 +1362,7 @@ function SourceReader({
   const [domMatchCount, setDomMatchCount] = useState(0);
   const domRanges = useRef<Range[]>([]);
   useEffect(() => {
-    if (!richMode || content === null) return;
+    if (!domMode || content === null) return;
     const timer = window.setTimeout(() => {
       if (!bodyRef.current) return;
       const ranges = query.trim()
@@ -1366,10 +1377,10 @@ function SourceReader({
       applyFindHighlights([], 0);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [richMode, content, query]);
+  }, [domMode, content, query]);
   // Stepping through matches: retarget the active highlight and scroll.
   useEffect(() => {
-    if (!richMode || domRanges.current.length === 0) return;
+    if (!domMode || domRanges.current.length === 0) return;
     const ranges = domRanges.current;
     const idx = ((active % ranges.length) + ranges.length) % ranges.length;
     applyFindHighlights(ranges, idx);
@@ -1378,9 +1389,9 @@ function SourceReader({
     if (body && bodyRef.current) {
       bodyRef.current.scrollTop += rect.top - body.top - bodyRef.current.clientHeight / 3;
     }
-  }, [active, richMode]);
+  }, [active, domMode]);
 
-  const matchTotal = richMode ? domMatchCount : matches.length;
+  const matchTotal = domMode ? domMatchCount : matches.length;
   const activeIdx = query.trim()
     ? Math.min(active, Math.max(0, matchTotal - 1))
     : 0;
@@ -1393,7 +1404,7 @@ function SourceReader({
   // nodes, highlight it (CSS Custom Highlight — no DOM mutation), and scroll
   // it to a third from the top. Runs after paint so the markdown DOM exists.
   useEffect(() => {
-    if (!richMode || !highlight || content === null) return;
+    if (!domMode || !highlight || content === null) return;
     let cancelled = false;
     // setTimeout, NOT requestAnimationFrame: rAF never fires while the
     // window is occluded (macOS pauses it), which would silently skip the
@@ -1415,7 +1426,7 @@ function SourceReader({
       window.clearTimeout(timer);
       applyCitationHighlight(null);
     };
-  }, [richMode, highlight, content]);
+  }, [domMode, highlight, content]);
   useEffect(() => {
     setAnchorFailed(false);
   }, [highlight, source.id]);
@@ -1523,7 +1534,7 @@ function SourceReader({
   }
 
   const segments: { text: string; hit: boolean; current: boolean }[] = [];
-  if (content && !richMode) {
+  if (content && !domMode) {
     let pos = 0;
     ranges.forEach(([s, e], i) => {
       if (s > pos)
@@ -1713,6 +1724,8 @@ function SourceReader({
                 </span>
               )}
             </div>
+          ) : codeMode ? (
+            <CodeView path={source.title} code={content} lineNums />
           ) : richMode ? (
             <div className="selectable">
               <Markdown>{content}</Markdown>

@@ -19,6 +19,7 @@ import type {
   Note,
   ReadingPrefs,
   ReportSchedule,
+  Source,
 } from "./types";
 
 // Side panels stay usable at any drag position: wide enough for content,
@@ -243,6 +244,7 @@ export const useStore = create<AppState>((set, get) => {
     kokoroBusy: false,
     reader: { open: false, history: [], index: -1 },
     folderScan: null,
+    importingFolders: [],
     noteReads: loadNoteReads(),
     noteReadsBaseline: loadNoteReadsBaseline(),
 
@@ -764,15 +766,51 @@ export const useStore = create<AppState>((set, get) => {
       if (!id) return;
       const picked = await open({ directory: true });
       if (!picked || Array.isArray(picked)) return;
+      const name = picked.split("/").pop() || picked;
       const item: QueueItem = {
         id: `${Date.now()}`,
-        name: picked.split("/").pop() || picked,
+        name,
         status: "pending",
       };
-      set({ ingestQueue: [...get().ingestQueue, item], error: null });
+      // Optimistic folder row: the backend embeds every child before it
+      // returns, so without this the folder wouldn't appear in the list until
+      // the whole import finished. Insert a placeholder now (marked importing
+      // so the panel shows a loading affordance) and let the real listSources
+      // reconcile it away when addSourceFolder resolves.
+      const tempId = `pending-folder-${Date.now()}`;
+      const optimistic: Source = {
+        id: tempId,
+        notebookId: id,
+        title: name,
+        sourceType: "folder",
+        url: picked,
+        content: "",
+        status: "ready",
+        error: "",
+        charCount: 0,
+        chunkCount: 0,
+        createdAt: Date.now(),
+        parentId: "",
+        mtime: 0,
+      };
+      set({
+        ingestQueue: [...get().ingestQueue, item],
+        sources: [...get().sources, optimistic],
+        importingFolders: [...get().importingFolders, tempId],
+        error: null,
+      });
       await runQueued(get, set, item, () => api.addSourceFolder(id, picked));
-      set({ folderScan: null });
-      if (get().currentId === id) set({ sources: await api.listSources(id) });
+      set({
+        folderScan: null,
+        importingFolders: get().importingFolders.filter((f) => f !== tempId),
+      });
+      if (get().currentId === id) {
+        // Success replaces the whole list (dropping the temp row); on failure
+        // listSources isn't reached, so drop the temp row explicitly.
+        set({ sources: await api.listSources(id) });
+      } else {
+        set({ sources: get().sources.filter((s) => s.id !== tempId) });
+      }
     },
 
     startSourceSync: () => {
