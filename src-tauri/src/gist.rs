@@ -12,10 +12,12 @@
 //!
 //! Generated text is gated before it is stored (the Doc2Query-- lesson:
 //! hallucinated expansions actively hurt retrieval): length bounds, a
-//! degeneracy check, and every identifier-ish token in the gist must appear
-//! verbatim in the source. A gist that fails the gate is dropped and the
-//! (source, hash) pair is remembered for this app run so the sweep doesn't
-//! spin on an unwilling model.
+//! degeneracy check, and an identifier-grounding check that rejects a gist
+//! only on wholesale confabulation (a majority of its identifiers absent from
+//! the source), not on the odd paraphrase or plural — three rounds of real
+//! corpus proved per-token rejection threw out good gists. A gist that fails
+//! the gate is dropped and the (source, hash) pair is remembered for this app
+//! run so the sweep doesn't spin on an unwilling model.
 //!
 //! Phase 2 (RFC-infinite-context §2) rides the same sweep: once gists
 //! converge, `ensure_enrichment` re-embeds one low-density page-capture
@@ -172,13 +174,25 @@ pub fn gate(candidate: &str, raw: &str) -> Result<String, String> {
     if lines.len() >= 4 && distinct.len() * 2 < lines.len() {
         return Err("degenerate (repeated lines)".into());
     }
-    // Every identifier in the gist must appear in the source (case-blind).
-    // One invented error code poisons exact-match retrieval forever.
+    // Identifier grounding, softened from per-token rejection after three
+    // rounds of real-corpus false positives (RFC-infinite-context §1): a good
+    // summary legitimately paraphrases, pluralizes ("RecordBatch" →
+    // "RecordBatches"), and names entities the extractor dropped from the
+    // body, so a single unverified token is not evidence of hallucination.
+    // Reject only on WHOLESALE confabulation — several unverified identifiers
+    // AND a majority of them unverified — which is what an untethered model
+    // actually produces; one or two strays ride along.
     let raw_lower = raw.to_lowercase();
-    for tok in identifier_tokens(gist) {
-        if !raw_lower.contains(&tok.to_lowercase()) {
-            return Err(format!("unverified identifier {tok:?}"));
-        }
+    let idents = identifier_tokens(gist);
+    let unverified = idents
+        .iter()
+        .filter(|t| !raw_lower.contains(&t.to_lowercase()))
+        .count();
+    if unverified >= 3 && unverified * 2 > idents.len() {
+        return Err(format!(
+            "{unverified} of {} identifiers unverified (likely confabulated)",
+            idents.len()
+        ));
     }
     Ok(gist.to_string())
 }
@@ -405,13 +419,18 @@ pub fn situating_gate(candidate: &str, raw: &str) -> Option<String> {
             return None;
         }
     }
-    // Every identifier in the sentence must appear in the source (case-blind):
-    // a hallucinated code baked into the embed input misleads exact retrieval.
+    // Identifier grounding, softened like the gist gate: reject only on
+    // wholesale confabulation, not a lone stray. This sentence is one chunk's
+    // embed context, so an odd unverified token is low-harm; the threshold is
+    // 2 (not the gist's 3) because a single sentence carries few identifiers.
     let raw_lower = raw.to_lowercase();
-    for tok in identifier_tokens(&sentence) {
-        if !raw_lower.contains(&tok.to_lowercase()) {
-            return None;
-        }
+    let idents = identifier_tokens(&sentence);
+    let unverified = idents
+        .iter()
+        .filter(|t| !raw_lower.contains(&t.to_lowercase()))
+        .count();
+    if unverified >= 2 && unverified * 2 > idents.len() {
+        return None;
     }
     Some(sentence)
 }
@@ -626,19 +645,31 @@ mod tests {
     }
 
     #[test]
-    fn gate_rejects_hallucinated_identifiers() {
-        let raw = "Retries use ERR-500-RETRY with a ten second wait. \
-                   The loader is CheckpointLoader in checkpoint_loader.cc.";
-        let good = format!(
-            "This runbook explains retry behavior for the loader and when waits apply. \
-             It covers how ERR-500-RETRY is issued and what CheckpointLoader does when \
-             a manifest stalls during restore. It can answer how long the retry wait is \
-             and which component performs loading. {}Key terms: ERR-500-RETRY, CheckpointLoader",
-            ""
+    fn gate_tolerates_strays_but_rejects_confabulation() {
+        let raw = "Retries use ERR-500-RETRY. The loader is CheckpointLoader in \
+                   checkpoint_loader.cc for net-45 jobs.";
+        // Grounded: every identifier present in the source. Passes.
+        let good = "This runbook covers retries via ERR-500-RETRY and the CheckpointLoader \
+                    defined in checkpoint_loader.cc, explaining net-45 job handling so it can \
+                    answer how retries and loading behave during a stalled restore for a team.";
+        assert!(gate(good, raw).is_ok(), "{:?}", gate(good, raw));
+        // One unverified identifier (a paraphrase / plural / dropped id) rides
+        // along — no longer grounds for rejecting the whole gist.
+        let one_stray = good.replace("net-45", "net-90");
+        assert!(
+            gate(&one_stray, raw).is_ok(),
+            "a single stray must be tolerated: {:?}",
+            gate(&one_stray, raw)
         );
-        assert!(gate(&good, raw).is_ok());
-        let bad = good.replace("ERR-500-RETRY", "ERR-404-RETRY");
-        assert!(gate(&bad, raw).is_err(), "invented code must be rejected");
+        // Wholesale confabulation — a majority of identifiers invented — rejects.
+        let confab = "This runbook covers ERR-909-FAKE and the PhantomLoader defined in \
+                      phantom_loader.cc, explaining zeta-99 job handling so it can answer \
+                      how the invented retries and loading behave during some restore now.";
+        assert!(
+            gate(confab, raw).is_err(),
+            "confabulation must reject: {:?}",
+            gate(confab, raw)
+        );
     }
 
     #[test]
@@ -668,12 +699,19 @@ mod tests {
         // Too long (well past 300 chars).
         let long = "word ".repeat(120);
         assert!(situating_gate(&long, raw).is_none());
-        // Invented identifier not present in the source.
-        let bad = "This passage covers vendor wire payments and the ERR-999-FAKE path \
-                   used when a remittance is disputed by procurement.";
+        // A lone invented identifier now rides along (softened gate).
+        let one_stray = "This passage covers vendor wire payments and the ERR-999-FAKE path \
+                         used when a remittance is disputed by procurement on net-45 terms.";
         assert!(
-            situating_gate(bad, raw).is_none(),
-            "hallucinated code must be rejected"
+            situating_gate(one_stray, raw).is_some(),
+            "one stray tolerated"
+        );
+        // Wholesale confabulation — a majority of identifiers invented — rejects.
+        let confab = "This passage covers ERR-909-FAKE and the PhantomLoader path via \
+                      zeta_bad_ref when a remittance is disputed on some terms.";
+        assert!(
+            situating_gate(confab, raw).is_none(),
+            "confabulated sentence must be rejected"
         );
     }
 
@@ -727,12 +765,6 @@ mod tests {
                     questions about the panel, the error path, and how the overall \
                     generation works for a reader exploring the studio surface right now.";
         assert!(gate(gist, raw).is_ok(), "{:?}", gate(gist, raw));
-        // A wrapped code that is NOT in the source is still rejected.
-        let bad = gist.replace("ERR-9917", "ERR-1234");
-        assert!(
-            gate(&bad, raw).is_err(),
-            "hallucinated wrapped code must reject"
-        );
     }
 
     /// Regression for the false-positive classes seen on the first real

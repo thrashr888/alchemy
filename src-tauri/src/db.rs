@@ -801,6 +801,38 @@ impl Db {
         Ok(())
     }
 
+    /// Delete a folder/repo source and all its children in a handful of
+    /// predicate ops instead of one transaction pair per child. A 48-file
+    /// folder was 96+ sequential Lance transactions — slow enough to trip the
+    /// IPC timeout; this is two deletes total for the whole tree.
+    pub async fn delete_source_tree(&self, folder_id: &str, child_ids: &[String]) -> Result<()> {
+        // Every owner id whose chunks (verbatim + gist rows) must go: the
+        // folder itself plus each child.
+        let mut owners: Vec<String> = Vec::with_capacity(child_ids.len() + 1);
+        owners.push(folder_id.to_string());
+        owners.extend(child_ids.iter().cloned());
+        let quoted = |prefix: &str| {
+            owners
+                .iter()
+                .map(|id| format!("'{prefix}{}'", esc(id)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let pred = format!(
+            "source_id IN ({}) OR source_id IN ({})",
+            quoted(""),
+            quoted(GIST_CHUNK_PREFIX)
+        );
+        self.delete_where(T_CHUNKS, &pred).await?;
+        // One delete for the folder row and every row parented to it.
+        self.delete_where(
+            T_SOURCES,
+            &format!("id = '{0}' OR parent_id = '{0}'", esc(folder_id)),
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Fetch a single source with its full content (None if not found).
     pub async fn get_source(&self, source_id: &str) -> Result<Option<Source>> {
         let filter = format!("id = '{}'", esc(source_id));

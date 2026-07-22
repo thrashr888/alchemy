@@ -1286,14 +1286,22 @@ pub async fn get_source_content(
 
 #[tauri::command]
 pub async fn delete_source(state: State<'_, AppState>, source_id: String) -> Result<(), String> {
-    // Deleting a folder or repo removes its children (and their chunks).
+    // Deleting a folder or repo removes its children (and their chunks) in
+    // one bulk op — a per-child loop was slow enough to trip the IPC timeout.
     if let Some(src) = e(state.db.get_source(&source_id).await)? {
         if src.source_type == "folder" || src.source_type == "git" {
-            for child in e(state.db.list_sources(&src.notebook_id).await)? {
-                if child.parent_id == source_id {
-                    e(state.db.delete_source(&child.id).await)?;
-                }
+            let child_ids: Vec<String> = e(state.db.list_sources(&src.notebook_id).await)?
+                .into_iter()
+                .filter(|c| c.parent_id == source_id)
+                .map(|c| c.id)
+                .collect();
+            let data_dir = app_data_dir(&state);
+            for id in &child_ids {
+                crate::git::remove_cache(&data_dir, id);
             }
+            e(state.db.delete_source_tree(&source_id, &child_ids).await)?;
+            crate::git::remove_cache(&data_dir, &source_id);
+            return Ok(());
         }
     }
     e(state.db.delete_source(&source_id).await)?;
