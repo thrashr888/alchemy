@@ -82,10 +82,12 @@ pub struct AiConfig {
     /// fully recoverable, so the toggle exists for cost control, not safety.
     #[serde(default = "default_true")]
     pub curator_consolidate: bool,
-    /// Background source-gist distillation (docs/RFC-infinite-context.md
-    /// Phase 1). On by default — smart defaults over opt-ins; the sweep is
-    /// budgeted, gated, and self-healing, so the toggle exists for cost
-    /// control, not safety.
+    /// Master switch for the background distillation family
+    /// (docs/RFC-infinite-context.md): source gists (Phase 1) and per-chunk
+    /// embedding enrichment for low-density page captures (Phase 2) both ride
+    /// this one flag — they share the same fire-and-forget sweep. On by
+    /// default — smart defaults over opt-ins; the sweep is budgeted, gated,
+    /// and self-healing, so the toggle exists for cost control, not safety.
     #[serde(default = "default_true")]
     pub source_gists: bool,
     /// Which engine runs image OCR: "" (off) | "ollama" | "gateway".
@@ -314,6 +316,11 @@ pub struct Ai {
     ollama: Ollama,
     /// Gateway client retained for vision + model listing when configured.
     openai: Option<OpenAiClient>,
+    /// Resolved app-data dir (same one the embedder writes under). The gist
+    /// sweep's enrichment marker lives here (RFC-infinite-context §2), so the
+    /// distillation family can find it without threading a path through every
+    /// `spawn_sweep` call site.
+    data_dir: std::path::PathBuf,
 }
 
 fn ollama_config(config: &AiConfig) -> OllamaConfig {
@@ -384,7 +391,7 @@ impl Ai {
         };
         let embedder = if config.embedder == "builtin" {
             Embedder::Builtin(LocalEmbedder::new(
-                data_dir,
+                data_dir.clone(),
                 runtime.embedder_progress.clone(),
             ))
         } else {
@@ -406,7 +413,14 @@ impl Ai {
             router,
             ollama,
             openai,
+            data_dir,
         }
+    }
+
+    /// The app-data dir this instance writes under — the gist sweep's
+    /// enrichment marker lives here (RFC-infinite-context §2).
+    pub fn data_dir(&self) -> &std::path::Path {
+        &self.data_dir
     }
 
     /// Retrieval/context parameters for a role, resolved by the router

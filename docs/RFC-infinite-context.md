@@ -134,6 +134,29 @@ Eval: messy-source datasets built from real captured pages and transcript
 fixtures. Target: ≥20% failed-retrieval reduction on messy sets, ≥0% on
 clean sets (regression fence).
 
+Status: **implemented** (`gist.rs` — `ensure_enrichment` rides the gist
+sweep after gists converge, one source per batch; `ingest.rs` boilerplate
+gate). Per-type policy scopes situating-sentence enrichment to url/html
+captures; pdf/markdown/docx/text keep the `[title › section]` prefix, code
+keeps its path prefix, and mac sources (cider Reminders/Calendar/Notes —
+structured data, not page captures) stay on the plain path. `Chunk.text`,
+ids, ordinals, and FTS are never altered — only stored vectors change,
+with per-row verbatim-text verification before any write and per-chunk
+degrade to prefix-only on a failed gate (length/degeneracy/
+identifier-overlap, the gist gates). Durable state is a self-healing
+`enrichment.json` marker keyed by content hash (lost marker = recompute
+only; hash-invalidated on refresh; self-pruned on delete) — chosen over
+sources-table schema evolution (disproportionate) and hash-in-chunk-ids
+(would break stable citation ids). The boilerplate gate drops url/html nav
+cruft from the index while `source.content` keeps everything for the
+reader; it drops zero chunks on the clean fixtures. All of it rides the
+`source_gists` master switch. Deterministic evidence: the re-embed eval
+shows situating vocabulary pulling a chunk's query distance 0.74 → 0.37
+with rows byte-stable; dataset report byte-identical. Not yet delivered:
+the real captured-page/transcript datasets and the ≥20% target — those
+need a live Small role, which the deterministic suite doesn't have; they
+land with a live-model eval harness, not more code here.
+
 ## Phase 3: scale-adaptive evidence assembly
 
 - `retrieve_k` scales with corpus size (log curve) inside the resolved

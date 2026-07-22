@@ -1128,6 +1128,128 @@ async fn eval_gist_rows() {
     }
 }
 
+// ---- Chunk enrichment re-embed mechanics (RFC-infinite-context §2) ---------
+//
+// Enrichment prepends a situating sentence to a chunk's embed input and
+// rewrites the vector, but `Chunk.text`, ids, and ordinals are sacred. There
+// is no chat model in the suite, so this simulates the pass with a hand-written
+// situating sentence (the exact string a Small role would produce) and proves
+// the mechanics deterministically: verbatim text and row identity survive, and
+// the situating vocabulary measurably pulls the vector toward a query the
+// verbatim text alone would miss.
+
+#[tokio::test]
+async fn eval_enrichment_reembed() {
+    let Some(ai) = builtin_ai().await else { return };
+    let dir = std::env::temp_dir().join(format!("nbl-eval-enrich-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb = "enrich-nb";
+
+    // Distractors so retrieval is contested, then the target: a url source
+    // whose verbatim passage describes its topic only indirectly (no query
+    // vocabulary at all).
+    seed_docs(&ai, &db, nb, CORPUS, "d-").await;
+    let title = "Northern Freight Route";
+    let target = "The overnight ferry departs the northern pier and threads the fjord \
+                  before dawn, carrying freight and a handful of passengers to the far \
+                  settlement.";
+    let fillers = [
+        "Deckhands coil the mooring lines and stow the gangway once the last vehicle \
+         rolls aboard.",
+        "A small galley serves hot soup and coffee through the crossing, cash only, \
+         no reservations.",
+    ];
+    let src_id = format!("enrich-src-{}", uuid::Uuid::new_v4());
+    let embed_text = |body: &str| format!("[{title}]\n{body}");
+    let bodies = [target, fillers[0], fillers[1]];
+    let inputs: Vec<String> = bodies.iter().map(|b| embed_text(b)).collect();
+    let embeddings = ai.embed(&inputs).await.expect("embed target");
+    let tuples: Vec<(String, i32, String)> = bodies
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (format!("t-c{i}"), i as i32, b.to_string()))
+        .collect();
+    let source = crate::models::Source {
+        id: src_id.clone(),
+        notebook_id: nb.to_string(),
+        title: title.to_string(),
+        source_type: "url".into(),
+        url: "https://example.com/ferry".into(),
+        content: bodies.join("\n\n"),
+        char_count: 0,
+        chunk_count: tuples.len() as i64,
+        created_at: 0,
+        status: "ready".into(),
+        error: String::new(),
+        parent_id: String::new(),
+        mtime: 0,
+    };
+    db.insert_source(&source, &tuples, &embeddings)
+        .await
+        .expect("insert target");
+
+    // A query in the situating sentence's vocabulary, absent from the passage.
+    let q = "arctic cargo shipping schedule for the freight route";
+    let qv = ai.embed_one(q).await.expect("embed query");
+    let target_distance = |trace: &crate::db::SearchTrace| {
+        trace
+            .vector_hits
+            .iter()
+            .find(|c| c.chunk_id == "t-c0")
+            .map(|c| c.distance)
+    };
+    let before = db
+        .search_chunks_trace(nb, qv.clone(), q, 10, None)
+        .await
+        .expect("search before");
+    let before_dist = target_distance(&before).expect("target in vector pool before");
+
+    // Simulate the enrichment pass: same ids/ordinals/text, situating sentence
+    // prepended only to the target chunk's embed input.
+    let rows = db.source_chunk_rows(&src_id).await.expect("rows before");
+    let situating =
+        "This passage covers the arctic cargo shipping schedule for the northern freight route.";
+    let new_inputs: Vec<String> = rows
+        .iter()
+        .map(|(_, ord, text)| {
+            let base = embed_text(text);
+            if *ord == 0 {
+                format!("{situating}\n{base}")
+            } else {
+                base
+            }
+        })
+        .collect();
+    let new_embeddings = ai.embed(&new_inputs).await.expect("re-embed");
+    db.reembed_source_chunks(nb, &src_id, &rows, &new_embeddings)
+        .await
+        .expect("reembed");
+
+    // (a) + (b): verbatim text, ids, and ordinals are byte-for-byte stable —
+    // only the vectors moved. These are the hard guarantees.
+    let rows_after = db.source_chunk_rows(&src_id).await.expect("rows after");
+    assert_eq!(
+        rows, rows_after,
+        "enrichment must preserve chunk ids, ordinals, and verbatim text"
+    );
+
+    // (c): the situating vocabulary pulled the target's vector strictly closer
+    // to the query than its verbatim-only embedding — a deterministic vector
+    // measurement (FTS is untouched: `text` never changed), not a flaky
+    // full-stack ranking assertion.
+    let after = db
+        .search_chunks_trace(nb, qv, q, 10, None)
+        .await
+        .expect("search after");
+    let after_dist = target_distance(&after).expect("target in vector pool after");
+    eprintln!("enrich eval: target query-distance {before_dist:.4} -> {after_dist:.4}");
+    assert!(
+        after_dist < before_dist,
+        "situating sentence should move the vector toward the query \
+         (before {before_dist:.4}, after {after_dist:.4})"
+    );
+}
+
 // ---- Global source selection (RFC-infinite-context §4) --------------------
 //
 // The global answer route retrieves the standing gist layer corpus-wide, then
@@ -1690,7 +1812,7 @@ async fn run_scale(ai: &crate::ai::Ai, target_chars: usize) -> (f64, f64, usize)
     let inputs: Vec<String> = pending.iter().map(|(_, c)| c.embed_text.clone()).collect();
     let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(inputs.len());
     for batch in inputs.chunks(256) {
-        vectors.extend(ai.embed(&batch.to_vec()).await.expect("embed scale corpus"));
+        vectors.extend(ai.embed(batch).await.expect("embed scale corpus"));
     }
     let mut cursor = 0usize;
     for (di, (title, body)) in docs.iter().enumerate() {

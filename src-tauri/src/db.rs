@@ -1514,6 +1514,53 @@ impl Db {
         self.delete_where(T_CHUNKS, &pred).await
     }
 
+    /// One source's stored chunk rows as (chunk_id, ordinal, text), in ordinal
+    /// order — the enrichment pass (RFC-infinite-context §2) reads these to
+    /// re-embed with identical ids, ordinals, and verbatim text. The equality
+    /// filter can't match the source's `gist:`/`note:` rows (those owner ids
+    /// are prefixed), so only the plain source chunks come back.
+    pub async fn source_chunk_rows(&self, source_id: &str) -> Result<Vec<(String, i32, String)>> {
+        if !self.table_exists(T_CHUNKS).await? {
+            return Ok(vec![]);
+        }
+        let filter = format!("source_id = '{}'", esc(source_id));
+        let batches = self.collect(T_CHUNKS, Some(&filter)).await?;
+        let mut out = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let ord = i32_col(b, "ordinal")?;
+            let text = str_col(b, "text")?;
+            for i in 0..b.num_rows() {
+                out.push((
+                    id.value(i).to_string(),
+                    ord.value(i),
+                    text.value(i).to_string(),
+                ));
+            }
+        }
+        out.sort_by_key(|(_, ord, _)| *ord);
+        Ok(out)
+    }
+
+    /// Replace the vectors of one source's chunks in place: same ids, ordinals,
+    /// and verbatim text — only the embeddings change (RFC-infinite-context §2
+    /// enrichment). LanceDB has no vector-cell update, so this is
+    /// delete-then-add of the exact same rows; the FTS `text` is unchanged, so
+    /// the rebuilt index is identical. Only the plain source chunks are
+    /// touched — the `gist:` row (prefixed owner id) is left in place.
+    pub async fn reembed_source_chunks(
+        &self,
+        notebook_id: &str,
+        source_id: &str,
+        chunks: &[(String, i32, String)],
+        embeddings: &[Vec<f32>],
+    ) -> Result<()> {
+        self.delete_where(T_CHUNKS, &format!("source_id = '{}'", esc(source_id)))
+            .await?;
+        self.add_chunks(notebook_id, source_id, chunks, embeddings)
+            .await
+    }
+
     /// Post-rank neighbor expansion (RFC-infinite-context §3): for each
     /// cited source chunk, widen the PROMPT excerpt to include its ordinal
     /// ±1 neighbors so a section split by chunking reaches the model whole.
