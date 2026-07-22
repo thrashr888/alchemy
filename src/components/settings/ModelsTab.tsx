@@ -848,6 +848,11 @@ function ProviderWizard({
             </span>
             <ChevronRight className="h-3.5 w-3.5 text-subtle-foreground" />
           </button>
+          <div className="pt-1">
+            <Button variant="ghost" onClick={onClose}>
+              ‹ Back
+            </Button>
+          </div>
         </div>
       )}
 
@@ -944,7 +949,7 @@ function ProviderWizard({
           </Field>
           <div className="flex items-center justify-between pt-1">
             <Button variant="ghost" onClick={() => (editing ? onClose() : setStep("door"))}>
-              {editing ? "Cancel" : "‹ Back"}
+              ‹ Back
             </Button>
             <Button
               variant="primary"
@@ -998,7 +1003,7 @@ function ProviderWizard({
           </Field>
           <div className="flex items-center justify-between pt-1">
             <Button variant="ghost" onClick={() => (editing ? onClose() : setStep("door"))}>
-              {editing ? "Cancel" : "‹ Back"}
+              ‹ Back
             </Button>
             <Button
               variant="primary"

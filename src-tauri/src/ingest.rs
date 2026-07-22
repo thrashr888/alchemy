@@ -1098,10 +1098,13 @@ pub fn chunk_text(title: &str, text: &str) -> Vec<Chunk> {
             ctx.push_str(heading);
         }
         let body = body.trim().to_string();
+        // Embed text de-brackets [[wikilinks]] so retrieval reads prose;
+        // display text keeps them for the reader to render as links.
+        let embed_body = debracket_wikilinks(&body);
         let embed_text = if ctx.is_empty() {
-            body.clone()
+            embed_body
         } else {
-            format!("[{ctx}]\n{body}")
+            format!("[{ctx}]\n{embed_body}")
         };
         Chunk {
             text: body,
@@ -1206,12 +1209,92 @@ fn split_oversized(p: &str) -> Vec<String> {
 /// boundaries; everything else uses the prose chunker. `code_ctx` is the
 /// retrieval context for code chunks — "repo › relative/path.rs" when the
 /// caller knows it (folder children), falling back to the title.
+///
+/// Markdown gets vault-aware prep (RFC-obsidian-notion §3): leading YAML
+/// frontmatter is provenance, not prose — stripped from what's chunked, with
+/// `tags:` joining the retrieval context the way repo paths do — and
+/// `[[wikilinks]]` de-bracket in embed text so retrieval reads prose.
+/// Display text keeps the brackets; the reader renders them as links.
 pub fn chunk_source(extracted: &Extracted, code_ctx: Option<&str>) -> Vec<Chunk> {
     if extracted.source_type == "code" {
-        chunk_code(code_ctx.unwrap_or(&extracted.title), &extracted.text)
-    } else {
-        chunk_text(&extracted.title, &extracted.text)
+        return chunk_code(code_ctx.unwrap_or(&extracted.title), &extracted.text);
     }
+    if extracted.source_type == "markdown" {
+        let (tags, body) = split_frontmatter(&extracted.text);
+        let ctx = match tags.is_empty() {
+            true => extracted.title.clone(),
+            false => format!("{} · {}", extracted.title, tags.join(" ")),
+        };
+        return chunk_text(&ctx, body);
+    }
+    chunk_text(&extracted.title, &extracted.text)
+}
+
+/// Split leading YAML frontmatter off markdown. Returns (`#tag`s from any
+/// `tags:` key, body after the closing `---`). Not a YAML parser — it reads
+/// the two shapes Obsidian writes (inline `[a, b]` and block `- a` lists)
+/// and ignores everything else. Unclosed fences are treated as content.
+fn split_frontmatter(text: &str) -> (Vec<String>, &str) {
+    let Some(rest) = text.strip_prefix("---\n") else {
+        return (vec![], text);
+    };
+    let Some(end) = rest.find("\n---") else {
+        return (vec![], text);
+    };
+    let (yaml, mut body) = rest.split_at(end);
+    body = body.strip_prefix("\n---").unwrap_or(body);
+    body = body.strip_prefix('\n').unwrap_or(body);
+
+    let mut tags: Vec<String> = Vec::new();
+    let mut in_tags_block = false;
+    for line in yaml.lines() {
+        if in_tags_block {
+            if let Some(item) = line.trim().strip_prefix("- ") {
+                push_tag(&mut tags, item);
+                continue;
+            }
+            in_tags_block = false;
+        }
+        if let Some(val) = line.strip_prefix("tags:") {
+            let val = val.trim();
+            if val.is_empty() {
+                in_tags_block = true;
+            } else {
+                for item in val.trim_start_matches('[').trim_end_matches(']').split(',') {
+                    push_tag(&mut tags, item);
+                }
+            }
+        }
+    }
+    (tags, body)
+}
+
+fn push_tag(tags: &mut Vec<String>, raw: &str) {
+    let t = raw.trim().trim_matches(['"', '\'']).trim_start_matches('#');
+    if !t.is_empty() {
+        tags.push(format!("#{t}"));
+    }
+}
+
+/// `[[Note]]` → `Note`, `[[Note|alias]]` → `alias`, `[[Note#head]]` →
+/// `Note head` — embed text reads as prose instead of bracket soup.
+fn debracket_wikilinks(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("[[") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("]]") else { break };
+        out.push_str(&rest[..start]);
+        let inner = &after[..end];
+        let display = match inner.rsplit_once('|') {
+            Some((_, alias)) if !alias.trim().is_empty() => alias.trim().to_string(),
+            _ => inner.replace('#', " ").trim().to_string(),
+        };
+        out.push_str(&display);
+        rest = &after[end + 2..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// How many trailing lines of one code chunk repeat at the start of the next
@@ -1739,6 +1822,68 @@ mod tests {
         // Empty extraction never gets a dangling provenance header.
         let ex = extracted_from_html("<html></html>", "https://e.com/a", "", &meta);
         assert!(!ex.text.starts_with(">"));
+    }
+
+    #[test]
+    fn frontmatter_splits_and_reads_both_tag_shapes() {
+        // Inline list.
+        let (tags, body) =
+            split_frontmatter("---\ntitle: X\ntags: [espresso, gear]\n---\nBody here.");
+        assert_eq!(tags, vec!["#espresso", "#gear"]);
+        assert_eq!(body, "Body here.");
+
+        // Block list, quoted and pre-hashed entries normalize.
+        let (tags, body) =
+            split_frontmatter("---\ntags:\n  - \"a\"\n  - '#b'\nother: y\n---\n\nText.");
+        assert_eq!(tags, vec!["#a", "#b"]);
+        assert_eq!(body, "\nText.");
+
+        // No frontmatter, unclosed fence, and a mid-document rule all pass through.
+        assert_eq!(split_frontmatter("plain text").1, "plain text");
+        assert_eq!(
+            split_frontmatter("---\nnever closed").1,
+            "---\nnever closed"
+        );
+        let (tags, body) = split_frontmatter("---\nkey: v\n---\nA\n\n---\n\nB");
+        assert!(tags.is_empty());
+        assert_eq!(body, "A\n\n---\n\nB");
+    }
+
+    #[test]
+    fn wikilinks_debracket_in_embed_text_only() {
+        assert_eq!(
+            debracket_wikilinks("See [[Roast Log]] and [[Gear#Grinder|the grinder]]."),
+            "See Roast Log and the grinder."
+        );
+        assert_eq!(debracket_wikilinks("[[A#B]]"), "A B");
+        // Unclosed brackets pass through untouched.
+        assert_eq!(debracket_wikilinks("broken [[link"), "broken [[link");
+
+        let chunks = chunk_text("Note", "Compare with [[Other Note|that one]].");
+        assert_eq!(chunks[0].text, "Compare with [[Other Note|that one]].");
+        assert!(chunks[0].embed_text.ends_with("Compare with that one."));
+    }
+
+    #[test]
+    fn markdown_chunking_strips_frontmatter_and_carries_tags() {
+        let ex = Extracted {
+            title: "Dialing In".into(),
+            text: "---\ntags: [espresso]\n---\nGrind finer when sour. See [[Temps]].".into(),
+            source_type: "markdown".into(),
+            url: String::new(),
+        };
+        let chunks = chunk_source(&ex, None);
+        assert_eq!(chunks.len(), 1);
+        // Frontmatter is gone from both text and embeds; tags join the context.
+        assert!(!chunks[0].text.contains("---"));
+        assert!(chunks[0]
+            .embed_text
+            .starts_with("[Dialing In · #espresso]\n"));
+        assert!(chunks[0].embed_text.contains("See Temps."));
+        assert!(
+            chunks[0].text.contains("[[Temps]]"),
+            "display keeps brackets"
+        );
     }
 
     #[test]

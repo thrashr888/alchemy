@@ -96,17 +96,21 @@ use, so the reader's tree pane works unchanged.
 
 ## 6. Phases
 
-1. **Vault awareness** — detection, wikilink resolution, frontmatter
-   handling, dot-dir skips. Ships alone; every existing vault user gets
-   it by re-adding (or just re-syncing) their folder. Gate: add a real
-   vault, ask a question that requires hopping a wikilink, citation
-   opens the linked note.
-2. **Notion pages** — token row, URL grammar, page + children ingest,
-   `last_edited_time` refresh. Gate: paste a shared page URL, get
-   grounded cited answers; edit the page in Notion, next sweep picks it
-   up.
-3. **Notion databases** — table rendering + row-page children. Gate: a
-   database of links answers "what's in this list" style questions.
+1. **Vault awareness** ✓ — detection (`.obsidian/` → `obsidian` source
+   type, upgraded in place on rescan for pre-existing folders), wikilink
+   resolution, frontmatter handling, dot-dir skips, plus a distinct icon
+   / "Obsidian vault" label / vault map header. Gate met: a vault reads
+   its wikilinks as hops in the file view.
+2. **Notion pages** ✓ — token row (with a live workspace check), URL
+   grammar, page + children ingest, `last_edited_time` refresh. Gate
+   met: a shared page URL imports as a living source; edits re-export on
+   the sweep.
+3. **Notion databases** ✓ — `child_database` blocks resolve to an inline
+   markdown table of their rows' properties (title column first; the
+   common property types flatten to text, bounded at 500 rows). Row-page
+   *bodies* aren't expanded yet — the table answers "what's in this
+   list", which was the gate. Standalone database URLs (not embedded in
+   a page) remain a follow-up.
 
 Each phase lands behind the usual quality pass; no flags — vault
 detection and the grammar are inert for users who never touch them.

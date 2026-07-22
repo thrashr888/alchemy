@@ -331,6 +331,20 @@ pub fn open_in_terminal(command: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate a Notion integration token against the API (Settings field's live
+/// check). Returns the workspace/bot label on success; a human error string
+/// on failure. Standalone — no app state needed.
+#[tauri::command]
+pub async fn notion_check(token: String) -> Result<String, String> {
+    if token.trim().is_empty() {
+        return Err("Paste a token first".into());
+    }
+    crate::notion::NotionClient::new(&token)
+        .check_token()
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
 /// Message-footer attribution: which provider answered, with metered cost
 /// when the engine reported one ("Claude Code · $0.04").
 fn model_caption(model: &str, cost_usd: Option<f64>) -> String {
@@ -810,6 +824,18 @@ pub(crate) async fn ingest_url(
             Err(err) => store_failed_url(state, notebook_id, url.trim(), err.to_string()).await,
         };
     }
+    // Notion pages (docs/RFC-obsidian-notion.md §4): with a token configured,
+    // the page tree exports to a cache dir and ingests via the folder
+    // machinery. Without one, public pages fall through to page capture.
+    if let Some(page_id) = crate::notion::detect_page(url) {
+        let token = { state.ai.read().await.config().notion_token.clone() };
+        if !token.is_empty() {
+            return match ingest_notion(state, notebook_id, url, &page_id, &token).await {
+                Ok(src) => Ok(src),
+                Err(err) => store_failed_url(state, notebook_id, url.trim(), err.to_string()).await,
+            };
+        }
+    }
     match crate::capture::extract_url_rescued(url).await {
         Ok(extracted) => store_extracted(state, notebook_id, extracted).await,
         Err(err) => store_failed_url(state, notebook_id, url.trim(), err.to_string()).await,
@@ -917,6 +943,43 @@ pub(crate) async fn ingest_git(
     }
 }
 
+/// Notion page tree -> parent source + markdown cache dir + folder rescan
+/// (docs/RFC-obsidian-notion.md §4). The exporter writes only changed pages,
+/// so the rescan re-embeds only what moved.
+pub(crate) async fn ingest_notion(
+    state: &AppState,
+    notebook_id: &str,
+    url: &str,
+    page_id: &str,
+    token: &str,
+) -> anyhow::Result<Source> {
+    let data_dir = app_data_dir(state);
+    let parent_id = new_id();
+    let dir = crate::notion::cache_dir(&data_dir, &parent_id);
+    let client = crate::notion::NotionClient::new(token);
+    let stats = client.export_tree(page_id, &dir).await?;
+    let parent = Source {
+        id: parent_id,
+        notebook_id: notebook_id.to_string(),
+        title: stats.title.clone(),
+        source_type: "notion".to_string(),
+        url: url.trim().trim_end_matches('/').to_string(),
+        content: String::new(),
+        char_count: 0,
+        chunk_count: 0,
+        created_at: now(),
+        status: "ready".to_string(),
+        error: String::new(),
+        parent_id: String::new(),
+        mtime: stats.max_edited_ms,
+    };
+    state.db.insert_source(&parent, &[], &[]).await?;
+    let _guard = state.folder_scan_lock.lock().await;
+    rescan_one_folder(None, state, &parent, true).await?;
+    state.db.touch_notebook(notebook_id, now()).await?;
+    Ok(parent)
+}
+
 /// Re-read a git-backed single source (README/blob) from its cache checkout
 /// and re-embed, stamping the given sha.
 async fn reextract_git_single(
@@ -966,7 +1029,12 @@ pub(crate) async fn repo_backed_files(
     };
     let parents: HashSet<&str> = sources
         .iter()
-        .filter(|s| (s.source_type == "folder" || s.source_type == "git") && s.parent_id.is_empty())
+        .filter(|s| {
+            matches!(
+                s.source_type.as_str(),
+                "folder" | "obsidian" | "git" | "notion"
+            ) && s.parent_id.is_empty()
+        })
         .map(|s| s.id.as_str())
         .collect();
     let selected = |id: &str| selection.is_none_or(|ids| ids.iter().any(|x| x == id));
@@ -1170,7 +1238,30 @@ pub async fn refresh_source_url(
     if existing.url.is_empty() {
         return Err("This source has no URL or file path to refresh from".into());
     }
-    if existing.source_type == "folder" || existing.source_type == "git" {
+    if matches!(
+        existing.source_type.as_str(),
+        "folder" | "obsidian" | "git" | "notion"
+    ) {
+        // Notion parents re-export changed pages before the rescan.
+        if existing.source_type == "notion" {
+            let token = { state.ai.read().await.config().notion_token.clone() };
+            let page = crate::notion::detect_page(&existing.url);
+            if let (Some(page_id), false) = (page, token.is_empty()) {
+                let dir = crate::notion::cache_dir(&app_data_dir(&state), &existing.id);
+                match crate::notion::NotionClient::new(&token)
+                    .export_tree(&page_id, &dir)
+                    .await
+                {
+                    Ok(stats) => {
+                        let _ = state
+                            .db
+                            .set_source_mtime(&existing.id, stats.max_edited_ms)
+                            .await;
+                    }
+                    Err(err) => return Err(format!("Notion refresh failed: {err:#}")),
+                }
+            }
+        }
         // Git parents force a remote sync first so the rescan sees fresh
         // files; local folders scan the disk as-is.
         if existing.source_type == "git" {
@@ -1279,7 +1370,10 @@ pub async fn get_source_content(
 pub async fn delete_source(state: State<'_, AppState>, source_id: String) -> Result<(), String> {
     // Deleting a folder or repo removes its children (and their chunks).
     if let Some(src) = e(state.db.get_source(&source_id).await)? {
-        if src.source_type == "folder" || src.source_type == "git" {
+        if matches!(
+            src.source_type.as_str(),
+            "folder" | "obsidian" | "git" | "notion"
+        ) {
             for child in e(state.db.list_sources(&src.notebook_id).await)? {
                 if child.parent_id == source_id {
                     e(state.db.delete_source(&child.id).await)?;
@@ -1288,8 +1382,12 @@ pub async fn delete_source(state: State<'_, AppState>, source_id: String) -> Res
         }
     }
     e(state.db.delete_source(&source_id).await)?;
-    // Git-backed sources leave a cache checkout behind — a no-op otherwise.
+    // Git and Notion sources leave cache dirs behind — no-ops otherwise.
     crate::git::remove_cache(&app_data_dir(&state), &source_id);
+    let notion_cache = crate::notion::cache_dir(&app_data_dir(&state), &source_id);
+    if notion_cache.exists() {
+        let _ = std::fs::remove_dir_all(&notion_cache);
+    }
     Ok(())
 }
 
@@ -1818,10 +1916,10 @@ pub async fn set_child_embedded(
     let parent = e(state.db.get_source(&child.parent_id).await)?
         .ok_or_else(|| "Parent source not found".to_string())?;
     let data_dir = app_data_dir(&state);
-    let root_buf = if parent.source_type == "git" {
-        crate::git::checkout_root(&data_dir, &parent.id)
-    } else {
-        std::path::PathBuf::from(&parent.url)
+    let root_buf = match parent.source_type.as_str() {
+        "git" => crate::git::checkout_root(&data_dir, &parent.id),
+        "notion" => crate::notion::cache_dir(&data_dir, &parent.id),
+        _ => std::path::PathBuf::from(&parent.url),
     };
     let rel = std::path::Path::new(&child.url)
         .strip_prefix(&root_buf)
@@ -1868,14 +1966,20 @@ async fn rescan_one_folder(
     force_map: bool,
 ) -> anyhow::Result<FolderScan> {
     let mut scan = FolderScan::default();
-    // Git parents scan their cache checkout (plus sparse scope); local
-    // folders scan the path in `url` directly.
-    let root_buf = if folder.source_type == "git" {
-        crate::git::checkout_root(&app_data_dir(state), &folder.id)
-    } else {
-        std::path::PathBuf::from(&folder.url)
+    // Git parents scan their cache checkout (plus sparse scope), Notion
+    // parents their export dir; local folders scan the path in `url`.
+    let root_buf = match folder.source_type.as_str() {
+        "git" => crate::git::checkout_root(&app_data_dir(state), &folder.id),
+        "notion" => crate::notion::cache_dir(&app_data_dir(state), &folder.id),
+        _ => std::path::PathBuf::from(&folder.url),
     };
     let root = root_buf.as_path();
+    // Upgrade a plain local folder to an Obsidian vault when `.obsidian/`
+    // appears (covers folders added before vault detection existed). One
+    // column flip; the rest of the scan is identical for both types.
+    if folder.source_type == "folder" && root.join(".obsidian").is_dir() {
+        let _ = state.db.set_source_type(&folder.id, "obsidian").await;
+    }
     if !root.is_dir() {
         // Folder vanished (unmounted / renamed / not yet synced). Keep the
         // children — their text is still usable — but flag the folder row.
@@ -2184,7 +2288,7 @@ pub async fn add_source_folder(
     }
     let _guard = state.folder_scan_lock.lock().await;
     for s in e(state.db.list_sources(&notebook_id).await)? {
-        if s.source_type == "folder" && s.url == path {
+        if matches!(s.source_type.as_str(), "folder" | "obsidian") && s.url == path {
             return Err(format!(
                 "Folder already added as \"{}\" — it refreshes automatically",
                 s.title
@@ -2196,11 +2300,19 @@ pub async fn add_source_folder(
         .and_then(|s| s.to_str())
         .unwrap_or("Folder")
         .to_string();
+    // An `.obsidian/` config dir marks the folder as an Obsidian vault
+    // (RFC-obsidian-notion §3): same folder machinery, distinct identity, and
+    // the reader renders its wikilinks as hops.
+    let source_type = if root.join(".obsidian").is_dir() {
+        "obsidian"
+    } else {
+        "folder"
+    };
     let folder = Source {
         id: new_id(),
         notebook_id: notebook_id.clone(),
         title,
-        source_type: "folder".to_string(),
+        source_type: source_type.to_string(),
         url: path,
         content: String::new(),
         char_count: 0,
@@ -2659,6 +2771,33 @@ pub async fn resync_sources(
                 }
                 Ok(None) => {}
                 Err(err) => eprintln!("git resync: {} failed: {err:#}", folder.url),
+            }
+        }
+        // Notion parents: re-export changed pages per cadence tick; the
+        // rescan below re-embeds only rewritten files. remote_probe_due is
+        // a generic per-source-id throttle, shared with git.
+        if folder.source_type == "notion"
+            && sync_minutes > 0
+            && crate::git::remote_probe_due(&folder.id, sync_minutes)
+        {
+            let token = { state.ai.read().await.config().notion_token.clone() };
+            if let (Some(page_id), false) =
+                (crate::notion::detect_page(&folder.url), token.is_empty())
+            {
+                let dir = crate::notion::cache_dir(&app_data_dir(&state), &folder.id);
+                match crate::notion::NotionClient::new(&token)
+                    .export_tree(&page_id, &dir)
+                    .await
+                {
+                    Ok(stats) if stats.pages > 0 => {
+                        let _ = state
+                            .db
+                            .set_source_mtime(&folder.id, stats.max_edited_ms)
+                            .await;
+                    }
+                    Ok(_) => {}
+                    Err(err) => eprintln!("notion resync: {} failed: {err:#}", folder.url),
+                }
             }
         }
         match rescan_one_folder(Some(&app), &state, &folder, false).await {
@@ -5282,7 +5421,7 @@ pub async fn source_backlinks(
     }
     let mut out = Vec::new();
     for s in e(state.db.list_sources(&target.notebook_id).await)? {
-        if s.id == target.id || s.source_type == "folder" {
+        if s.id == target.id || matches!(s.source_type.as_str(), "folder" | "obsidian") {
             continue;
         }
         let content = e(state.db.source_content(&s.id).await)?;

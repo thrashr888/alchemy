@@ -18,6 +18,8 @@ import type { Source } from "@/lib/types";
 import {
   ChevronRight,
   FileCode,
+  Blocks,
+  Gem,
   FileText,
   FileType,
   GitBranch,
@@ -63,6 +65,10 @@ export function sourceIcon(t: Source["sourceType"], url?: string) {
   switch (t) {
     case "git":
       return <GitBranch className="h-3.5 w-3.5 text-muted-foreground" />;
+    case "notion":
+      return <Blocks className="h-3.5 w-3.5 text-muted-foreground" />;
+    case "obsidian":
+      return <Gem className="h-3.5 w-3.5 text-muted-foreground" />;
     case "code":
       return <FileCode className="h-3.5 w-3.5 text-muted-foreground" />;
     case "pdf":
@@ -209,7 +215,7 @@ export function SourcesPanel() {
   for (const s of sources) {
     if (s.parentId) continue;
     rows.push({ s, indent: false });
-    if (s.sourceType === "folder" || s.sourceType === "git") {
+    if (["folder", "git", "notion", "obsidian"].includes(s.sourceType)) {
       const kids = sources.filter((x) => x.parentId === s.id);
       if (!isCollapsed(s.id, kids.length)) {
         for (const c of kids) {
@@ -225,7 +231,9 @@ export function SourcesPanel() {
   const isSelected = (id: string) =>
     !selectedSourceIds || selectedSourceIds[id] !== false;
   // Folder container rows have no chunks — only content sources count.
-  const contentSources = sources.filter((s) => s.sourceType !== "folder");
+  const contentSources = sources.filter(
+    (s) => s.sourceType !== "folder" && s.sourceType !== "obsidian",
+  );
   const selectedCount = contentSources.filter((s) => isSelected(s.id)).length;
   const allSelected = selectedCount === contentSources.length;
 
@@ -408,8 +416,12 @@ export function SourcesPanel() {
             </div>
             <div className="flex flex-col gap-0.5">
               {rows.map(({ s, indent }) => {
-                const isFolder =
-                  s.sourceType === "folder" || s.sourceType === "git";
+                const isFolder = [
+                  "folder",
+                  "git",
+                  "notion",
+                  "obsidian",
+                ].includes(s.sourceType);
                 const isMacNote = s.url.startsWith("cider://notes/note/");
                 const isMacReminders = s.url.startsWith(
                   "cider://reminders/list/",

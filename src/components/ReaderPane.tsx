@@ -139,7 +139,24 @@ function resolveInCorpus(
   }
   if (origin.startsWith("/")) {
     const dir = origin.slice(0, origin.lastIndexOf("/"));
-    return byKey(normalizePath(`${dir}/${rawHref}`));
+    const direct = byKey(normalizePath(`${dir}/${rawHref}`));
+    if (direct) return direct;
+    // Obsidian shortest-path rule: a bare [[Note]] target resolves anywhere
+    // in the vault, not just beside the linking file — fall back to a
+    // filename-stem match across local sources.
+    if (!rawHref.includes("/")) {
+      const stem = rawHref.replace(/\.md$/i, "").toLowerCase();
+      return (
+        sources.find(
+          (src) =>
+            src.url.startsWith("/") &&
+            (src.url.split("/").pop() ?? "")
+              .replace(/\.[a-z0-9]{1,5}$/i, "")
+              .toLowerCase() === stem,
+        ) ?? null
+      );
+    }
+    return null;
   }
   return null;
 }
@@ -1081,6 +1098,8 @@ const SOURCE_TYPE_LABEL: Record<Source["sourceType"], string> = {
   mac: "Mac app",
   code: "Code",
   git: "Git repository",
+  notion: "Notion pages",
+  obsidian: "Obsidian vault",
 };
 
 /** Git provenance parsed from the content header line the ingesters write
@@ -1552,10 +1571,10 @@ function SourceReader({
     );
   }
 
-  // Folder and git parents open as the repo reader (RFC-git-sources §7):
-  // file tree + file pane instead of the flat map text. All hooks above have
-  // run, so the early return is safe.
-  if (source.sourceType === "folder" || source.sourceType === "git") {
+  // Folder, git, and Notion parents open as the repo reader (RFC-git-sources
+  // §7): file tree + file pane instead of the flat map text. All hooks above
+  // have run, so the early return is safe.
+  if (["folder", "git", "notion", "obsidian"].includes(source.sourceType)) {
     return <RepoView source={source} map={content} />;
   }
 
@@ -1715,7 +1734,7 @@ function SourceReader({
             </div>
           ) : richMode ? (
             <div className="selectable">
-              <Markdown>{content}</Markdown>
+              <Markdown wikilinks>{content}</Markdown>
             </div>
           ) : (
             <p className="reader-plain whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/90 selectable">
@@ -2689,8 +2708,13 @@ function RepoView({ source, map }: { source: Source; map: string | null }) {
                   lineNums={lineNums}
                 />
               ) : (
-                <div className="selectable">
-                  <Markdown>{selContent}</Markdown>
+                // Vault/folder notes render [[wikilinks]] as hops, routed
+                // through the selected file's path as the link origin.
+                <div
+                  className="selectable"
+                  onClickCapture={docLinkClickHandler(sel?.url || undefined)}
+                >
+                  <Markdown wikilinks>{selContent}</Markdown>
                 </div>
               )}
             </>

@@ -585,6 +585,14 @@ impl Db {
             self.query_sources(Some("source_type = 'git'"), false)
                 .await?,
         );
+        out.extend(
+            self.query_sources(Some("source_type = 'notion'"), false)
+                .await?,
+        );
+        out.extend(
+            self.query_sources(Some("source_type = 'obsidian'"), false)
+                .await?,
+        );
         Ok(out)
     }
 
@@ -608,6 +616,19 @@ impl Db {
         tbl.update()
             .only_if(format!("id = '{}'", esc(source_id)))
             .column("mtime", mtime.to_string())
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    /// Flip a source's `source_type` in place (no child/chunk disturbance) —
+    /// used to upgrade a plain folder to an Obsidian vault when `.obsidian/`
+    /// is detected on rescan.
+    pub async fn set_source_type(&self, source_id: &str, source_type: &str) -> Result<()> {
+        let tbl = self.conn.open_table(T_SOURCES).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(source_id)))
+            .column("source_type", format!("'{}'", esc(source_type)))
             .execute()
             .await?;
         Ok(())
