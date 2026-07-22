@@ -65,6 +65,23 @@ pub struct ContextProfile {
     /// (RFC-infinite-context §3): ON where the window affords context, OFF
     /// where the window itself is the constraint.
     pub neighbor_expansion: bool,
+    /// Gist rows admitted to fusion as their own capped class
+    /// (RFC-infinite-context §1, §5). One distilled overview orients the
+    /// answer; a second spends the tight budget twice on redundancy — its
+    /// source's verbatim chunks already carry the specifics — so on-device
+    /// takes one, everyone else two.
+    pub max_gists: usize,
+    /// Max Small-role extracts in the Phase 4 global map-reduce
+    /// (RFC-infinite-context §4, §5). Each extract is a sequential Small call
+    /// against one source; the on-device tier runs them on the same
+    /// single-tenant engine that answers, so a narrower fan-out keeps the
+    /// global route from starving the synthesis it feeds.
+    pub global_fan_out: usize,
+    /// Hard-cap prompt excerpt bodies at 500 chars (RFC-infinite-context §5).
+    /// The frontier tier reads full passages; the ~4k-token on-device window
+    /// cannot afford long excerpts and answers better from tight, numbered
+    /// evidence. Prompt text only — persisted citations/snippets never change.
+    pub compact_excerpts: bool,
 }
 
 impl Default for ContextProfile {
@@ -75,6 +92,9 @@ impl Default for ContextProfile {
             manifest_chars: 24_000,
             history_turns: 6,
             neighbor_expansion: true,
+            max_gists: 2,
+            global_fan_out: 6,
+            compact_excerpts: false,
         }
     }
 }
@@ -310,6 +330,12 @@ impl Router {
                 manifest_chars: 2_000,
                 history_turns: 2,
                 neighbor_expansion: false,
+                // One overview is orientation; a second is budget spent twice.
+                max_gists: 1,
+                // Extracts share the single-tenant engine that synthesizes.
+                global_fan_out: 3,
+                // The ~4k-token window answers better from tight excerpts.
+                compact_excerpts: true,
             },
             _ => ContextProfile::default(),
         }
@@ -347,6 +373,9 @@ mod tests {
             manifest_chars: 2_000,
             history_turns: 2,
             neighbor_expansion: false,
+            max_gists: 1,
+            global_fan_out: 3,
+            compact_excerpts: true,
         };
         assert_eq!(tight.retrieve_k_for(50_000), 4);
         assert_eq!(
@@ -354,5 +383,33 @@ mod tests {
             6,
             "on-device budget caps a 10M corpus at six passages"
         );
+    }
+
+    /// RFC-infinite-context §5: the two tiers diverge only where the eval
+    /// evidence says so. The default tier reproduces today's fixed constants
+    /// exactly (byte-for-byte prompt/retrieval equivalence depends on it); the
+    /// on-device tier tightens each evidence-shape knob.
+    #[test]
+    fn evidence_shape_tiers_match_their_constants() {
+        // Default tier: today's hardcoded values (the meta SearchOptions
+        // literal's max_gists 2, the old global fan-out 6, uncapped excerpts).
+        let d = ContextProfile::default();
+        assert_eq!(d.max_gists, 2, "default gist budget is today's constant");
+        assert_eq!(d.global_fan_out, 6, "default fan-out is today's constant");
+        assert!(!d.compact_excerpts, "default reads full excerpts");
+
+        // On-device tier: one overview, half the fan-out, capped excerpts.
+        // Construction is pure (probe/model load are lazy), so a dummy path
+        // is enough to resolve the FoundationModels tier's profile.
+        let router = Router::new(
+            ChatEngine::FoundationModels(FmEngine::new("fm-sidecar".into())),
+            Embedder::Builtin(LocalEmbedder::new("data".into(), None)),
+            None,
+            None,
+        );
+        let p = router.profile(Role::Chat);
+        assert_eq!(p.max_gists, 1, "on-device admits one overview gist");
+        assert_eq!(p.global_fan_out, 3, "on-device narrows the global fan-out");
+        assert!(p.compact_excerpts, "on-device caps excerpt bodies");
     }
 }

@@ -249,6 +249,20 @@ Apple FM) over the shared datasets; per-tier citation precision and latency
 budgets. "Extreme quality on disparate models" = the small-model tier loses
 ≤10% citation precision vs frontier on the same questions, at its own k.
 
+Status: **implemented (deterministic half)**. `ContextProfile` gains
+`max_gists` (default 2 / on-device 1), `global_fan_out` (6 / 3), and
+`compact_excerpts` (off / on — a 500-char char-boundary cap with `…`,
+shared by chat and meta prompts via `rag::cap_excerpt`; prompt text only,
+persisted citations never touched). The meta `SearchOptions` reads
+`max_gists` from the resolved profile, `global_meta_route` reads
+`global_fan_out` (the standalone const is gone — one source of truth), and
+the default tier reproduces the prior constants byte-for-byte (dataset
+report unchanged). Tiers and caps are unit-tested; `eval_context_profiles`
+exercises the tight gist budget (max_gists=1 caps the class while backfill
+preserves count, 8 vs 8). Out of scope and NOT faked: the live cross-model
+matrix and the ≤10% citation-precision bar need real models — they land
+with the same live-model eval harness Phase 2's targets wait on.
+
 ## Costs
 
 - Gist: one Small call per source (~1–3s local 3–8B; fractions of a cent

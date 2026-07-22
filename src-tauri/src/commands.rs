@@ -6321,9 +6321,12 @@ pub(crate) async fn retrieve_everything(
         .map(|n| (n.id, n.title))
         .collect();
 
-    let query_vec = {
+    let (query_vec, profile) = {
         let ai = state.ai.read().await.clone();
-        e(ai.embed_one(question).await)?
+        (
+            e(ai.embed_one(question).await)?,
+            ai.profile(crate::inference::Role::Chat),
+        )
     };
     // Semantic routing: with enough notebooks, search the most likely ones
     // instead of the whole corpus. The index is self-healing and any
@@ -6365,10 +6368,11 @@ pub(crate) async fn retrieve_everything(
         max_per_source: 2,
         max_per_notebook: 3,
         max_notes: 4,
-        // Gists are overview evidence: useful on synthesis questions, but
-        // two is plenty — verbatim passages carry the specifics
-        // (RFC-infinite-context §1).
-        max_gists: 2,
+        // Gists are overview evidence: useful on synthesis questions, but a
+        // small budget is plenty — verbatim passages carry the specifics. The
+        // budget is model-tiered (RFC-infinite-context §1, §5): two by
+        // default, one on the tight on-device window.
+        max_gists: profile.max_gists,
     };
     // Deep search retrieves a wider pool for the reranker to pick from.
     let fetch_k = if deep { k * 3 } else { k };
@@ -6498,11 +6502,6 @@ pub(crate) async fn retrieve_everything(
     Ok(out)
 }
 
-/// Small-role extract calls per global answer, run sequentially — the fan-out
-/// bound and the single-tenant budget for local engines
-/// (docs/RFC-infinite-context.md Phase 4).
-const GLOBAL_FAN_OUT: usize = 6;
-
 /// One Small-role extract for the global route: pull only what answers the
 /// question out of one source's content. Returns None on any failure, an
 /// explicit SKIP, empty output, or output past the length bound — the caller
@@ -6549,16 +6548,22 @@ async fn global_meta_route(
     if state.db.list_gists().await?.is_empty() {
         return Ok(None);
     }
-    let query_vec = {
+    let (query_vec, profile) = {
         let ai = state.ai.read().await.clone();
-        ai.embed_one(question).await?
+        (
+            ai.embed_one(question).await?,
+            ai.profile(crate::inference::Role::Chat),
+        )
     };
+    // Fan-out is model-tiered (RFC-infinite-context §4, §5): six Small-role
+    // extracts by default, three on the on-device tier whose single-tenant
+    // engine also runs the synthesis these extracts feed.
     let selected: Vec<(String, Citation)> = state
         .db
         .search_gists(query_vec, 12)
         .await?
         .into_iter()
-        .take(GLOBAL_FAN_OUT)
+        .take(profile.global_fan_out)
         .collect();
     if selected.is_empty() {
         return Ok(None);
@@ -6691,15 +6696,19 @@ pub async fn ask_everything(
         (citations, passages)
     };
 
-    let persona = {
+    let (persona, ctx_profile) = {
         let ai = state.ai.read().await.clone();
-        rag::persona_block(&ai.config().profile)
+        (
+            rag::persona_block(&ai.config().profile),
+            ai.profile(crate::inference::Role::Chat),
+        )
     };
     let messages = rag::build_meta_messages(
         history.as_deref().unwrap_or(&[]),
         &question,
         &passages,
         &persona,
+        ctx_profile.compact_excerpts,
     );
 
     // Same stream/cancel dance as notebook chat, under its own scope so a

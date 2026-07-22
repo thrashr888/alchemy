@@ -2,6 +2,24 @@
 
 use crate::ai::{ChatTurn, UserProfile};
 use crate::models::Citation;
+use std::borrow::Cow;
+
+/// Hard-cap one prompt excerpt body (RFC-infinite-context §5). Compact tiers
+/// (the ~4k-token on-device model) cannot afford long passages and answer
+/// better from tight evidence; frontier tiers read the body whole. The cut is
+/// on a char boundary (byte slicing panics on Unicode) with a trailing `…` so
+/// the model knows the passage was clipped. Off (or under the cap) it borrows
+/// unchanged — the default tier stays byte-for-byte identical. Prompt text
+/// only: the caller passes an already-trimmed body, and persisted
+/// citations/snippets are never routed through here.
+const COMPACT_EXCERPT_CHARS: usize = 500;
+fn cap_excerpt(body: &str, compact: bool) -> Cow<'_, str> {
+    if !compact || body.chars().count() <= COMPACT_EXCERPT_CHARS {
+        return Cow::Borrowed(body);
+    }
+    let head: String = body.chars().take(COMPACT_EXCERPT_CHARS).collect();
+    Cow::Owned(format!("{head}…"))
+}
 
 /// Format the user's profile into a system-prompt block; empty when unset.
 pub fn persona_block(profile: &UserProfile) -> String {
@@ -125,11 +143,15 @@ pub struct MetaPassage {
 
 /// Build the corpus-wide chat message list: like `build_chat_messages`, but
 /// each excerpt names its notebook and there is no per-notebook manifest.
+/// `compact` (the resolved profile's `compact_excerpts`) hard-caps excerpt
+/// bodies for tight-window tiers; false leaves the prompt byte-for-byte as it
+/// was before Phase 5.
 pub fn build_meta_messages(
     history: &[ChatTurn],
     question: &str,
     passages: &[MetaPassage],
     persona: &str,
+    compact: bool,
 ) -> Vec<ChatTurn> {
     let mut context = String::new();
     if passages.is_empty() {
@@ -142,7 +164,7 @@ pub fn build_meta_messages(
                 p.notebook_title,
                 p.kind,
                 p.title,
-                p.snippet.trim()
+                cap_excerpt(p.snippet.trim(), compact)
             ));
         }
     }
@@ -209,7 +231,7 @@ pub fn build_chat_messages(
                 i + 1,
                 tier,
                 c.source_title,
-                body.trim()
+                cap_excerpt(body.trim(), profile.compact_excerpts)
             ));
         }
     }
@@ -848,5 +870,96 @@ mod tests {
             citations[0].snippet, "the core snippet",
             "citation stays verbatim"
         );
+    }
+
+    /// RFC-infinite-context §5: the compact tier hard-caps prompt excerpt
+    /// bodies at 500 chars on a char boundary with a trailing `…`; the default
+    /// tier leaves them whole; the persisted citation snippet is never touched.
+    #[test]
+    fn compact_profile_caps_chat_excerpts() {
+        // A body past the cap, built from multi-byte chars so a byte-index cut
+        // would panic — the helper must slice on a char boundary.
+        let long = "é".repeat(800);
+        let citations = vec![cite("c1", &long)];
+        let expanded = HashMap::new();
+        let prompt = |profile: &crate::inference::ContextProfile| {
+            build_chat_messages(
+                &[],
+                "q?",
+                Excerpts {
+                    citations: &citations,
+                    expanded: &expanded,
+                },
+                &[],
+                "",
+                "",
+                profile,
+            )
+            .iter()
+            .map(|m| m.content.clone())
+            .collect::<Vec<_>>()
+            .join("\n")
+        };
+
+        let compact = crate::inference::ContextProfile {
+            compact_excerpts: true,
+            ..Default::default()
+        };
+        let capped = prompt(&compact);
+        // 500 kept chars + the ellipsis; the 800-char body is not present whole.
+        assert!(
+            capped.contains(&format!("{}…", "é".repeat(500))),
+            "compact excerpt is cut at 500 chars with a trailing ellipsis"
+        );
+        assert!(
+            !capped.contains(&"é".repeat(501)),
+            "compact excerpt drops everything past the cap"
+        );
+
+        let full = prompt(&crate::inference::ContextProfile::default());
+        assert!(
+            full.contains(&long),
+            "the default tier keeps the excerpt body whole"
+        );
+        assert!(!full.contains('…'), "the default tier adds no ellipsis");
+
+        assert_eq!(
+            citations[0].snippet, long,
+            "the persisted citation snippet is never capped"
+        );
+    }
+
+    /// The meta path shares the cap: compact caps the excerpt, default leaves
+    /// it whole (byte-for-byte the pre-Phase-5 prompt).
+    #[test]
+    fn compact_flag_caps_meta_excerpts() {
+        let long = "a".repeat(700);
+        let passages = vec![MetaPassage {
+            number: 1,
+            kind: "source".into(),
+            notebook_title: "NB".into(),
+            title: "Doc".into(),
+            snippet: long.clone(),
+        }];
+        let render = |compact: bool| {
+            build_meta_messages(&[], "q?", &passages, "", compact)
+                .iter()
+                .map(|m| m.content.clone())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let capped = render(true);
+        assert!(
+            capped.contains(&format!("{}…", "a".repeat(500))),
+            "compact meta excerpt is cut at 500 chars with an ellipsis"
+        );
+        assert!(!capped.contains(&"a".repeat(501)));
+
+        let full = render(false);
+        assert!(full.contains(&long), "the default tier keeps the full body");
+        // The body isn't cut mid-run (META_SYSTEM has its own `…`, so an
+        // absolute no-ellipsis check would be wrong — assert the truncated
+        // form specifically is absent).
+        assert!(!full.contains(&format!("{}…", "a".repeat(500))));
     }
 }

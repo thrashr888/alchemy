@@ -957,6 +957,51 @@ async fn eval_context_profiles() {
         "on-device profile keeps only {:.1}% of default-profile recall",
         retention * 100.0
     );
+
+    // Gist budget is model-tiered too (RFC-infinite-context §5): the default
+    // profile admits two overview rows, the on-device profile one. Seed the
+    // stored gists and confirm the tight budget caps the gist class while the
+    // two-tier backfill (Phase 1) still returns the same number of hits — a
+    // gist slot is traded for a verbatim chunk, never lost. The two literals
+    // mirror the production ContextProfile constants (default 2, on-device 1),
+    // asserted against those constants in inference::tests.
+    for (title, gist) in GIST_FIXTURES {
+        seed_gist(&ai, &db, nb, title, gist).await;
+    }
+    const GIST_K: usize = 8;
+    let q = "give me an overview of what these documents cover";
+    let qv = ai.embed_one(q).await.expect("embed overview");
+    let budget_opts = |max_gists: usize| SearchOptions {
+        pool_multiplier: 4,
+        max_per_source: 2,
+        max_per_notebook: 3,
+        max_notes: 4,
+        max_gists,
+    };
+    let default_hits = db
+        .search_chunks_all_opts(qv.clone(), q, GIST_K, None, budget_opts(2))
+        .await
+        .expect("default-budget search");
+    let tight_hits = db
+        .search_chunks_all_opts(qv, q, GIST_K, None, budget_opts(1))
+        .await
+        .expect("on-device-budget search");
+    let tight_gists = tight_hits.iter().filter(|(_, c)| c.gist).count();
+    println!(
+        "gist budget: default kept {} gists / on-device kept {tight_gists} · counts {} vs {}",
+        default_hits.iter().filter(|(_, c)| c.gist).count(),
+        default_hits.len(),
+        tight_hits.len(),
+    );
+    assert!(
+        tight_gists <= 1,
+        "on-device max_gists=1 must cap gist rows, kept {tight_gists}"
+    );
+    assert_eq!(
+        tight_hits.len(),
+        default_hits.len(),
+        "backfill preserves the hit count under the tighter gist budget"
+    );
 }
 
 /// Handwritten gist fixtures (RFC-infinite-context §1). The eval seeds
