@@ -193,11 +193,16 @@ export function SettingsDialog({
       }
     >
       {/* Content-sized up to the window: short tabs (About) sit at the nav's
-          natural height, long tabs (Models, Appearance) grow to the cap and
-          scroll only past it. Per-tab heights are deliberate. The cap comes
-          from the modal body (bodyScroll={false} above) so exactly one
-          region scrolls — a viewport-derived cap here double-scrolled. */}
-      <div className="flex min-h-0 max-h-full gap-5">
+          natural height, long tabs (Models, Appearance, Agents) grow to the
+          cap and scroll only past it. The scroll cap MUST be a definite
+          height on the scrolling column itself — a percentage (max-h-full)
+          collapses here because the panel is capped by max-h, not a fixed
+          height, so overflow-y-auto never gets a bound (that was the
+          "long tabs don't scroll" regression). 8.5rem clears the header,
+          body padding, and the models tab's Save footer. bodyScroll={false}
+          keeps the modal body from scrolling too, so exactly one region
+          moves. */}
+      <div className="flex gap-5">
         <nav className="flex w-36 shrink-0 flex-col gap-0.5">
           {TABS.map((t) => (
             <button
@@ -218,7 +223,7 @@ export function SettingsDialog({
           ))}
         </nav>
 
-        <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
+        <div className="flex max-h-[calc(92vh-8.5rem)] min-w-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
           {tab === "general" && <GeneralTab />}
           {tab === "sources" && <SourcesTab />}
           {tab === "studio" && <StudioTab />}
