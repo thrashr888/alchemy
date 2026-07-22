@@ -107,7 +107,22 @@ pub fn file_title(path: &str) -> String {
 }
 
 /// Extract text from a local file, inferring type from the extension.
+///
+/// Panic-contained at this boundary: extractor crates can panic (not error)
+/// on malformed files — pdf-extract's "unexpected encoding NULL" was caught
+/// live, mid folder-import, where the unwound worker hung the whole import.
+/// One guard here turns any extractor panic, for every current and future
+/// format, into an ordinary failed source instead of a stuck app.
 pub fn extract_file(path: &str) -> Result<Extracted> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| extract_file_inner(path)))
+        .unwrap_or_else(|_| {
+            Err(anyhow!(
+                "failed to parse {path} — the file may be malformed or corrupt"
+            ))
+        })
+}
+
+fn extract_file_inner(path: &str) -> Result<Extracted> {
     let p = Path::new(path);
     let ext = p
         .extension()
@@ -158,15 +173,9 @@ pub fn extract_file(path: &str) -> Result<Extracted> {
             ("html".to_string(), text)
         }
         "pdf" => {
-            // pdf-extract PANICS (not errors) on some malformed/encrypted PDFs
-            // — e.g. "unexpected encoding NULL". Catch it so one bad file in a
-            // folder import fails gracefully instead of unwinding the worker
-            // thread and hanging the whole import.
-            let text = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                pdf_extract::extract_text(path)
-            }))
-            .map_err(|_| anyhow!("failed to parse PDF {path} — it may be malformed or encrypted"))?
-            .with_context(|| format!("failed to extract text from PDF {path}"))?;
+            // Panic containment for a malformed PDF lives on `extract_file`.
+            let text = pdf_extract::extract_text(path)
+                .with_context(|| format!("failed to extract text from PDF {path}"))?;
             if normalize(&text).trim().is_empty() {
                 return Err(anyhow!(
                     "no selectable text in {path} — it looks like a scanned/image PDF. \
@@ -2262,5 +2271,18 @@ mod tests {
         assert!(first < second, "spine order should win over archive order");
         assert!(text.contains("Opening"));
         assert!(!text.contains('<'), "no tags survive: {text}");
+    }
+
+    /// The panic boundary on `extract_file`: a malformed file of any type
+    /// must come back as Err — never a panic that unwinds the worker (which
+    /// hung a live folder import when pdf-extract hit "unexpected encoding
+    /// NULL"). Garbage bytes with a .pdf extension exercise the whole path.
+    #[test]
+    fn extract_file_errors_instead_of_panicking_on_garbage() {
+        let path = std::env::temp_dir().join("nbl-malformed-fixture.pdf");
+        std::fs::write(&path, b"%PDF-1.4 garbage \x00\x01\x02 not a real pdf").unwrap();
+        let res = extract_file(&path.to_string_lossy());
+        assert!(res.is_err(), "malformed pdf must error, not panic");
+        let _ = std::fs::remove_file(&path);
     }
 }
