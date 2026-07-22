@@ -158,8 +158,15 @@ pub fn extract_file(path: &str) -> Result<Extracted> {
             ("html".to_string(), text)
         }
         "pdf" => {
-            let text = pdf_extract::extract_text(path)
-                .with_context(|| format!("failed to extract text from PDF {path}"))?;
+            // pdf-extract PANICS (not errors) on some malformed/encrypted PDFs
+            // — e.g. "unexpected encoding NULL". Catch it so one bad file in a
+            // folder import fails gracefully instead of unwinding the worker
+            // thread and hanging the whole import.
+            let text = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                pdf_extract::extract_text(path)
+            }))
+            .map_err(|_| anyhow!("failed to parse PDF {path} — it may be malformed or encrypted"))?
+            .with_context(|| format!("failed to extract text from PDF {path}"))?;
             if normalize(&text).trim().is_empty() {
                 return Err(anyhow!(
                     "no selectable text in {path} — it looks like a scanned/image PDF. \

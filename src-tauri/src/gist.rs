@@ -39,9 +39,12 @@ use crate::db::{Db, GistRow, GIST_CHUNK_PREFIX};
 use crate::inference::{ChatTurn, Role};
 use crate::models::Source;
 
-/// Gate bounds for a stored gist (RFC-infinite-context §1).
-const GIST_MIN_CHARS: usize = 200;
-const GIST_MAX_CHARS: usize = 2000;
+/// Gate bounds for a stored gist (RFC-infinite-context §1). Wide on purpose:
+/// the min only rejects trivial one-liners, and the max only rejects runaway
+/// output — a dense source legitimately summarizes to a couple thousand chars,
+/// and one gist row per source makes index bloat a non-issue.
+const GIST_MIN_CHARS: usize = 120;
+const GIST_MAX_CHARS: usize = 3000;
 /// Sources shorter than this are their own gist — distilling them adds a
 /// worse duplicate, not signal.
 const MIN_SOURCE_CHARS: i64 = 600;
@@ -640,7 +643,7 @@ mod tests {
     fn gate_rejects_out_of_bounds_lengths() {
         let raw = "Anything at all.";
         assert!(gate("too short", raw).is_err());
-        let long = "word ".repeat(500); // 2500 chars, past GIST_MAX_CHARS
+        let long = "word ".repeat(700); // 3500 chars, past GIST_MAX_CHARS
         assert!(gate(&long, raw).is_err());
     }
 

@@ -103,6 +103,16 @@ function docKey(u: string): string {
   return u.replace(/\/+$/, "");
 }
 
+/** Drop the leading "> url · ref · date" provenance line git-cloned sources
+ *  prepend for LLM context. The reader already shows Origin/Ref above, so it
+ *  shouldn't appear as line 1 of the code view. Display only — the stored
+ *  content keeps it. */
+function stripLeadingProvenance(text: string): string {
+  if (!text.startsWith("> ")) return text;
+  const nl = text.indexOf("\n");
+  return nl === -1 ? text : text.slice(nl + 1).replace(/^\n+/, "");
+}
+
 /** Resolve `../`-style segments in a joined file path. */
 function normalizePath(path: string): string {
   const out: string[] = [];
@@ -1279,7 +1289,10 @@ function SourceReader({
     api
       .getSourceContent(source.id)
       .then((text) => {
-        if (!stale) setContent(text);
+        if (!stale)
+          setContent(
+            source.sourceType === "code" ? stripLeadingProvenance(text) : text,
+          );
       })
       .catch(() => {
         if (!stale) setContent("");
