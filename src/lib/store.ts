@@ -143,6 +143,12 @@ async function runQueued(
   }
 }
 
+/** One-shot guard for `init`. React StrictMode double-invokes the mount
+ *  effect in dev, so without this the whole boot (notebook select, schedulers,
+ *  global listeners, the update check) ran twice — hence two "update available"
+ *  toasts. Module scope, so it survives the StrictMode remount. */
+let initStarted = false;
+
 export const useStore = create<AppState>((set, get) => {
   /** Run an async action, surfacing any failure as the global error instead of
    *  swallowing it (unhandled rejection = the UI silently does nothing). */
@@ -241,6 +247,9 @@ export const useStore = create<AppState>((set, get) => {
     noteReadsBaseline: loadNoteReadsBaseline(),
 
     init: async () => {
+      // Runs once per launch even though StrictMode fires the effect twice.
+      if (initStarted) return;
+      initStarted = true;
       // Deferred: inserting NSGlassEffectView while WKWebView is still
       // doing its first paint can blank the webview for the whole session
       // (setTimeout, not rAF — rAF stalls in occluded windows).

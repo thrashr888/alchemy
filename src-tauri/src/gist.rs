@@ -129,7 +129,11 @@ fn build_messages(title: &str, source_type: &str, text: &str) -> Vec<ChatTurn> {
 /// capital, so they stay caught.
 fn identifier_tokens(text: &str) -> Vec<String> {
     text.split(|ch: char| ch.is_whitespace() || ",;()[]{}\"'`".contains(ch))
-        .map(|t| t.trim_matches(|ch: char| ".:!?".contains(ch)))
+        // Strip markdown emphasis / heading markers from token boundaries: a
+        // model that writes "**Studio**" or "_v:1_" means the bare word, and
+        // the wrapper would otherwise fail the verbatim source check. Internal
+        // underscores (snake_case) survive — trim only touches the ends.
+        .map(|t| t.trim_matches(|ch: char| ".:!?*_~#".contains(ch)))
         .filter(|t| t.chars().count() >= 4)
         .filter(|t| {
             let has_digit = t.chars().any(|c| c.is_ascii_digit());
@@ -692,6 +696,36 @@ mod tests {
         assert!(toks.contains(&"CheckpointLoader".to_string()));
         assert!(toks.contains(&"net-45".to_string()));
         assert!(!toks.iter().any(|t| t == "Vendor" || t == "runbook"));
+    }
+
+    /// Regression: markdown emphasis around a token must not defeat the
+    /// verbatim source check (live models emit "**Studio**", "_v:1_").
+    #[test]
+    fn identifier_tokens_unwrap_markdown_emphasis() {
+        let toks =
+            identifier_tokens("It documents the **Studio** panel and the **ERR-9917** code.");
+        // No wrapper survives to be checked verbatim.
+        assert!(!toks.iter().any(|t| t.contains('*')), "got {toks:?}");
+        // A real code still gets enforced — in its bare, unwrapped form.
+        assert!(toks.contains(&"ERR-9917".to_string()), "got {toks:?}");
+        // "Studio" unwraps to a leading-capital word — prose, not an
+        // identifier — so it is (correctly) NOT enforced. Pre-fix, the leading
+        // `*` made the capital "internal" and the whole gist was rejected.
+        assert!(!toks.iter().any(|t| t == "Studio"), "got {toks:?}");
+        // The gate clears when the enforced bare word is present in the source
+        // even though the gist wrote it wrapped in markdown.
+        let raw = "The Studio panel surfaces the ERR-9917 code path for two-host overviews.";
+        let gist = "This document describes the **Studio** panel and the **ERR-9917** code \
+                    path it surfaces, covering the two-host overview flow so it can answer \
+                    questions about the panel, the error path, and how the overall \
+                    generation works for a reader exploring the studio surface right now.";
+        assert!(gate(gist, raw).is_ok(), "{:?}", gate(gist, raw));
+        // A wrapped code that is NOT in the source is still rejected.
+        let bad = gist.replace("ERR-9917", "ERR-1234");
+        assert!(
+            gate(&bad, raw).is_err(),
+            "hallucinated wrapped code must reject"
+        );
     }
 
     /// Regression: hyphenated lowercase adjectives are prose, not identifiers.

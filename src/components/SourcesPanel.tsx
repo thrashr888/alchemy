@@ -626,7 +626,6 @@ export function SourcesPanel() {
                         </div>
                       ) : (
                         <div className="text-[11px] text-subtle-foreground">
-                          {s.chunkCount} chunks ·{" "}
                           {Intl.NumberFormat().format(s.charCount)} chars
                         </div>
                       )}
