@@ -71,14 +71,14 @@ function ExternalAddForm({
         }}
         className="flex flex-col gap-4"
       >
-        <div className="rounded-md border border-border bg-surface-2/40 px-3 py-2.5 text-[12px] leading-relaxed text-foreground/90">
+        <div className="rounded-md border border-border bg-surface-2/40 px-3 py-2.5 text-caption leading-relaxed text-foreground/90">
           {summary}
         </div>
         <select
           autoFocus
           value={notebookId}
           onChange={(e) => setNotebookId(e.target.value)}
-          className="h-8 w-full rounded-md border border-input bg-surface-2 px-2 text-[13px] text-foreground outline-none focus:border-ring/70 focus:ring-1 focus:ring-ring/40"
+          className="h-8 w-full rounded-md border border-input bg-surface-2 px-2 text-body text-foreground outline-none focus:border-ring/70 focus:ring-1 focus:ring-ring/40"
         >
           {notebooks.map((nb) => (
             <option key={nb.id} value={nb.id}>

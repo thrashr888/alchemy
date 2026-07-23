@@ -625,7 +625,7 @@ export function CommandPalette() {
                     ? "Ask a follow-up…"
                     : "Type a command or search…"
                 }
-                className="h-11 w-full bg-transparent text-[14px] text-foreground placeholder:text-subtle-foreground outline-none"
+                className="h-11 w-full bg-transparent text-card text-foreground placeholder:text-subtle-foreground outline-none"
                 // macOS text intelligence draws a focus ring + suggestion pill
                 // on this field and its popup steals the arrow keys.
                 autoComplete="off"
@@ -647,7 +647,7 @@ export function CommandPalette() {
                   onClick={() => setAskDeep((d) => !d)}
                   title="Deep search: retrieve a wider pool and let the model pick the passages that actually answer — slower, more precise. Applies to the next question."
                   className={cn(
-                    "inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] transition-colors",
+                    "inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-micro transition-colors",
                     askDeep
                       ? "border-primary/50 bg-primary/15 text-citation"
                       : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
@@ -657,7 +657,7 @@ export function CommandPalette() {
                   {askDeep ? "Deep: on" : "Deep: off"}
                 </button>
               )}
-              <kbd className="shrink-0 rounded border border-border-strong bg-surface-2 px-1.5 py-0.5 text-[10px] text-subtle-foreground">
+              <kbd className="shrink-0 rounded border border-border-strong bg-surface-2 px-1.5 py-0.5 text-badge text-subtle-foreground">
                 esc
               </kbd>
             </div>
@@ -668,7 +668,7 @@ export function CommandPalette() {
                 key="ask-body"
                 className="flex-1 overflow-y-auto px-4 py-3.5"
               >
-                <div className="mb-2.5 text-[13px] font-medium text-foreground">
+                <div className="mb-2.5 text-body font-medium text-foreground">
                   {askQuestion}
                 </div>
                 {askNotebooks.length > 0 && (
@@ -680,7 +680,7 @@ export function CommandPalette() {
                           setPaletteOpen(false);
                           void useStore.getState().selectNotebook(id);
                         }}
-                        className="rounded-full border border-border bg-surface-2/60 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
+                        className="rounded-full border border-border bg-surface-2/60 px-2 py-0.5 text-micro text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
                       >
                         {title || "Untitled"}
                       </button>
@@ -688,7 +688,7 @@ export function CommandPalette() {
                   </div>
                 )}
                 {askText ? (
-                  <div className="text-[13px] leading-relaxed">
+                  <div className="text-body leading-relaxed">
                     {/* Citations arrive with the completed answer, so inline
                         [n] markers turn into clickable chips once streaming
                         ends; while streaming they render as plain text. */}
@@ -703,7 +703,7 @@ export function CommandPalette() {
                     </Markdown>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-2 py-4 text-[12px] text-muted-foreground">
+                  <div className="flex items-center gap-2 py-4 text-caption text-muted-foreground">
                     <Spinner className="h-3.5 w-3.5" />
                     Searching every notebook…
                   </div>
@@ -714,9 +714,9 @@ export function CommandPalette() {
                       <button
                         key={`${c.kind}-${c.id}-${i}`}
                         onClick={() => openCitation(c)}
-                        className="flex items-center gap-2 rounded-md px-1.5 py-1 text-left text-[12px] text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+                        className="flex items-center gap-2 rounded-md px-1.5 py-1 text-left text-caption text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
                       >
-                        <span className="shrink-0 text-[10px] text-subtle-foreground">
+                        <span className="shrink-0 text-badge text-subtle-foreground">
                           [{i + 1}]
                         </span>
                         {c.kind === "note" ? (
@@ -727,7 +727,7 @@ export function CommandPalette() {
                         <span className="min-w-0 truncate">
                           {c.title || "Untitled"}
                         </span>
-                        <span className="ml-auto shrink-0 text-[11px] text-subtle-foreground">
+                        <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
                           {c.notebookTitle}
                         </span>
                       </button>
@@ -744,7 +744,7 @@ export function CommandPalette() {
                 className="flex-1 overflow-y-auto p-1.5"
               >
                 {results.length === 0 ? (
-                  <div className="px-3 py-8 text-center text-[13px] text-muted-foreground">
+                  <div className="px-3 py-8 text-center text-body text-muted-foreground">
                     No matching commands
                   </div>
                 ) : (
@@ -752,7 +752,7 @@ export function CommandPalette() {
                     <Fragment key={cmd.id}>
                       {(index === 0 ||
                         results[index - 1].group !== cmd.group) && (
-                        <div className="px-2.5 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-subtle-foreground">
+                        <div className="px-2.5 pb-1 pt-2 text-micro font-semibold uppercase tracking-wide text-subtle-foreground">
                           {cmd.group}
                         </div>
                       )}
@@ -764,7 +764,7 @@ export function CommandPalette() {
                         onMouseMove={() => setSelected(index)}
                         onClick={() => cmd.run()}
                         className={cn(
-                          "flex cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px]",
+                          "flex cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1.5 text-body",
                           index === selected
                             ? "bg-surface-2 text-foreground"
                             : cmd.muted
@@ -779,7 +779,7 @@ export function CommandPalette() {
                           {cmd.label}
                         </span>
                         {cmd.hint && (
-                          <span className="shrink-0 rounded border border-border-strong bg-surface-2 px-1 py-px text-[10px] text-subtle-foreground">
+                          <span className="shrink-0 rounded border border-border-strong bg-surface-2 px-1 py-px text-badge text-subtle-foreground">
                             {cmd.hint}
                           </span>
                         )}

@@ -179,7 +179,7 @@ function Deck({ cards, noteId }: { cards: Card[]; noteId?: string }) {
         else if (flipped && e.key === "2") grade(true);
       }}
     >
-      <div className="flex items-center gap-2 text-[11px] text-subtle-foreground">
+      <div className="flex items-center gap-2 text-micro text-subtle-foreground">
         <span className="tabular-nums">
           {dueCount} of {cards.length} due for review
         </span>
@@ -202,10 +202,10 @@ function Deck({ cards, noteId }: { cards: Card[]; noteId?: string }) {
       {printing && <PrintCards cards={cards} />}
       {done ? (
         <div className="flex min-h-[220px] flex-col items-center justify-center gap-3 rounded-xl border border-border bg-surface-2 px-8 py-6 text-center">
-          <span className="text-[15px] font-medium text-foreground">
+          <span className="text-section font-medium text-foreground">
             Session complete — {gotIt} got it, {missed.length} missed
           </span>
-          <span className="text-[12px] text-muted-foreground">
+          <span className="text-caption text-muted-foreground">
             Missed cards come back immediately; the rest return on a 1 / 3 / 7 / 21
             day schedule.
           </span>
@@ -214,7 +214,7 @@ function Deck({ cards, noteId }: { cards: Card[]; noteId?: string }) {
               <button
                 type="button"
                 onClick={() => restart(missed)}
-                className="rounded-md border border-border-strong bg-elevated px-3 py-1.5 text-[12px] text-foreground transition-colors hover:border-ring/50"
+                className="rounded-md border border-border-strong bg-elevated px-3 py-1.5 text-caption text-foreground transition-colors hover:border-ring/50"
               >
                 Review {missed.length} missed
               </button>
@@ -222,7 +222,7 @@ function Deck({ cards, noteId }: { cards: Card[]; noteId?: string }) {
             <button
               type="button"
               onClick={() => restart()}
-              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-caption text-muted-foreground transition-colors hover:text-foreground"
             >
               <RotateCcw className="h-3 w-3" />
               Start over
@@ -242,23 +242,23 @@ function Deck({ cards, noteId }: { cards: Card[]; noteId?: string }) {
                 : "border-border-strong bg-elevated hover:border-ring/50",
             )}
           >
-            <span className="text-[10px] font-medium uppercase tracking-wider text-subtle-foreground">
+            <span className="text-badge font-medium uppercase tracking-wider text-subtle-foreground">
               {flipped ? "Back" : "Front"}
             </span>
             {flipped ? (
               <>
-                <span className="text-[13px] text-muted-foreground">{card.front}</span>
-                <span className="text-[15px] leading-relaxed text-foreground">
+                <span className="text-body text-muted-foreground">{card.front}</span>
+                <span className="text-section leading-relaxed text-foreground">
                   {card.back}
                 </span>
               </>
             ) : (
-              <span className="text-[17px] font-medium leading-snug text-foreground">
+              <span className="text-[1.0625rem] font-medium leading-snug text-foreground">
                 {card.front}
               </span>
             )}
             {!flipped && (
-              <span className="text-[11px] text-subtle-foreground">
+              <span className="text-micro text-subtle-foreground">
                 Recall the answer, then click to reveal
               </span>
             )}
@@ -268,20 +268,20 @@ function Deck({ cards, noteId }: { cards: Card[]; noteId?: string }) {
               <button
                 type="button"
                 onClick={() => grade(false)}
-                className="inline-flex items-center gap-1.5 rounded-md border border-destructive/50 px-3 py-1.5 text-[12px] text-destructive transition-colors hover:bg-destructive/10"
+                className="inline-flex items-center gap-1.5 rounded-md border border-destructive/50 px-3 py-1.5 text-caption text-destructive transition-colors hover:bg-destructive/10"
               >
                 <X className="h-3.5 w-3.5" />
                 Missed it
-                <kbd className="text-[10px] text-subtle-foreground">1</kbd>
+                <kbd className="text-badge text-subtle-foreground">1</kbd>
               </button>
               <button
                 type="button"
                 onClick={() => grade(true)}
-                className="inline-flex items-center gap-1.5 rounded-md border border-success/50 px-3 py-1.5 text-[12px] text-success transition-colors hover:bg-success/10"
+                className="inline-flex items-center gap-1.5 rounded-md border border-success/50 px-3 py-1.5 text-caption text-success transition-colors hover:bg-success/10"
               >
                 <Check className="h-3.5 w-3.5" />
                 Got it
-                <kbd className="text-[10px] text-subtle-foreground">2</kbd>
+                <kbd className="text-badge text-subtle-foreground">2</kbd>
               </button>
             </div>
           ) : (
@@ -295,7 +295,7 @@ function Deck({ cards, noteId }: { cards: Card[]; noteId?: string }) {
               >
                 <ChevronLeft className="h-4 w-4" />
               </button>
-              <span className="min-w-16 text-center text-[12px] tabular-nums text-muted-foreground">
+              <span className="min-w-16 text-center text-caption tabular-nums text-muted-foreground">
                 {index + 1} / {queue.length}
               </span>
               <button

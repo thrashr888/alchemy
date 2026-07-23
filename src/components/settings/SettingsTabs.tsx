@@ -53,7 +53,7 @@ export function ChatTab() {
 
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-pretty text-[13px] leading-relaxed text-muted-foreground">
+      <p className="text-pretty text-body leading-relaxed text-muted-foreground">
         {currentId ? (
           <>
             Tune how the assistant responds in{" "}
@@ -79,7 +79,7 @@ export function ChatTab() {
             </Pill>
           ))}
         </div>
-        {styleHint && <span className="text-[11px] text-subtle-foreground">{styleHint}</span>}
+        {styleHint && <span className="text-micro text-subtle-foreground">{styleHint}</span>}
         {chatConfig.style === "custom" && (
           <Textarea
             rows={4}
@@ -134,7 +134,7 @@ export function PersonalizationTab() {
 
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-pretty text-[13px] leading-relaxed text-muted-foreground">
+      <p className="text-pretty text-body leading-relaxed text-muted-foreground">
         Personalization is added to chat and document prompts and is sent only to your configured model. Changes save automatically.
       </p>
       <Field label="What should the assistant call you?">
@@ -280,11 +280,11 @@ export function ShortcutsTab() {
           <div className="flex w-20 shrink-0 items-center gap-1">
             {shortcut.keys.map((key) => <Kbd key={key}>{key}</Kbd>)}
           </div>
-          <span className="text-[13px] text-foreground/90">{shortcut.label}</span>
-          {shortcut.context && <span className="ml-auto text-[11px] text-subtle-foreground">{shortcut.context}</span>}
+          <span className="text-body text-foreground/90">{shortcut.label}</span>
+          {shortcut.context && <span className="ml-auto text-micro text-subtle-foreground">{shortcut.context}</span>}
         </div>
       ))}
-      <p className="mt-2 text-[11px] leading-relaxed text-subtle-foreground">
+      <p className="mt-2 text-micro leading-relaxed text-subtle-foreground">
         On Windows and Linux, use Ctrl in place of ⌘.
       </p>
     </div>
@@ -301,19 +301,19 @@ export function AboutTab() {
   return (
     <div className="flex flex-col items-center gap-1 py-6 text-center">
       <AlchemySymbol className="h-16 w-16 text-citation/70" />
-      <div className="mt-3 text-[17px] font-semibold">Alchemy</div>
-      <div className="text-[13px] text-muted-foreground">Local-first research notebooks</div>
+      <div className="mt-3 text-[1.0625rem] font-semibold">Alchemy</div>
+      <div className="text-body text-muted-foreground">Local-first research notebooks</div>
       {version && (
-        <div className="mt-2 text-[12px] text-subtle-foreground">
+        <div className="mt-2 text-caption text-subtle-foreground">
           Version {version}
           {build && <>{" · "}<span className="font-mono">{build.commit}</span>{build.profile === "dev" && <span className="ml-1.5 rounded bg-primary/15 px-1.5 py-0.5 font-medium text-citation">dev</span>}</>}
         </div>
       )}
-      <button type="button" className="mt-4 inline-flex items-center gap-1.5 text-[12px] text-citation hover:underline" onClick={() => void openUrl("https://github.com/thrashr888/alchemy")}>
+      <button type="button" className="mt-4 inline-flex items-center gap-1.5 text-caption text-citation hover:underline" onClick={() => void openUrl("https://github.com/thrashr888/alchemy")}>
         <Globe className="h-3.5 w-3.5" />
         github.com/thrashr888/alchemy
       </button>
-      <div className="mt-4 text-[12px] text-subtle-foreground">© {new Date().getFullYear()} Paul Thrasher</div>
+      <div className="mt-4 text-caption text-subtle-foreground">© {new Date().getFullYear()} Paul Thrasher</div>
     </div>
   );
 }
@@ -346,7 +346,7 @@ function ThemePicker() {
 
 function ThemeButton({ label, selected, colors, onClick }: { label: string; selected: boolean; colors: string[]; onClick: () => void }) {
   return (
-    <button type="button" aria-pressed={selected} onClick={onClick} className={cn("flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-[12px] transition-colors", selected ? "border-primary/60 bg-primary/10 text-foreground" : "border-border bg-surface-2 text-muted-foreground hover:text-foreground")}>
+    <button type="button" aria-pressed={selected} onClick={onClick} className={cn("flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-caption transition-colors", selected ? "border-primary/60 bg-primary/10 text-foreground" : "border-border bg-surface-2 text-muted-foreground hover:text-foreground")}>
       <span className="flex overflow-hidden rounded border border-border">
         {colors.map((color) => <span key={color} className="h-4 w-3" style={{ backgroundColor: color }} />)}
       </span>
@@ -356,19 +356,19 @@ function ThemeButton({ label, selected, colors, onClick }: { label: string; sele
 }
 
 function Kbd({ children }: { children: ReactNode }) {
-  return <kbd className="inline-flex h-[22px] min-w-[22px] items-center justify-center rounded-md border border-border-strong bg-surface-2 px-1.5 font-sans text-[12px] text-foreground/85 shadow-[0_1px_0_var(--border)]">{children}</kbd>;
+  return <kbd className="inline-flex h-[22px] min-w-[22px] items-center justify-center rounded-md border border-border-strong bg-surface-2 px-1.5 font-sans text-caption text-foreground/85 shadow-[0_1px_0_var(--border)]">{children}</kbd>;
 }
 
 function Pill({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
-  return <button type="button" aria-pressed={active} onClick={onClick} className={cn("rounded-md border px-3 py-1.5 text-[12px] transition-colors", active ? "border-primary/60 bg-primary/15 text-citation" : "border-border bg-surface-2 text-muted-foreground hover:text-foreground")}>{children}</button>;
+  return <button type="button" aria-pressed={active} onClick={onClick} className={cn("rounded-md border px-3 py-1.5 text-caption transition-colors", active ? "border-primary/60 bg-primary/15 text-citation" : "border-border bg-surface-2 text-muted-foreground hover:text-foreground")}>{children}</button>;
 }
 
 export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-1.5">
-      <div className="text-[12px] font-medium text-foreground">{label}</div>
+      <div className="text-caption font-medium text-foreground">{label}</div>
       {children}
-      {hint && <div className="text-pretty text-[12px] text-subtle-foreground">{hint}</div>}
+      {hint && <div className="text-pretty text-caption text-subtle-foreground">{hint}</div>}
     </section>
   );
 }

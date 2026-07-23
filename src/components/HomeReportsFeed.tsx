@@ -28,7 +28,7 @@ export function AwayDigest({
   ].filter(Boolean);
   if (parts.length === 0) return null;
   return (
-    <p className="mt-0.5 text-[12px] text-subtle-foreground">
+    <p className="mt-0.5 text-caption text-subtle-foreground">
       Since you were away: {parts.join(" · ")}
     </p>
   );
@@ -72,11 +72,11 @@ export function ReportsFeed({
   return (
     <>
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-6">
-        <span className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
           Latest reports
         </span>
         {unreadCount > 0 && (
-          <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-citation">
+          <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-badge font-medium tabular-nums text-citation">
             {unreadCount} unread
           </span>
         )}
@@ -85,7 +85,7 @@ export function ReportsFeed({
             <button
               type="button"
               onClick={() => markRead(reports.filter(isUnread).map((note) => note.id))}
-              className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+              className="text-micro text-muted-foreground transition-colors hover:text-foreground"
             >
               Mark all read
             </button>
@@ -105,7 +105,7 @@ export function ReportsFeed({
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {unread.length === 0 && (
-          <div className="px-6 py-6 text-center text-[12px] text-subtle-foreground">
+          <div className="px-6 py-6 text-center text-caption text-subtle-foreground">
             You’re all caught up.
           </div>
         )}
@@ -175,7 +175,7 @@ function ReportCard({
         unread && "bg-primary/[0.04]",
       )}
     >
-      <div className="flex items-center gap-1.5 text-[11px] text-subtle-foreground">
+      <div className="flex items-center gap-1.5 text-micro text-subtle-foreground">
         <span
           className="inline-flex h-2 w-2 shrink-0 rounded-full"
           style={{ backgroundColor: color }}
@@ -185,7 +185,7 @@ function ReportCard({
         <span>·</span>
         <span className="shrink-0">{relativeTime(note.updatedAt)}</span>
         {unread && (
-          <span className="ml-auto shrink-0 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-citation">
+          <span className="ml-auto shrink-0 rounded-full bg-primary/15 px-1.5 py-0.5 text-badge font-medium text-citation">
             new
           </span>
         )}
@@ -196,11 +196,11 @@ function ReportCard({
         className="mt-1 block w-full text-left"
         title={`Open in "${notebook}"`}
       >
-        <h3 className="text-[15px] font-semibold text-foreground hover:underline">
+        <h3 className="text-section font-semibold text-foreground hover:underline">
           {note.title}
         </h3>
       </button>
-      <div className="mt-2 text-[13px] leading-relaxed">
+      <div className="mt-2 text-body leading-relaxed">
         <Markdown>{note.content}</Markdown>
       </div>
       <div ref={endRef} aria-hidden="true" />

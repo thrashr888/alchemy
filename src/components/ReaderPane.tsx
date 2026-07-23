@@ -424,7 +424,7 @@ export function CenterModeTabs() {
       disabled={disabled}
       title={disabled ? "Open a source or note to read it here" : label}
       className={cn(
-        "flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium transition-colors",
+        "flex items-center gap-1.5 rounded-md px-2 py-1 text-caption font-medium transition-colors",
         active === id
           ? "bg-surface-2 text-foreground"
           : "text-muted-foreground hover:text-foreground",
@@ -665,7 +665,7 @@ export function ReaderPane() {
               sourceIcon(source.sourceType, source.url)
             ))}
           <span
-            className="truncate text-[13px] font-medium text-foreground"
+            className="truncate text-body font-medium text-foreground"
             title={source?.title ?? note?.title}
           >
             {source?.title ?? note?.title ?? "Document"}
@@ -691,7 +691,7 @@ export function ReaderPane() {
                       : "The OCR transcription (searchable)"
                   }
                   className={cn(
-                    "rounded-md px-2 py-0.5 text-[11px] font-medium capitalize transition-colors",
+                    "rounded-md px-2 py-0.5 text-micro font-medium capitalize transition-colors",
                     imageMode === (mode === "image")
                       ? "bg-surface-2 text-foreground"
                       : "text-muted-foreground hover:text-foreground",
@@ -716,7 +716,7 @@ export function ReaderPane() {
                       : "The extracted article (fast, offline, searchable)"
                   }
                   className={cn(
-                    "rounded-md px-2 py-0.5 text-[11px] font-medium capitalize transition-colors",
+                    "rounded-md px-2 py-0.5 text-micro font-medium capitalize transition-colors",
                     liveMode === (mode === "live")
                       ? "bg-surface-2 text-foreground"
                       : "text-muted-foreground hover:text-foreground",
@@ -789,7 +789,7 @@ export function ReaderPane() {
         </div>
       </div>
       {current === null ? (
-        <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
+        <div className="flex flex-1 items-center justify-center text-body text-muted-foreground">
           Open a source or note to read it here.
         </div>
       ) : source ? (
@@ -812,7 +812,7 @@ export function ReaderPane() {
           onEditingChange={setEditing}
         />
       ) : (
-        <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
+        <div className="flex flex-1 items-center justify-center text-body text-muted-foreground">
           This document no longer exists — it may have been deleted.
         </div>
       )}
@@ -873,7 +873,7 @@ function TocList({
 
   return (
     <nav aria-label="Table of contents" className="flex min-h-0 flex-col">
-      <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-subtle-foreground">
+      <div className="mb-1.5 text-badge font-medium uppercase tracking-wider text-subtle-foreground">
         Contents
       </div>
       <div className="flex flex-col overflow-y-auto">
@@ -890,7 +890,7 @@ function TocList({
               target?.scrollIntoView({ block: "start", behavior: "smooth" });
             }}
             className={cn(
-              "truncate rounded px-1.5 py-0.5 text-left text-[11px] leading-relaxed transition-colors",
+              "truncate rounded px-1.5 py-0.5 text-left text-micro leading-relaxed transition-colors",
               h.level === 2 && "pl-4",
               h.level === 3 && "pl-6",
               i === active
@@ -1081,7 +1081,7 @@ function ImageView({ url, title }: { url: string; title: string }) {
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-6">
       {failed ? (
-        <span className="text-[13px] text-muted-foreground">
+        <span className="text-body text-muted-foreground">
           The original file could not be read — it may have moved.
         </span>
       ) : blobUrl ? (
@@ -1171,7 +1171,7 @@ function DocProperties({
     // data-doc-meta: excluded from find-in-source and citation anchoring —
     // matching "example.com" against the Site row would be noise.
     <div data-doc-meta className="mb-6 border-b border-border pb-4">
-      <div className="grid w-fit max-w-full grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-[12px]">
+      <div className="grid w-fit max-w-full grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-caption">
         {rows.map((r) => (
           <Fragment key={r.label}>
             <span className="text-subtle-foreground">{r.label}</span>
@@ -1589,7 +1589,7 @@ function SourceReader({
       <div className="min-h-0 flex-1 p-3">
         <div
           ref={liveRef}
-          className="flex h-full w-full items-center justify-center rounded-md border border-border bg-surface-2/40 text-[12px] text-muted-foreground"
+          className="flex h-full w-full items-center justify-center rounded-md border border-border bg-surface-2/40 text-caption text-muted-foreground"
         >
           Loading live page…
         </div>
@@ -1625,10 +1625,10 @@ function SourceReader({
                 }
               }}
               placeholder="Find in source…"
-              className="h-7 w-56 pl-7 text-[12px]"
+              className="h-7 w-56 pl-7 text-caption"
             />
           </div>
-          <span className="min-w-8 text-right text-[11px] tabular-nums text-subtle-foreground">
+          <span className="min-w-8 text-right text-micro tabular-nums text-subtle-foreground">
             {query.trim()
               ? matches.length === 0
                 ? "0/0"
@@ -1688,11 +1688,11 @@ function SourceReader({
               useStore.getState().openInReader({ type: "source", id: preview.source.id })
             }
           >
-            <span className="flex items-center gap-1.5 text-[12px] font-medium text-foreground">
+            <span className="flex items-center gap-1.5 text-caption font-medium text-foreground">
               {sourceIcon(preview.source.sourceType, preview.source.url)}
               <span className="truncate">{preview.source.title}</span>
             </span>
-            <span className="text-[11px] text-subtle-foreground">
+            <span className="text-micro text-subtle-foreground">
               In this notebook · {preview.source.chunkCount} chunks ·{" "}
               {Intl.NumberFormat().format(preview.source.charCount)} chars
             </span>
@@ -1741,19 +1741,19 @@ function SourceReader({
             <DocProperties source={source} git={parseGitProvenance(content)} />
           )}
           {content === null ? (
-            <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+            <div className="flex items-center gap-2 text-body text-muted-foreground">
               <Spinner className="h-3.5 w-3.5" /> Loading source…
             </div>
           ) : content === "" ? (
-            <div className="flex flex-col gap-1.5 text-[13px] text-muted-foreground">
+            <div className="flex flex-col gap-1.5 text-body text-muted-foreground">
               <span>No text stored for this source.</span>
               {source.status === "error" && source.error && (
-                <span className="text-[12px] text-destructive/80 [overflow-wrap:anywhere]">
+                <span className="text-caption text-destructive/80 [overflow-wrap:anywhere]">
                   Import failed: {source.error}
                 </span>
               )}
               {isWebUrl(source.url) && (
-                <span className="text-[12px]">
+                <span className="text-caption">
                   The Live view (toolbar) shows the actual page.
                 </span>
               )}
@@ -1765,7 +1765,7 @@ function SourceReader({
               <Markdown wikilinks>{content}</Markdown>
             </div>
           ) : (
-            <p className="reader-plain whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/90 selectable">
+            <p className="reader-plain whitespace-pre-wrap text-body leading-relaxed text-foreground/90 selectable">
               {segments.map((seg, i) =>
                 seg.hit ? (
                   <mark
@@ -1788,7 +1788,7 @@ function SourceReader({
       </div>
       </div>
       {content && (
-        <div className="flex shrink-0 items-center gap-2 border-t border-border px-5 py-1 text-[11px] tabular-nums text-subtle-foreground">
+        <div className="flex shrink-0 items-center gap-2 border-t border-border px-5 py-1 text-micro tabular-nums text-subtle-foreground">
           <span className="min-w-0 truncate whitespace-nowrap">
             {source.chunkCount} chunks · {countsLine(content)}
           </span>
@@ -1843,7 +1843,7 @@ function SelAction({
   return (
     <button
       className={cn(
-        "flex items-center gap-1.5 whitespace-nowrap rounded px-2 py-1 text-[12px] text-foreground/90",
+        "flex items-center gap-1.5 whitespace-nowrap rounded px-2 py-1 text-caption text-foreground/90",
         "transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40",
       )}
       onClick={onClick}
@@ -1972,7 +1972,7 @@ function NoteReader({
         </div>
       </div>
       {!fillsPane && (
-        <div className="shrink-0 overflow-hidden truncate whitespace-nowrap border-t border-border px-5 py-1.5 text-[11px] tabular-nums text-subtle-foreground">
+        <div className="shrink-0 overflow-hidden truncate whitespace-nowrap border-t border-border px-5 py-1.5 text-micro tabular-nums text-subtle-foreground">
           {countsLine(note.content)}
         </div>
       )}
@@ -2068,7 +2068,7 @@ function InlineNote({ note }: { note: Note }) {
             pending.current.title = e.target.value;
             queueSave();
           }}
-          className="w-full bg-transparent text-[22px] font-semibold leading-snug text-foreground outline-none placeholder:text-subtle-foreground"
+          className="w-full bg-transparent text-page font-semibold leading-snug text-foreground outline-none placeholder:text-subtle-foreground"
         />
         <div className="mt-4">
           <DocProperties note={note} />
@@ -2127,7 +2127,7 @@ function InlineNote({ note }: { note: Note }) {
           insertRef.current?.(c.sourceTitle, href);
         }}
       />
-      <div className="flex shrink-0 items-center gap-2 border-t border-border px-5 py-1.5 text-[11px] tabular-nums text-subtle-foreground">
+      <div className="flex shrink-0 items-center gap-2 border-t border-border px-5 py-1.5 text-micro tabular-nums text-subtle-foreground">
         <span className="min-w-0 truncate whitespace-nowrap">{countsLine(counts)}</span>
         <span className="ml-auto shrink-0">
           {status === "dirty" ? "Editing…" : status === "saved" ? "Saved" : ""}
@@ -2230,7 +2230,7 @@ function RepoTreeRows({
             onClick={() => onSelect(n.child!)}
             title={n.path}
             className={cn(
-              "flex w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-[3px] text-left text-[12px]",
+              "flex w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-[3px] text-left text-caption",
               selected === n.child.id
                 ? "bg-surface-2 text-foreground"
                 : "text-muted-foreground hover:bg-surface-2",
@@ -2254,7 +2254,7 @@ function RepoTreeRows({
               type="button"
               onClick={() => onToggleDir(n.path)}
               title={n.path}
-              className="flex w-full min-w-0 items-center gap-1 rounded-md px-1.5 py-[3px] text-left text-[12px] text-muted-foreground hover:bg-surface-2"
+              className="flex w-full min-w-0 items-center gap-1 rounded-md px-1.5 py-[3px] text-left text-caption text-muted-foreground hover:bg-surface-2"
               style={{ paddingLeft: `${4 + depth * 12}px` }}
               aria-expanded={!closed.has(n.path)}
             >
@@ -2309,7 +2309,7 @@ function RepoBreadcrumb({
     })),
   ];
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-0.5 text-[12px]">
+    <div className="flex min-w-0 flex-wrap items-center gap-0.5 text-caption">
       {segs.map((seg, i) => (
         <Fragment key={`${seg.label}-${i}`}>
           {i > 0 && (
@@ -2344,7 +2344,7 @@ function RepoBreadcrumb({
                           if (n.child) onSelect(n.child);
                           else onRevealDir(n.path);
                         }}
-                        className="flex w-full items-center gap-1.5 px-2.5 py-1 text-left text-[12px] text-foreground hover:bg-surface-2"
+                        className="flex w-full items-center gap-1.5 px-2.5 py-1 text-left text-caption text-foreground hover:bg-surface-2"
                       >
                         {n.child ? (
                           <span
@@ -2433,7 +2433,7 @@ function CodeView({
   }, [path, code]);
   if (!html) {
     return (
-      <pre className="reader-plain selectable overflow-x-auto whitespace-pre font-mono text-[12px] leading-relaxed text-foreground/90">
+      <pre className="reader-plain selectable overflow-x-auto whitespace-pre font-mono text-caption leading-relaxed text-foreground/90">
         {code}
       </pre>
     );
@@ -2441,7 +2441,7 @@ function CodeView({
   return (
     <div
       className={cn(
-        "shiki-view selectable overflow-x-auto text-[12px] leading-relaxed",
+        "shiki-view selectable overflow-x-auto text-caption leading-relaxed",
         lineNums && "shiki-nums",
       )}
       dangerouslySetInnerHTML={{ __html: html }}
@@ -2576,7 +2576,7 @@ function RepoView({ source, map }: { source: Source; map: string | null }) {
               type="button"
               onClick={() => setSel(null)}
               className={cn(
-                "flex items-center gap-1.5 rounded-md px-1.5 py-[3px] text-left text-[12px]",
+                "flex items-center gap-1.5 rounded-md px-1.5 py-[3px] text-left text-caption",
                 sel === null
                   ? "bg-surface-2 text-foreground"
                   : "text-muted-foreground hover:bg-surface-2",
@@ -2643,7 +2643,7 @@ function RepoView({ source, map }: { source: Source; map: string | null }) {
           )}
           {sel === null ? (
             map === null ? (
-              <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+              <div className="flex items-center gap-2 text-body text-muted-foreground">
                 <Spinner className="h-3.5 w-3.5" /> Loading…
               </div>
             ) : (
@@ -2651,20 +2651,20 @@ function RepoView({ source, map }: { source: Source; map: string | null }) {
                 {readme && readmeContent && (
                   <>
                     <div className="mb-2 flex items-center gap-2">
-                      <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+                      <span className="text-micro font-medium uppercase tracking-wide text-subtle-foreground">
                         Readme
                       </span>
                       <button
                         type="button"
                         onClick={() => setSel(readme)}
-                        className="text-[11px] text-citation hover:underline"
+                        className="text-micro text-citation hover:underline"
                       >
                         Open file →
                       </button>
                     </div>
                     <Markdown>{readmeContent}</Markdown>
                     <div className="my-5 h-px bg-border" />
-                    <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+                    <div className="mb-2 text-micro font-medium uppercase tracking-wide text-subtle-foreground">
                       Map
                     </div>
                   </>
@@ -2698,7 +2698,7 @@ function RepoView({ source, map }: { source: Source; map: string | null }) {
                       : "Promote: embed this file so hybrid retrieval sees it"
                   }
                   className={cn(
-                    "flex shrink-0 items-center gap-1 rounded-full border border-border px-2 py-px text-[11px] hover:border-border-strong hover:bg-surface-2",
+                    "flex shrink-0 items-center gap-1 rounded-full border border-border px-2 py-px text-micro hover:border-border-strong hover:bg-surface-2",
                     sel.chunkCount > 0 ? "text-citation" : "text-muted-foreground",
                   )}
                 >
@@ -2726,7 +2726,7 @@ function RepoView({ source, map }: { source: Source; map: string | null }) {
                 )}
               </div>
               {selContent === null ? (
-                <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+                <div className="flex items-center gap-2 text-body text-muted-foreground">
                   <Spinner className="h-3.5 w-3.5" /> Loading file…
                 </div>
               ) : selIsCode ? (
@@ -2764,7 +2764,7 @@ function ParentJump({ source }: { source: Source }) {
     <button
       type="button"
       onClick={() => openSourceViewer(parent.id, parent.title)}
-      className="mb-2 flex items-center gap-1 text-[12px] text-muted-foreground hover:text-citation"
+      className="mb-2 flex items-center gap-1 text-caption text-muted-foreground hover:text-citation"
     >
       <ChevronRight className="h-3 w-3 rotate-180" />
       in {parent.title}

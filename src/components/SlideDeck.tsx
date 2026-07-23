@@ -279,7 +279,7 @@ function DeckView({
   };
 
   const selectClass =
-    "h-7 rounded-md border border-border bg-transparent px-1.5 text-[12px] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60";
+    "h-7 rounded-md border border-border bg-transparent px-1.5 text-caption text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60";
 
   return (
     <div
@@ -309,7 +309,7 @@ function DeckView({
         >
           <ChevronLeft className="h-4 w-4" />
         </button>
-        <span className="min-w-14 text-center text-[12px] tabular-nums text-muted-foreground">
+        <span className="min-w-14 text-center text-caption tabular-nums text-muted-foreground">
           {index + 1} / {slides.length}
         </span>
         <button
@@ -351,7 +351,7 @@ function DeckView({
           type="button"
           onClick={() => setPresent(true)}
           aria-label="Present fullscreen"
-          className="ml-2 inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+          className="ml-2 inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-caption text-muted-foreground transition-colors hover:text-foreground"
         >
           <Maximize2 className="h-3.5 w-3.5" />
           Present
@@ -362,7 +362,7 @@ function DeckView({
           disabled={printing}
           aria-label="Export deck as PDF"
           title="Print / save the whole deck as PDF"
-          className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-caption text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
         >
           <FileDown className="h-3.5 w-3.5" />
           PDF
@@ -458,7 +458,7 @@ function Presentation({
         >
           <ChevronLeft className="h-4 w-4" />
         </button>
-        <span className="min-w-16 text-center text-[12px] tabular-nums text-white/50">
+        <span className="min-w-16 text-center text-caption tabular-nums text-white/50">
           {index + 1} / {slides.length}
         </span>
         <button

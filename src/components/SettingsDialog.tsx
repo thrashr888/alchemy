@@ -191,7 +191,7 @@ export function SettingsDialog({
           moves. "Settings" is the nav's section header (no title bar). */}
       <div className="flex gap-5">
         <nav className="flex w-36 shrink-0 flex-col gap-0.5">
-          <h2 className="px-2.5 pb-2 pt-0.5 text-[13px] font-semibold text-foreground">
+          <h2 className="px-2.5 pb-2 pt-0.5 text-body font-semibold text-foreground">
             Settings
           </h2>
           {TABS.map((t) => (
@@ -201,7 +201,7 @@ export function SettingsDialog({
               onClick={() => setTab(t.id)}
               aria-current={tab === t.id ? "page" : undefined}
               className={cn(
-                "flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12.5px] transition-colors",
+                "flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[0.78125rem] transition-colors",
                 tab === t.id
                   ? "bg-surface-2 font-medium text-foreground"
                   : "text-muted-foreground hover:text-foreground",
@@ -249,7 +249,7 @@ export function SettingsDialog({
         title="Switch embedding model?"
       >
         <div className="flex flex-col gap-4">
-          <p className="text-[13px] leading-relaxed text-muted-foreground">
+          <p className="text-body leading-relaxed text-muted-foreground">
             Different embedders produce incompatible vectors, so switching to{" "}
             <span className="font-medium text-foreground">
               {draft.embedder === "builtin"
@@ -303,8 +303,8 @@ function PrefToggle({
         className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
       />
       <span className="flex flex-col gap-0.5">
-        <span className="text-[13px] text-foreground">{label}</span>
-        <span className="text-[11px] text-subtle-foreground">{hint}</span>
+        <span className="text-body text-foreground">{label}</span>
+        <span className="text-micro text-subtle-foreground">{hint}</span>
       </span>
     </label>
   );
@@ -400,8 +400,8 @@ function SourcesTab() {
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-col gap-1.5">
-        <div className="text-[13px]">Mac apps</div>
-        <p className="text-[11px] leading-relaxed text-subtle-foreground">
+        <div className="text-body">Mac apps</div>
+        <p className="text-micro leading-relaxed text-subtle-foreground">
           Calendar, Reminders, and Apple Notes can be added as auto-syncing
           sources. Connecting here triggers the macOS permission prompts once,
           so adding them to a notebook later just works.
@@ -463,7 +463,7 @@ function NotionTokenField() {
   const value = draft ?? aiConfig.notionToken;
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="text-[13px]">Notion</div>
+      <div className="text-body">Notion</div>
       <Input
         type="password"
         aria-label="Notion integration token"
@@ -482,22 +482,22 @@ function NotionTokenField() {
         }}
       />
       {check.state === "checking" && (
-        <span className="flex items-center gap-1.5 text-[12px] text-subtle-foreground">
+        <span className="flex items-center gap-1.5 text-caption text-subtle-foreground">
           <Spinner className="h-3 w-3" /> Checking the token…
         </span>
       )}
       {check.state === "ok" && (
-        <span className="flex items-center gap-1.5 text-[12px] text-success">
+        <span className="flex items-center gap-1.5 text-caption text-success">
           <CheckCircle2 className="h-3.5 w-3.5" /> Connected to{" "}
           {check.workspace}
         </span>
       )}
       {check.state === "error" && (
-        <span className="text-[12px] leading-relaxed text-destructive/90">
+        <span className="text-caption leading-relaxed text-destructive/90">
           {check.message}
         </span>
       )}
-      <span className="text-[12px] leading-relaxed text-subtle-foreground">
+      <span className="text-caption leading-relaxed text-subtle-foreground">
         Create an internal integration at{" "}
         <button
           type="button"
@@ -520,8 +520,8 @@ function StudioTab() {
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-col gap-1.5">
-        <div className="text-[13px]">Studio templates</div>
-        <p className="text-[11px] leading-relaxed text-subtle-foreground">
+        <div className="text-body">Studio templates</div>
+        <p className="text-micro leading-relaxed text-subtle-foreground">
           Custom generators live in ~/Documents/Alchemy/templates — one .md file
           per generator. Deleting a file removes its tile for good; this puts
           the default pack back (without touching files you've edited).
@@ -583,10 +583,10 @@ function CuratorToggle() {
         className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
       />
       <span className="flex flex-col gap-0.5">
-        <span className="text-[13px] text-foreground">
+        <span className="text-body text-foreground">
           Consolidate auto notes weekly
         </span>
-        <span className="text-[11px] leading-relaxed text-subtle-foreground">
+        <span className="text-micro leading-relaxed text-subtle-foreground">
           Once a week, while you're away, the model merges chat-created evidence
           notes that state the same claim. The merged-away note is archived,
           never deleted, and each notebook's Curator report lists what happened.
@@ -607,7 +607,7 @@ function GitSyncSelect() {
   return (
     <div className="flex flex-col gap-1">
       <label className="flex items-center justify-between gap-3">
-        <span className="text-[13px] text-foreground">
+        <span className="text-body text-foreground">
           Auto-sync git repositories
         </span>
         <select
@@ -618,7 +618,7 @@ function GitSyncSelect() {
               gitSyncMinutes: Number(e.target.value),
             })
           }
-          className="h-8 rounded-md border border-input bg-surface-2 px-2 text-[13px] text-foreground focus:outline-none"
+          className="h-8 rounded-md border border-input bg-surface-2 px-2 text-body text-foreground focus:outline-none"
         >
           <option value="15">Every 15 minutes</option>
           <option value="60">Hourly</option>
@@ -627,7 +627,7 @@ function GitSyncSelect() {
           <option value="0">Off</option>
         </select>
       </label>
-      <span className="text-[11px] leading-relaxed text-subtle-foreground">
+      <span className="text-micro leading-relaxed text-subtle-foreground">
         Remote repos re-fetch when their branch moves, using your own git
         credentials — Alchemy never stores tokens. Manual Refresh always syncs,
         even when this is off.
@@ -652,8 +652,8 @@ function TrayToggle() {
         className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
       />
       <span className="flex flex-col gap-0.5">
-        <span className="text-[13px] text-foreground">Show menu bar icon</span>
-        <span className="text-[11px] leading-relaxed text-subtle-foreground">
+        <span className="text-body text-foreground">Show menu bar icon</span>
+        <span className="text-micro leading-relaxed text-subtle-foreground">
           Ask Alchemy, add the clipboard as a source, and jump to recent
           notebooks from the menu bar. ⌥Space summons Alchemy either way.
         </span>
@@ -732,10 +732,10 @@ function AgentsTab() {
           className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
         />
         <span className="flex flex-col gap-0.5">
-          <span className="text-[13px] text-foreground">
+          <span className="text-body text-foreground">
             Let AI agents use Alchemy (MCP)
           </span>
-          <span className="text-[11px] text-subtle-foreground">
+          <span className="text-micro text-subtle-foreground">
             Agents can create notebooks, add sources, search, and write notes —
             changes appear live in the app. Local-only: the server listens on
             127.0.0.1 and nothing leaves this Mac.
@@ -743,7 +743,7 @@ function AgentsTab() {
         </span>
       </label>
 
-      <div className="flex items-center gap-2 text-[12px]">
+      <div className="flex items-center gap-2 text-caption">
         <span
           className={cn(
             "h-2 w-2 rounded-full",
@@ -788,14 +788,14 @@ function AgentsTab() {
               )}
             >
               <div className="flex min-w-0 flex-1 flex-col">
-                <span className="text-[12.5px] text-foreground">{c.name}</span>
-                <span className="truncate text-[10.5px] text-subtle-foreground">
+                <span className="text-[0.78125rem] text-foreground">{c.name}</span>
+                <span className="truncate text-[0.65625rem] text-subtle-foreground">
                   {c.configPath}
                 </span>
               </div>
 
               {c.configured ? (
-                <span className="flex items-center gap-1 text-[11px] text-success">
+                <span className="flex items-center gap-1 text-micro text-success">
                   <CheckCircle2 className="h-3.5 w-3.5" />
                   Connected
                   {c.supportsSkill && c.skillInstalled ? " + skill" : ""}
@@ -820,7 +820,7 @@ function AgentsTab() {
                   </Button>
                 )
               ) : (
-                <span className="text-[11px] text-subtle-foreground">
+                <span className="text-micro text-subtle-foreground">
                   Not installed
                 </span>
               )}
@@ -853,7 +853,7 @@ function AgentsTab() {
             </div>
           ))}
           {connectors.length === 0 && (
-            <div className="px-2.5 py-3 text-[11.5px] text-subtle-foreground">
+            <div className="px-2.5 py-3 text-[0.71875rem] text-subtle-foreground">
               Loading clients…
             </div>
           )}
@@ -895,18 +895,18 @@ function PodcastVoicesSection() {
       <div className="flex items-center gap-3 rounded-md border border-border bg-surface-2/60 px-3 py-2.5">
         <AudioLines className="h-4 w-4 shrink-0 text-muted-foreground" />
         <div className="flex min-w-0 flex-col">
-          <span className={cn("text-[12px] font-medium", state.cls)}>
+          <span className={cn("text-caption font-medium", state.cls)}>
             {state.label}
           </span>
           {downloading && download && (
-            <span className="text-[11px] tabular-nums text-subtle-foreground">
+            <span className="text-micro tabular-nums text-subtle-foreground">
               {download.total > 0
                 ? `${download.label} — ${Math.round((download.done / download.total) * 100)}% of ${(download.total / 1e6).toFixed(0)} MB`
                 : `${(download.done / 1e6).toFixed(1)} MB…`}
             </span>
           )}
           {busy && !downloading && (
-            <span className="text-[11px] text-subtle-foreground">
+            <span className="text-micro text-subtle-foreground">
               Verifying with a test synthesis…
             </span>
           )}
