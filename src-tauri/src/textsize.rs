@@ -37,7 +37,7 @@
 //! (the fine slider signal) and keep the legacy key only as a last-resort
 //! fallback for macOS versions without `FontSizeCategory`. We map the category
 //! onto a Dynamic Type scale ladder (see `LADDER`) and divide by the anchor
-//! (`XXXS` = the user's normal setting) to get the scale.
+//! (`L`, the macOS "Default" slider position) to get the scale.
 //!
 //! ## Opting into the per-app list
 //!
@@ -94,12 +94,14 @@ const LEGACY_GLOBAL_KEY: &str = "UIPreferredContentSizeCategoryName";
 /// `ladder[current] / ladder[ANCHOR_CATEGORY]`, so re-anchoring is a one-line
 /// change.
 ///
-/// ANCHOR: `XXXS`. Confirmed live against this Mac: the OS reports
-/// `FontSizeCategory.global = XXXS` at the user's normal setting and the app
-/// "looks great" at fixed px there, so 1.0 must anchor at `XXXS`. The app then
-/// only scales UP the ladder and never renders below today's size. (Anchoring
-/// at `L` would shrink it below today at `XXXS` — wrong.)
-const ANCHOR_CATEGORY: &str = "XXXS";
+/// ANCHOR: `L` — the macOS "Default" slider position. At that stop the OS emits
+/// the literal `FontSizeCategory.global = "DEFAULT"` (its legacy UICT value is
+/// `…CategoryL`), which `canon` folds to `L`. Anchoring here renders the app at
+/// its design size when the system is at Default — the neutral point users
+/// expect — shrinking below Default and growing above it. (An earlier anchor at
+/// the smallest stop `XXXS` made the app match its design only at the tiny end
+/// and read oversized at Default, which is what testing surfaced.)
+const ANCHOR_CATEGORY: &str = "L";
 
 /// Clamp so a mis-read or an extreme setting can't drive the UI to an unusable
 /// size (rem type multiplies straight into this).
@@ -153,7 +155,7 @@ fn canon(raw: &str) -> Option<&'static str> {
         "XS" => "XS",
         "S" => "S",
         "M" => "M",
-        "L" => "L",
+        "L" | "DEFAULT" => "L",
         "XL" => "XL",
         "XXL" => "XXL",
         "XXXL" => "XXXL",
@@ -405,6 +407,17 @@ mod tests {
     #[test]
     fn anchor_category_is_unity() {
         assert_eq!(scale_for_category(ANCHOR_CATEGORY), 1.0);
+    }
+
+    #[test]
+    fn macos_default_maps_to_the_anchor() {
+        // The macOS "Default" slider stop emits the literal "DEFAULT"; it must
+        // fold to the L anchor and render at 1.0 (the app's design size), with
+        // smaller stops below 1.0 and larger stops above.
+        assert_eq!(canon("DEFAULT"), Some("L"));
+        assert_eq!(scale_for_category("DEFAULT"), 1.0);
+        assert!(scale_for_category("XXXS") < 1.0, "below Default shrinks");
+        assert!(scale_for_category("XL") > 1.0, "above Default grows");
     }
 
     #[test]
