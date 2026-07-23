@@ -73,7 +73,9 @@ two-host podcast voiced on-device.*
   across **all** notebooks at once: semantic routing to the likely notebooks,
   hybrid retrieval with diversity caps, optional deep rerank on gateway
   models, a streamed answer with notebook chips, and citations that jump
-  straight to the passage ("which notebook has the SNDK stock data?").
+  straight to the passage ("which notebook has the SNDK stock data?"). Broad
+  questions — "summarize the themes," "what do these disagree on?" — are
+  answered across every relevant source, not just the closest passages.
   ⌥Space summons it from anywhere.
 - **Part of the Mac** — `alchemy://` deep links, a menu bar extra (ask, add the
   clipboard as a source, recent notebooks), "Add to Alchemy" in every app's
@@ -89,6 +91,15 @@ two-host podcast voiced on-device.*
 - **Grounded chat** — streamed answers that cite the exact source passages they drew
   from, with a **"Deep research"** agentic mode that plans multiple retrieval steps.
   Copy a response or save it as a note.
+- **Retrieval at scale** — search quality holds as a notebook grows past millions of
+  characters. The retrieval budget adapts to corpus size, and a scale fence keeps
+  recall flat from 1M to 10M chars (verified) — a large source list stays fully
+  searchable instead of diluting every answer.
+- **Source gists** — every source gets a short distilled overview in the background,
+  so corpus-wide questions ("what's in here?", "which source covers X?") find the
+  right document even when no single passage is an obvious match. Captured web pages
+  also get a per-chunk context pass and shed navigation cruft, so search over clipped
+  articles reads much closer to search over clean documents.
 - **Reader** — sources and notes open in a center-column reader (Chat ⇄ Reader
   tabs in the toolbar), never a modal: click through the rails to swap
   documents, with browser-style **back/forward** (⌘[ / ⌘]), **j/k** to step
@@ -96,7 +107,9 @@ two-host podcast voiced on-device.*
   counts. Markdown sources render as real markdown (GitHub-flavored, including
   `<details>` and friends), **relative links resolve** — a link to another
   source in the notebook jumps straight to it, wiki-style — and your chat
-  reading preferences (font, size, alignment) apply to documents too.
+  reading preferences (font, size, alignment) apply to documents too. Code
+  files render with syntax highlighting, with find-in-source over the
+  colored view.
 - **Select-to-ask** — highlight any passage in the source reader to **Explain** it,
   **Compare** it against your other sources, or stage it in the chat composer with
   your own question.
@@ -287,6 +300,28 @@ pipeline where each stage earned its place in the eval harness
   local; any failure falls back to fusion order).
 - **Title fallbacks** — "where did I save the contractor agreement?" matches
   source and note titles directly even when no chunk cracks the top-k.
+- **Source gists** — each source is distilled to a short overview in the
+  background and indexed alongside its chunks; those overview rows join
+  fusion as their own capped class (default 2), so "what's in here?" /
+  "which source covers X?" questions match the right document even when no
+  single passage is a strong hit. A gist hit cites its source and drills down
+  into it; the gates (identifier-overlap, length, degeneracy) keep a bad gist
+  from misrouting.
+- **Corpus-adaptive k** — the retrieval budget grows with corpus size (log
+  curve, +1 per doubling past ~200k chars, capped per model profile), so a
+  10M-char corpus isn't starved by the k that suits a 50k one. RRF ties break
+  by score, then source recency, then chunk id — determinism preserved.
+- **Global answers (map-reduce)** — broad questions (enumerative/comparative
+  markers, no identifier-shaped token) take a lazy map-reduce path: retrieve
+  gists corpus-wide, run one scoped extract per covered source (bounded
+  fan-out), then synthesize a single answer cited at source granularity with
+  chunk drill-down on demand. Any failure at any step degrades to the pointed
+  path, byte-for-byte.
+
+A deterministic scale fence (`eval_scale_fence`) makes the corpus-scale claim
+falsifiable: across synthetic 1M / 3M / 10M-char corpora, exact and paraphrase
+recall both hold at 1.00 while adaptive k grows 10 → 13 — recall flat from 1M
+to 10M, a passing eval rather than extrapolation.
 
 ### Chat tracing flow
 
