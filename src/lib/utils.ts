@@ -13,7 +13,7 @@ export function cn(...inputs: ClassValue[]) {
  */
 export const SUPPORTED_EXTENSIONS = [
   "pdf", "txt", "text", "md", "markdown", "html", "htm", "xhtml",
-  "docx", "pptx", "epub", "xlsx", "xls", "xlsm", "ods", "csv", "tsv",
+  "docx", "pptx", "epub", "boxnote", "xlsx", "xls", "xlsm", "ods", "csv", "tsv",
   "gdoc", "gsheet", "gslides",
   "png", "jpg", "jpeg", "jpe", "webp", "gif", "bmp", "tif", "tiff",
   "heic", "heif", "avif", "ico", "jp2",
@@ -52,6 +52,32 @@ export function visibleTitle(title: string): string {
 
 export function isWebUrl(s: string): boolean {
   return /^https?:\/\//.test(s);
+}
+
+/**
+ * Human cloud-provider label for a folder source's local path, or null when
+ * it isn't under a known sync root. A pure mirror of the backend's
+ * `list_cloud_folders` detection — provenance is derived from the path alone,
+ * so no new Source field is needed. macOS File Provider mounts live under
+ * ~/Library/CloudStorage/<Provider>-<account>; iCloud under Mobile Documents;
+ * older clients keep ~/Dropbox and ~/Box at the home root.
+ */
+export function folderProvider(path: string): string | null {
+  const cloud = path.match(/\/Library\/CloudStorage\/([^/]+)/);
+  if (cloud) {
+    const dir = cloud[1];
+    if (dir.startsWith("GoogleDrive-")) return "Google Drive";
+    if (dir.startsWith("OneDrive")) return "OneDrive";
+    if (dir === "Box" || dir.startsWith("Box-")) return "Box";
+    if (dir.startsWith("Dropbox")) return "Dropbox";
+  }
+  if (path.includes("/Library/Mobile Documents/com~apple~CloudDocs"))
+    return "iCloud Drive";
+  // Legacy top-level sync roots, anchored to the home dir so an unrelated
+  // "Box" or "Dropbox" project folder deeper in the tree doesn't match.
+  if (/^\/(?:Users|home)\/[^/]+\/Dropbox(?:\/|$)/.test(path)) return "Dropbox";
+  if (/^\/(?:Users|home)\/[^/]+\/Box(?:\/|$)/.test(path)) return "Box";
+  return null;
 }
 
 /**

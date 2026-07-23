@@ -54,6 +54,16 @@ export interface MacCollection {
   detail: string;
 }
 
+/** A detected cloud-storage sync root the "Add folder" picker can open into. */
+export interface CloudFolder {
+  /** Stable machine key: google_drive | onedrive | box | dropbox | icloud. */
+  provider: string;
+  /** Display name, e.g. "Google Drive". */
+  label: string;
+  /** Absolute path to the sync root on disk. */
+  path: string;
+}
+
 /** Tally of what a folder rescan changed. */
 export interface FolderScan {
   added: number;

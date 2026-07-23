@@ -761,10 +761,12 @@ export const useStore = create<AppState>((set, get) => {
       await get().addSourceFiles(Array.isArray(picked) ? picked : [picked]);
     },
 
-    pickAndAddFolder: async () => {
+    pickAndAddFolder: async (defaultPath?: string) => {
       const id = get().currentId;
       if (!id) return;
-      const picked = await open({ directory: true });
+      // defaultPath seeds the native picker inside a detected cloud sync root
+      // so the user drills down to a subfolder — never the whole drive.
+      const picked = await open({ directory: true, defaultPath });
       if (!picked || Array.isArray(picked)) return;
       const name = picked.split("/").pop() || picked;
       const item: QueueItem = {

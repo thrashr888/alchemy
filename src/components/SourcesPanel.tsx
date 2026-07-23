@@ -13,7 +13,13 @@ import {
   CardAction,
   useConfirm,
 } from "./ui";
-import { cn, compactNumber, isWebUrl, visibleTitle } from "@/lib/utils";
+import {
+  cn,
+  compactNumber,
+  folderProvider,
+  isWebUrl,
+  visibleTitle,
+} from "@/lib/utils";
 import { sourceIcon } from "@/lib/sourceIcon";
 import type { Source } from "@/lib/types";
 import {
@@ -377,7 +383,7 @@ export function SourcesPanel() {
           <EmptyState
             icon={<FileText className="h-7 w-7" />}
             title="No sources yet"
-            hint="Upload PDFs, Office files, CSVs, images, or markdown; add a folder (it stays in sync — great for OneDrive/Dropbox); add a URL (Google Docs, Sheets & Slides work); or paste text. You can also drag files or folders onto the window."
+            hint="Upload PDFs, Office files, CSVs, images, or markdown; add a folder (it stays in sync — great for Google Drive, OneDrive, Dropbox, Box & iCloud, including Box Notes); add a URL (Google Docs, Sheets & Slides work); or paste text. You can also drag files or folders onto the window."
           />
         ) : (
           <>
@@ -637,12 +643,21 @@ export function SourcesPanel() {
                         // The folder's contribution to the notebook. Its
                         // auto-refresh behavior moves to the tooltip — a folder
                         // staying in sync isn't something the reader must watch.
+                        // A cloud-provider chip (derived from the path) shows
+                        // where a synced folder lives.
                         <div
-                          className="truncate text-[11px] text-subtle-foreground"
+                          className="flex items-center gap-1.5 text-[11px] text-subtle-foreground"
                           title={`${s.url}\nStays in sync — auto-refreshes`}
                         >
-                          {childCount(s.id)} files ·{" "}
-                          {compactNumber(folderChars(s.id))} chars
+                          {folderProvider(s.url) && (
+                            <span className="shrink-0 rounded bg-surface-2 px-1.5 py-px text-[12px] text-muted-foreground">
+                              {folderProvider(s.url)}
+                            </span>
+                          )}
+                          <span className="truncate">
+                            {childCount(s.id)} files ·{" "}
+                            {compactNumber(folderChars(s.id))} chars
+                          </span>
                         </div>
                       ) : s.sourceType === "url" && s.url ? (
                         <div

@@ -6,6 +6,7 @@ import type {
   AiConfig,
   BuildInfo,
   ChatConfig,
+  CloudFolder,
   ConnectorStatus,
   CorpusStats,
   FolderScan,
@@ -118,6 +119,8 @@ export const api = {
     run(ai<Source>("add_source_file", { notebookId, path })),
   addSourceFolder: (notebookId: string, path: string) =>
     run(slow<Source>("add_source_folder", { notebookId, path })),
+  /** Cloud-storage sync roots detected on this machine, for folder quick-picks. */
+  listCloudFolders: () => run(query<CloudFolder[]>("list_cloud_folders")),
   resyncSources: () => run(slow<FolderScan>("resync_sources")),
   providerReadiness: () =>
     run(

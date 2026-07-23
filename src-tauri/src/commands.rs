@@ -791,6 +791,10 @@ pub(crate) async fn extract_any_file(
         // Google Drive desktop placeholder — the content lives in the cloud;
         // fetch it through the same export path as a pasted docs.google.com URL.
         ingest::extract_url(&url).await?
+    } else if let Some(url) = ingest::dropbox_paper_url(path) {
+        // Dropbox Paper stub that carries a link to the online doc — fetch it
+        // as a web page, the same way a .gdoc placeholder resolves.
+        ingest::extract_url(&url).await?
     } else if ingest::is_image(path) {
         extract_image(state, path).await?
     } else if ingest::is_pdf(path) {
@@ -1573,9 +1577,10 @@ pub(crate) async fn resync_mac_source(
 /// (mirrors the frontend's SUPPORTED_EXTENSIONS in src/lib/utils.ts). Code
 /// and unknown-but-textual files are admitted separately below.
 const RICH_EXTENSIONS: &[&str] = &[
-    "pdf", "txt", "text", "md", "markdown", "html", "htm", "xhtml", "docx", "pptx", "epub", "xlsx",
-    "xls", "xlsm", "ods", "csv", "tsv", "gdoc", "gsheet", "gslides", "png", "jpg", "jpeg", "jpe",
-    "webp", "gif", "bmp", "tif", "tiff", "heic", "heif", "avif", "ico", "jp2",
+    "pdf", "txt", "text", "md", "markdown", "html", "htm", "xhtml", "docx", "pptx", "epub",
+    "boxnote", "xlsx", "xls", "xlsm", "ods", "csv", "tsv", "gdoc", "gsheet", "gslides", "png",
+    "jpg", "jpeg", "jpe", "webp", "gif", "bmp", "tif", "tiff", "heic", "heif", "avif", "ico",
+    "jp2",
 ];
 
 /// How deep a folder scan descends. Repos nest deeper than research folders;
@@ -1714,6 +1719,23 @@ struct ScanOutcome {
     entries: Vec<ScanEntry>,
     /// (folder-relative path, reason)
     skipped: Vec<(String, String)>,
+    /// iCloud `.name.icloud` eviction stubs the caller should kick off a
+    /// background `brctl download` for, so they hydrate and a later resync
+    /// ingests them. Capped per scan pass so one folder can't spawn hundreds.
+    #[cfg(target_os = "macos")]
+    icloud_stubs: Vec<String>,
+}
+
+/// Max iCloud stubs to request a download for in a single scan pass — bounds
+/// the fire-and-forget `brctl download` fan-out on a freshly-added drive.
+#[cfg(target_os = "macos")]
+const ICLOUD_HYDRATE_CAP: usize = 32;
+
+/// Case-insensitive extension test.
+fn has_ext(path: &std::path::Path, want: &str) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case(want))
 }
 
 /// Collect ingestable files under `root` with ripgrep's walker — respects
@@ -1751,6 +1773,9 @@ fn scan_folder(root: &std::path::Path) -> ScanOutcome {
         });
 
     let mut out = ScanOutcome::default();
+    // Per-pass budget for kicking off iCloud downloads (macOS only).
+    #[cfg(target_os = "macos")]
+    let mut hydrate_budget = ICLOUD_HYDRATE_CAP;
     for dent in builder.build() {
         let Ok(dent) = dent else { continue };
         if dent.depth() == 0 {
@@ -1783,6 +1808,14 @@ fn scan_folder(root: &std::path::Path) -> ScanOutcome {
                         mtime: file_mtime(path),
                         placeholder: true,
                     });
+                    // Nudge iCloud to hydrate the stub in the background so a
+                    // later resync ingests it — unlike other File Provider
+                    // mounts, iCloud never downloads on its own. Bounded.
+                    #[cfg(target_os = "macos")]
+                    if hydrate_budget > 0 {
+                        out.icloud_stubs.push(path.to_string_lossy().into_owned());
+                        hydrate_budget -= 1;
+                    }
                 }
             }
             continue;
@@ -1800,6 +1833,26 @@ fn scan_folder(root: &std::path::Path) -> ScanOutcome {
         let evicted = is_evicted(&meta);
         let path_str = path.to_string_lossy().to_string();
         let too_large = meta.len() > TEXT_MAX_BYTES;
+        // Dropbox Paper docs surface as `.paper` files. A stub that links to the
+        // online doc is fetched like a page (extract_any_file); an opaque or
+        // online-only one is skipped with a reason rather than dumping its
+        // wrapper bytes into the index.
+        if has_ext(path, "paper") {
+            if evicted {
+                out.skipped
+                    .push((rel, "Dropbox Paper (online-only)".to_string()));
+            } else if ingest::dropbox_paper_url(&path_str).is_some() {
+                out.entries.push(ScanEntry {
+                    path: path_str,
+                    mtime: file_mtime(path),
+                    placeholder: false,
+                });
+            } else {
+                out.skipped
+                    .push((rel, "Dropbox Paper (open on dropbox.com)".to_string()));
+            }
+            continue;
+        }
         if rich_ingestable(path) {
             out.entries.push(ScanEntry {
                 path: path_str,
@@ -2097,6 +2150,22 @@ async fn rescan_one_folder_inner(
     let outcome = scan_folder(root);
     let mut on_disk = outcome.entries;
     let mut skipped = outcome.skipped;
+    // Fire-and-forget: ask iCloud to download this pass's eviction stubs so the
+    // next resync (60s) ingests them. `brctl` returns immediately — bird does
+    // the transfer in the background — and we reap in a detached blocking task
+    // so no zombies pile up across the app's lifetime.
+    #[cfg(target_os = "macos")]
+    if !outcome.icloud_stubs.is_empty() {
+        let stubs = outcome.icloud_stubs;
+        tokio::task::spawn_blocking(move || {
+            for stub in stubs {
+                let _ = std::process::Command::new("brctl")
+                    .arg("download")
+                    .arg(&stub)
+                    .status();
+            }
+        });
+    }
     on_disk.retain(|e| !claimed.contains(e.path.as_str()));
     // The include ladder (RFC-git-sources §1): a "Docs" source lists prose
     // only — code is out of scope entirely, not merely unembedded.
@@ -2352,6 +2421,91 @@ async fn rescan_one_folder_inner(
         state.db.touch_notebook(&folder.notebook_id, now()).await?;
     }
     Ok(scan)
+}
+
+/// A cloud-storage sync root the user can pick a subfolder from. `provider` is
+/// a stable machine key ("google_drive", "onedrive", "box", "dropbox",
+/// "icloud"); `label` is the display name; `path` is the root on disk.
+#[derive(serde::Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudFolder {
+    provider: String,
+    label: String,
+    path: String,
+}
+
+/// Cloud-storage sync roots that exist on this machine — Google Drive,
+/// OneDrive, Box, Dropbox, and iCloud Drive — so "Add folder" can open the
+/// native picker already inside one and the user drills down to a subfolder
+/// (never the whole drive). macOS mounts most providers under
+/// ~/Library/CloudStorage (File Provider); older clients drop ~/Dropbox and
+/// ~/Box (often symlinks into CloudStorage, deduped by canonical path); iCloud
+/// lives under ~/Library/Mobile Documents.
+#[tauri::command]
+pub fn list_cloud_folders() -> Vec<CloudFolder> {
+    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+        return Vec::new();
+    };
+    detect_cloud_folders(&home)
+}
+
+/// Pure detection over a home directory, so tests can drive it with a temp dir.
+fn detect_cloud_folders(home: &std::path::Path) -> Vec<CloudFolder> {
+    let mut out: Vec<CloudFolder> = Vec::new();
+    let mut seen: HashSet<std::path::PathBuf> = HashSet::new();
+    let mut add = |provider: &str, label: &str, path: std::path::PathBuf| {
+        if !path.is_dir() {
+            return;
+        }
+        // Dedupe symlinked/duplicate roots (e.g. ~/Dropbox -> CloudStorage).
+        let canon = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if !seen.insert(canon) {
+            return;
+        }
+        out.push(CloudFolder {
+            provider: provider.to_string(),
+            label: label.to_string(),
+            path: path.to_string_lossy().into_owned(),
+        });
+    };
+
+    // File Provider mounts (macOS 12+): one dir per connected account.
+    let cloud = home.join("Library/CloudStorage");
+    if let Ok(rd) = std::fs::read_dir(&cloud) {
+        let mut names: Vec<String> = rd
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort(); // stable order across launches
+        for name in names {
+            let provider = if name.starts_with("GoogleDrive-") {
+                Some(("google_drive", "Google Drive"))
+            } else if name.starts_with("OneDrive") {
+                Some(("onedrive", "OneDrive"))
+            } else if name == "Box" || name.starts_with("Box-") {
+                Some(("box", "Box"))
+            } else if name.starts_with("Dropbox") {
+                Some(("dropbox", "Dropbox"))
+            } else {
+                None
+            };
+            if let Some((key, label)) = provider {
+                add(key, label, cloud.join(&name));
+            }
+        }
+    }
+
+    // Legacy top-level sync folders from older desktop clients.
+    add("dropbox", "Dropbox", home.join("Dropbox"));
+    add("box", "Box", home.join("Box"));
+    // iCloud Drive.
+    add(
+        "icloud",
+        "iCloud Drive",
+        home.join("Library/Mobile Documents/com~apple~CloudDocs"),
+    );
+
+    out
 }
 
 #[tauri::command]
@@ -7326,6 +7480,63 @@ mod tool_tests {
             "example.com"
         );
         assert_eq!(presentable_title("   ", ""), "Untitled");
+    }
+
+    #[test]
+    fn detect_cloud_folders_finds_and_labels_roots() {
+        // A throwaway HOME mirroring the real macOS cloud-storage layout.
+        let home = std::env::temp_dir().join(format!("nbl-cloud-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let cloud = home.join("Library/CloudStorage");
+        for name in [
+            "GoogleDrive-me@gmail.com",
+            "OneDrive-Personal",
+            "Box-Box",
+            "Dropbox",
+            "Photos-Ignored",
+        ] {
+            std::fs::create_dir_all(cloud.join(name)).unwrap();
+        }
+        std::fs::create_dir_all(home.join("Library/Mobile Documents/com~apple~CloudDocs")).unwrap();
+
+        let found = detect_cloud_folders(&home);
+        let label = |p: &str| {
+            found
+                .iter()
+                .find(|c| c.provider == p)
+                .map(|c| c.label.as_str())
+        };
+        assert_eq!(label("google_drive"), Some("Google Drive"));
+        assert_eq!(label("onedrive"), Some("OneDrive"));
+        assert_eq!(label("box"), Some("Box"));
+        assert_eq!(label("dropbox"), Some("Dropbox"));
+        assert_eq!(label("icloud"), Some("iCloud Drive"));
+        // Unknown CloudStorage dirs aren't offered.
+        assert!(found.iter().all(|c| !c.path.contains("Ignored")));
+        // Every detected root actually exists.
+        assert!(found.iter().all(|c| std::path::Path::new(&c.path).is_dir()));
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn detect_cloud_folders_dedupes_symlinked_legacy_root() {
+        // ~/Dropbox as a symlink into CloudStorage/Dropbox must count once.
+        let home = std::env::temp_dir().join(format!("nbl-cloud-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let real = home.join("Library/CloudStorage/Dropbox");
+        std::fs::create_dir_all(&real).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, home.join("Dropbox")).unwrap();
+
+        let found = detect_cloud_folders(&home);
+        let dropboxes = found.iter().filter(|c| c.provider == "dropbox").count();
+        assert_eq!(
+            dropboxes, 1,
+            "symlinked legacy root should dedupe: {found:?}"
+        );
+
+        std::fs::remove_dir_all(&home).ok();
     }
 
     #[test]
