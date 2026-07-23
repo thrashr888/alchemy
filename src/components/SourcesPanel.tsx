@@ -14,15 +14,12 @@ import {
   useConfirm,
 } from "./ui";
 import { cn, compactNumber, isWebUrl } from "@/lib/utils";
+import { sourceIcon } from "@/lib/sourceIcon";
 import type { Source } from "@/lib/types";
 import {
   ChevronRight,
-  FileCode,
   FileText,
-  FileType,
-  GitBranch,
   Globe,
-  Hash,
   Plus,
   PanelLeftClose,
   Trash2,
@@ -32,15 +29,7 @@ import {
   X,
   Pencil,
   RefreshCw,
-  Image as ImageIcon,
-  Folder,
   Cloud,
-  CodeXml,
-  Command,
-  Calendar,
-  ListChecks,
-  NotebookText,
-  TrendingUp,
 } from "lucide-react";
 
 // Reference scale for the "how big is this notebook" gauge. Not a capacity —
@@ -72,42 +61,6 @@ function saveFoldersCollapsed(state: Record<string, boolean>) {
   }
 }
 
-export function sourceIcon(t: Source["sourceType"], url?: string) {
-  // Mac sources show the app they mirror (same icons as the add-source
-  // modal's provider tiles), in that app's signature color.
-  if (t === "mac" && url) {
-    if (url.startsWith("cider://calendar/"))
-      return <Calendar className="h-3.5 w-3.5 text-muted-foreground" />;
-    if (url.startsWith("cider://reminders/"))
-      return <ListChecks className="h-3.5 w-3.5 text-muted-foreground" />;
-    if (url.startsWith("cider://notes/"))
-      return <NotebookText className="h-3.5 w-3.5 text-muted-foreground" />;
-    if (url.startsWith("cider://stocks/"))
-      return <TrendingUp className="h-3.5 w-3.5 text-muted-foreground" />;
-  }
-  switch (t) {
-    case "git":
-      return <GitBranch className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "code":
-      return <FileCode className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "pdf":
-      return <FileType className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "url":
-      return <Globe className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "markdown":
-      return <Hash className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "image":
-      return <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "folder":
-      return <Folder className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "mac":
-      return <Command className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "html":
-      return <CodeXml className="h-3.5 w-3.5 text-muted-foreground" />;
-    default:
-      return <FileText className="h-3.5 w-3.5 text-muted-foreground" />;
-  }
-}
 
 /** Source-domain favicon with a Globe fallback (kept local — no third party). */
 export function Favicon({ url }: { url: string }) {
@@ -557,9 +510,14 @@ export function SourcesPanel() {
                               ? "text-muted-foreground"
                               : "text-foreground",
                           )}
-                          title={s.title}
+                          title={s.title.trim() || s.url || "Untitled"}
                         >
-                          {s.title}
+                          {/* A source can arrive with a blank title (e.g. a
+                              page with no <title>); the row must never render
+                              as a bare checkbox. */}
+                          {s.title.trim() ||
+                            (s.url && hostname(s.url)) ||
+                            "Untitled"}
                         </span>
                         {!importing && (
                         <RowMenu

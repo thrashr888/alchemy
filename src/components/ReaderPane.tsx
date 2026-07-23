@@ -4,7 +4,8 @@ import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import type { Citation, Note, Source } from "@/lib/types";
-import { AmbientRail, activeParagraph } from "./AmbientRail";
+import { AmbientRail } from "./AmbientRail";
+import { activeParagraph } from "@/lib/utils";
 import { AudioPlayer, DialogueScript } from "./AudioNote";
 import { Flashcards } from "./Flashcards";
 import { Markdown } from "./Markdown";
@@ -14,7 +15,8 @@ import { SlideDeck } from "./SlideDeck";
 import { RichEditor } from "./RichEditor";
 import { StreamingBody } from "./StudioNoteViewer";
 import { KIND_LABEL } from "./studioArtifacts";
-import { Favicon, sourceIcon } from "./SourcesPanel";
+import { Favicon } from "./SourcesPanel";
+import { sourceIcon } from "@/lib/sourceIcon";
 import { Button, Input, RowMenu, Spinner } from "./ui";
 import { chatReadingClass, cn, fmtDay, isWebUrl, shortcutBlocked, urlHost } from "@/lib/utils";
 import {
@@ -61,7 +63,7 @@ const esc = (w: string) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  * whitespace-tolerant: find the first ~12 words, then the last ~12 words
  * within the expected span.
  */
-export function locatePassage(
+function locatePassage(
   content: string,
   snippet: string,
 ): [number, number] | null {

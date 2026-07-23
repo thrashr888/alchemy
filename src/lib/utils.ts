@@ -119,3 +119,20 @@ export function relativeTime(ms: number): string {
   if (d < 7) return `${d}d ago`;
   return new Date(ms).toLocaleDateString();
 }
+
+/** The paragraph the user is working on: the first one that changed, or the
+ *  last non-empty one when nothing differs (e.g. on entry). Lives here (not
+ *  in AmbientRail) so component modules keep components-only exports and
+ *  Vite Fast Refresh never has to invalidate them. */
+export function activeParagraph(prev: string, next: string): string {
+  const a = prev.split(/\n{2,}/);
+  const b = next.split(/\n{2,}/);
+  for (let i = 0; i < b.length; i++) {
+    if (a[i] !== b[i]) return (b[i] ?? "").trim().slice(0, 600);
+  }
+  for (let i = b.length - 1; i >= 0; i--) {
+    const p = (b[i] ?? "").trim();
+    if (p) return p.slice(0, 600);
+  }
+  return "";
+}

@@ -1,5 +1,5 @@
 import { useStore } from "@/lib/store";
-import { sourceIcon } from "./SourcesPanel";
+import { sourceIcon } from "@/lib/sourceIcon";
 import { cn } from "@/lib/utils";
 import {
   PanelLeft,

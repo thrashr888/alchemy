@@ -26,6 +26,7 @@ import {
 import type { Note } from "@/lib/types";
 import {
   KIND_LABEL,
+  kindIcon,
   studioArtifacts,
   type Artifact,
 } from "./studioArtifacts";
@@ -63,34 +64,6 @@ const TINT_DISCLOSURE: Tint = {
   tile: "border-border bg-surface-2 hover:border-border-strong hover:bg-elevated",
   icon: "text-muted-foreground",
 };
-
-/**
- * Card preview text: skip a leading markdown heading (or a first line equal to
- * the title) so the card doesn't repeat its own title, then flatten markdown.
- */
-function notePreview(n: Note): string {
-  const lines = n.content.split("\n");
-  let i = 0;
-  while (i < lines.length && !lines[i].trim()) i++;
-  const first = (lines[i] ?? "").trim();
-  const firstText = first
-    .replace(/^#+\s*/, "")
-    .replace(/[*_`]/g, "")
-    .trim();
-  if (
-    first.startsWith("#") ||
-    firstText.toLowerCase() === n.title.trim().toLowerCase()
-  )
-    i++;
-  return lines
-    .slice(i)
-    .join(" ")
-    .replace(/[#*`>_]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 160);
-}
-
 
 /** Notes the curator archived: out of retrieval, collapsed but never gone.
  *  Opening one still works; editing it revives it (see RFC-note-curator). */
@@ -433,7 +406,9 @@ export function StudioPanel() {
                     // has-: an open row menu must outrank the z-10 content of
                     // the rows after it (they'd paint over the dropdown
                     // otherwise — later DOM order wins at equal z).
-                    "group relative cursor-pointer rounded-md border border-border bg-surface-2/40 px-3 py-2.5 transition-colors hover:border-border-strong hover:bg-surface-2",
+                    // Flat rows, not bordered cards — the title and chips
+                    // carry the card; a hover wash marks the target.
+                    "group relative cursor-pointer rounded-md px-3 py-2 transition-colors hover:bg-surface-2",
                     n.status === "stale" && "opacity-60",
                   )}
                 >
@@ -442,6 +417,12 @@ export function StudioPanel() {
                     onClick={() => openNoteCard(n)}
                   />
                   <div className="pointer-events-none relative z-10 flex items-center gap-2">
+                    <span
+                      className="pointer-events-auto shrink-0 text-muted-foreground"
+                      title={KIND_LABEL[n.kind]}
+                    >
+                      {kindIcon(n.kind)}
+                    </span>
                     <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
                       {n.title}
                     </span>
@@ -486,13 +467,9 @@ export function StudioPanel() {
                       ]}
                     />
                   </div>
-                  <div className="pointer-events-none relative z-10 mt-1 flex items-center gap-1.5">
-                    {n.kind !== "note" &&
-                      n.title.trim().toLowerCase() !==
-                        KIND_LABEL[n.kind].toLowerCase() && (
-                        <Badge>{KIND_LABEL[n.kind]}</Badge>
-                      )}
-                    {/* Badges re-enable hit-testing so their explanatory
+                  <div className="pointer-events-none relative z-10 mt-1 flex items-center gap-1.5 pl-[22px]">
+                    {/* The kind icon on the title row replaces the old text
+                        chip. Badges re-enable hit-testing so their explanatory
                         tooltips still show inside the pointer-events-none row. */}
                     {n.origin === "auto" && (
                       <span
@@ -514,9 +491,6 @@ export function StudioPanel() {
                       {relativeTime(n.updatedAt)}
                     </span>
                   </div>
-                  <p className="pointer-events-none relative z-10 mt-1.5 line-clamp-2 text-[12px] leading-relaxed text-muted-foreground">
-                    {notePreview(n)}
-                  </p>
                 </div>
               ))}
             </div>
