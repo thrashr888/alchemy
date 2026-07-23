@@ -381,15 +381,15 @@ export function SourcesPanel() {
           />
         ) : (
           <>
-            {/* Master selection row: which sources feed chat & Studio. */}
+            {/* Master selection row: which sources feed chat & Studio. Always
+                labeled — a bare checkbox over empty space read as a blank,
+                menu-less source row in every notebook. */}
             <div className="mb-0.5 flex items-center gap-2 px-2 py-1.5">
-              {/* When everything is on, the select-all checkbox says enough;
-                  only a partial selection needs a count. */}
-              {!allSelected && (
-                <span className="text-[11px] text-muted-foreground">
-                  {selectedCount} of {contentSources.length} selected
-                </span>
-              )}
+              <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+                {allSelected
+                  ? "All selected"
+                  : `${selectedCount} of ${contentSources.length} selected`}
+              </span>
               <div className="ml-auto">
                 <SelectBox
                   checked={allSelected}
