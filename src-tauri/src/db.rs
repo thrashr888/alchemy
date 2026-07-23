@@ -168,6 +168,13 @@ pub struct Db {
     /// each other (a retryable commit conflict). One rebuild at a time — plus
     /// the bounded retry in `rebuild_chunks_fts` — removes the race.
     fts_lock: tokio::sync::Mutex<()>,
+    /// Bulk-write mode: rebuilding the full BM25 index after EVERY insert is
+    /// O(n²) across a folder import or eval seeding (a 48-file folder paid 48
+    /// full rebuilds; the 10M-char eval corpus ran 40+ minutes on a rebuild
+    /// pattern whose search takes milliseconds). While deferred, `add_chunks`
+    /// only marks the index dirty; `flush_fts` rebuilds once at the end.
+    fts_deferred: std::sync::atomic::AtomicBool,
+    fts_dirty: std::sync::atomic::AtomicBool,
 }
 
 /// One stored source-gist row (docs/RFC-infinite-context.md Phase 1).
@@ -195,11 +202,14 @@ impl Db {
         let db = Self {
             conn,
             fts_lock: tokio::sync::Mutex::new(()),
+            fts_deferred: std::sync::atomic::AtomicBool::new(false),
+            fts_dirty: std::sync::atomic::AtomicBool::new(false),
         };
         db.ensure_table(T_NOTEBOOKS, notebooks_schema()).await?;
         db.migrate_notebooks().await?;
         db.ensure_table(T_SOURCES, sources_schema()).await?;
         db.migrate_sources().await?;
+        db.backfill_blank_titles().await?;
         db.ensure_table(T_MESSAGES, messages_schema()).await?;
         db.migrate_messages().await?;
         db.ensure_table(T_NOTES, notes_schema()).await?;
@@ -370,6 +380,39 @@ impl Db {
     /// rebuilding it, backfilling any missing columns (`url`, `status`,
     /// `error`, `parent_id`, `mtime`) with defaults. No-op once all columns
     /// are present.
+    /// One-time backfill: any source persisted with a blank title (a page
+    /// capture with no `<title>`, from before `presentable_title` guarded the
+    /// ingest funnel) gets its origin host, else "Untitled" — so the list
+    /// never shows an unlabeled row the user can't act on. A filtered query,
+    /// so it's a no-op scan once there are none left.
+    async fn backfill_blank_titles(&self) -> Result<()> {
+        if !self.table_exists(T_SOURCES).await? {
+            return Ok(());
+        }
+        let batches = self.collect(T_SOURCES, Some("title = ''")).await?;
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let url = str_col(b, "url")?;
+            for i in 0..b.num_rows() {
+                let host = url
+                    .value(i)
+                    .split("://")
+                    .nth(1)
+                    .and_then(|rest| rest.split('/').next())
+                    .unwrap_or("")
+                    .trim_start_matches("www.");
+                let title = if host.is_empty() { "Untitled" } else { host };
+                let tbl = self.conn.open_table(T_SOURCES).execute().await?;
+                tbl.update()
+                    .only_if(format!("id = '{}'", esc(id.value(i))))
+                    .column("title", format!("'{}'", esc(title)))
+                    .execute()
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn migrate_sources(&self) -> Result<()> {
         if !self.table_exists(T_SOURCES).await? {
             return Ok(());
@@ -719,9 +762,33 @@ impl Db {
         )?;
         self.add_batch(T_CHUNKS, schema, batch).await?;
 
-        // Keep the BM25 side of hybrid search current. Rebuilding on every
-        // write is fine at personal-corpus scale (thousands of rows, ms-level).
+        // Keep the BM25 side of hybrid search current — unless a bulk write
+        // (folder import, eval seeding) deferred rebuilds; then just mark
+        // dirty and let `flush_fts` do one rebuild at the end.
+        if self.fts_deferred.load(std::sync::atomic::Ordering::SeqCst) {
+            self.fts_dirty
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            return Ok(());
+        }
         self.rebuild_chunks_fts().await
+    }
+
+    /// Enter/leave bulk-write mode (see `fts_deferred`). Leaving does NOT
+    /// rebuild — call `flush_fts` after, so error paths can still flush.
+    pub fn defer_fts(&self, on: bool) {
+        self.fts_deferred
+            .store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Rebuild the chunks FTS index if any deferred write dirtied it.
+    pub async fn flush_fts(&self) -> Result<()> {
+        if self
+            .fts_dirty
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            self.rebuild_chunks_fts().await?;
+        }
+        Ok(())
     }
 
     /// Rebuild the chunks full-text index, serialized process-wide and retried

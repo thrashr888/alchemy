@@ -1900,7 +1900,26 @@ fn code_context(folder_title: &str, root: &std::path::Path, path: &str) -> Optio
 /// re-ingest changed ones (by mtime), drop children whose file is gone, and
 /// keep the parent's folder/repo map current. `force_map` re-renders the map
 /// even when the scan found no changes (manual refresh, first scan).
+///
+/// FTS rebuilds are deferred across the whole scan and flushed once at the
+/// end (error paths included): per-child rebuilds made folder imports O(n²)
+/// — a 48-file folder paid 48 full BM25 index rebuilds.
 async fn rescan_one_folder(
+    app: Option<&AppHandle>,
+    state: &AppState,
+    folder: &Source,
+    force_map: bool,
+) -> anyhow::Result<FolderScan> {
+    state.db.defer_fts(true);
+    let result = rescan_one_folder_inner(app, state, folder, force_map).await;
+    state.db.defer_fts(false);
+    if let Err(err) = state.db.flush_fts().await {
+        eprintln!("folder scan: FTS flush failed: {err:#}");
+    }
+    result
+}
+
+async fn rescan_one_folder_inner(
     app: Option<&AppHandle>,
     state: &AppState,
     folder: &Source,

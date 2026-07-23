@@ -1860,6 +1860,10 @@ async fn run_scale(ai: &crate::ai::Ai, target_chars: usize) -> (f64, f64, usize)
         vectors.extend(ai.embed(batch).await.expect("embed scale corpus"));
     }
     let mut cursor = 0usize;
+    // Bulk seeding defers the per-insert BM25 rebuild (O(n²) otherwise —
+    // the 10M corpus ran 40+ minutes rebuilding an ever-growing index) and
+    // flushes once below; production folder imports use the same mode.
+    db.defer_fts(true);
     for (di, (title, body)) in docs.iter().enumerate() {
         let n = chunked[di].len();
         let tuples: Vec<(String, i32, String)> = chunked[di]
@@ -1889,6 +1893,8 @@ async fn run_scale(ai: &crate::ai::Ai, target_chars: usize) -> (f64, f64, usize)
             .await
             .expect("insert scale doc");
     }
+    db.defer_fts(false);
+    db.flush_fts().await.expect("flush scale corpus fts");
 
     let k = crate::inference::ContextProfile::default().retrieve_k_for(total_chars);
     let opts = SearchOptions {
