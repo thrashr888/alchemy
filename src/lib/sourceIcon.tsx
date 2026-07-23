@@ -4,6 +4,7 @@
 // invalidate") on any module mixing component and non-component exports.
 import type { Source } from "@/lib/types";
 import {
+  Blocks,
   Calendar,
   CodeXml,
   Command,
@@ -11,6 +12,7 @@ import {
   FileText,
   FileType,
   Folder,
+  Gem,
   GitBranch,
   Globe,
   Hash,
@@ -36,6 +38,10 @@ export function sourceIcon(t: Source["sourceType"], url?: string) {
   switch (t) {
     case "git":
       return <GitBranch className="h-3.5 w-3.5 text-muted-foreground" />;
+    case "notion":
+      return <Blocks className="h-3.5 w-3.5 text-muted-foreground" />;
+    case "obsidian":
+      return <Gem className="h-3.5 w-3.5 text-muted-foreground" />;
     case "code":
       return <FileCode className="h-3.5 w-3.5 text-muted-foreground" />;
     case "pdf":

@@ -78,6 +78,12 @@ two-host podcast voiced on-device.*
 - **Part of the Mac** — `alchemy://` deep links, a menu bar extra (ask, add the
   clipboard as a source, recent notebooks), "Add to Alchemy" in every app's
   Services menu, and Spotlight-indexed notebooks and notes.
+- **Web clipper** — the [Alchemy Web Clipper](https://chromewebstore.google.com/detail/alchemy-web-clipper/bdiidbpifneigmcknjbgolbclbbgjheh)
+  Chrome extension adds the current page, a link, or a text selection to a
+  notebook from the toolbar or right-click menu — it just composes an
+  `alchemy://add` deep link, so it needs no host permissions, stores nothing,
+  and makes no network requests. The same folder loads in Firefox and Safari
+  (see [extension/chrome/](extension/chrome/README.md)).
 - **OCR** — image sources and scanned/image-only PDFs are transcribed by a local
   vision model (dedicated OCR models like `glm-ocr` / `deepseek-ocr` recommended).
 - **Grounded chat** — streamed answers that cite the exact source passages they drew

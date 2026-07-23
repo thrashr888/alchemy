@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
-import { Button, Input, Modal } from "../ui";
+import { useStore } from "@/lib/store";
+import { Button, Input, Modal, useConfirm } from "../ui";
 import { Field } from "./SettingsTabs";
 import { cn } from "@/lib/utils";
 import type { AiConfig, ProviderEntry } from "@/lib/types";
@@ -140,6 +141,20 @@ export function ModelsTab({
   const [checkingStatus, setCheckingStatus] = useState(false);
   const [wizard, setWizard] = useState<null | { editId?: string }>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const reembedAll = useStore((s) => s.reembedAll);
+  const { confirm, dialog: confirmDialog } = useConfirm();
+
+  async function handleReembed() {
+    const ok = await confirm({
+      title: "Re-embed all sources?",
+      message:
+        "Rebuilds the search index for every notebook with the current embedding model. " +
+        "Needed after switching models or if search stopped matching; it reprocesses " +
+        "all sources and can take a few minutes.",
+      confirmLabel: "Re-embed",
+    });
+    if (ok) void reembedAll();
+  }
 
   useEffect(() => {
     setCheckingStatus(true);
@@ -514,6 +529,15 @@ export function ModelsTab({
                     placeholder="nomic-embed-text"
                   />
                 )}
+                <div className="flex items-center gap-2 pt-0.5">
+                  <Button variant="secondary" size="sm" onClick={handleReembed}>
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Re-embed all sources
+                  </Button>
+                  <span className="text-[11px] text-subtle-foreground">
+                    Rebuild the index without changing the model.
+                  </span>
+                </div>
               </div>
             </Field>
             <Field
@@ -568,6 +592,7 @@ export function ModelsTab({
           onClose={() => setWizard(null)}
         />
       )}
+      {confirmDialog}
     </div>
   );
 }
@@ -845,6 +870,11 @@ function ProviderWizard({
             </span>
             <ChevronRight className="h-3.5 w-3.5 text-subtle-foreground" />
           </button>
+          <div className="pt-1">
+            <Button variant="ghost" onClick={onClose}>
+              ‹ Back
+            </Button>
+          </div>
         </div>
       )}
 
@@ -941,7 +971,7 @@ function ProviderWizard({
           </Field>
           <div className="flex items-center justify-between pt-1">
             <Button variant="ghost" onClick={() => (editing ? onClose() : setStep("door"))}>
-              {editing ? "Cancel" : "‹ Back"}
+              ‹ Back
             </Button>
             <Button
               variant="primary"
@@ -995,7 +1025,7 @@ function ProviderWizard({
           </Field>
           <div className="flex items-center justify-between pt-1">
             <Button variant="ghost" onClick={() => (editing ? onClose() : setStep("door"))}>
-              {editing ? "Cancel" : "‹ Back"}
+              ‹ Back
             </Button>
             <Button
               variant="primary"

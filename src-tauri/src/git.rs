@@ -130,6 +130,8 @@ pub fn render_map(
     let mut out = String::new();
     let kind = if repo.is_some() {
         "repository map"
+    } else if folder_root.join(".obsidian").is_dir() {
+        "Obsidian vault"
     } else {
         "folder map"
     };

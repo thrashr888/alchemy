@@ -84,6 +84,48 @@ function remarkCitations(maxN: number) {
   return () => (tree: Node) => visit(tree);
 }
 
+/**
+ * Turn Obsidian-style `[[wikilinks]]` in text nodes into ordinary relative
+ * links (`[[Note#h|alias]]` → `<a href="Note.md">alias</a>`) so the reader's
+ * in-corpus link routing can hop between vault notes. Same mdast walk as
+ * remarkCitations; only enabled for document bodies (the `wikilinks` prop).
+ */
+function remarkWikilinks() {
+  interface Node {
+    type: string;
+    value?: string;
+    url?: string;
+    children?: Node[];
+  }
+  const split = (value: string): Node[] => {
+    const out: Node[] = [];
+    let last = 0;
+    for (const m of value.matchAll(/\[\[([^\][|#]+)(?:#([^\][|]*))?(?:\|([^\][]*))?\]\]/g)) {
+      const target = m[1].trim();
+      if (!target) continue;
+      if (m.index > last) out.push({ type: "text", value: value.slice(last, m.index) });
+      const display = m[3]?.trim() || (m[2] ? `${target} › ${m[2].trim()}` : target);
+      const href = /\.[a-z0-9]{1,5}$/i.test(target) ? target : `${target}.md`;
+      out.push({ type: "link", url: href, children: [{ type: "text", value: display }] });
+      last = m.index + m[0].length;
+    }
+    if (out.length === 0) return [{ type: "text", value }];
+    if (last < value.length) out.push({ type: "text", value: value.slice(last) });
+    return out;
+  };
+  const visit = (node: Node) => {
+    if (!node.children) return;
+    node.children = node.children.flatMap((child) => {
+      if (child.type === "text" && child.value?.includes("[[")) return split(child.value);
+      if (child.type !== "link" && child.type !== "inlineCode" && child.type !== "code") {
+        visit(child);
+      }
+      return [child];
+    });
+  };
+  return () => (tree: Node) => visit(tree);
+}
+
 /** A wide table scrolls inside its own container instead of stretching the
  *  whole chat/note column sideways. */
 function ScrollableTable({
@@ -104,12 +146,15 @@ export function Markdown<C extends { snippet: string }>({
   citations,
   onCitation,
   citationLabel,
+  wikilinks,
 }: {
   children: string;
   /** When present, inline [n] markers become clickable citation chips. */
   citations?: C[];
   onCitation?: (citation: C) => void;
   citationLabel?: (citation: C) => string;
+  /** Render `[[wikilinks]]` as relative links (document bodies only). */
+  wikilinks?: boolean;
 }) {
   const interactive = !!citations?.length && !!onCitation;
   const label =
@@ -118,10 +163,15 @@ export function Markdown<C extends { snippet: string }>({
       const t = c as { sourceTitle?: string; title?: string };
       return t.sourceTitle ?? t.title ?? "";
     });
+  const remarkPlugins = [
+    remarkGfm,
+    ...(interactive ? [remarkCitations(citations.length)] : []),
+    ...(wikilinks ? [remarkWikilinks()] : []),
+  ];
   return (
     <div className="prose">
       <ReactMarkdown
-        remarkPlugins={interactive ? [remarkGfm, remarkCitations(citations.length)] : [remarkGfm]}
+        remarkPlugins={remarkPlugins}
         rehypePlugins={REHYPE_PLUGINS}
         components={
           interactive

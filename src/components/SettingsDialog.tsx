@@ -3,7 +3,8 @@ import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { playDone } from "@/lib/sound";
 import { checkForUpdates, type UpdateFlow } from "@/lib/updates";
-import { Button, Modal, Spinner } from "./ui";
+import { Button, Input, Modal, Spinner } from "./ui";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "@/lib/utils";
 import { MacConnect } from "./MacConnect";
 import {
@@ -15,11 +16,7 @@ import {
   ShortcutsTab,
 } from "./settings/SettingsTabs";
 import { ModelsTab } from "./settings/ModelsTab";
-import type {
-  AiConfig,
-  ConnectorStatus,
-  McpStatus,
-} from "@/lib/types";
+import type { AiConfig, ConnectorStatus, McpStatus } from "@/lib/types";
 import {
   CheckCircle2,
   Cpu,
@@ -39,8 +36,6 @@ import {
 
 /** Treat `name` and `name:latest` as the same model for matching. */
 const normModel = (m: string) => m.replace(/:latest$/, "");
-
-
 
 const TABS = [
   { id: "general", label: "General", icon: SlidersHorizontal },
@@ -99,14 +94,6 @@ export function SettingsDialog({
       setModels([]);
     }
   }
-
-
-
-
-
-
-
-
 
   const embedChanged =
     !!draft &&
@@ -192,12 +179,17 @@ export function SettingsDialog({
         ) : undefined
       }
     >
-      {/* One scroll region: the content column. The wrapper is a flex child
-          of the modal body (itself flex when bodyScroll=false), so heights
-          resolve through real flex constraints — max-h-full percentages here
-          silently failed in WKWebView, which is why long tabs didn't scroll.
-          "Settings" is the nav's section header (no title bar / hr above). */}
-      <div className="flex min-h-0 flex-1 gap-5">
+      {/* Content-sized up to the window: short tabs (About) sit at the nav's
+          natural height, long tabs (Models, Appearance, Agents) grow to the
+          cap and scroll only past it. The scroll cap MUST be a definite
+          height on the scrolling column itself — a percentage (max-h-full)
+          collapses here because the panel is capped by max-h, not a fixed
+          height, so overflow-y-auto never gets a bound (that was the
+          "long tabs don't scroll" regression). 8.5rem clears the header,
+          body padding, and the models tab's Save footer. bodyScroll={false}
+          keeps the modal body from scrolling too, so exactly one region
+          moves. "Settings" is the nav's section header (no title bar). */}
+      <div className="flex gap-5">
         <nav className="flex w-36 shrink-0 flex-col gap-0.5">
           <h2 className="px-2.5 pb-2 pt-0.5 text-[13px] font-semibold text-foreground">
             Settings
@@ -221,7 +213,7 @@ export function SettingsDialog({
           ))}
         </nav>
 
-        <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
+        <div className="flex max-h-[calc(92vh-8.5rem)] min-w-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
           {tab === "general" && <GeneralTab />}
           {tab === "sources" && <SourcesTab />}
           {tab === "studio" && <StudioTab />}
@@ -283,7 +275,6 @@ export function SettingsDialog({
     </Modal>
   );
 }
-
 
 /** Toggle row: label + native checkbox, persisted to localStorage. */
 function PrefToggle({
@@ -421,6 +412,104 @@ function SourcesTab() {
       <div className="h-px bg-border" />
 
       <GitSyncSelect />
+
+      <div className="h-px bg-border" />
+
+      <NotionTokenField />
+    </div>
+  );
+}
+
+/** Notion internal-integration token — pasting one makes notion.so URLs
+ *  import as living page trees instead of one-shot page captures. The token
+ *  is validated against the API on entry so the user sees it work. */
+function NotionTokenField() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [check, setCheck] = useState<
+    | { state: "idle" | "checking" }
+    | { state: "ok"; workspace: string }
+    | { state: "error"; message: string }
+  >({ state: "idle" });
+
+  // Validate whatever token is currently saved when the field mounts, so a
+  // returning user sees the green check without re-typing.
+  useEffect(() => {
+    const saved = useStore.getState().aiConfig?.notionToken ?? "";
+    if (saved) void verify(saved);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function verify(token: string) {
+    const t = token.trim();
+    if (!t) {
+      setCheck({ state: "idle" });
+      return;
+    }
+    setCheck({ state: "checking" });
+    try {
+      const workspace = await api.notionCheck(t);
+      setCheck({ state: "ok", workspace });
+    } catch (e) {
+      setCheck({
+        state: "error",
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  if (!aiConfig) return null;
+  const value = draft ?? aiConfig.notionToken;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="text-[13px]">Notion</div>
+      <Input
+        type="password"
+        aria-label="Notion integration token"
+        placeholder="ntn_… integration token"
+        value={value}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          setCheck({ state: "idle" });
+        }}
+        onBlur={() => {
+          if (draft !== null && draft.trim() !== aiConfig.notionToken) {
+            void saveAiConfig({ ...aiConfig, notionToken: draft.trim() });
+            void verify(draft);
+          }
+          setDraft(null);
+        }}
+      />
+      {check.state === "checking" && (
+        <span className="flex items-center gap-1.5 text-[12px] text-subtle-foreground">
+          <Spinner className="h-3 w-3" /> Checking the token…
+        </span>
+      )}
+      {check.state === "ok" && (
+        <span className="flex items-center gap-1.5 text-[12px] text-success">
+          <CheckCircle2 className="h-3.5 w-3.5" /> Connected to{" "}
+          {check.workspace}
+        </span>
+      )}
+      {check.state === "error" && (
+        <span className="text-[12px] leading-relaxed text-destructive/90">
+          {check.message}
+        </span>
+      )}
+      <span className="text-[12px] leading-relaxed text-subtle-foreground">
+        Create an internal integration at{" "}
+        <button
+          type="button"
+          onClick={() => void openUrl("https://www.notion.so/my-integrations")}
+          className="text-citation hover:underline"
+        >
+          notion.so/my-integrations
+        </button>
+        , then share pages with it in Notion (••• → Connections). Pasting a page
+        URL here after that imports the page and its children as a living source
+        that re-syncs on the cadence above. Stored locally; sent only to Notion.
+      </span>
     </div>
   );
 }
@@ -486,7 +575,10 @@ function CuratorToggle() {
         type="checkbox"
         checked={aiConfig.curatorConsolidate}
         onChange={(e) =>
-          void saveAiConfig({ ...aiConfig, curatorConsolidate: e.target.checked })
+          void saveAiConfig({
+            ...aiConfig,
+            curatorConsolidate: e.target.checked,
+          })
         }
         className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
       />
@@ -495,10 +587,10 @@ function CuratorToggle() {
           Consolidate auto notes weekly
         </span>
         <span className="text-[11px] leading-relaxed text-subtle-foreground">
-          Once a week, while you're away, the model merges chat-created
-          evidence notes that state the same claim. The merged-away note is
-          archived, never deleted, and each notebook's Curator report lists
-          what happened. Uses your chat model.
+          Once a week, while you're away, the model merges chat-created evidence
+          notes that state the same claim. The merged-away note is archived,
+          never deleted, and each notebook's Curator report lists what happened.
+          Uses your chat model.
         </span>
       </span>
     </label>
@@ -537,8 +629,8 @@ function GitSyncSelect() {
       </label>
       <span className="text-[11px] leading-relaxed text-subtle-foreground">
         Remote repos re-fetch when their branch moves, using your own git
-        credentials — Alchemy never stores tokens. Manual Refresh always
-        syncs, even when this is off.
+        credentials — Alchemy never stores tokens. Manual Refresh always syncs,
+        even when this is off.
       </span>
     </div>
   );
@@ -770,8 +862,6 @@ function AgentsTab() {
     </div>
   );
 }
-
-
 
 /**
  * Settings → Models: manage the on-device podcast voice model (Kokoro-82M).

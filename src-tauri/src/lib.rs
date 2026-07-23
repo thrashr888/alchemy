@@ -14,6 +14,7 @@ mod mac;
 mod mcp;
 mod menu;
 mod models;
+mod notion;
 mod outline;
 mod pdf;
 mod rag;
@@ -181,6 +182,7 @@ pub fn run() {
             commands::send_message_agentic,
             commands::cancel_generation,
             commands::open_in_terminal,
+            commands::notion_check,
             commands::delete_message,
             commands::list_notes,
             commands::list_recent_notes,

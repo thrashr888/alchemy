@@ -61,7 +61,6 @@ function saveFoldersCollapsed(state: Record<string, boolean>) {
   }
 }
 
-
 /** Source-domain favicon with a Globe fallback (kept local — no third party). */
 export function Favicon({ url }: { url: string }) {
   const [failed, setFailed] = useState(false);
@@ -178,9 +177,8 @@ export function SourcesPanel() {
   // shouldn't wall the panel — and the chevron remembers the user's choice
   // across restarts (persisted to localStorage, keyed by folder source id,
   // mirroring the other UI-state keys in store.ts).
-  const [collapsedParents, setCollapsedParents] = useState<
-    Record<string, boolean>
-  >(loadFoldersCollapsed);
+  const [collapsedParents, setCollapsedParents] =
+    useState<Record<string, boolean>>(loadFoldersCollapsed);
   const isCollapsed = (id: string, kidCount: number) =>
     collapsedParents[id] ?? kidCount > 8;
   const toggleCollapsed = (id: string, kidCount: number) =>
@@ -194,7 +192,7 @@ export function SourcesPanel() {
   for (const s of sources) {
     if (s.parentId) continue;
     rows.push({ s, indent: false });
-    if (s.sourceType === "folder" || s.sourceType === "git") {
+    if (["folder", "git", "notion", "obsidian"].includes(s.sourceType)) {
       const kids = sources.filter((x) => x.parentId === s.id);
       if (!isCollapsed(s.id, kids.length)) {
         for (const c of kids) {
@@ -216,7 +214,9 @@ export function SourcesPanel() {
   const isSelected = (id: string) =>
     !selectedSourceIds || selectedSourceIds[id] !== false;
   // Folder container rows have no chunks — only content sources count.
-  const contentSources = sources.filter((s) => s.sourceType !== "folder");
+  const contentSources = sources.filter(
+    (s) => s.sourceType !== "folder" && s.sourceType !== "obsidian",
+  );
   const selectedCount = contentSources.filter((s) => isSelected(s.id)).length;
   const allSelected = selectedCount === contentSources.length;
 
@@ -403,8 +403,12 @@ export function SourcesPanel() {
             </div>
             <div className="flex flex-col gap-0.5">
               {rows.map(({ s, indent }) => {
-                const isFolder =
-                  s.sourceType === "folder" || s.sourceType === "git";
+                const isFolder = [
+                  "folder",
+                  "git",
+                  "notion",
+                  "obsidian",
+                ].includes(s.sourceType);
                 const isMacNote = s.url.startsWith("cider://notes/note/");
                 const isMacReminders = s.url.startsWith(
                   "cider://reminders/list/",
@@ -520,86 +524,88 @@ export function SourcesPanel() {
                             "Untitled"}
                         </span>
                         {!importing && (
-                        <RowMenu
-                          className="pointer-events-auto z-20"
-                          label={`Options for "${s.title}"`}
-                          items={[
-                            // url holds the origin: a web URL, an on-disk path, or
-                            // a folder — any of them can be refreshed.
-                            ...(s.url
-                              ? [
-                                  {
-                                    label: isFolder
-                                      ? "Rescan folder now"
-                                      : s.sourceType === "mac"
-                                        ? "Sync now"
-                                        : s.status === "placeholder"
-                                          ? "Download & embed"
-                                          : isWebUrl(s.url)
-                                            ? "Refresh from URL"
-                                            : "Refresh from file",
-                                    icon: <RefreshCw className="h-3.5 w-3.5" />,
-                                    onClick: () => void refreshSource(s.id),
-                                  },
-                                ]
-                              : []),
-                            // Mac sources are mirrors — editing our copy would
-                            // just be overwritten, so writes go to the app
-                            // itself and sync back.
-                            ...(isMacNote
-                              ? [
-                                  {
-                                    label: "Edit note",
-                                    icon: <Pencil className="h-3.5 w-3.5" />,
-                                    onClick: () => void startEditMacNote(s),
-                                  },
-                                ]
-                              : []),
-                            ...(isMacReminders
-                              ? [
-                                  {
-                                    label: "Add reminder…",
-                                    icon: <Plus className="h-3.5 w-3.5" />,
-                                    onClick: () =>
-                                      setAddingReminder({
-                                        sourceId: s.id,
-                                        list: s.title,
-                                      }),
-                                  },
-                                ]
-                              : []),
-                            ...(s.sourceType !== "url" &&
-                            s.sourceType !== "mac" &&
-                            !isFolder &&
-                            s.status !== "placeholder"
-                              ? [
-                                  {
-                                    label: "Edit text",
-                                    icon: <Pencil className="h-3.5 w-3.5" />,
-                                    onClick: () => void startEdit(s),
-                                  },
-                                ]
-                              : []),
-                            {
-                              label: "Remove",
-                              icon: <Trash2 className="h-3.5 w-3.5" />,
-                              danger: true,
-                              onClick: async () => {
-                                if (
-                                  await confirm({
-                                    title: `Remove "${s.title}"?`,
-                                    message: isFolder
-                                      ? `This removes the folder and its ${childCount(s.id)} file sources (with their embedded chunks) from the notebook. Nothing on disk is touched.`
-                                      : "This deletes the source and its embedded chunks from the notebook.",
-                                    confirmLabel: "Remove",
-                                    danger: true,
-                                  })
-                                )
-                                  deleteSource(s.id);
+                          <RowMenu
+                            className="pointer-events-auto z-20"
+                            label={`Options for "${s.title}"`}
+                            items={[
+                              // url holds the origin: a web URL, an on-disk path, or
+                              // a folder — any of them can be refreshed.
+                              ...(s.url
+                                ? [
+                                    {
+                                      label: isFolder
+                                        ? "Rescan folder now"
+                                        : s.sourceType === "mac"
+                                          ? "Sync now"
+                                          : s.status === "placeholder"
+                                            ? "Download & embed"
+                                            : isWebUrl(s.url)
+                                              ? "Refresh from URL"
+                                              : "Refresh from file",
+                                      icon: (
+                                        <RefreshCw className="h-3.5 w-3.5" />
+                                      ),
+                                      onClick: () => void refreshSource(s.id),
+                                    },
+                                  ]
+                                : []),
+                              // Mac sources are mirrors — editing our copy would
+                              // just be overwritten, so writes go to the app
+                              // itself and sync back.
+                              ...(isMacNote
+                                ? [
+                                    {
+                                      label: "Edit note",
+                                      icon: <Pencil className="h-3.5 w-3.5" />,
+                                      onClick: () => void startEditMacNote(s),
+                                    },
+                                  ]
+                                : []),
+                              ...(isMacReminders
+                                ? [
+                                    {
+                                      label: "Add reminder…",
+                                      icon: <Plus className="h-3.5 w-3.5" />,
+                                      onClick: () =>
+                                        setAddingReminder({
+                                          sourceId: s.id,
+                                          list: s.title,
+                                        }),
+                                    },
+                                  ]
+                                : []),
+                              ...(s.sourceType !== "url" &&
+                              s.sourceType !== "mac" &&
+                              !isFolder &&
+                              s.status !== "placeholder"
+                                ? [
+                                    {
+                                      label: "Edit text",
+                                      icon: <Pencil className="h-3.5 w-3.5" />,
+                                      onClick: () => void startEdit(s),
+                                    },
+                                  ]
+                                : []),
+                              {
+                                label: "Remove",
+                                icon: <Trash2 className="h-3.5 w-3.5" />,
+                                danger: true,
+                                onClick: async () => {
+                                  if (
+                                    await confirm({
+                                      title: `Remove "${s.title}"?`,
+                                      message: isFolder
+                                        ? `This removes the folder and its ${childCount(s.id)} file sources (with their embedded chunks) from the notebook. Nothing on disk is touched.`
+                                        : "This deletes the source and its embedded chunks from the notebook.",
+                                      confirmLabel: "Remove",
+                                      danger: true,
+                                    })
+                                  )
+                                    deleteSource(s.id);
+                                },
                               },
-                            },
-                          ]}
-                        />
+                            ]}
+                          />
                         )}
                       </div>
                       {importing ? (
