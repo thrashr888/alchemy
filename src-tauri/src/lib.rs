@@ -181,6 +181,7 @@ pub fn run() {
             mac::list_mac_collections,
             commands::agent_cli_status,
             commands::provider_readiness,
+            commands::provider_readiness_one,
             commands::resync_sources,
             commands::add_source_url,
             commands::add_source_text,
