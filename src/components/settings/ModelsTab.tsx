@@ -449,14 +449,17 @@ export function ModelsTab({
                       </Button>
                     </>
                   ) : (
-                    <>
+                    // Stack the select and its reset button: inline, a long
+                    // "provider · model" option pushed the button off the
+                    // right edge of the dialog.
+                    <div className="flex min-w-0 flex-1 flex-col gap-1.5">
                       <select
                         aria-label="Studio provider"
                         value={draft.studioProvider}
                         onChange={(e) =>
                           setDraft({ ...draft, studioProvider: e.target.value })
                         }
-                        className="h-7 flex-1 rounded-md border border-input bg-surface-2 px-2 text-[12.5px] text-foreground focus:outline-none"
+                        className="h-7 w-full rounded-md border border-input bg-surface-2 px-2 text-[12.5px] text-foreground focus:outline-none"
                       >
                         {draft.providers.map((p) => (
                           <option key={p.id} value={p.id}>
@@ -467,11 +470,12 @@ export function ModelsTab({
                       </select>
                       <Button
                         variant="ghost"
+                        className="self-start"
                         onClick={() => setDraft({ ...draft, studioProvider: "" })}
                       >
                         Set to main
                       </Button>
-                    </>
+                    </div>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
@@ -546,14 +550,7 @@ export function ModelsTab({
                   />
                 )}
                 {draft.visionProvider === "gateway" && (
-                  <Input
-                    aria-label="Vision model"
-                    value={draft.openaiVisionModel}
-                    onChange={(e) =>
-                      setDraft({ ...draft, openaiVisionModel: e.target.value })
-                    }
-                    placeholder="a vision-capable gateway model"
-                  />
+                  <GatewayVisionPicker draft={draft} setDraft={setDraft} />
                 )}
               </div>
             </Field>
@@ -1046,5 +1043,82 @@ function ProviderWizard({
         </div>
       )}
     </Modal>
+  );
+}
+
+/** Vision model picker for the gateway provider: a dropdown of the models the
+ *  configured gateway offers, fetched live from its /models endpoint. Falls
+ *  back to a free-text input when the gateway can't be listed (no creds,
+ *  offline) so the setting is never a dead end. */
+function GatewayVisionPicker({
+  draft,
+  setDraft,
+}: {
+  draft: AiConfig;
+  setDraft: (c: AiConfig) => void;
+}) {
+  const gw = draft.providers.find((p) => p.kind === "gateway");
+  const baseUrl = gw?.baseUrl ?? "";
+  const apiKey = gw?.apiKey ?? "";
+  const [models, setModels] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const current = draft.openaiVisionModel;
+
+  useEffect(() => {
+    if (!baseUrl.trim() || !apiKey.trim()) {
+      setModels([]);
+      return;
+    }
+    let stale = false;
+    setLoading(true);
+    api
+      .listGatewayModels(baseUrl, apiKey)
+      .then((list) => {
+        if (!stale) setModels([...list].sort((a, b) => a.localeCompare(b)));
+      })
+      .catch(() => {
+        if (!stale) setModels([]);
+      })
+      .finally(() => {
+        if (!stale) setLoading(false);
+      });
+    return () => {
+      stale = true;
+    };
+  }, [baseUrl, apiKey]);
+
+  // No models to offer (unlisted gateway / offline): keep the text input so
+  // the user can still name a vision model by hand.
+  if (!loading && models.length === 0) {
+    return (
+      <Input
+        aria-label="Vision model"
+        value={current}
+        onChange={(e) => setDraft({ ...draft, openaiVisionModel: e.target.value })}
+        placeholder="a vision-capable gateway model"
+      />
+    );
+  }
+
+  // Keep a previously-saved model selectable even if the listing omits it.
+  const options =
+    current && !models.includes(current) ? [current, ...models] : models;
+  return (
+    <select
+      aria-label="Vision model"
+      value={current}
+      disabled={loading}
+      onChange={(e) => setDraft({ ...draft, openaiVisionModel: e.target.value })}
+      className="h-8 rounded-md border border-input bg-surface-2 px-2 text-[13px] text-foreground focus:outline-none"
+    >
+      {!current && (
+        <option value="">{loading ? "Loading models…" : "Select a model"}</option>
+      )}
+      {options.map((m) => (
+        <option key={m} value={m}>
+          {m}
+        </option>
+      ))}
+    </select>
   );
 }

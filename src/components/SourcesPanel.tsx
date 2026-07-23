@@ -13,7 +13,7 @@ import {
   CardAction,
   useConfirm,
 } from "./ui";
-import { cn, compactNumber, isWebUrl } from "@/lib/utils";
+import { cn, compactNumber, isWebUrl, visibleTitle } from "@/lib/utils";
 import { sourceIcon } from "@/lib/sourceIcon";
 import type { Source } from "@/lib/types";
 import {
@@ -510,12 +510,12 @@ export function SourcesPanel() {
                               ? "text-muted-foreground"
                               : "text-foreground",
                           )}
-                          title={s.title.trim() || s.url || "Untitled"}
+                          title={visibleTitle(s.title) || s.url || "Untitled"}
                         >
-                          {/* A source can arrive with a blank title (e.g. a
-                              page with no <title>); the row must never render
-                              as a bare checkbox. */}
-                          {s.title.trim() ||
+                          {/* A source can arrive with a blank or zero-width
+                              title (a page with no real <title>); the row must
+                              never render as a bare checkbox. */}
+                          {visibleTitle(s.title) ||
                             (s.url && hostname(s.url)) ||
                             "Untitled"}
                         </span>

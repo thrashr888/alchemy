@@ -473,13 +473,29 @@ async fn find_duplicate(
     Ok(None)
 }
 
+/// True when a title carries no visible characters. `trim()` alone is not
+/// enough: a page `<title>` can be a zero-width space or a BOM (U+200B, U+FEFF)
+/// — not whitespace, so `trim()` keeps it, and it renders as an empty row that
+/// evaded every earlier blank-title guard. Visible = at least one char that is
+/// not whitespace, control, or zero-width formatting.
+pub(crate) fn is_blank_title(s: &str) -> bool {
+    s.chars().all(|c| {
+        c.is_whitespace()
+            || c.is_control()
+            || matches!(
+                c,
+                '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}' | '\u{feff}'
+            )
+    })
+}
+
 /// A source never persists a blank title — lists would render an unlabeled
 /// row (seen live: pages with no <title>). Extractors already provide file
 /// stems and readability titles; this is the last-resort funnel guard,
 /// falling back to the origin's host and then "Untitled".
 fn presentable_title(title: &str, url: &str) -> String {
     let t = title.trim();
-    if !t.is_empty() {
+    if !is_blank_title(t) {
         return t.to_string();
     }
     let host = url
@@ -7127,6 +7143,37 @@ pub async fn check_ollama(state: State<'_, AppState>) -> Result<bool, String> {
 #[cfg(test)]
 mod tool_tests {
     use super::*;
+
+    #[test]
+    fn blank_title_catches_invisible_content() {
+        // Real content is not blank.
+        assert!(!is_blank_title("Architecture RFC"));
+        assert!(!is_blank_title("  padded but real  "));
+        // Ordinary whitespace/control — blank.
+        assert!(is_blank_title(""));
+        assert!(is_blank_title("   \n\t "));
+        // The bug that evaded three trim()-based guards: zero-width space,
+        // ZWNJ/ZWJ, word-joiner, BOM — not whitespace, so trim() kept them
+        // and the row rendered empty.
+        assert!(is_blank_title("\u{200b}"));
+        assert!(is_blank_title("\u{feff}\u{200d}"));
+        assert!(is_blank_title(" \u{200b}\u{2060} "));
+        // But a real char alongside a zero-width space is still a real title.
+        assert!(!is_blank_title("A\u{200b}"));
+    }
+
+    #[test]
+    fn presentable_title_falls_back_past_invisible() {
+        assert_eq!(
+            presentable_title("Real Title", "https://x.com"),
+            "Real Title"
+        );
+        assert_eq!(
+            presentable_title("\u{200b}", "https://www.example.com/page"),
+            "example.com"
+        );
+        assert_eq!(presentable_title("   ", ""), "Untitled");
+    }
 
     #[test]
     fn auto_evidence_parsing_is_conservative() {

@@ -389,11 +389,20 @@ impl Db {
         if !self.table_exists(T_SOURCES).await? {
             return Ok(());
         }
-        let batches = self.collect(T_SOURCES, Some("title = ''")).await?;
+        // Scan all rows and test the trimmed title in Rust: a `title = ''`
+        // SQL filter missed whitespace-only titles (a page <title> of spaces
+        // or newlines), which still render as an unlabeled, menu-less row.
+        let batches = self.collect(T_SOURCES, None).await?;
         for b in &batches {
             let id = str_col(b, "id")?;
             let url = str_col(b, "url")?;
+            let title = str_col(b, "title")?;
             for i in 0..b.num_rows() {
+                // Not `.trim().is_empty()`: a zero-width/BOM title isn't
+                // whitespace, so trim keeps it while the row renders blank.
+                if !crate::commands::is_blank_title(title.value(i)) {
+                    continue;
+                }
                 let host = url
                     .value(i)
                     .split("://")
@@ -401,11 +410,11 @@ impl Db {
                     .and_then(|rest| rest.split('/').next())
                     .unwrap_or("")
                     .trim_start_matches("www.");
-                let title = if host.is_empty() { "Untitled" } else { host };
+                let new_title = if host.is_empty() { "Untitled" } else { host };
                 let tbl = self.conn.open_table(T_SOURCES).execute().await?;
                 tbl.update()
                     .only_if(format!("id = '{}'", esc(id.value(i))))
-                    .column("title", format!("'{}'", esc(title)))
+                    .column("title", format!("'{}'", esc(new_title)))
                     .execute()
                     .await?;
             }

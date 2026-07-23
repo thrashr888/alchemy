@@ -33,6 +33,23 @@ export const SUPPORTED_EXTENSIONS = [
  * A source's `url` holds its origin: a web URL for fetched sources, a local
  * file path for file imports, empty for pasted text. True for the web case.
  */
+/** A source/note title with visible characters, else "". `trim()` alone is
+ *  insufficient — a captured page title can be a zero-width space or BOM
+ *  (U+200B, U+FEFF), which isn't whitespace, so trim keeps it and the row
+ *  renders blank. Strips whitespace + zero-width/control chars. */
+export function visibleTitle(title: string): string {
+  // Visible = any char that isn't whitespace, control, or zero-width /
+  // BOM formatting (U+200B-200D, U+2060, U+FEFF). trim() misses those.
+  const zeroWidth = /[\u200b-\u200d\u2060\ufeff]/;
+  for (const ch of title) {
+    // eslint-disable-next-line no-control-regex
+    if (!/\s/.test(ch) && !/[\u0000-\u001f]/.test(ch) && !zeroWidth.test(ch)) {
+      return title.trim();
+    }
+  }
+  return "";
+}
+
 export function isWebUrl(s: string): boolean {
   return /^https?:\/\//.test(s);
 }
