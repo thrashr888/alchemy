@@ -851,14 +851,14 @@ function SlashPicker({
       className="menu-glass absolute bottom-full left-0 z-30 mb-1.5 max-h-72 w-[22rem] max-w-[calc(100vw-2.5rem)] overflow-y-auto rounded-md py-1"
     >
       {results.length === 0 ? (
-        <div className="px-2.5 py-2 text-[12px] text-muted-foreground">
+        <div className="px-2.5 py-2 text-caption text-muted-foreground">
           No matching commands — press ↩ to send as a message
         </div>
       ) : (
         results.map((c, i) => (
           <Fragment key={c.name}>
             {(i === 0 || results[i - 1].family !== c.family) && (
-              <div className="px-2.5 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-subtle-foreground">
+              <div className="px-2.5 pb-1 pt-1.5 text-micro font-semibold uppercase tracking-wide text-subtle-foreground">
                 {c.family}
               </div>
             )}
@@ -873,7 +873,7 @@ function SlashPicker({
                 onPick(c);
               }}
               className={cn(
-                "flex w-full items-baseline gap-1.5 px-2.5 py-1.5 text-left text-[12.5px]",
+                "flex w-full items-baseline gap-1.5 px-2.5 py-1.5 text-left text-[0.78125rem]",
                 i === selected
                   ? "bg-surface-2 text-foreground"
                   : "text-foreground/85",
@@ -893,7 +893,7 @@ function SlashPicker({
         ))
       )}
       <div className="mx-2 my-1 h-px bg-border" />
-      <div className="px-2.5 py-1 text-[11px] text-subtle-foreground">
+      <div className="px-2.5 py-1 text-micro text-subtle-foreground">
         ⇥ complete · ↩ run · esc dismiss
       </div>
     </div>

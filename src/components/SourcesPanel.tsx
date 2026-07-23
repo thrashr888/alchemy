@@ -650,7 +650,7 @@ export function SourcesPanel() {
                           title={`${s.url}\nStays in sync — auto-refreshes`}
                         >
                           {folderProvider(s.url) && (
-                            <span className="shrink-0 rounded bg-surface-2 px-1.5 py-px text-[12px] text-muted-foreground">
+                            <span className="shrink-0 rounded bg-surface-2 px-1.5 py-px text-caption text-muted-foreground">
                               {folderProvider(s.url)}
                             </span>
                           )}

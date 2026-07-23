@@ -325,10 +325,10 @@ export function AddSourceModal() {
             )}
           >
             <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <span className="text-[13px] font-medium text-foreground">
+            <span className="text-body font-medium text-foreground">
               Search your Mac
             </span>
-            <span className="ml-auto text-[11px] text-subtle-foreground">
+            <span className="ml-auto text-micro text-subtle-foreground">
               Spotlight
             </span>
           </button>
@@ -747,7 +747,7 @@ function MacFileSearch({
         className="mb-1"
       />
       {!query.trim() ? (
-        <p className="px-2 py-8 text-center text-[12px] text-subtle-foreground">
+        <p className="px-2 py-8 text-center text-caption text-subtle-foreground">
           Search your Mac for files and folders to add as sources.
         </p>
       ) : loading && results === null ? (
@@ -755,7 +755,7 @@ function MacFileSearch({
           <Spinner className="h-4 w-4 text-muted-foreground" />
         </div>
       ) : results && results.length === 0 ? (
-        <p className="px-2 py-8 text-center text-[12px] text-muted-foreground">
+        <p className="px-2 py-8 text-center text-caption text-muted-foreground">
           No files match “{query.trim()}”.
         </p>
       ) : (
@@ -793,22 +793,22 @@ function MacFileSearch({
                   <File className="h-4 w-4 shrink-0 text-muted-foreground" />
                 )}
                 <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-[13px] text-foreground">
+                  <span className="truncate text-body text-foreground">
                     {hit.name}
                   </span>
                   {meta && (
-                    <span className="truncate text-[12px] text-subtle-foreground">
+                    <span className="truncate text-caption text-subtle-foreground">
                       {meta}
                     </span>
                   )}
                 </span>
                 {isAdded ? (
-                  <span className="flex shrink-0 items-center gap-1 text-[11px] text-success">
+                  <span className="flex shrink-0 items-center gap-1 text-micro text-success">
                     <Check className="h-3.5 w-3.5" />
                     Added
                   </span>
                 ) : (
-                  <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[11px] text-subtle-foreground">
+                  <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-micro text-subtle-foreground">
                     {hit.kind}
                   </span>
                 )}
@@ -817,7 +817,7 @@ function MacFileSearch({
           })}
         </div>
       )}
-      <p className="mt-2 text-[11px] leading-relaxed text-subtle-foreground">
+      <p className="mt-2 text-micro leading-relaxed text-subtle-foreground">
         Files add to this notebook and embed into its local index; folders sync
         as living sources. Arrow keys move, Enter adds.
       </p>
