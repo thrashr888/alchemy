@@ -4,6 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { SYSTEM_THEME, THEME_LIST } from "@/lib/themes";
+import { SLASH_COMMANDS } from "@/lib/slashCommands";
 import type { BuildInfo, ChatConfig } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { AlchemySymbol } from "../AlchemyHero";
@@ -287,6 +288,24 @@ export function ShortcutsTab() {
       <p className="mt-2 text-[11px] leading-relaxed text-subtle-foreground">
         On Windows and Linux, use Ctrl in place of ⌘.
       </p>
+
+      <div className="mt-5 mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-subtle-foreground">
+        Slash commands
+      </div>
+      <p className="mb-1.5 px-1 text-[12px] leading-relaxed text-muted-foreground">
+        Type <code className="text-citation">/</code> at the start of the chat
+        composer to open the command picker. Tab completes, Enter runs.
+      </p>
+      {SLASH_COMMANDS.map((c) => (
+        <div key={c.name} className="flex items-center gap-3 rounded-md px-1 py-1.5">
+          <code className="w-36 shrink-0 truncate text-[12px] text-citation">
+            /{c.name}
+            {c.argHint ? ` ${c.argHint}` : ""}
+          </code>
+          <span className="min-w-0 flex-1 text-[13px] text-foreground/90">{c.description}</span>
+          <span className="ml-auto shrink-0 text-[11px] text-subtle-foreground">{c.family}</span>
+        </div>
+      ))}
     </div>
   );
 }
