@@ -137,6 +137,17 @@ export const api = {
         {},
       ),
     ),
+  /** One provider's readiness, by id — Settings → Models probes each row
+   *  independently so a slow/unreachable provider can't stall the others.
+   *  Uses the fast 15s probe budget: a wedged backend flips the row to an
+   *  error state promptly instead of spinning behind the 10-minute ceiling. */
+  providerReadinessOne: (providerId: string) =>
+    run(
+      probe<{ id: string; ready: boolean; detail: string }>(
+        "provider_readiness_one",
+        { providerId },
+      ),
+    ),
   agentCliStatus: () =>
     run(ai<{ id: string; installed: boolean; detail: string }[]>("agent_cli_status", {})),
   addSourceUrl: (notebookId: string, url: string, include?: string) =>

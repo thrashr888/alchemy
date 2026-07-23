@@ -106,14 +106,24 @@ const AGENT_LABELS: Record<string, string> = {
   "bob-shell": "Bob Shell",
 };
 
-type Readiness = { id: string; ready: boolean; detail: string };
 type CliStatus = { id: string; installed: boolean; detail: string };
+
+/** One provider row's live-probe slice. Each row owns its own state so it can
+ *  render the moment ITS request settles — a slow or unreachable provider
+ *  spins only its own row and never gates a healthy one. */
+type ProviderProbe =
+  | { status: "loading" }
+  | { status: "loaded"; ready: boolean; detail: string }
+  | { status: "error"; error: string };
 
 // Last probe results, kept for the app's lifetime: the tab renders instantly
 // from these and refreshes in the background (agent probes spawn CLIs and
 // take seconds — that wait belongs behind a spinner, not in front of paint).
-const statusCache: { readiness: Readiness[]; clis: CliStatus[] } = {
-  readiness: [],
+const statusCache: {
+  probes: Record<string, ProviderProbe>;
+  clis: CliStatus[];
+} = {
+  probes: {},
   clis: [],
 };
 
@@ -134,9 +144,9 @@ export function ModelsTab({
   /** Ollama's local model list (for the local-server editor). */
   models: string[];
 }) {
-  const [readiness, setReadiness] = useState<Readiness[]>(
-    statusCache.readiness,
-  );
+  const [probes, setProbes] = useState<Record<string, ProviderProbe>>(() => ({
+    ...statusCache.probes,
+  }));
   const [clis, setClis] = useState<CliStatus[]>(statusCache.clis);
   const [checkingStatus, setCheckingStatus] = useState(false);
   const [wizard, setWizard] = useState<null | { editId?: string }>(null);
@@ -156,19 +166,80 @@ export function ModelsTab({
     if (ok) void reembedAll();
   }
 
+  // The set of provider ids drives every probe below: re-run when a provider
+  // is added or removed, not on every render (the joined key compares by value).
+  const providerKey = draft.providers.map((p) => p.id).join(",");
+
+  // Per-provider readiness: fire one request per row WITHOUT awaiting them
+  // together. Each resolves (or rejects) into its own slice, so a hung ollama
+  // or a slow agent-CLI probe only spins its own row and never blocks the rest.
   useEffect(() => {
-    setCheckingStatus(true);
-    void Promise.allSettled([
-      api.providerReadiness().then((r) => {
-        statusCache.readiness = r;
-        setReadiness(r);
-      }),
-      api.agentCliStatus().then((c) => {
+    let cancelled = false;
+    const entries = draft.providers;
+
+    // Seed "loading" only for rows we've never probed; keep any cached result
+    // visible so a re-open paints instantly and refreshes underneath. This
+    // also prunes slices for providers that were just removed.
+    setProbes((prev) => {
+      const next: Record<string, ProviderProbe> = {};
+      for (const p of entries) next[p.id] = prev[p.id] ?? { status: "loading" };
+      return next;
+    });
+
+    let remaining = entries.length;
+    setCheckingStatus(remaining > 0);
+    const settle = () => {
+      remaining -= 1;
+      if (remaining <= 0 && !cancelled) setCheckingStatus(false);
+    };
+    for (const p of entries) {
+      void api
+        .providerReadinessOne(p.id)
+        .then((r) => {
+          if (cancelled) return;
+          const slice: ProviderProbe = {
+            status: "loaded",
+            ready: r.ready,
+            detail: r.detail,
+          };
+          statusCache.probes[p.id] = slice;
+          setProbes((prev) => ({ ...prev, [p.id]: slice }));
+        })
+        .catch((e) => {
+          if (cancelled) return;
+          const slice: ProviderProbe = {
+            status: "error",
+            error: e instanceof Error ? e.message : String(e),
+          };
+          statusCache.probes[p.id] = slice;
+          setProbes((prev) => ({ ...prev, [p.id]: slice }));
+        })
+        .finally(settle);
+    }
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerKey]);
+
+  // The agent-CLI list (first-run doors + wizard) probes on its own track,
+  // independent of the per-provider readiness rows above.
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .agentCliStatus()
+      .then((c) => {
+        if (cancelled) return;
         statusCache.clis = c;
         setClis(c);
-      }),
-    ]).finally(() => setCheckingStatus(false));
-  }, [draft.providers.length]);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerKey]);
 
   // The chosen provider reads from the top; captured once per open so rows
   // don't jump under the pointer when picking a different one.
@@ -178,7 +249,17 @@ export function ModelsTab({
     ...draft.providers.filter((p) => p.id !== initialChoice),
   ];
 
-  const readyOf = (id: string) => readiness.find((r) => r.id === id);
+  // First-run doors read a plain ready/detail view; `undefined` while the
+  // probe is still loading (matches the old "no note yet" state). An errored
+  // probe surfaces its message as the detail.
+  const readyOf = (
+    id: string,
+  ): { ready: boolean; detail: string } | undefined => {
+    const probe = probes[id];
+    if (!probe || probe.status === "loading") return undefined;
+    if (probe.status === "error") return { ready: false, detail: probe.error };
+    return { ready: probe.ready, detail: probe.detail };
+  };
   const installedClis = clis.filter((c) => c.installed);
 
   function choose(patch: Partial<AiConfig>) {
@@ -311,7 +392,7 @@ export function ModelsTab({
           }}
         >
           {orderedProviders.map((p) => {
-            const r = readyOf(p.id);
+            const probe = probes[p.id];
             const selected = draft.chatProvider === p.id;
             return (
               <div
@@ -342,17 +423,27 @@ export function ModelsTab({
                     <span className="text-body text-foreground">{p.label}</span>
                     <br />
                     <span className="block truncate text-micro text-subtle-foreground">
-                      {r?.detail ?? "checking…"}
+                      {!probe || probe.status === "loading"
+                        ? "checking…"
+                        : probe.status === "error"
+                          ? probe.error || "couldn't check"
+                          : probe.detail}
                     </span>
                   </span>
                 </button>
-                <span
-                  className={cn(
-                    "w-20 shrink-0 text-right text-micro",
-                    r?.ready ? "text-success" : "text-subtle-foreground",
+                <span className="flex w-20 shrink-0 items-center justify-end gap-1 text-right text-micro">
+                  {!probe || probe.status === "loading" ? (
+                    <>
+                      <RefreshCw className="h-3 w-3 animate-spin text-subtle-foreground" />
+                      <span className="text-subtle-foreground">checking</span>
+                    </>
+                  ) : probe.status === "error" ? (
+                    <span className="text-destructive">error</span>
+                  ) : probe.ready ? (
+                    <span className="text-success">ready</span>
+                  ) : (
+                    <span className="text-subtle-foreground">unavailable</span>
                   )}
-                >
-                  {r ? (r.ready ? "ready" : "unavailable") : ""}
                 </span>
                 <span className="flex w-[52px] shrink-0 items-center justify-end gap-0.5">
                 {(p.kind === "gateway" || p.kind === "ollama") && (

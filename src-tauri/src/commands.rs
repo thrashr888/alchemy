@@ -181,6 +181,89 @@ pub struct ProviderReadiness {
     pub detail: String,
 }
 
+/// Compute one provider row's live readiness. Shared by the batch
+/// `provider_readiness` (ChatPanel's model pill) and the per-provider
+/// `provider_readiness_one` (Settings → Models probes each row on its own so a
+/// slow or unreachable provider never blocks a healthy one).
+async fn readiness_for_entry(
+    app: &AppHandle,
+    entry: &crate::ai::ProviderEntry,
+    config: &AiConfig,
+) -> Result<(bool, String), String> {
+    Ok(match entry.kind.as_str() {
+        "fm" => match find_fm_sidecar(app) {
+            Some(bin) => {
+                let fm = crate::inference::FmEngine::new(bin);
+                if fm.available().await {
+                    (true, "Apple on-device · private, no setup".to_string())
+                } else {
+                    let detail = fm.probe_detail().await;
+                    if detail.contains("modelNotReady") {
+                        (
+                            false,
+                            "downloading — macOS is fetching the on-device model".to_string(),
+                        )
+                    } else {
+                        (false, "needs macOS 26+ with Apple Intelligence".to_string())
+                    }
+                }
+            }
+            None => (false, "not available in this build".to_string()),
+        },
+        "gateway" => {
+            if entry.api_key.is_empty() {
+                (false, "no key yet".to_string())
+            } else {
+                let model = if entry.chat_model.is_empty() {
+                    "model picked on first use".to_string()
+                } else {
+                    entry.chat_model.clone()
+                };
+                (true, format!("{model} · your key"))
+            }
+        }
+        "ollama" => {
+            let mut cfg = crate::inference::OllamaConfig {
+                base_url: config.base_url.clone(),
+                chat_model: config.chat_model.clone(),
+                embed_model: config.embed_model.clone(),
+                vision_model: config.vision_model.clone(),
+            };
+            if !entry.base_url.trim().is_empty() {
+                cfg.base_url = entry.base_url.clone();
+            }
+            let model = if entry.chat_model.trim().is_empty() {
+                cfg.chat_model.clone()
+            } else {
+                entry.chat_model.clone()
+            };
+            let ping = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                crate::inference::Ollama::new(cfg).list_models(),
+            )
+            .await;
+            match ping {
+                Ok(Ok(_)) => (true, format!("{model} · running")),
+                _ => (false, "server not running".to_string()),
+            }
+        }
+        kind => match crate::inference::AgentKind::from_id(kind) {
+            Some(agent) => {
+                let (installed, detail) =
+                    tokio::task::spawn_blocking(move || crate::inference::agent_status(agent))
+                        .await
+                        .map_err(|e| e.to_string())?;
+                if installed {
+                    (true, format!("your subscription · {detail}"))
+                } else {
+                    (false, detail)
+                }
+            }
+            None => (false, "unknown provider".to_string()),
+        },
+    })
+}
+
 #[tauri::command]
 pub async fn provider_readiness(
     app: AppHandle,
@@ -189,78 +272,7 @@ pub async fn provider_readiness(
     let config = { state.ai.read().await.config().clone() };
     let mut out = Vec::new();
     for entry in &config.providers {
-        let (ready, detail) = match entry.kind.as_str() {
-            "fm" => match find_fm_sidecar(&app) {
-                Some(bin) => {
-                    let fm = crate::inference::FmEngine::new(bin);
-                    if fm.available().await {
-                        (true, "Apple on-device · private, no setup".to_string())
-                    } else {
-                        let detail = fm.probe_detail().await;
-                        if detail.contains("modelNotReady") {
-                            (
-                                false,
-                                "downloading — macOS is fetching the on-device model".to_string(),
-                            )
-                        } else {
-                            (false, "needs macOS 26+ with Apple Intelligence".to_string())
-                        }
-                    }
-                }
-                None => (false, "not available in this build".to_string()),
-            },
-            "gateway" => {
-                if entry.api_key.is_empty() {
-                    (false, "no key yet".to_string())
-                } else {
-                    let model = if entry.chat_model.is_empty() {
-                        "model picked on first use".to_string()
-                    } else {
-                        entry.chat_model.clone()
-                    };
-                    (true, format!("{model} · your key"))
-                }
-            }
-            "ollama" => {
-                let mut cfg = crate::inference::OllamaConfig {
-                    base_url: config.base_url.clone(),
-                    chat_model: config.chat_model.clone(),
-                    embed_model: config.embed_model.clone(),
-                    vision_model: config.vision_model.clone(),
-                };
-                if !entry.base_url.trim().is_empty() {
-                    cfg.base_url = entry.base_url.clone();
-                }
-                let model = if entry.chat_model.trim().is_empty() {
-                    cfg.chat_model.clone()
-                } else {
-                    entry.chat_model.clone()
-                };
-                let ping = tokio::time::timeout(
-                    std::time::Duration::from_secs(2),
-                    crate::inference::Ollama::new(cfg).list_models(),
-                )
-                .await;
-                match ping {
-                    Ok(Ok(_)) => (true, format!("{model} · running")),
-                    _ => (false, "server not running".to_string()),
-                }
-            }
-            kind => match crate::inference::AgentKind::from_id(kind) {
-                Some(agent) => {
-                    let (installed, detail) =
-                        tokio::task::spawn_blocking(move || crate::inference::agent_status(agent))
-                            .await
-                            .map_err(|e| e.to_string())?;
-                    if installed {
-                        (true, format!("your subscription · {detail}"))
-                    } else {
-                        (false, detail)
-                    }
-                }
-                None => (false, "unknown provider".to_string()),
-            },
-        };
+        let (ready, detail) = readiness_for_entry(&app, entry, &config).await?;
         out.push(ProviderReadiness {
             id: entry.id.clone(),
             ready,
@@ -268,6 +280,27 @@ pub async fn provider_readiness(
         });
     }
     Ok(out)
+}
+
+/// One provider's readiness, looked up by id. Settings → Models fires one of
+/// these per row so each renders the instant its own probe resolves — a hung
+/// ollama server or a slow agent-CLI `which` no longer gates every other row.
+#[tauri::command]
+pub async fn provider_readiness_one(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    provider_id: String,
+) -> Result<ProviderReadiness, String> {
+    let config = { state.ai.read().await.config().clone() };
+    let entry = config
+        .provider_by_id(&provider_id)
+        .ok_or_else(|| "unknown provider".to_string())?;
+    let (ready, detail) = readiness_for_entry(&app, entry, &config).await?;
+    Ok(ProviderReadiness {
+        id: entry.id.clone(),
+        ready,
+        detail,
+    })
 }
 
 pub fn ai_runtime(app: AppHandle, data_dir: std::path::PathBuf) -> crate::ai::AiRuntime {
