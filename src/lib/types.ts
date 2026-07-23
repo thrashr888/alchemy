@@ -64,6 +64,23 @@ export interface CloudFolder {
   path: string;
 }
 
+/** One Spotlight hit from the Add Source → "Search your Mac" step (mirrors
+ *  `FileHit` in src-tauri/src/filesearch.rs). Only `ingestible` rows (and
+ *  every folder) can be added. */
+export interface MacFileHit {
+  name: string;
+  path: string;
+  /** Lowercased extension without the dot ("" for folders / extensionless). */
+  ext: string;
+  /** Human kind for the row chip: "Folder", "PDF", "Code", … */
+  kind: string;
+  isDir: boolean;
+  size: number;
+  /** mtime in unix millis (0 when unknown). */
+  mtime: number;
+  ingestible: boolean;
+}
+
 /** Tally of what a folder rescan changed. */
 export interface FolderScan {
   added: number;

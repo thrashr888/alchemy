@@ -1,20 +1,30 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { Button, Input, Textarea, Modal, Spinner } from "./ui";
-import { cn } from "@/lib/utils";
-import type { CloudFolder, MacCollection } from "@/lib/types";
+import { cn, relativeTime } from "@/lib/utils";
+import type { CloudFolder, MacCollection, MacFileHit } from "@/lib/types";
 import { FdaHint } from "./MacConnect";
+import { ingestPaths } from "./FileDrop";
 import {
   Calendar,
+  Check,
   ChevronLeft,
   ChevronRight,
   ClipboardPaste,
   Cloud,
+  File,
   Folder,
   Link2,
   ListChecks,
   NotebookText,
+  Search,
   TrendingUp,
   Upload,
   FolderOpen,
@@ -30,7 +40,7 @@ const MAC_PROVIDERS = [
 
 type MacProvider = (typeof MAC_PROVIDERS)[number];
 
-type Step = "hub" | "url" | "text" | "mac";
+type Step = "hub" | "url" | "text" | "mac" | "find";
 
 /** Client-side mirror of the backend's git URL grammar (RFC-git-sources §1)
  *  — just enough shape detection to show the include ladder before import.
@@ -196,6 +206,7 @@ export function AddSourceModal() {
     url: "Add source from URL",
     text: "Paste text",
     mac: `Add from ${provider.label}`,
+    find: "Search your Mac",
   };
 
   return (
@@ -302,6 +313,25 @@ export function AddSourceModal() {
             URLs cover web pages, Google Docs, and GitHub or git repositories
             — repos import as living sources that re-sync automatically.
           </p>
+
+          {/* Local-file search — always available (Spotlight, no cider). */}
+          <button
+            type="button"
+            onClick={() => setStep("find")}
+            className={cn(
+              "flex items-center gap-2.5 rounded-md border border-border bg-surface-2/60 px-3 py-2.5 text-left",
+              "transition-colors hover:border-border-strong hover:bg-surface-2",
+              "outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+            )}
+          >
+            <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className="text-[13px] font-medium text-foreground">
+              Search your Mac
+            </span>
+            <span className="ml-auto text-[11px] text-subtle-foreground">
+              Spotlight
+            </span>
+          </button>
 
           {macAvailable === true && (
             <div className="grid grid-cols-4 gap-2">
@@ -450,6 +480,10 @@ export function AddSourceModal() {
           }}
         />
       )}
+
+      {step === "find" && (
+        <MacFileSearch back={back} onBack={() => setStep("hub")} />
+      )}
     </Modal>
   );
 }
@@ -595,6 +629,197 @@ function MacPicker({
               : ""}
         Content is embedded into this notebook's local index and re-syncs
         automatically.
+      </p>
+    </div>
+  );
+}
+
+/** The containing folder's name — the "parent dir" shown in each row's caption
+ *  (`/Users/me/Documents/q3.pdf` → "Documents"). */
+function parentDir(path: string): string {
+  const parts = path.split("/").filter(Boolean);
+  return parts.length >= 2 ? parts[parts.length - 2] : "";
+}
+
+/**
+ * The "Search your Mac" step: a live Spotlight search (debounced, stale queries
+ * cancelled) over local files and folders. Rows carry a file-kind chip and a
+ * caption (parent dir · modified); arrow keys move, Enter adds the selection,
+ * Escape clears the query then steps back. A click adds immediately and marks
+ * the row — no checkbox ceremony. Adds route through the same `ingestPaths`
+ * FileDrop uses, so OKF bundles and folders behave identically to a drop.
+ */
+function MacFileSearch({
+  back,
+  onBack,
+}: {
+  back: ReactNode;
+  onBack: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  // null = idle / not yet searched; [] = searched with no matches.
+  const [results, setResults] = useState<MacFileHit[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [sel, setSel] = useState(0);
+  const [added, setAdded] = useState<Set<string>>(new Set());
+  // Monotonic request token: a fired query claims the next value; changing the
+  // query bumps it, so a slow in-flight response for stale text is discarded.
+  const reqId = useRef(0);
+  const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setResults(null);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    const timer = setTimeout(() => {
+      const id = ++reqId.current;
+      api
+        .searchMacFiles(q, 30)
+        .then((hits) => {
+          if (reqId.current !== id) return;
+          setResults(hits);
+          setSel(0);
+          setLoading(false);
+        })
+        .catch(() => {
+          if (reqId.current !== id) return;
+          setResults([]);
+          setLoading(false);
+        });
+    }, 200);
+    return () => {
+      clearTimeout(timer);
+      // Invalidate any request already in flight for the previous query.
+      reqId.current++;
+    };
+  }, [query]);
+
+  // Keep the keyboard-selected row visible as it moves past the fold.
+  useEffect(() => {
+    rowRefs.current[sel]?.scrollIntoView({ block: "nearest" });
+  }, [sel]);
+
+  function add(hit: MacFileHit) {
+    if (!hit.ingestible || added.has(hit.path)) return;
+    setAdded((prev) => new Set(prev).add(hit.path));
+    // Fire-and-forget through the shared drop path; failures surface as the
+    // store's own ingest-queue toast, and the row stays marked (lowest
+    // friction — the user moves on to the next file).
+    void ingestPaths([hit.path]);
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (e.key === "Escape") {
+      // Beat the Modal's window-level Escape (which would close the whole
+      // dialog): clear the query first, then step back to the hub.
+      e.preventDefault();
+      e.stopPropagation();
+      if (query.trim()) setQuery("");
+      else onBack();
+      return;
+    }
+    if (!results || results.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSel((i) => Math.min(i + 1, results.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setSel((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const hit = results[sel];
+      if (hit) add(hit);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1" onKeyDown={onKeyDown}>
+      {back}
+      <Input
+        autoFocus
+        placeholder="Search files on your Mac…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        className="mb-1"
+      />
+      {!query.trim() ? (
+        <p className="px-2 py-8 text-center text-[12px] text-subtle-foreground">
+          Search your Mac for files and folders to add as sources.
+        </p>
+      ) : loading && results === null ? (
+        <div className="flex items-center justify-center py-8">
+          <Spinner className="h-4 w-4 text-muted-foreground" />
+        </div>
+      ) : results && results.length === 0 ? (
+        <p className="px-2 py-8 text-center text-[12px] text-muted-foreground">
+          No files match “{query.trim()}”.
+        </p>
+      ) : (
+        <div className="flex max-h-72 flex-col gap-0.5 overflow-y-auto">
+          {results?.map((hit, i) => {
+            const isSel = i === sel;
+            const isAdded = added.has(hit.path);
+            const addable = hit.ingestible;
+            const dir = parentDir(hit.path);
+            const when = hit.mtime > 0 ? relativeTime(hit.mtime) : "";
+            const meta = [dir, when].filter(Boolean).join(" · ");
+            return (
+              <button
+                key={hit.path}
+                ref={(el) => {
+                  rowRefs.current[i] = el;
+                }}
+                type="button"
+                aria-disabled={!addable || isAdded}
+                title={
+                  addable ? hit.path : "This file type can't be added yet."
+                }
+                onMouseEnter={() => setSel(i)}
+                onClick={() => add(hit)}
+                className={cn(
+                  "flex items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none transition-colors",
+                  isSel ? "bg-surface-2" : "hover:bg-surface-2",
+                  !addable && "opacity-55",
+                  (!addable || isAdded) && "cursor-default",
+                )}
+              >
+                {hit.isDir ? (
+                  <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
+                ) : (
+                  <File className="h-4 w-4 shrink-0 text-muted-foreground" />
+                )}
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-[13px] text-foreground">
+                    {hit.name}
+                  </span>
+                  {meta && (
+                    <span className="truncate text-[12px] text-subtle-foreground">
+                      {meta}
+                    </span>
+                  )}
+                </span>
+                {isAdded ? (
+                  <span className="flex shrink-0 items-center gap-1 text-[11px] text-success">
+                    <Check className="h-3.5 w-3.5" />
+                    Added
+                  </span>
+                ) : (
+                  <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[11px] text-subtle-foreground">
+                    {hit.kind}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <p className="mt-2 text-[11px] leading-relaxed text-subtle-foreground">
+        Files add to this notebook and embed into its local index; folders sync
+        as living sources. Arrow keys move, Enter adds.
       </p>
     </div>
   );

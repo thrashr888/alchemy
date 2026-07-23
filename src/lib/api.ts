@@ -12,6 +12,7 @@ import type {
   FolderScan,
   KokoroStatus,
   MacCollection,
+  MacFileHit,
   McpStatus,
   Message,
   MetaAnswer,
@@ -121,6 +122,12 @@ export const api = {
     run(slow<Source>("add_source_folder", { notebookId, path })),
   /** Cloud-storage sync roots detected on this machine, for folder quick-picks. */
   listCloudFolders: () => run(query<CloudFolder[]>("list_cloud_folders")),
+  /** Live Spotlight search over local files (probe: one attempt, no retry —
+   *  the caller debounces and cancels stale queries itself). */
+  searchMacFiles: (q: string, limit?: number) =>
+    run(
+      probe<MacFileHit[]>("search_mac_files", { query: q, limit: limit ?? null }),
+    ),
   resyncSources: () => run(slow<FolderScan>("resync_sources")),
   providerReadiness: () =>
     run(

@@ -32,7 +32,7 @@ export function FileDrop() {
           setDraggingFiles(false);
         } else if (p.type === "drop") {
           setDraggingFiles(false);
-          void handleDrop(p.paths);
+          void ingestPaths(p.paths);
         }
       })
       .then((fn) => {
@@ -56,7 +56,13 @@ export function FileDrop() {
   return null;
 }
 
-async function handleDrop(paths: string[]) {
+/**
+ * Route a set of local paths into the active notebook: OKF bundles open the
+ * importer, everything else (files, and folders which become synced folder
+ * sources) flows through `addSourceFiles`. Shared with the Add Source →
+ * "Search your Mac" step so Spotlight results ingest identically to a drop.
+ */
+export async function ingestPaths(paths: string[]) {
   const { currentId, addSourceFiles, setError } = useStore.getState();
 
   // OKF bundles (a shared .okf.zip or an exported folder) route to import,
