@@ -4398,6 +4398,17 @@ pub async fn send_message(
         &persona,
         &profile,
     );
+    // On-device model only: cap the prompt to its 8192-token window before
+    // streaming (structure-aware — the system rules and the question survive,
+    // retrieved excerpts and old history are trimmed). No-op for the
+    // larger-window engines, whose prompts must not be shrunk.
+    let messages = {
+        let ai = state.ai.read().await.clone();
+        match ai.fm_input_budget(crate::inference::Role::Chat) {
+            Some(budget) => crate::inference::budget::fit_messages(&messages, budget).into_owned(),
+            None => messages,
+        }
+    };
 
     // Stream the answer, emitting tokens to the frontend. Race against the
     // cancellation token so a Stop click aborts the request; on cancel we keep
@@ -5269,6 +5280,19 @@ async fn run_generation_chat(
 ) -> anyhow::Result<String> {
     let (text, stats, model) = {
         let ai = state.ai.read().await.clone();
+        // On-device model only: cap the corpus prompt to its 8192-token window
+        // before generating (the instruction survives at the head; the source
+        // body is trimmed to fit). Streaming runs the Generate role, the
+        // non-streaming summary path the Chat role — budget whichever answers.
+        let role = if app.is_some() {
+            crate::inference::Role::Generate
+        } else {
+            crate::inference::Role::Chat
+        };
+        let budgeted = ai
+            .fm_input_budget(role)
+            .map(|budget| crate::inference::budget::fit_messages(messages, budget).into_owned());
+        let messages: &[crate::ai::ChatTurn] = budgeted.as_deref().unwrap_or(messages);
         let out = match app {
             Some(app) => {
                 let app = app.clone();
@@ -7147,6 +7171,15 @@ pub async fn ask_everything(
         &persona,
         ctx_profile.compact_excerpts,
     );
+    // On-device model only: fit the prompt to its 8192-token window before
+    // streaming; a no-op for larger-window engines (see notebook chat above).
+    let messages = {
+        let ai = state.ai.read().await.clone();
+        match ai.fm_input_budget(crate::inference::Role::Chat) {
+            Some(budget) => crate::inference::budget::fit_messages(&messages, budget).into_owned(),
+            None => messages,
+        }
+    };
 
     // Same stream/cancel dance as notebook chat, under its own scope so a
     // palette Esc never kills a notebook stream (or vice versa).
