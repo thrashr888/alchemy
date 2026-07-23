@@ -2960,14 +2960,21 @@ struct MigrateProgress {
 #[tauri::command]
 pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u32, String> {
     let sources = e(state.db.all_sources().await)?;
-    let owners: Vec<(String, String, String, String)> = sources
+    // Carry source_type so re-embedding dispatches the same way ingest does —
+    // otherwise code loses its code-aware chunking and vault markdown loses
+    // frontmatter stripping (both would silently degrade on a re-embed).
+    let owners: Vec<(String, String, ingest::Extracted)> = sources
         .iter()
         .map(|s| {
             (
                 s.notebook_id.clone(),
                 s.id.clone(),
-                s.content.clone(),
-                s.title.clone(),
+                ingest::Extracted {
+                    title: s.title.clone(),
+                    source_type: s.source_type.clone(),
+                    url: s.url.clone(),
+                    text: s.content.clone(),
+                },
             )
         })
         .collect();
@@ -2978,16 +2985,18 @@ pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u
     e(state.db.clear_all_chunks().await)?;
 
     let ai = state.ai.read().await.clone();
-    for (i, (notebook_id, owner_id, content, title)) in owners.iter().enumerate() {
+    for (i, (notebook_id, owner_id, extracted)) in owners.iter().enumerate() {
         let _ = app.emit(
             "migrate://progress",
             MigrateProgress {
                 done: i as u32,
                 total,
-                title: title.clone(),
+                title: extracted.title.clone(),
             },
         );
-        let chunks = ingest::chunk_text(title, content);
+        // Child files of a folder/repo keep their "parent › path" code context
+        // when it can be derived; top-level sources fall back to the title.
+        let chunks = ingest::chunk_source(extracted, None);
         if chunks.is_empty() {
             continue;
         }
