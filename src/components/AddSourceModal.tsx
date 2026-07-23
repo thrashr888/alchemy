@@ -309,11 +309,6 @@ export function AddSourceModal() {
             </div>
           )}
 
-          <p className="text-micro leading-relaxed text-subtle-foreground">
-            URLs cover web pages, Google Docs, and GitHub or git repositories
-            — repos import as living sources that re-sync automatically.
-          </p>
-
           {/* Local-file search — always available (Spotlight, no cider). */}
           <button
             type="button"
@@ -703,6 +698,11 @@ function MacFileSearch({
     rowRefs.current[sel]?.scrollIntoView({ block: "nearest" });
   }, [sel]);
 
+  // Only ingestible files and folders can become sources — drop everything
+  // else so the list never shows dimmed, un-addable rows. Folders are always
+  // ingestible (they sync as living sources), so `isDir` keeps them too.
+  const visible = (results ?? []).filter((h) => h.isDir || h.ingestible);
+
   function add(hit: MacFileHit) {
     if (!hit.ingestible || added.has(hit.path)) return;
     setAdded((prev) => new Set(prev).add(hit.path));
@@ -722,16 +722,16 @@ function MacFileSearch({
       else onBack();
       return;
     }
-    if (!results || results.length === 0) return;
+    if (visible.length === 0) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setSel((i) => Math.min(i + 1, results.length - 1));
+      setSel((i) => Math.min(i + 1, visible.length - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setSel((i) => Math.max(i - 1, 0));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      const hit = results[sel];
+      const hit = visible[sel];
       if (hit) add(hit);
     }
   }
@@ -741,6 +741,12 @@ function MacFileSearch({
       {back}
       <Input
         autoFocus
+        // Filenames aren't prose: kill WebKit's autocorrect squiggles,
+        // spellcheck, and auto-capitalization so the query stays verbatim.
+        spellCheck={false}
+        autoCorrect="off"
+        autoCapitalize="off"
+        autoComplete="off"
         placeholder="Search files on your Mac…"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
@@ -754,16 +760,15 @@ function MacFileSearch({
         <div className="flex items-center justify-center py-8">
           <Spinner className="h-4 w-4 text-muted-foreground" />
         </div>
-      ) : results && results.length === 0 ? (
+      ) : results !== null && visible.length === 0 ? (
         <p className="px-2 py-8 text-center text-caption text-muted-foreground">
           No files match “{query.trim()}”.
         </p>
       ) : (
         <div className="flex max-h-72 flex-col gap-0.5 overflow-y-auto">
-          {results?.map((hit, i) => {
+          {visible.map((hit, i) => {
             const isSel = i === sel;
             const isAdded = added.has(hit.path);
-            const addable = hit.ingestible;
             const dir = parentDir(hit.path);
             const when = hit.mtime > 0 ? relativeTime(hit.mtime) : "";
             const meta = [dir, when].filter(Boolean).join(" · ");
@@ -774,17 +779,14 @@ function MacFileSearch({
                   rowRefs.current[i] = el;
                 }}
                 type="button"
-                aria-disabled={!addable || isAdded}
-                title={
-                  addable ? hit.path : "This file type can't be added yet."
-                }
+                aria-disabled={isAdded}
+                title={hit.path}
                 onMouseEnter={() => setSel(i)}
                 onClick={() => add(hit)}
                 className={cn(
                   "flex items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none transition-colors",
                   isSel ? "bg-surface-2" : "hover:bg-surface-2",
-                  !addable && "opacity-55",
-                  (!addable || isAdded) && "cursor-default",
+                  isAdded && "cursor-default",
                 )}
               >
                 {hit.isDir ? (
