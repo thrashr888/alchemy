@@ -89,7 +89,7 @@ function ArchivedNotes({
   return (
     <div className="mt-2 border-t border-border pt-2">
       <button
-        className="flex w-full items-center gap-1.5 rounded px-1 py-1 text-[11px] font-medium text-subtle-foreground hover:text-foreground transition-colors"
+        className="flex w-full items-center gap-1.5 rounded px-1 py-1 text-micro font-medium text-subtle-foreground hover:text-foreground transition-colors"
         onClick={() => setOpen((o) => !o)}
       >
         {open ? (
@@ -108,10 +108,10 @@ function ArchivedNotes({
               onClick={() => onOpen(n)}
               className="group w-full rounded-md border border-border bg-surface-2/40 px-3 py-2 text-left opacity-50 transition-opacity hover:opacity-80"
             >
-              <span className="block truncate text-[12px] font-medium text-foreground">
+              <span className="block truncate text-caption font-medium text-foreground">
                 {n.title}
               </span>
-              <span className="text-[11px] text-subtle-foreground">
+              <span className="text-micro text-subtle-foreground">
                 {relativeTime(n.updatedAt)} — editing revives it
               </span>
             </button>
@@ -227,7 +227,7 @@ export function StudioPanel() {
       />
       <div className="flex items-center px-4 h-12 border-b border-border">
         <Wand2 className="h-4 w-4 text-muted-foreground" />
-        <span className="ml-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className="ml-2 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
           Studio
         </span>
         <Button
@@ -246,7 +246,7 @@ export function StudioPanel() {
           generator section never pins the notes list below the fold. */}
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         <div className="p-3">
-          <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+          <div className="flex items-center gap-2 text-micro font-medium uppercase tracking-wide text-subtle-foreground">
             <span>Generate</span>
             {generatingKind && (
               <button
@@ -259,7 +259,7 @@ export function StudioPanel() {
               </button>
             )}
             {audioProgress && (
-              <span className="text-[10px] normal-case tabular-nums text-subtle-foreground">
+              <span className="text-badge normal-case tabular-nums text-subtle-foreground">
                 voicing {audioProgress.done}/{audioProgress.total}
               </span>
             )}
@@ -359,19 +359,19 @@ export function StudioPanel() {
                   value={instructions}
                   onChange={(e) => setInstructions(e.target.value)}
                   placeholder="Optional instructions applied to the next generation…"
-                  className="mt-2.5 text-[12px]"
+                  className="mt-2.5 text-caption"
                 />
               ) : (
                 <button
                   onClick={() => setShowInstructions(true)}
                   disabled={!hasSources}
-                  className="mt-2.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+                  className="mt-2.5 text-micro text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
                 >
                   + Add instructions
                 </button>
               )}
               {!hasSources && (
-                <p className="mt-2 text-[11px] text-subtle-foreground">
+                <p className="mt-2 text-micro text-subtle-foreground">
                   Add sources to generate documents.
                 </p>
               )}
@@ -381,7 +381,7 @@ export function StudioPanel() {
         {currentId && <Reports />}
 
         <div className="flex items-center justify-between px-4 pt-3 pb-1">
-          <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+          <span className="text-micro font-medium uppercase tracking-wide text-subtle-foreground">
             Notes
           </span>
           <Button
@@ -436,7 +436,7 @@ export function StudioPanel() {
                     >
                       {kindIcon(n.kind)}
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
+                    <span className="min-w-0 flex-1 truncate text-body font-medium text-foreground">
                       {n.title}
                     </span>
                     {noteUnread(n, noteReads, noteReadsBaseline) && (
@@ -500,7 +500,7 @@ export function StudioPanel() {
                         <Badge>stale</Badge>
                       </span>
                     )}
-                    <span className="text-[11px] text-subtle-foreground">
+                    <span className="text-micro text-subtle-foreground">
                       {relativeTime(n.updatedAt)}
                     </span>
                   </div>
@@ -529,7 +529,7 @@ export function StudioPanel() {
         width="max-w-2xl"
         footer={
           <div className="flex items-center justify-between">
-            <span className="flex items-center gap-2 text-[12px] tabular-nums text-muted-foreground">
+            <span className="flex items-center gap-2 text-caption tabular-nums text-muted-foreground">
               <Spinner className="h-3.5 w-3.5" />
               {audioProgress
                 ? `Voicing the episode — line ${audioProgress.done} of ${audioProgress.total}`
@@ -620,7 +620,7 @@ function GenTile({
       title={title}
       aria-label={category ? `${label} — ${category}` : label}
       className={cn(
-        "flex items-center gap-2 rounded-md border px-2.5 py-2 text-[12px] text-foreground/90 transition-colors disabled:pointer-events-none disabled:opacity-40",
+        "flex items-center gap-2 rounded-md border px-2.5 py-2 text-caption text-foreground/90 transition-colors disabled:pointer-events-none disabled:opacity-40",
         tint.tile,
       )}
     >

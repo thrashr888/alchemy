@@ -253,19 +253,19 @@ export function SourcesPanel() {
       {draggingFiles && currentId && (
         <div className="pointer-events-none absolute inset-1.5 z-30 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary/60 bg-primary/10">
           <Upload className="h-6 w-6 text-primary" />
-          <span className="text-[13px] font-semibold text-foreground">
+          <span className="text-body font-semibold text-foreground">
             Drop to add sources
           </span>
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-micro text-muted-foreground">
             PDF · Office · images · text
           </span>
         </div>
       )}
       <div className="flex items-center px-4 h-12 border-b border-border">
-        <span className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
           Sources
         </span>
-        <span className="ml-2 text-[11px] text-subtle-foreground">
+        <span className="ml-2 text-micro text-subtle-foreground">
           {sources.length}
         </span>
         <div className="ml-auto flex items-center gap-0.5">
@@ -294,7 +294,7 @@ export function SourcesPanel() {
       {/* Notebook capacity gauge */}
       {sources.length > 0 && (
         <div className="border-b border-border px-4 py-2.5">
-          <div className="mb-1.5 flex items-center justify-between text-[11px]">
+          <div className="mb-1.5 flex items-center justify-between text-micro">
             <span className="text-muted-foreground">
               {Intl.NumberFormat().format(totalChars)} chars
             </span>
@@ -340,12 +340,12 @@ export function SourcesPanel() {
                   )}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-[12px]" title={q.name}>
+                  <div className="truncate text-caption" title={q.name}>
                     {q.name}
                   </div>
                   <div
                     className={cn(
-                      "text-[11px]",
+                      "text-micro",
                       q.status === "error"
                         ? "text-destructive"
                         : "text-subtle-foreground",
@@ -391,7 +391,7 @@ export function SourcesPanel() {
                 labeled — a bare checkbox over empty space read as a blank,
                 menu-less source row in every notebook. */}
             <div className="mb-0.5 flex items-center gap-2 px-2 py-1.5">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+              <span className="text-micro font-medium uppercase tracking-wide text-subtle-foreground">
                 {allSelected
                   ? "All selected"
                   : `${selectedCount} of ${contentSources.length} selected`}
@@ -515,7 +515,7 @@ export function SourcesPanel() {
                       <div className="flex items-center gap-1">
                         <span
                           className={cn(
-                            "min-w-0 flex-1 truncate text-[13px]",
+                            "min-w-0 flex-1 truncate text-body",
                             s.status === "placeholder"
                               ? "text-muted-foreground"
                               : "text-foreground",
@@ -615,7 +615,7 @@ export function SourcesPanel() {
                         )}
                       </div>
                       {importing ? (
-                        <div className="truncate text-[11px] text-subtle-foreground">
+                        <div className="truncate text-micro text-subtle-foreground">
                           {folderScan
                             ? `Embedding ${Math.min(
                                 folderScan.done + 1,
@@ -627,14 +627,14 @@ export function SourcesPanel() {
                         <div
                           // break-anywhere: raw URLs in errors have no
                           // spaces and would otherwise force the panel wide.
-                          className="line-clamp-3 text-[11px] leading-snug text-destructive [overflow-wrap:anywhere]"
+                          className="line-clamp-3 text-micro leading-snug text-destructive [overflow-wrap:anywhere]"
                           title={s.error}
                         >
                           {s.error || "Import failed"}
                         </div>
                       ) : s.status === "placeholder" ? (
                         <div
-                          className="text-[11px] text-subtle-foreground"
+                          className="text-micro text-subtle-foreground"
                           title={s.url}
                         >
                           Online-only — not downloaded
@@ -646,7 +646,7 @@ export function SourcesPanel() {
                         // A cloud-provider chip (derived from the path) shows
                         // where a synced folder lives.
                         <div
-                          className="flex items-center gap-1.5 text-[11px] text-subtle-foreground"
+                          className="flex items-center gap-1.5 text-micro text-subtle-foreground"
                           title={`${s.url}\nStays in sync — auto-refreshes`}
                         >
                           {folderProvider(s.url) && (
@@ -661,7 +661,7 @@ export function SourcesPanel() {
                         </div>
                       ) : s.sourceType === "url" && s.url ? (
                         <div
-                          className="truncate text-[11px] text-citation"
+                          className="truncate text-micro text-citation"
                           title={s.url}
                         >
                           {hostname(s.url)}
@@ -736,7 +736,7 @@ export function SourcesPanel() {
             }
           />
           {editing?.macNote && (
-            <p className="text-[11px] leading-relaxed text-subtle-foreground">
+            <p className="text-micro leading-relaxed text-subtle-foreground">
               Saves straight into Apple Notes — the first line is the note's
               title.
             </p>

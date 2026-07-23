@@ -302,7 +302,7 @@ function PanCanvas({ children }: { children: React.ReactNode }) {
         >
           <Minus className="h-3.5 w-3.5" />
         </button>
-        <span className="min-w-10 px-1 py-0.5 text-center text-[11px] tabular-nums text-subtle-foreground">
+        <span className="min-w-10 px-1 py-0.5 text-center text-micro tabular-nums text-subtle-foreground">
           {Math.round(view.scale * 100)}%
         </span>
         <button

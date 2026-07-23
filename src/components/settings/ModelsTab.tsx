@@ -209,10 +209,10 @@ export function ModelsTab({
     return (
       <div className="flex flex-col gap-3">
         <div>
-          <div className="text-[15px] font-semibold text-foreground">
+          <div className="text-section font-semibold text-foreground">
             How should Alchemy answer?
           </div>
-          <p className="mt-0.5 text-[12px] text-subtle-foreground">
+          <p className="mt-0.5 text-caption text-subtle-foreground">
             It already works — this just picks the brain. Change it anytime
             from the chat box.
           </p>
@@ -270,7 +270,7 @@ export function ModelsTab({
         <button
           type="button"
           onClick={() => choose({})}
-          className="mt-1 text-center text-[12px] text-subtle-foreground hover:text-muted-foreground"
+          className="mt-1 text-center text-caption text-subtle-foreground hover:text-muted-foreground"
         >
           Skip — keep the automatic choice
         </button>
@@ -339,16 +339,16 @@ export function ModelsTab({
                     )}
                   />
                   <span className="min-w-0 flex-1">
-                    <span className="text-[13px] text-foreground">{p.label}</span>
+                    <span className="text-body text-foreground">{p.label}</span>
                     <br />
-                    <span className="block truncate text-[11px] text-subtle-foreground">
+                    <span className="block truncate text-micro text-subtle-foreground">
                       {r?.detail ?? "checking…"}
                     </span>
                   </span>
                 </button>
                 <span
                   className={cn(
-                    "w-20 shrink-0 text-right text-[11px]",
+                    "w-20 shrink-0 text-right text-micro",
                     r?.ready ? "text-success" : "text-subtle-foreground",
                   )}
                 >
@@ -400,15 +400,15 @@ export function ModelsTab({
             <button
               type="button"
               onClick={() => setWizard({})}
-              className="text-[12px] text-citation hover:underline"
+              className="text-caption text-citation hover:underline"
             >
               + Add a provider…
-              <span className="ml-1.5 text-[11px] text-subtle-foreground no-underline">
+              <span className="ml-1.5 text-micro text-subtle-foreground no-underline">
                 subscriptions, keys, local servers
               </span>
             </button>
             {checkingStatus && (
-              <span className="flex items-center gap-1 text-[12px] text-subtle-foreground">
+              <span className="flex items-center gap-1 text-caption text-subtle-foreground">
                 <RefreshCw className="h-3 w-3 animate-spin" />
                 Checking availability…
               </span>
@@ -422,7 +422,7 @@ export function ModelsTab({
           type="button"
           onClick={() => setAdvancedOpen((v) => !v)}
           aria-expanded={advancedOpen}
-          className="flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground"
+          className="flex items-center gap-1.5 text-caption text-muted-foreground hover:text-foreground"
         >
           <ChevronRight
             className={cn(
@@ -431,7 +431,7 @@ export function ModelsTab({
             )}
           />
           Advanced
-          <span className="text-[11px] text-subtle-foreground">
+          <span className="text-micro text-subtle-foreground">
             studio & titles routing · embeddings · vision
           </span>
         </button>
@@ -443,12 +443,12 @@ export function ModelsTab({
             >
               <div className="flex flex-col gap-1.5">
                 <div className="flex items-center gap-2">
-                  <span className="w-24 shrink-0 text-[12.5px] text-foreground">
+                  <span className="w-24 shrink-0 text-[0.78125rem] text-foreground">
                     Studio
                   </span>
                   {draft.studioProvider === "" ? (
                     <>
-                      <span className="flex-1 text-[12px] text-subtle-foreground">
+                      <span className="flex-1 text-caption text-subtle-foreground">
                         use main model
                       </span>
                       <Button
@@ -474,7 +474,7 @@ export function ModelsTab({
                         onChange={(e) =>
                           setDraft({ ...draft, studioProvider: e.target.value })
                         }
-                        className="h-7 w-full rounded-md border border-input bg-surface-2 px-2 text-[12.5px] text-foreground focus:outline-none"
+                        className="h-7 w-full rounded-md border border-input bg-surface-2 px-2 text-[0.78125rem] text-foreground focus:outline-none"
                       >
                         {draft.providers.map((p) => (
                           <option key={p.id} value={p.id}>
@@ -494,10 +494,10 @@ export function ModelsTab({
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="w-24 shrink-0 text-[12.5px] text-foreground">
+                  <span className="w-24 shrink-0 text-[0.78125rem] text-foreground">
                     Titles
                   </span>
-                  <span className="flex-1 text-[12px] text-subtle-foreground">
+                  <span className="flex-1 text-caption text-subtle-foreground">
                     on-device Apple model · automatic, falls back to main
                   </span>
                 </div>
@@ -514,7 +514,7 @@ export function ModelsTab({
                   onChange={(e) =>
                     setDraft({ ...draft, embedder: e.target.value })
                   }
-                  className="h-8 rounded-md border border-input bg-surface-2 px-2 text-[13px] text-foreground focus:outline-none"
+                  className="h-8 rounded-md border border-input bg-surface-2 px-2 text-body text-foreground focus:outline-none"
                 >
                   <option value="builtin">Built-in (no setup, private)</option>
                   <option value="ollama">Ollama model</option>
@@ -534,7 +534,7 @@ export function ModelsTab({
                     <RefreshCw className="h-3.5 w-3.5" />
                     Re-embed all sources
                   </Button>
-                  <span className="text-[11px] text-subtle-foreground">
+                  <span className="text-micro text-subtle-foreground">
                     Rebuild the index without changing the model.
                   </span>
                 </div>
@@ -557,7 +557,7 @@ export function ModelsTab({
                   onChange={(e) =>
                     setDraft({ ...draft, visionProvider: e.target.value })
                   }
-                  className="h-8 rounded-md border border-input bg-surface-2 px-2 text-[13px] text-foreground focus:outline-none"
+                  className="h-8 rounded-md border border-input bg-surface-2 px-2 text-body text-foreground focus:outline-none"
                 >
                   <option value="">Off</option>
                   <option value="ollama">Ollama model</option>
@@ -615,7 +615,7 @@ function Select({
       aria-label={ariaLabel}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="h-8 w-full appearance-none rounded-md border border-input bg-surface-2 px-2.5 text-[13px] text-foreground outline-none transition-colors focus:border-ring/60"
+      className="h-8 w-full appearance-none rounded-md border border-input bg-surface-2 px-2.5 text-body text-foreground outline-none transition-colors focus:border-ring/60"
     >
       {!value && <option value="">Choose a model…</option>}
       {list.map((m) => (
@@ -661,19 +661,19 @@ function FirstRunDoor({
     >
       <span className="shrink-0">{icon}</span>
       <span className="min-w-0 flex-1">
-        <span className="text-[13px] font-medium text-foreground">{title}</span>
+        <span className="text-body font-medium text-foreground">{title}</span>
         {recommended && (
-          <span className="ml-1.5 rounded-full bg-primary/15 px-2 py-px text-[10.5px] text-citation">
+          <span className="ml-1.5 rounded-full bg-primary/15 px-2 py-px text-[0.65625rem] text-citation">
             recommended
           </span>
         )}
-        <span className="block text-[12px] text-muted-foreground">
+        <span className="block text-caption text-muted-foreground">
           {subtitle}
         </span>
         {note && (
           <span
             className={cn(
-              "block text-[11px]",
+              "block text-micro",
               noteOk ? "text-success" : "text-subtle-foreground",
             )}
           >
@@ -803,11 +803,11 @@ function ProviderWizard({
     >
       {step === "door" && (
         <div className="flex flex-col gap-2">
-          <div className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+          <div className="text-micro font-medium uppercase tracking-wide text-subtle-foreground">
             A subscription on this Mac
           </div>
           {clis.filter((c) => c.installed).length === 0 && (
-            <p className="text-[12px] text-subtle-foreground">
+            <p className="text-caption text-subtle-foreground">
               None found — Claude, ChatGPT, Gemini, Cursor, and Bob appear here
               once their apps are installed and signed in.
             </p>
@@ -823,15 +823,15 @@ function ProviderWizard({
                 className="flex items-center gap-2.5 rounded-lg border border-border bg-surface-2 px-3 py-2 text-left hover:border-border-strong disabled:opacity-50"
               >
                 <span className="min-w-0 flex-1">
-                  <span className="text-[13px] text-foreground">
+                  <span className="text-body text-foreground">
                     {AGENT_LABELS[c.id] ?? c.id}
                   </span>
-                  <span className="block truncate text-[11px] text-subtle-foreground">
+                  <span className="block truncate text-micro text-subtle-foreground">
                     {c.detail} · nothing to configure
                   </span>
                 </span>
                 {draft.providers.some((p) => p.kind === c.id) ? (
-                  <span className="text-[11px] text-subtle-foreground">
+                  <span className="text-micro text-subtle-foreground">
                     added
                   </span>
                 ) : (
@@ -839,7 +839,7 @@ function ProviderWizard({
                 )}
               </button>
             ))}
-          <div className="mt-1 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+          <div className="mt-1 text-micro font-medium uppercase tracking-wide text-subtle-foreground">
             Something else
           </div>
           <button
@@ -848,9 +848,9 @@ function ProviderWizard({
             className="flex items-center gap-2.5 rounded-lg border border-border bg-surface-2 px-3 py-2 text-left hover:border-border-strong"
           >
             <KeyRound className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <span className="flex-1 text-[13px] text-foreground">
+            <span className="flex-1 text-body text-foreground">
               An API key
-              <span className="block text-[11px] text-subtle-foreground">
+              <span className="block text-micro text-subtle-foreground">
                 OpenAI, Gemini, Mistral — 30+ services
               </span>
             </span>
@@ -862,9 +862,9 @@ function ProviderWizard({
             className="flex items-center gap-2.5 rounded-lg border border-border bg-surface-2 px-3 py-2 text-left hover:border-border-strong"
           >
             <Server className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <span className="flex-1 text-[13px] text-foreground">
+            <span className="flex-1 text-body text-foreground">
               A local server
-              <span className="block text-[11px] text-subtle-foreground">
+              <span className="block text-micro text-subtle-foreground">
                 Ollama, LM Studio, vLLM — anything OpenAI-compatible
               </span>
             </span>
@@ -893,7 +893,7 @@ function ProviderWizard({
                   customUrl;
                 probeKey(url, key);
               }}
-              className="h-8 w-full rounded-md border border-input bg-surface-2 px-2 text-[13px] text-foreground focus:outline-none"
+              className="h-8 w-full rounded-md border border-input bg-surface-2 px-2 text-body text-foreground focus:outline-none"
             >
               {GATEWAY_PRESETS.map((g) => (
                 <option key={g.name} value={g.name}>
@@ -1054,10 +1054,10 @@ function ProviderWizard({
           <div className="flex items-center gap-2.5">
             <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />
             <span className="min-w-0 flex-1">
-              <span className="text-[13px] font-medium text-foreground">
+              <span className="text-body font-medium text-foreground">
                 {added.label} added
               </span>
-              <span className="block text-[12px] text-subtle-foreground">
+              <span className="block text-caption text-subtle-foreground">
                 signed in as you · nothing to configure
               </span>
             </span>
@@ -1139,7 +1139,7 @@ function GatewayVisionPicker({
       value={current}
       disabled={loading}
       onChange={(e) => setDraft({ ...draft, openaiVisionModel: e.target.value })}
-      className="h-8 rounded-md border border-input bg-surface-2 px-2 text-[13px] text-foreground focus:outline-none"
+      className="h-8 rounded-md border border-input bg-surface-2 px-2 text-body text-foreground focus:outline-none"
     >
       {!current && (
         <option value="">{loading ? "Loading models…" : "Select a model"}</option>

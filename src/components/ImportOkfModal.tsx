@@ -44,18 +44,18 @@ export function ImportOkfModal() {
       width="max-w-md"
     >
       <div className="flex flex-col gap-4">
-        <p className="text-[12px] leading-relaxed text-muted-foreground">
+        <p className="text-caption leading-relaxed text-muted-foreground">
           Bring in an{" "}
           <code className="rounded bg-surface-2 px-1 py-0.5">.okf.zip</code>{" "}
           someone shared (or an exported bundle folder). Sources are re-embedded
           locally; nothing leaves this Mac.
         </p>
         <label className="flex flex-col gap-1.5">
-          <span className="text-[12px] text-muted-foreground">Import into</span>
+          <span className="text-caption text-muted-foreground">Import into</span>
           <select
             value={dest}
             onChange={(e) => setDest(e.target.value)}
-            className="h-8 w-full rounded-md border border-input bg-surface-2 px-2 text-[13px] text-foreground outline-none focus:border-ring/70 focus:ring-1 focus:ring-ring/40"
+            className="h-8 w-full rounded-md border border-input bg-surface-2 px-2 text-body text-foreground outline-none focus:border-ring/70 focus:ring-1 focus:ring-ring/40"
           >
             <option value="">New notebook (named from the bundle)</option>
             {notebooks.map((nb) => (
@@ -66,7 +66,7 @@ export function ImportOkfModal() {
           </select>
         </label>
         {dropped && (
-          <div className="flex items-center gap-2 rounded-md border border-border bg-surface-2/40 px-3 py-2 text-[12px] text-foreground/90">
+          <div className="flex items-center gap-2 rounded-md border border-border bg-surface-2/40 px-3 py-2 text-caption text-foreground/90">
             <FileArchive className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             <span className="min-w-0 truncate">
               {dropped.split("/").pop() ?? dropped}

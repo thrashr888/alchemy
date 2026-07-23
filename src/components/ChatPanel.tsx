@@ -384,7 +384,7 @@ export function ChatPanel() {
       )}
       <div className="relative z-10 flex items-center px-5 h-12 border-b border-border">
         <MessageSquare className="h-4 w-4 text-muted-foreground" />
-        <span className="ml-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className="ml-2 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
           Chat
         </span>
         <div className="ml-auto flex items-center gap-1">
@@ -453,7 +453,7 @@ export function ChatPanel() {
 
           {!sending && followups.length > 0 && messages.length > 0 && (
             <div className="flex flex-col gap-1.5">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+              <span className="text-micro font-medium uppercase tracking-wide text-subtle-foreground">
                 Suggested follow-ups
               </span>
               {followups.map((q, i) => (
@@ -465,7 +465,7 @@ export function ChatPanel() {
                     setDraft(q);
                     inputRef.current?.focus();
                   }}
-                  className="flex items-start gap-2 rounded-lg border border-border bg-surface/60 px-3 py-2 text-left text-[13px] text-foreground/90 transition-colors hover:border-border-strong hover:bg-surface-2"
+                  className="flex items-start gap-2 rounded-lg border border-border bg-surface/60 px-3 py-2 text-left text-body text-foreground/90 transition-colors hover:border-border-strong hover:bg-surface-2"
                 >
                   <CornerDownRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                   {q}
@@ -481,7 +481,7 @@ export function ChatPanel() {
               onClick={jumpToLatest}
               className={cn(
                 "pointer-events-auto flex h-7 items-center gap-1.5 rounded-full border border-border-strong",
-                "bg-elevated/95 px-3 text-[11px] font-medium text-muted-foreground shadow-lg backdrop-blur",
+                "bg-elevated/95 px-3 text-micro font-medium text-muted-foreground shadow-lg backdrop-blur",
                 "transition-colors hover:text-foreground",
               )}
             >
@@ -594,7 +594,7 @@ export function ChatPanel() {
                 onClick={toggleAgentMode}
                 title="Agentic mode: the model plans multiple searches over your sources before answering"
                 className={cn(
-                  "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] transition-colors",
+                  "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-micro transition-colors",
                   agentMode
                     ? "border-primary/50 bg-primary/15 text-citation"
                     : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
@@ -654,7 +654,7 @@ function SummaryBanner({
       <button
         onClick={onRefresh}
         className={cn(
-          "rounded-lg border border-dashed border-border-strong bg-surface/50 px-3 py-1.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground",
+          "rounded-lg border border-dashed border-border-strong bg-surface/50 px-3 py-1.5 text-caption text-muted-foreground transition-colors hover:text-foreground",
           centered ? "self-center" : "self-start",
         )}
       >
@@ -666,7 +666,7 @@ function SummaryBanner({
   return (
     <div className="rounded-lg border border-border bg-surface/60 p-3.5">
       <div className="mb-1 flex items-center justify-between">
-        <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+        <span className="text-micro font-medium uppercase tracking-wide text-subtle-foreground">
           Notebook summary
         </span>
         <button
@@ -678,9 +678,9 @@ function SummaryBanner({
         </button>
       </div>
       {loading && !summary ? (
-        <div className="text-[13px] text-muted-foreground">Summarizing sources…</div>
+        <div className="text-body text-muted-foreground">Summarizing sources…</div>
       ) : (
-        <div className="text-[13px] leading-relaxed text-foreground/90 selectable">
+        <div className="text-body leading-relaxed text-foreground/90 selectable">
           {/* Single newlines become markdown hard breaks so the model's line
               breaks survive; double newlines stay paragraphs. */}
           <Markdown>{summary.replace(/\n(?!\n)/g, "  \n")}</Markdown>
@@ -700,7 +700,7 @@ function ChatMessage({ message }: { message: Message }) {
   // no bubble, no role label — the Claude-desktop "Ran ..." grammar.
   if (message.kind === "tool") {
     return (
-      <div className="flex items-start gap-2 py-0.5 text-[12px] text-muted-foreground">
+      <div className="flex items-start gap-2 py-0.5 text-caption text-muted-foreground">
         <Wrench className="mt-0.5 h-3 w-3 shrink-0 text-subtle-foreground" />
         <span className="selectable min-w-0">{message.content}</span>
       </div>
@@ -709,7 +709,7 @@ function ChatMessage({ message }: { message: Message }) {
   if (message.role === "user") {
     return (
       <div className="flex flex-col items-end gap-1">
-        <div className="max-w-[85%] rounded-lg rounded-br-sm bg-surface-2 px-3.5 py-2 text-[13px] selectable border border-border">
+        <div className="max-w-[85%] rounded-lg rounded-br-sm bg-surface-2 px-3.5 py-2 text-body selectable border border-border">
           {message.content}
         </div>
       </div>
@@ -747,7 +747,7 @@ function ChatMessage({ message }: { message: Message }) {
       <div className="flex flex-col gap-1.5">
         <RoleLabel role="assistant" />
         <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3.5 py-2.5">
-          <div className="flex items-start gap-2 text-[13px] text-foreground">
+          <div className="flex items-start gap-2 text-body text-foreground">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
             <span className="selectable min-w-0">{message.content}</span>
           </div>
@@ -779,7 +779,7 @@ function ChatMessage({ message }: { message: Message }) {
               )}
           </div>
           {message.model && (
-            <div className="mt-1.5 text-[11px] text-subtle-foreground">
+            <div className="mt-1.5 text-micro text-subtle-foreground">
               {message.model}
             </div>
           )}
@@ -798,7 +798,7 @@ function ChatMessage({ message }: { message: Message }) {
       </Markdown>
       {message.citations.length > 0 && <Citations citations={message.citations} />}
       {message.model && (
-        <div className="mt-1 text-[11px] text-subtle-foreground">
+        <div className="mt-1 text-micro text-subtle-foreground">
           {message.model}
         </div>
       )}
@@ -924,7 +924,7 @@ function MessageActions({ content }: { content: string }) {
     <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
       <button
         onClick={copy}
-        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-surface-2 hover:text-foreground"
+        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-micro text-muted-foreground hover:bg-surface-2 hover:text-foreground"
         title="Copy to clipboard"
       >
         {copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
@@ -932,7 +932,7 @@ function MessageActions({ content }: { content: string }) {
       </button>
       <button
         onClick={save}
-        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-surface-2 hover:text-foreground"
+        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-micro text-muted-foreground hover:bg-surface-2 hover:text-foreground"
         title="Save this response as a note"
       >
         {saved ? <Check className="h-3.5 w-3.5 text-success" /> : <NotebookPen className="h-3.5 w-3.5" />}
@@ -944,7 +944,7 @@ function MessageActions({ content }: { content: string }) {
 
 function RoleLabel({ role }: { role: "assistant" | "user" }) {
   return (
-    <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+    <div className="flex items-center gap-1.5 text-micro font-medium text-muted-foreground">
       <Sparkles className="h-3 w-3 text-primary" />
       {role === "assistant" ? "Assistant" : "You"}
     </div>
@@ -976,7 +976,7 @@ function Citations({ citations }: { citations: Citation[] }) {
   return (
     <div className="mt-1">
       <button
-        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:border-border-strong transition-colors"
+        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1 text-micro text-muted-foreground hover:text-foreground hover:border-border-strong transition-colors"
         onClick={() => setOpen((o) => !o)}
       >
         <Quote className="h-3 w-3" />
@@ -994,7 +994,7 @@ function Citations({ citations }: { citations: Citation[] }) {
                 label={`${c.noteId ? "Open note" : "Open source"} ${c.sourceTitle}`}
                 onClick={() => openCitationTarget(c)}
               />
-              <div className="pointer-events-none relative z-10 mb-1 flex items-center gap-2 text-[11px]">
+              <div className="pointer-events-none relative z-10 mb-1 flex items-center gap-2 text-micro">
                 <span className="flex h-4 min-w-4 items-center justify-center rounded bg-primary/15 px-1 font-semibold text-citation">
                   {i + 1}
                 </span>
@@ -1025,7 +1025,7 @@ function Citations({ citations }: { citations: Citation[] }) {
               <p
                 // Stays hit-testable so the text can be selected; plain
                 // clicks (no selection) still open the citation target.
-                className="pointer-events-auto relative z-10 line-clamp-4 text-[12px] leading-relaxed text-muted-foreground selectable"
+                className="pointer-events-auto relative z-10 line-clamp-4 text-caption leading-relaxed text-muted-foreground selectable"
                 onClick={() => {
                   if (!window.getSelection()?.toString())
                     openCitationTarget(c);
@@ -1048,7 +1048,7 @@ function StepTrail({ steps, done }: { steps: string[]; done: boolean }) {
         const isLast = i === steps.length - 1;
         const spinning = isLast && !done;
         return (
-          <div key={i} className="flex items-center gap-2 text-[12px]">
+          <div key={i} className="flex items-center gap-2 text-caption">
             {spinning ? (
               <span
                 className="h-2.5 w-2.5 shrink-0 rounded-full border-[1.5px] border-primary border-t-transparent animate-spin"
@@ -1074,7 +1074,7 @@ function ThinkingDots() {
   });
   return (
     <div className="flex items-center gap-2 py-1">
-      <span className="text-[12px] text-muted-foreground">{verb}</span>
+      <span className="text-caption text-muted-foreground">{verb}</span>
       <div className="flex items-center gap-1">
         {[0, 1, 2].map((i) => (
           <span
@@ -1127,7 +1127,7 @@ function ChatHero({
       />
       {!compact && (
         <>
-          <div className="text-[15px] font-semibold text-foreground/90">
+          <div className="text-section font-semibold text-foreground/90">
             {!hasNotebook
               ? "Create a notebook to begin"
               : !hasSources
@@ -1163,7 +1163,7 @@ function RotatingQuote({ theme }: { theme: string }) {
   // the curated product quotes remain the fallback.
   const gen = generatedEpigraph(theme);
   return (
-    <p className="max-w-[360px] animate-[quote-fade_0.8s_ease] text-[13px] text-muted-foreground">
+    <p className="max-w-[360px] animate-[quote-fade_0.8s_ease] text-body text-muted-foreground">
       {gen ? `“${gen}”` : QUOTE}
     </p>
   );
@@ -1195,7 +1195,7 @@ function ModelPill() {
         aria-expanded={open}
         aria-haspopup="menu"
         title="Which model answers this notebook"
-        className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+        className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-1 text-micro text-muted-foreground transition-colors hover:text-foreground"
       >
         {active?.label ?? "Model"}
         <ChevronDown className="h-3 w-3" />
@@ -1219,7 +1219,7 @@ function ModelPill() {
               }
             }}
           >
-            <div className="px-2.5 py-1 text-[11px] text-subtle-foreground">
+            <div className="px-2.5 py-1 text-micro text-subtle-foreground">
               Answer with
             </div>
             {aiConfig.providers.map((p) => {
@@ -1237,7 +1237,7 @@ function ModelPill() {
                     void saveAiConfig({ ...aiConfig, chatProvider: p.id });
                   }}
                   className={cn(
-                    "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12.5px]",
+                    "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[0.78125rem]",
                     selectable
                       ? "text-foreground hover:bg-surface-2"
                       : "cursor-default text-subtle-foreground",
@@ -1255,7 +1255,7 @@ function ModelPill() {
                   {aiConfig.chatProvider === p.id ? (
                     <Check className="h-3.5 w-3.5 text-citation" />
                   ) : !selectable ? (
-                    <span className="text-[11px]">unavailable</span>
+                    <span className="text-micro">unavailable</span>
                   ) : null}
                 </button>
               );
@@ -1268,7 +1268,7 @@ function ModelPill() {
                 setOpen(false);
                 openSettings("models");
               }}
-              className="w-full px-2.5 py-1.5 text-left text-[12px] text-muted-foreground hover:bg-surface-2 hover:text-foreground"
+              className="w-full px-2.5 py-1.5 text-left text-caption text-muted-foreground hover:bg-surface-2 hover:text-foreground"
             >
               Model settings…
             </button>

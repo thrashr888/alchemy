@@ -75,13 +75,13 @@ export function DialogueScript({ content }: { content: string }) {
           <div key={i} className="flex gap-2.5">
             <span
               className={cn(
-                "mt-0.5 h-fit shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                "mt-0.5 h-fit shrink-0 rounded px-1.5 py-0.5 text-badge font-semibold uppercase tracking-wide",
                 host ? "bg-primary/15 text-citation" : "bg-surface-2 text-muted-foreground",
               )}
             >
               {host ? "Host" : "Guest"}
             </span>
-            <p className="text-[13px] leading-relaxed text-foreground/90">
+            <p className="text-body leading-relaxed text-foreground/90">
               {m[2].replace(/[*_`]/g, "")}
             </p>
           </div>

@@ -190,7 +190,7 @@ export function Markdown<C extends { snippet: string }>({
                     <button
                       onClick={() => onCitation(cite)}
                       title={`${label(cite)} — “${cite.snippet.slice(0, 120)}…”`}
-                      className="mx-0.5 inline-flex h-[18px] min-w-[18px] translate-y-[-2px] cursor-pointer items-center justify-center rounded bg-primary/15 px-1 align-baseline text-[11px] font-semibold text-citation transition-colors hover:bg-primary/30"
+                      className="mx-0.5 inline-flex h-[18px] min-w-[18px] translate-y-[-2px] cursor-pointer items-center justify-center rounded bg-primary/15 px-1 align-baseline text-micro font-semibold text-citation transition-colors hover:bg-primary/30"
                     >
                       {linkChildren}
                     </button>

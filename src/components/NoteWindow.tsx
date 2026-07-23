@@ -36,7 +36,7 @@ export function NoteWindow({ noteId }: { noteId: string }) {
         className="flex h-12 shrink-0 items-center gap-2 border-b border-border pl-[84px] pr-4"
       >
         <StickyNote className="h-3.5 w-3.5 shrink-0 text-primary" />
-        <span className="truncate text-[13px] font-semibold" title={note?.title}>
+        <span className="truncate text-body font-semibold" title={note?.title}>
           {note?.title ?? "Note"}
         </span>
       </header>
@@ -60,11 +60,11 @@ export function NoteWindow({ noteId }: { noteId: string }) {
           )}
         >
           {loading ? (
-            <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+            <div className="flex items-center gap-2 text-body text-muted-foreground">
               <Spinner className="h-3.5 w-3.5" /> Loading note…
             </div>
           ) : !note ? (
-            <div className="text-[13px] text-muted-foreground">
+            <div className="text-body text-muted-foreground">
               This note no longer exists — it may have been deleted.
             </div>
           ) : note.kind === "mind_map" ? (

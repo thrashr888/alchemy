@@ -137,12 +137,12 @@ export function AlchemyHero({
           {title}
         </h1>
         {subtitle && (
-          <p className="mt-4 max-w-md text-[13px] leading-relaxed text-muted-foreground">
+          <p className="mt-4 max-w-md text-body leading-relaxed text-muted-foreground">
             {subtitle}
           </p>
         )}
         {epigraph && (
-          <p className="mt-3 max-w-md font-serif text-[13px] italic leading-relaxed text-subtle-foreground">
+          <p className="mt-3 max-w-md font-serif text-body italic leading-relaxed text-subtle-foreground">
             “{epigraph}”
           </p>
         )}

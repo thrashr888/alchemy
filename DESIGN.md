@@ -91,18 +91,35 @@ System font first — SF Pro on macOS:
 `-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", sans-serif`.
 Monospace: `"SF Mono", ui-monospace, monospace`.
 
-| Style | Size / weight | Usage |
-|---|---|---|
-| Page title | 22px / 600, tight tracking | Home "Your notebooks" |
-| Section title | 15px / 600 | Hero headings, app name |
-| Body / controls | 13px / 400–500 | Default UI text, buttons, inputs, prose |
-| Card title | 13–14px / 500 | Notebook and note cards |
-| Caption | 12px / 400 | Toasts, metadata, hints |
-| Micro-label | 11px / 500, uppercase + tracking-wide | Panel headers ("SOURCES", "NOTES") |
+Type is sized in **rem**, not px, so the whole UI tracks the macOS
+Accessibility text size. The native layer (`src-tauri/src/textsize.rs`) reads
+the effective Dynamic Type size and publishes `--system-text-scale`; the root
+`font-size` is `calc(16px * var(--system-text-scale, 1))`, so every rem
+multiplies into it. At a 16px root (scale 1.0) the tokens below are the exact
+px they replaced — pixel-identical to the pre-scale UI.
 
-Floors: 11px is the minimum text size anywhere; 10px only for numeric count
-badges. Chat prose is 13px at line-height 1.65 (user-adjustable 12/13/15px).
-Never introduce a webfont; the system stack is deliberate.
+Use the semantic `text-*` classes (backed by `@theme` tokens in `index.css`),
+never `text-[Npx]`. The rem values are exact 16ths of px:
+
+| Style | Class / token | rem (px @16) | Weight | Usage |
+|---|---|---|---|---|
+| Page title | `text-page` / `--text-page` | 1.375rem (22px) | 600, tight tracking | Home "Your notebooks" |
+| Section title | `text-section` / `--text-section` | 0.9375rem (15px) | 600 | Hero headings, app name |
+| Card title | `text-card` / `--text-card` | 0.875rem (14px) | 500 | Notebook and note cards (13px cards use Body) |
+| Body / controls | `text-body` / `--text-body` | 0.8125rem (13px) | 400–500 | Default UI text, buttons, inputs, prose |
+| Caption | `text-caption` / `--text-caption` | 0.75rem (12px) | 400 | Toasts, metadata, hints |
+| Micro-label | `text-micro` / `--text-micro` | 0.6875rem (11px) | 500, uppercase + tracking-wide | Panel headers ("SOURCES", "NOTES") |
+| Count badge | `text-badge` / `--text-badge` | 0.625rem (10px) | 500 | Numeric count badges only (the floor) |
+
+Rare one-off sizes (10.5/11.5/12.5/13.5/17/26px) don't earn a token — write
+them as arbitrary **rem** literals (`text-[1.0625rem]` for 17px, etc.), never
+px. Floors: 11px (`text-micro`) is the minimum text size anywhere; 10px
+(`text-badge`) only for numeric count badges. Chat prose is 13px at
+line-height 1.65 (user-adjustable 12/13/15px, also in rem so it composes with
+the system scale). Fixed-canvas artifacts — slide decks (`.slide-surface`, a
+960×540 design surface scaled by transform) and print/PDF export — stay px and
+do NOT scale with accessibility: they are documents, not chrome. Never
+introduce a webfont; the system stack is deliberate.
 
 ## 4. Component Stylings
 
@@ -228,8 +245,11 @@ Quick reference for agents building UI here:
 - New keyboard shortcuts: add the listener at the owning component, guard with
   `shortcutBlocked(e)`, and register the shortcut in `SHORTCUTS` in
   `SettingsDialog.tsx` so the Shortcuts tab stays truthful.
-- Text sizes: pick from 11/12/13/15/22px. Radii: `rounded-md` (6px) controls,
-  `rounded-lg` (10px) overlays/cards. Icons: `h-4` toolbar, `h-3.5` dense.
+- Text sizes: pick a semantic class — `text-micro` (11) `text-caption` (12)
+  `text-body` (13) `text-card` (14) `text-section` (15) `text-page` (22),
+  `text-badge` (10) for count badges only. Never `text-[Npx]` — rare sizes are
+  arbitrary rem literals. Radii: `rounded-md` (6px) controls, `rounded-lg`
+  (10px) overlays/cards. Icons: `h-4` toolbar, `h-3.5` dense.
 - Example prompt: "Add a 'pin source' action to each source row: h-3.5 lucide
   Pin icon button, hidden until hover/focus-within, aria-label with the source
   title, confirm nothing, toast on success."

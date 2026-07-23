@@ -69,7 +69,7 @@ export function Reports() {
 
   return (
     <div className="px-4 py-3">
-      <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+      <div className="flex items-center gap-2 text-micro font-medium uppercase tracking-wide text-subtle-foreground">
         <span>Reports</span>
         <button
           type="button"
@@ -112,10 +112,10 @@ export function Reports() {
                 <Power className={cn("h-3.5 w-3.5", r.enabled ? "text-success" : "text-subtle-foreground")} />
               </button>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-[13px] text-foreground" title={r.name}>
+                <div className="truncate text-body text-foreground" title={r.name}>
                   {r.name}
                 </div>
-                <div className="flex items-center gap-1 text-[11px] text-subtle-foreground">
+                <div className="flex items-center gap-1 text-micro text-subtle-foreground">
                   <Clock className="h-2.5 w-2.5" />
                   {intervalLabel(r.intervalSecs)}
                   {r.lastRunAt > 0 && <span>· last {fmtDay(r.lastRunAt)}</span>}
@@ -212,7 +212,7 @@ export function Reports() {
 function Field({ label, htmlFor, children }: { label: string; htmlFor: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor={htmlFor} className="text-[12px] font-medium text-foreground">{label}</label>
+      <label htmlFor={htmlFor} className="text-caption font-medium text-foreground">{label}</label>
       {children}
     </div>
   );
@@ -234,7 +234,7 @@ function Select({
       id={id}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="w-full rounded-md border border-input bg-surface-2 px-2.5 py-1.5 text-[13px] text-foreground outline-none focus:border-primary/60"
+      className="w-full rounded-md border border-input bg-surface-2 px-2.5 py-1.5 text-body text-foreground outline-none focus:border-primary/60"
     >
       {options.map((o) => (
         <option key={o.value} value={o.value}>

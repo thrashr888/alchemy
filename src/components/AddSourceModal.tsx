@@ -98,7 +98,7 @@ function Tile({
       onClick={onClick}
       className={cn(
         "flex flex-col items-center justify-center gap-1.5 rounded-md border border-border bg-surface-2/60 px-2 py-3",
-        "text-[12px] text-foreground/90 transition-colors hover:border-border-strong hover:bg-surface-2 hover:text-foreground",
+        "text-caption text-foreground/90 transition-colors hover:border-border-strong hover:bg-surface-2 hover:text-foreground",
         "focus-visible:ring-2 focus-visible:ring-ring/60 outline-none",
       )}
     >
@@ -194,7 +194,7 @@ export function AddSourceModal() {
       // Enter in the URL input would "click" this and bounce to the hub.
       type="button"
       onClick={() => setStep("hub")}
-      className="mb-3 flex items-center gap-1 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+      className="mb-3 flex items-center gap-1 text-caption text-muted-foreground transition-colors hover:text-foreground"
     >
       <ChevronLeft className="h-3.5 w-3.5" />
       All sources
@@ -239,10 +239,10 @@ export function AddSourceModal() {
                 draggingFiles ? "text-primary" : "text-muted-foreground",
               )}
             />
-            <span className="text-[13px] font-medium text-foreground">
+            <span className="text-body font-medium text-foreground">
               Drop files or folders here
             </span>
-            <span className="text-[11px] text-subtle-foreground">
+            <span className="text-micro text-subtle-foreground">
               PDF · Office · images · text — or click to browse
             </span>
           </button>
@@ -278,7 +278,7 @@ export function AddSourceModal() {
 
           {cloudFolders.length > 0 && (
             <div className="flex flex-col gap-1">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+              <span className="text-micro font-medium uppercase tracking-wide text-subtle-foreground">
                 Synced folders
               </span>
               <div className="flex flex-col gap-0.5">
@@ -299,7 +299,7 @@ export function AddSourceModal() {
                     )}
                   >
                     <Cloud className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <span className="text-[13px] text-foreground">
+                    <span className="text-body text-foreground">
                       {cf.label}
                     </span>
                     <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-subtle-foreground" />
@@ -309,7 +309,7 @@ export function AddSourceModal() {
             </div>
           )}
 
-          <p className="text-[11px] leading-relaxed text-subtle-foreground">
+          <p className="text-micro leading-relaxed text-subtle-foreground">
             URLs cover web pages, Google Docs, and GitHub or git repositories
             — repos import as living sources that re-sync automatically.
           </p>
@@ -346,7 +346,7 @@ export function AddSourceModal() {
             </div>
           )}
           {macAvailable === false && (
-            <p className="text-[11px] leading-relaxed text-subtle-foreground">
+            <p className="text-micro leading-relaxed text-subtle-foreground">
               Connect Calendar, Reminders & Notes —{" "}
               <code className="rounded bg-surface-2 px-1 py-0.5">
                 brew install cider
@@ -383,7 +383,7 @@ export function AddSourceModal() {
           {includeOptions(gitShape(url)).length > 0 ? (
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center gap-1.5">
-                <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+                <span className="text-micro font-medium uppercase tracking-wide text-subtle-foreground">
                   Import
                 </span>
                 {includeOptions(gitShape(url)).map((o) => {
@@ -395,8 +395,8 @@ export function AddSourceModal() {
                       onClick={() => setInclude(o.v)}
                       className={
                         active
-                          ? "rounded-full bg-primary/15 px-2.5 py-0.5 text-[12px] text-citation"
-                          : "rounded-full px-2.5 py-0.5 text-[12px] text-muted-foreground hover:bg-surface-2"
+                          ? "rounded-full bg-primary/15 px-2.5 py-0.5 text-caption text-citation"
+                          : "rounded-full px-2.5 py-0.5 text-caption text-muted-foreground hover:bg-surface-2"
                       }
                     >
                       {o.label}
@@ -404,14 +404,14 @@ export function AddSourceModal() {
                   );
                 })}
               </div>
-              <p className="text-[11px] leading-relaxed text-subtle-foreground">
+              <p className="text-micro leading-relaxed text-subtle-foreground">
                 A git repository — import just the README, prose docs, or docs
                 and code. Re-syncs automatically with your own git
                 credentials; widen it later from the source's Refresh.
               </p>
             </div>
           ) : (
-            <p className="text-[11px] leading-relaxed text-subtle-foreground">
+            <p className="text-micro leading-relaxed text-subtle-foreground">
               Google Docs, Sheets, and Slides links work too — share them as
               “Anyone with the link” first.
             </p>
@@ -558,14 +558,14 @@ function MacPicker({
             <FdaHint message={error} />
           </div>
         ) : (
-          <p className="px-2 py-4 text-[12px] text-destructive [overflow-wrap:anywhere]">{error}</p>
+          <p className="px-2 py-4 text-caption text-destructive [overflow-wrap:anywhere]">{error}</p>
         )
       ) : collections === null ? (
         <div className="flex items-center justify-center py-8">
           <Spinner className="h-4 w-4 text-muted-foreground" />
         </div>
       ) : collections.length === 0 ? (
-        <p className="px-2 py-4 text-[12px] text-muted-foreground">
+        <p className="px-2 py-4 text-caption text-muted-foreground">
           Nothing to add from {provider.label}.
         </p>
       ) : (
@@ -573,7 +573,7 @@ function MacPicker({
           {provider.id === "notes" && !q && notesFolder !== null && (
             <button
               onClick={() => setNotesFolder(null)}
-              className="flex items-center gap-1 rounded-md px-2 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground outline-none focus-visible:bg-surface-2"
+              className="flex items-center gap-1 rounded-md px-2 py-1.5 text-left text-caption text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground outline-none focus-visible:bg-surface-2"
             >
               <ChevronLeft className="h-3.5 w-3.5" />
               {notesFolder}
@@ -587,10 +587,10 @@ function MacPicker({
                   className="flex items-center gap-2 rounded-md px-2 py-2 text-left transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 outline-none"
                 >
                   <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 truncate text-[13px] text-foreground">
+                  <span className="min-w-0 truncate text-body text-foreground">
                     {name}
                   </span>
-                  <span className="ml-auto shrink-0 text-[11px] text-subtle-foreground">
+                  <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
                     {count} {count === 1 ? "note" : "notes"}
                   </span>
                   <ChevronRight className="h-3.5 w-3.5 shrink-0 text-subtle-foreground" />
@@ -602,24 +602,24 @@ function MacPicker({
                   onClick={() => onPick(c)}
                   className="flex items-baseline gap-2 rounded-md px-2 py-2 text-left transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 outline-none"
                 >
-                  <span className="min-w-0 truncate text-[13px] text-foreground">
+                  <span className="min-w-0 truncate text-body text-foreground">
                     {c.label}
                   </span>
                   {showDetail && (
-                    <span className="ml-auto shrink-0 text-[11px] text-subtle-foreground">
+                    <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
                       {c.detail}
                     </span>
                   )}
                 </button>
               ))}
           {!showFolders && visible.length === 0 && q && (
-            <p className="px-2 py-4 text-[12px] text-muted-foreground">
+            <p className="px-2 py-4 text-caption text-muted-foreground">
               No matches for “{query.trim()}”.
             </p>
           )}
         </div>
       )}
-      <p className="mt-2 text-[11px] leading-relaxed text-subtle-foreground">
+      <p className="mt-2 text-micro leading-relaxed text-subtle-foreground">
         {provider.id === "notes"
           ? "The note's full text becomes one source and re-syncs as you edit it. "
           : provider.id === "reminders"

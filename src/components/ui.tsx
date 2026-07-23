@@ -24,8 +24,8 @@ const variants: Record<ButtonVariant, string> = {
 };
 
 const sizes: Record<ButtonSize, string> = {
-  sm: "h-7 px-2.5 text-[12px] gap-1.5 rounded-md",
-  md: "h-8 px-3 text-[13px] gap-2 rounded-md",
+  sm: "h-7 px-2.5 text-caption gap-1.5 rounded-md",
+  md: "h-8 px-3 text-body gap-2 rounded-md",
   icon: "h-7 w-7 rounded-md justify-center",
 };
 
@@ -72,7 +72,7 @@ export function Input({
   return (
     <input
       className={cn(
-        "h-8 w-full rounded-md bg-surface-2 px-2.5 text-[13px] text-foreground",
+        "h-8 w-full rounded-md bg-surface-2 px-2.5 text-body text-foreground",
         "border border-input placeholder:text-subtle-foreground outline-none",
         "focus:border-ring/70 focus:ring-1 focus:ring-ring/40 transition-colors",
         className,
@@ -91,7 +91,7 @@ export function Textarea({
   return (
     <textarea
       className={cn(
-        "w-full rounded-md bg-surface-2 px-2.5 py-2 text-[13px] text-foreground resize-none",
+        "w-full rounded-md bg-surface-2 px-2.5 py-2 text-body text-foreground resize-none",
         "border border-input placeholder:text-subtle-foreground outline-none",
         "focus:border-ring/70 focus:ring-1 focus:ring-ring/40 transition-colors",
         className,
@@ -329,7 +329,7 @@ export function Modal({
           <div className="flex min-h-11 shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-2">
             <h2
               id={titleId}
-              className="text-[13px] font-semibold text-foreground"
+              className="text-body font-semibold text-foreground"
             >
               {title}
             </h2>
@@ -427,7 +427,7 @@ export function useConfirm() {
       }
     >
       {state.message && (
-        <p className="text-[13px] leading-relaxed text-muted-foreground">
+        <p className="text-body leading-relaxed text-muted-foreground">
           {state.message}
         </p>
       )}
@@ -474,7 +474,7 @@ export function Toaster({
           )}
         >
           {icon[t.kind]}
-          <div className="text-[12px] text-foreground/90 selectable">
+          <div className="text-caption text-foreground/90 selectable">
             {t.message}
           </div>
           <button
@@ -671,7 +671,7 @@ export function RowMenu({
                 it.onClick();
               }}
               className={cn(
-                "flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px]",
+                "flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-body",
                 it.danger
                   ? "text-destructive hover:bg-destructive/10"
                   : "text-foreground/90 hover:bg-surface-2 hover:text-foreground",
@@ -704,7 +704,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded px-1.5 h-[18px] text-[11px] font-medium",
+        "inline-flex items-center rounded px-1.5 h-[18px] text-micro font-medium",
         "bg-surface-2 text-muted-foreground border border-border",
         className,
       )}
@@ -736,9 +736,9 @@ export function EmptyState({
       )}
     >
       {icon && <div className="text-subtle-foreground mb-1">{icon}</div>}
-      <div className="text-[13px] font-medium text-foreground">{title}</div>
+      <div className="text-body font-medium text-foreground">{title}</div>
       {hint && (
-        <div className="text-[12px] text-muted-foreground max-w-[260px]">
+        <div className="text-caption text-muted-foreground max-w-[260px]">
           {hint}
         </div>
       )}

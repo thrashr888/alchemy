@@ -38,7 +38,7 @@ export function MacConnect({
 
   if (macAvailable === false) {
     return showInstallHint ? (
-      <p className="text-[11px] leading-relaxed text-subtle-foreground">
+      <p className="text-micro leading-relaxed text-subtle-foreground">
         Install <code className="rounded bg-surface-2 px-1">cider</code> to use
         Calendar, Reminders &amp; Apple Notes as sources:{" "}
         <code className="rounded bg-surface-2 px-1">brew install cider</code>
@@ -90,7 +90,7 @@ export function MacConnect({
 export function FdaHint({ message }: { message: string }) {
   return (
     <div className="flex flex-col gap-2 rounded-md border border-border bg-surface-2/40 px-3 py-2.5">
-      <div className="flex items-start gap-2 text-[12px] leading-relaxed text-foreground/90">
+      <div className="flex items-start gap-2 text-caption leading-relaxed text-foreground/90">
         <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#e8a33d]" />
         <span>{message}</span>
       </div>

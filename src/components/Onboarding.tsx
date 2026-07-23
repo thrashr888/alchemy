@@ -24,7 +24,7 @@ function CommandChip({ command }: { command: string }) {
         }
       }}
       title="Copy to clipboard"
-      className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-2 px-2 py-1 font-mono text-[11.5px] text-foreground/85 transition-colors hover:border-border-strong"
+      className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-2 px-2 py-1 font-mono text-[0.71875rem] text-foreground/85 transition-colors hover:border-border-strong"
     >
       {command}
       {copied ? (
@@ -64,14 +64,14 @@ function Step({
     >
       <div className="flex items-center gap-2.5">
         <StatusIcon ok={ok} optional={optional} />
-        <span className="text-[13px] font-medium text-foreground">{title}</span>
+        <span className="text-body font-medium text-foreground">{title}</span>
         {optional && (
-          <span className="rounded border border-border px-1 py-px text-[10px] uppercase tracking-wide text-subtle-foreground">
+          <span className="rounded border border-border px-1 py-px text-badge uppercase tracking-wide text-subtle-foreground">
             Optional
           </span>
         )}
       </div>
-      {!ok && detail && <p className="pl-6.5 text-[12px] text-muted-foreground">{detail}</p>}
+      {!ok && detail && <p className="pl-6.5 text-caption text-muted-foreground">{detail}</p>}
       {!ok && children && <div className="flex flex-wrap items-center gap-1.5 pl-6.5">{children}</div>}
     </div>
   );
@@ -165,10 +165,10 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
       <div className="flex w-full max-w-[520px] flex-col gap-5 px-6 py-10">
         <div className="flex flex-col items-center gap-3 text-center">
           <AlchemySymbol className="h-14 w-14 text-citation" />
-          <h1 className="font-serif text-[26px] font-medium tracking-[0.14em] text-foreground">
+          <h1 className="font-serif text-[1.625rem] font-medium tracking-[0.14em] text-foreground">
             Set up Alchemy
           </h1>
-          <p className="max-w-sm text-[13px] leading-relaxed text-muted-foreground">
+          <p className="max-w-sm text-body leading-relaxed text-muted-foreground">
             {provider === "openai" ? (
               <>
                 Connect an OpenAI-compatible gateway. Your sources are indexed
@@ -204,15 +204,15 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
                   : "border-border bg-surface text-muted-foreground hover:text-foreground",
               )}
             >
-              <span className="text-[13px] font-medium">{pv.label}</span>
-              <span className="text-[11px] text-subtle-foreground">{pv.note}</span>
+              <span className="text-body font-medium">{pv.label}</span>
+              <span className="text-micro text-subtle-foreground">{pv.note}</span>
             </button>
           ))}
         </div>
 
         {provider === "openai" && (
           <div className="flex flex-col gap-1.5 rounded-lg border border-border-strong bg-surface px-4 py-3">
-            <span className="text-[13px] font-medium text-foreground">Gateway</span>
+            <span className="text-body font-medium text-foreground">Gateway</span>
             <Input
               value={gwUrl}
               onChange={(e) => setGwUrl(e.target.value)}
@@ -234,7 +234,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
                 <select
                   value={gwModel}
                   onChange={(e) => setGwModel(e.target.value)}
-                  className="h-8 w-full appearance-none rounded-md border border-input bg-surface-2 px-2.5 text-[13px] text-foreground outline-none transition-colors focus:border-ring/60"
+                  className="h-8 w-full appearance-none rounded-md border border-input bg-surface-2 px-2.5 text-body text-foreground outline-none transition-colors focus:border-ring/60"
                 >
                   {!gwModel && <option value="">Choose a model…</option>}
                   {(gwModels.includes(gwModel) || !gwModel ? gwModels : [gwModel, ...gwModels]).map(
@@ -265,7 +265,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
             </div>
             <span
               className={cn(
-                "text-[11px]",
+                "text-micro",
                 gwStatus && !gwStatus.startsWith("Connected")
                   ? "text-destructive"
                   : gwStatus
@@ -290,7 +290,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
             <CommandChip command="brew install ollama" />
             <CommandChip command="ollama serve" />
             <button
-              className="text-[12px] text-citation hover:underline"
+              className="text-caption text-citation hover:underline"
               onClick={() => void openUrl("https://ollama.com/download")}
             >
               or download the app
@@ -313,7 +313,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
               <CommandChip command={`ollama pull ${chat.name}`} />
             )}
             {provider !== "openai" && health.reachable && (
-              <button className="text-[12px] text-citation hover:underline" onClick={onOpenSettings}>
+              <button className="text-caption text-citation hover:underline" onClick={onOpenSettings}>
                 or pick a smaller model
               </button>
             )}
@@ -361,7 +361,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
         </div>
 
         <div className="flex items-center justify-between">
-          <span className="text-[11.5px] text-subtle-foreground">
+          <span className="text-[0.71875rem] text-subtle-foreground">
             Rechecks automatically every few seconds.
           </span>
           <div className="flex items-center gap-2">

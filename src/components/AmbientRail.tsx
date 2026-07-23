@@ -8,7 +8,7 @@ import { CornerDownLeft, Sparkles, StickyNote } from "lucide-react";
 function SourceChip({ c }: { c: Citation }) {
   const source = useStore((s) => s.sources.find((x) => x.id === c.sourceId));
   return (
-    <span className="flex min-w-0 items-center gap-1.5 text-[11px] font-medium text-foreground">
+    <span className="flex min-w-0 items-center gap-1.5 text-micro font-medium text-foreground">
       {c.noteId ? (
         <StickyNote className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       ) : (
@@ -76,12 +76,12 @@ export function AmbientRail({
   if (!emptyState && hits.length === 0) return null;
   return (
     <div className="flex min-h-0 flex-col gap-2">
-      <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-subtle-foreground">
+      <div className="flex items-center gap-1.5 text-badge font-medium uppercase tracking-wider text-subtle-foreground">
         <Sparkles className="h-3 w-3" />
         Related
       </div>
       {hits.length === 0 ? (
-        <div className="text-[11px] leading-relaxed text-subtle-foreground/70">
+        <div className="text-micro leading-relaxed text-subtle-foreground/70">
           Passages from your sources appear here as you write.
         </div>
       ) : (
@@ -99,7 +99,7 @@ export function AmbientRail({
               className="flex w-full flex-col gap-1 rounded-md border border-border/60 bg-elevated/90 p-2 text-left shadow-sm backdrop-blur transition-colors hover:border-border-strong"
             >
               <SourceChip c={c} />
-              <span className="line-clamp-4 text-[11px] leading-relaxed text-muted-foreground">
+              <span className="line-clamp-4 text-micro leading-relaxed text-muted-foreground">
                 {c.snippet}
               </span>
             </button>

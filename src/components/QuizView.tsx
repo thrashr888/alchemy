@@ -84,7 +84,7 @@ function Quiz({ questions }: { questions: Question[] }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="sticky top-0 z-10 flex items-center gap-2 rounded-md border border-border bg-elevated px-3 py-1.5 text-[12px] text-muted-foreground">
+      <div className="sticky top-0 z-10 flex items-center gap-2 rounded-md border border-border bg-elevated px-3 py-1.5 text-caption text-muted-foreground">
         <span className="tabular-nums">
           {answered} / {questions.length} answered
           {answered > 0 && (
@@ -111,7 +111,7 @@ function Quiz({ questions }: { questions: Question[] }) {
         const pick = picks[q.n];
         return (
           <div key={q.n} className="flex flex-col gap-1.5">
-            <div className="text-[13.5px] font-medium text-foreground">
+            <div className="text-[0.84375rem] font-medium text-foreground">
               {q.n}. {q.text}
             </div>
             <div className="flex flex-col gap-1">
@@ -125,7 +125,7 @@ function Quiz({ questions }: { questions: Question[] }) {
                     disabled={!!pick}
                     onClick={() => setPicks((p) => ({ ...p, [q.n]: o.letter }))}
                     className={cn(
-                      "flex items-start gap-2 rounded-md border px-2.5 py-1.5 text-left text-[13px] transition-colors",
+                      "flex items-start gap-2 rounded-md border px-2.5 py-1.5 text-left text-body transition-colors",
                       !pick && "border-border hover:border-border-strong hover:bg-surface-2",
                       pick && isRight && "border-success/60 bg-success/10",
                       pick && chosen && !isRight && "border-destructive/60 bg-destructive/10",
@@ -145,7 +145,7 @@ function Quiz({ questions }: { questions: Question[] }) {
               })}
             </div>
             {pick && q.explanation && (
-              <div className="rounded-md bg-surface-2 px-2.5 py-1.5 text-[12px] leading-relaxed text-muted-foreground">
+              <div className="rounded-md bg-surface-2 px-2.5 py-1.5 text-caption leading-relaxed text-muted-foreground">
                 {q.explanation}
               </div>
             )}

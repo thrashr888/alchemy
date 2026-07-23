@@ -25,6 +25,7 @@ mod services;
 #[cfg(target_os = "macos")]
 mod spotlight;
 mod templates;
+mod textsize;
 mod trace;
 mod tts;
 
@@ -56,15 +57,21 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_debug_bridge::init());
 
     builder
-        // Evict per-window glass memos when a window is destroyed so a
-        // recreated window with the same label re-applies from scratch.
-        .on_window_event(|window, event| {
-            if matches!(event, tauri::WindowEvent::Destroyed) {
-                use tauri::Manager;
+        .on_window_event(|window, event| match event {
+            // Evict per-window glass memos when a window is destroyed so a
+            // recreated window with the same label re-applies from scratch.
+            tauri::WindowEvent::Destroyed => {
                 if let Some(state) = window.app_handle().try_state::<commands::AppState>() {
                     state.glass_applied.lock().unwrap().remove(window.label());
                 }
             }
+            // Refocusing Alchemy is the moment the accessibility text size can
+            // have just changed — the user came back from System Settings.
+            // Re-query and broadcast to every window if it actually moved.
+            tauri::WindowEvent::Focused(true) => {
+                textsize::publish_if_changed(window.app_handle());
+            }
+            _ => {}
         })
         .setup(|app| {
             let data_dir = app
@@ -143,6 +150,11 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 mcp::apply_config(&handle, mcp_enabled, mcp_port).await;
             });
+
+            // Seed the current accessibility text scale so the first window
+            // focus doesn't spuriously broadcast; the frontend reads it at boot
+            // via get_system_text_scale, and window-focus republishes changes.
+            textsize::prime();
             Ok(())
         })
         .on_menu_event(|app, event| menu::handle_event(app, event.id().0.as_str()))
@@ -244,6 +256,7 @@ pub fn run() {
             mcp::mcp_status,
             connectors::list_agent_connectors,
             connectors::connect_agent,
+            textsize::get_system_text_scale,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

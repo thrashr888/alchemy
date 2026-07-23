@@ -18,8 +18,8 @@ export function MigrationOverlay() {
             <Layers className="h-4.5 w-4.5" />
           </div>
           <div>
-            <div className="text-[14px] font-semibold text-foreground">Re-embedding sources</div>
-            <div className="text-[12px] text-muted-foreground">
+            <div className="text-card font-semibold text-foreground">Re-embedding sources</div>
+            <div className="text-caption text-muted-foreground">
               Rebuilding the vector index with your new model.
             </div>
           </div>
@@ -32,7 +32,7 @@ export function MigrationOverlay() {
           />
         </div>
 
-        <div className="flex items-center justify-between text-[12px]">
+        <div className="flex items-center justify-between text-caption">
           <span className="flex items-center gap-1.5 min-w-0 text-muted-foreground">
             <Spinner className="h-3 w-3 shrink-0" />
             <span className="truncate" title={title}>

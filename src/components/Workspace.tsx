@@ -82,7 +82,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
             aria-hidden="true"
           />
           <span
-            className="truncate text-[13px] font-semibold"
+            className="truncate text-body font-semibold"
             title={notebook?.title}
           >
             {notebook?.title ?? "Notebook"}

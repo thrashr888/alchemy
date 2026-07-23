@@ -12,7 +12,7 @@ export function HealthBanner({ onOpenSettings }: { onOpenSettings: () => void })
   if (issues.length === 0) return null;
 
   return (
-    <div className="flex items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-1.5 text-[12px] text-destructive">
+    <div className="flex items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-1.5 text-caption text-destructive">
       <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
       <span className="min-w-0 flex-1 truncate" title={issues.join(" · ")}>
         {issues.join(" · ")}
