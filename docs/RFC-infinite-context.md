@@ -183,15 +183,18 @@ Status: **implemented**.
   honesty note: a true RRF tie is a vector-only vs FTS-only hit at equal
   rank — constructing that end to end is fixture-fragile, so the recency
   rule is proven at the extracted comparator, not through the full stack.
-- The scale fence (`eval_scale_fence`): deterministic synthetic corpora
-  (xorshift-seeded distractor binders, identifier spaces disjoint from 12
-  fixed needles). Measured: **1M chars exact 1.00 / paraphrase 1.00
-  (k=10) · 3M exact 1.00 / paraphrase 1.00 (k=11)** — recall flat across a
-  tripling, adaptive k growing as designed. Ignored by default (per-doc
-  LanceDB seeding ≈ 10 min); run on retrieval changes with
-  `cargo test --lib eval_scale_fence -- --ignored --nocapture`; the 10M
-  variant is `eval_scale_fence_10m`. A bulk-insert seeding path would move
-  it into the default suite — noted as follow-up, not blocking.
+- The scale fence (`eval_scale_fence` / `eval_scale_fence_10m`):
+  deterministic synthetic corpora (xorshift-seeded distractor binders,
+  identifier spaces disjoint from 12 fixed needles). Measured across the
+  full target range: **1M exact 1.00 / paraphrase 1.00 (k=10) · 3M 1.00 /
+  1.00 (k=11) · 10M 1.00 / 1.00 (k=13)** — recall flat from 1M to 10M,
+  adaptive k growing as designed. The "infinite context" claim, and the
+  10M reference on the sources gauge, are now backed by a passing eval at
+  that exact scale, not extrapolation. Still `--ignored` (seeding, not
+  search, is the cost — all three sizes now seed in ~5.5 min total after
+  the deferred-FTS fix, down from 40+ min for 10M alone); run on retrieval
+  changes with `cargo test --lib eval_scale_fence -- --ignored --nocapture`
+  (the pattern matches both, covering all three sizes).
 - The dataset runner gained a **meta** variant (corpus-wide
   `search_chunks_all_opts` with production caps): additive report change,
   existing variants byte-identical; meta scores R@10 1.00 / nDCG 0.95
