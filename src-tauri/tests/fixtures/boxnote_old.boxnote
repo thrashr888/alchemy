@@ -1,0 +1,12 @@
+{
+  "atext": {
+    "text": "Legacy Box Note\nThis note predates the ProseMirror editor.\nSecond paragraph line.\n",
+    "attribs": "*0+f|1+g|1+i"
+  },
+  "pool": {
+    "numToAttrib": { "0": ["bold", "true"] },
+    "attribToNum": { "bold,true": 0 },
+    "nextNum": 1
+  },
+  "schemaVersion": 1
+}

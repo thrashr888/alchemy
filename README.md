@@ -50,7 +50,8 @@ two-host podcast voiced on-device.*
 ## Features
 
 - **Notebooks** — a home screen of notebooks (most-recent first); opens to your last one.
-- **Sources** — import **PDF**, **Office** (`.docx` / `.pptx` / `.xlsx`), **CSV/TSV**,
+- **Sources** — import **PDF**, **Office** (`.docx` / `.pptx` / `.xlsx`),
+  **Box Notes** (`.boxnote`), **CSV/TSV**,
   **images**, **text**, **Markdown**, paste text, or fetch a **URL** — including
   link-shared **Google Docs, Sheets, and Slides** (paste the link, or drag the
   `.gdoc` / `.gsheet` / `.gslides` files from a local Google Drive folder). Each is
@@ -59,9 +60,12 @@ two-host podcast voiced on-device.*
   (and URL sources re-fetch); **Show in Finder** jumps to the original.
   Failed/blocked imports show an error badge and can be retried; edited/refreshed
   sources are re-embedded.
-- **Folder sources** — add a whole folder (OneDrive/Dropbox/Drive/iCloud included):
-  it scans supported files, keeps syncing on a timer, and lists cloud
-  placeholders without downloading them.
+- **Folder sources** — add any folder, or start from a detected cloud sync root
+  (**Google Drive, OneDrive, Dropbox, Box, iCloud Drive**) with one click and
+  drill down to a subfolder. It scans supported files, keeps syncing on a timer,
+  and lists cloud placeholders without downloading them — iCloud stubs hydrate
+  on their own in the background, and Dropbox Paper (`.paper`) / Google
+  `.gdoc`·`.gsheet`·`.gslides` stubs resolve to their online docs.
 - **Mac apps as sources** — connect **Apple Notes** (individual notes),
   **Reminders** lists, rolling **Calendar** windows, and **Stocks** watchlists
   via [cider](https://github.com/thrashr888/cider); they re-sync automatically.

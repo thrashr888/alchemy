@@ -1,0 +1,45 @@
+{
+  "doc": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "heading",
+        "attrs": { "level": 1 },
+        "content": [{ "type": "text", "text": "Quarterly Plan" }]
+      },
+      {
+        "type": "paragraph",
+        "content": [
+          { "type": "text", "text": "We ship " },
+          { "type": "text", "text": "cloud folders", "marks": [{ "type": "strong" }] },
+          { "type": "text", "text": " this week." }
+        ]
+      },
+      {
+        "type": "bullet_list",
+        "content": [
+          {
+            "type": "list_item",
+            "content": [
+              { "type": "paragraph", "content": [{ "type": "text", "text": "Box Notes" }] }
+            ]
+          },
+          {
+            "type": "list_item",
+            "content": [
+              { "type": "paragraph", "content": [{ "type": "text", "text": "Dropbox Paper" }] }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "paragraph",
+        "content": [
+          { "type": "text", "text": "Line one" },
+          { "type": "hard_break" },
+          { "type": "text", "text": "Line two" }
+        ]
+      }
+    ]
+  }
+}

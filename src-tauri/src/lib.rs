@@ -154,6 +154,7 @@ pub fn run() {
             commands::list_sources,
             commands::add_source_file,
             commands::add_source_folder,
+            commands::list_cloud_folders,
             commands::add_source_mac,
             integrations::integrations_ready,
             integrations::locate_note,

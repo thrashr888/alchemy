@@ -3,13 +3,14 @@ import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { Button, Input, Textarea, Modal, Spinner } from "./ui";
 import { cn } from "@/lib/utils";
-import type { MacCollection } from "@/lib/types";
+import type { CloudFolder, MacCollection } from "@/lib/types";
 import { FdaHint } from "./MacConnect";
 import {
   Calendar,
   ChevronLeft,
   ChevronRight,
   ClipboardPaste,
+  Cloud,
   Folder,
   Link2,
   ListChecks,
@@ -119,6 +120,7 @@ export function AddSourceModal() {
   const addMac = useStore((s) => s.addSourceMac);
 
   const [step, setStep] = useState<Step>("hub");
+  const [cloudFolders, setCloudFolders] = useState<CloudFolder[]>([]);
   const [url, setUrl] = useState("");
   /** Include-ladder choice for git-shaped URLs; null = the shape's default. */
   const [include, setInclude] = useState<string | null>(null);
@@ -138,6 +140,12 @@ export function AddSourceModal() {
     setUrl("");
     setPasteTitle("");
     setPasteText("");
+    // Detect cloud sync roots each open — a drive mounted since last time shows
+    // up. Cheap, and failure just hides the quick-picks.
+    api
+      .listCloudFolders()
+      .then(setCloudFolders)
+      .catch(() => setCloudFolders([]));
   }, [open, deepStep]);
 
   // "Add source from URL / paste text" asks come in as store flags rather
@@ -256,6 +264,40 @@ export function AddSourceModal() {
               onClick={() => setStep("text")}
             />
           </div>
+
+          {cloudFolders.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+                Synced folders
+              </span>
+              <div className="flex flex-col gap-0.5">
+                {cloudFolders.map((cf) => (
+                  <button
+                    key={cf.path}
+                    // Opens the native picker inside this root so the user drills
+                    // down to a subfolder — never ingests the whole drive.
+                    onClick={() => {
+                      closeAddSource();
+                      void pickAndAddFolder(cf.path);
+                    }}
+                    title={`Choose a folder inside ${cf.path}`}
+                    className={cn(
+                      "flex items-center gap-2 rounded-md border border-border bg-surface-2/60 px-2.5 py-2 text-left",
+                      "transition-colors hover:border-border-strong hover:bg-surface-2",
+                      "focus-visible:ring-2 focus-visible:ring-ring/60 outline-none",
+                    )}
+                  >
+                    <Cloud className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span className="text-[13px] text-foreground">
+                      {cf.label}
+                    </span>
+                    <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-subtle-foreground" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <p className="text-[11px] leading-relaxed text-subtle-foreground">
             URLs cover web pages, Google Docs, and GitHub or git repositories
             — repos import as living sources that re-sync automatically.

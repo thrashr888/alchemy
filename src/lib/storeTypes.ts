@@ -161,7 +161,9 @@ export interface AppState {
   startReportScheduler: () => void;
 
   pickAndAddFiles: () => Promise<void>;
-  pickAndAddFolder: () => Promise<void>;
+  /** Open the folder picker (optionally rooted at a cloud sync folder) and add
+   *  the chosen subfolder as a source. */
+  pickAndAddFolder: (defaultPath?: string) => Promise<void>;
   addSourceFiles: (paths: string[]) => Promise<void>;
   startSourceSync: () => void;
   addSourceUrl: (url: string, include?: string) => Promise<void>;

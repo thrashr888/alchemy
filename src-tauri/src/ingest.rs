@@ -199,6 +199,7 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
         "docx" => ("text".to_string(), extract_docx(path)?),
         "pptx" => ("text".to_string(), extract_pptx(path)?),
         "epub" => ("text".to_string(), extract_epub(path)?),
+        "boxnote" => ("markdown".to_string(), extract_boxnote(path)?),
         "txt" | "text" | "" => (
             "text".to_string(),
             std::fs::read_to_string(path).context("failed to read text file")?,
@@ -646,6 +647,156 @@ fn extract_epub(path: &str) -> Result<String> {
         }
     }
     Ok(out)
+}
+
+/// Extract text from a Box Note (`.boxnote`). Box Notes are JSON: the modern
+/// editor (2022+) stores a ProseMirror document under `doc`; the original
+/// Etherpad-derived editor stored the flat text under `atext.text`. Both are
+/// parsed best-effort into markdown-ish plain text.
+fn extract_boxnote(path: &str) -> Result<String> {
+    let raw = read_text_lossy(path)?;
+    let v: serde_json::Value = serde_json::from_str(&raw)
+        .with_context(|| format!("{path} is not a valid Box Note (JSON)"))?;
+
+    // Modern format: { "doc": { "type": "doc", "content": [ … ] } } — a
+    // ProseMirror tree. Walk it collecting text with block breaks.
+    if let Some(doc) = v.get("doc").filter(|d| d.is_object()) {
+        let text = boxnote_prosemirror_text(doc);
+        if !text.trim().is_empty() {
+            return Ok(text);
+        }
+    }
+
+    // Legacy format: Etherpad-style { "atext": { "text": "…" }, "pool": … } —
+    // the text field is already newline-delimited plain text.
+    if let Some(text) = v
+        .get("atext")
+        .and_then(|a| a.get("text"))
+        .and_then(|t| t.as_str())
+        .filter(|t| !t.trim().is_empty())
+    {
+        return Ok(text.to_string());
+    }
+
+    Err(anyhow!("no extractable text in Box Note {path}"))
+}
+
+/// Walk a Box Note ProseMirror document, concatenating text nodes and inserting
+/// breaks at block boundaries so paragraphs, headings and list items survive.
+fn boxnote_prosemirror_text(doc: &serde_json::Value) -> String {
+    let mut out = String::new();
+    boxnote_walk(doc, &mut out);
+    out
+}
+
+fn boxnote_walk(node: &serde_json::Value, out: &mut String) {
+    let ty = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    match ty {
+        // Leaf text run.
+        "text" => {
+            if let Some(t) = node.get("text").and_then(|t| t.as_str()) {
+                out.push_str(t);
+            }
+            return;
+        }
+        // Explicit in-paragraph line break.
+        "hard_break" | "hardBreak" => {
+            out.push('\n');
+            return;
+        }
+        // A rule renders as nothing meaningful for retrieval.
+        "horizontal_rule" | "horizontalRule" => {
+            boxnote_break(out, "\n\n");
+            return;
+        }
+        _ => {}
+    }
+
+    // Markdown-ish prefixes so structure reads (and chunks) sensibly.
+    if ty == "heading" {
+        let level = node
+            .get("attrs")
+            .and_then(|a| a.get("level"))
+            .and_then(|l| l.as_u64())
+            .unwrap_or(1)
+            .clamp(1, 6) as usize;
+        out.push_str(&"#".repeat(level));
+        out.push(' ');
+    }
+    let is_list_item = matches!(
+        ty,
+        "list_item" | "listItem" | "check_list_item" | "checkListItem"
+    );
+    if is_list_item {
+        out.push_str("- ");
+    }
+
+    if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
+        for child in content {
+            boxnote_walk(child, out);
+        }
+    }
+
+    // Close the block. Paragraph-level nodes get a blank line; tighter
+    // structures (list items, table rows) get a single newline.
+    match ty {
+        "paragraph" | "heading" | "code_block" | "codeBlock" | "blockquote" => {
+            boxnote_break(out, "\n\n")
+        }
+        "list_item" | "listItem" | "check_list_item" | "checkListItem" | "table_row"
+        | "tableRow" => boxnote_break(out, "\n"),
+        _ => {}
+    }
+}
+
+/// Append a block separator without piling blank lines onto an empty buffer or
+/// one that already ends with the same break.
+fn boxnote_break(out: &mut String, sep: &str) {
+    if out.is_empty() || out.ends_with(sep) {
+        return;
+    }
+    out.push_str(sep);
+}
+
+/// If `path` is a Dropbox Paper stub (`.paper`) that carries a link to the
+/// online document, return that URL so it can be fetched like any web page —
+/// the same treatment `.gdoc` placeholders get. Modern `.paper` files are
+/// usually opaque online-only placeholders with no embedded URL; those return
+/// None and the folder scan skips them with a clear reason.
+pub fn dropbox_paper_url(path: &str) -> Option<String> {
+    if !Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("paper"))
+    {
+        return None;
+    }
+    let raw = std::fs::read_to_string(path).ok()?;
+    // JSON stub: a field holding the doc's dropbox.com URL.
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+        for key in ["url", "link", "href", "web_url"] {
+            if let Some(u) = v.get(key).and_then(|x| x.as_str()) {
+                if is_dropbox_paper_url(u) {
+                    return Some(u.trim().to_string());
+                }
+            }
+        }
+    }
+    // Bare weblink stub (e.g. a .webloc-style `URL=…` line): the first Dropbox
+    // Paper URL anywhere in the text.
+    raw.split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '=' | '('))
+        .map(|tok| tok.trim_end_matches(['/', ',', ')']))
+        .find(|tok| is_dropbox_paper_url(tok))
+        .map(str::to_string)
+}
+
+/// A Dropbox Paper document URL: paper.dropbox.com/…, or a dropbox.com link
+/// into a Paper doc (`/paper` path, or a modern `…Name.paper` share link).
+fn is_dropbox_paper_url(u: &str) -> bool {
+    let u = u.trim();
+    u.starts_with("https://")
+        && (u.contains("paper.dropbox.com")
+            || (u.contains("dropbox.com") && (u.contains("/paper") || u.contains(".paper"))))
 }
 
 /// Fetch a URL and strip it down to readable text (naive tag removal).
@@ -2430,5 +2581,106 @@ mod tests {
         let res = extract_file(&path.to_string_lossy());
         assert!(res.is_err(), "malformed pdf must error, not panic");
         let _ = std::fs::remove_file(&path);
+    }
+
+    fn fixture(name: &str) -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name)
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn boxnote_new_format_parses_prosemirror_tree() {
+        // The whole pipeline: extension dispatch + ProseMirror walk + normalize.
+        let ex = extract_file(&fixture("boxnote_new.boxnote")).unwrap();
+        assert_eq!(ex.source_type, "markdown");
+        // Heading keeps its markdown level; bold runs join with their siblings.
+        assert!(ex.text.contains("# Quarterly Plan"), "heading: {}", ex.text);
+        assert!(
+            ex.text.contains("We ship cloud folders this week."),
+            "paragraph runs join: {}",
+            ex.text
+        );
+        // List items get bullets and land on their own lines.
+        assert!(ex.text.contains("- Box Notes"), "bullet: {}", ex.text);
+        assert!(ex.text.contains("- Dropbox Paper"), "bullet: {}", ex.text);
+        // A hard break inside a paragraph becomes a newline, not a space.
+        assert!(
+            ex.text.contains("Line one\nLine two"),
+            "hard break: {:?}",
+            ex.text
+        );
+    }
+
+    #[test]
+    fn boxnote_old_format_reads_etherpad_atext() {
+        let ex = extract_file(&fixture("boxnote_old.boxnote")).unwrap();
+        assert!(
+            ex.text.contains("Legacy Box Note"),
+            "title line: {}",
+            ex.text
+        );
+        assert!(
+            ex.text
+                .contains("This note predates the ProseMirror editor."),
+            "body: {}",
+            ex.text
+        );
+    }
+
+    #[test]
+    fn boxnote_rejects_non_json() {
+        let path = std::env::temp_dir().join("nbl-bad-fixture.boxnote");
+        std::fs::write(&path, b"not json at all").unwrap();
+        let res = extract_file(&path.to_string_lossy());
+        assert!(res.is_err(), "garbage .boxnote must error, not panic");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn dropbox_paper_url_reads_json_stub() {
+        let path = std::env::temp_dir().join("nbl-stub-json.paper");
+        std::fs::write(
+            &path,
+            br#"{"url":"https://www.dropbox.com/scl/fi/abc123/Plan.paper?rlkey=xyz","title":"Plan"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            dropbox_paper_url(&path.to_string_lossy()).as_deref(),
+            Some("https://www.dropbox.com/scl/fi/abc123/Plan.paper?rlkey=xyz")
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn dropbox_paper_url_reads_bare_weblink_stub() {
+        let path = std::env::temp_dir().join("nbl-stub-link.paper");
+        std::fs::write(
+            &path,
+            b"[InternetShortcut]\nURL=https://paper.dropbox.com/doc/Roadmap--abcDEF\n",
+        )
+        .unwrap();
+        assert_eq!(
+            dropbox_paper_url(&path.to_string_lossy()).as_deref(),
+            Some("https://paper.dropbox.com/doc/Roadmap--abcDEF")
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn dropbox_paper_url_skips_opaque_stub() {
+        // An opaque/binary .paper placeholder has no fetchable URL — None means
+        // the folder scan skips it with a reason rather than fetching garbage.
+        let path = std::env::temp_dir().join("nbl-stub-opaque.paper");
+        std::fs::write(&path, b"\x00\x01\x02 opaque box\x00 not a url").unwrap();
+        assert_eq!(dropbox_paper_url(&path.to_string_lossy()), None);
+        let _ = std::fs::remove_file(&path);
+        // Wrong extension never matches, even with a URL inside.
+        let other = std::env::temp_dir().join("nbl-not-paper.txt");
+        std::fs::write(&other, b"https://paper.dropbox.com/doc/x").unwrap();
+        assert_eq!(dropbox_paper_url(&other.to_string_lossy()), None);
+        let _ = std::fs::remove_file(&other);
     }
 }
