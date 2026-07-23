@@ -100,20 +100,64 @@ impl FmEngine {
         // 8192 tokens — a prompt past it does not degrade, it hard-errors.
         // Structure-aware callers already budget the prompt before assembly;
         // this catches every path that didn't (agentic retrieval, rerank,
-        // distill, tool routing…) and any estimate that drifted, trimming the
-        // expendable context/history while the system preamble and the
-        // trailing question survive. See `inference::budget`.
-        let fitted = budget::fit_messages(messages, budget::FM_INPUT_BUDGET_TOKENS);
-        if let Cow::Owned(_) = &fitted {
-            eprintln!(
-                "foundation models: prompt exceeded the {}-token input budget (~{} tokens); \
-                 trimmed retrieved context/history to fit the on-device window",
-                budget::FM_INPUT_BUDGET_TOKENS,
-                budget::messages_tokens(messages),
-            );
+        // distill, tool routing…) and any estimate that drifted.
+        //
+        // The token estimate (chars/3.5) is calibrated to English prose; dense
+        // content (code, RFCs, dense markdown, CJK) tokenizes to MORE tokens per
+        // char, so a prompt the estimator calls "in budget" can still exceed
+        // 8192 and get rejected up front — before any token — with the exact
+        // count ("Content contains N tokens, which exceeds … 8192"). We read
+        // that measured count and re-trim to its true ratio, retrying a bounded
+        // number of times. Overflow is a pre-generation rejection, so no token
+        // has reached `on_token` when we retry. See `inference::budget`.
+        const MAX_ATTEMPTS: usize = 3;
+        let mut budget_tokens = budget::FM_INPUT_BUDGET_TOKENS;
+        for attempt in 0..MAX_ATTEMPTS {
+            let fitted = budget::fit_messages(messages, budget_tokens);
+            if let Cow::Owned(_) = &fitted {
+                eprintln!(
+                    "foundation models: trimming prompt to ~{budget_tokens} est input tokens \
+                     (assembled ~{} est) to fit the on-device window",
+                    budget::messages_tokens(messages),
+                );
+            }
+            match self.run_once(&fitted, &mut on_token).await {
+                Ok(outcome) => return Ok(outcome),
+                Err(e) => match parse_context_overflow(&e) {
+                    // Still over the real window and attempts remain: recalibrate
+                    // the budget from the measured count (with headroom) and retry.
+                    Some((actual, limit)) if attempt + 1 < MAX_ATTEMPTS => {
+                        let target = budget::FM_INPUT_BUDGET_TOKENS * 9 / 10; // 10% headroom
+                        let scaled = (budget_tokens as u128 * target as u128
+                            / (actual.max(1) as u128))
+                            as usize;
+                        let next = scaled.min(budget_tokens.saturating_sub(1)).max(256);
+                        eprintln!(
+                            "foundation models: prompt measured {actual} tokens (limit {limit}); \
+                             re-trimming to ~{next} est input tokens and retrying",
+                        );
+                        budget_tokens = next;
+                    }
+                    // Not an overflow, or attempts exhausted: surface it.
+                    _ => return Err(e),
+                },
+            }
         }
-        let messages: &[ChatTurn] = &fitted;
+        Err(anyhow!(
+            "foundation models: could not fit the prompt within the {}-token window \
+             after {MAX_ATTEMPTS} attempts",
+            budget::FM_CONTEXT_TOKENS,
+        ))
+    }
 
+    /// One sidecar round-trip: spawn, send the assembled prompt, stream tokens.
+    /// Factored out of `chat_stream` so the overflow-retry loop can re-invoke it
+    /// with a tighter prompt; takes `on_token` by `&mut` so the same callback
+    /// spans attempts.
+    async fn run_once<F>(&self, messages: &[ChatTurn], on_token: &mut F) -> Result<ChatOutcome>
+    where
+        F: FnMut(&str),
+    {
         let request = serde_json::json!({
             "messages": messages
                 .iter()
@@ -195,5 +239,47 @@ impl FmEngine {
 
     pub async fn chat(&self, messages: &[ChatTurn]) -> Result<ChatOutcome> {
         self.chat_stream(messages, |_| {}).await
+    }
+}
+
+/// Parse the framework's over-budget rejection — "Content contains N tokens,
+/// which exceeds the maximum allowed context size of M" — into `(actual, limit)`.
+/// Returns `None` for any other error, so only a true context overflow triggers
+/// a re-trim/retry.
+fn parse_context_overflow(err: &anyhow::Error) -> Option<(usize, usize)> {
+    let s = err.to_string();
+    if !s.contains("exceeds the maximum allowed context size") {
+        return None;
+    }
+    let first_uint = |seg: &str| -> Option<usize> {
+        seg.split(|c: char| !c.is_ascii_digit())
+            .find(|p| !p.is_empty())
+            .and_then(|n| n.parse().ok())
+    };
+    let actual = first_uint(s.split("contains ").nth(1)?)?;
+    let limit = first_uint(s.rsplit("context size of ").next()?)?;
+    Some((actual, limit))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_the_context_overflow_rejection() {
+        let e = anyhow!(
+            "foundation models: Content contains 9554 tokens, which exceeds the \
+             maximum allowed context size of 8192."
+        );
+        assert_eq!(parse_context_overflow(&e), Some((9554, 8192)));
+    }
+
+    #[test]
+    fn ignores_unrelated_errors() {
+        assert_eq!(
+            parse_context_overflow(&anyhow!("foundation models sidecar timed out")),
+            None
+        );
+        assert_eq!(parse_context_overflow(&anyhow!("boom")), None);
     }
 }
