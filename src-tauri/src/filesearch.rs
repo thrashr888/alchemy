@@ -382,7 +382,7 @@ mod tests {
         assert_eq!(pool.len(), 3);
         assert_eq!(pool[0], (p("a/one.pdf"), true));
         assert_eq!(pool[1], (p("a/two.pdf"), true));
-        assert_eq!(pool[2].1, false);
+        assert!(!pool[2].1);
     }
 
     fn hit(name: &str, ingestible: bool, name_hit: bool, mtime: i64) -> FileHit {
