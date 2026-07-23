@@ -43,9 +43,12 @@ import {
   TrendingUp,
 } from "lucide-react";
 
-// Soft per-notebook capacity used for the "how full is this notebook" gauge.
-// ~1M chars ≈ ~250k tokens — generous for local RAG over many documents.
-const MAX_NOTEBOOK_CHARS = 1_000_000;
+// Reference scale for the "how big is this notebook" gauge. Not a capacity —
+// retrieval has no cliff (RFC-infinite-context: adaptive k, gists, the scale
+// fence holds recall flat as the corpus grows) — 10M chars is the design
+// target the eval fence covers, so the bar reads as "where you are in the
+// verified operating range", going red only near its edge.
+const SCALE_TARGET_CHARS = 10_000_000;
 
 // Folder tree open/closed state persists across restarts, keyed by folder
 // source id (only ids the user has explicitly toggled are stored; unseen
@@ -215,7 +218,7 @@ export function SourcesPanel() {
   }
 
   const totalChars = sources.reduce((sum, s) => sum + s.charCount, 0);
-  const pct = Math.min(100, (totalChars / MAX_NOTEBOOK_CHARS) * 100);
+  const pct = Math.min(100, (totalChars / SCALE_TARGET_CHARS) * 100);
 
   // Folder children render indented under their folder; everything else is a
   // flat top-level row. Parents with many children start collapsed — a repo
@@ -331,7 +334,7 @@ export function SourcesPanel() {
               {Intl.NumberFormat().format(totalChars)} chars
             </span>
             <span className="text-subtle-foreground">
-              {pct < 1 ? "<1" : Math.round(pct)}% of capacity
+              {pct < 1 ? "<1" : Math.round(pct)}% of 10M
             </span>
           </div>
           <div className="h-1.5 overflow-hidden rounded-full bg-surface-2">
