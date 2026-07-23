@@ -10,6 +10,7 @@ import type {
   ConnectorStatus,
   CorpusStats,
   FolderScan,
+  GrepHit,
   KokoroStatus,
   MacCollection,
   MacFileHit,
@@ -277,6 +278,16 @@ export const api = {
     ),
   searchEverything: (q: string) =>
     run(query<SearchHit[]>("search_everything", { query: q })),
+  /** `/grep` in the composer: in-process ripgrep over the notebook's repo- and
+   *  folder-backed files. No model call; hits render as a local chat message. */
+  grepSources: (notebookId: string, pattern: string, maxResults?: number) =>
+    run(
+      cmd<GrepHit[]>("grep_sources", {
+        notebookId,
+        pattern,
+        maxResults: maxResults ?? null,
+      }),
+    ),
   askEverything: (
     question: string,
     history: { role: string; content: string }[],

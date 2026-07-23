@@ -1109,6 +1109,57 @@ pub(crate) async fn repo_backed_files(
         .collect()
 }
 
+/// One exact-match window for the `/grep` composer command.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GrepHitOut {
+    pub source_id: String,
+    pub source_title: String,
+    pub path: String,
+    pub line: u64,
+    pub window: String,
+}
+
+/// `/grep` in the chat composer: the same in-process ripgrep engine the MCP
+/// `grep_sources` tool uses, exposed as a command so the chat UI can render
+/// hits locally with no model call. Searches the notebook's repo- and
+/// folder-backed files (whole working trees, not just embedded passages).
+#[tauri::command]
+pub async fn grep_sources(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    pattern: String,
+    max_results: Option<u32>,
+) -> Result<Vec<GrepHitOut>, String> {
+    let pattern = pattern.trim().to_string();
+    if pattern.is_empty() {
+        return Err("Enter a pattern to grep for.".to_string());
+    }
+    let files = repo_backed_files(&state, &notebook_id, None).await;
+    if files.is_empty() {
+        return Err("This notebook has no repo- or folder-backed files to grep.".to_string());
+    }
+    let k = max_results.unwrap_or(8).clamp(1, 20) as usize;
+    let paths: Vec<String> = files.iter().map(|f| f.0.clone()).collect();
+    let hits =
+        tokio::task::spawn_blocking(move || crate::grepsearch::search_pattern(&pattern, &paths, k))
+            .await
+            .map_err(|err| err.to_string())??;
+    Ok(hits
+        .into_iter()
+        .map(|h| {
+            let (path, id, title) = &files[h.file_index];
+            GrepHitOut {
+                source_id: id.clone(),
+                source_title: title.clone(),
+                path: path.clone(),
+                line: h.first_line,
+                window: h.window,
+            }
+        })
+        .collect())
+}
+
 async fn grep_leg(
     state: &AppState,
     notebook_id: &str,

@@ -216,4 +216,32 @@ mod tests {
         assert!(hits[0].window.contains("    body();"));
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // The `/grep` composer command and the MCP tool both call `search_pattern`
+    // with a user-supplied regex: valid patterns rank windows, invalid ones
+    // surface the engine error rather than panicking.
+    #[test]
+    fn search_pattern_regex_and_invalid() {
+        let dir = std::env::temp_dir().join(format!("alch-grep-re-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.rs");
+        std::fs::write(&a, "let todo = 1;\n// TODO: fix\nfn done() {}\n").unwrap();
+        let files = vec![a.to_string_lossy().to_string()];
+
+        // Case-insensitive regex matches both `todo` and `TODO`.
+        let hits = search_pattern(r"(?i)todo", &files, 4).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].file_index, 0);
+        assert!(hits[0].window.contains("TODO"));
+
+        // A pattern that matches nothing yields no hits (not an error).
+        assert!(search_pattern("no_such_symbol", &files, 4)
+            .unwrap()
+            .is_empty());
+
+        // An unbalanced group is a regex error, returned as a message.
+        assert!(search_pattern("(unterminated", &files, 4).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

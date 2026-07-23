@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
@@ -10,7 +10,13 @@ import { DitherBackground } from "./DitherBackground";
 import { AlchemySymbol } from "./AlchemyHero";
 import { DEFAULT_VERBS, THEMES, resolveThemeId } from "@/lib/themes";
 import { generatedEpigraph } from "@/lib/epigraph";
-import type { Citation, Message } from "@/lib/types";
+import {
+  parseSlash,
+  slashFilter,
+  slashNorm,
+  type SlashCommandMeta,
+} from "@/lib/slashCommands";
+import type { Citation, GrepHit, Message, NoteKind } from "@/lib/types";
 import {
   MessageSquare,
   Wrench,
@@ -58,6 +64,10 @@ export function ChatPanel() {
   const refreshSummary = useStore((s) => s.refreshSummary);
 
   const [draft, setDraft] = useState("");
+  // Slash-command picker (see the composer below): index of the highlighted
+  // row, and whether Esc/blur has dismissed the menu for the current draft.
+  const [slashSel, setSlashSel] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
   const failedInput = useStore((s) => s.failedInput);
   const { confirm, dialog: confirmDialog } = useConfirm();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -164,8 +174,202 @@ export function ChatPanel() {
   function submit() {
     const text = draft.trim();
     if (!text || sending || !canChat) return;
+    // A typed "/command args" runs the command; an unknown slash falls through
+    // and sends as a normal message.
+    if (text.startsWith("/")) {
+      const parsed = parseSlash(text);
+      if (parsed) {
+        resetComposer();
+        void runSlash(parsed.cmd, parsed.arg);
+        return;
+      }
+    }
     setDraft("");
     void send(text);
+  }
+
+  // The picker is a pure command chooser: it's active only while the (space-
+  // free) name is being typed as the first characters. A space commits the
+  // choice and switches the composer to argument entry, closing the picker.
+  const slashName =
+    draft.startsWith("/") && !draft.includes("\n") && !/\s/.test(draft.slice(1))
+      ? draft.slice(1)
+      : null;
+  const slashOpen = slashName !== null && !slashDismissed;
+  const slashResults = useMemo(
+    () => (slashName === null ? [] : slashFilter(slashName)),
+    [slashName],
+  );
+  useEffect(() => {
+    setSlashSel((i) => Math.min(i, Math.max(0, slashResults.length - 1)));
+  }, [slashResults.length]);
+
+  function resetComposer() {
+    setDraft("");
+    setSlashSel(0);
+    setSlashDismissed(false);
+  }
+
+  // Tab, or Enter on an argument-required command: drop the canonical name into
+  // the composer with a trailing space and keep focus so the user can type
+  // arguments (the space closes the picker on its own).
+  function completeSlash(c: SlashCommandMeta) {
+    const next = `/${c.name} `;
+    setDraft(next);
+    setSlashSel(0);
+    setSlashDismissed(false);
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.selectionStart = el.selectionEnd = next.length;
+    });
+  }
+
+  // Enter/click on a picker row: complete arg-required commands, run the rest.
+  function activateSlash(c: SlashCommandMeta) {
+    if (c.argRequired) {
+      completeSlash(c);
+      return;
+    }
+    void runSlash(c, "");
+    resetComposer();
+  }
+
+  async function runGrep(pattern: string) {
+    const s = useStore.getState();
+    const id = s.currentId;
+    if (!id) return;
+    let hits: GrepHit[];
+    try {
+      hits = await api.grepSources(id, pattern);
+    } catch (e) {
+      s.pushToast("error", e instanceof Error ? e.message : String(e));
+      return;
+    }
+    // A local, non-LLM transcript row — never persisted, so it stays out of the
+    // model's history and simply shows the matches inline.
+    const msg: Message = {
+      id: `grep-${Date.now()}`,
+      notebookId: id,
+      role: "assistant",
+      content: renderGrepMarkdown(pattern, hits),
+      citations: [],
+      kind: "chat",
+      model: `grep · ${hits.length} ${hits.length === 1 ? "match" : "matches"}`,
+      createdAt: Date.now(),
+    };
+    useStore.setState((st) => ({ messages: [...st.messages, msg] }));
+  }
+
+  async function runSlash(c: SlashCommandMeta, rawArg: string) {
+    const s = useStore.getState();
+    const arg = rawArg.trim();
+
+    // Generators (any non-Actions family) map name → note kind; trailing text
+    // becomes optional custom instructions for the generation.
+    if (c.family !== "Actions") {
+      if (c.name === "audio_overview" && !s.kokoroStatus?.verified) {
+        s.pushToast(
+          "info",
+          "Audio Overview needs the voice model — set it up in Settings → Studio",
+        );
+        return;
+      }
+      void s.generateArtifact(c.name as NoteKind, arg || undefined);
+      return;
+    }
+
+    switch (c.name) {
+      case "add": {
+        if (!isWebUrl(arg)) {
+          s.pushToast("error", "Add needs a web URL, e.g. /add https://example.com");
+          return;
+        }
+        void s.addSourceUrl(arg);
+        s.pushToast("info", "Adding source…");
+        return;
+      }
+      case "model": {
+        const cfg = s.aiConfig;
+        if (!cfg) return;
+        const q = slashNorm(arg);
+        const providers = cfg.providers;
+        const hit =
+          providers.find((p) => slashNorm(p.label) === q || slashNorm(p.id) === q) ??
+          providers.find(
+            (p) =>
+              slashNorm(p.label).includes(q) ||
+              slashNorm(p.id).includes(q) ||
+              slashNorm(p.chatModel).includes(q),
+          );
+        if (!hit) {
+          s.pushToast("error", `No model matches “${arg}”`);
+          return;
+        }
+        void s.saveAiConfig({ ...cfg, chatProvider: hit.id });
+        s.pushToast("success", `Answering with ${hit.label}`);
+        return;
+      }
+      case "research": {
+        const want = arg.toLowerCase();
+        const on = s.agentMode;
+        const target = want === "on" ? true : want === "off" ? false : !on;
+        if (on !== target) s.toggleAgentMode();
+        s.pushToast("info", `Deep research: ${target ? "on" : "off"}`);
+        return;
+      }
+      case "grep": {
+        if (!arg) {
+          s.pushToast("error", "Grep needs a pattern, e.g. /grep TODO");
+          return;
+        }
+        void runGrep(arg);
+        return;
+      }
+      case "note": {
+        if (arg) {
+          void s.createNote(noteTitleFrom(arg), arg);
+          s.pushToast("success", "Note saved");
+          return;
+        }
+        const last = [...s.messages]
+          .reverse()
+          .find((m) => m.role === "assistant" && m.kind === "chat");
+        if (!last) {
+          s.pushToast("info", "No answer to save yet");
+          return;
+        }
+        void s.createNote(noteTitleFrom(last.content), last.content);
+        s.pushToast("success", "Saved the last answer as a note");
+        return;
+      }
+      case "report": {
+        const scheds = s.reportSchedules;
+        if (scheds.length === 1) {
+          void s.runReportNow(scheds[0].id);
+          s.pushToast("info", `Running “${scheds[0].name}”…`);
+          return;
+        }
+        if (!s.studioOpen) s.toggleStudio();
+        s.pushToast(
+          "info",
+          scheds.length === 0
+            ? "No reports yet — schedule one in Studio → Reports"
+            : "Choose a report to run in Studio → Reports",
+        );
+        return;
+      }
+      case "clear": {
+        const ok = await confirm({
+          title: "Clear this conversation?",
+          confirmLabel: "Clear",
+          danger: true,
+        });
+        if (ok) void s.clearChat();
+        return;
+      }
+    }
   }
 
   return (
@@ -292,31 +496,94 @@ export function ChatPanel() {
         <div className="mx-auto max-w-[720px]">
           <div
             className={cn(
-              "rounded-lg border border-border-strong bg-surface p-2.5 shadow-md transition-colors",
+              "relative rounded-lg border border-border-strong bg-surface p-2.5 shadow-md transition-colors",
               "focus-within:border-ring/60",
             )}
           >
+            {slashOpen && (
+              <SlashPicker
+                results={slashResults}
+                selected={slashSel}
+                onHover={setSlashSel}
+                onPick={activateSlash}
+              />
+            )}
             <Textarea
               ref={inputRef}
               rows={1}
               className="border-0 bg-transparent focus:ring-0 min-h-[24px] max-h-[180px] px-1.5 py-1"
               placeholder={
                 canChat
-                  ? "Ask anything about your sources…"
+                  ? "Ask anything, or type / for commands…"
                   : currentId
                     ? "Add a source to start chatting"
                     : "Select or create a notebook"
               }
               value={draft}
               disabled={!canChat}
+              role="combobox"
+              aria-expanded={slashOpen}
+              aria-controls={slashOpen ? "slash-picker" : undefined}
+              aria-activedescendant={
+                slashOpen && slashResults[slashSel]
+                  ? `slash-${slashResults[slashSel].name}`
+                  : undefined
+              }
               onChange={(e) => {
                 setDraft(e.target.value);
+                // Any edit re-opens the picker (Esc/blur only dismiss the
+                // current text) and resets the highlight to the top match.
+                setSlashDismissed(false);
+                setSlashSel(0);
                 e.target.style.height = "auto";
                 e.target.style.height = `${Math.min(e.target.scrollHeight, 180)}px`;
               }}
+              // Clicking outside (Send button, model pill, transcript) closes
+              // the picker; row clicks use onMouseDown+preventDefault so focus
+              // never leaves and this doesn't fire.
+              onBlur={() => setSlashDismissed(true)}
               onKeyDown={(e) => {
-                // isComposing: don't send mid-IME-composition (CJK input).
-                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                // isComposing: don't act mid-IME-composition (CJK input).
+                if (e.nativeEvent.isComposing) return;
+                if (slashOpen) {
+                  const c = slashResults[slashSel];
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setSlashSel((i) =>
+                      slashResults.length ? (i + 1) % slashResults.length : 0,
+                    );
+                    return;
+                  }
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setSlashSel((i) =>
+                      slashResults.length
+                        ? (i - 1 + slashResults.length) % slashResults.length
+                        : 0,
+                    );
+                    return;
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setSlashDismissed(true);
+                    return;
+                  }
+                  if (e.key === "Tab") {
+                    e.preventDefault();
+                    if (c) completeSlash(c);
+                    return;
+                  }
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    if (c) activateSlash(c);
+                    else submit(); // no match → send as a plain message
+                    return;
+                  }
+                  // Other keys type through and re-filter the picker.
+                  return;
+                }
+                if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   submit();
                 }
@@ -544,6 +811,93 @@ function noteTitleFrom(content: string): string {
   const line = content.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
   const clean = line.replace(/^#+\s*/, "").replace(/[*_`>#]/g, "").trim();
   return clean.slice(0, 60) || "Chat response";
+}
+
+/** `/grep` results as a chat message: a heading, then each hit as its source
+ *  title + a shortened path:line locator and a fenced window. Tilde fences so
+ *  a window containing ``` (markdown sources) can't break out of the block. */
+function renderGrepMarkdown(pattern: string, hits: GrepHit[]): string {
+  const head = `Grep \`${pattern}\` — ${hits.length} ${hits.length === 1 ? "match" : "matches"}`;
+  if (hits.length === 0) {
+    return `${head}\n\nNo matches in this notebook's repo- or folder-backed files.`;
+  }
+  const blocks = hits.map((h) => {
+    const loc = `${h.path.split("/").slice(-3).join("/")}:${h.line}`;
+    return `**${h.sourceTitle}** · \`${loc}\`\n\n~~~\n${h.window}\n~~~`;
+  });
+  return `${head}\n\n${blocks.join("\n\n")}`;
+}
+
+/** The composer's slash-command menu — a type-ahead chooser. Focus stays in the
+ *  textarea (so typing keeps filtering), rows are selected via
+ *  aria-activedescendant, and the ModelPill popover grammar carries the styling.
+ *  Rows are grouped by family (Generate / Learning / Documents / Actions). */
+function SlashPicker({
+  results,
+  selected,
+  onHover,
+  onPick,
+}: {
+  results: SlashCommandMeta[];
+  selected: number;
+  onHover: (index: number) => void;
+  onPick: (cmd: SlashCommandMeta) => void;
+}) {
+  return (
+    <div
+      id="slash-picker"
+      role="listbox"
+      aria-label="Slash commands"
+      className="menu-glass absolute bottom-full left-0 z-30 mb-1.5 max-h-72 w-[22rem] max-w-[calc(100vw-2.5rem)] overflow-y-auto rounded-md py-1"
+    >
+      {results.length === 0 ? (
+        <div className="px-2.5 py-2 text-[12px] text-muted-foreground">
+          No matching commands — press ↩ to send as a message
+        </div>
+      ) : (
+        results.map((c, i) => (
+          <Fragment key={c.name}>
+            {(i === 0 || results[i - 1].family !== c.family) && (
+              <div className="px-2.5 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-subtle-foreground">
+                {c.family}
+              </div>
+            )}
+            <button
+              type="button"
+              role="option"
+              id={`slash-${c.name}`}
+              aria-selected={i === selected}
+              onMouseMove={() => onHover(i)}
+              onMouseDown={(e) => {
+                e.preventDefault(); // keep focus in the textarea
+                onPick(c);
+              }}
+              className={cn(
+                "flex w-full items-baseline gap-1.5 px-2.5 py-1.5 text-left text-[12.5px]",
+                i === selected
+                  ? "bg-surface-2 text-foreground"
+                  : "text-foreground/85",
+              )}
+            >
+              <span className="shrink-0 font-medium">/{c.name}</span>
+              {c.argHint && (
+                <span className="shrink-0 text-subtle-foreground">
+                  {c.argHint}
+                </span>
+              )}
+              <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                — {c.description}
+              </span>
+            </button>
+          </Fragment>
+        ))
+      )}
+      <div className="mx-2 my-1 h-px bg-border" />
+      <div className="px-2.5 py-1 text-[11px] text-subtle-foreground">
+        ⇥ complete · ↩ run · esc dismiss
+      </div>
+    </div>
+  );
 }
 
 function MessageActions({ content }: { content: string }) {
