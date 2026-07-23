@@ -2,6 +2,24 @@
 
 use crate::ai::{ChatTurn, UserProfile};
 use crate::models::Citation;
+use std::borrow::Cow;
+
+/// Hard-cap one prompt excerpt body (RFC-infinite-context §5). Compact tiers
+/// (the ~4k-token on-device model) cannot afford long passages and answer
+/// better from tight evidence; frontier tiers read the body whole. The cut is
+/// on a char boundary (byte slicing panics on Unicode) with a trailing `…` so
+/// the model knows the passage was clipped. Off (or under the cap) it borrows
+/// unchanged — the default tier stays byte-for-byte identical. Prompt text
+/// only: the caller passes an already-trimmed body, and persisted
+/// citations/snippets are never routed through here.
+const COMPACT_EXCERPT_CHARS: usize = 500;
+fn cap_excerpt(body: &str, compact: bool) -> Cow<'_, str> {
+    if !compact || body.chars().count() <= COMPACT_EXCERPT_CHARS {
+        return Cow::Borrowed(body);
+    }
+    let head: String = body.chars().take(COMPACT_EXCERPT_CHARS).collect();
+    Cow::Owned(format!("{head}…"))
+}
 
 /// Format the user's profile into a system-prompt block; empty when unset.
 pub fn persona_block(profile: &UserProfile) -> String {
@@ -46,6 +64,70 @@ Rules:\n\
 - If the excerpts do not contain the answer, say so plainly. Do not fabricate.\n\
 - Be concise — this answer renders in a small palette, not a document. Short paragraphs, no headers.";
 
+/// Classify a corpus-wide question as global (docs/RFC-infinite-context.md
+/// Phase 4): enumerative/comparative/overview intent that needs coverage, not
+/// a top-k of the closest chunks. Pure heuristics, no model call. Deliberately
+/// conservative — a pointed question misrouted as global costs latency and
+/// answer focus, so the marker set errs toward false negatives: only
+/// distinctive breadth words fire, matched on word boundaries so "all" never
+/// triggers on "call" or "smallest".
+pub fn is_global_query(q: &str) -> bool {
+    // An identifier-shaped token (error code, invoice number, port,
+    // snake/camel compound) is a pointed lookup no matter how the sentence
+    // around it reads: the pointed path's corpus-wide BM25 finds it exactly,
+    // while the global route's gist vectors may not carry it at all — the
+    // same escape-hatch rule that keeps BM25 unrouted in meta search.
+    let identifierish = q
+        .split(|c: char| c.is_whitespace() || ",;()[]{}\"'`?".contains(c))
+        .map(|t| t.trim_matches(|c: char| ".:!".contains(c)))
+        .filter(|t| t.chars().count() >= 4)
+        .any(|t| {
+            t.chars().any(|c| c.is_ascii_digit())
+                || t.contains('_')
+                || (t.contains('-') && !t.ends_with('-'))
+        });
+    if identifierish {
+        return false;
+    }
+    let lower = q.to_lowercase();
+    // Multi-word markers are distinctive enough for a plain substring test.
+    const PHRASES: &[&str] = &[
+        "how many",
+        "what do my",
+        "what are my",
+        "my sources",
+        "my notebooks",
+        "my documents",
+        "disagree",
+        "differ",
+        "in common",
+    ];
+    if PHRASES.iter().any(|p| lower.contains(p)) {
+        return true;
+    }
+    const WORDS: &[&str] = &[
+        "all",
+        "every",
+        "everything",
+        "each",
+        "overview",
+        "summarize",
+        "summarise",
+        "summary",
+        "themes",
+        "theme",
+        "compare",
+        "comparison",
+        "contrast",
+        "recurring",
+        "across",
+        "throughout",
+    ];
+    lower
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|tok| WORDS.contains(&tok))
+}
+
 /// One passage feeding a meta-chat answer (see commands::MetaCitation).
 /// `number` is the SOURCE's reference number — several excerpts from the
 /// same source share it, so the model's [n] citations line up with the
@@ -61,11 +143,15 @@ pub struct MetaPassage {
 
 /// Build the corpus-wide chat message list: like `build_chat_messages`, but
 /// each excerpt names its notebook and there is no per-notebook manifest.
+/// `compact` (the resolved profile's `compact_excerpts`) hard-caps excerpt
+/// bodies for tight-window tiers; false leaves the prompt byte-for-byte as it
+/// was before Phase 5.
 pub fn build_meta_messages(
     history: &[ChatTurn],
     question: &str,
     passages: &[MetaPassage],
     persona: &str,
+    compact: bool,
 ) -> Vec<ChatTurn> {
     let mut context = String::new();
     if passages.is_empty() {
@@ -78,7 +164,7 @@ pub fn build_meta_messages(
                 p.notebook_title,
                 p.kind,
                 p.title,
-                p.snippet.trim()
+                cap_excerpt(p.snippet.trim(), compact)
             ));
         }
     }
@@ -96,8 +182,17 @@ pub fn build_meta_messages(
     messages
 }
 
-/// Build the chat message list from the retrieved citations and the question.
-/// The citation list passed in becomes excerpts [1..n] in order. `sources` is
+/// The evidence block for a chat prompt: ranked citations plus optional
+/// neighbor-expanded prompt bodies keyed by chunk id
+/// (RFC-infinite-context §3). Citations stay verbatim — expansion changes
+/// only what the model reads, never what gets persisted or highlighted.
+pub struct Excerpts<'a> {
+    pub citations: &'a [Citation],
+    pub expanded: &'a std::collections::HashMap<String, String>,
+}
+
+/// Build the chat message list from the retrieved excerpts and the question.
+/// The citation list becomes excerpts [1..n] in order. `sources` is
 /// the full (title, url) list for the notebook — url empty for local files —
 /// so the model can answer corpus-level questions ("what documents do we
 /// have?") even when top-k retrieval only surfaced chunks from a few of them,
@@ -105,12 +200,13 @@ pub fn build_meta_messages(
 pub fn build_chat_messages(
     history: &[ChatTurn],
     question: &str,
-    citations: &[Citation],
+    excerpts: Excerpts<'_>,
     sources: &[(String, String)],
     extra_system: &str,
     persona: &str,
     profile: &crate::inference::ContextProfile,
 ) -> Vec<ChatTurn> {
+    let citations = excerpts.citations;
     let mut context = String::new();
     if citations.is_empty() {
         context.push_str("(No source excerpts matched this question.)");
@@ -123,12 +219,19 @@ pub fn build_chat_messages(
             } else {
                 "from note"
             };
+            // Neighbor-expanded excerpts widen what the model reads; the
+            // citation itself stays verbatim.
+            let body = excerpts
+                .expanded
+                .get(&c.chunk_id)
+                .map(String::as_str)
+                .unwrap_or(&c.snippet);
             context.push_str(&format!(
                 "[{}] ({} \"{}\")\n{}\n\n",
                 i + 1,
                 tier,
                 c.source_title,
-                c.snippet.trim()
+                cap_excerpt(body.trim(), profile.compact_excerpts)
             ));
         }
     }
@@ -663,4 +766,200 @@ pub fn build_artifact_messages(instruction: &str, corpus: &str, persona: &str) -
         ChatTurn::system(system),
         ChatTurn::user(format!("{instruction}\n\n--- SOURCES ---\n\n{corpus}")),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn cite(chunk_id: &str, snippet: &str) -> Citation {
+        Citation {
+            chunk_id: chunk_id.into(),
+            source_id: "s1".into(),
+            source_title: "Doc".into(),
+            note_id: String::new(),
+            gist: false,
+            ordinal: 0,
+            snippet: snippet.into(),
+            distance: 0.0,
+        }
+    }
+
+    /// The classifier stays pointed on specific look-ups and fires only on
+    /// genuine breadth intent (RFC-infinite-context §4). False negatives are
+    /// cheaper than false positives, so pointed questions must never route
+    /// global even when they brush a topic word.
+    #[test]
+    fn global_query_classifier_separates_pointed_from_global() {
+        let pointed = [
+            "what is the status of INV-2024-0042?",
+            "how much vacation time do employees earn?",
+            "where did we stay on the Japan trip?",
+            "when are router firmware updates applied?",
+            "what should happen after ERR-503-BACKOFF?",
+            "which invoice is overdue for Globex?",
+            "what temple did the ryokan owner recommend?",
+            "how warm should the oven be for baking bread?",
+            "what port forwards to the media server?",
+            // Identifier guard: breadth words lose to an identifier-shaped
+            // token — exact lookups must keep the BM25 escape hatch.
+            "which of my sources mentions ERR-9917-FROST?",
+            "compare all occurrences of INV-2077-0420",
+            "summarize everything about CKPT_PREFETCH",
+        ];
+        for q in pointed {
+            assert!(!is_global_query(q), "pointed misrouted as global: {q:?}");
+        }
+        let global = [
+            "summarize the themes across all my notebooks",
+            "what do my sources disagree on?",
+            "give me an overview of everything I have",
+            "compare the retry policies in my invoices",
+            "how many of my notebooks mention networking?",
+            "what are the recurring themes in my research?",
+            "across all my documents, what patterns emerge?",
+            "what do all my sources say about payments?",
+            "contrast the different network setups I have",
+        ];
+        for q in global {
+            assert!(is_global_query(q), "global not detected: {q:?}");
+        }
+    }
+
+    /// Expanded excerpts reach the prompt; the citation list itself is
+    /// untouched (persisted snippets are what click-to-highlight matches).
+    #[test]
+    fn chat_prompt_prefers_expanded_excerpts() {
+        let citations = vec![
+            cite("c1", "the core snippet"),
+            cite("c2", "unexpanded snippet"),
+        ];
+        let mut expanded = HashMap::new();
+        expanded.insert(
+            "c1".to_string(),
+            "preceding context\n\nthe core snippet\n\nfollowing context".to_string(),
+        );
+        let messages = build_chat_messages(
+            &[],
+            "what does the doc say?",
+            Excerpts {
+                citations: &citations,
+                expanded: &expanded,
+            },
+            &[],
+            "",
+            "",
+            &crate::inference::ContextProfile::default(),
+        );
+        let prompt = messages
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            prompt.contains("preceding context"),
+            "expanded body reaches the prompt"
+        );
+        assert!(prompt.contains("following context"));
+        assert!(
+            prompt.contains("unexpanded snippet"),
+            "unexpanded citations keep their snippet"
+        );
+        assert_eq!(
+            citations[0].snippet, "the core snippet",
+            "citation stays verbatim"
+        );
+    }
+
+    /// RFC-infinite-context §5: the compact tier hard-caps prompt excerpt
+    /// bodies at 500 chars on a char boundary with a trailing `…`; the default
+    /// tier leaves them whole; the persisted citation snippet is never touched.
+    #[test]
+    fn compact_profile_caps_chat_excerpts() {
+        // A body past the cap, built from multi-byte chars so a byte-index cut
+        // would panic — the helper must slice on a char boundary.
+        let long = "é".repeat(800);
+        let citations = vec![cite("c1", &long)];
+        let expanded = HashMap::new();
+        let prompt = |profile: &crate::inference::ContextProfile| {
+            build_chat_messages(
+                &[],
+                "q?",
+                Excerpts {
+                    citations: &citations,
+                    expanded: &expanded,
+                },
+                &[],
+                "",
+                "",
+                profile,
+            )
+            .iter()
+            .map(|m| m.content.clone())
+            .collect::<Vec<_>>()
+            .join("\n")
+        };
+
+        let compact = crate::inference::ContextProfile {
+            compact_excerpts: true,
+            ..Default::default()
+        };
+        let capped = prompt(&compact);
+        // 500 kept chars + the ellipsis; the 800-char body is not present whole.
+        assert!(
+            capped.contains(&format!("{}…", "é".repeat(500))),
+            "compact excerpt is cut at 500 chars with a trailing ellipsis"
+        );
+        assert!(
+            !capped.contains(&"é".repeat(501)),
+            "compact excerpt drops everything past the cap"
+        );
+
+        let full = prompt(&crate::inference::ContextProfile::default());
+        assert!(
+            full.contains(&long),
+            "the default tier keeps the excerpt body whole"
+        );
+        assert!(!full.contains('…'), "the default tier adds no ellipsis");
+
+        assert_eq!(
+            citations[0].snippet, long,
+            "the persisted citation snippet is never capped"
+        );
+    }
+
+    /// The meta path shares the cap: compact caps the excerpt, default leaves
+    /// it whole (byte-for-byte the pre-Phase-5 prompt).
+    #[test]
+    fn compact_flag_caps_meta_excerpts() {
+        let long = "a".repeat(700);
+        let passages = vec![MetaPassage {
+            number: 1,
+            kind: "source".into(),
+            notebook_title: "NB".into(),
+            title: "Doc".into(),
+            snippet: long.clone(),
+        }];
+        let render = |compact: bool| {
+            build_meta_messages(&[], "q?", &passages, "", compact)
+                .iter()
+                .map(|m| m.content.clone())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let capped = render(true);
+        assert!(
+            capped.contains(&format!("{}…", "a".repeat(500))),
+            "compact meta excerpt is cut at 500 chars with an ellipsis"
+        );
+        assert!(!capped.contains(&"a".repeat(501)));
+
+        let full = render(false);
+        assert!(full.contains(&long), "the default tier keeps the full body");
+        // The body isn't cut mid-run (META_SYSTEM has its own `…`, so an
+        // absolute no-ellipsis check would be wrong — assert the truncated
+        // form specifically is absent).
+        assert!(!full.contains(&format!("{}…", "a".repeat(500))));
+    }
 }

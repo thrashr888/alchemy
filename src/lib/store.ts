@@ -19,6 +19,7 @@ import type {
   Note,
   ReadingPrefs,
   ReportSchedule,
+  Source,
 } from "./types";
 
 // Side panels stay usable at any drag position: wide enough for content,
@@ -143,6 +144,12 @@ async function runQueued(
   }
 }
 
+/** One-shot guard for `init`. React StrictMode double-invokes the mount
+ *  effect in dev, so without this the whole boot (notebook select, schedulers,
+ *  global listeners, the update check) ran twice — hence two "update available"
+ *  toasts. Module scope, so it survives the StrictMode remount. */
+let initStarted = false;
+
 export const useStore = create<AppState>((set, get) => {
   /** Run an async action, surfacing any failure as the global error instead of
    *  swallowing it (unhandled rejection = the UI silently does nothing). */
@@ -237,10 +244,14 @@ export const useStore = create<AppState>((set, get) => {
     kokoroBusy: false,
     reader: { open: false, history: [], index: -1 },
     folderScan: null,
+    importingFolders: [],
     noteReads: loadNoteReads(),
     noteReadsBaseline: loadNoteReadsBaseline(),
 
     init: async () => {
+      // Runs once per launch even though StrictMode fires the effect twice.
+      if (initStarted) return;
+      initStarted = true;
       // Deferred: inserting NSGlassEffectView while WKWebView is still
       // doing its first paint can blank the webview for the whole session
       // (setTimeout, not rAF — rAF stalls in occluded windows).
@@ -755,15 +766,51 @@ export const useStore = create<AppState>((set, get) => {
       if (!id) return;
       const picked = await open({ directory: true });
       if (!picked || Array.isArray(picked)) return;
+      const name = picked.split("/").pop() || picked;
       const item: QueueItem = {
         id: `${Date.now()}`,
-        name: picked.split("/").pop() || picked,
+        name,
         status: "pending",
       };
-      set({ ingestQueue: [...get().ingestQueue, item], error: null });
+      // Optimistic folder row: the backend embeds every child before it
+      // returns, so without this the folder wouldn't appear in the list until
+      // the whole import finished. Insert a placeholder now (marked importing
+      // so the panel shows a loading affordance) and let the real listSources
+      // reconcile it away when addSourceFolder resolves.
+      const tempId = `pending-folder-${Date.now()}`;
+      const optimistic: Source = {
+        id: tempId,
+        notebookId: id,
+        title: name,
+        sourceType: "folder",
+        url: picked,
+        content: "",
+        status: "ready",
+        error: "",
+        charCount: 0,
+        chunkCount: 0,
+        createdAt: Date.now(),
+        parentId: "",
+        mtime: 0,
+      };
+      set({
+        ingestQueue: [...get().ingestQueue, item],
+        sources: [...get().sources, optimistic],
+        importingFolders: [...get().importingFolders, tempId],
+        error: null,
+      });
       await runQueued(get, set, item, () => api.addSourceFolder(id, picked));
-      set({ folderScan: null });
-      if (get().currentId === id) set({ sources: await api.listSources(id) });
+      set({
+        folderScan: null,
+        importingFolders: get().importingFolders.filter((f) => f !== tempId),
+      });
+      if (get().currentId === id) {
+        // Success replaces the whole list (dropping the temp row); on failure
+        // listSources isn't reached, so drop the temp row explicitly.
+        set({ sources: await api.listSources(id) });
+      } else {
+        set({ sources: get().sources.filter((s) => s.id !== tempId) });
+      }
     },
 
     startSourceSync: () => {
@@ -1122,7 +1169,14 @@ export const useStore = create<AppState>((set, get) => {
         );
         // Auto-open the new note so the outcome is visible where the user acted,
         // not just appended to the Notes list below the fold.
-        set({ notes: [note, ...get().notes], justCreatedNoteId: note.id });
+        // Filter by id before prepending: the note:// event listener may have
+        // upserted this note already, and an unfiltered prepend rendered the
+        // same note twice (deleting "one" then removed both cards — they were
+        // one row shown twice).
+        set({
+          notes: [note, ...get().notes.filter((n) => n.id !== note.id)],
+          justCreatedNoteId: note.id,
+        });
         void get().refreshModelStats();
         get().pushToast("success", `${note.title} ready`);
         playDone();
@@ -1220,7 +1274,7 @@ export const useStore = create<AppState>((set, get) => {
         const id = get().currentId;
         if (!id) return;
         const note = await api.createNote(id, title, content);
-        set({ notes: [note, ...get().notes] });
+        set({ notes: [note, ...get().notes.filter((n) => n.id !== note.id)] });
       }),
 
     updateNote: (noteId, title, content) =>

@@ -33,6 +33,23 @@ export const SUPPORTED_EXTENSIONS = [
  * A source's `url` holds its origin: a web URL for fetched sources, a local
  * file path for file imports, empty for pasted text. True for the web case.
  */
+/** A source/note title with visible characters, else "". `trim()` alone is
+ *  insufficient — a captured page title can be a zero-width space or BOM
+ *  (U+200B, U+FEFF), which isn't whitespace, so trim keeps it and the row
+ *  renders blank. Strips whitespace + zero-width/control chars. */
+export function visibleTitle(title: string): string {
+  // Visible = any char that isn't whitespace, control, or zero-width /
+  // BOM formatting (U+200B-200D, U+2060, U+FEFF). trim() misses those.
+  const zeroWidth = /[\u200b-\u200d\u2060\ufeff]/;
+  for (const ch of title) {
+    // eslint-disable-next-line no-control-regex
+    if (!/\s/.test(ch) && !/[\u0000-\u001f]/.test(ch) && !zeroWidth.test(ch)) {
+      return title.trim();
+    }
+  }
+  return "";
+}
+
 export function isWebUrl(s: string): boolean {
   return /^https?:\/\//.test(s);
 }
@@ -97,6 +114,16 @@ export function urlHost(url: string): string | null {
   }
 }
 
+/** Cached compact number formatter ("1.2M", "48K") — Intl construction is
+ *  expensive and this renders per folder row. */
+const compactFormat = new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+export function compactNumber(n: number): string {
+  return compactFormat.format(n);
+}
+
 export function relativeTime(ms: number): string {
   const diff = Date.now() - ms;
   const s = Math.floor(diff / 1000);
@@ -108,4 +135,21 @@ export function relativeTime(ms: number): string {
   const d = Math.floor(h / 24);
   if (d < 7) return `${d}d ago`;
   return new Date(ms).toLocaleDateString();
+}
+
+/** The paragraph the user is working on: the first one that changed, or the
+ *  last non-empty one when nothing differs (e.g. on entry). Lives here (not
+ *  in AmbientRail) so component modules keep components-only exports and
+ *  Vite Fast Refresh never has to invalidate them. */
+export function activeParagraph(prev: string, next: string): string {
+  const a = prev.split(/\n{2,}/);
+  const b = next.split(/\n{2,}/);
+  for (let i = 0; i < b.length; i++) {
+    if (a[i] !== b[i]) return (b[i] ?? "").trim().slice(0, 600);
+  }
+  for (let i = b.length - 1; i >= 0; i--) {
+    const p = (b[i] ?? "").trim();
+    if (p) return p.slice(0, 600);
+  }
+  return "";
 }

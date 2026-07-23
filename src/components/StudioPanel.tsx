@@ -25,7 +25,10 @@ import {
 } from "@/lib/utils";
 import type { Note } from "@/lib/types";
 import {
+  FAMILY_ACCENT,
   KIND_LABEL,
+  kindAccent,
+  kindIcon,
   studioArtifacts,
   type Artifact,
 } from "./studioArtifacts";
@@ -43,54 +46,34 @@ import {
   ChevronUp,
 } from "lucide-react";
 
-/** Generator families keep their established color language even when the
- * long tail is collapsed behind More. The disclosure tile stays neutral. */
-// One neutral tile treatment (DESIGN.md §2: color is semantic, chrome is
-// colorless — the per-family rainbow predates the quiet-icon policy).
+/** Generator families carry a quiet color identity: the icon takes the family
+ *  accent (tokens in index.css) and the tile gets a faint matching wash that
+ *  warms on hover. Restraint over noise — a whisper of hue for wayfinding, no
+ *  filled chips, and never a colored border accent. The neutral border keeps
+ *  the resting grid calm; color reads mostly from the icon. */
 type Tint = { tile: string; icon: string };
-const TINT_NEUTRAL: Tint = {
-  tile:
-    "border-border bg-surface-2/40 hover:border-border-strong hover:bg-surface-2",
-  icon: "text-muted-foreground",
-};
 const TINT_BY_FAMILY: Record<Artifact["family"], Tint> = {
-  generate: TINT_NEUTRAL,
-  learning: TINT_NEUTRAL,
-  documents: TINT_NEUTRAL,
+  generate: {
+    tile: "border-border bg-artifact-generate/5 hover:border-artifact-generate/25 hover:bg-artifact-generate/10",
+    icon: FAMILY_ACCENT.generate,
+  },
+  learning: {
+    tile: "border-border bg-artifact-learning/5 hover:border-artifact-learning/25 hover:bg-artifact-learning/10",
+    icon: FAMILY_ACCENT.learning,
+  },
+  documents: {
+    tile: "border-border bg-artifact-documents/5 hover:border-artifact-documents/25 hover:bg-artifact-documents/10",
+    icon: FAMILY_ACCENT.documents,
+  },
 };
-const TINT_TEMPLATES: Tint = TINT_NEUTRAL;
+const TINT_TEMPLATES: Tint = {
+  tile: "border-border bg-artifact-template/5 hover:border-artifact-template/25 hover:bg-artifact-template/10",
+  icon: "text-artifact-template",
+};
 const TINT_DISCLOSURE: Tint = {
   tile: "border-border bg-surface-2 hover:border-border-strong hover:bg-elevated",
   icon: "text-muted-foreground",
 };
-
-/**
- * Card preview text: skip a leading markdown heading (or a first line equal to
- * the title) so the card doesn't repeat its own title, then flatten markdown.
- */
-function notePreview(n: Note): string {
-  const lines = n.content.split("\n");
-  let i = 0;
-  while (i < lines.length && !lines[i].trim()) i++;
-  const first = (lines[i] ?? "").trim();
-  const firstText = first
-    .replace(/^#+\s*/, "")
-    .replace(/[*_`]/g, "")
-    .trim();
-  if (
-    first.startsWith("#") ||
-    firstText.toLowerCase() === n.title.trim().toLowerCase()
-  )
-    i++;
-  return lines
-    .slice(i)
-    .join(" ")
-    .replace(/[#*`>_]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 160);
-}
-
 
 /** Notes the curator archived: out of retrieval, collapsed but never gone.
  *  Opening one still works; editing it revives it (see RFC-note-curator). */
@@ -433,7 +416,9 @@ export function StudioPanel() {
                     // has-: an open row menu must outrank the z-10 content of
                     // the rows after it (they'd paint over the dropdown
                     // otherwise — later DOM order wins at equal z).
-                    "group relative cursor-pointer rounded-md border border-border bg-surface-2/40 px-3 py-2.5 transition-colors hover:border-border-strong hover:bg-surface-2",
+                    // Flat rows, not bordered cards — the title and chips
+                    // carry the card; a hover wash marks the target.
+                    "group relative cursor-pointer rounded-md px-3 py-2 transition-colors hover:bg-surface-2",
                     n.status === "stale" && "opacity-60",
                   )}
                 >
@@ -442,6 +427,15 @@ export function StudioPanel() {
                     onClick={() => openNoteCard(n)}
                   />
                   <div className="pointer-events-none relative z-10 flex items-center gap-2">
+                    <span
+                      className={cn(
+                        "pointer-events-auto shrink-0 [&_svg]:h-4 [&_svg]:w-4",
+                        kindAccent(n.kind),
+                      )}
+                      title={KIND_LABEL[n.kind]}
+                    >
+                      {kindIcon(n.kind)}
+                    </span>
                     <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
                       {n.title}
                     </span>
@@ -486,13 +480,9 @@ export function StudioPanel() {
                       ]}
                     />
                   </div>
-                  <div className="pointer-events-none relative z-10 mt-1 flex items-center gap-1.5">
-                    {n.kind !== "note" &&
-                      n.title.trim().toLowerCase() !==
-                        KIND_LABEL[n.kind].toLowerCase() && (
-                        <Badge>{KIND_LABEL[n.kind]}</Badge>
-                      )}
-                    {/* Badges re-enable hit-testing so their explanatory
+                  <div className="pointer-events-none relative z-10 mt-1 flex items-center gap-1.5 pl-[22px]">
+                    {/* The kind icon on the title row replaces the old text
+                        chip. Badges re-enable hit-testing so their explanatory
                         tooltips still show inside the pointer-events-none row. */}
                     {n.origin === "auto" && (
                       <span
@@ -514,9 +504,6 @@ export function StudioPanel() {
                       {relativeTime(n.updatedAt)}
                     </span>
                   </div>
-                  <p className="pointer-events-none relative z-10 mt-1.5 line-clamp-2 text-[12px] leading-relaxed text-muted-foreground">
-                    {notePreview(n)}
-                  </p>
                 </div>
               ))}
             </div>

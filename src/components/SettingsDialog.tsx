@@ -16,11 +16,7 @@ import {
   ShortcutsTab,
 } from "./settings/SettingsTabs";
 import { ModelsTab } from "./settings/ModelsTab";
-import type {
-  AiConfig,
-  ConnectorStatus,
-  McpStatus,
-} from "@/lib/types";
+import type { AiConfig, ConnectorStatus, McpStatus } from "@/lib/types";
 import {
   CheckCircle2,
   Cpu,
@@ -40,8 +36,6 @@ import {
 
 /** Treat `name` and `name:latest` as the same model for matching. */
 const normModel = (m: string) => m.replace(/:latest$/, "");
-
-
 
 const TABS = [
   { id: "general", label: "General", icon: SlidersHorizontal },
@@ -100,14 +94,6 @@ export function SettingsDialog({
       setModels([]);
     }
   }
-
-
-
-
-
-
-
-
 
   const embedChanged =
     !!draft &&
@@ -179,6 +165,7 @@ export function SettingsDialog({
       width="max-w-2xl"
       tall
       bodyScroll={false}
+      hideHeader
       footer={
         tab === "models" ? (
           <div className="flex justify-end gap-2">
@@ -201,9 +188,12 @@ export function SettingsDialog({
           "long tabs don't scroll" regression). 8.5rem clears the header,
           body padding, and the models tab's Save footer. bodyScroll={false}
           keeps the modal body from scrolling too, so exactly one region
-          moves. */}
+          moves. "Settings" is the nav's section header (no title bar). */}
       <div className="flex gap-5">
         <nav className="flex w-36 shrink-0 flex-col gap-0.5">
+          <h2 className="px-2.5 pb-2 pt-0.5 text-[13px] font-semibold text-foreground">
+            Settings
+          </h2>
           {TABS.map((t) => (
             <button
               type="button"
@@ -285,7 +275,6 @@ export function SettingsDialog({
     </Modal>
   );
 }
-
 
 /** Toggle row: label + native checkbox, persisted to localStorage. */
 function PrefToggle({
@@ -463,7 +452,10 @@ function NotionTokenField() {
       const workspace = await api.notionCheck(t);
       setCheck({ state: "ok", workspace });
     } catch (e) {
-      setCheck({ state: "error", message: e instanceof Error ? e.message : String(e) });
+      setCheck({
+        state: "error",
+        message: e instanceof Error ? e.message : String(e),
+      });
     }
   }
 
@@ -496,7 +488,8 @@ function NotionTokenField() {
       )}
       {check.state === "ok" && (
         <span className="flex items-center gap-1.5 text-[12px] text-success">
-          <CheckCircle2 className="h-3.5 w-3.5" /> Connected to {check.workspace}
+          <CheckCircle2 className="h-3.5 w-3.5" /> Connected to{" "}
+          {check.workspace}
         </span>
       )}
       {check.state === "error" && (
@@ -513,10 +506,9 @@ function NotionTokenField() {
         >
           notion.so/my-integrations
         </button>
-        , then share pages with it in Notion (••• → Connections). Pasting a
-        page URL here after that imports the page and its children as a living
-        source that re-syncs on the cadence above. Stored locally; sent only to
-        Notion.
+        , then share pages with it in Notion (••• → Connections). Pasting a page
+        URL here after that imports the page and its children as a living source
+        that re-syncs on the cadence above. Stored locally; sent only to Notion.
       </span>
     </div>
   );
@@ -583,7 +575,10 @@ function CuratorToggle() {
         type="checkbox"
         checked={aiConfig.curatorConsolidate}
         onChange={(e) =>
-          void saveAiConfig({ ...aiConfig, curatorConsolidate: e.target.checked })
+          void saveAiConfig({
+            ...aiConfig,
+            curatorConsolidate: e.target.checked,
+          })
         }
         className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
       />
@@ -592,10 +587,10 @@ function CuratorToggle() {
           Consolidate auto notes weekly
         </span>
         <span className="text-[11px] leading-relaxed text-subtle-foreground">
-          Once a week, while you're away, the model merges chat-created
-          evidence notes that state the same claim. The merged-away note is
-          archived, never deleted, and each notebook's Curator report lists
-          what happened. Uses your chat model.
+          Once a week, while you're away, the model merges chat-created evidence
+          notes that state the same claim. The merged-away note is archived,
+          never deleted, and each notebook's Curator report lists what happened.
+          Uses your chat model.
         </span>
       </span>
     </label>
@@ -634,8 +629,8 @@ function GitSyncSelect() {
       </label>
       <span className="text-[11px] leading-relaxed text-subtle-foreground">
         Remote repos re-fetch when their branch moves, using your own git
-        credentials — Alchemy never stores tokens. Manual Refresh always
-        syncs, even when this is off.
+        credentials — Alchemy never stores tokens. Manual Refresh always syncs,
+        even when this is off.
       </span>
     </div>
   );
@@ -867,8 +862,6 @@ function AgentsTab() {
     </div>
   );
 }
-
-
 
 /**
  * Settings → Models: manage the on-device podcast voice model (Kokoro-82M).

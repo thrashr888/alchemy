@@ -107,7 +107,22 @@ pub fn file_title(path: &str) -> String {
 }
 
 /// Extract text from a local file, inferring type from the extension.
+///
+/// Panic-contained at this boundary: extractor crates can panic (not error)
+/// on malformed files — pdf-extract's "unexpected encoding NULL" was caught
+/// live, mid folder-import, where the unwound worker hung the whole import.
+/// One guard here turns any extractor panic, for every current and future
+/// format, into an ordinary failed source instead of a stuck app.
 pub fn extract_file(path: &str) -> Result<Extracted> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| extract_file_inner(path)))
+        .unwrap_or_else(|_| {
+            Err(anyhow!(
+                "failed to parse {path} — the file may be malformed or corrupt"
+            ))
+        })
+}
+
+fn extract_file_inner(path: &str) -> Result<Extracted> {
     let p = Path::new(path);
     let ext = p
         .extension()
@@ -158,6 +173,7 @@ pub fn extract_file(path: &str) -> Result<Extracted> {
             ("html".to_string(), text)
         }
         "pdf" => {
+            // Panic containment for a malformed PDF lives on `extract_file`.
             let text = pdf_extract::extract_text(path)
                 .with_context(|| format!("failed to extract text from PDF {path}"))?;
             if normalize(&text).trim().is_empty() {
@@ -1205,6 +1221,67 @@ fn split_oversized(p: &str) -> Vec<String> {
     out
 }
 
+/// url/html sources are page captures: low-density prose where a situating
+/// sentence measurably helps retrieval (RFC-infinite-context §2) and where
+/// nav cruft is worth keeping out of the vector space. pdf/markdown/docx/text
+/// are clean prose with near-zero measured headroom, and code keeps its
+/// path-prefix trick — none of those is a page capture. Mac (cider) sources
+/// are structured Reminders/Calendar/Notes data, not captured pages, so they
+/// stay on the plain path too.
+pub fn is_page_capture_type(source_type: &str) -> bool {
+    matches!(source_type, "url" | "html")
+}
+
+/// Is this chunk unmistakable navigation cruft — safe to keep out of the
+/// vector index (RFC-infinite-context §2 boilerplate gate)? Only page-capture
+/// chunks are ever tested; the verbatim text still lives in `source.content`,
+/// so dropping it here never touches the reader or a citation. Deliberately
+/// conservative: a chunk is junk only when it is short AND carries no
+/// sentence, no heading structure, and no rare/identifier-ish token — anything
+/// that could be real content keeps its slot.
+pub fn is_boilerplate_chunk(chunk: &Chunk) -> bool {
+    let text = chunk.text.trim();
+    // Short: real passages run long; menus and breadcrumbs don't.
+    if text.chars().count() >= 120 {
+        return false;
+    }
+    // Any sentence punctuation (even a fragment) reads as content, not a link.
+    if text.chars().any(|c| matches!(c, '.' | '!' | '?')) {
+        return false;
+    }
+    // Heading structure: the chunk IS a heading line, or sits under a section
+    // (its embed prefix carries "title › section"). Structure means keep.
+    if text.starts_with('#') || chunk.embed_text.contains(" › ") {
+        return false;
+    }
+    // A rare or identifier-ish token (a name, code, number, or long word)
+    // marks real signal; a run of common short words is nav.
+    if text
+        .split(|c: char| c.is_whitespace() || "|·,:;()[]{}\"'`/".contains(c))
+        .any(is_rare_token)
+    {
+        return false;
+    }
+    true
+}
+
+/// A token a navigation bar is unlikely to contain: it carries a digit, an
+/// underscore/hyphen compound, internal capitalization, or is simply long.
+/// Mirrors the identifier heuristic gists gate on, plus a length rule for rare
+/// words. Short common words ("Home", "About", "Next") match none of these.
+fn is_rare_token(t: &str) -> bool {
+    let t = t.trim_matches(|c: char| ".:!?".contains(c));
+    let n = t.chars().count();
+    if n < 4 {
+        return false;
+    }
+    let has_digit = t.chars().any(|c| c.is_ascii_digit());
+    let compound = t.contains('_') || (t.contains('-') && !t.ends_with('-'));
+    let mixed_case =
+        t.chars().skip(1).any(|c| c.is_uppercase()) && t.chars().any(|c| c.is_lowercase());
+    has_digit || compound || mixed_case || n >= 12
+}
+
 /// Chunk dispatch: code sources keep whitespace and split on block
 /// boundaries; everything else uses the prose chunker. `code_ctx` is the
 /// retrieval context for code chunks — "repo › relative/path.rs" when the
@@ -1215,6 +1292,8 @@ fn split_oversized(p: &str) -> Vec<String> {
 /// `tags:` joining the retrieval context the way repo paths do — and
 /// `[[wikilinks]]` de-bracket in embed text so retrieval reads prose.
 /// Display text keeps the brackets; the reader renders them as links.
+/// Page-capture (url/html) sources additionally drop nav-cruft chunks from
+/// the index (RFC-infinite-context §2).
 pub fn chunk_source(extracted: &Extracted, code_ctx: Option<&str>) -> Vec<Chunk> {
     if extracted.source_type == "code" {
         return chunk_code(code_ctx.unwrap_or(&extracted.title), &extracted.text);
@@ -1227,7 +1306,15 @@ pub fn chunk_source(extracted: &Extracted, code_ctx: Option<&str>) -> Vec<Chunk>
         };
         return chunk_text(&ctx, body);
     }
-    chunk_text(&extracted.title, &extracted.text)
+    let chunks = chunk_text(&extracted.title, &extracted.text);
+    if is_page_capture_type(&extracted.source_type) {
+        chunks
+            .into_iter()
+            .filter(|c| !is_boilerplate_chunk(c))
+            .collect()
+    } else {
+        chunks
+    }
 }
 
 /// Split leading YAML frontmatter off markdown. Returns (`#tag`s from any
@@ -1773,6 +1860,65 @@ mod tests {
         assert!(got[0].embed_text.starts_with("[Notes]\n"));
     }
 
+    /// Build the Chunk a page-capture chunker would produce for a bare body
+    /// under `title` (title-only prefix, no section) — the boilerplate gate's
+    /// worst case, where only the text itself can save the chunk.
+    fn page_chunk(title: &str, body: &str) -> Chunk {
+        Chunk {
+            text: body.to_string(),
+            embed_text: format!("[{title}]\n{body}"),
+        }
+    }
+
+    #[test]
+    fn boilerplate_gate_drops_nav_keeps_content() {
+        // Pure nav: short, no sentence, no heading, all common words.
+        assert!(is_boilerplate_chunk(&page_chunk(
+            "Acme Blog",
+            "Home About Products Services Contact Careers"
+        )));
+        // A short sentence fragment is content — punctuation saves it.
+        assert!(!is_boilerplate_chunk(&page_chunk(
+            "Acme Blog",
+            "Read our latest pricing update."
+        )));
+        // A rare/identifier token (version code) marks signal.
+        assert!(!is_boilerplate_chunk(&page_chunk(
+            "Acme Blog",
+            "Download release v2.4.1 arm64"
+        )));
+        // Heading context (section prefix) keeps the chunk even when short.
+        assert!(!is_boilerplate_chunk(&Chunk {
+            text: "Overview".into(),
+            embed_text: "[Acme Blog › Docs]\nOverview".into(),
+        }));
+        // Long real passage never trips the gate.
+        assert!(!is_boilerplate_chunk(&page_chunk(
+            "Acme Blog",
+            "The onboarding flow walks a new teammate through account setup, \
+             workspace selection, and the first import before handing off"
+        )));
+    }
+
+    #[test]
+    fn boilerplate_gate_spares_clean_fixture_prose() {
+        // The golden fixtures are clean article prose: the gate must drop
+        // none of them when they are treated as page captures (§2 regression
+        // fence — enrichment must never cost recall on clean sets).
+        let mut dropped = 0usize;
+        for (title, body) in crate::evals::CORPUS {
+            for c in chunk_text(title, &normalize(body)) {
+                if is_boilerplate_chunk(&c) {
+                    dropped += 1;
+                }
+            }
+        }
+        assert_eq!(
+            dropped, 0,
+            "boilerplate gate dropped {dropped} clean chunks"
+        );
+    }
+
     #[test]
     fn provenance_line_formats_and_filters() {
         let meta = PageMeta {
@@ -2271,5 +2417,18 @@ mod tests {
         assert!(first < second, "spine order should win over archive order");
         assert!(text.contains("Opening"));
         assert!(!text.contains('<'), "no tags survive: {text}");
+    }
+
+    /// The panic boundary on `extract_file`: a malformed file of any type
+    /// must come back as Err — never a panic that unwinds the worker (which
+    /// hung a live folder import when pdf-extract hit "unexpected encoding
+    /// NULL"). Garbage bytes with a .pdf extension exercise the whole path.
+    #[test]
+    fn extract_file_errors_instead_of_panicking_on_garbage() {
+        let path = std::env::temp_dir().join("nbl-malformed-fixture.pdf");
+        std::fs::write(&path, b"%PDF-1.4 garbage \x00\x01\x02 not a real pdf").unwrap();
+        let res = extract_file(&path.to_string_lossy());
+        assert!(res.is_err(), "malformed pdf must error, not panic");
+        let _ = std::fs::remove_file(&path);
     }
 }

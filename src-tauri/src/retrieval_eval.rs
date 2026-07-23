@@ -281,7 +281,18 @@ async fn eval_retrieval_datasets() {
         .collect();
     let title_set: std::collections::HashSet<&str> = titles.values().map(String::as_str).collect();
 
-    const VARIANTS: [&str; 3] = ["vector", "fts", "hybrid"];
+    // "meta" is the corpus-wide path (search_chunks_all_opts with the
+    // production meta-chat caps) — the surface gists and cross-notebook
+    // questions ride. Here it runs over the same single-notebook corpus, so
+    // its numbers are directly comparable to the per-notebook variants.
+    const VARIANTS: [&str; 4] = ["vector", "fts", "hybrid", "meta"];
+    let meta_opts = SearchOptions {
+        pool_multiplier: 4,
+        max_per_source: 2,
+        max_per_notebook: 3,
+        max_notes: 4,
+        max_gists: 2,
+    };
     let mut reports = Vec::new();
     for ds in &datasets {
         // Fail loudly on dataset authoring errors: an empty query list or a
@@ -305,7 +316,7 @@ async fn eval_retrieval_datasets() {
         let qvecs = ai.embed(&query_texts).await.expect("embed queries");
 
         // (kind, metrics) per query, indexed parallel to VARIANTS.
-        let mut rows: [Vec<(String, Metrics)>; 3] = Default::default();
+        let mut rows: [Vec<(String, Metrics)>; 4] = Default::default();
         let mut misses: Vec<String> = Vec::new();
         for (q, qvec) in ds.queries.iter().zip(&qvecs) {
             let vector = db
@@ -326,7 +337,14 @@ async fn eval_retrieval_datasets() {
             );
             let fts: Vec<Citation> = trace.fts_hits.into_iter().take(K).collect();
             let hybrid = trace.final_hits;
-            for (vi, hits) in [vector, fts, hybrid].into_iter().enumerate() {
+            let meta: Vec<Citation> = db
+                .search_chunks_all_opts(qvec.clone(), &q.query, K, None, meta_opts)
+                .await
+                .expect("meta search")
+                .into_iter()
+                .map(|(_, c)| c)
+                .collect();
+            for (vi, hits) in [vector, fts, hybrid, meta].into_iter().enumerate() {
                 let (ranks, unmatched) = matched_ranks(&hits, &titles, &q.relevant);
                 for si in unmatched {
                     let s = &q.relevant[si];
@@ -558,6 +576,7 @@ async fn eval_meta_diversity() {
         max_per_source: 2,
         max_per_notebook: 3,
         max_notes: 4,
+        max_gists: 2,
     };
 
     // Per query: (recall, distinct sources, distinct notebooks) per variant.
@@ -938,4 +957,1021 @@ async fn eval_context_profiles() {
         "on-device profile keeps only {:.1}% of default-profile recall",
         retention * 100.0
     );
+
+    // Gist budget is model-tiered too (RFC-infinite-context §5): the default
+    // profile admits two overview rows, the on-device profile one. Seed the
+    // stored gists and confirm the tight budget caps the gist class while the
+    // two-tier backfill (Phase 1) still returns the same number of hits — a
+    // gist slot is traded for a verbatim chunk, never lost. The two literals
+    // mirror the production ContextProfile constants (default 2, on-device 1),
+    // asserted against those constants in inference::tests.
+    for (title, gist) in GIST_FIXTURES {
+        seed_gist(&ai, &db, nb, title, gist).await;
+    }
+    const GIST_K: usize = 8;
+    let q = "give me an overview of what these documents cover";
+    let qv = ai.embed_one(q).await.expect("embed overview");
+    let budget_opts = |max_gists: usize| SearchOptions {
+        pool_multiplier: 4,
+        max_per_source: 2,
+        max_per_notebook: 3,
+        max_notes: 4,
+        max_gists,
+    };
+    let default_hits = db
+        .search_chunks_all_opts(qv.clone(), q, GIST_K, None, budget_opts(2))
+        .await
+        .expect("default-budget search");
+    let tight_hits = db
+        .search_chunks_all_opts(qv, q, GIST_K, None, budget_opts(1))
+        .await
+        .expect("on-device-budget search");
+    let tight_gists = tight_hits.iter().filter(|(_, c)| c.gist).count();
+    println!(
+        "gist budget: default kept {} gists / on-device kept {tight_gists} · counts {} vs {}",
+        default_hits.iter().filter(|(_, c)| c.gist).count(),
+        default_hits.len(),
+        tight_hits.len(),
+    );
+    assert!(
+        tight_gists <= 1,
+        "on-device max_gists=1 must cap gist rows, kept {tight_gists}"
+    );
+    assert_eq!(
+        tight_hits.len(),
+        default_hits.len(),
+        "backfill preserves the hit count under the tighter gist budget"
+    );
+}
+
+/// Handwritten gist fixtures (RFC-infinite-context §1). The eval seeds
+/// these as stored gist rows exactly as the production sweep would write
+/// them — generation quality is gated and unit-tested in `gist.rs`; this
+/// eval covers what stored gists do to retrieval: overview queries find
+/// them, exact-identifier queries are not displaced by them, and the
+/// `max_gists` cap holds.
+const GIST_FIXTURES: &[(&str, &str)] = &[
+    (
+        "Media Server Maintenance",
+        "This runbook describes the routine upkeep of the home media server: \
+         when the library scan runs, how many transcode streams are allowed \
+         at once, and the monthly restart schedule tied to backups. It can \
+         answer when scans happen, what the transcoding cap is, and when the \
+         server container restarts. Key terms: media server, library scan, \
+         transcoding, restarts",
+    ),
+    (
+        "Home Insurance Policy",
+        "This policy document lays out the homeowner's coverage terms: the \
+         deductibles that apply to wind, hail, and theft losses, and the \
+         claims process with its filing window. It can answer how large each \
+         deductible is and how and when to file a claim through the agent \
+         portal. Key terms: deductible, wind and hail, theft, claims, agent \
+         portal",
+    ),
+    (
+        "Vendor Payment Runbook",
+        "This runbook covers how vendor invoices get paid: wire payments on \
+         net-forty-five terms with same-day remittance advice, and the \
+         escalation path for disputed invoices through procurement. It can \
+         answer how vendors are paid, on what terms, and what happens when \
+         an invoice is disputed. Key terms: wires, net-forty-five, \
+         remittance advice, disputes, procurement",
+    ),
+];
+
+/// Seed one stored gist row the way `gist::ensure_gists` writes them:
+/// verbatim gist in `text`, title-context prefix on the embedded form, and
+/// the source's content hash in `ordinal`.
+async fn seed_gist(ai: &crate::ai::Ai, db: &Db, notebook_id: &str, title: &str, gist: &str) {
+    let sources = db.list_sources(notebook_id).await.expect("list sources");
+    let s = sources
+        .iter()
+        .find(|s| s.title == title)
+        .unwrap_or_else(|| panic!("gist fixture names unknown source {title:?}"));
+    let full = db
+        .get_source(&s.id)
+        .await
+        .expect("get source")
+        .expect("source exists");
+    let embed_input = format!("[{} — overview]\n{gist}", s.title);
+    let embeddings = ai.embed(&[embed_input]).await.expect("embed gist");
+    db.add_chunks(
+        notebook_id,
+        &format!("{}{}", crate::db::GIST_CHUNK_PREFIX, s.id),
+        &[(
+            format!("gist-{}", s.id),
+            crate::gist::content_hash(&full.content),
+            gist.to_string(),
+        )],
+        &embeddings,
+    )
+    .await
+    .expect("write gist row");
+}
+
+/// Corpus-wide retrieval with stored gists (RFC-infinite-context §1):
+/// overview questions surface the gist row; exact-identifier questions keep
+/// their verbatim winner; the gist class cap holds; and every corpus-wide
+/// read (including FTS-only) returns filled titles — the shared
+/// title-filling pass this RFC required.
+#[tokio::test]
+async fn eval_gist_rows() {
+    let Some(ai) = builtin_ai().await else { return };
+    let dir = std::env::temp_dir().join(format!("nbl-eval-gist-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    seed_docs(&ai, &db, "gist-a", CORPUS, "a-").await;
+    seed_docs(&ai, &db, "gist-b", EXTRA_CORPUS, "b-").await;
+    let gist_notebook = |title: &str| {
+        if CORPUS.iter().any(|(t, _)| *t == title) {
+            "gist-a"
+        } else {
+            "gist-b"
+        }
+    };
+    for (title, gist) in GIST_FIXTURES {
+        seed_gist(&ai, &db, gist_notebook(title), title, gist).await;
+    }
+
+    const K: usize = 8;
+    let opts = SearchOptions {
+        pool_multiplier: 4,
+        max_per_source: 2,
+        max_per_notebook: 3,
+        max_notes: 4,
+        max_gists: 2,
+    };
+    // Overview intent → the gist row surfaces, titled after its source.
+    let q = "which document explains how the media server is maintained overall?";
+    let qv = ai.embed_one(q).await.expect("embed");
+    let hits = db
+        .search_chunks_all_opts(qv, q, K, None, opts)
+        .await
+        .expect("search");
+    let gist_rank = hits
+        .iter()
+        .position(|(_, c)| c.gist && c.source_title == "Media Server Maintenance");
+    eprintln!(
+        "gist eval: overview query gist rank = {:?} of {}",
+        gist_rank.map(|r| r + 1),
+        hits.len()
+    );
+    assert!(
+        gist_rank.is_some_and(|r| r < 5),
+        "media-server gist should rank in the top 5 for an overview query"
+    );
+
+    // Exact identifier → verbatim chunk stays the winner (the fence: gists
+    // must never displace exact evidence).
+    let q = "what is the status of INV-2024-0042?";
+    let qv = ai.embed_one(q).await.expect("embed");
+    let hits = db
+        .search_chunks_all_opts(qv, q, K, None, opts)
+        .await
+        .expect("search");
+    let top = &hits.first().expect("hits").1;
+    assert!(
+        !top.gist && top.snippet.contains("INV-2024-0042"),
+        "exact-identifier winner must be a verbatim chunk, got gist={} snippet={:?}",
+        top.gist,
+        top.snippet.chars().take(60).collect::<String>()
+    );
+
+    // Cap: an all-overviews query keeps at most `max_gists` gist rows.
+    let q = "give me an overview of what these documents cover";
+    let qv = ai.embed_one(q).await.expect("embed");
+    let hits = db
+        .search_chunks_all_opts(qv, q, K, None, opts)
+        .await
+        .expect("search");
+    let gist_hits = hits.iter().filter(|(_, c)| c.gist).count();
+    eprintln!(
+        "gist eval: overview-of-everything gist hits = {gist_hits}/{}",
+        hits.len()
+    );
+    assert!(
+        gist_hits <= 2,
+        "max_gists=2 must cap gist rows, got {gist_hits}"
+    );
+
+    // FTS-only corpus-wide read fills titles for every row kind — the
+    // empty-title gap this RFC's Phase 1 required fixed.
+    let fts = db
+        .search_chunks_fts_all("remittance", K)
+        .await
+        .expect("fts all");
+    assert!(
+        !fts.is_empty(),
+        "fts should match the vendor runbook corpus"
+    );
+    for (_, c) in &fts {
+        assert!(
+            !c.source_title.is_empty(),
+            "corpus-wide FTS returned an empty title for chunk {}",
+            c.chunk_id
+        );
+    }
+}
+
+// ---- Chunk enrichment re-embed mechanics (RFC-infinite-context §2) ---------
+//
+// Enrichment prepends a situating sentence to a chunk's embed input and
+// rewrites the vector, but `Chunk.text`, ids, and ordinals are sacred. There
+// is no chat model in the suite, so this simulates the pass with a hand-written
+// situating sentence (the exact string a Small role would produce) and proves
+// the mechanics deterministically: verbatim text and row identity survive, and
+// the situating vocabulary measurably pulls the vector toward a query the
+// verbatim text alone would miss.
+
+#[tokio::test]
+async fn eval_enrichment_reembed() {
+    let Some(ai) = builtin_ai().await else { return };
+    let dir = std::env::temp_dir().join(format!("nbl-eval-enrich-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb = "enrich-nb";
+
+    // Distractors so retrieval is contested, then the target: a url source
+    // whose verbatim passage describes its topic only indirectly (no query
+    // vocabulary at all).
+    seed_docs(&ai, &db, nb, CORPUS, "d-").await;
+    let title = "Northern Freight Route";
+    let target = "The overnight ferry departs the northern pier and threads the fjord \
+                  before dawn, carrying freight and a handful of passengers to the far \
+                  settlement.";
+    let fillers = [
+        "Deckhands coil the mooring lines and stow the gangway once the last vehicle \
+         rolls aboard.",
+        "A small galley serves hot soup and coffee through the crossing, cash only, \
+         no reservations.",
+    ];
+    let src_id = format!("enrich-src-{}", uuid::Uuid::new_v4());
+    let embed_text = |body: &str| format!("[{title}]\n{body}");
+    let bodies = [target, fillers[0], fillers[1]];
+    let inputs: Vec<String> = bodies.iter().map(|b| embed_text(b)).collect();
+    let embeddings = ai.embed(&inputs).await.expect("embed target");
+    let tuples: Vec<(String, i32, String)> = bodies
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (format!("t-c{i}"), i as i32, b.to_string()))
+        .collect();
+    let source = crate::models::Source {
+        id: src_id.clone(),
+        notebook_id: nb.to_string(),
+        title: title.to_string(),
+        source_type: "url".into(),
+        url: "https://example.com/ferry".into(),
+        content: bodies.join("\n\n"),
+        char_count: 0,
+        chunk_count: tuples.len() as i64,
+        created_at: 0,
+        status: "ready".into(),
+        error: String::new(),
+        parent_id: String::new(),
+        mtime: 0,
+    };
+    db.insert_source(&source, &tuples, &embeddings)
+        .await
+        .expect("insert target");
+
+    // A query in the situating sentence's vocabulary, absent from the passage.
+    let q = "arctic cargo shipping schedule for the freight route";
+    let qv = ai.embed_one(q).await.expect("embed query");
+    let target_distance = |trace: &crate::db::SearchTrace| {
+        trace
+            .vector_hits
+            .iter()
+            .find(|c| c.chunk_id == "t-c0")
+            .map(|c| c.distance)
+    };
+    let before = db
+        .search_chunks_trace(nb, qv.clone(), q, 10, None)
+        .await
+        .expect("search before");
+    let before_dist = target_distance(&before).expect("target in vector pool before");
+
+    // Simulate the enrichment pass: same ids/ordinals/text, situating sentence
+    // prepended only to the target chunk's embed input.
+    let rows = db.source_chunk_rows(&src_id).await.expect("rows before");
+    let situating =
+        "This passage covers the arctic cargo shipping schedule for the northern freight route.";
+    let new_inputs: Vec<String> = rows
+        .iter()
+        .map(|(_, ord, text)| {
+            let base = embed_text(text);
+            if *ord == 0 {
+                format!("{situating}\n{base}")
+            } else {
+                base
+            }
+        })
+        .collect();
+    let new_embeddings = ai.embed(&new_inputs).await.expect("re-embed");
+    db.reembed_source_chunks(nb, &src_id, &rows, &new_embeddings)
+        .await
+        .expect("reembed");
+
+    // (a) + (b): verbatim text, ids, and ordinals are byte-for-byte stable —
+    // only the vectors moved. These are the hard guarantees.
+    let rows_after = db.source_chunk_rows(&src_id).await.expect("rows after");
+    assert_eq!(
+        rows, rows_after,
+        "enrichment must preserve chunk ids, ordinals, and verbatim text"
+    );
+
+    // (c): the situating vocabulary pulled the target's vector strictly closer
+    // to the query than its verbatim-only embedding — a deterministic vector
+    // measurement (FTS is untouched: `text` never changed), not a flaky
+    // full-stack ranking assertion.
+    let after = db
+        .search_chunks_trace(nb, qv, q, 10, None)
+        .await
+        .expect("search after");
+    let after_dist = target_distance(&after).expect("target in vector pool after");
+    eprintln!("enrich eval: target query-distance {before_dist:.4} -> {after_dist:.4}");
+    assert!(
+        after_dist < before_dist,
+        "situating sentence should move the vector toward the query \
+         (before {before_dist:.4}, after {after_dist:.4})"
+    );
+}
+
+// ---- Global source selection (RFC-infinite-context §4) --------------------
+//
+// The global answer route retrieves the standing gist layer corpus-wide, then
+// fans out per source. This eval covers the retrieval half — `search_gists` —
+// with handwritten gists: a global question must cover the sources it touches
+// while the per-notebook cap keeps one notebook from owning the fan-out.
+// Extract quality is a live-model concern, out of the deterministic suite.
+
+/// Network-heavy notebook: four network sources plus a baking distractor, so
+/// the per-notebook gist cap has a fifth candidate to trim.
+const GLOBAL_NET: &[(&str, &str)] = &[
+    (
+        "Home Network Guide",
+        "The home router lives in the hallway closet. Port 32400 forwards to \
+         the Plex media server. The guest WiFi is isolated from home devices \
+         and rotates its passphrase every quarter.",
+    ),
+    (
+        "Office Network Runbook",
+        "Office switches are patched on the last Friday of the quarter. Port \
+         8443 forwards to the badge system console. The conference network \
+         uses a captive portal with a daily rotating code.",
+    ),
+    (
+        "Cabin WiFi Setup",
+        "The cabin router sits above the wood stove shelf. Port 8080 forwards \
+         to the trail camera system. The guest passphrase is taped inside the \
+         pantry door.",
+    ),
+    (
+        "VPN Access Guide",
+        "The VPN uses WireGuard listening on port 51820. Shell access to home \
+         machines goes over the VPN only; nothing listens on the public \
+         interface.",
+    ),
+    (
+        "Sourdough Notes",
+        "Feed the starter twice daily at room temperature. Bulk fermentation \
+         runs four to six hours. A dutch oven preheated to four hundred fifty \
+         degrees gives the best oven spring.",
+    ),
+];
+
+/// Payments notebook: exactly the sources the payments query expects, so the
+/// cap returns all of them and recall does not hinge on a ranking tie-break.
+const GLOBAL_PAY: &[(&str, &str)] = &[
+    (
+        "Acme Invoices Q3",
+        "INV-2024-0042 for Acme Corp is paid; INV-2024-0051 for Globex is \
+         overdue. Retries that fail with ERR-503-BACKOFF wait sixty seconds. \
+         Contact billing for escalations.",
+    ),
+    (
+        "Vendor Payment Runbook",
+        "Vendor invoices are paid by wire on net-forty-five terms with \
+         same-day remittance advice. Disputed invoices escalate to \
+         procurement within five business days.",
+    ),
+    (
+        "Contractor Agreement Summary",
+        "Contractors invoice monthly on net-thirty terms. Late payments \
+         accrue one percent interest per month. Unlogged hours past thirty \
+         days are not billable.",
+    ),
+];
+
+/// Benefits notebook: exactly the two sources the benefits query expects.
+const GLOBAL_LIFE: &[(&str, &str)] = &[
+    (
+        "Employee Handbook",
+        "Employees accrue one and a half days of paid time off per month, \
+         available after the first ninety days. Expense reports are due by \
+         the fifth business day of the following month.",
+    ),
+    (
+        "Benefits FAQ",
+        "The company observes eleven paid holidays per year. Sick time is \
+         unlimited within reason. Parental leave is sixteen weeks paid after \
+         six months of service.",
+    ),
+];
+
+/// One handwritten gist per source, keyed by title — seeded exactly as the
+/// production sweep writes them via `seed_gist`.
+const GLOBAL_GISTS: &[(&str, &str)] = &[
+    (
+        "Home Network Guide",
+        "This guide covers the home network: where the router lives, the Plex \
+         port forward on 32400, and the isolated guest WiFi. Key terms: \
+         router, port 32400, guest WiFi.",
+    ),
+    (
+        "Office Network Runbook",
+        "This runbook covers the office network: the switch patching cadence, \
+         the badge console port forward on 8443, and the conference captive \
+         portal. Key terms: switches, port 8443, captive portal.",
+    ),
+    (
+        "Cabin WiFi Setup",
+        "This note covers the cabin network: the router location, the \
+         trail-camera port forward on 8080, and the guest passphrase. Key \
+         terms: cabin router, port 8080, trail camera.",
+    ),
+    (
+        "VPN Access Guide",
+        "This guide covers remote access: the WireGuard VPN on port 51820 and \
+         SSH restricted to the VPN. Key terms: WireGuard, port 51820, SSH.",
+    ),
+    (
+        "Sourdough Notes",
+        "These notes cover sourdough baking: starter feeding, bulk \
+         fermentation timing, and oven temperature. Key terms: starter, \
+         fermentation, oven spring.",
+    ),
+    (
+        "Acme Invoices Q3",
+        "This sheet lists Q3 invoices and their status, plus the \
+         ERR-503-BACKOFF retry wait. It can answer which invoices are paid or \
+         overdue. Key terms: INV-2024-0042, ERR-503-BACKOFF, billing.",
+    ),
+    (
+        "Vendor Payment Runbook",
+        "This runbook covers vendor payments: wire payments on net-forty-five \
+         terms and the dispute escalation path. Key terms: wires, \
+         net-forty-five, procurement.",
+    ),
+    (
+        "Contractor Agreement Summary",
+        "This summary covers contractor payment terms: monthly net-thirty \
+         invoicing, late-payment interest, and time-tracking rules. Key \
+         terms: net-thirty, interest, time tracking.",
+    ),
+    (
+        "Employee Handbook",
+        "This handbook covers time off and expenses: paid-time-off accrual \
+         and the expense-report deadline. Key terms: paid time off, expense \
+         reports.",
+    ),
+    (
+        "Benefits FAQ",
+        "This FAQ covers employee benefits: paid holidays, sick time, and \
+         parental leave. Key terms: holidays, sick time, parental leave.",
+    ),
+];
+
+/// One global question and the source titles it should cover.
+struct GlobalCase {
+    query: &'static str,
+    expected: &'static [&'static str],
+}
+
+const GLOBAL_CASES: &[GlobalCase] = &[
+    GlobalCase {
+        query: "compare all my invoice and payment terms across my notebooks",
+        expected: &[
+            "Acme Invoices Q3",
+            "Vendor Payment Runbook",
+            "Contractor Agreement Summary",
+        ],
+    },
+    GlobalCase {
+        query: "what do all my sources say about employee time off and benefits?",
+        expected: &["Employee Handbook", "Benefits FAQ"],
+    },
+];
+
+/// Corpus-wide gist selection (RFC-infinite-context §4): a global question
+/// covers the labeled sources it touches, and the per-notebook cap trims a
+/// notebook that over-supplies. Deterministic (builtin embedder + handwritten
+/// gists), so a failure is a selection regression, not flakiness.
+#[tokio::test]
+async fn eval_global_source_selection() {
+    let Some(ai) = builtin_ai().await else { return };
+    let dir = std::env::temp_dir().join(format!("nbl-eval-global-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    seed_docs(&ai, &db, "glob-net", GLOBAL_NET, "gn-").await;
+    seed_docs(&ai, &db, "glob-pay", GLOBAL_PAY, "gp-").await;
+    seed_docs(&ai, &db, "glob-life", GLOBAL_LIFE, "gl-").await;
+    let notebook_of = |title: &str| -> &'static str {
+        if GLOBAL_NET.iter().any(|(t, _)| *t == title) {
+            "glob-net"
+        } else if GLOBAL_PAY.iter().any(|(t, _)| *t == title) {
+            "glob-pay"
+        } else {
+            "glob-life"
+        }
+    };
+    for (title, gist) in GLOBAL_GISTS {
+        seed_gist(&ai, &db, notebook_of(title), title, gist).await;
+    }
+
+    const MAX_PER_NB: usize = 3;
+    let select = |q: &'static str| async {
+        let qv = ai.embed_one(q).await.expect("embed query");
+        db.search_gists(qv, 12)
+            .await
+            .expect("search gists")
+            .into_iter()
+            .map(|(nb, c)| (nb, c.source_title))
+            .collect::<Vec<_>>()
+    };
+    let cap_holds = |sel: &[(String, String)]| {
+        let mut per_nb: HashMap<&str, usize> = HashMap::new();
+        for (nb, _) in sel {
+            *per_nb.entry(nb.as_str()).or_default() += 1;
+        }
+        per_nb.values().all(|&n| n <= MAX_PER_NB)
+    };
+
+    eprintln!("\nglobal source selection (search_gists, cap {MAX_PER_NB}/notebook):");
+    for c in GLOBAL_CASES {
+        let sel = select(c.query).await;
+        assert!(cap_holds(&sel), "per-notebook cap exceeded: {sel:?}");
+        let titles: std::collections::HashSet<&str> = sel.iter().map(|(_, t)| t.as_str()).collect();
+        let missing: Vec<&str> = c
+            .expected
+            .iter()
+            .copied()
+            .filter(|t| !titles.contains(t))
+            .collect();
+        eprintln!(
+            "  {:<58} covered {}/{}",
+            c.query.chars().take(58).collect::<String>(),
+            c.expected.len() - missing.len(),
+            c.expected.len()
+        );
+        assert!(
+            missing.is_empty(),
+            "global selection for {:?} missed {missing:?}; got {sel:?}",
+            c.query
+        );
+    }
+
+    // Cap-trim query: five gists in glob-net, only three come back, and the
+    // baking distractor never displaces a network source.
+    let q = "summarize everything about my home, office, cabin, and vpn networks";
+    let sel = select(q).await;
+    assert!(cap_holds(&sel), "per-notebook cap exceeded: {sel:?}");
+    let net: Vec<&str> = sel
+        .iter()
+        .filter(|(nb, _)| nb == "glob-net")
+        .map(|(_, t)| t.as_str())
+        .collect();
+    eprintln!("  network query → glob-net kept {net:?}");
+    assert_eq!(
+        net.len(),
+        MAX_PER_NB,
+        "cap should trim glob-net's five gists to {MAX_PER_NB}, got {net:?}"
+    );
+    assert!(
+        !net.contains(&"Sourdough Notes"),
+        "cap kept the baking distractor over a network source: {net:?}"
+    );
+}
+
+// ---- Scale fence (RFC-infinite-context §3) --------------------------------
+//
+// Deterministic synthetic corpora at 1M/3M (and, behind --ignored, 10M)
+// chars, with 12 fixed needle documents planted among distractor docs whose
+// identifier spaces are disjoint from every needle. The fence that makes
+// "infinite context" falsifiable: exact-identifier recall stays 1.00 at
+// every size, and mean recall must not sag as the corpus grows.
+
+/// xorshift64 — deterministic distractor generation without a rand dep.
+/// (`Date`/`rand` would make corpora differ across runs; the whole point is
+/// a byte-stable corpus per size.)
+struct XorShift(u64);
+
+impl XorShift {
+    fn next(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n.max(1)
+    }
+    fn pick<'a>(&mut self, xs: &'a [&'a str]) -> &'a str {
+        xs[self.below(xs.len() as u64) as usize]
+    }
+}
+
+const SCALE_HOSTS: &[&str] = &[
+    "maple", "birch", "walnut", "aspen", "cedar", "willow", "rowan", "alder",
+];
+const SCALE_CUSTOMERS: &[&str] = &[
+    "Acme Corp",
+    "Globex",
+    "Initech",
+    "Umbrella",
+    "Stark Industrial",
+    "Wayne Logistics",
+];
+const SCALE_SERVICES: &[&str] = &[
+    "billing",
+    "ingest",
+    "metrics",
+    "auth",
+    "search",
+    "archive",
+    "reporting",
+    "queue",
+];
+
+/// One large distractor document (~24k chars, ten sections) — long enough
+/// that a 3M-char corpus is ~125 inserts, structured like the real PDFs and
+/// runbooks users import. Identifier spaces are deliberately disjoint from
+/// every needle: invoices 2015–2023, errors ERR-100..899, ports below
+/// 50000, project codes PRJ-1000..6999, hosts from the tree word bank.
+fn scale_doc(rng: &mut XorShift, i: usize) -> (String, String) {
+    let mut body = String::with_capacity(26_000);
+    for sec in 0..10 {
+        match rng.below(4) {
+            0 => {
+                body.push_str(&format!("# Invoice batch {sec}\n\n"));
+                for _ in 0..6 {
+                    body.push_str(&format!(
+                        "INV-20{}-{:04} | {} | ${},{:03} | {}\n",
+                        15 + rng.below(9),
+                        rng.below(9000) + 100,
+                        rng.pick(SCALE_CUSTOMERS),
+                        rng.below(40) + 1,
+                        rng.below(1000),
+                        if rng.below(3) == 0 { "overdue" } else { "paid" },
+                    ));
+                }
+                body.push_str(&format!(
+                    "\nRetries for this batch use ERR-{}-BACKOFF with a {} second wait.\n\n",
+                    rng.below(800) + 100,
+                    rng.below(50) + 5
+                ));
+            }
+            1 => {
+                body.push_str(&format!("# Service runbook section {sec}\n\n"));
+                body.push_str(&format!(
+                    "The {} service listens on port {} of host {}-{:02}. Deploys roll \
+                     Tuesday; on-call rotates weekly. Health checks poll every {} \
+                     seconds and page after three consecutive failures. Project code \
+                     PRJ-{}.\n\n",
+                    rng.pick(SCALE_SERVICES),
+                    rng.below(46_000) + 3_000,
+                    rng.pick(SCALE_HOSTS),
+                    rng.below(90) + 1,
+                    rng.below(50) + 10,
+                    rng.below(6_000) + 1_000,
+                ));
+            }
+            2 => {
+                body.push_str(&format!("# Meeting notes, week {sec}\n\n"));
+                body.push_str(&format!(
+                    "Attendees reviewed the {} migration and agreed to defer the \
+                     {} cleanup until after the freeze. Action items: audit the \
+                     {} dashboards, refresh the {} credentials, and close out \
+                     stale tickets older than {} days.\n\n",
+                    rng.pick(SCALE_SERVICES),
+                    rng.pick(SCALE_SERVICES),
+                    rng.pick(SCALE_SERVICES),
+                    rng.pick(SCALE_SERVICES),
+                    rng.below(90) + 30,
+                ));
+            }
+            _ => {
+                body.push_str(&format!("# Policy appendix {sec}\n\n"));
+                body.push_str(&format!(
+                    "Expense reports above ${} require director approval and are \
+                     reimbursed within {} business days. Travel booked through the \
+                     portal earns no points but is covered by the corporate policy \
+                     for {} staff.\n\n",
+                    (rng.below(40) + 1) * 250,
+                    rng.below(20) + 3,
+                    rng.pick(SCALE_SERVICES),
+                ));
+            }
+        }
+    }
+    (format!("Corpus binder {i:04}"), body)
+}
+
+/// Fixed needle documents. Every identifier here is outside the distractor
+/// generator's ranges, so exactly one document in any corpus answers each
+/// query — recall is unambiguous at every size.
+const SCALE_NEEDLES: &[(&str, &str)] = &[
+    (
+        "Zephyr Project Charter",
+        "Project PRJ-7741-ZEPHYR covers the migration of archival storage to \
+         cold tier. The charter owner is the platform group and the budget \
+         line closes at fiscal year end.",
+    ),
+    (
+        "Invoice Exceptions 2077",
+        "INV-2077-0420 for Vandelay Import/Export remains disputed at \
+         $83,000. The exception ages out of the ledger after two quarters.",
+    ),
+    (
+        "Frost Incident Postmortem",
+        "The outage tracked as ERR-9917-FROST began with a stuck mutex in \
+         the scheduler and was mitigated by draining the standby pool.",
+    ),
+    (
+        "Kestrel Host Bringup",
+        "Host kestrel-40k exposes the debug console on port 55731. Serial \
+         access requires the lab bastion and a hardware token.",
+    ),
+    (
+        "Vulnerability Note 31337",
+        "CVE-2099-31337 affects the legacy image resizer; the fix pins the \
+         codec and disables remote profile loading.",
+    ),
+    (
+        "Aurora Contract Rider",
+        "The Aurora rider sets penalty clause AUR-2088-PENALTY at twelve \
+         percent for missed delivery windows in winter months.",
+    ),
+    (
+        "Solar Array Field Report",
+        "Solar array output peaked at 4.2 kilowatts during the June heat \
+         wave, and the inverter clipped for two afternoons in a row.",
+    ),
+    (
+        "Beekeeping Season Log",
+        "The north hive swarmed in late spring; a captured swarm was rehomed \
+         into the cedar box and accepted the new queen within a week.",
+    ),
+    (
+        "Sourdough Hydration Study",
+        "Raising hydration to eighty two percent opened the crumb \
+         dramatically but made shaping harder on warm days.",
+    ),
+    (
+        "Glacier Hike Journal",
+        "The crossing took nine hours with crampons required above the \
+         moraine; the hut warden stamped permits at the saddle.",
+    ),
+    (
+        "Cello Practice Plan",
+        "Thumb position drills come before the Elgar concerto excerpts; \
+         scales run three octaves with a drone on the open string.",
+    ),
+    (
+        "Heirloom Tomato Trial",
+        "The Cherokee Purple plants outyielded the Brandywine rows despite \
+         later transplanting and half the fertilizer.",
+    ),
+];
+
+struct ScaleQuery {
+    query: &'static str,
+    kind: &'static str, // "exact" | "paraphrase"
+    title: &'static str,
+}
+
+const SCALE_QUERIES: &[ScaleQuery] = &[
+    ScaleQuery {
+        query: "what is PRJ-7741-ZEPHYR about?",
+        kind: "exact",
+        title: "Zephyr Project Charter",
+    },
+    ScaleQuery {
+        query: "what is the status of INV-2077-0420?",
+        kind: "exact",
+        title: "Invoice Exceptions 2077",
+    },
+    ScaleQuery {
+        query: "what caused ERR-9917-FROST?",
+        kind: "exact",
+        title: "Frost Incident Postmortem",
+    },
+    ScaleQuery {
+        query: "which host uses port 55731?",
+        kind: "exact",
+        title: "Kestrel Host Bringup",
+    },
+    ScaleQuery {
+        query: "what does CVE-2099-31337 affect?",
+        kind: "exact",
+        title: "Vulnerability Note 31337",
+    },
+    ScaleQuery {
+        query: "what is the AUR-2088-PENALTY clause?",
+        kind: "exact",
+        title: "Aurora Contract Rider",
+    },
+    ScaleQuery {
+        query: "how much power did the panels produce at their peak?",
+        kind: "paraphrase",
+        title: "Solar Array Field Report",
+    },
+    ScaleQuery {
+        query: "what happened when the bees swarmed?",
+        kind: "paraphrase",
+        title: "Beekeeping Season Log",
+    },
+    ScaleQuery {
+        query: "what did the wetter bread dough change?",
+        kind: "paraphrase",
+        title: "Sourdough Hydration Study",
+    },
+    ScaleQuery {
+        query: "how long did the glacier crossing take?",
+        kind: "paraphrase",
+        title: "Glacier Hike Journal",
+    },
+    ScaleQuery {
+        query: "what should I practice before the concerto?",
+        kind: "paraphrase",
+        title: "Cello Practice Plan",
+    },
+    ScaleQuery {
+        query: "which tomato variety produced more fruit?",
+        kind: "paraphrase",
+        title: "Heirloom Tomato Trial",
+    },
+];
+
+/// Build a corpus of ~`target_chars`, run the needle queries corpus-wide at
+/// the adaptive k, and return (exact recall, paraphrase recall, k used).
+async fn run_scale(ai: &crate::ai::Ai, target_chars: usize) -> (f64, f64, usize) {
+    let dir = std::env::temp_dir().join(format!("nbl-eval-scale-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let mut rng = XorShift(0x5EED_0000 + target_chars as u64);
+
+    // Generate distractors up to the target, needles interleaved evenly.
+    let mut docs: Vec<(String, String)> = Vec::new();
+    let mut chars = 0usize;
+    let mut i = 0usize;
+    while chars < target_chars {
+        let (t, b) = scale_doc(&mut rng, i);
+        chars += b.chars().count();
+        docs.push((t, b));
+        i += 1;
+    }
+    let stride = (docs.len() / SCALE_NEEDLES.len()).max(1);
+    for (ni, (t, b)) in SCALE_NEEDLES.iter().enumerate() {
+        let at = (ni * stride + stride / 2).min(docs.len());
+        docs.insert(at, (t.to_string(), b.to_string()));
+    }
+
+    // Chunk everything, embed in large batches, insert per doc.
+    let notebooks = ["s-a", "s-b", "s-c", "s-d", "s-e", "s-f", "s-g", "s-h"];
+    let mut total_chars = 0i64;
+    let mut pending: Vec<(usize, crate::ingest::Chunk)> = Vec::new(); // (doc idx, chunk)
+    let chunked: Vec<Vec<crate::ingest::Chunk>> = docs
+        .iter()
+        .map(|(t, b)| crate::ingest::chunk_text(t, &normalize_ws(b)))
+        .collect();
+    for (di, chunks) in chunked.iter().enumerate() {
+        for c in chunks {
+            pending.push((
+                di,
+                crate::ingest::Chunk {
+                    text: c.text.clone(),
+                    embed_text: c.embed_text.clone(),
+                },
+            ));
+        }
+    }
+    let inputs: Vec<String> = pending.iter().map(|(_, c)| c.embed_text.clone()).collect();
+    let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(inputs.len());
+    for batch in inputs.chunks(256) {
+        vectors.extend(ai.embed(batch).await.expect("embed scale corpus"));
+    }
+    let mut cursor = 0usize;
+    // Bulk seeding defers the per-insert BM25 rebuild (O(n²) otherwise —
+    // the 10M corpus ran 40+ minutes rebuilding an ever-growing index) and
+    // flushes once below; production folder imports use the same mode.
+    db.defer_fts(true);
+    for (di, (title, body)) in docs.iter().enumerate() {
+        let n = chunked[di].len();
+        let tuples: Vec<(String, i32, String)> = chunked[di]
+            .iter()
+            .enumerate()
+            .map(|(ci, c)| (format!("d{di}-c{ci}"), ci as i32, c.text.clone()))
+            .collect();
+        let vecs = vectors[cursor..cursor + n].to_vec();
+        cursor += n;
+        let source = crate::models::Source {
+            id: format!("scale-src-{di}"),
+            notebook_id: notebooks[di % notebooks.len()].to_string(),
+            title: title.clone(),
+            source_type: "text".into(),
+            url: String::new(),
+            content: body.clone(),
+            char_count: body.chars().count() as i64,
+            chunk_count: n as i64,
+            created_at: 1_700_000_000_000 + di as i64,
+            status: "ready".into(),
+            error: String::new(),
+            parent_id: String::new(),
+            mtime: 0,
+        };
+        total_chars += source.char_count;
+        db.insert_source(&source, &tuples, &vecs)
+            .await
+            .expect("insert scale doc");
+    }
+    db.defer_fts(false);
+    db.flush_fts().await.expect("flush scale corpus fts");
+
+    let k = crate::inference::ContextProfile::default().retrieve_k_for(total_chars);
+    let opts = SearchOptions {
+        pool_multiplier: 4,
+        max_per_source: 2,
+        max_per_notebook: 3,
+        max_notes: 4,
+        max_gists: 2,
+    };
+    let queries: Vec<String> = SCALE_QUERIES.iter().map(|q| q.query.to_string()).collect();
+    let qvecs = ai.embed(&queries).await.expect("embed scale queries");
+    let (mut exact_hit, mut exact_n, mut para_hit, mut para_n) = (0f64, 0f64, 0f64, 0f64);
+    for (q, qv) in SCALE_QUERIES.iter().zip(qvecs) {
+        let hits = db
+            .search_chunks_all_opts(qv, q.query, k, None, opts)
+            .await
+            .expect("scale search");
+        let found = hits.iter().any(|(_, c)| c.source_title == q.title);
+        if q.kind == "exact" {
+            exact_n += 1.0;
+            exact_hit += found as u8 as f64;
+        } else {
+            para_n += 1.0;
+            para_hit += found as u8 as f64;
+        }
+        if !found {
+            eprintln!(
+                "  scale MISS ({} chars, {}): {}",
+                total_chars, q.kind, q.query
+            );
+        }
+    }
+    (exact_hit / exact_n, para_hit / para_n, k)
+}
+
+/// Collapse the escaped-continuation whitespace in generated bodies so the
+/// chunker sees ordinary paragraphs.
+fn normalize_ws(s: &str) -> String {
+    s.replace("  ", " ")
+}
+
+/// The fence at 1M and 3M chars (10M below): exact recall holds at 1.00 at
+/// every size, and recall does not sag with scale. Last verified run:
+/// 1M exact 1.00 / para 1.00 (k=10) · 3M exact 1.00 / para 1.00 (k=11).
+/// Ignored by default: per-doc LanceDB inserts put seeding at ~10 minutes —
+/// run on retrieval changes via
+/// `cargo test --lib eval_scale_fence -- --ignored --nocapture`
+/// (a bulk-insert seeding path would bring this into the default suite).
+#[tokio::test]
+#[ignore = "scale corpus seeding takes ~10 minutes; run explicitly on retrieval changes"]
+async fn eval_scale_fence() {
+    let Some(ai) = builtin_ai().await else { return };
+    let (e1, p1, k1) = run_scale(&ai, 1_000_000).await;
+    let (e3, p3, k3) = run_scale(&ai, 3_000_000).await;
+    eprintln!("scale fence: 1M exact {e1:.2} para {p1:.2} (k={k1}) · 3M exact {e3:.2} para {p3:.2} (k={k3})");
+    assert!(
+        k3 > k1,
+        "adaptive k must grow with the corpus ({k1} → {k3})"
+    );
+    assert_eq!(e1, 1.0, "1M: every exact-identifier needle must be found");
+    assert_eq!(e3, 1.0, "3M: every exact-identifier needle must be found");
+    assert!(
+        (p1 + e1) / 2.0 - (p3 + e3) / 2.0 <= 0.05,
+        "recall sagged with corpus growth: 1M mean {:.2} → 3M mean {:.2}",
+        (p1 + e1) / 2.0,
+        (p3 + e3) / 2.0
+    );
+}
+
+/// The 10M-char fence — minutes of embedding, so opt-in:
+/// `cargo test --lib eval_scale_fence_10m -- --ignored --nocapture`
+#[tokio::test]
+#[ignore = "10M-char corpus takes minutes to embed; run explicitly"]
+async fn eval_scale_fence_10m() {
+    let Some(ai) = builtin_ai().await else { return };
+    let (e10, p10, k10) = run_scale(&ai, 10_000_000).await;
+    eprintln!("scale fence: 10M exact {e10:.2} para {p10:.2} (k={k10})");
+    assert_eq!(e10, 1.0, "10M: every exact-identifier needle must be found");
+    assert!(p10 >= 0.5, "10M: paraphrase recall collapsed to {p10:.2}");
 }

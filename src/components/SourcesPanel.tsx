@@ -13,18 +13,13 @@ import {
   CardAction,
   useConfirm,
 } from "./ui";
-import { cn, isWebUrl } from "@/lib/utils";
+import { cn, compactNumber, isWebUrl, visibleTitle } from "@/lib/utils";
+import { sourceIcon } from "@/lib/sourceIcon";
 import type { Source } from "@/lib/types";
 import {
   ChevronRight,
-  FileCode,
-  Blocks,
-  Gem,
   FileText,
-  FileType,
-  GitBranch,
   Globe,
-  Hash,
   Plus,
   PanelLeftClose,
   Trash2,
@@ -34,59 +29,35 @@ import {
   X,
   Pencil,
   RefreshCw,
-  Image as ImageIcon,
-  Folder,
   Cloud,
-  CodeXml,
-  Command,
-  Calendar,
-  ListChecks,
-  NotebookText,
-  TrendingUp,
 } from "lucide-react";
 
-// Soft per-notebook capacity used for the "how full is this notebook" gauge.
-// ~1M chars ≈ ~250k tokens — generous for local RAG over many documents.
-const MAX_NOTEBOOK_CHARS = 1_000_000;
+// Reference scale for the "how big is this notebook" gauge. Not a capacity —
+// retrieval has no cliff (RFC-infinite-context: adaptive k, gists, the scale
+// fence holds recall flat as the corpus grows) — 10M chars is the design
+// target the eval fence covers, so the bar reads as "where you are in the
+// verified operating range", going red only near its edge.
+const SCALE_TARGET_CHARS = 10_000_000;
 
-export function sourceIcon(t: Source["sourceType"], url?: string) {
-  // Mac sources show the app they mirror (same icons as the add-source
-  // modal's provider tiles), in that app's signature color.
-  if (t === "mac" && url) {
-    if (url.startsWith("cider://calendar/"))
-      return <Calendar className="h-3.5 w-3.5 text-muted-foreground" />;
-    if (url.startsWith("cider://reminders/"))
-      return <ListChecks className="h-3.5 w-3.5 text-muted-foreground" />;
-    if (url.startsWith("cider://notes/"))
-      return <NotebookText className="h-3.5 w-3.5 text-muted-foreground" />;
-    if (url.startsWith("cider://stocks/"))
-      return <TrendingUp className="h-3.5 w-3.5 text-muted-foreground" />;
+// Folder tree open/closed state persists across restarts, keyed by folder
+// source id (only ids the user has explicitly toggled are stored; unseen
+// folders keep the collapsed-when-many default).
+const FOLDERS_COLLAPSED_KEY = "foldersCollapsed";
+
+function loadFoldersCollapsed(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(FOLDERS_COLLAPSED_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
   }
-  switch (t) {
-    case "git":
-      return <GitBranch className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "notion":
-      return <Blocks className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "obsidian":
-      return <Gem className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "code":
-      return <FileCode className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "pdf":
-      return <FileType className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "url":
-      return <Globe className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "markdown":
-      return <Hash className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "image":
-      return <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "folder":
-      return <Folder className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "mac":
-      return <Command className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "html":
-      return <CodeXml className="h-3.5 w-3.5 text-muted-foreground" />;
-    default:
-      return <FileText className="h-3.5 w-3.5 text-muted-foreground" />;
+}
+
+function saveFoldersCollapsed(state: Record<string, boolean>) {
+  try {
+    localStorage.setItem(FOLDERS_COLLAPSED_KEY, JSON.stringify(state));
+  } catch {
+    /* storage full or unavailable — collapse state is best-effort */
   }
 }
 
@@ -156,6 +127,7 @@ export function SourcesPanel() {
   const sources = useStore((s) => s.sources);
   const currentId = useStore((s) => s.currentId);
   const queue = useStore((s) => s.ingestQueue);
+  const importingFolders = useStore((s) => s.importingFolders);
   const clearQueueItem = useStore((s) => s.clearQueueItem);
   const openAddSource = useStore((s) => s.openAddSource);
   const folderScan = useStore((s) => s.folderScan);
@@ -198,19 +170,24 @@ export function SourcesPanel() {
   }
 
   const totalChars = sources.reduce((sum, s) => sum + s.charCount, 0);
-  const pct = Math.min(100, (totalChars / MAX_NOTEBOOK_CHARS) * 100);
+  const pct = Math.min(100, (totalChars / SCALE_TARGET_CHARS) * 100);
 
   // Folder children render indented under their folder; everything else is a
   // flat top-level row. Parents with many children start collapsed — a repo
   // shouldn't wall the panel — and the chevron remembers the user's choice
-  // for the session.
-  const [collapsedParents, setCollapsedParents] = useState<
-    Record<string, boolean>
-  >({});
+  // across restarts (persisted to localStorage, keyed by folder source id,
+  // mirroring the other UI-state keys in store.ts).
+  const [collapsedParents, setCollapsedParents] =
+    useState<Record<string, boolean>>(loadFoldersCollapsed);
   const isCollapsed = (id: string, kidCount: number) =>
     collapsedParents[id] ?? kidCount > 8;
   const toggleCollapsed = (id: string, kidCount: number) =>
-    setCollapsedParents((m) => ({ ...m, [id]: !isCollapsed(id, kidCount) }));
+    setCollapsedParents((m) => {
+      const cur = m[id] ?? kidCount > 8;
+      const next = { ...m, [id]: !cur };
+      saveFoldersCollapsed(next);
+      return next;
+    });
   const rows: { s: Source; indent: boolean }[] = [];
   for (const s of sources) {
     if (s.parentId) continue;
@@ -226,6 +203,12 @@ export function SourcesPanel() {
   }
   const childCount = (folderId: string) =>
     sources.filter((x) => x.parentId === folderId).length;
+  // A folder/repo parent carries no chars of its own (char_count 0 in the DB);
+  // its children are the real carriers, so its "contribution" is their sum.
+  const folderChars = (folderId: string) =>
+    sources
+      .filter((x) => x.parentId === folderId)
+      .reduce((sum, x) => sum + x.charCount, 0);
 
   // Selection: null means everything is on; the map holds only deselected ids.
   const isSelected = (id: string) =>
@@ -310,7 +293,7 @@ export function SourcesPanel() {
               {Intl.NumberFormat().format(totalChars)} chars
             </span>
             <span className="text-subtle-foreground">
-              {pct < 1 ? "<1" : Math.round(pct)}% of capacity
+              {pct < 1 ? "<1" : Math.round(pct)}% of 10M
             </span>
           </div>
           <div className="h-1.5 overflow-hidden rounded-full bg-surface-2">
@@ -398,10 +381,14 @@ export function SourcesPanel() {
           />
         ) : (
           <>
-            {/* Master selection row: which sources feed chat & Studio. */}
+            {/* Master selection row: which sources feed chat & Studio. Always
+                labeled — a bare checkbox over empty space read as a blank,
+                menu-less source row in every notebook. */}
             <div className="mb-0.5 flex items-center gap-2 px-2 py-1.5">
-              <span className="text-[11px] text-muted-foreground">
-                {selectedCount} of {contentSources.length} selected
+              <span className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+                {allSelected
+                  ? "All selected"
+                  : `${selectedCount} of ${contentSources.length} selected`}
               </span>
               <div className="ml-auto">
                 <SelectBox
@@ -426,12 +413,16 @@ export function SourcesPanel() {
                 const isMacReminders = s.url.startsWith(
                   "cider://reminders/list/",
                 );
+                // A folder inserted optimistically while its children embed:
+                // shown right away with a loading affordance, not yet openable.
+                const importing = isFolder && importingFolders.includes(s.id);
                 // Errored WEB sources still open in the reader: extraction
                 // failed, but the Live view can show the actual page. Folder
                 // and git parents open as the repo reader.
                 const readable =
-                  s.status === "ready" ||
-                  (s.status === "error" && isWebUrl(s.url));
+                  !importing &&
+                  (s.status === "ready" ||
+                    (s.status === "error" && isWebUrl(s.url)));
                 const kids = isFolder
                   ? sources.filter((x) => x.parentId === s.id)
                   : [];
@@ -499,7 +490,9 @@ export function SourcesPanel() {
                       </button>
                     ) : (
                       <div className="pointer-events-none relative z-10 mt-0.5">
-                        {s.status === "error" ? (
+                        {importing ? (
+                          <Spinner className="h-3.5 w-3.5 text-muted-foreground" />
+                        ) : s.status === "error" ? (
                           <AlertCircle className="h-3.5 w-3.5 text-destructive" />
                         ) : s.status === "placeholder" ? (
                           <Cloud className="h-3.5 w-3.5 text-subtle-foreground" />
@@ -521,92 +514,110 @@ export function SourcesPanel() {
                               ? "text-muted-foreground"
                               : "text-foreground",
                           )}
-                          title={s.title}
+                          title={visibleTitle(s.title) || s.url || "Untitled"}
                         >
-                          {s.title}
+                          {/* A source can arrive with a blank or zero-width
+                              title (a page with no real <title>); the row must
+                              never render as a bare checkbox. */}
+                          {visibleTitle(s.title) ||
+                            (s.url && hostname(s.url)) ||
+                            "Untitled"}
                         </span>
-                        <RowMenu
-                          className="pointer-events-auto z-20"
-                          label={`Options for "${s.title}"`}
-                          items={[
-                            // url holds the origin: a web URL, an on-disk path, or
-                            // a folder — any of them can be refreshed.
-                            ...(s.url
-                              ? [
-                                  {
-                                    label: isFolder
-                                      ? "Rescan folder now"
-                                      : s.sourceType === "mac"
-                                        ? "Sync now"
-                                        : s.status === "placeholder"
-                                          ? "Download & embed"
-                                          : isWebUrl(s.url)
-                                            ? "Refresh from URL"
-                                            : "Refresh from file",
-                                    icon: <RefreshCw className="h-3.5 w-3.5" />,
-                                    onClick: () => void refreshSource(s.id),
-                                  },
-                                ]
-                              : []),
-                            // Mac sources are mirrors — editing our copy would
-                            // just be overwritten, so writes go to the app
-                            // itself and sync back.
-                            ...(isMacNote
-                              ? [
-                                  {
-                                    label: "Edit note",
-                                    icon: <Pencil className="h-3.5 w-3.5" />,
-                                    onClick: () => void startEditMacNote(s),
-                                  },
-                                ]
-                              : []),
-                            ...(isMacReminders
-                              ? [
-                                  {
-                                    label: "Add reminder…",
-                                    icon: <Plus className="h-3.5 w-3.5" />,
-                                    onClick: () =>
-                                      setAddingReminder({
-                                        sourceId: s.id,
-                                        list: s.title,
-                                      }),
-                                  },
-                                ]
-                              : []),
-                            ...(s.sourceType !== "url" &&
-                            s.sourceType !== "mac" &&
-                            !isFolder &&
-                            s.status !== "placeholder"
-                              ? [
-                                  {
-                                    label: "Edit text",
-                                    icon: <Pencil className="h-3.5 w-3.5" />,
-                                    onClick: () => void startEdit(s),
-                                  },
-                                ]
-                              : []),
-                            {
-                              label: "Remove",
-                              icon: <Trash2 className="h-3.5 w-3.5" />,
-                              danger: true,
-                              onClick: async () => {
-                                if (
-                                  await confirm({
-                                    title: `Remove "${s.title}"?`,
-                                    message: isFolder
-                                      ? `This removes the folder and its ${childCount(s.id)} file sources (with their embedded chunks) from the notebook. Nothing on disk is touched.`
-                                      : "This deletes the source and its embedded chunks from the notebook.",
-                                    confirmLabel: "Remove",
-                                    danger: true,
-                                  })
-                                )
-                                  deleteSource(s.id);
+                        {!importing && (
+                          <RowMenu
+                            className="pointer-events-auto z-20"
+                            label={`Options for "${s.title}"`}
+                            items={[
+                              // url holds the origin: a web URL, an on-disk path, or
+                              // a folder — any of them can be refreshed.
+                              ...(s.url
+                                ? [
+                                    {
+                                      label: isFolder
+                                        ? "Rescan folder now"
+                                        : s.sourceType === "mac"
+                                          ? "Sync now"
+                                          : s.status === "placeholder"
+                                            ? "Download & embed"
+                                            : isWebUrl(s.url)
+                                              ? "Refresh from URL"
+                                              : "Refresh from file",
+                                      icon: (
+                                        <RefreshCw className="h-3.5 w-3.5" />
+                                      ),
+                                      onClick: () => void refreshSource(s.id),
+                                    },
+                                  ]
+                                : []),
+                              // Mac sources are mirrors — editing our copy would
+                              // just be overwritten, so writes go to the app
+                              // itself and sync back.
+                              ...(isMacNote
+                                ? [
+                                    {
+                                      label: "Edit note",
+                                      icon: <Pencil className="h-3.5 w-3.5" />,
+                                      onClick: () => void startEditMacNote(s),
+                                    },
+                                  ]
+                                : []),
+                              ...(isMacReminders
+                                ? [
+                                    {
+                                      label: "Add reminder…",
+                                      icon: <Plus className="h-3.5 w-3.5" />,
+                                      onClick: () =>
+                                        setAddingReminder({
+                                          sourceId: s.id,
+                                          list: s.title,
+                                        }),
+                                    },
+                                  ]
+                                : []),
+                              ...(s.sourceType !== "url" &&
+                              s.sourceType !== "mac" &&
+                              !isFolder &&
+                              s.status !== "placeholder"
+                                ? [
+                                    {
+                                      label: "Edit text",
+                                      icon: <Pencil className="h-3.5 w-3.5" />,
+                                      onClick: () => void startEdit(s),
+                                    },
+                                  ]
+                                : []),
+                              {
+                                label: "Remove",
+                                icon: <Trash2 className="h-3.5 w-3.5" />,
+                                danger: true,
+                                onClick: async () => {
+                                  if (
+                                    await confirm({
+                                      title: `Remove "${s.title}"?`,
+                                      message: isFolder
+                                        ? `This removes the folder and its ${childCount(s.id)} file sources (with their embedded chunks) from the notebook. Nothing on disk is touched.`
+                                        : "This deletes the source and its embedded chunks from the notebook.",
+                                      confirmLabel: "Remove",
+                                      danger: true,
+                                    })
+                                  )
+                                    deleteSource(s.id);
+                                },
                               },
-                            },
-                          ]}
-                        />
+                            ]}
+                          />
+                        )}
                       </div>
-                      {s.status === "error" ? (
+                      {importing ? (
+                        <div className="truncate text-[11px] text-subtle-foreground">
+                          {folderScan
+                            ? `Embedding ${Math.min(
+                                folderScan.done + 1,
+                                folderScan.total,
+                              )}/${folderScan.total}…`
+                            : "Adding folder…"}
+                        </div>
+                      ) : s.status === "error" ? (
                         <div
                           // break-anywhere: raw URLs in errors have no
                           // spaces and would otherwise force the panel wide.
@@ -623,11 +634,15 @@ export function SourcesPanel() {
                           Online-only — not downloaded
                         </div>
                       ) : isFolder ? (
+                        // The folder's contribution to the notebook. Its
+                        // auto-refresh behavior moves to the tooltip — a folder
+                        // staying in sync isn't something the reader must watch.
                         <div
                           className="truncate text-[11px] text-subtle-foreground"
-                          title={s.url}
+                          title={`${s.url}\nStays in sync — auto-refreshes`}
                         >
-                          {childCount(s.id)} files · auto-refreshes
+                          {childCount(s.id)} files ·{" "}
+                          {compactNumber(folderChars(s.id))} chars
                         </div>
                       ) : s.sourceType === "url" && s.url ? (
                         <div
@@ -636,17 +651,12 @@ export function SourcesPanel() {
                         >
                           {hostname(s.url)}
                         </div>
-                      ) : (
-                        <div className="text-[11px] text-subtle-foreground">
-                          {s.chunkCount} chunks ·{" "}
-                          {Intl.NumberFormat().format(s.charCount)} chars
-                        </div>
-                      )}
+                      ) : null}
                     </div>
                     {/* Selection stays at the far right (NotebookLM-style), always
                     visible. */}
                     <div className="relative z-20 mt-0.5">
-                      {isFolder ? (
+                      {importing ? null : isFolder ? (
                         <SelectBox
                           checked={kids.length > 0 && kidsOn === kids.length}
                           indeterminate={kidsOn > 0 && kidsOn < kids.length}

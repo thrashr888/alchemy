@@ -34,6 +34,15 @@
   --success: #4cb782;
 
   --citation: #8b95f5;
+
+  /* Studio generator identity: one quiet accent per artifact family (plus
+     custom templates). Muted, near-desaturated hues that sit on the
+     near-black canvas as wayfinding, not decoration. Carried by the icon,
+     with an optional faint wash on generator tiles — never a border accent. */
+  --artifact-generate: #5e9bd2;
+  --artifact-learning: #9b87f5;
+  --artifact-documents: #4cb782;
+  --artifact-template: #e8a33d;
 }
 
 @theme inline {
@@ -57,6 +66,10 @@
   --color-destructive: var(--destructive);
   --color-success: var(--success);
   --color-citation: var(--citation);
+  --color-artifact-generate: var(--artifact-generate);
+  --color-artifact-learning: var(--artifact-learning);
+  --color-artifact-documents: var(--artifact-documents);
+  --color-artifact-template: var(--artifact-template);
 
   --radius-sm: calc(var(--radius) - 2px);
   --radius-md: var(--radius);

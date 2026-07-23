@@ -113,6 +113,10 @@ export interface AppState {
     index: number;
   };
   folderScan: { done: number; total: number; title: string } | null;
+  /** Temp ids of folders inserted optimistically while their children embed —
+   *  the Sources panel shows these rows with a loading affordance until
+   *  `addSourceFolder` resolves and the real list replaces them. */
+  importingFolders: string[];
   noteReads: Record<string, number>;
   noteReadsBaseline: number;
 

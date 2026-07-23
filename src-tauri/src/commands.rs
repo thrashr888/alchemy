@@ -487,6 +487,44 @@ async fn find_duplicate(
     Ok(None)
 }
 
+/// True when a title carries no visible characters. `trim()` alone is not
+/// enough: a page `<title>` can be a zero-width space or a BOM (U+200B, U+FEFF)
+/// — not whitespace, so `trim()` keeps it, and it renders as an empty row that
+/// evaded every earlier blank-title guard. Visible = at least one char that is
+/// not whitespace, control, or zero-width formatting.
+pub(crate) fn is_blank_title(s: &str) -> bool {
+    s.chars().all(|c| {
+        c.is_whitespace()
+            || c.is_control()
+            || matches!(
+                c,
+                '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}' | '\u{feff}'
+            )
+    })
+}
+
+/// A source never persists a blank title — lists would render an unlabeled
+/// row (seen live: pages with no <title>). Extractors already provide file
+/// stems and readability titles; this is the last-resort funnel guard,
+/// falling back to the origin's host and then "Untitled".
+fn presentable_title(title: &str, url: &str) -> String {
+    let t = title.trim();
+    if !is_blank_title(t) {
+        return t.to_string();
+    }
+    let host = url
+        .split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("")
+        .trim_start_matches("www.");
+    if host.is_empty() {
+        "Untitled".to_string()
+    } else {
+        host.to_string()
+    }
+}
+
 pub(crate) async fn store_extracted(
     state: &AppState,
     notebook_id: &str,
@@ -541,7 +579,7 @@ async fn store_new_source(
     let source = Source {
         id: new_id(),
         notebook_id: notebook_id.to_string(),
-        title: extracted.title,
+        title: presentable_title(&extracted.title, &extracted.url),
         source_type: extracted.source_type,
         url: extracted.url,
         content: extracted.text.clone(),
@@ -558,6 +596,12 @@ async fn store_new_source(
         .insert_source(&source, &chunk_tuples, &embeddings)
         .await?;
     state.db.touch_notebook(notebook_id, now()).await?;
+
+    // Kick the gist sweep (RFC-infinite-context §1) — fire-and-forget, so
+    // the import returns before any distillation happens.
+    if embed {
+        crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
+    }
 
     // Don't ship the full content back in the list payload.
     Ok(Source {
@@ -1075,6 +1119,7 @@ async fn grep_leg(
                 source_id: id.clone(),
                 source_title: title.clone(),
                 note_id: String::new(),
+                gist: false,
                 ordinal: 0,
                 snippet: h.window,
                 // Not a vector hit — match count carried the ranking; the
@@ -1159,7 +1204,7 @@ async fn reingest(
     let updated = Source {
         id: existing.id.clone(),
         notebook_id: existing.notebook_id.clone(),
-        title: extracted.title,
+        title: presentable_title(&extracted.title, &url),
         source_type: existing.source_type.clone(),
         url,
         content: extracted.text.clone(),
@@ -1181,6 +1226,8 @@ async fn reingest(
         .db
         .touch_notebook(&existing.notebook_id, now())
         .await?;
+    // Refreshed content means a changed hash — let the sweep re-gist it.
+    crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
     Ok(Source {
         content: String::new(),
         ..updated
@@ -1368,17 +1415,30 @@ pub async fn get_source_content(
 
 #[tauri::command]
 pub async fn delete_source(state: State<'_, AppState>, source_id: String) -> Result<(), String> {
-    // Deleting a folder or repo removes its children (and their chunks).
+    // Deleting a folder or repo removes its children (and their chunks) in
+    // one bulk op — a per-child loop was slow enough to trip the IPC timeout.
     if let Some(src) = e(state.db.get_source(&source_id).await)? {
         if matches!(
             src.source_type.as_str(),
             "folder" | "obsidian" | "git" | "notion"
         ) {
-            for child in e(state.db.list_sources(&src.notebook_id).await)? {
-                if child.parent_id == source_id {
-                    e(state.db.delete_source(&child.id).await)?;
+            let child_ids: Vec<String> = e(state.db.list_sources(&src.notebook_id).await)?
+                .into_iter()
+                .filter(|c| c.parent_id == source_id)
+                .map(|c| c.id)
+                .collect();
+            let data_dir = app_data_dir(&state);
+            // Parent and children can each own a git or notion cache dir; the
+            // bulk delete_source_tree drops their rows in one shot.
+            for id in child_ids.iter().chain(std::iter::once(&source_id)) {
+                crate::git::remove_cache(&data_dir, id);
+                let nc = crate::notion::cache_dir(&data_dir, id);
+                if nc.exists() {
+                    let _ = std::fs::remove_dir_all(&nc);
                 }
             }
+            e(state.db.delete_source_tree(&source_id, &child_ids).await)?;
+            return Ok(());
         }
     }
     e(state.db.delete_source(&source_id).await)?;
@@ -1959,7 +2019,26 @@ fn code_context(folder_title: &str, root: &std::path::Path, path: &str) -> Optio
 /// re-ingest changed ones (by mtime), drop children whose file is gone, and
 /// keep the parent's folder/repo map current. `force_map` re-renders the map
 /// even when the scan found no changes (manual refresh, first scan).
+///
+/// FTS rebuilds are deferred across the whole scan and flushed once at the
+/// end (error paths included): per-child rebuilds made folder imports O(n²)
+/// — a 48-file folder paid 48 full BM25 index rebuilds.
 async fn rescan_one_folder(
+    app: Option<&AppHandle>,
+    state: &AppState,
+    folder: &Source,
+    force_map: bool,
+) -> anyhow::Result<FolderScan> {
+    state.db.defer_fts(true);
+    let result = rescan_one_folder_inner(app, state, folder, force_map).await;
+    state.db.defer_fts(false);
+    if let Err(err) = state.db.flush_fts().await {
+        eprintln!("folder scan: FTS flush failed: {err:#}");
+    }
+    result
+}
+
+async fn rescan_one_folder_inner(
     app: Option<&AppHandle>,
     state: &AppState,
     folder: &Source,
@@ -4011,7 +4090,9 @@ pub async fn send_message(
         return finish_tool_reply(&app, &state, &notebook_id, reply).await;
     }
 
-    // Retrieve relevant chunks.
+    // Retrieve relevant chunks. The selected sources are fetched first so
+    // retrieval depth can scale with how much text is actually in play
+    // (RFC-infinite-context §3) and the manifest reuses the same rows.
     let (query_vec, profile) = {
         let ai = state.ai.read().await.clone();
         (
@@ -4019,15 +4100,15 @@ pub async fn send_message(
             ai.profile(crate::inference::Role::Chat),
         )
     };
+    let selected_sources: Vec<Source> = e(state.db.list_sources(&notebook_id).await)?
+        .into_iter()
+        .filter(|s| source_ids.as_ref().is_none_or(|ids| ids.contains(&s.id)))
+        .collect();
+    let notebook_chars: i64 = selected_sources.iter().map(|s| s.char_count).sum();
+    let k = profile.retrieve_k_for(notebook_chars);
     let search = e(state
         .db
-        .search_chunks_trace(
-            &notebook_id,
-            query_vec,
-            &content,
-            profile.retrieve_k,
-            source_ids.as_deref(),
-        )
+        .search_chunks_trace(&notebook_id, query_vec, &content, k, source_ids.as_deref())
         .await)?;
     // The ripgrep leg (RFC-git-sources §6): code-shaped queries also
     // exact-match over the notebook's repo-backed files, and the windows
@@ -4048,16 +4129,27 @@ pub async fn send_message(
             "citations": crate::trace::cite_summaries(&search.final_hits),
         }),
     );
-    let citations = fuse_grep_hits(search.final_hits, grep_hits, 8);
+    let citations = fuse_grep_hits(search.final_hits, grep_hits, k);
     bump_note_usage(&state.db, &citations, "retrieval_hits").await;
+
+    // Widen prompt excerpts to ordinal neighbors where the model's window
+    // affords it; persisted citations stay verbatim.
+    let expanded = if profile.neighbor_expansion {
+        state
+            .db
+            .expand_neighbor_excerpts(&citations)
+            .await
+            .unwrap_or_default()
+    } else {
+        std::collections::HashMap::new()
+    };
 
     // Full source manifest (title + url) so corpus-level questions are
     // answerable regardless of which chunks the top-k search happened to
     // surface, and the model can propose new addable URLs. Respects the
     // source selection so deselected sources stay out of the prompt.
-    let source_manifest: Vec<(String, String)> = e(state.db.list_sources(&notebook_id).await)?
+    let source_manifest: Vec<(String, String)> = selected_sources
         .into_iter()
-        .filter(|s| source_ids.as_ref().is_none_or(|ids| ids.contains(&s.id)))
         .map(|s| (s.title, s.url))
         .collect();
 
@@ -4078,7 +4170,10 @@ pub async fn send_message(
     let messages = rag::build_chat_messages(
         &history_turns,
         &content,
-        &citations,
+        rag::Excerpts {
+            citations: &citations,
+            expanded: &expanded,
+        },
         &source_manifest,
         &extra,
         &persona,
@@ -6444,9 +6539,12 @@ pub(crate) async fn retrieve_everything(
         .map(|n| (n.id, n.title))
         .collect();
 
-    let query_vec = {
+    let (query_vec, profile) = {
         let ai = state.ai.read().await.clone();
-        e(ai.embed_one(question).await)?
+        (
+            e(ai.embed_one(question).await)?,
+            ai.profile(crate::inference::Role::Chat),
+        )
     };
     // Semantic routing: with enough notebooks, search the most likely ones
     // instead of the whole corpus. The index is self-healing and any
@@ -6455,6 +6553,10 @@ pub(crate) async fn retrieve_everything(
     // searched in full either way.
     let routed: Option<Vec<String>> = if nb_titles.len() > crate::router::MIN_NOTEBOOKS_TO_ROUTE {
         let ai = state.ai.read().await.clone();
+        // Piggyback the gist sweep on the same self-heal moment the router
+        // uses — catches sources imported before gisting existed (or while
+        // the app was quitting mid-backfill).
+        crate::gist::spawn_sweep(state.db.clone(), ai.clone());
         if let Err(err) = crate::router::ensure_router(&state.db, &ai).await {
             eprintln!("router refresh failed (falling back to flat): {err:#}");
         }
@@ -6484,6 +6586,11 @@ pub(crate) async fn retrieve_everything(
         max_per_source: 2,
         max_per_notebook: 3,
         max_notes: 4,
+        // Gists are overview evidence: useful on synthesis questions, but a
+        // small budget is plenty — verbatim passages carry the specifics. The
+        // budget is model-tiered (RFC-infinite-context §1, §5): two by
+        // default, one on the tight on-device window.
+        max_gists: profile.max_gists,
     };
     // Deep search retrieves a wider pool for the reranker to pick from.
     let fetch_k = if deep { k * 3 } else { k };
@@ -6532,7 +6639,7 @@ pub(crate) async fn retrieve_everything(
     // tiny titles matching everything) or a short palette-style query is
     // contained in the title.
     let mut source_hits = 0;
-    for (id, nb, title) in e(state.db.all_source_meta().await)? {
+    for (id, nb, title, _) in e(state.db.all_source_meta().await)? {
         if source_hits >= 3 {
             break;
         }
@@ -6613,6 +6720,129 @@ pub(crate) async fn retrieve_everything(
     Ok(out)
 }
 
+/// One Small-role extract for the global route: pull only what answers the
+/// question out of one source's content. Returns None on any failure, an
+/// explicit SKIP, empty output, or output past the length bound — the caller
+/// then falls back to that source's gist text, never dropping the source.
+async fn global_extract(ai: &Ai, question: &str, content: &str) -> Option<String> {
+    // Same head-cap convention as the gist prompt (gist.rs PROMPT_HEAD_CHARS).
+    const HEAD_CHARS: usize = 10_000;
+    const EXTRACT_MAX_CHARS: usize = 2_000;
+    let head: String = content.chars().take(HEAD_CHARS).collect();
+    let messages = [
+        crate::ai::ChatTurn::system(
+            "You extract only what is relevant. Reply with 2-5 tight bullet points, \
+             or exactly SKIP if nothing applies.",
+        ),
+        crate::ai::ChatTurn::user(format!("Question: {question}\n\nSource:\n---\n{head}")),
+    ];
+    let text = ai
+        .chat_role(crate::ai::Role::Small, &messages)
+        .await
+        .ok()?
+        .text;
+    let text = text.trim();
+    let skipped = text
+        .lines()
+        .next()
+        .is_none_or(|l| l.trim().eq_ignore_ascii_case("SKIP"));
+    if skipped || text.chars().count() > EXTRACT_MAX_CHARS {
+        return None;
+    }
+    Some(text.to_string())
+}
+
+/// The global answer route (docs/RFC-infinite-context.md Phase 4): a lazy
+/// map-reduce over the standing gist layer. Retrieve the gist rows the
+/// question touches, extract per source on the Small role (falling back to the
+/// gist text on any per-source failure), and hand source-granular passages +
+/// citations to the shared meta synthesis path. Returns None when the route
+/// does not apply (no gists, nothing retrieved) or ANY step failed — the
+/// caller then takes the pointed path unchanged.
+async fn global_meta_route(
+    state: &AppState,
+    question: &str,
+) -> anyhow::Result<Option<(Vec<MetaCitation>, Vec<rag::MetaPassage>)>> {
+    if state.db.list_gists().await?.is_empty() {
+        return Ok(None);
+    }
+    let (query_vec, profile) = {
+        let ai = state.ai.read().await.clone();
+        (
+            ai.embed_one(question).await?,
+            ai.profile(crate::inference::Role::Chat),
+        )
+    };
+    // Fan-out is model-tiered (RFC-infinite-context §4, §5): six Small-role
+    // extracts by default, three on the on-device tier whose single-tenant
+    // engine also runs the synthesis these extracts feed.
+    let selected: Vec<(String, Citation)> = state
+        .db
+        .search_gists(query_vec, 12)
+        .await?
+        .into_iter()
+        .take(profile.global_fan_out)
+        .collect();
+    if selected.is_empty() {
+        return Ok(None);
+    }
+
+    let nb_titles: std::collections::HashMap<String, String> = state
+        .db
+        .list_notebooks()
+        .await?
+        .into_iter()
+        .map(|n| (n.id, n.title))
+        .collect();
+
+    // One source → one passage → one citation, so numbers line up 1:1 (the
+    // pointed path dedupes several chunks per source; here each source is
+    // distinct already). Small-role calls run sequentially: local engines are
+    // single-tenant.
+    let ai = state.ai.read().await.clone();
+    let mut citations: Vec<MetaCitation> = Vec::with_capacity(selected.len());
+    let mut passages: Vec<rag::MetaPassage> = Vec::with_capacity(selected.len());
+    let mut fallbacks: Vec<bool> = Vec::with_capacity(selected.len());
+    for (i, (nb_id, gist)) in selected.iter().enumerate() {
+        let notebook_title = nb_titles.get(nb_id).cloned().unwrap_or_default();
+        // The gist row's snippet IS the distilled overview — the guaranteed
+        // fallback for this source when the extract fails or SKIPs.
+        let content = state.db.source_content(&gist.source_id).await?;
+        let (snippet, fell_back) = match global_extract(&ai, question, &content).await {
+            Some(extract) => (extract, false),
+            None => (gist.snippet.clone(), true),
+        };
+        fallbacks.push(fell_back);
+        passages.push(rag::MetaPassage {
+            number: i + 1,
+            kind: "source".into(),
+            notebook_title: notebook_title.clone(),
+            title: gist.source_title.clone(),
+            snippet,
+        });
+        citations.push(MetaCitation {
+            kind: "source".into(),
+            notebook_title,
+            notebook_id: nb_id.clone(),
+            id: gist.source_id.clone(),
+            title: gist.source_title.clone(),
+            snippet: gist.snippet.clone(),
+        });
+    }
+
+    crate::trace::log(
+        &state.trace_dir,
+        serde_json::json!({
+            "ts": now(),
+            "surface": "meta-global",
+            "query": question,
+            "fanOut": selected.len(),
+            "fallbacks": fallbacks,
+        }),
+    );
+    Ok(Some((citations, passages)))
+}
+
 /// Answer a question across the ENTIRE corpus, streaming tokens as
 /// meta://token events. See docs/RFC-meta-chat.md.
 #[tauri::command]
@@ -6637,41 +6867,66 @@ pub async fn ask_everything(
         Some(d) => d,
         None => state.ai.read().await.config().is_gateway(),
     };
-    let passages_raw = retrieve_everything(&state, &question, 16, deep).await?;
+    // Global route (RFC-infinite-context §4): enumerative/comparative
+    // questions want coverage of the gist layer, not a top-k of chunks. The
+    // classifier is pure; ANY failure inside the route degrades to None, so
+    // the pointed path below runs unchanged whenever the route doesn't fire.
+    let global = if rag::is_global_query(&question) {
+        match global_meta_route(&state, &question).await {
+            Ok(g) => g,
+            Err(err) => {
+                eprintln!("meta-global route failed, falling back to pointed: {err:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // References are per SOURCE, not per chunk: several excerpts from one
     // source share a number, and the citation list the UI shows is deduped —
     // otherwise a source that contributed five chunks shows up five times.
-    let mut citations: Vec<MetaCitation> = Vec::new();
-    let mut passages: Vec<rag::MetaPassage> = Vec::new();
-    for c in &passages_raw {
-        let number = match citations
-            .iter()
-            .position(|u| u.kind == c.kind && u.id == c.id)
-        {
-            Some(i) => i + 1,
-            None => {
-                citations.push(c.clone());
-                citations.len()
-            }
-        };
-        passages.push(rag::MetaPassage {
-            number,
-            kind: c.kind.clone(),
-            notebook_title: c.notebook_title.clone(),
-            title: c.title.clone(),
-            snippet: c.snippet.clone(),
-        });
-    }
+    let (citations, passages) = if let Some(g) = global {
+        g
+    } else {
+        let passages_raw = retrieve_everything(&state, &question, 16, deep).await?;
+        let mut citations: Vec<MetaCitation> = Vec::new();
+        let mut passages: Vec<rag::MetaPassage> = Vec::new();
+        for c in &passages_raw {
+            let number = match citations
+                .iter()
+                .position(|u| u.kind == c.kind && u.id == c.id)
+            {
+                Some(i) => i + 1,
+                None => {
+                    citations.push(c.clone());
+                    citations.len()
+                }
+            };
+            passages.push(rag::MetaPassage {
+                number,
+                kind: c.kind.clone(),
+                notebook_title: c.notebook_title.clone(),
+                title: c.title.clone(),
+                snippet: c.snippet.clone(),
+            });
+        }
+        (citations, passages)
+    };
 
-    let persona = {
+    let (persona, ctx_profile) = {
         let ai = state.ai.read().await.clone();
-        rag::persona_block(&ai.config().profile)
+        (
+            rag::persona_block(&ai.config().profile),
+            ai.profile(crate::inference::Role::Chat),
+        )
     };
     let messages = rag::build_meta_messages(
         history.as_deref().unwrap_or(&[]),
         &question,
         &passages,
         &persona,
+        ctx_profile.compact_excerpts,
     );
 
     // Same stream/cancel dance as notebook chat, under its own scope so a
@@ -6731,11 +6986,11 @@ pub async fn search_everything(
     let meta = e(state.db.all_source_meta().await)?;
     let title_of: std::collections::HashMap<&str, (&str, &str)> = meta
         .iter()
-        .map(|(id, nb, title)| (id.as_str(), (nb.as_str(), title.as_str())))
+        .map(|(id, nb, title, _)| (id.as_str(), (nb.as_str(), title.as_str())))
         .collect();
 
     let mut hits = Vec::new();
-    for (id, nb, title) in &meta {
+    for (id, nb, title, _) in &meta {
         if title.to_lowercase().contains(&q) {
             hits.push(SearchHit {
                 kind: "source".into(),
@@ -7041,6 +7296,37 @@ pub async fn check_ollama(state: State<'_, AppState>) -> Result<bool, String> {
 #[cfg(test)]
 mod tool_tests {
     use super::*;
+
+    #[test]
+    fn blank_title_catches_invisible_content() {
+        // Real content is not blank.
+        assert!(!is_blank_title("Architecture RFC"));
+        assert!(!is_blank_title("  padded but real  "));
+        // Ordinary whitespace/control — blank.
+        assert!(is_blank_title(""));
+        assert!(is_blank_title("   \n\t "));
+        // The bug that evaded three trim()-based guards: zero-width space,
+        // ZWNJ/ZWJ, word-joiner, BOM — not whitespace, so trim() kept them
+        // and the row rendered empty.
+        assert!(is_blank_title("\u{200b}"));
+        assert!(is_blank_title("\u{feff}\u{200d}"));
+        assert!(is_blank_title(" \u{200b}\u{2060} "));
+        // But a real char alongside a zero-width space is still a real title.
+        assert!(!is_blank_title("A\u{200b}"));
+    }
+
+    #[test]
+    fn presentable_title_falls_back_past_invisible() {
+        assert_eq!(
+            presentable_title("Real Title", "https://x.com"),
+            "Real Title"
+        );
+        assert_eq!(
+            presentable_title("\u{200b}", "https://www.example.com/page"),
+            "example.com"
+        );
+        assert_eq!(presentable_title("   ", ""), "Untitled");
+    }
 
     #[test]
     fn auto_evidence_parsing_is_conservative() {

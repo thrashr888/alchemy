@@ -35,6 +35,14 @@ const T_ROUTES: &str = "routes";
 /// prefix is decoded back into `Citation::note_id` at the read boundary;
 /// nothing outside this module sees it.
 pub const NOTE_CHUNK_PREFIX: &str = "note:";
+
+/// `source_id = "gist:<source_id>"` marks a source-gist row
+/// (docs/RFC-infinite-context.md Phase 1): one distilled overview per
+/// source, stored in the chunks table so it rides the same vector + FTS
+/// index. Its `ordinal` column carries the i32 content hash of the source
+/// text it was distilled from — the staleness signal for the gist sweep —
+/// not a position.
+pub const GIST_CHUNK_PREFIX: &str = "gist:";
 pub const NOTEBOOK_PALETTE: [&str; 8] = [
     "#eb5757", "#e8a33d", "#4cb782", "#5e9bd2", "#9b87f5", "#e274b6", "#4fc1c9", "#98a562",
 ];
@@ -77,6 +85,10 @@ pub struct SearchOptions {
     pub max_per_notebook: usize,
     /// Max note chunks kept in total (0 → unlimited).
     pub max_notes: usize,
+    /// Max gist rows kept in total (0 → unlimited). Gists also count toward
+    /// their source's `max_per_source` budget — a gist is evidence about the
+    /// source, not a bonus slot for it.
+    pub max_gists: usize,
 }
 
 /// Walk the fused pool in score order keeping hits that fit the caps, then
@@ -87,13 +99,17 @@ fn apply_diversity(
     k: usize,
     opts: SearchOptions,
 ) -> Vec<(String, Citation)> {
-    let uncapped = opts.max_per_source == 0 && opts.max_per_notebook == 0 && opts.max_notes == 0;
+    let uncapped = opts.max_per_source == 0
+        && opts.max_per_notebook == 0
+        && opts.max_notes == 0
+        && opts.max_gists == 0;
     if uncapped {
         return ranked.into_iter().take(k).collect();
     }
     let mut per_owner: HashMap<String, usize> = HashMap::new();
     let mut per_notebook: HashMap<String, usize> = HashMap::new();
     let mut notes = 0usize;
+    let mut gists = 0usize;
     let mut kept: Vec<(String, Citation)> = Vec::with_capacity(k);
     let mut skipped: Vec<(String, Citation)> = Vec::new();
     for hit in ranked {
@@ -112,7 +128,8 @@ fn apply_diversity(
         let nb_full = opts.max_per_notebook > 0
             && per_notebook.get(nb).copied().unwrap_or(0) >= opts.max_per_notebook;
         let notes_full = opts.max_notes > 0 && is_note && notes >= opts.max_notes;
-        if owner_full || nb_full || notes_full {
+        let gists_full = opts.max_gists > 0 && c.gist && gists >= opts.max_gists;
+        if owner_full || nb_full || notes_full || gists_full {
             skipped.push(hit);
             continue;
         }
@@ -121,9 +138,19 @@ fn apply_diversity(
         if is_note {
             notes += 1;
         }
+        if c.gist {
+            gists += 1;
+        }
         kept.push(hit);
     }
-    for hit in skipped {
+    // Backfill keeps the count guarantee (shaped search never returns fewer
+    // hits than flat), but gists rejoin last: a skipped chunk is a lost
+    // near-duplicate, while a skipped gist is redundant by construction —
+    // its source's verbatim chunks are in the pool. Without this two-tier
+    // order, a gist-heavy pool walks straight past `max_gists` on backfill.
+    let (skipped_gists, skipped_rest): (Vec<_>, Vec<_>) =
+        skipped.into_iter().partition(|(_, c)| c.gist);
+    for hit in skipped_rest.into_iter().chain(skipped_gists) {
         if kept.len() >= k {
             break;
         }
@@ -134,6 +161,31 @@ fn apply_diversity(
 
 pub struct Db {
     conn: Connection,
+    /// Serializes chunk BM25-index rebuilds. `add_chunks` rebuilds the whole
+    /// full-text index on every write; the background gist/enrichment sweep
+    /// (RFC-infinite-context) made those writes concurrent with foreground
+    /// imports, and two overlapping Lance `CreateIndex` transactions preempt
+    /// each other (a retryable commit conflict). One rebuild at a time — plus
+    /// the bounded retry in `rebuild_chunks_fts` — removes the race.
+    fts_lock: tokio::sync::Mutex<()>,
+    /// Bulk-write mode: rebuilding the full BM25 index after EVERY insert is
+    /// O(n²) across a folder import or eval seeding (a 48-file folder paid 48
+    /// full rebuilds; the 10M-char eval corpus ran 40+ minutes on a rebuild
+    /// pattern whose search takes milliseconds). While deferred, `add_chunks`
+    /// only marks the index dirty; `flush_fts` rebuilds once at the end.
+    fts_deferred: std::sync::atomic::AtomicBool,
+    fts_dirty: std::sync::atomic::AtomicBool,
+}
+
+/// One stored source-gist row (docs/RFC-infinite-context.md Phase 1).
+/// `hash` is the i32 content hash of the source text the gist was distilled
+/// from (stored in the chunk row's `ordinal` column) — the staleness signal
+/// the gist sweep diffs against, router-style.
+#[derive(Clone, Debug)]
+pub struct GistRow {
+    pub source_id: String,
+    pub hash: i32,
+    pub text: String,
 }
 
 impl Db {
@@ -147,11 +199,17 @@ impl Db {
             .execute()
             .await
             .context("failed to open LanceDB")?;
-        let db = Self { conn };
+        let db = Self {
+            conn,
+            fts_lock: tokio::sync::Mutex::new(()),
+            fts_deferred: std::sync::atomic::AtomicBool::new(false),
+            fts_dirty: std::sync::atomic::AtomicBool::new(false),
+        };
         db.ensure_table(T_NOTEBOOKS, notebooks_schema()).await?;
         db.migrate_notebooks().await?;
         db.ensure_table(T_SOURCES, sources_schema()).await?;
         db.migrate_sources().await?;
+        db.backfill_blank_titles().await?;
         db.ensure_table(T_MESSAGES, messages_schema()).await?;
         db.migrate_messages().await?;
         db.ensure_table(T_NOTES, notes_schema()).await?;
@@ -322,6 +380,48 @@ impl Db {
     /// rebuilding it, backfilling any missing columns (`url`, `status`,
     /// `error`, `parent_id`, `mtime`) with defaults. No-op once all columns
     /// are present.
+    /// One-time backfill: any source persisted with a blank title (a page
+    /// capture with no `<title>`, from before `presentable_title` guarded the
+    /// ingest funnel) gets its origin host, else "Untitled" — so the list
+    /// never shows an unlabeled row the user can't act on. A filtered query,
+    /// so it's a no-op scan once there are none left.
+    async fn backfill_blank_titles(&self) -> Result<()> {
+        if !self.table_exists(T_SOURCES).await? {
+            return Ok(());
+        }
+        // Scan all rows and test the trimmed title in Rust: a `title = ''`
+        // SQL filter missed whitespace-only titles (a page <title> of spaces
+        // or newlines), which still render as an unlabeled, menu-less row.
+        let batches = self.collect(T_SOURCES, None).await?;
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let url = str_col(b, "url")?;
+            let title = str_col(b, "title")?;
+            for i in 0..b.num_rows() {
+                // Not `.trim().is_empty()`: a zero-width/BOM title isn't
+                // whitespace, so trim keeps it while the row renders blank.
+                if !crate::commands::is_blank_title(title.value(i)) {
+                    continue;
+                }
+                let host = url
+                    .value(i)
+                    .split("://")
+                    .nth(1)
+                    .and_then(|rest| rest.split('/').next())
+                    .unwrap_or("")
+                    .trim_start_matches("www.");
+                let new_title = if host.is_empty() { "Untitled" } else { host };
+                let tbl = self.conn.open_table(T_SOURCES).execute().await?;
+                tbl.update()
+                    .only_if(format!("id = '{}'", esc(id.value(i))))
+                    .column("title", format!("'{}'", esc(new_title)))
+                    .execute()
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn migrate_sources(&self) -> Result<()> {
         if !self.table_exists(T_SOURCES).await? {
             return Ok(());
@@ -692,15 +792,70 @@ impl Db {
         )?;
         self.add_batch(T_CHUNKS, schema, batch).await?;
 
-        // Keep the BM25 side of hybrid search current. Rebuilding on every
-        // write is fine at personal-corpus scale (thousands of rows, ms-level).
-        let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
-        tbl.create_index(&["text"], Index::FTS(FtsIndexBuilder::default()))
-            .replace(true)
-            .execute()
-            .await
-            .context("failed to build full-text index on chunks")?;
+        // Keep the BM25 side of hybrid search current — unless a bulk write
+        // (folder import, eval seeding) deferred rebuilds; then just mark
+        // dirty and let `flush_fts` do one rebuild at the end.
+        if self.fts_deferred.load(std::sync::atomic::Ordering::SeqCst) {
+            self.fts_dirty
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            return Ok(());
+        }
+        self.rebuild_chunks_fts().await
+    }
+
+    /// Enter/leave bulk-write mode (see `fts_deferred`). Leaving does NOT
+    /// rebuild — call `flush_fts` after, so error paths can still flush.
+    pub fn defer_fts(&self, on: bool) {
+        self.fts_deferred
+            .store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Rebuild the chunks FTS index if any deferred write dirtied it.
+    pub async fn flush_fts(&self) -> Result<()> {
+        if self
+            .fts_dirty
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            self.rebuild_chunks_fts().await?;
+        }
         Ok(())
+    }
+
+    /// Rebuild the chunks full-text index, serialized process-wide and retried
+    /// on Lance's retryable `CreateIndex` commit conflict. Two overlapping
+    /// full-index rebuilds — the background gist/enrichment sweep racing a
+    /// foreground import — otherwise preempt each other; the lock keeps them
+    /// one-at-a-time and the retry absorbs any conflict from outside this
+    /// process (e.g. a stray build kicked off before the lock was taken).
+    async fn rebuild_chunks_fts(&self) -> Result<()> {
+        let _guard = self.fts_lock.lock().await;
+        let mut attempt = 0u32;
+        loop {
+            let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
+            match tbl
+                .create_index(&["text"], Index::FTS(FtsIndexBuilder::default()))
+                .replace(true)
+                .execute()
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    let msg = e.to_string();
+                    let retryable = msg.contains("Retryable")
+                        || msg.contains("commit conflict")
+                        || msg.contains("preempted");
+                    if retryable && attempt < 5 {
+                        attempt += 1;
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            40 * u64::from(attempt),
+                        ))
+                        .await;
+                        continue;
+                    }
+                    return Err(e).context("failed to build full-text index on chunks");
+                }
+            }
+        }
     }
 
     /// All sources across every notebook, with full content (for re-embedding).
@@ -731,10 +886,47 @@ impl Db {
     }
 
     pub async fn delete_source(&self, source_id: &str) -> Result<()> {
-        let pred = format!("source_id = '{}'", esc(source_id));
+        // Chunks and the source's gist row go together (the gist sweep would
+        // also catch a stray gist later, but immediate is cleaner).
+        let pred = format!(
+            "source_id = '{0}' OR source_id = '{GIST_CHUNK_PREFIX}{0}'",
+            esc(source_id)
+        );
         self.delete_where(T_CHUNKS, &pred).await?;
         self.delete_where(T_SOURCES, &format!("id = '{}'", esc(source_id)))
             .await?;
+        Ok(())
+    }
+
+    /// Delete a folder/repo source and all its children in a handful of
+    /// predicate ops instead of one transaction pair per child. A 48-file
+    /// folder was 96+ sequential Lance transactions — slow enough to trip the
+    /// IPC timeout; this is two deletes total for the whole tree.
+    pub async fn delete_source_tree(&self, folder_id: &str, child_ids: &[String]) -> Result<()> {
+        // Every owner id whose chunks (verbatim + gist rows) must go: the
+        // folder itself plus each child.
+        let mut owners: Vec<String> = Vec::with_capacity(child_ids.len() + 1);
+        owners.push(folder_id.to_string());
+        owners.extend(child_ids.iter().cloned());
+        let quoted = |prefix: &str| {
+            owners
+                .iter()
+                .map(|id| format!("'{prefix}{}'", esc(id)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let pred = format!(
+            "source_id IN ({}) OR source_id IN ({})",
+            quoted(""),
+            quoted(GIST_CHUNK_PREFIX)
+        );
+        self.delete_where(T_CHUNKS, &pred).await?;
+        // One delete for the folder row and every row parented to it.
+        self.delete_where(
+            T_SOURCES,
+            &format!("id = '{0}' OR parent_id = '{0}'", esc(folder_id)),
+        )
+        .await?;
         Ok(())
     }
 
@@ -799,16 +991,26 @@ impl Db {
             return Ok(SearchTrace::default());
         }
         // Map stored owner id -> title for citation labels (notes keyed by
-        // their prefixed form, matching what the chunk rows store).
+        // their prefixed form, matching what the chunk rows store), plus
+        // owner recency for the fusion tie-break.
         let mut titles: HashMap<String, String> = HashMap::new();
+        let mut recency: HashMap<String, i64> = HashMap::new();
         for s in self.list_sources(notebook_id).await? {
+            recency.insert(s.id.clone(), s.created_at);
             titles.insert(s.id, s.title);
         }
         for n in self.list_notes(notebook_id).await? {
             titles.insert(format!("{NOTE_CHUNK_PREFIX}{}", n.id), n.title);
+            recency.insert(format!("{NOTE_CHUNK_PREFIX}{}", n.id), n.created_at);
         }
 
-        let mut filter = format!("notebook_id = '{}'", esc(notebook_id));
+        // Gist rows are corpus-wide evidence (meta-chat, MCP search); the
+        // per-notebook chat path stays verbatim-passages-only until the
+        // citation reader can render a gist hit (RFC-infinite-context §1).
+        let mut filter = format!(
+            "notebook_id = '{}' AND source_id NOT LIKE '{GIST_CHUNK_PREFIX}%'",
+            esc(notebook_id)
+        );
         if let Some(ids) = source_ids {
             // Some(&[]) matches nothing — '' is never a real source id.
             let list = if ids.is_empty() {
@@ -885,10 +1087,12 @@ impl Db {
             }
         }
         let mut merged: Vec<(Citation, f32)> = fused.into_values().collect();
+        let at = |c: &Citation| owner_recency(&recency, c);
         merged.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0.chunk_id.cmp(&b.0.chunk_id))
+            fused_cmp(
+                (a.1, at(&a.0), &a.0.chunk_id),
+                (b.1, at(&b.0), &b.0.chunk_id),
+            )
         });
         let fused_hits: Vec<Citation> = merged.into_iter().map(|(c, _)| c).collect();
         let final_hits = fused_hits.iter().take(k).cloned().collect();
@@ -990,20 +1194,22 @@ impl Db {
         Ok(notes)
     }
 
-    /// (id, notebook_id, title) for every source — lightweight lookups without
-    /// dragging full content across.
-    pub async fn all_source_meta(&self) -> Result<Vec<(String, String, String)>> {
+    /// (id, notebook_id, title, created_at) for every source — lightweight
+    /// lookups without dragging full content across.
+    pub async fn all_source_meta(&self) -> Result<Vec<(String, String, String, i64)>> {
         let batches = self.collect(T_SOURCES, None).await?;
         let mut out = Vec::new();
         for b in &batches {
             let id = str_col(b, "id")?;
             let nb = str_col(b, "notebook_id")?;
             let title = str_col(b, "title")?;
+            let created = i64_col(b, "created_at")?;
             for i in 0..b.num_rows() {
                 out.push((
                     id.value(i).to_string(),
                     nb.value(i).to_string(),
                     title.value(i).to_string(),
+                    created.value(i),
                 ));
             }
         }
@@ -1049,15 +1255,7 @@ impl Db {
         if !self.table_exists(T_CHUNKS).await? {
             return Ok(vec![]);
         }
-        let mut titles: HashMap<String, String> = self
-            .all_source_meta()
-            .await?
-            .into_iter()
-            .map(|(id, _nb, title)| (id, title))
-            .collect();
-        for n in self.recent_notes(usize::MAX).await? {
-            titles.insert(format!("{NOTE_CHUNK_PREFIX}{}", n.id), n.title);
-        }
+        let (titles, recency) = self.corpus_meta().await?;
         let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
         let pool = k.max(1) * opts.pool_multiplier.max(3);
 
@@ -1122,10 +1320,12 @@ impl Db {
             }
         }
         let mut merged: Vec<((String, Citation), f32)> = fused.into_values().collect();
+        let at = |c: &Citation| owner_recency(&recency, c);
         merged.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0 .1.chunk_id.cmp(&b.0 .1.chunk_id))
+            fused_cmp(
+                (a.1, at(&a.0 .1), &a.0 .1.chunk_id),
+                (b.1, at(&b.0 .1), &b.0 .1.chunk_id),
+            )
         });
         let ranked: Vec<(String, Citation)> = merged.into_iter().map(|(hit, _)| hit).collect();
         Ok(apply_diversity(ranked, k, opts))
@@ -1139,6 +1339,10 @@ impl Db {
         if query_text.trim().is_empty() || !self.table_exists(T_CHUNKS).await? {
             return Ok(vec![]);
         }
+        // Same uniform title pass as the hybrid path — this previously
+        // returned note chunks with empty titles (the known gap from
+        // RFC-retrieval-maturity Phase 2).
+        let (titles, _) = self.corpus_meta().await?;
         let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
         let batches = match tbl
             .query()
@@ -1150,30 +1354,77 @@ impl Db {
             Ok(stream) => stream.try_collect::<Vec<_>>().await.unwrap_or_default(),
             Err(_) => return Ok(vec![]),
         };
-        let mut out = Vec::new();
-        for b in &batches {
-            let id = str_col(b, "id")?;
-            let nb = str_col(b, "notebook_id")?;
-            let sid = str_col(b, "source_id")?;
-            let ord = i32_col(b, "ordinal")?;
-            let text = str_col(b, "text")?;
-            for i in 0..b.num_rows() {
-                let (source_id, note_id) = split_owner(sid.value(i));
-                out.push((
-                    nb.value(i).to_string(),
-                    Citation {
-                        chunk_id: id.value(i).to_string(),
-                        source_id,
-                        source_title: String::new(),
-                        note_id,
-                        ordinal: ord.value(i),
-                        snippet: text.value(i).to_string(),
-                        distance: 0.0,
-                    },
-                ));
+        nb_citations_from_batches(&batches, &titles)
+    }
+
+    /// Vector search over the gist rows only (docs/RFC-infinite-context.md
+    /// Phase 4): the standing distilled-overview layer, retrieved corpus-wide
+    /// to seed the global answer route. Restricted to `gist:%` owners, decoded
+    /// through the shared title pass (so each hit is titled after its source),
+    /// then capped to `MAX_GISTS_PER_NOTEBOOK` per notebook — walked in score
+    /// order like `apply_diversity`, kept local and simple — so one chatty
+    /// notebook can't own the whole fan-out. Returns (notebook_id, citation).
+    pub async fn search_gists(
+        &self,
+        query_vec: Vec<f32>,
+        k: usize,
+    ) -> Result<Vec<(String, Citation)>> {
+        if !self.table_exists(T_CHUNKS).await? {
+            return Ok(vec![]);
+        }
+        let (titles, _) = self.corpus_meta().await?;
+        let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
+        let batches = tbl
+            .query()
+            .only_if(format!("source_id LIKE '{GIST_CHUNK_PREFIX}%'"))
+            .nearest_to(query_vec)?
+            .limit(k.max(1) * 3)
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        let mut hits = nb_citations_from_batches(&batches, &titles)?;
+        hits.sort_by(|a, b| {
+            a.1.distance
+                .partial_cmp(&b.1.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        const MAX_GISTS_PER_NOTEBOOK: usize = 3;
+        let mut per_notebook: HashMap<String, usize> = HashMap::new();
+        let mut out: Vec<(String, Citation)> = Vec::with_capacity(k);
+        for hit in hits {
+            if out.len() >= k {
+                break;
             }
+            let n = per_notebook.entry(hit.0.clone()).or_default();
+            if *n >= MAX_GISTS_PER_NOTEBOOK {
+                continue;
+            }
+            *n += 1;
+            out.push(hit);
         }
         Ok(out)
+    }
+
+    /// Corpus-wide owner metadata in one sources+notes scan: stored-owner-id
+    /// → display title (the uniform title-filling pass shared by all
+    /// corpus-wide reads; gist rows display their source's title), plus the
+    /// recency map fusion uses as a tie-break. Recency keys: plain source id
+    /// (gists resolve to their source before lookup) and `note:<id>`.
+    async fn corpus_meta(&self) -> Result<(HashMap<String, String>, HashMap<String, i64>)> {
+        let mut titles: HashMap<String, String> = HashMap::new();
+        let mut recency: HashMap<String, i64> = HashMap::new();
+        for (id, _nb, title, created_at) in self.all_source_meta().await? {
+            titles.insert(format!("{GIST_CHUNK_PREFIX}{id}"), title.clone());
+            recency.insert(id.clone(), created_at);
+            titles.insert(id, title);
+        }
+        for n in self.recent_notes(usize::MAX).await? {
+            titles.insert(format!("{NOTE_CHUNK_PREFIX}{}", n.id), n.title);
+            recency.insert(format!("{NOTE_CHUNK_PREFIX}{}", n.id), n.created_at);
+        }
+        Ok((titles, recency))
     }
 
     // ---- Semantic router ---------------------------------------------------
@@ -1398,6 +1649,173 @@ impl Db {
     pub async fn delete_note_chunks(&self, note_id: &str) -> Result<()> {
         let pred = format!("source_id = '{NOTE_CHUNK_PREFIX}{}'", esc(note_id));
         self.delete_where(T_CHUNKS, &pred).await
+    }
+
+    /// All stored source-gist rows — the staleness baseline for
+    /// `gist::ensure_gists`'s diff (mirrors `list_routes` for the router).
+    pub async fn list_gists(&self) -> Result<Vec<GistRow>> {
+        if !self.table_exists(T_CHUNKS).await? {
+            return Ok(vec![]);
+        }
+        let filter = format!("source_id LIKE '{GIST_CHUNK_PREFIX}%'");
+        let batches = self.collect(T_CHUNKS, Some(&filter)).await?;
+        let mut out = Vec::new();
+        for b in &batches {
+            let sid = str_col(b, "source_id")?;
+            let ord = i32_col(b, "ordinal")?;
+            let text = str_col(b, "text")?;
+            for i in 0..b.num_rows() {
+                let Some(source_id) = sid.value(i).strip_prefix(GIST_CHUNK_PREFIX) else {
+                    continue;
+                };
+                out.push(GistRow {
+                    source_id: source_id.to_string(),
+                    hash: ord.value(i),
+                    text: text.value(i).to_string(),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Drop one source's gist row (no-op if it has none).
+    pub async fn delete_gist_row(&self, source_id: &str) -> Result<()> {
+        let pred = format!("source_id = '{GIST_CHUNK_PREFIX}{}'", esc(source_id));
+        self.delete_where(T_CHUNKS, &pred).await
+    }
+
+    /// One source's stored chunk rows as (chunk_id, ordinal, text), in ordinal
+    /// order — the enrichment pass (RFC-infinite-context §2) reads these to
+    /// re-embed with identical ids, ordinals, and verbatim text. The equality
+    /// filter can't match the source's `gist:`/`note:` rows (those owner ids
+    /// are prefixed), so only the plain source chunks come back.
+    pub async fn source_chunk_rows(&self, source_id: &str) -> Result<Vec<(String, i32, String)>> {
+        if !self.table_exists(T_CHUNKS).await? {
+            return Ok(vec![]);
+        }
+        let filter = format!("source_id = '{}'", esc(source_id));
+        let batches = self.collect(T_CHUNKS, Some(&filter)).await?;
+        let mut out = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let ord = i32_col(b, "ordinal")?;
+            let text = str_col(b, "text")?;
+            for i in 0..b.num_rows() {
+                out.push((
+                    id.value(i).to_string(),
+                    ord.value(i),
+                    text.value(i).to_string(),
+                ));
+            }
+        }
+        out.sort_by_key(|(_, ord, _)| *ord);
+        Ok(out)
+    }
+
+    /// Replace the vectors of one source's chunks in place: same ids, ordinals,
+    /// and verbatim text — only the embeddings change (RFC-infinite-context §2
+    /// enrichment). LanceDB has no vector-cell update, so this is
+    /// delete-then-add of the exact same rows; the FTS `text` is unchanged, so
+    /// the rebuilt index is identical. Only the plain source chunks are
+    /// touched — the `gist:` row (prefixed owner id) is left in place.
+    pub async fn reembed_source_chunks(
+        &self,
+        notebook_id: &str,
+        source_id: &str,
+        chunks: &[(String, i32, String)],
+        embeddings: &[Vec<f32>],
+    ) -> Result<()> {
+        self.delete_where(T_CHUNKS, &format!("source_id = '{}'", esc(source_id)))
+            .await?;
+        self.add_chunks(notebook_id, source_id, chunks, embeddings)
+            .await
+    }
+
+    /// Post-rank neighbor expansion (RFC-infinite-context §3): for each
+    /// cited source chunk, widen the PROMPT excerpt to include its ordinal
+    /// ±1 neighbors so a section split by chunking reaches the model whole.
+    /// Returns chunk_id → expanded text for the citations that grew;
+    /// persisted citations keep their verbatim snippet (click-to-highlight
+    /// depends on it) — only prompt assembly reads this map. Higher-ranked
+    /// citations claim neighbors first, and an ordinal already cited (or
+    /// claimed) is never included twice.
+    pub async fn expand_neighbor_excerpts(
+        &self,
+        citations: &[Citation],
+    ) -> Result<HashMap<String, String>> {
+        let mut claimed: HashMap<&str, std::collections::HashSet<i32>> = HashMap::new();
+        for c in citations {
+            if c.note_id.is_empty() && !c.gist && !c.source_id.is_empty() {
+                claimed.entry(&c.source_id).or_default().insert(c.ordinal);
+            }
+        }
+        let mut out = HashMap::new();
+        for c in citations {
+            // Notes and gists have no meaningful neighbors; grep/read
+            // pseudo-citations carry ordinals that aren't chunk positions.
+            if !c.note_id.is_empty() || c.gist || c.source_id.is_empty() {
+                continue;
+            }
+            if c.chunk_id.starts_with("grep:") || c.chunk_id.starts_with("read:") {
+                continue;
+            }
+            let taken = claimed.entry(&c.source_id).or_default();
+            let want: Vec<i32> = [c.ordinal - 1, c.ordinal + 1]
+                .into_iter()
+                .filter(|o| *o >= 0 && !taken.contains(o))
+                .collect();
+            if want.is_empty() {
+                continue;
+            }
+            let texts = self.chunk_texts_by_ordinal(&c.source_id, &want).await?;
+            if texts.is_empty() {
+                continue;
+            }
+            for o in texts.keys() {
+                taken.insert(*o);
+            }
+            let mut parts: Vec<&str> = Vec::with_capacity(3);
+            if let Some(prev) = texts.get(&(c.ordinal - 1)) {
+                parts.push(prev);
+            }
+            parts.push(&c.snippet);
+            if let Some(next) = texts.get(&(c.ordinal + 1)) {
+                parts.push(next);
+            }
+            if parts.len() > 1 {
+                out.insert(c.chunk_id.clone(), parts.join("\n\n"));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Verbatim chunk texts for specific ordinals of one source — the
+    /// neighbor-expansion fetch. Gist rows can't collide: their stored
+    /// owner id is prefixed, so the equality filter never matches them.
+    async fn chunk_texts_by_ordinal(
+        &self,
+        source_id: &str,
+        ordinals: &[i32],
+    ) -> Result<HashMap<i32, String>> {
+        if ordinals.is_empty() || !self.table_exists(T_CHUNKS).await? {
+            return Ok(HashMap::new());
+        }
+        let list = ordinals
+            .iter()
+            .map(|o| o.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let filter = format!("source_id = '{}' AND ordinal IN ({list})", esc(source_id));
+        let batches = self.collect(T_CHUNKS, Some(&filter)).await?;
+        let mut out = HashMap::new();
+        for b in &batches {
+            let ord = i32_col(b, "ordinal")?;
+            let text = str_col(b, "text")?;
+            for i in 0..b.num_rows() {
+                out.insert(ord.value(i), text.value(i).to_string());
+            }
+        }
+        Ok(out)
     }
 
     /// Bump a usage counter for the given notes (deduped — one answer citing
@@ -1640,13 +2058,43 @@ fn nb_citations_from_batches(
     Ok(out)
 }
 
-/// Decode a stored chunk owner id into (source_id, note_id) — exactly one
-/// is non-empty.
-fn split_owner(stored: &str) -> (String, String) {
-    match stored.strip_prefix(NOTE_CHUNK_PREFIX) {
-        Some(note_id) => (String::new(), note_id.to_string()),
-        None => (stored.to_string(), String::new()),
+/// Fused-pool ordering (RFC-infinite-context §3): RRF score descending,
+/// then owner recency descending — when two hits score identically (the
+/// classic case: a vector-only and an FTS-only hit at the same rank), the
+/// newer owner answers — then chunk id ascending as the deterministic
+/// floor. Extracted so the rule is unit-testable; both fusion paths use it.
+fn fused_cmp(a: (f32, i64, &str), b: (f32, i64, &str)) -> std::cmp::Ordering {
+    b.0.partial_cmp(&a.0)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| b.1.cmp(&a.1))
+        .then_with(|| a.2.cmp(b.2))
+}
+
+/// A hit's owner recency for the fusion tie-break. Notes key by their
+/// prefixed form; gists were resolved to their source id at decode time, so
+/// they inherit the source's timestamp. Unknown owners sort oldest.
+fn owner_recency(recency: &HashMap<String, i64>, c: &Citation) -> i64 {
+    if c.note_id.is_empty() {
+        recency.get(&c.source_id).copied().unwrap_or(0)
+    } else {
+        recency
+            .get(&format!("{NOTE_CHUNK_PREFIX}{}", c.note_id))
+            .copied()
+            .unwrap_or(0)
     }
+}
+
+/// Decode a stored chunk owner id into (source_id, note_id, is_gist).
+/// Note rows set `note_id`; gist rows resolve to their source id with the
+/// flag set; plain rows are just the source id.
+fn split_owner(stored: &str) -> (String, String, bool) {
+    if let Some(note_id) = stored.strip_prefix(NOTE_CHUNK_PREFIX) {
+        return (String::new(), note_id.to_string(), false);
+    }
+    if let Some(source_id) = stored.strip_prefix(GIST_CHUNK_PREFIX) {
+        return (source_id.to_string(), String::new(), true);
+    }
+    (stored.to_string(), String::new(), false)
 }
 
 fn citations_from_batches(
@@ -1666,12 +2114,13 @@ fn citations_from_batches(
         });
         for i in 0..b.num_rows() {
             let stored = sid.value(i).to_string();
-            let (source_id, note_id) = split_owner(&stored);
+            let (source_id, note_id, gist) = split_owner(&stored);
             citations.push(Citation {
                 chunk_id: id.value(i).to_string(),
                 source_title: titles.get(&stored).cloned().unwrap_or_default(),
                 source_id,
                 note_id,
+                gist,
                 ordinal: ord.value(i),
                 snippet: text.value(i).to_string(),
                 distance: dist.as_ref().map(|d| d.value(i)).unwrap_or(0.0),
@@ -1937,4 +2386,145 @@ fn note_batch(schema: &SchemaRef, notes: &[Note]) -> Result<RecordBatch> {
             s(|x| x.status.clone()),
         ],
     )?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cmp::Ordering;
+
+    /// The RRF tie case that motivated the recency tie-break: a vector-only
+    /// and an FTS-only hit at the same rank score identically. Newer owner
+    /// wins the tie; id order decides only when recency ties too — and the
+    /// fixtures make id order vote the other way, so a pass proves recency
+    /// actually outranks it.
+    #[test]
+    fn fused_cmp_breaks_score_ties_by_recency_then_id() {
+        let tie = 1.0 / 60.0;
+        // Score dominates everything.
+        assert_eq!(
+            fused_cmp((0.9, 0, "z"), (0.1, 999, "a")),
+            Ordering::Less,
+            "higher score ranks first regardless of recency and id"
+        );
+        // Equal score → newer owner first, even though "a" < "z".
+        assert_eq!(
+            fused_cmp((tie, 2_000, "z"), (tie, 1_000, "a")),
+            Ordering::Less
+        );
+        assert_eq!(
+            fused_cmp((tie, 1_000, "a"), (tie, 2_000, "z")),
+            Ordering::Greater
+        );
+        // Equal score and recency → id ascending keeps determinism.
+        assert_eq!(fused_cmp((tie, 5, "a"), (tie, 5, "b")), Ordering::Less);
+        assert_eq!(fused_cmp((tie, 5, "b"), (tie, 5, "a")), Ordering::Greater);
+        assert_eq!(fused_cmp((tie, 5, "a"), (tie, 5, "a")), Ordering::Equal);
+    }
+
+    #[test]
+    fn owner_recency_resolves_notes_and_unknowns() {
+        let mut recency = HashMap::new();
+        recency.insert("src-1".to_string(), 111i64);
+        recency.insert(format!("{NOTE_CHUNK_PREFIX}n-1"), 222i64);
+        let source_hit = Citation {
+            chunk_id: "c1".into(),
+            source_id: "src-1".into(),
+            source_title: String::new(),
+            note_id: String::new(),
+            gist: false,
+            ordinal: 0,
+            snippet: String::new(),
+            distance: 0.0,
+        };
+        // Gist rows reach the comparator with source_id already resolved,
+        // so they inherit the source's timestamp through the same key.
+        let gist_hit = Citation {
+            gist: true,
+            ..source_hit.clone()
+        };
+        let note_hit = Citation {
+            source_id: String::new(),
+            note_id: "n-1".into(),
+            ..source_hit.clone()
+        };
+        let unknown = Citation {
+            source_id: "src-gone".into(),
+            ..source_hit.clone()
+        };
+        assert_eq!(owner_recency(&recency, &source_hit), 111);
+        assert_eq!(owner_recency(&recency, &gist_hit), 111);
+        assert_eq!(owner_recency(&recency, &note_hit), 222);
+        assert_eq!(
+            owner_recency(&recency, &unknown),
+            0,
+            "unknown owners sort oldest"
+        );
+    }
+
+    /// Neighbor expansion widens prompt excerpts with ordinal ±1 text,
+    /// never double-includes an ordinal another citation already carries,
+    /// and skips notes/gists. Fake 4-dim vectors — no embedder involved.
+    #[tokio::test]
+    async fn expand_neighbor_excerpts_widens_and_dedupes() {
+        let dir = std::env::temp_dir().join(format!("nbl-db-expand-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+        let rows: Vec<(String, i32, String)> = [
+            "alpha section text",
+            "bravo section text",
+            "charlie section text",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (format!("c{i}"), i as i32, t.to_string()))
+        .collect();
+        let vecs: Vec<Vec<f32>> = vec![vec![0.0; 4]; rows.len()];
+        db.add_chunks("nb", "src-1", &rows, &vecs)
+            .await
+            .expect("add");
+
+        let cite = |chunk_id: &str, ordinal: i32, snippet: &str| Citation {
+            chunk_id: chunk_id.into(),
+            source_id: "src-1".into(),
+            source_title: "Doc".into(),
+            note_id: String::new(),
+            gist: false,
+            ordinal,
+            snippet: snippet.into(),
+            distance: 0.0,
+        };
+        // Both middle and last chunks are cited: the middle one may claim
+        // only the uncited ordinal 0; the last one has no free neighbors
+        // (1 is cited, 3 does not exist) so it must not expand.
+        let citations = vec![
+            cite("c1", 1, "bravo section text"),
+            cite("c2", 2, "charlie section text"),
+        ];
+        let expanded = db
+            .expand_neighbor_excerpts(&citations)
+            .await
+            .expect("expand");
+        let widened = expanded.get("c1").expect("middle chunk widens");
+        assert_eq!(widened, "alpha section text\n\nbravo section text");
+        assert!(
+            !expanded.contains_key("c2"),
+            "no free neighbors means no expansion entry"
+        );
+
+        // Notes and gists never expand.
+        let note_hit = Citation {
+            note_id: "n1".into(),
+            source_id: String::new(),
+            ..cite("c9", 0, "note text")
+        };
+        let gist_hit = Citation {
+            gist: true,
+            ..cite("c1", 1, "gist text")
+        };
+        let none = db
+            .expand_neighbor_excerpts(&[note_hit, gist_hit])
+            .await
+            .expect("expand");
+        assert!(none.is_empty());
+    }
 }

@@ -4,6 +4,7 @@ mod capture;
 mod commands;
 mod connectors;
 mod db;
+mod gist;
 mod git;
 mod grepsearch;
 mod inference;
