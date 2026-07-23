@@ -473,6 +473,28 @@ async fn find_duplicate(
     Ok(None)
 }
 
+/// A source never persists a blank title — lists would render an unlabeled
+/// row (seen live: pages with no <title>). Extractors already provide file
+/// stems and readability titles; this is the last-resort funnel guard,
+/// falling back to the origin's host and then "Untitled".
+fn presentable_title(title: &str, url: &str) -> String {
+    let t = title.trim();
+    if !t.is_empty() {
+        return t.to_string();
+    }
+    let host = url
+        .split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("")
+        .trim_start_matches("www.");
+    if host.is_empty() {
+        "Untitled".to_string()
+    } else {
+        host.to_string()
+    }
+}
+
 pub(crate) async fn store_extracted(
     state: &AppState,
     notebook_id: &str,
@@ -527,7 +549,7 @@ async fn store_new_source(
     let source = Source {
         id: new_id(),
         notebook_id: notebook_id.to_string(),
-        title: extracted.title,
+        title: presentable_title(&extracted.title, &extracted.url),
         source_type: extracted.source_type,
         url: extracted.url,
         content: extracted.text.clone(),
@@ -1098,7 +1120,7 @@ async fn reingest(
     let updated = Source {
         id: existing.id.clone(),
         notebook_id: existing.notebook_id.clone(),
-        title: extracted.title,
+        title: presentable_title(&extracted.title, &url),
         source_type: existing.source_type.clone(),
         url,
         content: extracted.text.clone(),

@@ -1169,7 +1169,14 @@ export const useStore = create<AppState>((set, get) => {
         );
         // Auto-open the new note so the outcome is visible where the user acted,
         // not just appended to the Notes list below the fold.
-        set({ notes: [note, ...get().notes], justCreatedNoteId: note.id });
+        // Filter by id before prepending: the note:// event listener may have
+        // upserted this note already, and an unfiltered prepend rendered the
+        // same note twice (deleting "one" then removed both cards — they were
+        // one row shown twice).
+        set({
+          notes: [note, ...get().notes.filter((n) => n.id !== note.id)],
+          justCreatedNoteId: note.id,
+        });
         void get().refreshModelStats();
         get().pushToast("success", `${note.title} ready`);
         playDone();
@@ -1267,7 +1274,7 @@ export const useStore = create<AppState>((set, get) => {
         const id = get().currentId;
         if (!id) return;
         const note = await api.createNote(id, title, content);
-        set({ notes: [note, ...get().notes] });
+        set({ notes: [note, ...get().notes.filter((n) => n.id !== note.id)] });
       }),
 
     updateNote: (noteId, title, content) =>

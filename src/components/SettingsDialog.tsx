@@ -178,6 +178,7 @@ export function SettingsDialog({
       width="max-w-2xl"
       tall
       bodyScroll={false}
+      hideHeader
       footer={
         tab === "models" ? (
           <div className="flex justify-end gap-2">
@@ -191,13 +192,16 @@ export function SettingsDialog({
         ) : undefined
       }
     >
-      {/* Content-sized up to the window: short tabs (About) sit at the nav's
-          natural height, long tabs (Models, Appearance) grow to the cap and
-          scroll only past it. Per-tab heights are deliberate. The cap comes
-          from the modal body (bodyScroll={false} above) so exactly one
-          region scrolls — a viewport-derived cap here double-scrolled. */}
-      <div className="flex min-h-0 max-h-full gap-5">
+      {/* One scroll region: the content column. The wrapper is a flex child
+          of the modal body (itself flex when bodyScroll=false), so heights
+          resolve through real flex constraints — max-h-full percentages here
+          silently failed in WKWebView, which is why long tabs didn't scroll.
+          "Settings" is the nav's section header (no title bar / hr above). */}
+      <div className="flex min-h-0 flex-1 gap-5">
         <nav className="flex w-36 shrink-0 flex-col gap-0.5">
+          <h2 className="px-2.5 pb-2 pt-0.5 text-[13px] font-semibold text-foreground">
+            Settings
+          </h2>
           {TABS.map((t) => (
             <button
               type="button"

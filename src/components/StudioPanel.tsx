@@ -418,7 +418,7 @@ export function StudioPanel() {
                   />
                   <div className="pointer-events-none relative z-10 flex items-center gap-2">
                     <span
-                      className="pointer-events-auto shrink-0 text-muted-foreground"
+                      className="pointer-events-auto shrink-0 text-muted-foreground [&_svg]:h-4 [&_svg]:w-4"
                       title={KIND_LABEL[n.kind]}
                     >
                       {kindIcon(n.kind)}

@@ -211,6 +211,7 @@ export function Modal({
   width = "max-w-md",
   tall = false,
   bodyScroll = true,
+  hideHeader = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -226,6 +227,10 @@ export function Modal({
   /** Set false when the content manages its own scroll region (settings'
    *  fixed-sidebar layout) — nested scrollbars otherwise. */
   bodyScroll?: boolean;
+  /** Skip the title bar (the caller renders the title inside its own
+   *  layout, e.g. settings' nav header); the close X floats top-right and
+   *  the dialog is labeled via aria-label instead. */
+  hideHeader?: boolean;
 }) {
   const panelRef = React.useRef<HTMLDivElement>(null);
   const titleId = React.useMemo(() => `modal-title-${++modalSeq}`, []);
@@ -297,24 +302,19 @@ export function Modal({
         ref={panelRef}
         role="dialog"
         aria-modal="true"
-        aria-labelledby={titleId}
+        aria-labelledby={hideHeader ? undefined : titleId}
+        aria-label={hideHeader ? title : undefined}
         tabIndex={-1}
         className={cn(
           tall ? "max-h-[92vh]" : "max-h-[80vh]",
-          "flex w-full flex-col rounded-lg bg-elevated outline-none animate-in zoom-in-95 duration-150",
+          "relative flex w-full flex-col rounded-lg bg-elevated outline-none animate-in zoom-in-95 duration-150",
           "shadow-[0_0_0_0.5px_var(--border-strong),0_16px_48px_-8px_rgba(0,0,0,0.45)]",
           width,
         )}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="flex min-h-11 shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-2">
-          <h2
-            id={titleId}
-            className="text-[13px] font-semibold text-foreground"
-          >
-            {title}
-          </h2>
-          <div className="flex shrink-0 items-center gap-1">
+        {hideHeader ? (
+          <div className="absolute right-2 top-2 z-10 flex items-center gap-1">
             {headerActions}
             <Button
               variant="ghost"
@@ -325,11 +325,35 @@ export function Modal({
               <X className="h-4 w-4" />
             </Button>
           </div>
-        </div>
+        ) : (
+          <div className="flex min-h-11 shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-2">
+            <h2
+              id={titleId}
+              className="text-[13px] font-semibold text-foreground"
+            >
+              {title}
+            </h2>
+            <div className="flex shrink-0 items-center gap-1">
+              {headerActions}
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={onClose}
+                aria-label="Close dialog"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        )}
         <div
           className={cn(
             "min-h-0 flex-1 p-4",
-            bodyScroll ? "overflow-y-auto" : "overflow-hidden",
+            // bodyScroll=false callers manage their own scroll column; the
+            // body becomes a flex container so children size against real
+            // flex constraints — percentage heights (h-full/max-h-full)
+            // inside flex items silently fail in WKWebView.
+            bodyScroll ? "overflow-y-auto" : "flex flex-col overflow-hidden",
           )}
         >
           {children}
