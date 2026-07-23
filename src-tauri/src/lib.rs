@@ -258,6 +258,7 @@ pub fn run() {
             connectors::list_agent_connectors,
             connectors::connect_agent,
             textsize::get_system_text_scale,
+            textsize::dump_text_size_signals,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
