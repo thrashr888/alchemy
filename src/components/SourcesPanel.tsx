@@ -13,7 +13,7 @@ import {
   CardAction,
   useConfirm,
 } from "./ui";
-import { cn, isWebUrl } from "@/lib/utils";
+import { cn, compactNumber, isWebUrl } from "@/lib/utils";
 import type { Source } from "@/lib/types";
 import {
   ChevronRight,
@@ -252,6 +252,12 @@ export function SourcesPanel() {
   }
   const childCount = (folderId: string) =>
     sources.filter((x) => x.parentId === folderId).length;
+  // A folder/repo parent carries no chars of its own (char_count 0 in the DB);
+  // its children are the real carriers, so its "contribution" is their sum.
+  const folderChars = (folderId: string) =>
+    sources
+      .filter((x) => x.parentId === folderId)
+      .reduce((sum, x) => sum + x.charCount, 0);
 
   // Selection: null means everything is on; the map holds only deselected ids.
   const isSelected = (id: string) =>
@@ -424,9 +430,13 @@ export function SourcesPanel() {
           <>
             {/* Master selection row: which sources feed chat & Studio. */}
             <div className="mb-0.5 flex items-center gap-2 px-2 py-1.5">
-              <span className="text-[11px] text-muted-foreground">
-                {selectedCount} of {contentSources.length} selected
-              </span>
+              {/* When everything is on, the select-all checkbox says enough;
+                  only a partial selection needs a count. */}
+              {!allSelected && (
+                <span className="text-[11px] text-muted-foreground">
+                  {selectedCount} of {contentSources.length} selected
+                </span>
+              )}
               <div className="ml-auto">
                 <SelectBox
                   checked={allSelected}
@@ -660,11 +670,15 @@ export function SourcesPanel() {
                           Online-only — not downloaded
                         </div>
                       ) : isFolder ? (
+                        // The folder's contribution to the notebook. Its
+                        // auto-refresh behavior moves to the tooltip — a folder
+                        // staying in sync isn't something the reader must watch.
                         <div
                           className="truncate text-[11px] text-subtle-foreground"
-                          title={s.url}
+                          title={`${s.url}\nStays in sync — auto-refreshes`}
                         >
-                          {childCount(s.id)} files · auto-refreshes
+                          {childCount(s.id)} files ·{" "}
+                          {compactNumber(folderChars(s.id))} chars
                         </div>
                       ) : s.sourceType === "url" && s.url ? (
                         <div
@@ -673,11 +687,7 @@ export function SourcesPanel() {
                         >
                           {hostname(s.url)}
                         </div>
-                      ) : (
-                        <div className="text-[11px] text-subtle-foreground">
-                          {Intl.NumberFormat().format(s.charCount)} chars
-                        </div>
-                      )}
+                      ) : null}
                     </div>
                     {/* Selection stays at the far right (NotebookLM-style), always
                     visible. */}

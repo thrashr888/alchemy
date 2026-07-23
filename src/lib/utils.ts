@@ -97,6 +97,16 @@ export function urlHost(url: string): string | null {
   }
 }
 
+/** Cached compact number formatter ("1.2M", "48K") — Intl construction is
+ *  expensive and this renders per folder row. */
+const compactFormat = new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+export function compactNumber(n: number): string {
+  return compactFormat.format(n);
+}
+
 export function relativeTime(ms: number): string {
   const diff = Date.now() - ms;
   const s = Math.floor(diff / 1000);
