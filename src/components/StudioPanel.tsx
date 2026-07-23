@@ -25,7 +25,9 @@ import {
 } from "@/lib/utils";
 import type { Note } from "@/lib/types";
 import {
+  FAMILY_ACCENT,
   KIND_LABEL,
+  kindAccent,
   kindIcon,
   studioArtifacts,
   type Artifact,
@@ -44,22 +46,30 @@ import {
   ChevronUp,
 } from "lucide-react";
 
-/** Generator families keep their established color language even when the
- * long tail is collapsed behind More. The disclosure tile stays neutral. */
-// One neutral tile treatment (DESIGN.md §2: color is semantic, chrome is
-// colorless — the per-family rainbow predates the quiet-icon policy).
+/** Generator families carry a quiet color identity: the icon takes the family
+ *  accent (tokens in index.css) and the tile gets a faint matching wash that
+ *  warms on hover. Restraint over noise — a whisper of hue for wayfinding, no
+ *  filled chips, and never a colored border accent. The neutral border keeps
+ *  the resting grid calm; color reads mostly from the icon. */
 type Tint = { tile: string; icon: string };
-const TINT_NEUTRAL: Tint = {
-  tile:
-    "border-border bg-surface-2/40 hover:border-border-strong hover:bg-surface-2",
-  icon: "text-muted-foreground",
-};
 const TINT_BY_FAMILY: Record<Artifact["family"], Tint> = {
-  generate: TINT_NEUTRAL,
-  learning: TINT_NEUTRAL,
-  documents: TINT_NEUTRAL,
+  generate: {
+    tile: "border-border bg-artifact-generate/5 hover:border-artifact-generate/25 hover:bg-artifact-generate/10",
+    icon: FAMILY_ACCENT.generate,
+  },
+  learning: {
+    tile: "border-border bg-artifact-learning/5 hover:border-artifact-learning/25 hover:bg-artifact-learning/10",
+    icon: FAMILY_ACCENT.learning,
+  },
+  documents: {
+    tile: "border-border bg-artifact-documents/5 hover:border-artifact-documents/25 hover:bg-artifact-documents/10",
+    icon: FAMILY_ACCENT.documents,
+  },
 };
-const TINT_TEMPLATES: Tint = TINT_NEUTRAL;
+const TINT_TEMPLATES: Tint = {
+  tile: "border-border bg-artifact-template/5 hover:border-artifact-template/25 hover:bg-artifact-template/10",
+  icon: "text-artifact-template",
+};
 const TINT_DISCLOSURE: Tint = {
   tile: "border-border bg-surface-2 hover:border-border-strong hover:bg-elevated",
   icon: "text-muted-foreground",
@@ -418,7 +428,10 @@ export function StudioPanel() {
                   />
                   <div className="pointer-events-none relative z-10 flex items-center gap-2">
                     <span
-                      className="pointer-events-auto shrink-0 text-muted-foreground [&_svg]:h-4 [&_svg]:w-4"
+                      className={cn(
+                        "pointer-events-auto shrink-0 [&_svg]:h-4 [&_svg]:w-4",
+                        kindAccent(n.kind),
+                      )}
                       title={KIND_LABEL[n.kind]}
                     >
                       {kindIcon(n.kind)}
