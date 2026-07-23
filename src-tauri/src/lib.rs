@@ -206,6 +206,7 @@ pub fn run() {
             commands::live_view_close,
             commands::rebuild_app_menu,
             commands::search_everything,
+            commands::grep_sources,
             commands::export_notebook_okf_zip,
             commands::import_notebook_okf,
             commands::probe_okf,

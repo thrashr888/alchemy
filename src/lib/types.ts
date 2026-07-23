@@ -159,6 +159,18 @@ export interface CorpusStats {
   chars: number;
 }
 
+/** One exact-match window from the `/grep` chat command (Rust grep_sources). */
+export interface GrepHit {
+  sourceId: string;
+  sourceTitle: string;
+  /** Absolute file path of the repo-/folder-backed child source. */
+  path: string;
+  /** 1-based line where the window begins. */
+  line: number;
+  /** The matching line window, real lines joined with whitespace intact. */
+  window: string;
+}
+
 /** One global-search result (command menu). */
 export interface SearchHit {
   kind: "source" | "note" | "content";
