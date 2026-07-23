@@ -434,6 +434,22 @@ impl Ai {
         self.router.profile(role)
     }
 
+    /// Input-token budget for the engine that will answer `role`, but only when
+    /// that engine is the on-device Foundation Models sidecar — its context
+    /// window is a hard 8192 tokens (`inference::budget`). `None` for every
+    /// other engine: Ollama, gateways, and agent CLIs carry far larger windows
+    /// and must never have their prompts shrunk to fit the on-device ceiling.
+    /// Call sites that assemble large prompts use this to structure-aware-trim
+    /// before dispatch; the sidecar itself re-checks as an unconditional
+    /// backstop.
+    pub fn fm_input_budget(&self, role: Role) -> Option<usize> {
+        matches!(
+            self.router.chat_engine(role),
+            ChatEngine::FoundationModels(_)
+        )
+        .then_some(crate::inference::budget::FM_INPUT_BUDGET_TOKENS)
+    }
+
     pub fn config(&self) -> &AiConfig {
         &self.config
     }

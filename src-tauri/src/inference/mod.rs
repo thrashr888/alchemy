@@ -10,6 +10,7 @@
 //! engines expose `chat_stream`; plain `chat` is just the collected stream.
 
 mod agent_cli;
+pub mod budget;
 mod fm;
 mod gateway;
 mod local_embed;

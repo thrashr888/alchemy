@@ -4,6 +4,7 @@
 //! is macOS 26+, and every failure here is soft — the router falls through
 //! to the configured chat engine (RFC-inference-providers §7).
 
+use std::borrow::Cow;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -13,7 +14,7 @@ use anyhow::{anyhow, Context, Result};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::OnceCell;
 
-use super::{ChatOutcome, ChatTurn};
+use super::{budget, ChatOutcome, ChatTurn};
 
 /// How long one Small-role generation may take end to end. The on-device
 /// model answers title-sized prompts in ~1–2 s; anything past this is a hung
@@ -94,6 +95,25 @@ impl FmEngine {
     where
         F: FnMut(&str),
     {
+        // Hard boundary guard (backstop): this sidecar runs ONLY when the
+        // active engine is the on-device model, whose context window is a hard
+        // 8192 tokens — a prompt past it does not degrade, it hard-errors.
+        // Structure-aware callers already budget the prompt before assembly;
+        // this catches every path that didn't (agentic retrieval, rerank,
+        // distill, tool routing…) and any estimate that drifted, trimming the
+        // expendable context/history while the system preamble and the
+        // trailing question survive. See `inference::budget`.
+        let fitted = budget::fit_messages(messages, budget::FM_INPUT_BUDGET_TOKENS);
+        if let Cow::Owned(_) = &fitted {
+            eprintln!(
+                "foundation models: prompt exceeded the {}-token input budget (~{} tokens); \
+                 trimmed retrieved context/history to fit the on-device window",
+                budget::FM_INPUT_BUDGET_TOKENS,
+                budget::messages_tokens(messages),
+            );
+        }
+        let messages: &[ChatTurn] = &fitted;
+
         let request = serde_json::json!({
             "messages": messages
                 .iter()
