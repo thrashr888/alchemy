@@ -11,6 +11,7 @@ import type {
   FolderScan,
   KokoroStatus,
   MacCollection,
+  MacFileHit,
   McpStatus,
   Message,
   MetaAnswer,
@@ -118,6 +119,12 @@ export const api = {
     run(ai<Source>("add_source_file", { notebookId, path })),
   addSourceFolder: (notebookId: string, path: string) =>
     run(slow<Source>("add_source_folder", { notebookId, path })),
+  /** Live Spotlight search over local files (probe: one attempt, no retry —
+   *  the caller debounces and cancels stale queries itself). */
+  searchMacFiles: (q: string, limit?: number) =>
+    run(
+      probe<MacFileHit[]>("search_mac_files", { query: q, limit: limit ?? null }),
+    ),
   resyncSources: () => run(slow<FolderScan>("resync_sources")),
   providerReadiness: () =>
     run(

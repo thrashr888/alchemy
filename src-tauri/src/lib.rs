@@ -4,6 +4,7 @@ mod capture;
 mod commands;
 mod connectors;
 mod db;
+mod filesearch;
 mod gist;
 mod git;
 mod grepsearch;
@@ -154,6 +155,7 @@ pub fn run() {
             commands::list_sources,
             commands::add_source_file,
             commands::add_source_folder,
+            commands::search_mac_files,
             commands::add_source_mac,
             integrations::integrations_ready,
             integrations::locate_note,

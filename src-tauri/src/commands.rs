@@ -827,6 +827,19 @@ pub async fn add_source_file(
     e(store_extracted(&state, &notebook_id, extracted).await)
 }
 
+/// Live Spotlight search over the user's Mac, backing the Add Source →
+/// "Search your Mac" step. Returns ranked file/folder hits; the rows route
+/// back through `add_source_file`, so folders and OKF bundles behave exactly
+/// as they do from a file drop. Empty query = empty results (no subprocess).
+/// See `filesearch.rs`.
+#[tauri::command]
+pub async fn search_mac_files(
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<crate::filesearch::FileHit>, String> {
+    Ok(crate::filesearch::search(&query, limit.unwrap_or(30)).await)
+}
+
 #[tauri::command]
 pub async fn add_source_url(
     state: State<'_, AppState>,
@@ -1572,7 +1585,8 @@ pub(crate) async fn resync_mac_source(
 /// Rich formats with dedicated extractors — PDF, Office, images, saved pages
 /// (mirrors the frontend's SUPPORTED_EXTENSIONS in src/lib/utils.ts). Code
 /// and unknown-but-textual files are admitted separately below.
-const RICH_EXTENSIONS: &[&str] = &[
+/// `pub(crate)` so `filesearch` can score Spotlight hits against the same list.
+pub(crate) const RICH_EXTENSIONS: &[&str] = &[
     "pdf", "txt", "text", "md", "markdown", "html", "htm", "xhtml", "docx", "pptx", "epub", "xlsx",
     "xls", "xlsm", "ods", "csv", "tsv", "gdoc", "gsheet", "gslides", "png", "jpg", "jpeg", "jpe",
     "webp", "gif", "bmp", "tif", "tiff", "heic", "heif", "avif", "ico", "jp2",
