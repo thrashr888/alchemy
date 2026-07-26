@@ -36,7 +36,7 @@ Empty chat may use the animated dithered "aetheric mist" WebGL background
 tinted from theme tokens, static under `prefers-reduced-motion`, and hidden
 entirely under glass (the material is the ambience there).
 
-The app is themeable (21 schemes, dark and light) — never hardcode a hex in a
+The app is themeable (23 schemes, dark and light) — never hardcode a hex in a
 component; always go through the semantic tokens below.
 
 ## 2. Color Palette & Roles

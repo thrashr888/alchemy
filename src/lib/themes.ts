@@ -3,7 +3,14 @@
 
 /** DitherBackground luminance-field variant. All variants share the Bayer
  *  dither + bg/primary tint + transmutation ring; only the field differs. */
-export type ShaderVariant = "mist" | "rain" | "horizon" | "grain";
+export type ShaderVariant =
+  | "mist"
+  | "rain"
+  | "horizon"
+  | "grain"
+  | "dial"
+  | "slipstream"
+  | "trellis";
 
 export interface Theme {
   id: string;
@@ -320,6 +327,80 @@ export const THEMES: Record<string, Theme> = {
       "primary-hover": "#bc524d", "primary-foreground": "#fffaf3", accent: "#f2e9e1",
       "accent-foreground": "#575279", destructive: "#a44f67", success: "#286983",
       citation: "#745d8f", selection: "rgba(215,130,126,0.25)", ...lightBorder,
+    },
+  },
+  carrera: {
+    id: "carrera",
+    label: "Carrera",
+    dark: false,
+    shader: "dial", // the centre gauge of the five-dial cluster
+    sigil: 3, // transmutation array — the four-spoke wheel
+    mood: "a Guards Red 993 over Cashmere Beige hide, a brass crest, air-cooled and analog",
+    verbs: [
+      "Warming the flat-six",
+      "Blipping the throttle",
+      "Trimming the apex",
+      "Reading the tarmac",
+      "Heeling and toeing",
+      "Settling the rear",
+    ],
+    vars: {
+      background: "#e4d8bf", surface: "#ddd0b4", "surface-2": "#d3c5a5", elevated: "#ede3ce",
+      foreground: "#241f18", muted: "#d3c5a5", "muted-foreground": "#574d3e",
+      "subtle-foreground": "#5b5142", ring: "#b30018", primary: "#b30018",
+      "primary-hover": "#9a0015", "primary-foreground": "#ffffff", accent: "#d3c5a5",
+      "accent-foreground": "#241f18", destructive: "#7d1810", success: "#3a5516",
+      citation: "#61470d", selection: "rgba(179,0,24,0.22)", ...lightBorder,
+    },
+  },
+  italia: {
+    id: "italia",
+    label: "Italia",
+    dark: true,
+    shader: "slipstream", // the world smearing past at speed
+    sigil: 2, // pentagram — the stellone, the star of Italy
+    mood: "rosso corsa over carbon, a V12 at full song, heat haze off Maranello asphalt",
+    verbs: [
+      "Winding out the V12",
+      "Sighting the apex",
+      "Braking impossibly late",
+      "Riding the redline",
+      "Slotting the gate",
+      "Chasing the tifosi",
+    ],
+    vars: {
+      background: "#0b0708", surface: "#130c0d", "surface-2": "#1b1113", elevated: "#241719",
+      foreground: "#f6f1ef", muted: "#1b1113", "muted-foreground": "#ab9d9c",
+      "subtle-foreground": "#a29493", ring: "#ff2800", primary: "#ff2800",
+      "primary-hover": "#ff4a2b", "primary-foreground": "#0b0708", accent: "#1b1113",
+      "accent-foreground": "#f6f1ef", destructive: "#ff4d6d", success: "#17b866",
+      citation: "#f5d000", selection: "rgba(255,40,0,0.30)",
+      border: "rgba(255,86,64,0.11)", "border-strong": "rgba(255,86,64,0.20)",
+      input: "rgba(255,86,64,0.15)", scrollbar: "rgba(255,86,64,0.18)",
+    },
+  },
+  desmo: {
+    id: "desmo",
+    label: "Desmo",
+    dark: true,
+    shader: "trellis", // the triangulated frame under the tank
+    sigil: 1, // hexagram — interlocked triangles, the lattice
+    mood: "Ducati red over anthracite, a trellis frame and desmodromic valves at full chat",
+    verbs: [
+      "Winding the desmo",
+      "Trail-braking in",
+      "Hanging off",
+      "Scraping a knee",
+      "Snicking the quickshifter",
+      "Holding the front wheel down",
+    ],
+    vars: {
+      background: "#1a1c1e", surface: "#202325", "surface-2": "#282c2f", elevated: "#31363a",
+      foreground: "#e9edf0", muted: "#282c2f", "muted-foreground": "#a3abb1",
+      "subtle-foreground": "#99a1a8", ring: "#da291c", primary: "#da291c",
+      "primary-hover": "#ea3a2c", "primary-foreground": "#ffffff", accent: "#282c2f",
+      "accent-foreground": "#e9edf0", destructive: "#ff7d8a", success: "#3fb56b",
+      citation: "#7fc8dc", selection: "rgba(218,41,28,0.30)", ...darkBorder,
     },
   },
   sepia: {

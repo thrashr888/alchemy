@@ -4,12 +4,21 @@ import { THEMES, resolveThemeId, type ShaderVariant } from "@/lib/themes";
 /**
  * Animated WebGL1 background: a theme-tinted luminance field quantized with
  * 4x4 Bayer ordered dithering. The field varies per theme (Theme.shader) —
- * aetheric mist by default, code rain, retro horizon, or paper grain — but
- * every variant keeps the dither, the central glow, and the transmutation
- * ring so it always reads as the same design element.
+ * aetheric mist by default, code rain, retro horizon, paper grain, an
+ * instrument dial, a slipstream, or a trellis lattice — but every variant
+ * keeps the dither, the central glow, and the transmutation ring so it always
+ * reads as the same design element.
  * WebGL1 (with an array-free Bayer) so it runs everywhere, incl. WKWebView.
  */
-const SHADER_MODE: Record<ShaderVariant, number> = { mist: 0, rain: 1, horizon: 2, grain: 3 };
+const SHADER_MODE: Record<ShaderVariant, number> = {
+  mist: 0,
+  rain: 1,
+  horizon: 2,
+  grain: 3,
+  dial: 4,
+  slipstream: 5,
+  trellis: 6,
+};
 export function DitherBackground({
   themeKey,
   className,
@@ -206,6 +215,64 @@ float grainField(vec2 uv, float glow){
   float m = fbm(vec2(uv.x*12.0, uv.y*5.0)) + 0.3*vnoise(uv*40.0);
   return clamp(glow*0.5 + m*0.42 - 0.20, 0.0, 1.0);
 }
+// mode 4 — instrument dial: a tick scale ringing the bezel with a needle
+// sweeping it, the centre gauge of a five-dial cluster. The transmutation
+// ring in main() lands inside the scale and reads as the dial face.
+float dialField(vec2 uv, float glow){
+  float t = mod(u_time, 2048.0);
+  float r = length(uv);
+  float ang = atan(uv.y, uv.x);
+  // The scale sits just inside the ring, which reads as the bezel. Anything
+  // further out clips at the top and bottom of a wide hero (uv.y is +-0.5).
+  float band = smoothstep(0.295, 0.315, r) * smoothstep(0.350, 0.332, r);
+  // A tachometer, not a clock: the scale breaks at the bottom (db is the
+  // angular distance from straight down) and runs ~270 degrees over the top.
+  float db = abs(fract((ang + 1.5708) * 0.15915 + 0.5) - 0.5) * 6.2832;
+  float arc = band * smoothstep(0.50, 0.80, db);
+  // 60 minor ticks (9.5493 = 60/2PI), a major every fifth (1.9099 = 12/2PI).
+  float minor = smoothstep(0.46, 0.50, abs(fract(ang * 9.5493) - 0.5)) * 0.34;
+  float major = smoothstep(0.44, 0.50, abs(fract(ang * 1.9099) - 0.5)) * 0.62;
+  // Redline: the last stretch of scale before the needle runs out of dial.
+  float redline = smoothstep(-1.30, -1.20, ang) * smoothstep(-0.70, -0.82, ang);
+  float ticks = (minor + major) * arc + redline * band * 0.45;
+  // Needle: pivots at the hub, sweeping clockwise over the top from the rest
+  // stop (4.0 rad, lower left) to the redline (-1.0 rad, lower right).
+  float sweep = 4.0 - 5.0 * (0.5 + 0.5 * sin(t * 0.30));
+  float da = abs(fract((ang - sweep) * 0.15915 + 0.5) - 0.5) * 6.2832;
+  float needle = smoothstep(0.09, 0.0, da) * smoothstep(0.34, 0.04, r);
+  return clamp((ticks + needle*0.85) * (0.5 + glow*0.5) + glow*0.12, 0.0, 1.0);
+}
+// mode 5 — slipstream: horizontal speed streaks tearing past, fastest across
+// the centre line, over a heat shimmer. Velocity rather than weather.
+float slipstreamField(vec2 uv, float glow){
+  float t = mod(u_time, 2048.0);
+  float lane = floor(uv.y * 90.0);
+  float speed = 0.20 + 0.45 * hash(vec2(lane, 3.0));
+  // Noise squashed along x so each lane smears into a motion-blurred streak.
+  float n = vnoise(vec2(uv.x*2.2 - t*speed, lane*0.37));
+  float streak = smoothstep(0.55, 0.92, n);
+  float centre = smoothstep(0.55, 0.0, abs(uv.y));
+  float shimmer = 0.14 * fbm(vec2(uv.x*3.0, uv.y*8.0 + t*0.16));
+  return clamp(streak*centre * (0.45 + glow*0.55) + shimmer + glow*0.10, 0.0, 1.0);
+}
+
+// mode 6 — trellis: a triangulated tube lattice, the frame under the tank.
+// Three line families 60 degrees apart tile the plane with triangles; a slow
+// wave travels the frame so it breathes without reading as motion.
+float trellisField(vec2 uv, float glow){
+  float t = mod(u_time, 2048.0);
+  float s = 6.0;
+  float a = abs(fract((uv.x) * s) - 0.5);
+  float b = abs(fract((uv.x*0.5 + uv.y*0.866) * s) - 0.5);
+  float c = abs(fract((-uv.x*0.5 + uv.y*0.866) * s) - 0.5);
+  float d = min(min(a, b), c);
+  float tube = smoothstep(0.055, 0.0, d);
+  // Nodes: where two families meet, the joint reads a touch brighter.
+  float second = min(max(min(a,b), min(max(a,b), c)), 0.5);
+  float node = smoothstep(0.05, 0.0, second) * 0.5;
+  float wave = 0.62 + 0.38 * sin(t*0.22 - (uv.x + uv.y) * 2.2);
+  return clamp((tube + node) * (0.30 + glow*0.70) * wave + glow*0.10, 0.0, 1.0);
+}
 
 void main(){
   vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / u_res.y;
@@ -215,7 +282,10 @@ void main(){
   if (u_mode < 0.5)      L = mistField(uv, glow);
   else if (u_mode < 1.5) L = rainField(uv, glow);
   else if (u_mode < 2.5) L = horizonField(uv, glow);
-  else                   L = grainField(uv, glow);
+  else if (u_mode < 3.5) L = grainField(uv, glow);
+  else if (u_mode < 4.5) L = dialField(uv, glow);
+  else if (u_mode < 5.5) L = slipstreamField(uv, glow);
+  else                   L = trellisField(uv, glow);
   float ring = smoothstep(0.006, 0.0, abs(r - 0.36)) * glow * 0.4;
   L = max(L, ring);
   float d = bayer4(gl_FragCoord.xy) - 0.5;
