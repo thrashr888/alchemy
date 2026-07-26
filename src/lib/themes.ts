@@ -371,7 +371,7 @@ export const THEMES: Record<string, Theme> = {
     vars: {
       background: "#0b0708", surface: "#130c0d", "surface-2": "#1b1113", elevated: "#241719",
       foreground: "#f6f1ef", muted: "#1b1113", "muted-foreground": "#ab9d9c",
-      "subtle-foreground": "#a29493", ring: "#ff2800", primary: "#ff2800",
+      "subtle-foreground": "#a29493", ring: "#f5d000", primary: "#ff2800",
       "primary-hover": "#ff4a2b", "primary-foreground": "#0b0708", accent: "#1b1113",
       "accent-foreground": "#f6f1ef", destructive: "#ff4d6d", success: "#17b866",
       citation: "#f5d000", selection: "rgba(255,40,0,0.30)",
@@ -379,9 +379,9 @@ export const THEMES: Record<string, Theme> = {
       input: "rgba(255,86,64,0.15)", scrollbar: "rgba(255,86,64,0.18)",
     },
   },
-  desmo: {
-    id: "desmo",
-    label: "Desmo",
+  panigale: {
+    id: "panigale",
+    label: "Panigale",
     dark: true,
     shader: "trellis", // the triangulated frame under the tank
     sigil: 1, // hexagram — interlocked triangles, the lattice
