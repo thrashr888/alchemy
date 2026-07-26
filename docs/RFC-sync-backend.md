@@ -124,6 +124,15 @@ so freshness stays a property of the device that owns the origin.
 Payload reality: a text corpus is megabytes. Vectors, clones, and audio
 — the gigabytes — never travel.
 
+One hazard the table hides: **`report_schedules` is config that
+fires.** Sync it naively and a schedule reading "Mondays at 9" runs on
+the laptop *and* the desktop — two reports, two inference bills, one
+confused user. Scheduled rows therefore carry an `owner_device`: other
+devices store the row and show it in the UI but never run it, and
+retiring the owner reassigns it. The same rule covers reminders and
+any future timer-driven artifact. Syncing a row that merely *describes*
+state is safe; syncing a row that *causes work* needs an owner.
+
 ## 4. The options
 
 ### 4a. iCloud/CloudKit
@@ -247,14 +256,26 @@ not a roadmap item, it's a property of the first release.
 - **Privacy**: unchanged from (b) — I relay and store ciphertext I
   cannot read. Quotas and rate limits are the entire abuse surface,
   because nothing stored is legible enough to moderate.
-- **Cost** (1/100/10k): ~$0 / ~$5 / ~$15–25 per month.
-  [R2](https://developers.cloudflare.com/r2/pricing/) runs
-  $0.015/GB-mo with zero egress — 10k users × ~50 MB of ciphertext ≈
-  500 GB ≈ $7.50 — plus [$5 Workers
-  Paid](https://developers.cloudflare.com/workers/platform/pricing/)
-  and request overage. Cheap enough to give away indefinitely; if a
-  storage-heavy minority ever matters, Obsidian's $4–8/user/mo shows
-  the market rate for exactly this service.
+- **Cost** (1/100/10k): ~$0 / ~$5 / **~$30–60 per month — and
+  operations, not storage, set the price.** Storage is noise: 10k
+  users × ~50 MB of ciphertext ≈ 500 GB × $0.015/GB-mo ≈ $7.50, plus
+  [$5 Workers Paid](https://developers.cloudflare.com/workers/platform/pricing/).
+  The bill is [Class A operations at
+  $4.50/M](https://developers.cloudflare.com/r2/pricing/), and the
+  trap is that **`ListObjects` is Class A** while `GetObject` is
+  Class B at $0.36/M. Two devices per user polling hourly is 14.4M
+  discovery calls a month: done by listing, that is ~$60 before
+  anyone edits anything, and listing *per notebook* rather than per
+  account multiplies it by the notebook count into four figures.
+  Done by fetching head files (§4b) the same 14.4M polls cost ~$1.60
+  and mostly fit the 10M free Class B ops. Writes then dominate
+  honestly — ~600 debounced pushes/user/mo ≈ 6M Class A ≈ $22 — and
+  push debounce becomes a cost lever, not just a battery one. Note
+  the asymmetry that makes (b) look free by comparison: BYO gives
+  every user their own 1M free Class A ops, while the relay
+  aggregates 10k users against a single free tier. Still cheap
+  enough to give away; if a heavy minority ever matters, Obsidian's
+  $4–8/user/mo is the market rate for exactly this service.
 - **Weight**: one small Worker (auth, token minting, quotas) and one
   deploy pipeline — bounded, and every line is shared with the
   eventual sharing service.
@@ -275,7 +296,7 @@ That stays true of the coordinator and stops being true of the
 doorman — adoption promoted it from someday-service to v1
 infrastructure, in the smallest form that can exist.
 
-### 4d. Control: the data dir in iCloud Drive
+### 4d. File syncers: the database (rejected), the log (promoted)
 
 Point iCloud Drive/Dropbox/Syncthing at the LanceDB directory and hope.
 
@@ -388,7 +409,7 @@ sugar, not architecture.
 | Auth | OS session | user's creds | device key via iCloud Keychain | OS/Dropbox session | key exchange, DIY |
 | Engine | Swift sidecar | Rust, in-app | Rust, in-app | Rust, in-app | Rust + rendezvous |
 | Privacy | Apple's keys | E2E | E2E, ciphertext relay | E2E | E2E |
-| $/mo (dev) at 1/100/10k | 0/0/0 | 0/0/0 | ~0/~5/~20 | 0/0/0 | relays, eventually |
+| $/mo (dev) at 1/100/10k | 0/0/0 | 0/0/0 | ~0/~5/~30–60 | 0/0/0 | relays, eventually |
 | User setup | none | owns a bucket | none-ish (email optional) | none (has iCloud) | none, until NAT |
 | Solo-dev weight | high, alien | low | medium, bounded | low | high, ongoing |
 | Sharing path | Apple-only | crude (creds) | the real one | shared folder, crude | unbuilt dream |
@@ -399,42 +420,68 @@ Single-user multi-device conflicts are rare and row-shaped. The model:
 
 - **Ops, not table dumps.** Every mutation emits an op
   (`upsert`/`delete`, table, row id, row payload) stamped with a hybrid
-  logical clock (`max(wall_ms, last+1)` — ~40 lines, no crate) plus
-  device id. Op batches append to the log; devices apply each other's
-  logs idempotently.
+  logical clock (`max(wall_ms, local+1, highest_seen_remote+1)` — ~40
+  lines, no crate; advancing on *receive* is what makes it hybrid
+  rather than a bare wall clock) plus device id. Op batches append to
+  the log; devices apply each other's logs idempotently.
 - **Last-writer-wins per row**, ordered by (HLC, device id). Rows
   gain a `rev` column via the additive lazy-migration pattern db.rs
   already uses (the `field_with_name` upgrades for `color`, `kind`,
-  `model`) — no schema migration event.
+  `model`) — no schema migration event. **Every op also carries the
+  `base_rev` it was edited from**, and that field is what makes
+  conflict *detection* possible at all: (HLC, device id) orders
+  writes but cannot tell a concurrent divergence from a device that
+  simply edited later, so LWW alone would either overwrite silently
+  or cry conflict on every ordinary sequential edit. An incoming op
+  whose `base_rev` matches the local `rev` is a fast-forward and
+  applies; one whose `base_rev` is older diverged, and only then does
+  the note rule below fire.
 - **Messages are append-only**: UUID ids, union merge, conflicts
   impossible by construction.
 - **Deletes are tombstones** in a small `tombstones` table (table, row
   id, HLC), retained 90 days so a long-offline device can't resurrect
   the dead; live tables stay clean and Lance deletes stay real.
-- **Identity is a keypair; access is key wrapping; auth is therefore
-  distributed.** Every device holds an Ed25519 keypair in the
-  Keychain and signs each op batch it uploads — batches are
-  self-certifying whatever relayed them (4e's lesson). An account
-  *is* a set of pubkeys, optionally labeled with an email; a relay —
-  mine or self-hosted — only verifies signatures, holds no
+- **Identity is two keypairs; access is key wrapping; auth is
+  therefore distributed.** Every device holds **Ed25519 for
+  signing** every op batch it uploads — batches are self-certifying
+  whatever relayed them (4e's lesson) — and **X25519 for wrapping**.
+  Two keys, not one: they are different curves used for different
+  primitives, and folding them into a single key means a birational
+  conversion that is a footgun rather than a shortcut. An account
+  *is* the set of those pubkeys, optionally labeled with an email; a
+  relay — mine or self-hosted — only verifies signatures, holds no
   passwords, and any relay accepts the same identity, which makes
-  auth as portable as the data. The identity key is stored as a
-  synchronizable Keychain item, so iCloud Keychain (or 1Password)
-  carries it to the user's other Macs and a second device enrolls
-  itself with zero ceremony; explicit device-to-device approval is
-  the fallback when Keychain sync is off. Each notebook gets a
-  random symmetric content key, wrapped (X25519) to the account's
-  device keys; sharing (phase 4) is the identical wrap extended to a
-  member's devices — Keybase's team shape. Revocation rotates the
-  notebook key and re-wraps to survivors. Lose every device *and*
-  the Keychain copy and no relay can help — it holds ciphertext
-  (§8).
+  auth as portable as the data. Each notebook gets a random
+  symmetric content key wrapped to each device's X25519 key; sharing
+  (phase 4) is the identical wrap extended to a member's devices —
+  Keybase's team shape. Revocation rotates the notebook key and
+  re-wraps to survivors.
+- **The iCloud Keychain trick has conditions — prove it before
+  promising it.** "The second Mac just works" rests entirely on the
+  identity key riding iCloud Keychain, and Apple's rules are
+  narrower than they look. Only password-class items sync —
+  [syncing is not supported for cryptographic key
+  items](https://developer.apple.com/documentation/security/ksecattrsynchronizable)
+  — so the key must travel as raw bytes inside a generic password
+  item, never as a `SecKey`. Synchronizable items also require the
+  data protection keychain
+  ([`kSecUseDataProtectionKeychain`](https://developer.apple.com/documentation/security/ksecusedataprotectionkeychain)),
+  which on macOS wants a `keychain-access-groups` entitlement and
+  therefore an embedded provisioning profile — the same
+  provisioning-profile weight §4a held against CloudKit, now landing
+  on us. Far cheaper than a Swift sync engine, but not free, and the
+  zero-setup promise is worth nothing if it silently doesn't work:
+  **verify on a signed Developer ID build in phase 2**, before the
+  flow is advertised. If it fails, the fallback is one step, not a
+  broken product — show a code on Mac A, type it on Mac B. Lose
+  every device *and* the Keychain copy and no relay can help; it
+  holds ciphertext (§8).
 - **Notes get one special case.** Notes are the only surface where
-  both sides plausibly edit the same text while apart. When two
-  upserts to one note straddle the common ancestor, newer wins and the
-  loser is written back as a sibling note ("Title (conflict from
-  MacBook)") — Obsidian's conflict-copy behavior, which loses nothing
-  and needs no merge UI. Zotero's per-object versions with a resolution
+  both sides plausibly edit the same text while apart. When a
+  divergent upsert lands on a note — `base_rev` older than local
+  `rev`, per above — newer wins and the loser is written back as a
+  sibling note ("Title (conflict from MacBook)") — Obsidian's
+  conflict-copy behavior, which loses nothing and needs no merge UI. Zotero's per-object versions with a resolution
   dialog solve the same problem with more ceremony than a notebook
   needs.
 - **CRDTs: no, and here's the tripwire.** Automerge/loro buy
@@ -466,8 +513,10 @@ ready.**
   using storage the user already pays for.
 - **Managed sync** — one switch. Notebooks sync through a relay I
   host, free, encrypted so I can't read them.
-- **Shared notebooks** — invite a coworker; you both edit and changes
-  merge live.
+- **Shared notebooks** — invite a coworker; you both edit and each
+  other's changes land within seconds. Not Google-Docs live cursors
+  (§2): if you both edit the same note at the same moment, one wins
+  and the other becomes a conflict copy.
 - **Self-hosted relay** — the relay is in this repo; a team runs its
   own with one deploy and keeps full custody.
 - **Bring-your-own bucket** — power users point sync at their own
@@ -496,7 +545,7 @@ ready.**
   vectors and clones never cross the wire.
 - **Share.** Open a notebook, invite a coworker. The notebook's key is
   wrapped to their device keys, and a small coordinator keeps both
-  sides converged in real time. The notebook lives on its owner's
+  sides converged within seconds. The notebook lives on its owner's
   relay — mine or the team's own — so sharing at work never means
   handing your research to me. Remove someone and their access is
   rotated out.
@@ -546,10 +595,12 @@ format. Nothing here is a detour.
    notebook keys; push debounced behind the existing sweep cadence,
    manual Sync Now; per-notebook opt-out, default all on
    (smart-defaults rule). *Gate: two real Macs against one iCloud
-   Drive folder through a week of daily use — zero lost rows, a
-   forced concurrent note edit yields a conflict copy, offline edits
-   reconcile on reconnect, and the loop stays quiet on
-   battery/network (no busy polling).*
+   Drive folder through a week of daily use — Mac B gets the notebook
+   key with no typing on a signed Developer ID build (the §5 Keychain
+   check) or via one approval step if that fails; zero lost rows; a
+   forced concurrent note edit yields a conflict copy while ordinary
+   sequential edits never do; offline edits reconcile on reconnect;
+   and the loop stays quiet on battery/network (no busy polling).*
 3. **The managed relay — sync becomes a product.** The doorman
    Worker, open source in this repo: device-key auth (account
    auto-created on the first signed request), per-user quotas,
@@ -613,6 +664,33 @@ format. Nothing here is a detour.
   90-day tombstone horizon vs. a device that pulls a compacted log
   later still; and how iCloud's dataless-file eviction interacts
   with pull cadence.
+- **Compaction without conditional writes** (phase 2): §4b claims a
+  snapshot with a conditional write, which a plain folder cannot do
+  — there is no compare-and-swap in a directory. Proposed rule to
+  confirm: only the device that wrote a batch may delete it, and
+  snapshots are additive behind a GC horizon, so a syncer's lazy
+  deletion can't resurrect a compacted batch into a half-collected
+  log.
+- **Batch encryption primitive** (phase 2): `age` per batch pays a
+  header and an ephemeral X25519 on every small write. Probably
+  better to wrap the notebook key once with age into a keyfile and
+  seal each batch with XChaCha20-Poly1305 under it — `age` for the
+  job age is good at. Measure before committing.
+- **Metadata the relay still sees** (phase 3): E2E hides content,
+  not shape — notebook count and ids, batch sizes, edit timing,
+  device count, and once sharing lands, the membership graph. Say
+  so plainly in user-facing copy rather than implying the relay
+  knows nothing.
+- **Running a public E2E service** (phase 3): terms of service, an
+  abuse/takedown path, a law-enforcement answer ("ciphertext and
+  possibly an email, nothing else"), and account deletion that
+  actually deletes. Cheap to write in advance, embarrassing to
+  improvise. "Quotas are the entire abuse surface" (§4c) is true of
+  the *bytes* and not of the inbox.
+- **Switching transports** (phase 3): moving a notebook from folder
+  to relay — snapshot upload or full log replay? Ops are idempotent
+  so running both at once converges rather than corrupts, but the
+  migration deserves one deliberate path.
 - **Archive format versioning**: the `.alchemy` zip should carry a
   schema version and tolerate additive columns — pin the rule in
   phase 1 so old archives import forever.
