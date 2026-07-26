@@ -1,6 +1,7 @@
 mod agent;
 mod ai;
 mod capture;
+mod clip;
 mod commands;
 mod connectors;
 mod db;
@@ -120,6 +121,7 @@ pub fn run() {
 
             let runtime = commands::ai_runtime(app.handle().clone(), data_dir.clone());
             let (mcp_enabled, mcp_port) = (config.mcp_enabled, config.mcp_port);
+            let (clip_enabled, clip_port) = (config.clip_enabled, config.clip_port);
             app.manage(AppState {
                 db: Arc::new(db),
                 ai: tokio::sync::RwLock::new(ai::Ai::new(config, runtime)),
@@ -149,6 +151,13 @@ pub fn run() {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 mcp::apply_config(&handle, mcp_enabled, mcp_port).await;
+            });
+
+            // Browser-extension clip receiver (docs/RFC-page-capture.md §8).
+            app.manage(clip::ClipState::default());
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                clip::apply_config(&handle, clip_enabled, clip_port).await;
             });
 
             // Seed the current accessibility text scale so the first window

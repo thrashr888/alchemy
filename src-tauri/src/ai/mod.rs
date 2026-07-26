@@ -73,6 +73,14 @@ pub struct AiConfig {
     pub mcp_enabled: bool,
     #[serde(default = "default_mcp_port")]
     pub mcp_port: u16,
+    /// Browser-extension clip receiver (localhost-only; accepts a rendered
+    /// DOM from the user's logged-in tab, see docs/RFC-page-capture.md §8).
+    /// Default-on, same as MCP — the toggle exists for anyone who wants no
+    /// localhost surface, not for safety (the endpoint is origin-gated).
+    #[serde(default = "default_true")]
+    pub clip_enabled: bool,
+    #[serde(default = "default_clip_port")]
+    pub clip_port: u16,
     /// Menu bar extra (tray icon). Settings → General toggles it live.
     #[serde(default = "default_true")]
     pub tray_enabled: bool,
@@ -132,6 +140,10 @@ fn default_true() -> bool {
 
 fn default_mcp_port() -> u16 {
     41414
+}
+
+fn default_clip_port() -> u16 {
+    41500
 }
 
 impl AiConfig {
@@ -287,6 +299,8 @@ impl Default for AiConfig {
             profile: UserProfile::default(),
             mcp_enabled: default_true(),
             mcp_port: default_mcp_port(),
+            clip_enabled: default_true(),
+            clip_port: default_clip_port(),
             tray_enabled: default_true(),
             curator_consolidate: default_true(),
             source_gists: default_true(),

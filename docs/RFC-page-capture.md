@@ -173,6 +173,96 @@ the user captures what they can already see.
 3. **Assisted capture** *(not planned)* — the visible login/challenge
    window is where the three misdiagnosed gaps above actually get solved,
    but it's explicitly out of scope for now.
+4. **Extension ingest seam** — the clip receiver (§8): `clip.rs` localhost
+   endpoint, extension-origin auth, URL-keyed held clips consumed by
+   `ingest_url` ahead of the generic capture fallback, extension scrapes the
+   live authenticated tab. This is the out-of-app answer to the same private
+   / login-walled pages assisted capture targets in-app.
+
+## 8. Addendum — the extension ingest seam (clip capture)
+
+The hidden capture webview (§2) is powerful but blind in one specific way:
+it is a **cookieless session**. Intranet pages, anything behind a login, a
+paywall the user subscribes to, a private Notion/Google Doc — the render
+pass reaches the same wall the fast path does, because it is not *the user's*
+browser. Assisted capture (§5) is the in-app answer; the Chrome extension is
+the out-of-app one, and it is strictly better when the user already has the
+page open: it captures the DOM from the **real, logged-in tab**, so it sees
+exactly what the user sees. RFC §6 already reserved the extension as
+"complementary… posts through `alchemy://add`. This RFC's pipeline is the
+ingest seam it needs." This section builds that seam.
+
+### 8.1 Transport — why not the deep link
+
+The clipper already fires `alchemy://add?url=…`. It cannot also *carry the
+page*: a rendered DOM is tens of KB to megabytes, and after percent-encoding
+it blows past every practical custom-scheme URL limit (Chrome's navigation
+cap, macOS `openURL`, the deep-link plugin). Even extension-side–cleaned
+plain text usually won't fit. The payload must travel out of band.
+
+The app already owns the right pattern: the MCP server (`mcp.rs`) binds a
+localhost HTTP port, writes a discovery file, and toggles from config. The
+clip receiver is the same shape — a separate module (`clip.rs`) because its
+**auth is the inverse of MCP's**. MCP *rejects* any request carrying an
+`Origin` header (real MCP clients never send one; a browser always does). A
+browser extension's `fetch` always sends `Origin: chrome-extension://<id>`
+(or `moz-extension://…`), and a malicious web page **cannot forge that** —
+the browser sets it. So the clip endpoint's rule is: allow when `Origin` is
+absent (native/CLI) or an extension scheme; reject everything else with 403.
+That single check closes the malicious-web-page and DNS-rebind holes (their
+`Origin` stays their real site), while `host_permissions` for
+`http://127.0.0.1/*` let the extension's cross-origin POST bypass CORS
+preflight entirely.
+
+### 8.2 Flow — held clip, unchanged deep link
+
+```
+extension click ─► scripting.executeScript (EXTRACT_JS, in the live tab)
+    │                  → {url, title, ogTitle, byline, published, html}
+    ├─► POST 127.0.0.1:<clip_port>/clip   (held server-side, keyed by URL)
+    └─► alchemy://add?url=…&title=…       (existing deep link, unchanged)
+                          │
+        add modal ► user picks notebook ► add_source_url(url)
+                          │
+        ingest_url: git/notion detectors first (identity-reshaping);
+                    then clip::take(url)? ──yes──► extracted_from_html ─► store
+                                            └─no──► extract_url_rescued (as today)
+```
+
+The correlation key is the **normalized URL** — no clip id threads through
+the frontend, so the deep link and the entire add flow are byte-for-byte
+unchanged. The extension POSTs, then fires the deep link; by the time the
+user picks a notebook (seconds later) the clip is waiting. `clip::take`
+consumes it (10-min TTL, bounded entry count and payload size sweep out
+anything abandoned). The clipped HTML runs through the *same*
+`extracted_from_html` the webview capture uses — identical readability,
+identical provenance line — so a clip and a rescue produce the same shape.
+
+### 8.3 Precedence
+
+A present clip **supersedes the generic page-capture fallback**, because an
+authenticated render is authoritative and re-fetching a private page is
+doomed. But identity-reshaping detectors still run first: a clipped GitHub
+URL ingests as a repo (`ingest_git`), a Notion URL via the API — the clip
+only stands in for the generic `extract_url_rescued` rung. If the clipped
+DOM extracts to empty/thin text, `ingest_url` falls through to the normal
+fetch path, so a broken clip never makes a source worse than URL-only would.
+
+### 8.4 What this changes about the source
+
+Clipped private pages are **snapshot sources**: re-sync is a no-op for them
+(the app still can't reach the page), exactly like the `assisted` capture
+tier. That's a deliberate, documented limit, not a regression — the content
+exists only because the user's browser could see it once.
+
+### 8.5 Cost, honestly stated
+
+The clipper's privacy pitch changes: the manifest gains `scripting` (DOM
+read on the active tab, still only on user gesture via `activeTab`) and
+`host_permissions` for `http://127.0.0.1/*` (the localhost POST). It no
+longer holds *zero* host permissions — the store listing copy must say so.
+The receiver is default-on but a config toggle (`clip_enabled`), same as MCP,
+for anyone who wants no localhost surface at all.
 
 ## Explicitly skipped
 

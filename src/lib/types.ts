@@ -279,6 +279,10 @@ export interface AiConfig {
   /** Embedded MCP server for agent access (localhost streamable HTTP). */
   mcpEnabled: boolean;
   mcpPort: number;
+  /** Browser-extension clip receiver (localhost; accepts a rendered DOM from
+   *  the user's logged-in tab, see docs/RFC-page-capture.md §8). */
+  clipEnabled: boolean;
+  clipPort: number;
   /** Menu bar extra (tray icon); Settings → General toggles it live. */
   trayEnabled: boolean;
   /** Weekly LLM consolidation of auto-created evidence notes (note curator

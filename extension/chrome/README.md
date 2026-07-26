@@ -1,20 +1,28 @@
 # Alchemy Web Clipper (Chrome)
 
 Sends pages, links, and text selections to Alchemy as sources through the
-`alchemy://add` deep link. No host permissions, no stored state, no network
-access — the extension is a button that composes a URL.
+`alchemy://add` deep link. Adding a whole page also scrapes the rendered DOM
+from your logged-in tab and hands it to Alchemy's local receiver on
+`127.0.0.1`, so private / login-walled pages the app could never fetch itself
+still capture. No stored state, no remote network access — the only host it
+talks to is your own machine.
 
 ## What it does
 
-- **Toolbar button** — adds the current page to a notebook.
-- **Right-click a page** — "Add page to Alchemy".
-- **Right-click a link** — "Add link to Alchemy" (adds the link target).
+- **Toolbar button** — captures the current page's rendered DOM and adds it
+  to a notebook (falls back to a URL-only clip if the app's receiver is off).
+- **Right-click a page** — "Add page to Alchemy" (same DOM capture).
+- **Right-click a link** — "Add link to Alchemy" (adds the link target; the
+  app fetches it, since a bare link isn't the open page).
 - **Right-click a selection** — "Add selection to Alchemy" (becomes a text
   source, with the page URL appended as provenance).
 
 Each action navigates the current tab to `alchemy://add?…`; Chrome shows its
 "Open Alchemy.app?" confirmation (check "Always allow" once to stop being
-asked). If no notebook is named, Alchemy asks which notebook to use.
+asked). If no notebook is named, Alchemy asks which notebook to use. The
+page's DOM (when captured) travels out of band to the local receiver — the
+deep link only carries the URL and title, which the app pairs with the
+scrape. See `docs/RFC-page-capture.md` §8.
 
 ## Try it locally (no store account needed)
 
@@ -37,10 +45,12 @@ extension card.
    - At least one 1280×800 screenshot (screenshot Chrome with the context
      menu open on a page).
    - Category: Productivity. Language: English.
-   - Privacy tab: declare **no data collected** (true — the extension has no
-     host permissions and makes no requests); justify `contextMenus`
-     ("adds right-click clipping actions") and `activeTab` ("reads the
-     current tab's URL and title when the user clicks the button").
+   - Privacy tab: declare **no data collected** (true — the extension sends
+     the page only to the user's own machine and stores nothing); justify
+     `contextMenus` ("adds right-click clipping actions"), `activeTab` +
+     `scripting` ("reads the current tab's content when the user clicks, to
+     capture the page"), and the `http://127.0.0.1/*` host permission
+     ("hands the captured page to the local Alchemy app").
 5. Submit for review. First reviews typically take a few days; minimal
    permissions like these usually pass without questions.
 6. Updates: bump `version` in `manifest.json`, re-zip, upload on the same

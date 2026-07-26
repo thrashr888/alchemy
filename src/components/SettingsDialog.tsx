@@ -416,6 +416,55 @@ function SourcesTab() {
       <div className="h-px bg-border" />
 
       <NotionTokenField />
+
+      <div className="h-px bg-border" />
+
+      <WebClipperToggle />
+    </div>
+  );
+}
+
+const CLIPPER_URL =
+  "https://chromewebstore.google.com/detail/alchemy-web-clipper/bdiidbpifneigmcknjbgolbclbbgjheh";
+
+/** Browser-extension clip receiver: a localhost endpoint that accepts the
+ *  rendered DOM the clipper scrapes from the user's logged-in tab, so private
+ *  and login-walled pages capture too (docs/RFC-page-capture.md §8). */
+function WebClipperToggle() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  if (!aiConfig) return null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="text-body">Web clipper</div>
+      <label className="flex cursor-pointer items-start gap-2.5">
+        <input
+          type="checkbox"
+          checked={aiConfig.clipEnabled}
+          onChange={(e) =>
+            void saveAiConfig({ ...aiConfig, clipEnabled: e.target.checked })
+          }
+          className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
+        />
+        <span className="flex flex-col gap-0.5">
+          <span className="text-body text-foreground">
+            Accept pages from the browser extension
+          </span>
+          <span className="text-micro leading-relaxed text-subtle-foreground">
+            The{" "}
+            <button
+              type="button"
+              onClick={() => void openUrl(CLIPPER_URL)}
+              className="text-citation hover:underline"
+            >
+              Alchemy Web Clipper
+            </button>{" "}
+            captures the page you're viewing — including private and
+            login-walled pages the app can't fetch itself — and hands it to
+            Alchemy over a local endpoint.
+          </span>
+        </span>
+      </label>
     </div>
   );
 }

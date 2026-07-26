@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Alchemy Web Clipper",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Send the current page, a link, or selected text to an Alchemy notebook as a source.",
   "icons": {
     "16": "icons/icon16.png",
@@ -12,7 +12,8 @@
   "action": {
     "default_title": "Add this page to Alchemy"
   },
-  "permissions": ["contextMenus", "activeTab"],
+  "permissions": ["contextMenus", "activeTab", "scripting"],
+  "host_permissions": ["http://127.0.0.1/*"],
   "background": {
     "service_worker": "background.js",
     "scripts": ["background.js"]

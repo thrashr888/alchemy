@@ -29,11 +29,13 @@ and makes it citable in chat. If the page is a GitHub or git URL, Alchemy's
 git-source machinery takes over — README-only by default, or the whole repo
 if you choose.
 
-Private by construction: the extension has no host permissions, collects
-nothing, stores nothing, and makes no network requests. It composes an
-alchemy:// link and hands it to the app — that's the entire mechanism. The
-first click shows the browser's standard "Open Alchemy.app?" confirmation;
-check "Always allow" to skip it in future.
+Private by construction: the extension collects nothing, stores nothing, and
+talks to no remote server. When you clip a whole page it reads that page and
+sends it to the Alchemy app on your own machine (`127.0.0.1`) so private and
+login-walled pages capture too; otherwise it just composes an alchemy:// link
+and hands it to the app. Everything stays on your Mac. The first click shows
+the browser's standard "Open Alchemy.app?" confirmation; check "Always allow"
+to skip it in future.
 
 Requires the Alchemy app for macOS (free, open source, MPL-2.0):
 https://thrashr888.github.io/alchemy/
@@ -50,14 +52,18 @@ Productivity · English
 
 ## Privacy questionnaire answers
 
-- Single purpose: send the current page URL, a link URL, or selected text
-  to the Alchemy app on the user's Mac via its alchemy:// URL scheme.
-- Data collected: none.
+- Single purpose: send the current page (its rendered content, or just the
+  URL), a link URL, or selected text to the Alchemy app on the user's Mac.
+- Data collected: none. The page is delivered only to the user's own
+  machine and nothing is retained by the extension.
 - `contextMenus` justification: adds the three right-click clipping
   actions (page, link, selection).
-- `activeTab` justification: reads the current tab's URL and title only
-  when the user clicks the toolbar button or a clipping menu item.
-- Remote code: none. No analytics, no external requests.
+- `activeTab` + `scripting` justification: reads the current tab's content
+  only when the user clicks the toolbar button or a clipping menu item, to
+  capture the page for the app.
+- `http://127.0.0.1/*` host permission justification: hands the captured
+  page to the local Alchemy app's receiver; no other host is contacted.
+- Remote code: none. No analytics, no external (non-localhost) requests.
 
 ## AMO (Firefox) notes
 

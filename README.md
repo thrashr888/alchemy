@@ -86,10 +86,12 @@ two-host podcast voiced on-device.*
   Services menu, and Spotlight-indexed notebooks and notes.
 - **Web clipper** — the [Alchemy Web Clipper](https://chromewebstore.google.com/detail/alchemy-web-clipper/bdiidbpifneigmcknjbgolbclbbgjheh)
   Chrome extension adds the current page, a link, or a text selection to a
-  notebook from the toolbar or right-click menu — it just composes an
-  `alchemy://add` deep link, so it needs no host permissions, stores nothing,
-  and makes no network requests. The same folder loads in Firefox and Safari
-  (see [extension/chrome/](extension/chrome/README.md)).
+  notebook from the toolbar or right-click menu. Clipping a whole page hands
+  Alchemy the rendered DOM from your logged-in tab — so private and
+  login-walled pages the app could never fetch itself still capture — over a
+  local `127.0.0.1` endpoint (Settings → Sources → Web clipper); nothing
+  leaves your Mac. The same folder loads in Firefox and Safari (see
+  [extension/chrome/](extension/chrome/README.md)).
 - **OCR** — image sources and scanned/image-only PDFs are transcribed by a local
   vision model (dedicated OCR models like `glm-ocr` / `deepseek-ocr` recommended).
 - **Grounded chat** — streamed answers that cite the exact source passages they drew

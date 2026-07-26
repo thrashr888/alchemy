@@ -930,6 +930,18 @@ pub(crate) async fn ingest_url(
             };
         }
     }
+    // A browser-extension clip (docs/RFC-page-capture.md §8) supersedes the
+    // generic page-capture fallback: the clipper saw the page as the
+    // logged-in user, which the cookieless capture webview never can. It
+    // sits *after* the git/notion detectors above — a clipped GitHub or
+    // Notion URL still ingests with its specialized identity — and *before*
+    // the fetch, so private pages never take the doomed round trip. A clip
+    // that extracts to nothing falls through to the normal path below.
+    if let Some(clip) = crate::clip::take(url) {
+        if let Some(extracted) = clip.into_extracted() {
+            return store_extracted(state, notebook_id, extracted).await;
+        }
+    }
     match crate::capture::extract_url_rescued(url).await {
         Ok(extracted) => store_extracted(state, notebook_id, extracted).await,
         Err(err) => store_failed_url(state, notebook_id, url.trim(), err.to_string()).await,
@@ -7552,6 +7564,7 @@ pub async fn set_ai_config(
     let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     std::fs::write(&state.config_path, json).map_err(|e| e.to_string())?;
     let (mcp_enabled, mcp_port) = (config.mcp_enabled, config.mcp_port);
+    let (clip_enabled, clip_port) = (config.clip_enabled, config.clip_port);
     crate::integrations::set_tray_visible(&app, config.tray_enabled);
     {
         let mut ai = state.ai.write().await;
@@ -7563,6 +7576,7 @@ pub async fn set_ai_config(
         *ai = Ai::new(config, ai_runtime(app.clone(), data_dir));
     }
     crate::mcp::apply_config(&app, mcp_enabled, mcp_port).await;
+    crate::clip::apply_config(&app, clip_enabled, clip_port).await;
     Ok(())
 }
 
