@@ -395,12 +395,15 @@ export const THEMES: Record<string, Theme> = {
       "Holding the front wheel down",
     ],
     vars: {
+      // Ducati's palette is red, white and black — so the accent is the white
+      // of a race number board, not a hue. Body text sits a step down in
+      // luminance to leave it room: citation reads brighter than prose.
       background: "#1a1c1e", surface: "#202325", "surface-2": "#282c2f", elevated: "#31363a",
-      foreground: "#e9edf0", muted: "#282c2f", "muted-foreground": "#a3abb1",
+      foreground: "#c6ced4", muted: "#282c2f", "muted-foreground": "#a3abb1",
       "subtle-foreground": "#99a1a8", ring: "#da291c", primary: "#da291c",
       "primary-hover": "#ea3a2c", "primary-foreground": "#ffffff", accent: "#282c2f",
-      "accent-foreground": "#e9edf0", destructive: "#ff7d8a", success: "#3fb56b",
-      citation: "#7fc8dc", selection: "rgba(218,41,28,0.30)", ...darkBorder,
+      "accent-foreground": "#c6ced4", destructive: "#ff7d8a", success: "#3fb56b",
+      citation: "#eef4f8", selection: "rgba(218,41,28,0.30)", ...darkBorder,
     },
   },
   sepia: {
