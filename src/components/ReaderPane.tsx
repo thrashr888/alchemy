@@ -18,7 +18,15 @@ import { KIND_LABEL } from "./studioArtifacts";
 import { Favicon } from "./SourcesPanel";
 import { sourceIcon } from "@/lib/sourceIcon";
 import { Button, Input, RowMenu, Spinner } from "./ui";
-import { chatReadingClass, cn, fmtDay, isWebUrl, shortcutBlocked, urlHost } from "@/lib/utils";
+import {
+  chatReadingClass,
+  cn,
+  fmtDay,
+  folderProvider,
+  isWebUrl,
+  shortcutBlocked,
+  urlHost,
+} from "@/lib/utils";
 import {
   AppWindow,
   ArrowLeft,
@@ -1143,9 +1151,21 @@ function DocProperties({
 }) {
   const rows: { label: string; value: string }[] = [];
   if (source) {
-    rows.push({ label: "Type", value: SOURCE_TYPE_LABEL[source.sourceType] });
+    // A cloud-synced folder says which service it came from — "Folder" alone
+    // can't distinguish a Box mount from a plain local directory.
+    const provider = isWebUrl(source.url) ? null : folderProvider(source.url);
+    rows.push({
+      label: "Type",
+      value: provider
+        ? `${SOURCE_TYPE_LABEL[source.sourceType]} · ${provider}`
+        : SOURCE_TYPE_LABEL[source.sourceType],
+    });
     const host = isWebUrl(source.url) ? urlHost(source.url) : null;
     if (host) rows.push({ label: "Site", value: host });
+    // The on-disk path, so a human can find the original and an agent reading
+    // the properties block gets the same handle Show in Finder uses.
+    if (source.url && !isWebUrl(source.url) && source.sourceType !== "mac")
+      rows.push({ label: "Path", value: source.url });
     if (git) {
       if (git.origin !== "local repository")
         rows.push({ label: "Origin", value: git.origin });
@@ -1175,7 +1195,9 @@ function DocProperties({
         {rows.map((r) => (
           <Fragment key={r.label}>
             <span className="text-subtle-foreground">{r.label}</span>
-            <span className="min-w-0 truncate text-muted-foreground">{r.value}</span>
+            <span className="min-w-0 truncate text-muted-foreground" title={r.value}>
+              {r.value}
+            </span>
           </Fragment>
         ))}
       </div>
@@ -2706,6 +2728,19 @@ function RepoView({ source, map }: { source: Source; map: string | null }) {
                   {sel.chunkCount > 0 ? "Embedded" : "Search-only"}
                 </button>
                 <span className="flex-1" />
+                {/* Reveal the selected file itself — the reader header's Show
+                    in Finder only ever reaches the folder root. */}
+                {sel.url && !isWebUrl(sel.url) && (
+                  <button
+                    type="button"
+                    title="Show this file in Finder"
+                    aria-label="Show this file in Finder"
+                    onClick={() => void revealItemInDir(sel.url)}
+                    className="rounded p-1 text-subtle-foreground hover:bg-surface-2 hover:text-foreground"
+                  >
+                    <FolderOpen className="h-3.5 w-3.5" />
+                  </button>
+                )}
                 {selIsCode && (
                   <button
                     type="button"
