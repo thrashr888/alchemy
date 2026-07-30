@@ -995,8 +995,15 @@ impl Db {
         // owner recency for the fusion tie-break.
         let mut titles: HashMap<String, String> = HashMap::new();
         let mut recency: HashMap<String, i64> = HashMap::new();
+        // Owner id -> on-disk path, for Citation.source_path. Only local
+        // paths qualify — web/mac origins stay empty rather than leaking a
+        // non-openable URL into a field agents treat as a filesystem handle.
+        let mut paths: HashMap<String, String> = HashMap::new();
         for s in self.list_sources(notebook_id).await? {
             recency.insert(s.id.clone(), s.created_at);
+            if s.url.starts_with('/') {
+                paths.insert(s.id.clone(), s.url.clone());
+            }
             titles.insert(s.id, s.title);
         }
         for n in self.list_notes(notebook_id).await? {
@@ -1037,7 +1044,7 @@ impl Db {
             .await?
             .try_collect::<Vec<_>>()
             .await?;
-        let mut vec_hits = citations_from_batches(&vec_batches, &titles)?;
+        let mut vec_hits = citations_from_batches(&vec_batches, &titles, &paths)?;
         vec_hits.sort_by(|a, b| {
             a.distance
                 .partial_cmp(&b.distance)
@@ -1060,7 +1067,7 @@ impl Db {
                 .await
             {
                 Ok(stream) => match stream.try_collect::<Vec<_>>().await {
-                    Ok(batches) => citations_from_batches(&batches, &titles)?,
+                    Ok(batches) => citations_from_batches(&batches, &titles, &paths)?,
                     Err(err) => {
                         warnings.push(format!("fts collect failed: {err:#}"));
                         vec![]
@@ -2050,7 +2057,9 @@ fn nb_citations_from_batches(
     let mut out = Vec::new();
     for b in batches {
         let nb = str_col(b, "notebook_id")?;
-        let citations = citations_from_batches(std::slice::from_ref(b), titles)?;
+        // Meta-search spans every notebook; corpus_meta carries no paths,
+        // so cross-notebook hits leave source_path empty for now.
+        let citations = citations_from_batches(std::slice::from_ref(b), titles, &HashMap::new())?;
         for (i, c) in citations.into_iter().enumerate() {
             out.push((nb.value(i).to_string(), c));
         }
@@ -2100,6 +2109,7 @@ fn split_owner(stored: &str) -> (String, String, bool) {
 fn citations_from_batches(
     batches: &[RecordBatch],
     titles: &HashMap<String, String>,
+    paths: &HashMap<String, String>,
 ) -> Result<Vec<Citation>> {
     let mut citations = Vec::new();
     for b in batches {
@@ -2118,6 +2128,9 @@ fn citations_from_batches(
             citations.push(Citation {
                 chunk_id: id.value(i).to_string(),
                 source_title: titles.get(&stored).cloned().unwrap_or_default(),
+                // Keyed by the bare source id: note/gist-prefixed owners have
+                // no file on disk, so their lookups miss and stay empty.
+                source_path: paths.get(&source_id).cloned().unwrap_or_default(),
                 source_id,
                 note_id,
                 gist,
@@ -2431,6 +2444,7 @@ mod tests {
             chunk_id: "c1".into(),
             source_id: "src-1".into(),
             source_title: String::new(),
+            source_path: String::new(),
             note_id: String::new(),
             gist: false,
             ordinal: 0,
@@ -2487,6 +2501,7 @@ mod tests {
             chunk_id: chunk_id.into(),
             source_id: "src-1".into(),
             source_title: "Doc".into(),
+            source_path: String::new(),
             note_id: String::new(),
             gist: false,
             ordinal,

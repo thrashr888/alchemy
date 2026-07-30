@@ -95,6 +95,9 @@ export interface Citation {
   sourceId: string;
   /** Title of the source — or of the note for note passages. */
   sourceTitle: string;
+  /** On-disk path of the source's original file; empty for web/mac sources,
+   *  note passages, and citations persisted before this field existed. */
+  sourcePath?: string;
   /** Non-empty when the passage came from a note: the note's id. */
   noteId: string;
   /**

@@ -152,6 +152,12 @@ pub struct Citation {
     pub source_id: String,
     /// Title of the source — or of the note for note passages.
     pub source_title: String,
+    /// On-disk path of the source's original file (`Source.url` when it is a
+    /// local path). Empty for web/mac sources and note passages. Lets an
+    /// agent reading the MCP search payload open the original without a
+    /// second `get_source` round-trip.
+    #[serde(default)]
+    pub source_path: String,
     /// Non-empty when the passage came from a note rather than a source:
     /// the note's id. Notes are indexed alongside source chunks so agents
     /// and chat can recall prior conclusions (docs/RFC-note-curator.md).

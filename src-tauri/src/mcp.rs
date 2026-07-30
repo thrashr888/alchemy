@@ -757,6 +757,10 @@ impl AlchemyMcp {
                         "chunkId": c.chunk_id,
                         "sourceId": c.source_id,
                         "sourceTitle": c.source_title,
+                        // On-disk path of the original file (empty for web/
+                        // mac/note hits) — lets an agent open the source
+                        // directly instead of a get_source round-trip.
+                        "sourcePath": c.source_path,
                         "noteId": c.note_id,
                         "distance": c.distance,
                         "snippet": c.snippet.chars().take(200).collect::<String>(),

@@ -778,6 +778,7 @@ mod tests {
             chunk_id: chunk_id.into(),
             source_id: "s1".into(),
             source_title: "Doc".into(),
+            source_path: String::new(),
             note_id: String::new(),
             gist: false,
             ordinal: 0,

@@ -1226,11 +1226,12 @@ async fn grep_leg(
             .unwrap_or_default();
     hits.into_iter()
         .map(|h| {
-            let (_, id, title) = &files[h.file_index];
+            let (path, id, title) = &files[h.file_index];
             Citation {
                 chunk_id: format!("grep:{}:{}", id, h.first_line),
                 source_id: id.clone(),
                 source_title: title.clone(),
+                source_path: path.clone(),
                 note_id: String::new(),
                 gist: false,
                 ordinal: 0,
