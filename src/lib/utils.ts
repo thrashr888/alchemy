@@ -1,6 +1,24 @@
 import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
+import { extendTailwindMerge } from "tailwind-merge";
 import type { AiConfig, ReadingPrefs } from "./types";
+
+/**
+ * The type scale (`--text-*` in index.css) is custom, so stock tailwind-merge
+ * can't tell `text-micro` from a color and files it under text-color. Any
+ * cn() mixing a size with a color then dropped the size — `Input` shipped with
+ * no font-size at all, inheriting whatever wrapped it. Registering the scale
+ * makes sizes conflict only with sizes, which is what keeps the tokens in
+ * DESIGN.md §3 authoritative instead of advisory.
+ */
+const twMerge = extendTailwindMerge({
+  extend: {
+    classGroups: {
+      "font-size": [
+        { text: ["page", "section", "card", "body", "caption", "micro", "badge"] },
+      ],
+    },
+  },
+});
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -128,6 +146,20 @@ const dayFormat = new Intl.DateTimeFormat(undefined, {
 });
 export function fmtDay(ms: number): string {
   return dayFormat.format(ms);
+}
+
+/** Absolute timestamp for tooltips backing a relative label ("12m ago") —
+ *  named zone included so a transcript read later is unambiguous. */
+const dateTimeFormat = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  timeZoneName: "short",
+});
+export function fmtDateTime(ms: number): string {
+  return dateTimeFormat.format(ms);
 }
 
 /** Hostname of a URL, or null when it doesn't parse (hand-ingested source
