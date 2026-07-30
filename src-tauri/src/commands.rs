@@ -6909,25 +6909,36 @@ pub(crate) async fn retrieve_everything(
     };
     // Deep search retrieves a wider pool for the reranker to pick from.
     let fetch_k = if deep { k * 3 } else { k };
-    let mut out: Vec<MetaCitation> = e(state
-        .db
-        .search_chunks_all_opts(query_vec, question, fetch_k, routed.as_deref(), opts)
-        .await)?
-    .into_iter()
-    .map(|(nb, c)| {
-        // Note chunks come back with note_id set (they share the chunk
-        // table); surface them as first-class note citations.
-        let is_note = !c.note_id.is_empty();
-        MetaCitation {
-            kind: if is_note { "note" } else { "source" }.into(),
-            notebook_title: nb_titles.get(&nb).cloned().unwrap_or_default(),
-            notebook_id: nb,
-            id: if is_note { c.note_id } else { c.source_id },
-            title: c.source_title,
-            snippet: c.snippet,
-        }
-    })
-    .collect();
+    // The title-fallback passes below need the corpus source list and the
+    // notes regardless of what the search returns — neither depends on it,
+    // so all three queries run concurrently instead of in file order. Only
+    // the per-hit source_content reads stay sequential (they depend on
+    // which titles match).
+    let (searched, source_meta, all_notes) = tokio::join!(
+        state
+            .db
+            .search_chunks_all_opts(query_vec, question, fetch_k, routed.as_deref(), opts),
+        state.db.all_source_meta(),
+        state.db.recent_notes(usize::MAX),
+    );
+    let source_meta = e(source_meta)?;
+    let all_notes = e(all_notes)?;
+    let mut out: Vec<MetaCitation> = e(searched)?
+        .into_iter()
+        .map(|(nb, c)| {
+            // Note chunks come back with note_id set (they share the chunk
+            // table); surface them as first-class note citations.
+            let is_note = !c.note_id.is_empty();
+            MetaCitation {
+                kind: if is_note { "note" } else { "source" }.into(),
+                notebook_title: nb_titles.get(&nb).cloned().unwrap_or_default(),
+                notebook_id: nb,
+                id: if is_note { c.note_id } else { c.source_id },
+                title: c.source_title,
+                snippet: c.snippet,
+            }
+        })
+        .collect();
 
     // Deep search: one model call picks the k passages that actually answer
     // from the wide pool. Failure (model down, unparseable output) degrades
@@ -6954,7 +6965,7 @@ pub(crate) async fn retrieve_everything(
     // tiny titles matching everything) or a short palette-style query is
     // contained in the title.
     let mut source_hits = 0;
-    for (id, nb, title, _) in e(state.db.all_source_meta().await)? {
+    for (id, nb, title, _) in source_meta {
         if source_hits >= 3 {
             break;
         }
@@ -6980,7 +6991,7 @@ pub(crate) async fn retrieve_everything(
     }
 
     let mut note_hits = 0;
-    for n in e(state.db.recent_notes(usize::MAX).await)? {
+    for n in all_notes {
         if note_hits >= 4 {
             break;
         }
