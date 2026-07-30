@@ -35,6 +35,7 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
+  Download,
   ExternalLink,
   FileInput,
   FolderOpen,
@@ -1227,6 +1228,11 @@ function SourceReader({
   const sendMessage = useStore((s) => s.sendMessage);
   const sending = useStore((s) => s.sending);
   const reading = useStore((s) => s.reading);
+  const refreshSource = useStore((s) => s.refreshSource);
+  // Placeholder hydration: the queued refresh downloads + embeds, then the
+  // bumped tick re-runs the content loader above.
+  const [hydrating, setHydrating] = useState(false);
+  const [hydrateTick, setHydrateTick] = useState(0);
   const [content, setContent] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -1343,7 +1349,7 @@ function SourceReader({
     return () => {
       stale = true;
     };
-  }, [source.id, refreshTick]);
+  }, [source.id, refreshTick, hydrateTick]);
 
   // Cmd/Ctrl+F opens the find bar and focuses it (Safari-style: the bar
   // exists only while finding).
@@ -1768,7 +1774,43 @@ function SourceReader({
             </div>
           ) : content === "" ? (
             <div className="flex flex-col gap-1.5 text-body text-muted-foreground">
-              <span>No text stored for this source.</span>
+              {source.status === "placeholder" ? (
+                <>
+                  <span>
+                    This file is online-only in{" "}
+                    {folderProvider(source.url) ?? "its cloud drive"} — its
+                    bytes aren't on this Mac yet.
+                  </span>
+                  {/* Same queued refresh the Sources row uses: hydrates
+                      (brctl for iCloud, the read itself for File Provider
+                      mounts), extracts, and embeds. */}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="mt-1.5 self-start"
+                    disabled={hydrating}
+                    onClick={() => {
+                      if (hydrating) return;
+                      setHydrating(true);
+                      void refreshSource(source.id)
+                        .catch(() => undefined)
+                        .finally(() => {
+                          setHydrating(false);
+                          setHydrateTick((t) => t + 1);
+                        });
+                    }}
+                  >
+                    {hydrating ? (
+                      <Spinner className="h-3.5 w-3.5" />
+                    ) : (
+                      <Download className="h-3.5 w-3.5" />
+                    )}
+                    {hydrating ? "Downloading…" : "Download & embed"}
+                  </Button>
+                </>
+              ) : (
+                <span>No text stored for this source.</span>
+              )}
               {source.status === "error" && source.error && (
                 <span className="text-caption text-destructive/80 [overflow-wrap:anywhere]">
                   Import failed: {source.error}

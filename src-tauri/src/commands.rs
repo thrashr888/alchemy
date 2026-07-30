@@ -1485,22 +1485,47 @@ pub async fn refresh_source_url(
     // the extracted text and chunks are still perfectly usable. Surface the
     // failure and leave the source untouched.
     if !std::path::Path::new(&existing.url).exists() {
-        // iCloud eviction leaves only a hidden `.name.icloud` stub, which we
-        // can't hydrate by reading — the user has to download it in Finder.
-        let p = std::path::Path::new(&existing.url);
+        // iCloud eviction leaves only a hidden `.name.icloud` stub, which a
+        // read can't hydrate (unlike File Provider mounts, where the extract
+        // below is itself the download). Ask bird to fetch it, then wait —
+        // bounded, because a refresh that hangs forever is worse than one
+        // that says "still downloading".
+        let p = std::path::Path::new(&existing.url).to_path_buf();
         let stub = p
             .file_name()
             .and_then(|n| n.to_str())
             .map(|n| p.with_file_name(format!(".{n}.icloud")));
         if stub.is_some_and(|s| s.exists()) {
-            return Err(
-                "This file is online-only in iCloud — download it in Finder first".to_string(),
-            );
+            let target = p.clone();
+            let hydrated = tokio::task::spawn_blocking(move || {
+                let _ = std::process::Command::new("brctl")
+                    .arg("download")
+                    .arg(&target)
+                    .status();
+                // bird downloads in the background; the real file replaces
+                // the stub when it lands. 90s covers all but huge files.
+                for _ in 0..90 {
+                    if target.exists() {
+                        return true;
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+                false
+            })
+            .await
+            .unwrap_or(false);
+            if !hydrated {
+                return Err(
+                    "iCloud is still downloading this file — try again in a moment".to_string(),
+                );
+            }
+            // Fall through: the file is local now; extract like any refresh.
+        } else {
+            return Err(format!(
+                "Original file no longer exists at {}",
+                existing.url
+            ));
         }
-        return Err(format!(
-            "Original file no longer exists at {}",
-            existing.url
-        ));
     }
     let mut extracted = e(extract_any_file(&state, &existing.url).await)?;
     let mut existing = existing;
