@@ -80,7 +80,7 @@ two-host podcast voiced on-device.*
 - **Command menu** — press **⌘K** anywhere to search notebooks, add sources, generate
   documents, toggle panels, and switch themes.
 - **Slash commands** — type `/` in the chat composer to open a picker over every
-  command, grouped Generate / Learning / Documents / Actions: all 18 generators
+  command, grouped Generate / Learning / Documents / Actions: all 19 generators
   (trailing text becomes custom instructions) plus `/add`, `/model`,
   `/research`, `/grep`, `/note`, `/report`, and `/clear`. Fuzzy matching
   tolerates spaces and hyphens ("study guide" → `study_guide`), **Tab**
@@ -144,7 +144,9 @@ two-host podcast voiced on-device.*
   episode plays inline.
 - **Studio generators** — one-click **Summary**, **FAQ**, **Study guide**, **Briefing**,
   **Timeline**, **Insights** (cross-source connections, contradictions & surprises),
-  **Data table**, **Problems** (finds errors/gaps/contradictions), **Flashcards**,
+  **Data table**, **Round table** (product, engineering, and design critique the
+  sources from their own risk lenses, then close on agreements and open
+  questions), **Problems** (finds errors/gaps/contradictions), **Flashcards**,
   **Quiz**, **Slide deck**, and a **Mind map**, plus HashiCorp-style
   **PRD**, **PR/FAQ**, **RFC**, and a **Skill** (SKILL.md) generator. Add custom
   instructions, and **rebuild** any document against the latest sources.
