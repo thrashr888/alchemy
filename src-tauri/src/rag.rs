@@ -490,6 +490,23 @@ pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
              each option on its own line. Then add a `## Answer Key` section listing each number's \
              correct letter with a one-sentence explanation of why it is right.",
         )),
+        "round_table" => Some((
+            "Round Table",
+            "Convene a product / engineering / design round table on the sources below. Three \
+             reviewers read the same material, each through their own risk lens: PRODUCT asks \
+             whether this solves a real problem for a real user, what the evidence says about \
+             demand, and what was assumed rather than shown; ENGINEERING asks what is hard, \
+             fragile, or underspecified, where the complexity and operational cost hide, and \
+             what would break first; DESIGN asks where a user would get lost, what the \
+             experience over-promises, and which flows are unexamined. Structure the output \
+             as: `## Product`, `## Engineering`, `## Design` — each 3-5 pointed observations \
+             grounded in specific claims from the sources (name the source), sharpest first, \
+             written in that discipline's voice; then `## Where we agree` (2-4 conclusions at \
+             least two lenses independently reached) and `## Still open` (the questions the \
+             sources cannot settle, each with what evidence would settle it). Critique the \
+             work, not a strawman — if the sources already address a concern, say so instead \
+             of raising it.",
+        )),
         "data_table" => Some((
             "Data Table",
             "Distill the sources below into structured reference tables. First decide what the \

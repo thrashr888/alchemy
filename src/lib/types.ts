@@ -138,6 +138,7 @@ export type NoteKind =
   | "mind_map"
   | "slide_deck"
   | "data_table"
+  | "round_table"
   | "problems"
   | "evidence"
   | "prd"

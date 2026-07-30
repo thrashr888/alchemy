@@ -19,6 +19,7 @@ import {
   StickyNote,
   Table,
   TriangleAlert,
+  Users,
   Waypoints,
 } from "lucide-react";
 
@@ -69,6 +70,7 @@ const SUMMARIES = inFamily("generate", [
   { kind: "timeline", label: "Timeline", icon: <Clock className="h-3.5 w-3.5" /> },
   { kind: "insights", label: "Insights", icon: <Lightbulb className="h-3.5 w-3.5" /> },
   { kind: "data_table", label: "Data table", icon: <Table className="h-3.5 w-3.5" /> },
+  { kind: "round_table", label: "Round table", icon: <Users className="h-3.5 w-3.5" /> },
   { kind: "problems", label: "Problems", icon: <TriangleAlert className="h-3.5 w-3.5" /> },
   { kind: "evidence", label: "Evidence Log", icon: <Quote className="h-3.5 w-3.5" /> },
 ]);
