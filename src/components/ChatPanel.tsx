@@ -34,6 +34,7 @@ import {
   RefreshCw,
   CornerDownRight,
   ExternalLink,
+  FileText,
   SlidersHorizontal,
   ChevronDown,
   AlertTriangle,
@@ -71,6 +72,16 @@ export function ChatPanel() {
   // row, and whether Esc/blur has dismissed the menu for the current draft.
   const [slashSel, setSlashSel] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
+  // @ mentions: picked source/note handles for THIS message. The text keeps
+  // reading naturally ("what does @Q3 Report say?") while the recorded ids
+  // narrow retrieval for the one send. A mention whose "@Title" text is
+  // edited out of the draft is dropped at send time.
+  const [mentions, setMentions] = useState<
+    { id: string; kind: "source" | "note"; title: string }[]
+  >([]);
+  const [mentionSel, setMentionSel] = useState(0);
+  const [mentionDismissed, setMentionDismissed] = useState(false);
+  const notes = useStore((s) => s.notes);
   const failedInput = useStore((s) => s.failedInput);
   const { confirm, dialog: confirmDialog } = useConfirm();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -194,8 +205,27 @@ export function ChatPanel() {
         return;
       }
     }
-    setDraft("");
-    void send(text);
+    // @ mentions narrow retrieval to exactly what was named: mentioned
+    // sources by id, folders as their ready children, notes via their
+    // prefixed chunk-owner ids. No mentions → the checkbox selection rules.
+    let override: string[] | undefined;
+    if (activeMentions.length) {
+      const ids = new Set<string>();
+      for (const m of activeMentions) {
+        if (m.kind === "note") {
+          ids.add(`note:${m.id}`);
+        } else if (sources.find((s) => s.id === m.id)?.sourceType === "folder") {
+          for (const c of sources) {
+            if (c.parentId === m.id && c.status === "ready") ids.add(c.id);
+          }
+        } else {
+          ids.add(m.id);
+        }
+      }
+      override = [...ids];
+    }
+    resetComposer();
+    void send(text, override);
   }
 
   // The picker is a pure command chooser: it's active only while the (space-
@@ -214,10 +244,56 @@ export function ChatPanel() {
     setSlashSel((i) => Math.min(i, Math.max(0, slashResults.length - 1)));
   }, [slashResults.length]);
 
+  // The active "@query" token: at the end of the draft (the same type-at-the-
+  // caret simplicity as the slash picker) and never mid-word — "user@host"
+  // must not open a picker.
+  const mentionQuery = /(^|\s)@([^\s@]{0,60})$/.exec(draft)?.[2] ?? null;
+  const mentionResults = useMemo(() => {
+    if (mentionQuery === null) return [];
+    const q = mentionQuery.toLowerCase();
+    // Sources first (folders included — a folder expands to its ready
+    // children at send), then notes; capped so a big repo can't flood it.
+    const srcs = sources
+      .filter((s) => s.status === "ready" && s.title.toLowerCase().includes(q))
+      .slice(0, 6)
+      .map((s) => ({ id: s.id, kind: "source" as const, title: s.title }));
+    const nts = notes
+      .filter((n) => n.title.toLowerCase().includes(q))
+      .slice(0, 4)
+      .map((n) => ({ id: n.id, kind: "note" as const, title: n.title }));
+    return [...srcs, ...nts];
+  }, [mentionQuery, sources, notes]);
+  const mentionOpen =
+    mentionQuery !== null && !mentionDismissed && mentionResults.length > 0;
+  useEffect(() => {
+    setMentionSel((i) => Math.min(i, Math.max(0, mentionResults.length - 1)));
+  }, [mentionResults.length]);
+
+  function pickMention(m: { id: string; kind: "source" | "note"; title: string }) {
+    // Replace the trailing "@query" with the canonical "@Title " token; the
+    // recorded id — not the text — is what narrows retrieval.
+    const next = draft.replace(/@[^\s@]{0,60}$/, `@${m.title} `);
+    setDraft(next);
+    setMentions((cur) => (cur.some((x) => x.id === m.id) ? cur : [...cur, m]));
+    setMentionSel(0);
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.selectionStart = el.selectionEnd = next.length;
+    });
+  }
+
+  /** Mentions whose "@Title" text still survives in the draft. */
+  const activeMentions = mentions.filter((m) => draft.includes(`@${m.title}`));
+
   function resetComposer() {
     setDraft("");
     setSlashSel(0);
     setSlashDismissed(false);
+    setMentions([]);
+    setMentionSel(0);
+    setMentionDismissed(false);
   }
 
   // Tab, or Enter on an argument-required command: drop the canonical name into
@@ -518,13 +594,21 @@ export function ChatPanel() {
                 onPick={activateSlash}
               />
             )}
+            {mentionOpen && !slashOpen && (
+              <MentionPicker
+                results={mentionResults}
+                selected={mentionSel}
+                onHover={setMentionSel}
+                onPick={pickMention}
+              />
+            )}
             <Textarea
               ref={inputRef}
               rows={1}
               className="border-0 bg-transparent focus:ring-0 min-h-[24px] max-h-[180px] px-1.5 py-1"
               placeholder={
                 canChat
-                  ? "Ask anything, or type / for commands…"
+                  ? "Ask anything — / for commands, @ to ask about one source…"
                   : currentId
                     ? "Add a source to start chatting"
                     : "Select or create a notebook"
@@ -545,11 +629,15 @@ export function ChatPanel() {
                 // current text) and resets the highlight to the top match.
                 setSlashDismissed(false);
                 setSlashSel(0);
+                setMentionDismissed(false);
               }}
               // Clicking outside (Send button, model pill, transcript) closes
-              // the picker; row clicks use onMouseDown+preventDefault so focus
-              // never leaves and this doesn't fire.
-              onBlur={() => setSlashDismissed(true)}
+              // the pickers; row clicks use onMouseDown+preventDefault so
+              // focus never leaves and this doesn't fire.
+              onBlur={() => {
+                setSlashDismissed(true);
+                setMentionDismissed(true);
+              }}
               onKeyDown={(e) => {
                 // isComposing: don't act mid-IME-composition (CJK input).
                 if (e.nativeEvent.isComposing) return;
@@ -591,6 +679,37 @@ export function ChatPanel() {
                   // Other keys type through and re-filter the picker.
                   return;
                 }
+                if (mentionOpen) {
+                  const m = mentionResults[mentionSel];
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setMentionSel((i) =>
+                      mentionResults.length ? (i + 1) % mentionResults.length : 0,
+                    );
+                    return;
+                  }
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setMentionSel((i) =>
+                      mentionResults.length
+                        ? (i - 1 + mentionResults.length) % mentionResults.length
+                        : 0,
+                    );
+                    return;
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setMentionDismissed(true);
+                    return;
+                  }
+                  if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+                    e.preventDefault();
+                    if (m) pickMention(m);
+                    return;
+                  }
+                  return;
+                }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   submit();
@@ -612,6 +731,15 @@ export function ChatPanel() {
                 {agentMode ? "Deep research: on" : "Deep research: off"}
               </button>
               <ModelPill />
+              {activeMentions.length > 0 && (
+                <span
+                  className="min-w-0 truncate text-micro text-subtle-foreground"
+                  title={activeMentions.map((m) => m.title).join(", ")}
+                >
+                  Searching only:{" "}
+                  {activeMentions.map((m) => m.title).join(", ")}
+                </span>
+              )}
               <span className="flex-1" />
               {sending ? (
                 <Button
@@ -843,6 +971,61 @@ function renderGrepMarkdown(pattern: string, hits: GrepHit[]): string {
  *  textarea (so typing keeps filtering), rows are selected via
  *  aria-activedescendant, and the ModelPill popover grammar carries the styling.
  *  Rows are grouped by family (Generate / Learning / Documents / Actions). */
+/** The @ mention chooser — the slash picker's grammar with sources and notes
+ *  as rows. Rows use onMouseDown+preventDefault so composer focus survives. */
+function MentionPicker({
+  results,
+  selected,
+  onHover,
+  onPick,
+}: {
+  results: { id: string; kind: "source" | "note"; title: string }[];
+  selected: number;
+  onHover: (index: number) => void;
+  onPick: (m: { id: string; kind: "source" | "note"; title: string }) => void;
+}) {
+  return (
+    <div
+      id="mention-picker"
+      role="listbox"
+      aria-label="Mention a source or note"
+      className="menu-glass absolute bottom-full left-0 z-30 mb-1.5 max-h-72 w-[22rem] max-w-[calc(100vw-2.5rem)] overflow-y-auto rounded-md py-1"
+    >
+      {results.map((m, i) => (
+        <Fragment key={`${m.kind}:${m.id}`}>
+          {(i === 0 || results[i - 1].kind !== m.kind) && (
+            <div className="px-2.5 pb-1 pt-1.5 text-micro font-semibold uppercase tracking-wide text-subtle-foreground">
+              {m.kind === "source" ? "Sources" : "Notes"}
+            </div>
+          )}
+          <button
+            type="button"
+            role="option"
+            id={`mention-${m.kind}-${m.id}`}
+            aria-selected={i === selected}
+            onMouseMove={() => onHover(i)}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onPick(m);
+            }}
+            className={cn(
+              "flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[0.78125rem]",
+              i === selected ? "bg-surface-2 text-foreground" : "text-foreground/85",
+            )}
+          >
+            {m.kind === "source" ? (
+              <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            ) : (
+              <NotebookPen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            )}
+            <span className="truncate">{m.title}</span>
+          </button>
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
 function SlashPicker({
   results,
   selected,

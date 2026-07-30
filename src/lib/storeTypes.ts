@@ -180,7 +180,10 @@ export interface AppState {
   toggleSourceSelected: (id: string) => void;
   setAllSourcesSelected: (selected: boolean) => void;
 
-  sendMessage: (content: string) => Promise<void>;
+  /** overrideSourceIds: per-message retrieval narrowing from @ mentions —
+   *  raw owner ids (source ids and "note:<id>"), replacing the checkbox
+   *  selection for this send only. */
+  sendMessage: (content: string, overrideSourceIds?: string[]) => Promise<void>;
   cancelGeneration: (scope?: "chat" | "artifact") => void;
   openSourceViewer: (sourceId: string, title: string, highlight?: string) => void;
   closeSourceViewer: () => void;

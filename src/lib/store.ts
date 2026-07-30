@@ -991,7 +991,7 @@ export const useStore = create<AppState>((set, get) => {
       set({ selectedSourceIds: sel });
     },
 
-    sendMessage: async (content) => {
+    sendMessage: async (content, overrideSourceIds) => {
       const id = get().currentId;
       if (!id || get().sending) return;
       const optimistic: Message = {
@@ -1015,7 +1015,9 @@ export const useStore = create<AppState>((set, get) => {
       });
       try {
         const cfg = get().chatConfig;
-        const sourceIds = selectedIdsForIpc();
+        // @ mentions replace (not merge with) the checkbox selection: the
+        // user named exactly what this question is about.
+        const sourceIds = overrideSourceIds ?? selectedIdsForIpc();
         if (get().agentMode) {
           await api.sendMessageAgentic(id, content, cfg, sourceIds);
         } else {

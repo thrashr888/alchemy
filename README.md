@@ -88,6 +88,9 @@ two-host podcast voiced on-device.*
   an exact-match ripgrep search across your sources inline — no model call,
   nothing persisted to the transcript. The whole list is also browsable in
   Settings → Shortcuts.
+- **@ mentions** — type `@` in the composer to name a source, folder, or note;
+  the question retrieves from exactly what you named (a folder means its
+  files), overriding the source checkboxes for that one message.
 - **Ask everything** — the ⌘K palette (and the homepage ask box) answers questions
   across **all** notebooks at once: semantic routing to the likely notebooks,
   hybrid retrieval with diversity caps, optional deep rerank on gateway
