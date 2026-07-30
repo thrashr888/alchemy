@@ -5,7 +5,7 @@ import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { Button, CardAction, Textarea, useConfirm } from "./ui";
 import { Markdown } from "./Markdown";
-import { cn, chatReadingClass, isWebUrl } from "@/lib/utils";
+import { cn, chatReadingClass, fmtDateTime, isWebUrl, relativeTime } from "@/lib/utils";
 import { DitherBackground } from "./DitherBackground";
 import { AlchemySymbol } from "./AlchemyHero";
 import { DEFAULT_VERBS, THEMES, resolveThemeId } from "@/lib/themes";
@@ -38,6 +38,9 @@ import {
   ChevronDown,
   AlertTriangle,
 } from "lucide-react";
+
+/** Composer autosize ceiling — past this the textarea scrolls instead. */
+const COMPOSER_MAX_H = 180;
 
 export function ChatPanel() {
   const currentId = useStore((s) => s.currentId);
@@ -89,17 +92,24 @@ export function ChatPanel() {
     if (!pendingInput) return;
     setDraft(pendingInput);
     useStore.setState({ pendingInput: null });
-    // Focus after the surface that staged the text (a modal) has closed, and
-    // autosize for multi-line prefills (onChange normally handles this).
+    // Focus after the surface that staged the text (a modal) has closed.
     setTimeout(() => {
       const el = inputRef.current;
       if (!el) return;
       el.focus();
-      el.style.height = "auto";
-      el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
       el.selectionStart = el.selectionEnd = el.value.length;
     }, 0);
   }, [pendingInput]);
+
+  // Autosize from the draft, not from onChange: sending, a slash reset, a
+  // follow-up click and retry-after-failure all set the text programmatically,
+  // so keying off the value is what makes the box shrink back as well as grow.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_H)}px`;
+  }, [draft]);
 
   // Subscribe once to streaming tokens + agent progress steps from the backend.
   // Events broadcast to every window — only the one with a send in flight
@@ -535,8 +545,6 @@ export function ChatPanel() {
                 // current text) and resets the highlight to the top match.
                 setSlashDismissed(false);
                 setSlashSel(0);
-                e.target.style.height = "auto";
-                e.target.style.height = `${Math.min(e.target.scrollHeight, 180)}px`;
               }}
               // Clicking outside (Send button, model pill, transcript) closes
               // the picker; row clicks use onMouseDown+preventDefault so focus
@@ -708,10 +716,13 @@ function ChatMessage({ message }: { message: Message }) {
   }
   if (message.role === "user") {
     return (
-      <div className="flex flex-col items-end gap-1">
-        <div className="max-w-[85%] rounded-lg rounded-br-sm bg-surface-2 px-3.5 py-2 text-body selectable border border-border">
+      <div className="group flex flex-col items-end gap-1">
+        {/* wrap-anywhere: a pasted URL has no break opportunities, so without
+            it the bubble sizes to the URL and scrolls the transcript. */}
+        <div className="max-w-[85%] min-w-0 wrap-anywhere rounded-lg rounded-br-sm bg-surface-2 px-3.5 py-2 text-body selectable border border-border">
           {message.content}
         </div>
+        <UserMessageActions message={message} />
       </div>
     );
   }
@@ -896,6 +907,76 @@ function SlashPicker({
       <div className="px-2.5 py-1 text-micro text-subtle-foreground">
         ⇥ complete · ↩ run · esc dismiss
       </div>
+    </div>
+  );
+}
+
+/** Hover row under a user turn: copy, re-run, and when it happened. Re-run is
+ *  a rewind — it drops this question and everything after it, then resends —
+ *  so it only appears on the last question; re-running an older one would
+ *  silently discard the exchanges below it. */
+function UserMessageActions({ message }: { message: Message }) {
+  const [copied, setCopied] = useState(false);
+  const isLastUser = useStore((s) => {
+    for (let i = s.messages.length - 1; i >= 0; i--) {
+      if (s.messages[i].role === "user") return s.messages[i].id === message.id;
+    }
+    return false;
+  });
+  const sending = useStore((s) => s.sending);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
+  async function rerun() {
+    const st = useStore.getState();
+    if (st.sending) return;
+    const msgs = st.messages;
+    const i = msgs.findIndex((m) => m.id === message.id);
+    if (i < 0) return;
+    for (const m of msgs.slice(i)) await api.deleteMessage(m.id);
+    useStore.setState({ messages: msgs.slice(0, i) });
+    void st.sendMessage(message.content);
+  }
+
+  // One literal, applied raw to both buttons: passing this through cn() would
+  // run it past tailwind-merge, which reads the custom `text-micro` token as a
+  // text *color*, and `text-muted-foreground` would then silently drop it.
+  const btn =
+    "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-micro text-muted-foreground hover:bg-surface-2 hover:text-foreground disabled:opacity-50";
+  return (
+    <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+      <span
+        className="px-1 text-micro text-subtle-foreground"
+        title={fmtDateTime(message.createdAt)}
+      >
+        {relativeTime(message.createdAt)}
+      </span>
+      <button onClick={copy} className={btn} title="Copy to clipboard">
+        {copied ? (
+          <Check className="h-3.5 w-3.5 text-success" />
+        ) : (
+          <Copy className="h-3.5 w-3.5" />
+        )}
+        {copied ? "Copied" : "Copy"}
+      </button>
+      {isLastUser && (
+        <button
+          onClick={() => void rerun()}
+          disabled={sending}
+          className={btn}
+          title="Ask this again — replaces the answer below"
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+          Re-run
+        </button>
+      )}
     </div>
   );
 }
