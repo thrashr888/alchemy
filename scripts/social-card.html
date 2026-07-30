@@ -1,0 +1,152 @@
+<!doctype html>
+<!--
+  Source for docs/social-card.png (the og:image for the GitHub Pages site).
+  Edit here, then re-render at 2x:
+
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+      --headless=new --disable-gpu --hide-scrollbars \
+      --force-device-scale-factor=2 --window-size=1200,630 \
+      --screenshot=docs/social-card.png scripts/social-card.html
+
+  Chrome (not rsvg) so the card resolves the same -apple-system stack the
+  site does. Tokens below are copied from docs/index.html on purpose — if you
+  restyle the site, restyle this too, then re-render.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  /* Tokens lifted verbatim from docs/index.html so the card and the page
+     it represents cannot drift apart. */
+  :root {
+    --background: #08090a;
+    --foreground: #eceef1;
+    --muted: #8a8f98;
+    --subtle: #6b7079;
+    --primary: #5e6ad2;
+    --accent-text: #8b95f5;
+    --dot: rgba(236, 238, 241, 0.055);
+    --border: rgba(255, 255, 255, 0.07);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1200px; height: 630px; }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0 92px;
+  }
+  /* The site's dot field, same 14px grid and masked ellipse, pulled to the
+     top-left so it reads behind the sigil and headline. */
+  body::before {
+    content: "";
+    position: absolute;
+    inset: -160px 0 auto 0;
+    height: 700px;
+    background-image: radial-gradient(var(--dot) 1px, transparent 1.4px);
+    background-size: 14px 14px;
+    -webkit-mask-image: radial-gradient(ellipse 70% 70% at 32% 22%, #000 22%, transparent 76%);
+    mask-image: radial-gradient(ellipse 70% 70% at 32% 22%, #000 22%, transparent 76%);
+    z-index: 0;
+  }
+  /* A single restrained accent bloom — the app's dither tint, flattened.
+     Sized and placed to sit behind the watermark sigil so the right half
+     carries weight instead of reading as dead space. */
+  body::after {
+    content: "";
+    position: absolute;
+    width: 1000px; height: 1000px;
+    right: -290px; top: -300px;
+    background: radial-gradient(circle, rgba(94,106,210,0.28) 0%, rgba(94,106,210,0.10) 40%, transparent 70%);
+    z-index: 0;
+  }
+  /* Same sigil geometry as the mark, blown up and bled off the edge. */
+  .watermark {
+    position: absolute;
+    right: -120px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 620px; height: 620px;
+    color: var(--accent-text);
+    opacity: 0.10;
+    z-index: 0;
+  }
+  .inner { position: relative; z-index: 1; max-width: 940px; }
+  .sigil { color: var(--subtle); display: block; margin-bottom: 30px; }
+  h1 {
+    font-size: 66px;
+    font-weight: 650;
+    letter-spacing: -0.032em;
+    line-height: 1.04;
+  }
+  .lede {
+    margin-top: 24px;
+    font-size: 25px;
+    line-height: 1.5;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .lede strong { color: var(--foreground); font-weight: 600; }
+  .rule {
+    margin-top: 40px;
+    width: 132px; height: 2px;
+    background: var(--primary);
+    border-radius: 2px;
+  }
+  .foot {
+    position: absolute;
+    left: 92px; right: 92px; bottom: 46px;
+    z-index: 1;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    font-size: 17px;
+    color: var(--subtle);
+  }
+  .foot .mono {
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    font-size: 15.5px;
+    letter-spacing: 0.01em;
+  }
+  .foot .accent { color: var(--accent-text); }
+</style>
+</head>
+<body>
+  <svg class="watermark" viewBox="0 0 96 96" aria-hidden="true">
+    <g fill="none" stroke="currentColor" stroke-width="0.7">
+      <circle cx="48" cy="48" r="45" opacity="0.85"/>
+      <circle cx="48" cy="48" r="40" opacity="0.4"/>
+      <path d="M48 8 82.6 68 13.4 68Z" opacity="0.65"/>
+      <circle cx="48" cy="52" r="14" opacity="0.85"/>
+    </g>
+  </svg>
+  <div class="inner">
+    <svg class="sigil" width="84" height="84" viewBox="0 0 96 96" aria-hidden="true">
+      <g fill="none" stroke="currentColor" stroke-width="1.25">
+        <circle cx="48" cy="48" r="45" opacity="0.85"/>
+        <circle cx="48" cy="48" r="40" opacity="0.4"/>
+        <path d="M48 8 82.6 68 13.4 68Z" opacity="0.65"/>
+        <circle cx="48" cy="52" r="14" opacity="0.85"/>
+      </g>
+      <g fill="currentColor" opacity="0.9">
+        <circle cx="48" cy="8" r="1.7"/>
+        <circle cx="82.6" cy="68" r="1.7"/>
+        <circle cx="13.4" cy="68" r="1.7"/>
+      </g>
+    </svg>
+    <h1>Your sources, your machine,<br>your models.</h1>
+    <p class="lede">A <strong>local-first research notebook</strong> for macOS.</p>
+    <div class="rule"></div>
+  </div>
+  <div class="foot">
+    <span class="mono">Grounded chat &middot; Local models &middot; On-device podcasts &middot; MCP</span>
+    <span class="accent">thrashr888.github.io/alchemy</span>
+  </div>
+</body>
+</html>
