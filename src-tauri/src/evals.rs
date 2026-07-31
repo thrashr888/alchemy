@@ -208,6 +208,7 @@ pub(crate) async fn seed_docs(
             .map(|(j, c)| (format!("{id_prefix}c{i}-{j}"), j as i32, c.text.clone()))
             .collect();
         let source = crate::models::Source {
+            author: String::new(),
             id: format!("{id_prefix}src-{i}"),
             notebook_id: notebook_id.to_string(),
             title: extracted.title.clone(),

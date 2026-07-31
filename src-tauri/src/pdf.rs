@@ -34,6 +34,22 @@ pub fn render_pdf_pages(path: &str, max_pages: usize, target_width: i32) -> Resu
     Ok(pages)
 }
 
+/// The document's /Author tag, if the PDF carries one. Best-effort: any
+/// failure (no PDFium, malformed file) reads as "no author" — authorship is
+/// garnish on the properties panel, never worth failing an ingest over.
+pub fn pdf_author(path: &str) -> Option<String> {
+    let bindings = bind_pdfium().ok()?;
+    let pdfium = Pdfium::new(bindings);
+    let document = pdfium.load_pdf_from_file(path, None).ok()?;
+    let author = document
+        .metadata()
+        .get(PdfDocumentMetadataTagType::Author)?
+        .value()
+        .trim()
+        .to_string();
+    (!author.is_empty()).then_some(author)
+}
+
 /// Locate and bind to the PDFium library across dev and bundled layouts.
 fn bind_pdfium() -> Result<Box<dyn PdfiumLibraryBindings>> {
     let mut dirs: Vec<String> = Vec::new();

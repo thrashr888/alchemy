@@ -785,6 +785,7 @@ export const useStore = create<AppState>((set, get) => {
         notebookId: id,
         title: name,
         sourceType: "folder",
+        author: "",
         url: picked,
         content: "",
         status: "ready",

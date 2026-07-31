@@ -82,6 +82,7 @@ window-vibrancy = "0.8.0"
 tauri-plugin-liquid-glass = "0.1.6"
 ast-grep-language = { version = "0.44.1", default-features = false, features = ["builtin-parser", "tree-sitter-rust", "tree-sitter-typescript", "tree-sitter-javascript", "tree-sitter-python", "tree-sitter-go", "tree-sitter-ruby", "tree-sitter-java", "tree-sitter-swift", "tree-sitter-c", "tree-sitter-cpp", "tree-sitter-php", "tree-sitter-html", "tree-sitter-bash", "tree-sitter-hcl"] }
 ast-grep-core = "0.44.1"
+exif = { version = "0.6.1", package = "kamadak-exif" }
 
 # Already in the tree via tauri/wry — traffic-light insets, the Services
 # provider (services.rs), and Spotlight indexing (spotlight.rs).

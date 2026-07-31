@@ -610,6 +610,7 @@ async fn store_new_source(
 
     let (status, error) = classify(&extracted.source_type, &extracted.url, &extracted.text);
     let source = Source {
+        author: extracted.author,
         id: new_id(),
         notebook_id: notebook_id.to_string(),
         title: presentable_title(&extracted.title, &extracted.url),
@@ -652,6 +653,7 @@ async fn store_failed_url(
     reason: String,
 ) -> anyhow::Result<Source> {
     let source = Source {
+        author: String::new(),
         id: new_id(),
         notebook_id: notebook_id.to_string(),
         title: url.to_string(),
@@ -716,6 +718,7 @@ async fn extract_image(state: &AppState, path: &str) -> anyhow::Result<ingest::E
         anyhow::bail!("no text found in image {path}");
     }
     Ok(ingest::Extracted {
+        author: String::new(),
         title: ingest::file_title(path),
         source_type: "image".to_string(),
         url: String::new(),
@@ -747,6 +750,7 @@ async fn extract_pdf_ocr(state: &AppState, path: &str) -> anyhow::Result<ingest:
         anyhow::bail!("OCR produced no text from {path}");
     }
     Ok(ingest::Extracted {
+        author: String::new(),
         title: ingest::file_title(path),
         source_type: "pdf".to_string(),
         url: String::new(),
@@ -1016,6 +1020,7 @@ pub(crate) async fn ingest_git(
         }
         crate::git::StagedKind::Tree => {
             let parent = Source {
+                author: String::new(),
                 id: new_id(),
                 notebook_id: notebook_id.to_string(),
                 title: label,
@@ -1065,6 +1070,7 @@ pub(crate) async fn ingest_notion(
     let client = crate::notion::NotionClient::new(token);
     let stats = client.export_tree(page_id, &dir).await?;
     let parent = Source {
+        author: String::new(),
         id: parent_id,
         notebook_id: notebook_id.to_string(),
         title: stats.title.clone(),
@@ -1316,6 +1322,13 @@ async fn reingest(
         extracted.url
     };
     let updated = Source {
+        // A paste/edit re-extract carries no file authorship — keep what the
+        // original ingest captured rather than blanking it.
+        author: if extracted.author.is_empty() {
+            existing.author.clone()
+        } else {
+            extracted.author
+        },
         id: existing.id.clone(),
         notebook_id: existing.notebook_id.clone(),
         title: presentable_title(&extracted.title, &url),
@@ -1453,6 +1466,7 @@ pub async fn refresh_source_url(
         let mut existing = existing;
         existing.mtime = crate::mac::content_stamp(&text);
         let extracted = ingest::Extracted {
+            author: String::new(),
             title: existing.title.clone(),
             source_type: "mac".to_string(),
             url: existing.url.clone(),
@@ -1640,6 +1654,7 @@ pub(crate) async fn ingest_mac(
     // store_extracted stamps 0 for a nonexistent path, so set it after.
     let stamp = crate::mac::content_stamp(&text);
     let extracted = ingest::Extracted {
+        author: String::new(),
         title,
         source_type: "mac".to_string(),
         url: uri.to_string(),
@@ -1698,6 +1713,7 @@ pub(crate) async fn resync_mac_source(
     let (_, text) = e(crate::mac::fetch(&existing.url).await)?;
     existing.mtime = crate::mac::content_stamp(&text);
     let extracted = ingest::Extracted {
+        author: String::new(),
         title: existing.title.clone(),
         source_type: "mac".to_string(),
         url: existing.url.clone(),
@@ -2071,6 +2087,7 @@ async fn store_failed_child(
     reason: String,
 ) -> anyhow::Result<()> {
     let source = Source {
+        author: String::new(),
         id: new_id(),
         notebook_id: folder.notebook_id.clone(),
         title: ingest::file_title(path),
@@ -2098,6 +2115,7 @@ async fn store_placeholder_child(
     mtime: i64,
 ) -> anyhow::Result<()> {
     let source = Source {
+        author: String::new(),
         id: new_id(),
         notebook_id: folder.notebook_id.clone(),
         title: ingest::file_title(path),
@@ -2539,6 +2557,7 @@ async fn rescan_one_folder_inner(
             .unwrap_or_default();
         if map != current {
             let extracted = ingest::Extracted {
+                author: String::new(),
                 title: folder.title.clone(),
                 source_type: folder.source_type.clone(),
                 url: folder.url.clone(),
@@ -2678,6 +2697,7 @@ pub async fn add_source_folder(
         "folder"
     };
     let folder = Source {
+        author: String::new(),
         id: new_id(),
         notebook_id: notebook_id.clone(),
         title,
@@ -3235,6 +3255,7 @@ pub async fn resync_sources(
                     let mut existing = src.clone();
                     existing.mtime = stamp;
                     let extracted = ingest::Extracted {
+                        author: String::new(),
                         title: existing.title.clone(),
                         source_type: "mac".to_string(),
                         url: existing.url.clone(),
@@ -3339,6 +3360,7 @@ pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u
                 s.notebook_id.clone(),
                 s.id.clone(),
                 ingest::Extracted {
+                    author: String::new(),
                     title: s.title.clone(),
                     source_type: s.source_type.clone(),
                     url: s.url.clone(),
@@ -5176,6 +5198,7 @@ pub async fn convert_note_to_source(
 ) -> Result<Source, String> {
     let note = e(state.db.get_note(&note_id).await)?.ok_or_else(|| "Note not found".to_string())?;
     let extracted = ingest::Extracted {
+        author: String::new(),
         title: note.title.clone(),
         source_type: "text".to_string(),
         url: String::new(),
@@ -6747,6 +6770,7 @@ async fn import_bundle(
             None => String::new(),
         };
         let extracted = ingest::Extracted {
+            author: String::new(),
             title,
             source_type,
             url,

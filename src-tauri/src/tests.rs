@@ -72,6 +72,7 @@ async fn rag_round_trip() {
         .map(|(i, c)| (uuid::Uuid::new_v4().to_string(), i as i32, c.text.clone()))
         .collect();
     let source = Source {
+        author: String::new(),
         id: uuid::Uuid::new_v4().to_string(),
         notebook_id: nb.id.clone(),
         title: extracted.title,

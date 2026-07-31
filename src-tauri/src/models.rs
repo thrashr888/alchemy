@@ -53,6 +53,10 @@ pub struct Source {
     /// children; 0 otherwise. Folder rescans compare it to detect changes.
     #[serde(default)]
     pub mtime: i64,
+    /// Embedded document authorship (PDF /Author, Office dc:creator, EXIF
+    /// Artist), captured at ingest; empty when the format carries none.
+    #[serde(default)]
+    pub author: String,
 }
 
 /// Tally of what a folder rescan changed across the scanned folder sources.

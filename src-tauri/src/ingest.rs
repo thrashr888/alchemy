@@ -16,6 +16,8 @@ pub struct Extracted {
     /// for file imports (stamped by the command layer), empty for pasted text.
     pub url: String,
     pub text: String,
+    /// Embedded document authorship (see `file_author`); empty when absent.
+    pub author: String,
 }
 
 /// Is this path an image we should OCR rather than read as text?
@@ -144,6 +146,7 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
             return Err(anyhow!("no extractable text found in {path}"));
         }
         return Ok(Extracted {
+            author: String::new(),
             title: p
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -217,6 +220,9 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
         return Err(anyhow!("no extractable text found in {path}"));
     }
     Ok(Extracted {
+        // Stamped here — the one chokepoint every local-file ingest passes
+        // through — so refresh and folder resync re-capture it for free.
+        author: file_author(path),
         title,
         source_type,
         url: String::new(),
@@ -292,6 +298,60 @@ fn delimited_to_rows(text: &str, delim: char) -> String {
 }
 
 /// Read a single entry from a zip (Office files are zip archives).
+/// Embedded authorship for a local file, best-effort: PDF /Author via
+/// PDFium, Office documents' OPC docProps/core.xml dc:creator (docx, xlsx,
+/// pptx share the format), EXIF Artist for images. Empty when the format has
+/// no author concept or the field is blank — callers store it as-is.
+pub fn file_author(path: &str) -> String {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    let author = match ext.as_str() {
+        "pdf" => crate::pdf::pdf_author(path),
+        "docx" | "xlsx" | "xlsm" | "pptx" => read_zip_entry(path, "docProps/core.xml")
+            .ok()
+            .and_then(|xml| tag_text(&xml, "dc:creator")),
+        _ if is_image(path) => exif_artist(path),
+        _ => None,
+    };
+    author.unwrap_or_default()
+}
+
+/// First <tag>…</tag> text content, entity-decoded enough for names.
+fn tag_text(xml: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}");
+    let close = format!("</{tag}>");
+    let start = xml.find(&open)?;
+    let body_at = xml[start..].find('>')? + start + 1;
+    let end = xml[body_at..].find(&close)? + body_at;
+    let v = xml[body_at..end]
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .trim()
+        .to_string();
+    (!v.is_empty()).then_some(v)
+}
+
+/// EXIF Artist tag (the photographer/creator field cameras and editors write).
+fn exif_artist(path: &str) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut reader = std::io::BufReader::new(file);
+    let exif = exif::Reader::new().read_from_container(&mut reader).ok()?;
+    let field = exif.get_field(exif::Tag::Artist, exif::In::PRIMARY)?;
+    let v = field
+        .display_value()
+        .to_string()
+        .trim_matches('"')
+        .trim()
+        .to_string();
+    (!v.is_empty()).then_some(v)
+}
+
 fn read_zip_entry(path: &str, name: &str) -> Result<String> {
     use std::io::Read;
     let file = std::fs::File::open(path).with_context(|| format!("failed to open {path}"))?;
@@ -874,6 +934,7 @@ pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
         .or_else(|| extract_title(&body))
         .unwrap_or_else(|| url.clone());
     Ok(Extracted {
+        author: String::new(),
         title,
         source_type: "url".to_string(),
         url,
@@ -1041,6 +1102,7 @@ async fn extract_google(
         return Err(anyhow!("this {} exported no text", kind.product()));
     }
     Ok(Extracted {
+        author: String::new(),
         title,
         source_type: "url".to_string(),
         url: original_url.to_string(),
@@ -1139,6 +1201,7 @@ pub fn extracted_from_html(html: &str, url: &str, dom_title: &str, meta: &PageMe
         _ => text,
     };
     Extracted {
+        author: String::new(),
         title,
         source_type: "url".to_string(),
         url: url.to_string(),
@@ -1230,6 +1293,7 @@ pub fn extract_pasted(title: &str, text: &str) -> Result<Extracted> {
         title.trim().to_string()
     };
     Ok(Extracted {
+        author: String::new(),
         title,
         source_type: "text".to_string(),
         url: String::new(),
@@ -1992,6 +2056,7 @@ mod tests {
     #[test]
     fn chunk_source_dispatches_on_source_type() {
         let code = Extracted {
+            author: String::new(),
             title: "main.rs".into(),
             source_type: "code".into(),
             url: String::new(),
@@ -2002,6 +2067,7 @@ mod tests {
         assert!(got[0].embed_text.starts_with("[main.rs]\n"));
 
         let prose = Extracted {
+            author: String::new(),
             title: "Notes".into(),
             source_type: "text".into(),
             url: String::new(),
@@ -2164,6 +2230,7 @@ mod tests {
     #[test]
     fn markdown_chunking_strips_frontmatter_and_carries_tags() {
         let ex = Extracted {
+            author: String::new(),
             title: "Dialing In".into(),
             text: "---\ntags: [espresso]\n---\nGrind finer when sour. See [[Temps]].".into(),
             source_type: "markdown".into(),

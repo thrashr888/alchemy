@@ -1163,6 +1163,9 @@ function DocProperties({
     });
     const host = isWebUrl(source.url) ? urlHost(source.url) : null;
     if (host) rows.push({ label: "Site", value: host });
+    // Embedded document authorship (PDF /Author, Office dc:creator, EXIF
+    // Artist) — present only when the file actually carries it.
+    if (source.author) rows.push({ label: "Author", value: source.author });
     // The on-disk path, so a human can find the original and an agent reading
     // the properties block gets the same handle Show in Finder uses.
     if (source.url && !isWebUrl(source.url) && source.sourceType !== "mac")

@@ -45,6 +45,9 @@ export interface Source {
   parentId: string;
   /** File mtime (unix millis) recorded at ingest for folder children. */
   mtime: number;
+  /** Embedded document authorship (PDF /Author, Office dc:creator, EXIF
+   *  Artist) captured at ingest; empty when the format carries none. */
+  author: string;
 }
 
 /** One pickable Mac-provider item (a calendar range, reminders list, note…). */

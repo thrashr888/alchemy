@@ -434,7 +434,13 @@ impl Db {
             .schema()
             .await?;
         let has = |n: &str| schema.field_with_name(n).is_ok();
-        if has("url") && has("status") && has("error") && has("parent_id") && has("mtime") {
+        if has("url")
+            && has("status")
+            && has("error")
+            && has("parent_id")
+            && has("mtime")
+            && has("author")
+        {
             return Ok(());
         }
 
@@ -457,6 +463,7 @@ impl Db {
             let mtime = opt_i64_col(b, "mtime");
             for i in 0..b.num_rows() {
                 sources.push(Source {
+                    author: String::new(),
                     id: id.value(i).to_string(),
                     notebook_id: nb.value(i).to_string(),
                     title: title.value(i).to_string(),
@@ -644,8 +651,10 @@ impl Db {
             let error = str_col(b, "error")?;
             let parent = str_col(b, "parent_id")?;
             let mtime = i64_col(b, "mtime")?;
+            let author = str_col(b, "author")?;
             for i in 0..b.num_rows() {
                 sources.push(Source {
+                    author: author.value(i).to_string(),
                     id: id.value(i).to_string(),
                     notebook_id: nb.value(i).to_string(),
                     title: title.value(i).to_string(),
@@ -2196,6 +2205,7 @@ fn source_batch(schema: &SchemaRef, sources: &[Source]) -> Result<RecordBatch> {
             s(|x| x.error.clone()),
             s(|x| x.parent_id.clone()),
             i(|x| x.mtime),
+            s(|x| x.author.clone()),
         ],
     )?)
 }
@@ -2258,6 +2268,7 @@ fn sources_schema() -> SchemaRef {
         Field::new("error", DataType::Utf8, false),
         Field::new("parent_id", DataType::Utf8, false),
         Field::new("mtime", DataType::Int64, false),
+        Field::new("author", DataType::Utf8, false),
     ]))
 }
 
