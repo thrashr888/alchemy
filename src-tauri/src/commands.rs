@@ -3687,6 +3687,8 @@ fn tool_gate(content: &str) -> bool {
         "report",
         "document",
         "doc",
+        "template",
+        "generator",
     ]
     .iter()
     .any(|k| l.contains(k));
@@ -3706,6 +3708,11 @@ enum ToolAction {
     RemoveSource(String),
     RefreshSources(String),
     SaveNote(String),
+    CreateTemplate {
+        name: String,
+        description: String,
+        prompt: String,
+    },
     ScheduleReport {
         kind: String,
         interval: String,
@@ -3735,6 +3742,7 @@ Tools:\n\
 - {\"action\":\"remove_source\",\"name\":\"<source name fragment>\"} — remove a source.\n\
 - {\"action\":\"refresh_sources\",\"name\":\"<name fragment, or empty for all URL sources>\"} — re-fetch URL sources.\n\
 - {\"action\":\"save_note\",\"title\":\"<title or empty>\"} — save the assistant's previous answer as a note.\n\
+- {\"action\":\"create_template\",\"name\":\"<short name>\",\"description\":\"<one line>\",\"prompt\":\"<the reusable generation instruction>\"} — save a reusable custom generator the user can run from Studio later. Compose \"prompt\" yourself from what they asked the generator to do.\n\
 - {\"action\":\"schedule_report\",\"kind\":\"summary|briefing|timeline|faq|custom\",\"interval\":\"hourly|daily|weekly\",\"name\":\"<report name>\",\"prompt\":\"<what the report should cover, for kind custom; else empty>\"} — create a recurring report (echo the user's cadence word in \"interval\" even if unsupported).\n\
 - {\"action\":\"update_report\",\"name\":\"<existing report name fragment>\",\"new_name\":\"\",\"kind\":\"\",\"interval\":\"\",\"prompt\":\"\",\"enabled\":\"true|false or empty\"} — change an existing recurring report; leave fields empty to keep them.\n\
 - {\"action\":\"chat\"} — not a command; answer normally.\n\n\
@@ -3853,6 +3861,18 @@ fn parse_tool_action(raw: &str) -> ToolAction {
         }
         "refresh_sources" => ToolAction::RefreshSources(s("name")),
         "save_note" => ToolAction::SaveNote(s("title")),
+        "create_template" => {
+            let prompt = s("prompt");
+            if prompt.is_empty() {
+                ToolAction::Chat
+            } else {
+                ToolAction::CreateTemplate {
+                    name: s("name"),
+                    description: s("description"),
+                    prompt,
+                }
+            }
+        }
         "schedule_report" => {
             // Keep the raw interval; dispatch validates it and refuses politely
             // on unsupported cadences instead of silently coercing.
@@ -4109,6 +4129,24 @@ async fn try_tool_route(
                 out.push_str(&format!("\n\nFailed:\n{}", failed.join("\n")));
             }
             Some(out)
+        }
+        ToolAction::CreateTemplate {
+            name,
+            description,
+            prompt,
+        } => {
+            let name = if name.is_empty() {
+                "New template".to_string()
+            } else {
+                name
+            };
+            match crate::templates::save_template(None, name, description, prompt) {
+                Ok(t) => Some(format!(
+                    "Created the \"{}\" template — it's in Studio under More; right-click its tile to edit.",
+                    t.name
+                )),
+                Err(err) => Some(format!("Couldn't save the template: {err}")),
+            }
         }
         ToolAction::SaveNote(title) => {
             let history = match state.db.list_messages(notebook_id).await {

@@ -430,6 +430,28 @@ export function ChatPanel() {
         s.pushToast("success", "Saved the last answer as a note");
         return;
       }
+      case "template": {
+        // Deterministic and instant — no model call. The argument becomes
+        // the generation prompt, the first words become a working name, and
+        // the editor opens for refinement. Asking the chat in prose ("make
+        // me a generator that…") is the model-composed route instead.
+        const name = arg
+          ? arg.split(/\s+/).slice(0, 5).join(" ").replace(/[.,;:!?]+$/, "")
+          : "New template";
+        const prompt =
+          arg ||
+          "Describe what this generator should produce from the notebook's sources.";
+        void (async () => {
+          try {
+            const t = await api.saveTemplate(null, name, "", prompt);
+            await s.refreshTemplates();
+            s.openInReader({ type: "template", id: t.id });
+          } catch (e) {
+            s.pushToast("error", e instanceof Error ? e.message : String(e));
+          }
+        })();
+        return;
+      }
       case "report": {
         const scheds = s.reportSchedules;
         if (scheds.length === 1) {

@@ -84,6 +84,12 @@ const ACTIONS: SlashCommandMeta[] = [
     argHint: "[text]",
   },
   {
+    name: "template",
+    family: "Actions",
+    description: "Create a reusable custom generator (opens the editor)",
+    argHint: "[what it should produce]",
+  },
+  {
     name: "report",
     family: "Actions",
     description: "Run a scheduled report, or open the report panel",

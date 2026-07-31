@@ -1024,18 +1024,19 @@ export const useStore = create<AppState>((set, get) => {
         } else {
           await api.sendMessage(id, content, cfg, sourceIds);
         }
-        // Reload in parallel; chat tools can touch sources, notes, and report
-        // schedules, so refresh them all alongside the transcript.
-        const [messages, sources, notes, reportSchedules] = await Promise.all([
+        // Reload in parallel; chat tools can touch sources, notes, report
+        // schedules, and templates, so refresh them all with the transcript.
+        const [messages, sources, notes, reportSchedules, templates] = await Promise.all([
           api.listMessages(id),
           api.listSources(id),
           api.listNotes(id),
           api.listReportSchedules(id),
+          api.listTemplates(),
         ]);
         // The user may have switched notebooks while a slow tool ran — never
         // write another notebook's data over the current one.
         if (get().currentId === id) {
-          set({ messages, sources, notes, reportSchedules, streamingText: "" });
+          set({ messages, sources, notes, reportSchedules, templates, streamingText: "" });
           playDone();
           void get().loadFollowups();
         }
