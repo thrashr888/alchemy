@@ -1977,3 +1977,86 @@ async fn eval_scale_fence_10m() {
     assert_eq!(e10, 1.0, "10M: every exact-identifier needle must be found");
     assert!(p10 >= 0.5, "10M: paraphrase recall collapsed to {p10:.2}");
 }
+
+/// Latency percentiles for the meta-ask retrieval phases, on the same seeded
+/// corpus the quality evals use. Measures the DB-side phases only (no model
+/// call, builtin embedder): the hybrid search, the two title-fallback
+/// queries, and both compositions — sequential (the pre-join code shape) and
+/// joined (what production runs now) — so the join's win is a printed number
+/// instead of a claim. Synthetic-corpus timings; for real-corpus numbers run
+/// the app with ALCHEMY_TIMING=1. No absolute-time assertions: machines vary.
+#[tokio::test]
+async fn eval_retrieval_latency() {
+    let Some(ai) = builtin_ai().await else { return };
+    let dir = std::env::temp_dir().join(format!("nbl-eval-lat-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb = "lat-nb";
+    seed_corpus(&ai, &db, nb).await;
+    seed_docs(&ai, &db, nb, EXTRA_CORPUS, "x-").await;
+
+    let opts = || SearchOptions {
+        pool_multiplier: 4,
+        max_per_source: 2,
+        max_per_notebook: 3,
+        max_notes: 4,
+        max_gists: 2,
+    };
+    let queries: Vec<String> = load_datasets()
+        .iter()
+        .flat_map(|d| d.queries.iter().map(|q| q.query.clone()))
+        .collect();
+    assert!(!queries.is_empty());
+
+    let pct = |samples: &mut Vec<f64>, p: f64| -> f64 {
+        samples.sort_by(|a, b| a.total_cmp(b));
+        samples[((samples.len() - 1) as f64 * p).round() as usize]
+    };
+    let (mut search_ms, mut fb_ms, mut serial_ms, mut joined_ms) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    const ROUNDS: usize = 5;
+    for _ in 0..ROUNDS {
+        for q in &queries {
+            let vec = ai.embed(std::slice::from_ref(q)).await.expect("embed")[0].clone();
+
+            let t = std::time::Instant::now();
+            let _ = db
+                .search_chunks_all_opts(vec.clone(), q, 8, None, opts())
+                .await
+                .expect("search");
+            let search = t.elapsed().as_secs_f64() * 1000.0;
+
+            let t = std::time::Instant::now();
+            let _ = db.all_source_meta().await.expect("meta");
+            let _ = db.recent_notes(usize::MAX).await.expect("notes");
+            let fallbacks = t.elapsed().as_secs_f64() * 1000.0;
+
+            let t = std::time::Instant::now();
+            let (s, m, n) = tokio::join!(
+                db.search_chunks_all_opts(vec, q, 8, None, opts()),
+                db.all_source_meta(),
+                db.recent_notes(usize::MAX),
+            );
+            s.expect("joined search");
+            m.expect("joined meta");
+            n.expect("joined notes");
+            joined_ms.push(t.elapsed().as_secs_f64() * 1000.0);
+
+            search_ms.push(search);
+            fb_ms.push(fallbacks);
+            serial_ms.push(search + fallbacks);
+        }
+    }
+    let report = |label: &str, v: &mut Vec<f64>| {
+        eprintln!(
+            "latency {label}: p50 {:.2}ms p95 {:.2}ms (n={})",
+            pct(v, 0.50),
+            pct(v, 0.95),
+            v.len()
+        );
+    };
+    report("search-only    ", &mut search_ms);
+    report("fallbacks-only ", &mut fb_ms);
+    report("serial (old)   ", &mut serial_ms);
+    report("joined (now)   ", &mut joined_ms);
+    let _ = std::fs::remove_dir_all(&dir);
+}

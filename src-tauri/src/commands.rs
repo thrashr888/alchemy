@@ -6938,6 +6938,7 @@ pub(crate) async fn retrieve_everything(
     // so all three queries run concurrently instead of in file order. Only
     // the per-hit source_content reads stay sequential (they depend on
     // which titles match).
+    let retrieval_t = std::time::Instant::now();
     let (searched, source_meta, all_notes) = tokio::join!(
         state
             .db
@@ -6945,6 +6946,15 @@ pub(crate) async fn retrieve_everything(
         state.db.all_source_meta(),
         state.db.recent_notes(usize::MAX),
     );
+    // Real-corpus phase timing, opt-in: `ALCHEMY_TIMING=1 pnpm tauri dev`.
+    // The synthetic-corpus percentiles live in eval_retrieval_latency; this
+    // is how those numbers get checked against an actual library.
+    if std::env::var_os("ALCHEMY_TIMING").is_some() {
+        eprintln!(
+            "timing meta-retrieval: {:.1}ms (deep={deep})",
+            retrieval_t.elapsed().as_secs_f64() * 1000.0
+        );
+    }
     let source_meta = e(source_meta)?;
     let all_notes = e(all_notes)?;
     let mut out: Vec<MetaCitation> = e(searched)?
