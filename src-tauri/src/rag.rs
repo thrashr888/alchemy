@@ -723,7 +723,9 @@ const AGENT_SYSTEM: &str = "You are a retrieval planner for a research assistant
 question yet — it is to decide the next retrieval step that will gather the evidence needed to answer it well.\n\n\
 Respond with EXACTLY ONE JSON object and nothing else. Valid actions:\n\
 - {\"action\":\"search\",\"query\":\"<focused search phrase>\"}  — vector-search the sources for a sub-topic.\n\
-- {\"action\":\"read\",\"sourceId\":\"<id>\"}  — read a full source when you need broad context from it.\n\
+- {\"action\":\"read\",\"sourceIds\":[\"<id>\",\"<id>\"]}  — read full sources when you need broad context. \
+If you can already tell that several sources will be needed, list them ALL in one read — they are fetched \
+and distilled in parallel, so one read of four sources is far faster than four reads of one.\n\
 - {\"action\":\"answer\"}  — stop; enough evidence has been gathered.\n\n\
 Guidance: break multi-part questions into several searches across turns. Prefer distinct queries that cover \
 different facets. Choose \"answer\" once the gathered excerpts can support a complete, grounded response.";

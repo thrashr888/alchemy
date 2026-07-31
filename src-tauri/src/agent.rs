@@ -46,9 +46,18 @@ struct TokenEvent {
 
 enum Action {
     Search(String),
-    Read(String),
+    /// One planner step can read several sources; they distill in parallel.
+    Read(Vec<String>),
     Stop,
 }
+
+/// Cap one read action's batch — the planner shouldn't drain the whole
+/// notebook in a step, and local model servers queue past a few in flight.
+const READ_BATCH_CAP: usize = 4;
+
+/// Distills in flight at once. Gateways parallelize; a local single-GPU
+/// server just queues, so past ~3 there's nothing left to win.
+const DISTILL_CONCURRENCY: usize = 3;
 
 /// Run the loop and return the final answer plus the citations actually gathered.
 /// `source_ids` restricts the loop to those sources; None means all.
@@ -115,39 +124,64 @@ pub async fn run(
                 }
                 transcript.push('\n');
             }
-            Some(Action::Read(source_id)) => {
-                let title = sources
-                    .iter()
-                    .find(|s| s.id == source_id)
-                    .map(|s| s.title.clone())
-                    .unwrap_or_else(|| "source".into());
-                emit_step(app, format!("Reading: {title}"));
-                // Later reads always get at least the gist even with the
-                // budget spent, so a read step is never a silent no-op.
-                let budget = read_remaining.max(READ_GIST_CHARS);
-                let content = truncate(&db.source_content(&source_id).await?, budget);
-                read_remaining = read_remaining.saturating_sub(content.chars().count());
-                // RLM-style sub-read: a separate model call distills the
+            Some(Action::Read(source_ids)) => {
+                // Fetches stay sequential (DB reads are cheap and the char
+                // budget is a running total), then every distill — the model
+                // call that dominates a read's wall-clock — runs concurrently.
+                // `buffered` (not unordered) keeps transcript order matching
+                // the planner's requested order, so runs stay reproducible.
+                let mut fetched: Vec<(String, String, String)> = Vec::new();
+                for source_id in source_ids {
+                    let title = sources
+                        .iter()
+                        .find(|s| s.id == source_id)
+                        .map(|s| s.title.clone())
+                        .unwrap_or_else(|| "source".into());
+                    emit_step(app, format!("Reading: {title}"));
+                    // Later reads always get at least the gist even with the
+                    // budget spent, so a read step is never a silent no-op.
+                    let budget = read_remaining.max(READ_GIST_CHARS);
+                    let content = truncate(&db.source_content(&source_id).await?, budget);
+                    read_remaining = read_remaining.saturating_sub(content.chars().count());
+                    fetched.push((source_id, title, content));
+                }
+                if fetched.len() > 1 {
+                    emit_step(app, format!("Distilling {} sources", fetched.len()));
+                } else if let Some((_, title, _)) = fetched.first() {
+                    emit_step(app, format!("Distilling: {title}"));
+                }
+                // RLM-style sub-read: a separate model call distills each
                 // document against the question into verbatim quotes, so a
                 // read contributes evidence — not bulk — to every later
                 // prompt. One distillate serves the planner transcript, the
                 // writer excerpt, and the persisted citation alike.
-                emit_step(app, format!("Distilling: {title}"));
-                let evidence = distill(ollama, question, &title, &content).await;
-                transcript.push_str(&format!("READ \"{title}\":\n{evidence}\n\n"));
-                let read_id = format!("read:{source_id}");
-                if seen.insert(read_id.clone()) {
-                    gathered.push(Citation {
-                        chunk_id: read_id,
-                        source_id: source_id.clone(),
-                        source_title: title,
-                        source_path: String::new(),
-                        note_id: String::new(),
-                        gist: false,
-                        ordinal: 0,
-                        snippet: evidence,
-                        distance: 0.0,
-                    });
+                use futures::stream::StreamExt;
+                let distilled: Vec<(String, String, String)> =
+                    futures::stream::iter(fetched.into_iter().map(
+                        |(source_id, title, content)| async move {
+                            let evidence = distill(ollama, question, &title, &content).await;
+                            (source_id, title, evidence)
+                        },
+                    ))
+                    .buffered(DISTILL_CONCURRENCY)
+                    .collect()
+                    .await;
+                for (source_id, title, evidence) in distilled {
+                    transcript.push_str(&format!("READ \"{title}\":\n{evidence}\n\n"));
+                    let read_id = format!("read:{source_id}");
+                    if seen.insert(read_id.clone()) {
+                        gathered.push(Citation {
+                            chunk_id: read_id,
+                            source_id,
+                            source_title: title,
+                            source_path: String::new(),
+                            note_id: String::new(),
+                            gist: false,
+                            ordinal: 0,
+                            snippet: evidence,
+                            distance: 0.0,
+                        });
+                    }
                 }
             }
             Some(Action::Stop) | None => break,
@@ -283,10 +317,34 @@ fn parse_action(raw: &str) -> Option<Action> {
                 Some(Action::Search(q.to_string()))
             }
         }
-        "read" => value
-            .get("sourceId")
-            .and_then(|s| s.as_str())
-            .map(|s| Action::Read(s.to_string())),
+        "read" => {
+            // Both grammars parse: the batched `sourceIds` array the prompt
+            // advertises, and the legacy singular `sourceId` smaller models
+            // keep producing from prior habits.
+            let mut ids: Vec<String> = value
+                .get("sourceIds")
+                .and_then(|s| s.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            if ids.is_empty() {
+                if let Some(one) = value.get("sourceId").and_then(|s| s.as_str()) {
+                    ids.push(one.to_string());
+                }
+            }
+            let mut seen = HashSet::new();
+            ids.retain(|id| seen.insert(id.clone()));
+            ids.truncate(READ_BATCH_CAP);
+            if ids.is_empty() {
+                None
+            } else {
+                Some(Action::Read(ids))
+            }
+        }
         "answer" => Some(Action::Stop),
         _ => None,
     }
@@ -359,10 +417,24 @@ mod tests {
             parse_action("{\"action\":\"search\",\"query\":\"q\"}"),
             Some(Action::Search(q)) if q == "q"
         ));
+        // Legacy singular grammar still parses (smaller models keep emitting
+        // it from habit) — it just becomes a batch of one.
         assert!(matches!(
             parse_action("```{\"action\":\"read\",\"sourceId\":\"abc\"}```"),
-            Some(Action::Read(id)) if id == "abc"
+            Some(Action::Read(ids)) if ids == ["abc"]
         ));
+        // The batched grammar the prompt advertises, capped and deduped.
+        assert!(matches!(
+            parse_action("{\"action\":\"read\",\"sourceIds\":[\"a\",\"a\",\"b\"]}"),
+            Some(Action::Read(ids)) if ids == ["a", "b"]
+        ));
+        assert!(matches!(
+            parse_action(
+                "{\"action\":\"read\",\"sourceIds\":[\"a\",\"b\",\"c\",\"d\",\"e\",\"f\"]}"
+            ),
+            Some(Action::Read(ids)) if ids.len() == 4
+        ));
+        assert!(parse_action("{\"action\":\"read\",\"sourceIds\":[]}").is_none());
         assert!(matches!(
             parse_action("{\"action\":\"answer\"}"),
             Some(Action::Stop)
