@@ -244,6 +244,22 @@ pub fn build_chat_messages(
             extra_system.trim()
         )
     };
+    // Clarify-before-guessing, gated on retrieval thinness so it stays rare:
+    // with a healthy excerpt set the instruction never appears and behavior
+    // is unchanged. A retrieval this thin means either the corpus barely
+    // covers the question or the question underdetermines what to look for —
+    // both are cases where one pointed question beats a confident miss.
+    let snippet_chars: usize = citations.iter().map(|c| c.snippet.chars().count()).sum();
+    if citations.len() < 3 || snippet_chars < 700 {
+        system.push_str(
+            "\n- The excerpts for THIS question are unusually thin. If they clearly \
+             settle the question, answer as normal. If they don't — or the question \
+             could mean several different things and the excerpts support different \
+             readings — ask ONE short clarifying question instead of guessing: say \
+             what you did find, then ask what would let you search better. Never ask \
+             when the excerpts suffice.",
+        );
+    }
     if !persona.is_empty() {
         system.push_str(&format!("\n\n{persona}"));
     }
@@ -802,6 +818,39 @@ mod tests {
             snippet: snippet.into(),
             distance: 0.0,
         }
+    }
+
+    /// The clarify instruction is gated on retrieval thinness: a healthy
+    /// excerpt set must produce a byte-identical system prompt to before the
+    /// feature existed, so the behavior change is provably scoped to thin
+    /// retrievals (few excerpts, or few total characters).
+    #[test]
+    fn clarify_instruction_appears_only_on_thin_retrieval() {
+        let build = |citations: &[Citation]| {
+            let messages = build_chat_messages(
+                &[],
+                "q",
+                Excerpts {
+                    citations,
+                    expanded: &HashMap::new(),
+                },
+                &[],
+                "",
+                "",
+                &crate::inference::ContextProfile::default(),
+            );
+            messages[0].content.clone()
+        };
+        let long = "x".repeat(400);
+        // Healthy: several excerpts, plenty of text — no clarify line.
+        let healthy: Vec<Citation> = (0..4).map(|i| cite(&format!("c{i}"), &long)).collect();
+        assert!(!build(&healthy).contains("unusually thin"));
+        // Two excerpts is thin no matter how long they are.
+        let few: Vec<Citation> = (0..2).map(|i| cite(&format!("c{i}"), &long)).collect();
+        assert!(build(&few).contains("unusually thin"));
+        // Many-but-tiny excerpts are thin too.
+        let tiny: Vec<Citation> = (0..4).map(|i| cite(&format!("c{i}"), "short")).collect();
+        assert!(build(&tiny).contains("unusually thin"));
     }
 
     /// The classifier stays pointed on specific look-ups and fires only on
