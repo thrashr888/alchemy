@@ -5655,20 +5655,38 @@ pub async fn start_generation_detached(
     // retrieval yet; indexing happens on completion.
     state.db.add_note(&note).await?;
 
+    // Hard deadline over the whole background generation. "generating" must
+    // be a bounded state: a polling agent has no other signal, and live
+    // verification found a slow headless-CLI provider holding a note in
+    // "generating" past twenty minutes. Providers carry their own request
+    // timeouts; this is the belt over corpus assembly + provider + retries.
+    const DETACHED_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+
     let app = app.clone();
     let spawned = note.clone();
     tauri::async_runtime::spawn(async move {
         let state = app.state::<AppState>();
-        let result = generate_content(
-            &state,
-            None, // no window streaming — the poller reads the stored note
-            &spawned.notebook_id,
-            &spawned.kind,
-            &spawned.prompt,
-            None,
-            None,
+        let result = match tokio::time::timeout(
+            DETACHED_DEADLINE,
+            generate_content(
+                &state,
+                None, // no window streaming — the poller reads the stored note
+                &spawned.notebook_id,
+                &spawned.kind,
+                &spawned.prompt,
+                None,
+                None,
+            ),
         )
-        .await;
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => Err(anyhow::anyhow!(
+                "generation exceeded {} minutes — the model provider may be \
+                 overloaded; try again or switch providers",
+                DETACHED_DEADLINE.as_secs() / 60
+            )),
+        };
         let ts = now();
         let outcome = match result {
             Ok((title, content)) => {
