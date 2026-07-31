@@ -443,6 +443,32 @@ pub fn parse_auto_evidence(raw: &str) -> Option<(String, String)> {
     Some((title, body))
 }
 
+/// Every kind `artifact_spec` answers, in rough display order. The single
+/// source for validation lists and router prompts — report scheduling, chat
+/// tools, and MCP all draw from here instead of minting their own copies
+/// (a drift test asserts this list and the match below stay in lockstep).
+pub const ARTIFACT_KINDS: &[&str] = &[
+    "summary",
+    "faq",
+    "study_guide",
+    "briefing",
+    "timeline",
+    "insights",
+    "flashcards",
+    "quiz",
+    "round_table",
+    "data_table",
+    "audio_overview",
+    "slide_deck",
+    "mind_map",
+    "problems",
+    "evidence",
+    "prd",
+    "prfaq",
+    "rfc",
+    "skill",
+];
+
 /// (title, instruction) for each generated artifact kind.
 pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
     match kind {
@@ -1030,5 +1056,23 @@ mod tests {
         // absolute no-ellipsis check would be wrong — assert the truncated
         // form specifically is absent).
         assert!(!full.contains(&format!("{}…", "a".repeat(500))));
+    }
+
+    /// ARTIFACT_KINDS and the artifact_spec match are two spellings of one
+    /// registry; every consumer (report kinds, tool router, MCP) trusts the
+    /// list, so a kind in one but not the other is a shipped bug.
+    #[test]
+    fn artifact_kinds_match_specs() {
+        for k in ARTIFACT_KINDS {
+            assert!(artifact_spec(k).is_some(), "listed kind {k} has no spec");
+        }
+        // Guard the reverse direction for the kinds most likely to be added
+        // to the match and forgotten here: none exist outside the list.
+        for k in ["custom", "template", "note", "report"] {
+            assert!(
+                !ARTIFACT_KINDS.contains(&k),
+                "pseudo-kind {k} must not join the registry"
+            );
+        }
     }
 }

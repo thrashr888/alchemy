@@ -1,25 +1,16 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import { Button, EmptyState, Input, Textarea, Modal, Spinner } from "./ui";
 import { cn, fmtDay } from "@/lib/utils";
 import { Clock, Eye, EyeOff, Plus, Play, Trash2, Power, Pencil } from "lucide-react";
 import type { ReportSchedule } from "@/lib/types";
+import { ARTIFACTS } from "./studioArtifacts";
 
 const INTERVALS = [
   { label: "Hourly", secs: 3600 },
   { label: "Every 6 hours", secs: 21600 },
   { label: "Daily", secs: 86400 },
   { label: "Weekly", secs: 604800 },
-];
-
-// Report generators (subset of note kinds that read well as recurring reports).
-const KINDS = [
-  { value: "briefing", label: "Briefing" },
-  { value: "summary", label: "Summary" },
-  { value: "insights", label: "Insights" },
-  { value: "timeline", label: "Timeline" },
-  { value: "faq", label: "FAQ" },
-  { value: "custom", label: "Custom prompt" },
 ];
 
 export function intervalLabel(secs: number): string {
@@ -33,6 +24,22 @@ export function Reports() {
   const remove = useStore((s) => s.deleteReport);
   const runNow = useStore((s) => s.runReportNow);
   const generating = useStore((s) => s.generatingKind === "report");
+
+  const templates = useStore((s) => s.templates);
+  // One registry, every surface: any generator or user template schedules as
+  // a report (audio stays out — a cron'd podcast isn't a report). Template
+  // schedules store "template:<id>" so renames and edits track live.
+  const kinds = useMemo(
+    () => [
+      ...ARTIFACTS.filter((a) => a.kind !== "audio_overview").map((a) => ({
+        value: a.kind,
+        label: a.label,
+      })),
+      ...templates.map((t) => ({ value: `template:${t.id}`, label: t.name })),
+      { value: "custom", label: "Custom prompt" },
+    ],
+    [templates],
+  );
 
   const [editing, setEditing] = useState(false);
   // Section hidden/shown — persisted so a notes-heavy workflow keeps its room.
@@ -176,7 +183,7 @@ export function Reports() {
             <Input id="report-name" name="report-name" autoFocus placeholder="e.g. Morning briefing" value={name} onChange={(e) => setName(e.target.value)} />
           </Field>
           <Field label="Generator" htmlFor="report-generator">
-            <Select id="report-generator" value={kind} onChange={setKind} options={KINDS} />
+            <Select id="report-generator" value={kind} onChange={setKind} options={kinds} />
           </Field>
           {kind === "custom" && (
             <Field label="Prompt" htmlFor="report-prompt">

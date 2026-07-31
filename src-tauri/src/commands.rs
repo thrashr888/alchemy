@@ -3738,12 +3738,12 @@ Respond with EXACTLY ONE JSON object, nothing else.\n\n\
 Tools:\n\
 - {\"action\":\"add_urls\",\"urls\":[\"https://…\"]} — add the given URL(s) as sources.\n\
 - {\"action\":\"add_text\",\"title\":\"<short title>\",\"text\":\"<the text to add>\"} — save text from the message as a source.\n\
-- {\"action\":\"generate\",\"kind\":\"summary|faq|study_guide|briefing|timeline|problems|evidence|prd|prfaq|rfc|skill|custom\",\"prompt\":\"<extra instructions or empty>\"} — generate a document from the sources.\n\
+- {\"action\":\"generate\",\"kind\":\"<KINDS>|custom\",\"prompt\":\"<extra instructions or empty>\"} — generate a document from the sources.\n\
 - {\"action\":\"remove_source\",\"name\":\"<source name fragment>\"} — remove a source.\n\
 - {\"action\":\"refresh_sources\",\"name\":\"<name fragment, or empty for all URL sources>\"} — re-fetch URL sources.\n\
 - {\"action\":\"save_note\",\"title\":\"<title or empty>\"} — save the assistant's previous answer as a note.\n\
 - {\"action\":\"create_template\",\"name\":\"<short name>\",\"description\":\"<one line>\",\"prompt\":\"<the reusable generation instruction>\"} — save a reusable custom generator the user can run from Studio later. Compose \"prompt\" yourself from what they asked the generator to do.\n\
-- {\"action\":\"schedule_report\",\"kind\":\"summary|briefing|timeline|faq|custom\",\"interval\":\"hourly|daily|weekly\",\"name\":\"<report name>\",\"prompt\":\"<what the report should cover, for kind custom; else empty>\"} — create a recurring report (echo the user's cadence word in \"interval\" even if unsupported).\n\
+- {\"action\":\"schedule_report\",\"kind\":\"<KINDS>|custom, or a template name from the list below\",\"interval\":\"hourly|daily|weekly\",\"name\":\"<report name>\",\"prompt\":\"<what the report should cover, for kind custom; else empty>\"} — create a recurring report (echo the user's cadence word in \"interval\" even if unsupported).\n\
 - {\"action\":\"update_report\",\"name\":\"<existing report name fragment>\",\"new_name\":\"\",\"kind\":\"\",\"interval\":\"\",\"prompt\":\"\",\"enabled\":\"true|false or empty\"} — change an existing recurring report; leave fields empty to keep them.\n\
 - {\"action\":\"chat\"} — not a command; answer normally.\n\n\
 Prefer {\"action\":\"chat\"} when unsure. Questions ABOUT sources (\"what does the spec say\") are chat, \
@@ -3771,8 +3771,23 @@ async fn route_tool(state: &AppState, sources: &[Source], content: &str) -> Tool
             .collect::<Vec<_>>()
             .join("\n")
     };
+    // The router's kind lists come from the artifact registry (plus the
+    // user's templates), so a new generator or template is routable the
+    // moment it exists — no prompt edit to forget.
+    let system = TOOL_ROUTER_SYSTEM.replace("<KINDS>", &rag::ARTIFACT_KINDS.join("|"));
+    let template_list = crate::templates::list_templates()
+        .unwrap_or_default()
+        .iter()
+        .map(|t| format!("- {}", sanitize_title(&t.name)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let system = if template_list.is_empty() {
+        system
+    } else {
+        format!("{system}\n\nUser templates (usable as schedule_report kinds):\n{template_list}")
+    };
     let messages = vec![
-        crate::ai::ChatTurn::system(TOOL_ROUTER_SYSTEM),
+        crate::ai::ChatTurn::system(system),
         crate::ai::ChatTurn::user(format!(
             "Current sources:\n{source_list}\n\nUser message:\n{content}\n\nOne JSON object:"
         )),
@@ -3874,12 +3889,10 @@ fn parse_tool_action(raw: &str) -> ToolAction {
             }
         }
         "schedule_report" => {
-            // Keep the raw interval; dispatch validates it and refuses politely
-            // on unsupported cadences instead of silently coercing.
-            let kind = match s("kind").as_str() {
-                k @ ("summary" | "briefing" | "timeline" | "faq" | "custom") => k.to_string(),
-                _ => "briefing".to_string(),
-            };
+            // Keep the raw kind and interval; dispatch validates both against
+            // the live registry (artifact kinds + user templates) and refuses
+            // politely instead of silently coercing to some other report.
+            let kind = s("kind");
             let name = {
                 let n = s("name");
                 if n.is_empty() {
@@ -3912,6 +3925,56 @@ fn parse_tool_action(raw: &str) -> ToolAction {
         }
         _ => ToolAction::Chat,
     }
+}
+
+/// Resolve a requested report kind against the live registry: registry
+/// artifact kinds pass through, "template:<id>" and bare template names
+/// resolve to the id form, "custom" requires a prompt. Err carries the
+/// polite refusal message for the chat transcript.
+fn resolve_report_kind(kind: &str, prompt: &str) -> Result<String, String> {
+    let kind = kind.trim();
+    if rag::ARTIFACT_KINDS.contains(&kind) {
+        return Ok(kind.to_string());
+    }
+    if kind == "custom" || kind.is_empty() {
+        if prompt.trim().is_empty() {
+            return Err(
+                "A custom report needs a prompt describing what it should cover — \
+                 tell me what to track and I'll schedule it."
+                    .to_string(),
+            );
+        }
+        return Ok("custom".to_string());
+    }
+    let templates = crate::templates::list_templates().unwrap_or_default();
+    if let Some(id) = kind.strip_prefix("template:") {
+        if templates.iter().any(|t| t.id == id) {
+            return Ok(kind.to_string());
+        }
+    }
+    if let Some(t) = templates
+        .iter()
+        .find(|t| t.name.eq_ignore_ascii_case(kind) || t.id == kind)
+    {
+        return Ok(format!("template:{}", t.id));
+    }
+    Err(format!(
+        "I don't know a “{kind}” report. I can schedule any generator ({}), one of your \
+         templates{}, or a custom prompt — which would you like?",
+        rag::ARTIFACT_KINDS.join(", "),
+        if templates.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " ({})",
+                templates
+                    .iter()
+                    .map(|t| t.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+    ))
 }
 
 /// Verbs that mean the URL in a message is a *target*, not something to add.
@@ -4203,6 +4266,16 @@ async fn try_tool_route(
             name,
             prompt,
         } => {
+            // Validate the kind against the live registry: any artifact kind,
+            // any existing template (by "template:<id>" or by name), or
+            // "custom" with a prompt. Refusing beats coercing — a schedule
+            // that quietly generates the wrong report erodes trust in all of
+            // them. Template names resolve to ids here, at creation, so the
+            // stored kind is always the stable reference.
+            let kind = match resolve_report_kind(&kind, &prompt) {
+                Ok(k) => k,
+                Err(msg) => return Some(msg),
+            };
             let interval_secs = match interval.as_str() {
                 "hourly" => 3_600,
                 "daily" => 86_400,
@@ -5263,25 +5336,41 @@ async fn generate_content(
     source_ids: Option<&[String]>,
     prior_report: Option<&str>,
 ) -> anyhow::Result<(String, String)> {
-    // Known kinds use their spec (+ optional extra prompt); "custom"/unknown
-    // kinds use the prompt itself as the instruction.
-    let (title, mut instruction) = match rag::artifact_spec(kind) {
-        Some((t, base)) => {
-            let instr = if prompt.trim().is_empty() {
-                base.to_string()
-            } else {
-                format!(
-                    "{base}\n\nAdditional instructions from the user (follow these):\n{}",
-                    prompt.trim()
-                )
-            };
-            (t.to_string(), instr)
+    // Instruction base by kind precedence: "template:<id>" resolves the
+    // template at RUN time (a schedule tracks the template's current body,
+    // not a snapshot; deleted template = hard error, because a report
+    // silently doing something else is worse), registry kinds use their
+    // spec, and "custom"/unknown kinds use the prompt itself. A trailing
+    // user prompt augments the first two the same way.
+    let augment = |base: &str| {
+        if prompt.trim().is_empty() {
+            base.to_string()
+        } else {
+            format!(
+                "{base}\n\nAdditional instructions from the user (follow these):\n{}",
+                prompt.trim()
+            )
         }
-        None => {
-            if prompt.trim().is_empty() {
-                anyhow::bail!("No instructions provided for this generation.");
+    };
+    let (title, mut instruction) = if let Some(template_id) = kind.strip_prefix("template:") {
+        let t = crate::templates::list_templates()
+            .map_err(|e| anyhow::anyhow!(e))?
+            .into_iter()
+            .find(|t| t.id == template_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!("template '{template_id}' no longer exists — edit this schedule")
+            })?;
+        let instr = augment(&t.prompt);
+        (t.name, instr)
+    } else {
+        match rag::artifact_spec(kind) {
+            Some((t, base)) => (t.to_string(), augment(base)),
+            None => {
+                if prompt.trim().is_empty() {
+                    anyhow::bail!("No instructions provided for this generation.");
+                }
+                ("Report".to_string(), prompt.trim().to_string())
             }
-            ("Report".to_string(), prompt.trim().to_string())
         }
     };
     if prior_report.is_some() {
@@ -7949,16 +8038,31 @@ mod tool_tests {
             }
             _ => panic!("expected schedule"),
         }
-        // Unsupported cadence survives parsing; dispatch refuses it politely.
+        // Unknown kind and unsupported cadence both survive parsing verbatim;
+        // dispatch validates against the live registry (which the parser can't
+        // see) and refuses politely instead of coercing to a different report.
         match parse_tool_action(
             r#"{"action":"schedule_report","kind":"podcast","interval":"monthly","name":"X"}"#,
         ) {
             ToolAction::ScheduleReport { kind, interval, .. } => {
-                assert_eq!(kind, "briefing"); // unknown kinds coerce to a known one
+                assert_eq!(kind, "podcast");
                 assert_eq!(interval, "monthly"); // preserved for the refusal reply
             }
             _ => panic!("expected schedule"),
         }
+        // The dispatch-time validator: registry kinds pass, unknown kinds get
+        // the refusal that names alternatives, custom demands a prompt.
+        assert_eq!(resolve_report_kind("briefing", ""), Ok("briefing".into()));
+        assert_eq!(
+            resolve_report_kind("round_table", ""),
+            Ok("round_table".into())
+        );
+        assert_eq!(
+            resolve_report_kind("custom", "track prices"),
+            Ok("custom".into())
+        );
+        assert!(resolve_report_kind("custom", " ").is_err());
+        assert!(resolve_report_kind("", "").is_err());
         // Custom reports carry their prompt through.
         match parse_tool_action(
             r#"{"action":"schedule_report","kind":"custom","interval":"daily","name":"X","prompt":"track prices"}"#,
