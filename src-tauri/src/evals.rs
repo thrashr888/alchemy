@@ -3,10 +3,15 @@
 //! model-dependent checks for the distillation and rerank sub-calls.
 //!
 //! The retrieval eval needs only the built-in embedder (downloads ~30 MB on
-//! first run, cached afterwards) — no Ollama. The distill/rerank evals skip
-//! unless Ollama is reachable, mirroring the round-trip tests.
+//! first run, cached afterwards) — no Ollama, so it runs everywhere including
+//! CI. The distill/rerank evals need live Ollama and are #[ignore]d: they
+//! previously skipped silently when Ollama was down, which meant they passed
+//! green on every CI run without measuring anything. Ignored is honest;
+//! run them explicitly when touching distill or rerank:
 //!
-//! Run with:  cargo test --lib evals -- --nocapture
+//!   cargo test --lib evals -- --ignored --nocapture
+//!
+//! Run the CI-safe eval with:  cargo test --lib evals -- --nocapture
 
 use crate::ai::{Ai, AiConfig, AiRuntime};
 use crate::db::Db;
@@ -319,6 +324,7 @@ async fn eval_retrieval_recall() {
 /// Ollama-gated: the distill sub-call must return the load-bearing fact
 /// verbatim and compress its input. Skips when no local chat model is up.
 #[tokio::test]
+#[ignore = "needs live Ollama; run explicitly — the silent skip made this pass green on CI without measuring anything"]
 async fn eval_distill_quality() {
     let ai = Ai::new(
         AiConfig {
@@ -327,10 +333,13 @@ async fn eval_distill_quality() {
         },
         AiRuntime::default(),
     );
-    if ai.list_models().await.is_err() {
-        eprintln!("SKIP: Ollama not reachable on localhost:11434");
-        return;
-    }
+    // This test only runs when explicitly requested (#[ignore]), so a
+    // missing Ollama is a failed precondition, not a skip — the silent
+    // return here is what let it pass green for months without measuring.
+    assert!(
+        ai.list_models().await.is_ok(),
+        "Ollama not reachable on localhost:11434 — start it, then rerun"
+    );
 
     // The needle sits mid-document surrounded by on-topic filler.
     let filler = "The committee met quarterly to review routine facilities matters. ".repeat(60);
@@ -360,6 +369,7 @@ async fn eval_distill_quality() {
 /// Ollama-gated: the reranker must pull an obviously relevant passage buried
 /// deep in the pool into the kept set.
 #[tokio::test]
+#[ignore = "needs live Ollama; run explicitly — the silent skip made this pass green on CI without measuring anything"]
 async fn eval_rerank_surfaces_buried_hit() {
     let ai = Ai::new(
         AiConfig {
@@ -368,10 +378,13 @@ async fn eval_rerank_surfaces_buried_hit() {
         },
         AiRuntime::default(),
     );
-    if ai.list_models().await.is_err() {
-        eprintln!("SKIP: Ollama not reachable on localhost:11434");
-        return;
-    }
+    // This test only runs when explicitly requested (#[ignore]), so a
+    // missing Ollama is a failed precondition, not a skip — the silent
+    // return here is what let it pass green for months without measuring.
+    assert!(
+        ai.list_models().await.is_ok(),
+        "Ollama not reachable on localhost:11434 — start it, then rerun"
+    );
 
     let mut hits: Vec<Citation> = (0..12)
         .map(|i| Citation {
