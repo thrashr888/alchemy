@@ -49,8 +49,84 @@ struct ScheduleReportReq {
     prompt: Option<String>,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct ScheduleIdReq {
+    /// Schedule id (from list_schedules).
+    schedule_id: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct TemplateIdReq {
+    /// Template id (from list_templates).
+    template_id: String,
+}
+
 #[tool_router(router = studio_router, vis = "pub(super)")]
 impl AlchemyMcp {
+    #[tool(
+        description = "List a notebook's scheduled reports (id, name, kind, interval, enabled, last run). Every create deserves a way to inspect and undo — clean up schedules you created that the user didn't ask to keep."
+    )]
+    async fn list_schedules(
+        &self,
+        Parameters(NotebookIdReq { notebook_id }): Parameters<NotebookIdReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let schedules = self
+            .state()
+            .db
+            .list_report_schedules(&notebook_id)
+            .await
+            .map_err(internal)?;
+        json_result(&schedules)
+    }
+
+    #[tool(
+        description = "Delete a scheduled report. The notes its past runs produced stay; only the recurring schedule goes."
+    )]
+    async fn delete_schedule(
+        &self,
+        Parameters(ScheduleIdReq { schedule_id }): Parameters<ScheduleIdReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        // Resolve the notebook before deleting so the change event can name
+        // it — the Reports panel only refreshes for the open notebook.
+        let notebook_id = state
+            .db
+            .list_notebooks()
+            .await
+            .map_err(internal)?
+            .into_iter()
+            .map(|nb| nb.id)
+            .collect::<Vec<_>>();
+        let mut owner = None;
+        for nb in &notebook_id {
+            if let Ok(scheds) = state.db.list_report_schedules(nb).await {
+                if scheds.iter().any(|s| s.id == schedule_id) {
+                    owner = Some(nb.clone());
+                    break;
+                }
+            }
+        }
+        state
+            .db
+            .delete_report_schedule(&schedule_id)
+            .await
+            .map_err(internal)?;
+        self.changed("reports", owner.as_deref());
+        json_result(&serde_json::json!({ "ok": true }))
+    }
+
+    #[tool(
+        description = "Delete a generator template. Report schedules that reference it will error on their next run naming the missing template — check list_schedules first."
+    )]
+    async fn delete_template(
+        &self,
+        Parameters(TemplateIdReq { template_id }): Parameters<TemplateIdReq>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::templates::delete_template(template_id).map_err(invalid)?;
+        self.changed("templates", None);
+        json_result(&serde_json::json!({ "ok": true }))
+    }
+
     #[tool(
         description = "Start generating a document (summary, briefing, RFC, slide deck, one of the user's templates via template:<id>, or custom with instructions) from a notebook's sources. Returns the placeholder note IMMEDIATELY with status \"generating\" — generation takes seconds to minutes, so poll get_note until status is \"\" (done) or \"error\" (the content then holds the reason). List available templates with list_templates from the Studio group, or use a kind from the error message's list."
     )]
