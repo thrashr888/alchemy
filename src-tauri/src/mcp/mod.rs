@@ -25,6 +25,7 @@ mod notebooks;
 mod notes;
 mod search;
 mod sources;
+mod studio;
 
 // ---- Server lifecycle ------------------------------------------------------
 
@@ -230,7 +231,8 @@ impl AlchemyMcp {
     + Self::sources_router()
     + Self::mac_router()
     + Self::search_router()
-    + Self::notes_router()))]
+    + Self::notes_router()
+    + Self::studio_router()))]
 impl ServerHandler for AlchemyMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())

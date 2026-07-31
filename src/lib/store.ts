@@ -388,12 +388,18 @@ export const useStore = create<AppState>((set, get) => {
           const { scope, notebookId } = e.payload;
           playArrival();
           void get().refreshNotebooks();
+          // Templates are app-global — refresh before the notebook gate.
+          if (scope === "templates") void get().refreshTemplates();
           const current = get().currentId;
           if (!current || (notebookId && notebookId !== current)) return;
           if (scope === "sources")
             void api.listSources(current).then((sources) => set({ sources }));
           if (scope === "notes")
             void api.listNotes(current).then((notes) => set({ notes }));
+          if (scope === "reports")
+            void api
+              .listReportSchedules(current)
+              .then((reportSchedules) => set({ reportSchedules }));
         },
       );
       // Safety net: the backend broadcasts every finished generation. If the

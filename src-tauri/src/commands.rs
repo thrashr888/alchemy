@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use chrono::Utc;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 mod reports;
@@ -3931,7 +3931,7 @@ fn parse_tool_action(raw: &str) -> ToolAction {
 /// artifact kinds pass through, "template:<id>" and bare template names
 /// resolve to the id form, "custom" requires a prompt. Err carries the
 /// polite refusal message for the chat transcript.
-fn resolve_report_kind(kind: &str, prompt: &str) -> Result<String, String> {
+pub(crate) fn resolve_report_kind(kind: &str, prompt: &str) -> Result<String, String> {
     let kind = kind.trim();
     if rag::ARTIFACT_KINDS.contains(&kind) {
         return Ok(kind.to_string());
@@ -5600,6 +5600,112 @@ pub async fn generate_artifact(
     }
     e(add_note_indexed(&state, &note).await)?;
     let _ = app.emit("generate://done", &note);
+    Ok(note)
+}
+
+/// Start a generation and return its placeholder note immediately; content
+/// arrives in the background. Built for MCP's generate tool — MCP clients
+/// time out long calls, so the agent gets the id now and polls get_note.
+/// The placeholder carries status "generating"; completion clears it and
+/// indexes the note, failure sets status "error" with the reason as content.
+pub async fn start_generation_detached(
+    app: &AppHandle,
+    notebook_id: &str,
+    kind: &str,
+    prompt: &str,
+) -> anyhow::Result<Note> {
+    // Fail fast on kinds the async path can't honor: audio synthesis needs
+    // the window-side player anyway, and a wrong kind should error at the
+    // tool call, not twenty seconds into a background task.
+    if kind == "audio_overview" {
+        anyhow::bail!("audio_overview can't be generated over MCP — use the app's Studio panel");
+    }
+    let state = app.state::<AppState>();
+    let title = if let Some(id) = kind.strip_prefix("template:") {
+        crate::templates::list_templates()
+            .map_err(|e| anyhow::anyhow!(e))?
+            .into_iter()
+            .find(|t| t.id == id)
+            .map(|t| t.name)
+            .ok_or_else(|| anyhow::anyhow!("no template with id {id}"))?
+    } else {
+        match rag::artifact_spec(kind) {
+            Some((t, _)) => format!("{t} (generating…)"),
+            None if !prompt.trim().is_empty() => "Report (generating…)".to_string(),
+            None => anyhow::bail!(
+                "unknown kind \"{kind}\" — use one of {}, template:<id>, or \"custom\" with a prompt",
+                rag::ARTIFACT_KINDS.join(", ")
+            ),
+        }
+    };
+    let ts = now();
+    let note = Note {
+        id: new_id(),
+        notebook_id: notebook_id.to_string(),
+        title,
+        content: String::new(),
+        kind: kind.to_string(),
+        prompt: prompt.to_string(),
+        origin: "mcp".to_string(),
+        status: "generating".to_string(),
+        created_at: ts,
+        updated_at: ts,
+    };
+    // Stored but NOT indexed: an empty in-flight note has nothing for
+    // retrieval yet; indexing happens on completion.
+    state.db.add_note(&note).await?;
+
+    let app = app.clone();
+    let spawned = note.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let result = generate_content(
+            &state,
+            None, // no window streaming — the poller reads the stored note
+            &spawned.notebook_id,
+            &spawned.kind,
+            &spawned.prompt,
+            None,
+            None,
+        )
+        .await;
+        let ts = now();
+        let outcome = match result {
+            Ok((title, content)) => {
+                let title = if spawned.kind.starts_with("template:") {
+                    spawned.title.clone()
+                } else {
+                    title
+                };
+                if let Err(err) = state
+                    .db
+                    .update_note(&spawned.id, &title, &content, ts)
+                    .await
+                {
+                    eprintln!("mcp generate: persisting result failed: {err:#}");
+                    return;
+                }
+                let _ = state.db.set_note_status(&spawned.id, "").await;
+                if let Ok(Some(done)) = state.db.get_note(&spawned.id).await {
+                    index_note(&state, &done).await;
+                }
+                "done"
+            }
+            Err(err) => {
+                let msg = format!("Generation failed: {err:#}");
+                let _ = state
+                    .db
+                    .update_note(&spawned.id, &spawned.title, &msg, ts)
+                    .await;
+                let _ = state.db.set_note_status(&spawned.id, "error").await;
+                "error"
+            }
+        };
+        let _ = app.emit(
+            "mcp://changed",
+            serde_json::json!({ "scope": "notes", "notebookId": spawned.notebook_id, "outcome": outcome }),
+        );
+    });
     Ok(note)
 }
 
