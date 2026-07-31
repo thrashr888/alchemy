@@ -68,11 +68,12 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
     let add_clipboard = MenuItemBuilder::with_id("menu-add-clipboard", "Add Clipboard Source…")
         .accelerator("CmdOrCtrl+Shift+V")
         .build(app)?;
-    let export_okf = MenuItemBuilder::with_id("menu-export-okf", "Export Notebook as OKF…")
+    // One export verb: the .okf.zip is the notebook's portable form (share
+    // it, back it up, unzip it for an OKF folder) — the separate
+    // folder-export and "share as zip" items said the same thing twice.
+    let export_okf = MenuItemBuilder::with_id("menu-export-okf", "Export Notebook…")
         .accelerator("CmdOrCtrl+Shift+E")
         .build(app)?;
-    let share_okf =
-        MenuItemBuilder::with_id("menu-share-okf", "Share Notebook as Zip…").build(app)?;
     let import_okf =
         MenuItemBuilder::with_id("menu-import-okf", "Import Notebook from OKF…").build(app)?;
     let file_menu = SubmenuBuilder::new(app, "File")
@@ -84,7 +85,6 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
         .separator()
         .item(&import_okf)
         .item(&export_okf)
-        .item(&share_okf)
         .separator()
         .close_window()
         .build()?;

@@ -266,8 +266,6 @@ export const api = {
   corpusStats: () => run(query<CorpusStats>("corpus_stats")),
   newWindow: (notebookId?: string, noteId?: string) =>
     run(cmd<void>("new_window", { notebookId, noteId })),
-  exportNotebookOkf: (notebookId: string, destDir: string) =>
-    run(cmd<string>("export_notebook_okf", { notebookId, destDir })),
   rebuildAppMenu: () => run(cmd<void>("rebuild_app_menu")),
   fixTrafficLights: () => run(cmd<void>("fix_traffic_lights")),
   getAudioPath: (noteId: string) =>

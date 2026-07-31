@@ -148,7 +148,6 @@ export interface AppState {
   closeAddSource: () => void;
 
   exportNotebookOkf: () => Promise<void>;
-  shareNotebookOkf: () => Promise<void>;
   importOkfOpen: boolean;
   pendingImportPath: string | null;
   importOkf: (path: string, notebookId?: string | null) => Promise<void>;

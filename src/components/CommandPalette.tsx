@@ -250,24 +250,14 @@ export function CommandPalette() {
         {
           id: "export-okf",
           group: "Notebook",
-          label: "Export notebook as OKF bundle…",
-          keywords: "open knowledge format markdown share backup download",
+          label: "Export notebook…",
+          keywords:
+            "share send coworker zip package okf open knowledge format markdown backup download",
           icon: <FolderOutput className="h-3.5 w-3.5" />,
           hint: "⌘⇧E",
           run: () => {
             close();
             void state().exportNotebookOkf();
-          },
-        },
-        {
-          id: "share-okf",
-          group: "Notebook",
-          label: "Share notebook as .okf.zip…",
-          keywords: "export send coworker zip package okf",
-          icon: <FolderOutput className="h-3.5 w-3.5" />,
-          run: () => {
-            close();
-            void state().shareNotebookOkf();
           },
         },
         {

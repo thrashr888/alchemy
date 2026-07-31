@@ -448,7 +448,6 @@ export const useStore = create<AppState>((set, get) => {
           else s.pushToast("info", "Open a notebook first, then add sources");
         }
         else if (e.payload.id === "menu-export-okf") void s.exportNotebookOkf();
-        else if (e.payload.id === "menu-share-okf") void s.shareNotebookOkf();
         else if (e.payload.id === "menu-import-okf")
           set({ importOkfOpen: true });
       });
@@ -1357,29 +1356,12 @@ export const useStore = create<AppState>((set, get) => {
       }
     },
 
+    // The one export verb: a .okf.zip is the notebook's portable form —
+    // share it, back it up, or unzip it into an OKF folder for OK tooling.
     exportNotebookOkf: async () => {
       const id = get().currentId;
       if (!id) {
         get().pushToast("info", "Open a notebook to export it");
-        return;
-      }
-      const dest = await open({
-        directory: true,
-        title: "Export OKF bundle into…",
-      });
-      if (!dest) return;
-      try {
-        const path = await api.exportNotebookOkf(id, dest as string);
-        get().pushToast("success", `Exported to ${path}`);
-      } catch (e) {
-        get().pushToast("error", e instanceof Error ? e.message : String(e));
-      }
-    },
-
-    shareNotebookOkf: async () => {
-      const id = get().currentId;
-      if (!id) {
-        get().pushToast("info", "Open a notebook to share it");
         return;
       }
       const nb = get().notebooks.find((n) => n.id === id);
@@ -1388,7 +1370,7 @@ export const useStore = create<AppState>((set, get) => {
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-+|-+$/g, "");
       const dest = await save({
-        title: "Share notebook as…",
+        title: "Export notebook as…",
         defaultPath: `${slug || "notebook"}.okf.zip`,
         filters: [{ name: "OKF bundle", extensions: ["zip"] }],
       });
