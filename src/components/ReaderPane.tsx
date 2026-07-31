@@ -3,7 +3,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import type { Citation, Note, Source } from "@/lib/types";
+import type { Citation, Note, Source, Template } from "@/lib/types";
 import { AmbientRail } from "./AmbientRail";
 import { activeParagraph } from "@/lib/utils";
 import { AudioPlayer, DialogueScript } from "./AudioNote";
@@ -17,7 +17,7 @@ import { StreamingBody } from "./StudioNoteViewer";
 import { KIND_LABEL } from "./studioArtifacts";
 import { Favicon } from "./SourcesPanel";
 import { sourceIcon } from "@/lib/sourceIcon";
-import { Button, Input, RowMenu, Spinner } from "./ui";
+import { Button, Input, RowMenu, Spinner, Textarea } from "./ui";
 import {
   chatReadingClass,
   cn,
@@ -502,6 +502,11 @@ export function ReaderPane() {
     current?.type === "note"
       ? (notes.find((n) => n.id === current.id) ?? null)
       : null;
+  const templates = useStore((s) => s.templates);
+  const template =
+    current?.type === "template"
+      ? (templates.find((t) => t.id === current.id) ?? null)
+      : null;
 
   // Keyboard: Esc back to chat, ⌘[ / ⌘] history, j/k rail order.
   useEffect(() => {
@@ -820,6 +825,8 @@ export function ReaderPane() {
           editing={editing}
           onEditingChange={setEditing}
         />
+      ) : template ? (
+        <TemplateEditor key={template.id} template={template} />
       ) : (
         <div className="flex flex-1 items-center justify-center text-body text-muted-foreground">
           This document no longer exists — it may have been deleted.
@@ -1141,6 +1148,103 @@ export function parseGitProvenance(
 
 /** Linear-style properties block at the top of a document: quiet
  *  label/value rows that answer "what is this" before the content. */
+/** Custom-generator editor: name, description, and the generation prompt of
+ *  one ~/Documents/Alchemy/templates/*.md file, saved back in place. Plain
+ *  controlled inputs — a template is an instruction, not a document, so it
+ *  gets a form rather than the rich note editor. */
+function TemplateEditor({ template }: { template: Template }) {
+  const refreshTemplates = useStore((s) => s.refreshTemplates);
+  const [name, setName] = useState(template.name);
+  const [description, setDescription] = useState(template.description);
+  const [prompt, setPrompt] = useState(template.prompt);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const dirty =
+    name !== template.name ||
+    description !== template.description ||
+    prompt !== template.prompt;
+
+  async function save() {
+    if (saving || !name.trim() || !prompt.trim()) return;
+    setSaving(true);
+    try {
+      await api.saveTemplate(template.id, name, description, prompt);
+      await refreshTemplates();
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1500);
+    } catch (e) {
+      useStore.getState().pushToast("error", e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove() {
+    try {
+      await api.deleteTemplate(template.id);
+      await refreshTemplates();
+      useStore.getState().closeReader();
+    } catch (e) {
+      useStore.getState().pushToast("error", e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto">
+      <div className="mx-auto flex max-w-[720px] flex-col gap-4 px-8 py-8">
+        <div className="flex flex-col gap-1">
+          <span className="text-micro font-semibold uppercase tracking-wide text-subtle-foreground">
+            Custom generator
+          </span>
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Template name"
+            aria-label="Template name"
+          />
+        </div>
+        <Input
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="One-line description (shown on the Studio tile)"
+          aria-label="Template description"
+        />
+        <div className="flex min-h-0 flex-col gap-1">
+          <span className="text-micro font-semibold uppercase tracking-wide text-subtle-foreground">
+            Generation prompt
+          </span>
+          <Textarea
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            rows={14}
+            placeholder="What should this generator produce from the notebook's sources?"
+            aria-label="Generation prompt"
+            className="font-mono leading-relaxed"
+          />
+          <span className="text-caption text-subtle-foreground">
+            Runs over the notebook's sources like any generator. Saved to
+            ~/Documents/Alchemy/templates/{template.id}.md.
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => void save()}
+            disabled={saving || !dirty || !name.trim() || !prompt.trim()}
+          >
+            {saved ? "Saved" : saving ? "Saving…" : "Save"}
+          </Button>
+          <span className="flex-1" />
+          <Button variant="danger" size="sm" onClick={() => void remove()}>
+            Delete template
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DocProperties({
   source,
   note,

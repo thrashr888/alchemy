@@ -263,6 +263,8 @@ pub fn run() {
             templates::list_templates,
             templates::open_templates_folder,
             templates::install_default_templates,
+            templates::save_template,
+            templates::delete_template,
             mcp::mcp_status,
             connectors::list_agent_connectors,
             connectors::connect_agent,

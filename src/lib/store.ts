@@ -1068,6 +1068,10 @@ export const useStore = create<AppState>((set, get) => {
       get().openInReader({ type: "source", id: sourceId, highlight }),
     closeSourceViewer: () => get().closeReader(),
 
+    refreshTemplates: async () => {
+      set({ templates: await api.listTemplates() });
+    },
+
     openInReader: (doc) => {
       const { history, index } = get().reader;
       const current = history[index];

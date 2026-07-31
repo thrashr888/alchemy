@@ -264,8 +264,35 @@ export function StudioPanel() {
               </span>
             )}
             <button
-              onClick={() => void api.openTemplatesFolder()}
+              onClick={() => {
+                // Create the file first, then edit it in the reader — the
+                // editor always points at a template that exists on disk.
+                void (async () => {
+                  try {
+                    const t = await api.saveTemplate(
+                      null,
+                      "New template",
+                      "",
+                      "Describe what this generator should produce from the notebook's sources.",
+                    );
+                    await useStore.getState().refreshTemplates();
+                    useStore.getState().openInReader({ type: "template", id: t.id });
+                  } catch (e) {
+                    useStore
+                      .getState()
+                      .pushToast("error", e instanceof Error ? e.message : String(e));
+                  }
+                })();
+              }}
               className="ml-auto rounded p-0.5 transition-colors hover:text-foreground"
+              title="New template — a reusable custom generator"
+              aria-label="New template"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => void api.openTemplatesFolder()}
+              className="rounded p-0.5 transition-colors hover:text-foreground"
               title="Open the templates folder — each .md file is a generator"
               aria-label="Open templates folder"
             >
@@ -321,11 +348,15 @@ export function StudioPanel() {
                       )
                     }
                     label={t.name}
-                    title={t.description || t.name}
+                    title={`${t.description || t.name} — right-click to edit`}
                     category="template"
                     tint={TINT_TEMPLATES}
                     disabled={!hasSources || !!generatingKind}
                     onClick={() => generateFromTemplate(t)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      useStore.getState().openInReader({ type: "template", id: t.id });
+                    }}
                   />
                 ))}
                 {moreCount > 0 && (
@@ -604,6 +635,7 @@ function GenTile({
   tint,
   disabled,
   onClick,
+  onContextMenu,
 }: {
   icon: ReactNode;
   label: string;
@@ -612,11 +644,14 @@ function GenTile({
   tint: Tint;
   disabled: boolean;
   onClick: () => void;
+  /** Template tiles: right-click opens the editor. */
+  onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   return (
     <button
       disabled={disabled}
       onClick={onClick}
+      onContextMenu={onContextMenu}
       title={title}
       aria-label={category ? `${label} — ${category}` : label}
       className={cn(

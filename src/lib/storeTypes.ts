@@ -23,9 +23,10 @@ export interface QueueItem {
   error?: string;
 }
 
-/** One document open (or remembered) in the center-column reader. */
+/** One document open (or remembered) in the center-column reader.
+ *  "template" opens the custom-generator editor for that template id. */
 export interface ReaderDoc {
-  type: "source" | "note";
+  type: "source" | "note" | "template";
   id: string;
   /** Passage to scroll to and highlight (citation jumps). */
   highlight?: string;
@@ -53,6 +54,8 @@ export interface AppState {
   notes: Note[];
   reportSchedules: ReportSchedule[];
   templates: Template[];
+  /** Re-list custom templates (after an in-app save/delete). */
+  refreshTemplates: () => Promise<void>;
   aiConfig: AiConfig | null;
   ollamaOk: boolean | null;
   modelHealth: ModelHealth | null;

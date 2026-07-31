@@ -342,6 +342,9 @@ export const api = {
   listTemplates: () => run(query<Template[]>("list_templates")),
   openTemplatesFolder: () => run(cmd<void>("open_templates_folder")),
   installDefaultTemplates: () => run(cmd<number>("install_default_templates")),
+  saveTemplate: (id: string | null, name: string, description: string, prompt: string) =>
+    run(cmd<Template>("save_template", { id, name, description, prompt })),
+  deleteTemplate: (id: string) => run(cmd<void>("delete_template", { id })),
 
   // Reports
   listReportSchedules: (notebookId: string) =>

@@ -282,6 +282,102 @@ pub fn open_templates_folder() -> Result<(), String> {
     Ok(())
 }
 
+/// Filename stem for a new template: lowercased, non-alphanumerics collapsed
+/// to single hyphens. "Q3 Board Update!" -> "q3-board-update".
+fn slugify(name: &str) -> String {
+    let mut out = String::new();
+    let mut dash = true; // suppress a leading hyphen
+    for c in name.to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+            dash = false;
+        } else if !dash {
+            out.push('-');
+            dash = true;
+        }
+    }
+    let out = out.trim_end_matches('-').to_string();
+    if out.is_empty() {
+        "template".into()
+    } else {
+        out
+    }
+}
+
+/// A stored id must be a bare stem we wrote ourselves — anything with a path
+/// separator or dot is refused before it touches the filesystem.
+fn safe_stem(id: &str) -> Result<(), String> {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(format!("invalid template id: {id}"));
+    }
+    Ok(())
+}
+
+/// Create (id: None) or update (id: Some) a template file. Creation derives
+/// the stem from the name and suffixes -2, -3, … rather than overwrite an
+/// existing file. Returns the saved template as the list would parse it, so
+/// the caller can trust what round-tripped.
+#[tauri::command]
+pub fn save_template(
+    id: Option<String>,
+    name: String,
+    description: String,
+    prompt: String,
+) -> Result<Template, String> {
+    let name = name.trim().to_string();
+    let prompt = prompt.trim().to_string();
+    if name.is_empty() {
+        return Err("Template name is required".into());
+    }
+    if prompt.is_empty() {
+        return Err("Template prompt is required".into());
+    }
+    let dir = templates_dir().ok_or_else(|| "Could not resolve the home directory".to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{e:#}"))?;
+    let stem = match id {
+        Some(id) => {
+            safe_stem(&id)?;
+            id
+        }
+        None => {
+            let base = slugify(&name);
+            let mut stem = base.clone();
+            let mut n = 2;
+            while dir.join(format!("{stem}.md")).exists() {
+                stem = format!("{base}-{n}");
+                n += 1;
+            }
+            stem
+        }
+    };
+    // Frontmatter mirrors the shipped pack; description stays single-line.
+    let description = description.trim().replace('\n', " ");
+    let contents = format!("---\nname: {name}\ndescription: {description}\n---\n{prompt}\n");
+    std::fs::write(dir.join(format!("{stem}.md")), contents).map_err(|e| format!("{e:#}"))?;
+    parse_template(
+        &stem,
+        &format!("---\nname: {name}\ndescription: {description}\n---\n{prompt}"),
+    )
+    .ok_or_else(|| "template failed to parse after save".to_string())
+}
+
+/// Delete a template file. The Finder route still exists; this one powers the
+/// in-app editor's Delete button.
+#[tauri::command]
+pub fn delete_template(id: String) -> Result<(), String> {
+    safe_stem(&id)?;
+    let dir = templates_dir().ok_or_else(|| "Could not resolve the home directory".to_string())?;
+    let file = dir.join(format!("{id}.md"));
+    if !file.exists() {
+        return Err(format!("no template file for {id}"));
+    }
+    std::fs::remove_file(file).map_err(|e| format!("{e:#}"))
+}
+
 /// Settings → General: (re)install any default template files that aren't
 /// present. Never overwrites a file the user has edited. Returns how many
 /// files were written.
