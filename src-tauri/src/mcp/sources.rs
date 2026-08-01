@@ -1,7 +1,53 @@
 //! Source ingest and read tools.
 
 use super::*;
-use rmcp::{handler::server::wrapper::Parameters, tool, tool_router, ErrorData as McpError};
+use rmcp::{
+    handler::server::wrapper::Parameters, service::RequestContext, tool, tool_router,
+    ErrorData as McpError, RoleServer,
+};
+
+/// Concurrent add_source calls queue here instead of all running at once.
+/// Imports are heavy — PDFium rasterization (globally mutexed), per-page OCR,
+/// embedding — and a burst of parallel calls mostly serializes on those locks
+/// anyway, stretching every call's wall clock past the clients' idle
+/// timeouts. Two at a time lets a small text add slip past a big scanned PDF
+/// without letting a batch starve them all.
+static IMPORT_GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
+/// Progress heartbeat for one long import. MCP clients abandon a call that
+/// stays silent too long (Claude Code: 300s), so while an import waits on the
+/// gate or OCRs a scanned PDF, a beat every 20 seconds keeps the call — and
+/// the rmcp session's own keep-alive — visibly alive. Clients that sent no
+/// progress token get no beats (the spec forbids inventing one); the raised
+/// session keep-alive in mod.rs still covers them server-side.
+struct Heartbeat(Option<tokio::task::JoinHandle<()>>);
+
+impl Heartbeat {
+    fn start(ctx: &RequestContext<RoleServer>, message: String) -> Self {
+        let Some(token) = ctx.meta.get_progress_token() else {
+            return Self(None);
+        };
+        let peer = ctx.peer.clone();
+        Self(Some(tokio::spawn(async move {
+            for beat in 1u64.. {
+                tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                let progress = ProgressNotificationParam::new(token.clone(), beat as f64)
+                    .with_message(message.clone());
+                if peer.notify_progress(progress).await.is_err() {
+                    return; // peer gone — nothing left to keep alive
+                }
+            }
+        })))
+    }
+}
+
+impl Drop for Heartbeat {
+    fn drop(&mut self) {
+        if let Some(task) = self.0.take() {
+            task.abort();
+        }
+    }
+}
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 struct AddSourceReq {
@@ -65,6 +111,7 @@ impl AlchemyMcp {
             file_path,
             title,
         }): Parameters<AddSourceReq>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let state = self.state();
         let provided = [url.is_some(), text.is_some(), file_path.is_some()]
@@ -74,6 +121,16 @@ impl AlchemyMcp {
         if provided != 1 {
             return Err(invalid("provide exactly one of url, text, or file_path"));
         }
+        let what = url
+            .clone()
+            .or_else(|| file_path.clone())
+            .or_else(|| title.clone())
+            .unwrap_or_else(|| "pasted text".into());
+        let _heartbeat = Heartbeat::start(&ctx, format!("importing {what}"));
+        let _permit = IMPORT_GATE
+            .acquire()
+            .await
+            .expect("import gate never closes");
         let source = if let Some(url) = url {
             if crate::mac::is_mac_uri(&url) {
                 // Mac items connect as living, auto-syncing sources — never

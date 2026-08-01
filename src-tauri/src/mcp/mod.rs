@@ -120,9 +120,19 @@ async fn start_server(
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     let shutdown = tokio_util::sync::CancellationToken::new();
 
+    // The session manager's keep-alive kills a session after that much time
+    // without a single session event — and a batch of parallel add_source
+    // imports (scanned PDFs OCR'ing page by page) can sit quiet far longer
+    // than the 5-minute default, terminating the session under every
+    // still-running call ("Session service terminated", seen live with 6
+    // parallel PDF imports). Long imports also heartbeat progress (see
+    // sources.rs), but the ceiling must outlast the slowest legitimate call:
+    // the 20-minute generation watchdog, plus margin.
+    let mut sessions = LocalSessionManager::default();
+    sessions.session_config.keep_alive = Some(std::time::Duration::from_secs(30 * 60));
     let service = StreamableHttpService::new(
         move || Ok(AlchemyMcp::new(app.clone())),
-        LocalSessionManager::default().into(),
+        sessions.into(),
         StreamableHttpServerConfig::default(),
     );
     let router = axum::Router::new()
