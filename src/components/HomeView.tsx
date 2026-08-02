@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { DevBadge } from "./DevBadge";
 import {
@@ -22,7 +22,7 @@ import {
   relativeTime,
   shortcutBlocked,
 } from "@/lib/utils";
-import type { Note } from "@/lib/types";
+import type { Note, SourceEvent } from "@/lib/types";
 import {
   BookOpen,
   PanelRight,
@@ -93,6 +93,30 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [briefOpen, setBriefOpen] = useState(
     () => localStorage.getItem("homeBriefOpen") !== "0",
   );
+  const clampSplit = (pct: number) => Math.min(75, Math.max(15, pct));
+  const [briefSplit, setBriefSplit] = useState(() =>
+    clampSplit(Number(localStorage.getItem("homeBriefSplit") ?? 40)),
+  );
+  const rightColRef = useRef<HTMLDivElement>(null);
+  const onSplitDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const col = rightColRef.current;
+    if (!col) return;
+    const rect = col.getBoundingClientRect();
+    const move = (ev: PointerEvent) => {
+      const pct = clampSplit(((ev.clientY - rect.top) / rect.height) * 100);
+      setBriefSplit(pct);
+      localStorage.setItem("homeBriefSplit", String(Math.round(pct)));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.style.cursor = "";
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    document.body.style.cursor = "row-resize";
+  };
   const toggleBrief = () => {
     setBriefOpen((open) => {
       localStorage.setItem("homeBriefOpen", open ? "0" : "1");
@@ -178,6 +202,14 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     // StudioPanel auto-opens this id once the notebook's notes load.
     useStore.setState({ justCreatedNoteId: note.id });
     void open(note.notebookId);
+  }
+
+  // A watcher event reads in its source's own notebook: switch, then open
+  // the reader on the source (same shape as the alchemy:// deep links).
+  function openEventSource(event: SourceEvent) {
+    void open(event.notebookId).then(() => {
+      useStore.getState().openInReader({ type: "source", id: event.sourceId });
+    });
   }
 
   // Cmd/Ctrl+N: new notebook.
@@ -274,6 +306,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 notebookTitle={notebookTitle}
                 notebookColor={notebookColor}
                 onOpenNote={openNote}
+                onOpenNotebook={(id) => void open(id)}
+                onOpenEvent={openEventSource}
                 onRan={refreshActivity}
                 onCollapse={toggleStaff}
               />
@@ -283,7 +317,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               <SidebarRail icon="staff" title="Show Staff" onClick={toggleStaff} />
             </div>
           )}
-          <div className="relative min-w-0 flex-[2] overflow-y-auto">
+          <div className="relative min-w-0 flex-1 overflow-y-auto">
             {/* The dither shader from the hero, as a banner behind the heading —
             it fades into the background before the notebook grid starts. */}
             {!glassOn && (
@@ -585,7 +619,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               />
             </div>
           ) : (
-            <div className="mx-2 mb-2 mt-1 hidden min-w-0 flex-[3] flex-col gap-2 lg:flex">
+            <div
+              ref={rightColRef}
+              className="mx-2 mb-2 mt-1 hidden min-w-0 flex-1 flex-col lg:flex"
+            >
               <>
                 <BriefSidebar
                   open={briefOpen}
@@ -594,7 +631,31 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   schedules={allReports}
                   unread={briefUnread}
                   onRan={refreshActivity}
+                  className={cn(
+                    briefOpen && !reportsOpen && "min-h-0 flex-1",
+                    briefOpen && reportsOpen && "shrink-0",
+                  )}
+                  style={
+                    briefOpen && reportsOpen
+                      ? { height: `${briefSplit}%` }
+                      : undefined
+                  }
                 />
+                {briefOpen && reportsOpen ? (
+                  <div
+                    role="separator"
+                    aria-orientation="horizontal"
+                    aria-label="Resize the brief"
+                    onPointerDown={onSplitDrag}
+                    onDoubleClick={() => {
+                      setBriefSplit(40);
+                      localStorage.setItem("homeBriefSplit", "40");
+                    }}
+                    className="h-2 shrink-0 cursor-row-resize rounded transition-colors hover:bg-ring/30 active:bg-ring/40"
+                  />
+                ) : (
+                  <div className="h-2 shrink-0" />
+                )}
                 <aside
                   className={cn(
                     "side-card flex min-h-0 flex-col",

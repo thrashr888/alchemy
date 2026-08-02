@@ -16,8 +16,8 @@ import {
   Clock,
   Moon,
   Newspaper,
-  PanelLeft,
-  PanelRight,
+  PanelLeftClose,
+  PanelRightClose,
   Pause,
   Play,
   Power,
@@ -37,6 +37,8 @@ export function BriefSidebar({
   schedules,
   unread,
   onRan,
+  className,
+  style,
 }: {
   open: boolean;
   onToggle: () => void;
@@ -45,6 +47,8 @@ export function BriefSidebar({
   schedules: ReportSchedule[];
   unread: boolean;
   onRan: () => void;
+  className?: string;
+  style?: React.CSSProperties;
 }) {
   const markNotesRead = useStore((s) => s.markNotesRead);
   const pushToast = useStore((s) => s.pushToast);
@@ -73,10 +77,8 @@ export function BriefSidebar({
 
   return (
     <section
-      className={cn(
-        "side-card flex min-h-0 flex-col",
-        open && "max-h-[55%] shrink-0",
-      )}
+      className={cn("side-card flex min-h-0 flex-col", className)}
+      style={style}
     >
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-6">
         <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
@@ -108,7 +110,7 @@ export function BriefSidebar({
             aria-expanded={open}
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
           >
-            <PanelRight className="h-4 w-4" />
+            <PanelRightClose className="h-4 w-4" />
           </button>
         </div>
       </div>
@@ -143,6 +145,8 @@ export function StaffSidebar({
   notebookTitle,
   notebookColor,
   onOpenNote,
+  onOpenNotebook,
+  onOpenEvent,
   onRan,
   onCollapse,
 }: {
@@ -151,6 +155,8 @@ export function StaffSidebar({
   notebookTitle: Map<string, string>;
   notebookColor: Map<string, string>;
   onOpenNote: (note: Note) => void;
+  onOpenNotebook: (notebookId: string) => void;
+  onOpenEvent: (event: SourceEvent) => void;
   onRan: () => void;
   onCollapse: () => void;
 }) {
@@ -234,7 +240,7 @@ export function StaffSidebar({
             aria-label="Collapse the Staff sidebar"
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
           >
-            <PanelLeft className="h-4 w-4" />
+            <PanelLeftClose className="h-4 w-4" />
           </button>
         </div>
       </div>
@@ -299,12 +305,14 @@ export function StaffSidebar({
                       r.enabled ? "text-success" : "text-subtle-foreground",
                     )}
                   />
-                  <span
-                    className="min-w-0 truncate text-caption text-foreground"
-                    title={`${r.name} — ${notebookTitle.get(r.notebookId) ?? "notebook"}`}
+                  <button
+                    type="button"
+                    onClick={() => onOpenNotebook(r.notebookId)}
+                    className="min-w-0 truncate text-left text-caption text-foreground hover:underline"
+                    title={`Open "${notebookTitle.get(r.notebookId) ?? "notebook"}"`}
                   >
                     {r.name}
-                  </span>
+                  </button>
                   <span className="ml-auto flex shrink-0 items-center gap-1 text-micro text-subtle-foreground group-hover:hidden">
                     {r.trigger === "change" ? (
                       <Zap className="h-2.5 w-2.5" />
@@ -341,9 +349,14 @@ export function StaffSidebar({
             events.slice(0, 10).map((event) => (
               <div key={event.id} className="rounded-md px-1.5 py-1">
                 <div className="flex items-center gap-1.5">
-                  <span className="min-w-0 truncate text-caption text-foreground">
+                  <button
+                    type="button"
+                    onClick={() => onOpenEvent(event)}
+                    className="min-w-0 truncate text-left text-caption text-foreground hover:underline"
+                    title={`Read "${event.sourceTitle}"`}
+                  >
                     {event.sourceTitle}
-                  </span>
+                  </button>
                   <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
                     {relativeTime(event.at)}
                   </span>
