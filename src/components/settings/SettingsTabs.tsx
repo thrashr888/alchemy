@@ -9,18 +9,27 @@ import type { BuildInfo, ChatConfig } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { AlchemySymbol } from "../AlchemyHero";
 import { Input, Textarea } from "../ui";
-import { Globe } from "lucide-react";
+import {
+  AlignLeft,
+  Globe,
+  GraduationCap,
+  PenLine,
+  Scissors,
+  ScrollText,
+  Sparkles,
+  type LucideIcon,
+} from "lucide-react";
 
 const CHAT_STYLES = [
-  { id: "default", label: "Default", hint: "Balanced, grounded answers for research and brainstorming." },
-  { id: "learning", label: "Learning Guide", hint: "Explains step by step, defines terms, builds intuition." },
-  { id: "custom", label: "Custom", hint: "Give your own goal, style, or role." },
+  { id: "default", label: "Default", icon: Sparkles, hint: "Balanced, grounded answers for research and brainstorming." },
+  { id: "learning", label: "Learning Guide", icon: GraduationCap, hint: "Explains step by step, defines terms, builds intuition." },
+  { id: "custom", label: "Custom", icon: PenLine, hint: "Give your own goal, style, or role." },
 ] as const;
 
 const CHAT_LENGTHS = [
-  { id: "default", label: "Default" },
-  { id: "longer", label: "Longer" },
-  { id: "shorter", label: "Shorter" },
+  { id: "default", label: "Default", icon: AlignLeft },
+  { id: "longer", label: "Longer", icon: ScrollText },
+  { id: "shorter", label: "Shorter", icon: Scissors },
 ] as const;
 
 const CHAT_FONTS = [
@@ -69,15 +78,15 @@ export function ChatTab() {
       </p>
 
       <Field label="Conversational goal, style, or role">
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-3">
           {CHAT_STYLES.map((style) => (
-            <Pill
+            <OptionTile
               key={style.id}
+              icon={style.icon}
+              label={style.label}
               active={chatConfig.style === style.id}
               onClick={() => apply({ style: style.id })}
-            >
-              {style.label}
-            </Pill>
+            />
           ))}
         </div>
         {styleHint && <span className="text-micro text-subtle-foreground">{styleHint}</span>}
@@ -94,15 +103,15 @@ export function ChatTab() {
       </Field>
 
       <Field label="Response length">
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-3">
           {CHAT_LENGTHS.map((length) => (
-            <Pill
+            <OptionTile
               key={length.id}
+              icon={length.icon}
+              label={length.label}
               active={chatConfig.length === length.id}
               onClick={() => apply({ length: length.id })}
-            >
-              {length.label}
-            </Pill>
+            />
           ))}
         </div>
       </Field>
@@ -376,6 +385,50 @@ function ThemeButton({ label, selected, colors, onClick }: { label: string; sele
 
 function Kbd({ children }: { children: ReactNode }) {
   return <kbd className="inline-flex h-[22px] min-w-[22px] items-center justify-center rounded-md border border-border-strong bg-surface-2 px-1.5 font-sans text-caption text-foreground/85 shadow-[0_1px_0_var(--border)]">{children}</kbd>;
+}
+
+/** macOS System Settings-style option: an icon tile above its label, the
+ *  selection carried by an accent ring on the tile (never color alone — the
+ *  label bolds too). */
+function OptionTile({
+  icon: Icon,
+  label,
+  active,
+  onClick,
+}: {
+  icon: LucideIcon;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className="group flex flex-col items-center gap-1.5 outline-none"
+    >
+      <span
+        className={cn(
+          "flex h-11 w-16 items-center justify-center rounded-lg border transition-colors",
+          "group-focus-visible:ring-2 group-focus-visible:ring-ring/60",
+          active
+            ? "border-primary bg-primary/15 text-citation ring-1 ring-primary"
+            : "border-border-strong bg-surface-2 text-muted-foreground group-hover:bg-elevated group-hover:text-foreground",
+        )}
+      >
+        <Icon className="h-[18px] w-[18px]" />
+      </span>
+      <span
+        className={cn(
+          "text-caption transition-colors",
+          active ? "font-medium text-foreground" : "text-muted-foreground",
+        )}
+      >
+        {label}
+      </span>
+    </button>
+  );
 }
 
 function Pill({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
