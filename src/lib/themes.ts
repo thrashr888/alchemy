@@ -345,12 +345,16 @@ export const THEMES: Record<string, Theme> = {
       "Settling the rear",
     ],
     vars: {
-      background: "#e4d8bf", surface: "#ddd0b4", "surface-2": "#d3c5a5", elevated: "#ede3ce",
-      foreground: "#241f18", muted: "#d3c5a5", "muted-foreground": "#574d3e",
-      "subtle-foreground": "#5b5142", ring: "#b30018", primary: "#b30018",
-      "primary-hover": "#9a0015", "primary-foreground": "#ffffff", accent: "#d3c5a5",
-      "accent-foreground": "#241f18", destructive: "#7d1810", success: "#3a5516",
-      citation: "#61470d", selection: "rgba(179,0,24,0.22)", ...lightBorder,
+      // A "medium mode": true Cashmere Beige hide is a warm mid-tan, not
+      // cream — darker canvas than the other light schemes, dark text.
+      background: "#c9b493", surface: "#c2ab88", "surface-2": "#b79e79", elevated: "#d6c4a6",
+      foreground: "#221b12", muted: "#b79e79", "muted-foreground": "#4a3d2a",
+      "subtle-foreground": "#544733", ring: "#b30018", primary: "#b30018",
+      "primary-hover": "#9a0015", "primary-foreground": "#ffffff", accent: "#b79e79",
+      "accent-foreground": "#221b12", destructive: "#7d1810", success: "#3a5516",
+      citation: "#5c460e", selection: "rgba(179,0,24,0.22)",
+      border: "rgba(46,33,16,0.14)", "border-strong": "rgba(46,33,16,0.24)",
+      input: "rgba(46,33,16,0.18)", scrollbar: "rgba(46,33,16,0.26)",
     },
   },
   italia: {
