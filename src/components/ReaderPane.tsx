@@ -39,6 +39,7 @@ import {
   ExternalLink,
   FileInput,
   FolderOpen,
+  LayoutGrid,
   MessageSquare,
   MessageSquarePlus,
   Pencil,
@@ -399,7 +400,7 @@ function applyCitationHighlight(range: Range | null): boolean {
 }
 
 /** Observed width of an element (for the toolbar's responsive tiers). */
-function useElementWidth(ref: React.RefObject<HTMLElement | null>): number {
+export function useElementWidth(ref: React.RefObject<HTMLElement | null>): number {
   const [width, setWidth] = useState(0);
   useEffect(() => {
     const el = ref.current;
@@ -419,10 +420,16 @@ function useElementWidth(ref: React.RefObject<HTMLElement | null>): number {
 export function CenterModeTabs() {
   const hasDocs = useStore((s) => s.reader.history.length > 0);
   const active = useStore((s) =>
-    s.ledgerOpen ? "ledger" : s.reader.open ? "reader" : "chat",
+    s.galleryOpen
+      ? "gallery"
+      : s.ledgerOpen
+        ? "ledger"
+        : s.reader.open
+          ? "reader"
+          : "chat",
   );
   const tab = (
-    id: "chat" | "reader" | "ledger",
+    id: "chat" | "reader" | "gallery" | "ledger",
     icon: React.ReactNode,
     label: string,
     onClick: () => void,
@@ -450,7 +457,7 @@ export function CenterModeTabs() {
   return (
     <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5">
       {tab("chat", <MessageSquare className="h-3.5 w-3.5" />, "Chat", () => {
-        useStore.setState({ ledgerOpen: false });
+        useStore.setState({ ledgerOpen: false, galleryOpen: false });
         s.closeReader();
       })}
       {tab(
@@ -460,12 +467,16 @@ export function CenterModeTabs() {
         () =>
           useStore.setState((st) => ({
             ledgerOpen: false,
+            galleryOpen: false,
             reader: { ...st.reader, open: true },
           })),
         !hasDocs,
       )}
+      {tab("gallery", <LayoutGrid className="h-3.5 w-3.5" />, "Gallery", () =>
+        useStore.setState({ galleryOpen: true, ledgerOpen: false }),
+      )}
       {tab("ledger", <Logs className="h-3.5 w-3.5" />, "Ledger", () =>
-        useStore.setState({ ledgerOpen: true }),
+        useStore.setState({ ledgerOpen: true, galleryOpen: false }),
       )}
     </div>
   );
@@ -542,6 +553,14 @@ export function ReaderPane() {
   }, []);
 
   const s = useStore.getState();
+  // Mirrors the Sources panel "Edit text" gate: extracted text the user may
+  // rewrite. URL/mac mirrors and folder-like parents stay read-only.
+  const sourceEditable =
+    !!source &&
+    source.sourceType !== "url" &&
+    source.sourceType !== "mac" &&
+    !["folder", "git", "notion", "obsidian"].includes(source.sourceType) &&
+    source.status !== "placeholder";
   const originAction = source?.url
     ? isWebUrl(source.url)
       ? {
@@ -782,6 +801,17 @@ export function ReaderPane() {
                 <Pencil className="h-4 w-4" />
               </Button>
             )}
+          {sourceEditable && !editing && !liveMode && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setEditing(true)}
+              title="Edit the source text (re-indexes on save)"
+              aria-label="Edit source text"
+            >
+              <Pencil className="h-4 w-4" />
+            </Button>
+          )}
           {inlineActions.map((action) => (
             <Button
               key={action.label}
@@ -817,17 +847,28 @@ export function ReaderPane() {
           Open a source or note to read it here.
         </div>
       ) : source ? (
-        <SourceReader
-          key={source.id}
-          source={source}
-          highlight={current.highlight}
-          findOpen={findOpen}
-          onFindOpen={() => setFindOpen(true)}
-          onFindClose={() => setFindOpen(false)}
-          refreshTick={refreshTick}
-          live={liveMode}
-          imageView={imageMode}
-        />
+        editing && sourceEditable ? (
+          <SourceEditor
+            key={source.id}
+            source={source}
+            onDone={(saved) => {
+              setEditing(false);
+              if (saved) setRefreshTick((t) => t + 1);
+            }}
+          />
+        ) : (
+          <SourceReader
+            key={source.id}
+            source={source}
+            highlight={current.highlight}
+            findOpen={findOpen}
+            onFindOpen={() => setFindOpen(true)}
+            onFindClose={() => setFindOpen(false)}
+            refreshTick={refreshTick}
+            live={liveMode}
+            imageView={imageMode}
+          />
+        )
       ) : note ? (
         <NoteReader
           key={note.id}
@@ -1125,7 +1166,7 @@ function ImageView({ url, title }: { url: string; title: string }) {
 
 /** Full-text source reading: faithful markdown when the content is markdown-
  *  shaped, find-in-source, citation highlight, and select-to-ask. */
-const SOURCE_TYPE_LABEL: Record<Source["sourceType"], string> = {
+export const SOURCE_TYPE_LABEL: Record<Source["sourceType"], string> = {
   pdf: "PDF",
   text: "Text",
   markdown: "Markdown",
@@ -2042,6 +2083,82 @@ function SelAction({
  *  rail floating alongside. No Save/Cancel. Artifact kinds (deck, quiz,
  *  flashcards, mind map, audio) keep native renderers plus the raw-markdown
  *  form behind the toolbar's Edit pencil. */
+/** Raw-text editor for a source's extracted text, behind the toolbar
+ *  pencil. Saving re-chunks and re-embeds through the ingest queue. */
+function SourceEditor({
+  source,
+  onDone,
+}: {
+  source: Source;
+  onDone: (saved: boolean) => void;
+}) {
+  const editSourceText = useStore((s) => s.editSourceText);
+  const [title, setTitle] = useState(source.title);
+  const [text, setText] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // List payloads omit content; fetch the full text to prefill the editor.
+  useEffect(() => {
+    let stale = false;
+    api
+      .getSourceContent(source.id)
+      .then((t) => {
+        if (!stale) setText(t);
+      })
+      .catch(() => {
+        if (!stale) setText("");
+      });
+    return () => {
+      stale = true;
+    };
+  }, [source.id]);
+
+  if (text === null) {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <Spinner />
+      </div>
+    );
+  }
+  return (
+    <form
+      className="flex min-h-0 flex-1 flex-col gap-3 px-6 py-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (saving) return;
+        setSaving(true);
+        void editSourceText(source.id, title, text)
+          .then(() => onDone(true))
+          .finally(() => setSaving(false));
+      }}
+    >
+      <Input
+        name="source-title"
+        aria-label="Source title"
+        value={title}
+        onChange={(event) => setTitle(event.target.value)}
+      />
+      <Textarea
+        aria-label="Source text"
+        className="min-h-0 flex-1 resize-none font-mono text-caption leading-relaxed"
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+      />
+      <div className="flex shrink-0 items-center justify-end gap-2">
+        <span className="mr-auto text-caption text-subtle-foreground">
+          Saving re-indexes this source.
+        </span>
+        <Button type="button" variant="ghost" onClick={() => onDone(false)}>
+          Cancel
+        </Button>
+        <Button type="submit" variant="primary" loading={saving}>
+          Save
+        </Button>
+      </div>
+    </form>
+  );
+}
+
 function NoteReader({
   note,
   editing,

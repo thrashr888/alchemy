@@ -25,7 +25,10 @@ import {
 } from "@/lib/utils";
 import type { Note, SourceEvent } from "@/lib/types";
 import {
+  Archive,
+  ArchiveRestore,
   BookOpen,
+  ChevronRight,
   PanelRight,
   Plus,
   Search,
@@ -59,6 +62,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const rename = useStore((s) => s.renameNotebook);
   const setColor = useStore((s) => s.setNotebookColor);
   const remove = useStore((s) => s.deleteNotebook);
+  const setStatus = useStore((s) => s.setNotebookStatus);
   const theme = useStore((s) => s.theme);
   // Shader must not mount under glass (rAF keeps running when display:none).
   const glassOn = useStore((s) => s.reading.glass);
@@ -70,6 +74,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     title: string;
   } | null>(null);
   const [colorPickerFor, setColorPickerFor] = useState<string | null>(null);
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  const activeNotebooks = notebooks.filter((n) => n.status !== "archived");
+  const archivedNotebooks = notebooks.filter((n) => n.status === "archived");
   // The Steward's sidebars (RFC-v12-steward UI §2, as sidebars): Staff on
   // the left, Brief above Latest Reports on the right. Each collapses on
   // its own, persisted. Registry joins when its pillar exists.
@@ -360,7 +367,17 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   </h1>
                   <p className="mt-1 text-body text-muted-foreground">
                     {stats
-                      ? `${notebooks.length} ${notebooks.length === 1 ? "notebook" : "notebooks"} · ${stats.sources} ${stats.sources === 1 ? "source" : "sources"} · ${Intl.NumberFormat().format(stats.chars)} chars indexed`
+                      ? [
+                          `${activeNotebooks.length} ${activeNotebooks.length === 1 ? "notebook" : "notebooks"}`,
+                          `${stats.sources} ${stats.sources === 1 ? "source" : "sources"}`,
+                          stats.notes > 0 &&
+                            `${stats.notes} ${stats.notes === 1 ? "note" : "notes"}`,
+                          stats.ledger > 0 &&
+                            `${stats.ledger} ledger ${stats.ledger === 1 ? "entry" : "entries"}`,
+                          `${Intl.NumberFormat().format(stats.chars)} chars indexed`,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")
                       : "Most recently used first."}
                   </p>
                   <AwayDigest
@@ -459,7 +476,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   <span className="text-body font-medium">New notebook</span>
                 </button>
 
-                {notebooks.map((nb) => (
+                {activeNotebooks.map((nb) => (
                   <div
                     key={nb.id}
                     // Card content is pointer-events-none, so the hover
@@ -538,6 +555,11 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                               setRenaming({ id: nb.id, title: nb.title }),
                           },
                           {
+                            label: "Archive",
+                            icon: <Archive className="h-3.5 w-3.5" />,
+                            onClick: () => void setStatus(nb.id, "archived"),
+                          },
+                          {
                             label: "Delete…",
                             icon: <Trash2 className="h-3.5 w-3.5" />,
                             danger: true,
@@ -585,6 +607,77 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   </div>
                 ))}
               </div>
+
+              {/* Archived notebooks: collapsed row list, data intact. */}
+              {archivedNotebooks.length > 0 && (
+                <div className="mt-8">
+                  <button
+                    type="button"
+                    onClick={() => setArchivedOpen((v) => !v)}
+                    aria-expanded={archivedOpen}
+                    className="flex cursor-pointer items-center gap-1 text-micro font-medium uppercase tracking-wide text-subtle-foreground transition-colors hover:text-muted-foreground"
+                  >
+                    <ChevronRight
+                      className={cn(
+                        "h-3 w-3 transition-transform",
+                        archivedOpen && "rotate-90",
+                      )}
+                    />
+                    Archived · {archivedNotebooks.length}
+                  </button>
+                  {archivedOpen && (
+                    <div className="mt-2 flex flex-col gap-1">
+                      {archivedNotebooks.map((nb) => (
+                        <div
+                          key={nb.id}
+                          className="group flex items-center gap-2.5 rounded-md border border-border bg-surface px-3 py-2 transition-colors hover:border-border-strong hover:bg-surface-2"
+                        >
+                          <Archive className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <span className="truncate text-body text-foreground">
+                            {nb.title}
+                          </span>
+                          <Badge className="shrink-0 gap-1">
+                            <FileText className="h-2.5 w-2.5" />
+                            {nb.sourceCount}
+                          </Badge>
+                          <div className="ml-auto flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => void setStatus(nb.id, "")}
+                            >
+                              <ArchiveRestore className="mr-1 h-3.5 w-3.5" />
+                              Unarchive
+                            </Button>
+                            <RowMenu
+                              label={`Options for ${nb.title}`}
+                              items={[
+                                {
+                                  label: "Delete…",
+                                  icon: <Trash2 className="h-3.5 w-3.5" />,
+                                  danger: true,
+                                  onClick: async () => {
+                                    if (
+                                      await confirm({
+                                        title: `Delete "${nb.title}"?`,
+                                        message:
+                                          "This permanently deletes the notebook and all of its sources.",
+                                        confirmLabel: "Delete",
+                                        danger: true,
+                                      })
+                                    )
+                                      remove(nb.id);
+                                  },
+                                },
+                              ]}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* The last few generated/edited documents across all notebooks. */}
               {recentNotes.length > 0 && (
@@ -686,8 +779,17 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                       setBriefSplit(40);
                       localStorage.setItem("homeBriefSplit", "40");
                     }}
-                    className="h-2 shrink-0 cursor-row-resize rounded transition-colors hover:bg-ring/30 active:bg-ring/40"
-                  />
+                    className="group/resize relative h-2 shrink-0 cursor-row-resize rounded transition-colors hover:bg-ring/30 active:bg-ring/40"
+                  >
+                    <span
+                      aria-hidden
+                      className="absolute top-1/2 left-1/2 flex -translate-x-1/2 -translate-y-1/2 gap-0.5 opacity-40 transition-opacity group-hover/resize:opacity-100"
+                    >
+                      <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
+                      <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
+                      <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
+                    </span>
+                  </div>
                 ) : (
                   <div className="h-2 shrink-0" />
                 )}

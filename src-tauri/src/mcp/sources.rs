@@ -77,6 +77,17 @@ struct SourceIdReq {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+struct UpdateSourceReq {
+    /// Source id (from list_sources).
+    source_id: String,
+    /// New title; empty keeps the current title.
+    #[serde(default)]
+    title: String,
+    /// The full replacement text.
+    text: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 struct ActivityReq {
     /// Look-back window in hours (default 24, capped to the 30-day event
     /// window the table keeps).
@@ -107,7 +118,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "List a notebook's sources (id, title, type, url, status, char/chunk counts). status \"error\" means the import failed — see the error field."
+        description = "List a notebook's sources (id, title, type, url, status, char/chunk counts, image_url — the page's lead image for url sources; \"-\" means checked and none). status \"error\" means the import failed — see the error field."
     )]
     async fn list_sources(
         &self,
@@ -207,6 +218,46 @@ impl AlchemyMcp {
             .await
             .map_err(internal)?;
         json_result(&Source { content, ..source })
+    }
+
+    #[tool(
+        description = "Replace an editable source's title and full text (pasted/text/markdown/file-extracted sources — not url or mac mirrors, which refresh from their origin). The new text is re-chunked and re-embedded. Returns the updated source."
+    )]
+    async fn update_source(
+        &self,
+        Parameters(UpdateSourceReq {
+            source_id,
+            title,
+            text,
+        }): Parameters<UpdateSourceReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let existing = state
+            .db
+            .get_source(&source_id)
+            .await
+            .map_err(internal)?
+            .ok_or_else(|| invalid(format!("no source with id {source_id}")))?;
+        if matches!(
+            existing.source_type.as_str(),
+            "url" | "mac" | "folder" | "git" | "notion" | "obsidian"
+        ) {
+            return Err(invalid(format!(
+                "{} sources mirror an origin and can't be edited — refresh them instead",
+                existing.source_type
+            )));
+        }
+        let title = if title.trim().is_empty() {
+            existing.title.clone()
+        } else {
+            title.trim().to_string()
+        };
+        let extracted = crate::ingest::extract_pasted(&title, &text).map_err(internal)?;
+        let source = commands::reingest(&state, &existing, extracted, None, true)
+            .await
+            .map_err(internal)?;
+        self.changed("sources", Some(&source.notebook_id));
+        json_result(&slim(source))
     }
 
     #[tool(description = "Delete a source and its chunks from a notebook.")]

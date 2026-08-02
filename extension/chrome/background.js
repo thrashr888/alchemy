@@ -76,6 +76,9 @@ function scrapePage() {
     url: location.href,
     title: document.title || "",
     ogTitle: pick('meta[property="og:title"]', "content"),
+    ogImage:
+      pick('meta[property="og:image"]', "content") ||
+      pick('meta[name="twitter:image"]', "content"),
     byline: byline || "",
     published: published || "",
     html: document.documentElement ? document.documentElement.outerHTML : "",

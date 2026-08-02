@@ -12,6 +12,10 @@ pub struct Notebook {
     pub updated_at: i64,
     #[serde(default)]
     pub color: String,
+    /// "" (active) | "archived". Archived notebooks are hidden from the
+    /// main grid but keep all their data and can be unarchived.
+    #[serde(default)]
+    pub status: String,
     /// Populated on list queries; not stored on the row.
     #[serde(default)]
     pub source_count: i64,
@@ -57,6 +61,10 @@ pub struct Source {
     /// Artist), captured at ingest; empty when the format carries none.
     #[serde(default)]
     pub author: String,
+    /// Lead image for the gallery: the page's og:image / twitter:image for
+    /// `url` sources. "" = unknown, "-" = checked and the page has none.
+    #[serde(default)]
+    pub image_url: String,
 }
 
 /// Tally of what a folder rescan changed across the scanned folder sources.

@@ -213,8 +213,10 @@ impl Db {
         };
         db.ensure_table(T_NOTEBOOKS, notebooks_schema()).await?;
         db.migrate_notebooks().await?;
+        db.migrate_notebook_status().await?;
         db.ensure_table(T_SOURCES, sources_schema()).await?;
         db.migrate_sources().await?;
+        db.migrate_source_image().await?;
         db.backfill_blank_titles().await?;
         db.ensure_table(T_MESSAGES, messages_schema()).await?;
         db.migrate_messages().await?;
@@ -301,6 +303,7 @@ impl Db {
                     created_at: created.value(i),
                     updated_at: updated.value(i),
                     color: NOTEBOOK_PALETTE[idx % NOTEBOOK_PALETTE.len()].to_string(),
+                    status: String::new(),
                     source_count: 0,
                 });
                 idx += 1;
@@ -315,6 +318,14 @@ impl Db {
             self.add_batch(T_NOTEBOOKS, schema, batch).await?;
         }
         Ok(())
+    }
+
+    /// Add the `status` column ("") to pre-existing notebook tables.
+    async fn migrate_notebook_status(&self) -> Result<()> {
+        if !self.table_exists(T_NOTEBOOKS).await? {
+            return Ok(());
+        }
+        self.add_string_column(T_NOTEBOOKS, "status", "").await
     }
 
     /// Backfill the `kind` column ("chat") on pre-existing `messages` tables.
@@ -516,6 +527,7 @@ impl Db {
             for i in 0..b.num_rows() {
                 sources.push(Source {
                     author: String::new(),
+                    image_url: String::new(),
                     id: id.value(i).to_string(),
                     notebook_id: nb.value(i).to_string(),
                     title: title.value(i).to_string(),
@@ -544,6 +556,14 @@ impl Db {
             self.add_batch(T_SOURCES, schema, batch).await?;
         }
         Ok(())
+    }
+
+    /// Add the `image_url` column ("") to pre-existing source tables.
+    async fn migrate_source_image(&self) -> Result<()> {
+        if !self.table_exists(T_SOURCES).await? {
+            return Ok(());
+        }
+        self.add_string_column(T_SOURCES, "image_url", "").await
     }
 
     async fn table_exists(&self, name: &str) -> Result<bool> {
@@ -607,6 +627,7 @@ impl Db {
             let created = i64_col(b, "created_at")?;
             let updated = i64_col(b, "updated_at")?;
             let color = opt_str_col(b, "color");
+            let status = opt_str_col(b, "status");
             for i in 0..b.num_rows() {
                 notebooks.push(Notebook {
                     id: id.value(i).to_string(),
@@ -614,6 +635,7 @@ impl Db {
                     created_at: created.value(i),
                     updated_at: updated.value(i),
                     color: color.map(|c| c.value(i).to_string()).unwrap_or_default(),
+                    status: status.map(|s| s.value(i).to_string()).unwrap_or_default(),
                     source_count: 0,
                 });
             }
@@ -671,6 +693,17 @@ impl Db {
         Ok(())
     }
 
+    /// Set the notebook's lifecycle status: "" (active) or "archived".
+    pub async fn set_notebook_status(&self, id: &str, status: &str) -> Result<()> {
+        let tbl = self.conn.open_table(T_NOTEBOOKS).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(id)))
+            .column("status", format!("'{}'", esc(status)))
+            .execute()
+            .await?;
+        Ok(())
+    }
+
     pub async fn delete_notebook(&self, id: &str) -> Result<()> {
         let pred = format!("notebook_id = '{}'", esc(id));
         self.delete_where(T_SOURCES, &pred).await?;
@@ -704,9 +737,11 @@ impl Db {
             let parent = str_col(b, "parent_id")?;
             let mtime = i64_col(b, "mtime")?;
             let author = str_col(b, "author")?;
+            let image = str_col(b, "image_url")?;
             for i in 0..b.num_rows() {
                 sources.push(Source {
                     author: author.value(i).to_string(),
+                    image_url: image.value(i).to_string(),
                     id: id.value(i).to_string(),
                     notebook_id: nb.value(i).to_string(),
                     title: title.value(i).to_string(),
@@ -777,6 +812,18 @@ impl Db {
         tbl.update()
             .only_if(format!("id = '{}'", esc(source_id)))
             .column("mtime", mtime.to_string())
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    /// Stamp a source's gallery lead image ("" unknown, "-" checked-none)
+    /// without touching content or chunks.
+    pub async fn set_source_image(&self, source_id: &str, image_url: &str) -> Result<()> {
+        let tbl = self.conn.open_table(T_SOURCES).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(source_id)))
+            .column("image_url", format!("'{}'", esc(image_url)))
             .execute()
             .await?;
         Ok(())
@@ -1284,8 +1331,9 @@ impl Db {
         Ok(out)
     }
 
-    /// Aggregate (source count, total chars) across every notebook.
-    pub async fn corpus_stats(&self) -> Result<(i64, i64)> {
+    /// Aggregate (source count, total chars, note count, ledger count)
+    /// across every notebook.
+    pub async fn corpus_stats(&self) -> Result<(i64, i64, i64, i64)> {
         let batches = self.collect(T_SOURCES, None).await?;
         let (mut count, mut chars) = (0i64, 0i64);
         for b in &batches {
@@ -1295,7 +1343,15 @@ impl Db {
                 chars += cc.value(i);
             }
         }
-        Ok((count, chars))
+        let notes: i64 = match self.collect(T_NOTES, None).await {
+            Ok(bs) => bs.iter().map(|b| b.num_rows() as i64).sum(),
+            Err(_) => 0, // table may not exist yet
+        };
+        let ledger: i64 = match self.collect(T_LEDGER, None).await {
+            Ok(bs) => bs.iter().map(|b| b.num_rows() as i64).sum(),
+            Err(_) => 0,
+        };
+        Ok((count, chars, notes, ledger))
     }
 
     /// BM25-only search across every notebook — no embedding round-trip, so
@@ -2376,6 +2432,7 @@ fn notebook_batch(schema: &SchemaRef, notebooks: &[Notebook]) -> Result<RecordBa
             i(|x| x.created_at),
             i(|x| x.updated_at),
             s(|x| x.color.clone()),
+            s(|x| x.status.clone()),
         ],
     )?)
 }
@@ -2411,6 +2468,7 @@ fn source_batch(schema: &SchemaRef, sources: &[Source]) -> Result<RecordBatch> {
             s(|x| x.parent_id.clone()),
             i(|x| x.mtime),
             s(|x| x.author.clone()),
+            s(|x| x.image_url.clone()),
         ],
     )?)
 }
@@ -2455,6 +2513,7 @@ fn notebooks_schema() -> SchemaRef {
         Field::new("created_at", DataType::Int64, false),
         Field::new("updated_at", DataType::Int64, false),
         Field::new("color", DataType::Utf8, false),
+        Field::new("status", DataType::Utf8, false),
     ]))
 }
 
@@ -2474,6 +2533,7 @@ fn sources_schema() -> SchemaRef {
         Field::new("parent_id", DataType::Utf8, false),
         Field::new("mtime", DataType::Int64, false),
         Field::new("author", DataType::Utf8, false),
+        Field::new("image_url", DataType::Utf8, false),
     ]))
 }
 

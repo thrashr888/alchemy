@@ -26,6 +26,7 @@ async fn ensure_briefs_notebook(state: &AppState) -> Result<Notebook, String> {
         created_at: ts,
         updated_at: ts,
         color: color.to_string(),
+        status: String::new(),
         source_count: 0,
     };
     e(state.db.create_notebook(&nb).await)?;

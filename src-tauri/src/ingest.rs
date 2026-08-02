@@ -18,6 +18,9 @@ pub struct Extracted {
     pub text: String,
     /// Embedded document authorship (see `file_author`); empty when absent.
     pub author: String,
+    /// Lead image (og:image / twitter:image) for `url` sources; "" when the
+    /// page has none. Powers the source gallery.
+    pub image_url: String,
 }
 
 /// Is this path an image we should OCR rather than read as text?
@@ -146,6 +149,7 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
             return Err(anyhow!("no extractable text found in {path}"));
         }
         return Ok(Extracted {
+            image_url: String::new(),
             author: String::new(),
             title: p
                 .file_name()
@@ -220,6 +224,7 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
         return Err(anyhow!("no extractable text found in {path}"));
     }
     Ok(Extracted {
+        image_url: String::new(),
         // Stamped here — the one chokepoint every local-file ingest passes
         // through — so refresh and folder resync re-capture it for free.
         author: file_author(path),
@@ -933,12 +938,14 @@ pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
     let title = article_title
         .or_else(|| extract_title(&body))
         .unwrap_or_else(|| url.clone());
+    let image_url = og_image(&body, &url).unwrap_or_default();
     Ok(Extracted {
         author: String::new(),
         title,
         source_type: "url".to_string(),
         url,
         text,
+        image_url,
     })
 }
 
@@ -1102,6 +1109,7 @@ async fn extract_google(
         return Err(anyhow!("this {} exported no text", kind.product()));
     }
     Ok(Extracted {
+        image_url: String::new(),
         author: String::new(),
         title,
         source_type: "url".to_string(),
@@ -1181,6 +1189,7 @@ pub struct PageMeta {
     pub og_title: String,
     pub byline: String,
     pub published: String,
+    pub og_image: String,
 }
 
 /// Build an `Extracted` from already-rendered HTML — the webview capture
@@ -1200,12 +1209,17 @@ pub fn extracted_from_html(html: &str, url: &str, dom_title: &str, meta: &PageMe
         Some(line) if !text.trim().is_empty() => format!("{line}\n\n{text}"),
         _ => text,
     };
+    let image_url = Some(meta.og_image.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| og_image(html, url))
+        .unwrap_or_default();
     Extracted {
         author: String::new(),
         title,
         source_type: "url".to_string(),
         url: url.to_string(),
         text,
+        image_url,
     }
 }
 
@@ -1293,6 +1307,7 @@ pub fn extract_pasted(title: &str, text: &str) -> Result<Extracted> {
         title.trim().to_string()
     };
     Ok(Extracted {
+        image_url: String::new(),
         author: String::new(),
         title,
         source_type: "text".to_string(),
@@ -1977,9 +1992,156 @@ fn extract_title(html: &str) -> Option<String> {
     }
 }
 
+/// Fetch a page and return just its lead image — the gallery backfill path
+/// for URL sources ingested before `image_url` existed. Lightweight on
+/// purpose: one GET, meta-tag parse, no readability, no embedding.
+pub async fn fetch_lead_image(url: &str) -> Option<String> {
+    let client = reqwest::Client::builder()
+        .user_agent(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+        )
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .ok()?;
+    let body = client.get(url).send().await.ok()?.text().await.ok()?;
+    og_image(&body, url)
+}
+
+/// The page's lead image from raw HTML meta tags — `og:image` (and its
+/// `:url`/`:secure_url` variants) or `twitter:image`, first hit wins —
+/// resolved against the page URL. Head-only scan; never fetches anything.
+pub fn og_image(html: &str, base_url: &str) -> Option<String> {
+    // Meta tags live in <head>; cap the scan so multi-MB bodies stay cheap.
+    let cap = html
+        .char_indices()
+        .nth(300_000)
+        .map(|(i, _)| i)
+        .unwrap_or(html.len());
+    let hay = &html[..cap];
+    let lower = hay.to_lowercase();
+    if lower.len() != hay.len() {
+        // Rare lowercasing length change (e.g. İ) would break shared byte
+        // indices below — skip rather than risk a mid-ingest panic.
+        return None;
+    }
+    const KEYS: &[&str] = &[
+        "og:image",
+        "og:image:url",
+        "og:image:secure_url",
+        "twitter:image",
+        "twitter:image:src",
+    ];
+    let mut pos = 0;
+    while let Some(off) = lower[pos..].find("<meta") {
+        let start = pos + off;
+        let Some(end) = lower[start..].find('>').map(|e| start + e + 1) else {
+            break;
+        };
+        pos = end;
+        let tag = &hay[start..end];
+        let key = meta_attr(tag, "property").or_else(|| meta_attr(tag, "name"));
+        if !key.is_some_and(|k| KEYS.contains(&k.to_lowercase().as_str())) {
+            continue;
+        }
+        let Some(content) = meta_attr(tag, "content") else {
+            continue;
+        };
+        let candidate = decode_entities(content.trim());
+        if candidate.is_empty() || candidate.starts_with("data:") {
+            continue;
+        }
+        // Resolve protocol-relative and path-relative candidates.
+        let resolved = reqwest::Url::parse(base_url)
+            .ok()
+            .and_then(|b| b.join(&candidate).ok())
+            .map(|u| u.to_string())
+            .unwrap_or(candidate);
+        if resolved.starts_with("http://") || resolved.starts_with("https://") {
+            return Some(resolved);
+        }
+    }
+    None
+}
+
+/// A quoted attribute value out of one `<meta …>` tag, order-agnostic.
+fn meta_attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let lower = tag.to_lowercase();
+    if lower.len() != tag.len() {
+        return None; // see og_image: byte indices must stay shared
+    }
+    let mut search = 0;
+    loop {
+        let at = lower[search..].find(name)? + search;
+        // Must be a standalone attribute name followed by `=`.
+        let before_ok = at == 0
+            || !lower.as_bytes()[at - 1].is_ascii_alphanumeric()
+                && lower.as_bytes()[at - 1] != b':';
+        let rest = &tag[at + name.len()..];
+        let trimmed = rest.trim_start();
+        if before_ok && trimmed.starts_with('=') {
+            let after_eq = trimmed[1..].trim_start();
+            let quote = after_eq.chars().next()?;
+            if quote == '"' || quote == '\'' {
+                let inner = &after_eq[1..];
+                let close = inner.find(quote)?;
+                return Some(&inner[..close]);
+            }
+            // Unquoted value: read to whitespace or tag end.
+            let end = after_eq
+                .find(|c: char| c.is_whitespace() || c == '>' || c == '/')
+                .unwrap_or(after_eq.len());
+            return Some(&after_eq[..end]);
+        }
+        search = at + name.len();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn og_image_finds_property_and_name_variants() {
+        let html = r#"<html><head>
+            <meta property="og:title" content="T">
+            <meta property="og:image" content="https://ex.com/hero.jpg">
+        </head><body></body></html>"#;
+        assert_eq!(
+            og_image(html, "https://ex.com/page"),
+            Some("https://ex.com/hero.jpg".to_string())
+        );
+        let twitter = r#"<meta name="twitter:image" content="https://ex.com/t.png">"#;
+        assert_eq!(
+            og_image(twitter, "https://ex.com/"),
+            Some("https://ex.com/t.png".to_string())
+        );
+    }
+
+    #[test]
+    fn og_image_resolves_relative_and_skips_junk() {
+        // Relative and protocol-relative candidates resolve against the page.
+        let rel = r#"<meta property="og:image" content="/img/lead.png">"#;
+        assert_eq!(
+            og_image(rel, "https://ex.com/articles/1"),
+            Some("https://ex.com/img/lead.png".to_string())
+        );
+        let proto = r#"<meta property="og:image" content="//cdn.ex.com/x.jpg">"#;
+        assert_eq!(
+            og_image(proto, "https://ex.com/"),
+            Some("https://cdn.ex.com/x.jpg".to_string())
+        );
+        // og:image:width's numeric content must not win; data: URIs skipped.
+        let junk = r#"<meta property="og:image:width" content="1200">
+                      <meta property="og:image" content="data:image/png;base64,xxx">"#;
+        assert_eq!(og_image(junk, "https://ex.com/"), None);
+        // Entities in the content attribute decode.
+        let ent = r#"<meta property="og:image" content="https://ex.com/a?b=1&amp;c=2">"#;
+        assert_eq!(
+            og_image(ent, "https://ex.com/"),
+            Some("https://ex.com/a?b=1&c=2".to_string())
+        );
+    }
 
     #[test]
     fn code_paths_detected_by_extension_and_name() {
@@ -2056,6 +2218,7 @@ mod tests {
     #[test]
     fn chunk_source_dispatches_on_source_type() {
         let code = Extracted {
+            image_url: String::new(),
             author: String::new(),
             title: "main.rs".into(),
             source_type: "code".into(),
@@ -2067,6 +2230,7 @@ mod tests {
         assert!(got[0].embed_text.starts_with("[main.rs]\n"));
 
         let prose = Extracted {
+            image_url: String::new(),
             author: String::new(),
             title: "Notes".into(),
             source_type: "text".into(),
@@ -2230,6 +2394,7 @@ mod tests {
     #[test]
     fn markdown_chunking_strips_frontmatter_and_carries_tags() {
         let ex = Extracted {
+            image_url: String::new(),
             author: String::new(),
             title: "Dialing In".into(),
             text: "---\ntags: [espresso]\n---\nGrind finer when sour. See [[Temps]].".into(),

@@ -11,7 +11,9 @@ import { FileText, Globe, ClipboardPaste } from "lucide-react";
  */
 export function ExternalAddModal() {
   const pending = useStore((s) => s.pendingExternalAdd);
-  const notebooks = useStore((s) => s.notebooks);
+  const notebooks = useStore((s) => s.notebooks).filter(
+    (n) => n.status !== "archived",
+  );
   const confirm = useStore((s) => s.confirmExternalAdd);
   // Keyed remount per payload resets the selection to the freshest notebook.
   if (!pending) return null;
@@ -32,7 +34,9 @@ function ExternalAddForm({
   onCancel: () => void;
 }) {
   const pending = useStore((s) => s.pendingExternalAdd);
-  const notebooks = useStore((s) => s.notebooks);
+  const notebooks = useStore((s) => s.notebooks).filter(
+    (n) => n.status !== "archived",
+  );
   const [notebookId, setNotebookId] = useState(notebooks[0]?.id ?? "");
 
   if (!pending) return null;

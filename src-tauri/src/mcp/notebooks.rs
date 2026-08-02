@@ -17,12 +17,20 @@ struct RenameNotebookReq {
     title: String,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct ArchiveNotebookReq {
+    /// Notebook id.
+    notebook_id: String,
+    /// true to archive, false to restore.
+    archived: bool,
+}
+
 #[tool_router(router = notebooks_router, vis = "pub(super)")]
 impl AlchemyMcp {
     // -- Notebooks --
 
     #[tool(
-        description = "List all notebooks with ids, titles, timestamps, and source counts. Start here to find or pick a notebook."
+        description = "List all notebooks with ids, titles, timestamps, source counts, and status (\"archived\" = hidden from the main grid). Start here to find or pick a notebook."
     )]
     async fn list_notebooks(&self) -> Result<CallToolResult, McpError> {
         let nbs: Vec<Notebook> = self.state().db.list_notebooks().await.map_err(internal)?;
@@ -46,6 +54,7 @@ impl AlchemyMcp {
             created_at: ts,
             updated_at: ts,
             color: NOTEBOOK_PALETTE[0].to_string(),
+            status: String::new(),
             source_count: 0,
         };
         self.state()
@@ -72,7 +81,27 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Delete a notebook and everything in it (sources, chunks, chat, notes). Irreversible — confirm with the user before deleting anything they didn't explicitly ask to remove."
+        description = "Archive a notebook (archived: true) or restore it (archived: false). Archiving hides the notebook from the main grid but keeps all data — prefer this over delete_notebook unless the user explicitly wants data gone."
+    )]
+    async fn archive_notebook(
+        &self,
+        Parameters(ArchiveNotebookReq {
+            notebook_id,
+            archived,
+        }): Parameters<ArchiveNotebookReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let status = if archived { "archived" } else { "" };
+        self.state()
+            .db
+            .set_notebook_status(&notebook_id, status)
+            .await
+            .map_err(internal)?;
+        self.changed("notebooks", Some(&notebook_id));
+        json_result(&serde_json::json!({ "ok": true, "status": status }))
+    }
+
+    #[tool(
+        description = "Delete a notebook and everything in it (sources, chunks, chat, notes). Irreversible — confirm with the user before deleting anything they didn't explicitly ask to remove; prefer archive_notebook when in doubt."
     )]
     async fn delete_notebook(
         &self,

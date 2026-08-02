@@ -777,6 +777,7 @@ async fn eval_router() {
             created_at: 0,
             updated_at: 0,
             color: String::new(),
+            status: String::new(),
             source_count: 0,
         })
         .await
@@ -1215,6 +1216,7 @@ async fn eval_enrichment_reembed() {
         .map(|(i, b)| (format!("t-c{i}"), i as i32, b.to_string()))
         .collect();
     let source = crate::models::Source {
+        image_url: String::new(),
         author: String::new(),
         id: src_id.clone(),
         notebook_id: nb.to_string(),
@@ -1875,6 +1877,7 @@ async fn run_scale(ai: &crate::ai::Ai, target_chars: usize) -> (f64, f64, usize)
         let vecs = vectors[cursor..cursor + n].to_vec();
         cursor += n;
         let source = crate::models::Source {
+            image_url: String::new(),
             author: String::new(),
             id: format!("scale-src-{di}"),
             notebook_id: notebooks[di % notebooks.len()].to_string(),

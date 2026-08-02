@@ -38,6 +38,7 @@ async fn rag_round_trip() {
         created_at: now(),
         updated_at: now(),
         color: "#eb5757".into(),
+        status: String::new(),
         source_count: 0,
     };
     db.create_notebook(&nb).await.expect("create notebook");
@@ -72,6 +73,7 @@ async fn rag_round_trip() {
         .map(|(i, c)| (uuid::Uuid::new_v4().to_string(), i as i32, c.text.clone()))
         .collect();
     let source = Source {
+        image_url: String::new(),
         author: String::new(),
         id: uuid::Uuid::new_v4().to_string(),
         notebook_id: nb.id.clone(),

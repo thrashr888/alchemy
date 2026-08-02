@@ -240,6 +240,7 @@ export const useStore = create<AppState>((set, get) => {
     // Center-column Ledger mode (Chat | Reader | Ledger) + a bump counter
     // the pane watches so agent writes appear live (mcp://changed).
     ledgerOpen: false,
+    galleryOpen: false,
     ledgerBump: 0,
     pendingNewNote: false,
     artifactStreamText: "",
@@ -333,7 +334,7 @@ export const useStore = create<AppState>((set, get) => {
         // notebook reopens in its center mode — chat, reader, or ledger.
         let view: {
           nb: string | null;
-          mode: "chat" | "reader" | "ledger";
+          mode: "chat" | "reader" | "ledger" | "gallery";
           doc?: ReaderDoc;
         } | null = null;
         try {
@@ -346,6 +347,7 @@ export const useStore = create<AppState>((set, get) => {
         if (last && notebooks.some((n) => n.id === last)) {
           await get().selectNotebook(last);
           if (view?.mode === "ledger") set({ ledgerOpen: true });
+          else if (view?.mode === "gallery") set({ galleryOpen: true });
           else if (view?.mode === "reader" && view.doc)
             get().openInReader(view.doc);
         }
@@ -513,7 +515,7 @@ export const useStore = create<AppState>((set, get) => {
           }
           // Capture from the menu bar shouldn't dead-end on the home
           // screen — hop into the most recent notebook and open there.
-          const recent = s.notebooks[0];
+          const recent = s.notebooks.find((n) => n.status !== "archived");
           if (!recent) {
             s.pushToast("error", "Create a notebook first, then add sources");
             return;
@@ -792,6 +794,29 @@ export const useStore = create<AppState>((set, get) => {
         }
       }),
 
+    setNotebookStatus: (id, status) =>
+      guard(async () => {
+        const prev = get().notebooks;
+        set({
+          notebooks: prev.map((n) => (n.id === id ? { ...n, status } : n)),
+        });
+        try {
+          await api.setNotebookStatus(id, status);
+        } catch (e) {
+          set({ notebooks: prev });
+          await get().refreshNotebooks();
+          throw e;
+        }
+        // Leave an archived notebook if it was open.
+        if (status === "archived" && get().currentId === id) {
+          const active = get().notebooks.filter(
+            (n) => n.status !== "archived" && n.id !== id,
+          );
+          if (active.length > 0) await get().selectNotebook(active[0].id);
+          else set({ currentId: null, sources: [], messages: [], notes: [] });
+        }
+      }),
+
     pickAndAddFiles: async () => {
       const picked = await open({
         multiple: true,
@@ -824,6 +849,7 @@ export const useStore = create<AppState>((set, get) => {
         id: tempId,
         notebookId: id,
         title: name,
+        imageUrl: "",
         sourceType: "folder",
         author: "",
         url: picked,
@@ -1105,12 +1131,17 @@ export const useStore = create<AppState>((set, get) => {
       if (current && current.type === doc.type && current.id === doc.id) {
         const next = [...history];
         next[index] = doc;
-        set({ ledgerOpen: false, reader: { open: true, history: next, index } });
+        set({
+          ledgerOpen: false,
+          galleryOpen: false,
+          reader: { open: true, history: next, index },
+        });
         return;
       }
       const next = [...history.slice(0, index + 1), doc];
       set({
         ledgerOpen: false,
+        galleryOpen: false,
         reader: { open: true, history: next, index: next.length - 1 },
       });
     },
@@ -1554,6 +1585,7 @@ if (getCurrentWebview().label === "main") {
     if (
       s.currentId === prev.currentId &&
       s.ledgerOpen === prev.ledgerOpen &&
+      s.galleryOpen === prev.galleryOpen &&
       s.reader === prev.reader
     )
       return;
@@ -1562,7 +1594,13 @@ if (getCurrentWebview().label === "main") {
       "lastView",
       JSON.stringify({
         nb: s.currentId,
-        mode: s.ledgerOpen ? "ledger" : s.reader.open ? "reader" : "chat",
+        mode: s.galleryOpen
+          ? "gallery"
+          : s.ledgerOpen
+            ? "ledger"
+            : s.reader.open
+              ? "reader"
+              : "chat",
         // Highlight is a one-time citation jump, not a place — drop it.
         doc: doc && { type: doc.type, id: doc.id },
       }),

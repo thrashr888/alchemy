@@ -183,6 +183,8 @@ const EXTRACT_JS: &str = r#"
       ok: true,
       title: document.title || '',
       ogTitle: pick('meta[property="og:title"]', 'content'),
+      ogImage: pick('meta[property="og:image"]', 'content') ||
+               pick('meta[name="twitter:image"]', 'content'),
       byline: byline || '',
       published: published || '',
       html: document.documentElement ? document.documentElement.outerHTML : ''
@@ -224,6 +226,8 @@ struct ExtractPayload {
     title: String,
     #[serde(default, rename = "ogTitle")]
     og_title: String,
+    #[serde(default, rename = "ogImage")]
+    og_image: String,
     #[serde(default)]
     byline: String,
     #[serde(default)]
@@ -550,6 +554,7 @@ async fn drive(window: &tauri::WebviewWindow, url: &str) -> Result<Rendered> {
     anyhow::ensure!(payload.ok, "extraction failed in page: {}", payload.error);
     anyhow::ensure!(!payload.html.trim().is_empty(), "rendered DOM was empty");
     let meta = ingest::PageMeta {
+        og_image: payload.og_image,
         og_title: payload.og_title,
         byline: payload.byline,
         published: payload.published,

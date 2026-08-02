@@ -104,6 +104,8 @@ export interface AppState {
   justCreatedNoteId: string | null;
   /** Center-column Ledger mode; reader wins below it, chat is the default. */
   ledgerOpen: boolean;
+  /** Center-column source Gallery mode; wins above Ledger. */
+  galleryOpen: boolean;
   /** Bumped when an agent writes the ledger (mcp://changed scope "ledger"). */
   ledgerBump: number;
   pendingNewNote: boolean;
@@ -136,6 +138,7 @@ export interface AppState {
   renameNotebook: (id: string, title: string) => Promise<void>;
   setNotebookColor: (id: string, color: string) => Promise<void>;
   deleteNotebook: (id: string) => Promise<void>;
+  setNotebookStatus: (id: string, status: "" | "archived") => Promise<void>;
   setTheme: (theme: string) => void;
   setReading: (patch: Partial<ReadingPrefs>) => void;
   clearQueueItem: (id: string) => void;

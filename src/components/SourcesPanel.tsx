@@ -28,6 +28,7 @@ import {
   ChevronRight,
   FileText,
   Globe,
+  LayoutGrid,
   Plus,
   PanelLeftClose,
   Trash2,
@@ -298,6 +299,21 @@ export function SourcesPanel() {
           {sources.length}
         </span>
         <div className="ml-auto flex items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() =>
+              useStore.setState((st) => ({
+                galleryOpen: !st.galleryOpen,
+                ledgerOpen: false,
+              }))
+            }
+            disabled={!currentId}
+            title="Browse source gallery"
+            aria-label="Browse source gallery"
+          >
+            <LayoutGrid className="h-4 w-4" />
+          </Button>
           <Button
             variant="ghost"
             size="icon"

@@ -444,6 +444,7 @@ pub async fn create_notebook(
         created_at: ts,
         updated_at: ts,
         color: color.to_string(),
+        status: String::new(),
         source_count: 0,
     };
     e(state.db.create_notebook(&nb).await)?;
@@ -475,6 +476,20 @@ pub async fn rename_notebook(
 #[tauri::command]
 pub async fn delete_notebook(state: State<'_, AppState>, id: String) -> Result<(), String> {
     e(state.db.delete_notebook(&id).await)
+}
+
+/// Archive ("archived") or restore ("") a notebook. Data is untouched —
+/// archived notebooks just leave the main grid.
+#[tauri::command]
+pub async fn set_notebook_status(
+    state: State<'_, AppState>,
+    id: String,
+    status: String,
+) -> Result<(), String> {
+    if status != "archived" && !status.is_empty() {
+        return Err("status must be \"archived\" or empty".into());
+    }
+    e(state.db.set_notebook_status(&id, &status).await)
 }
 
 // ---- Sources -------------------------------------------------------------
@@ -617,6 +632,7 @@ async fn store_new_source(
 
     let (status, error) = classify(&extracted.source_type, &extracted.url, &extracted.text);
     let source = Source {
+        image_url: extracted.image_url,
         author: extracted.author,
         id: new_id(),
         notebook_id: notebook_id.to_string(),
@@ -673,6 +689,7 @@ async fn store_failed_url(
     reason: String,
 ) -> anyhow::Result<Source> {
     let source = Source {
+        image_url: String::new(),
         author: String::new(),
         id: new_id(),
         notebook_id: notebook_id.to_string(),
@@ -738,6 +755,7 @@ async fn extract_image(state: &AppState, path: &str) -> anyhow::Result<ingest::E
         anyhow::bail!("no text found in image {path}");
     }
     Ok(ingest::Extracted {
+        image_url: String::new(),
         author: String::new(),
         title: ingest::file_title(path),
         source_type: "image".to_string(),
@@ -770,6 +788,7 @@ async fn extract_pdf_ocr(state: &AppState, path: &str) -> anyhow::Result<ingest:
         anyhow::bail!("OCR produced no text from {path}");
     }
     Ok(ingest::Extracted {
+        image_url: String::new(),
         author: String::new(),
         title: ingest::file_title(path),
         source_type: "pdf".to_string(),
@@ -1040,6 +1059,7 @@ pub(crate) async fn ingest_git(
         }
         crate::git::StagedKind::Tree => {
             let parent = Source {
+                image_url: String::new(),
                 author: String::new(),
                 id: new_id(),
                 notebook_id: notebook_id.to_string(),
@@ -1090,6 +1110,7 @@ pub(crate) async fn ingest_notion(
     let client = crate::notion::NotionClient::new(token);
     let stats = client.export_tree(page_id, &dir).await?;
     let parent = Source {
+        image_url: String::new(),
         author: String::new(),
         id: parent_id,
         notebook_id: notebook_id.to_string(),
@@ -1363,7 +1384,7 @@ fn diff_excerpt(old: &str, new: &str) -> (String, String) {
 
 /// Re-chunk, re-embed, and replace a source's content in place (edit /
 /// refresh). `code_ctx` as in `store_new_source`.
-async fn reingest(
+pub(crate) async fn reingest(
     state: &AppState,
     existing: &Source,
     extracted: ingest::Extracted,
@@ -1400,6 +1421,13 @@ async fn reingest(
         extracted.url
     };
     let updated = Source {
+        // A refresh may carry a new lead image; edits/pastes carry none —
+        // keep the stored one then (same rule as author below).
+        image_url: if extracted.image_url.is_empty() {
+            existing.image_url.clone()
+        } else {
+            extracted.image_url.clone()
+        },
         // A paste/edit re-extract carries no file authorship — keep what the
         // original ingest captured rather than blanking it.
         author: if extracted.author.is_empty() {
@@ -1427,6 +1455,11 @@ async fn reingest(
         .db
         .replace_source(&updated, &chunk_tuples, &embeddings)
         .await?;
+    // A refreshed PDF may have a new first page — drop the stale thumbnail
+    // so the gallery re-renders it on next view.
+    if existing.source_type == "pdf" {
+        let _ = std::fs::remove_file(thumb_path(state, &existing.id));
+    }
     state
         .db
         .touch_notebook(&existing.notebook_id, now())
@@ -1585,6 +1618,7 @@ pub async fn refresh_source_url(
         let mut existing = existing;
         existing.mtime = crate::mac::content_stamp(&text);
         let extracted = ingest::Extracted {
+            image_url: String::new(),
             author: String::new(),
             title: existing.title.clone(),
             source_type: "mac".to_string(),
@@ -1708,6 +1742,7 @@ pub async fn delete_source(state: State<'_, AppState>, source_id: String) -> Res
                 if nc.exists() {
                     let _ = std::fs::remove_dir_all(&nc);
                 }
+                let _ = std::fs::remove_file(thumb_path(&state, id));
             }
             e(state.db.delete_source_tree(&source_id, &child_ids).await)?;
             return Ok(());
@@ -1720,7 +1755,128 @@ pub async fn delete_source(state: State<'_, AppState>, source_id: String) -> Res
     if notion_cache.exists() {
         let _ = std::fs::remove_dir_all(&notion_cache);
     }
+    let _ = std::fs::remove_file(thumb_path(&state, &source_id));
     Ok(())
+}
+
+/// On-disk cache for a source's gallery thumbnail (PDF first pages).
+fn thumb_path(state: &AppState, source_id: &str) -> std::path::PathBuf {
+    app_data_dir(state)
+        .join("thumbs")
+        .join(format!("{source_id}.png"))
+}
+
+/// Data-URI thumbnail for a source's gallery card: PDFs render their first
+/// page (cached on disk, rendered once ever); images return the original
+/// file. Empty string when the source has no visual — the card falls back
+/// to typography. Base64 over IPC sidesteps the asset:// WKWebView decode
+/// caveat (see ImageView in ReaderPane.tsx).
+#[tauri::command]
+pub async fn source_thumbnail(
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<String, String> {
+    use base64::Engine;
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let Some(src) = e(state.db.get_source(&source_id).await)? else {
+        return Err("Source not found".into());
+    };
+    match src.source_type.as_str() {
+        "pdf" => {
+            let cache = thumb_path(&state, &source_id);
+            if let Ok(bytes) = std::fs::read(&cache) {
+                return Ok(format!("data:image/png;base64,{}", b64(&bytes)));
+            }
+            if src.url.is_empty() || !std::path::Path::new(&src.url).exists() {
+                return Ok(String::new());
+            }
+            let pages = match crate::pdf::render_pdf_pages(&src.url, 1, 480) {
+                Ok(p) => p,
+                Err(_) => return Ok(String::new()), // never fail the gallery
+            };
+            let Some(png) = pages.into_iter().next() else {
+                return Ok(String::new());
+            };
+            if let Some(dir) = cache.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(&cache, &png);
+            Ok(format!("data:image/png;base64,{}", b64(&png)))
+        }
+        "image" => {
+            // 12 MB cap: the webview scales, but a RAW-sized file as base64
+            // would balloon the IPC message.
+            const MAX_IMAGE_BYTES: u64 = 12 * 1024 * 1024;
+            if src.url.is_empty() {
+                return Ok(String::new());
+            }
+            let ok_size = std::fs::metadata(&src.url)
+                .map(|m| m.len() <= MAX_IMAGE_BYTES)
+                .unwrap_or(false);
+            if !ok_size {
+                return Ok(String::new());
+            }
+            let mime = match std::path::Path::new(&src.url)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase()
+                .as_str()
+            {
+                "jpg" | "jpeg" | "jpe" => "image/jpeg",
+                "webp" => "image/webp",
+                "gif" => "image/gif",
+                "bmp" => "image/bmp",
+                "tif" | "tiff" => "image/tiff",
+                "heic" | "heif" => "image/heic",
+                _ => "image/png",
+            };
+            match std::fs::read(&src.url) {
+                Ok(bytes) => Ok(format!("data:{mime};base64,{}", b64(&bytes))),
+                Err(_) => Ok(String::new()),
+            }
+        }
+        _ => Ok(String::new()),
+    }
+}
+
+/// Backfill `image_url` for a notebook's pre-gallery URL sources: fetch just
+/// the HTML, parse the lead image, stamp the row — no re-chunk, no re-embed.
+/// Sources that yield nothing are stamped "-" so the sweep never repeats
+/// them. Returns how many sources gained an image.
+#[tauri::command]
+pub async fn backfill_source_images(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<u32, String> {
+    use futures::StreamExt;
+    let targets: Vec<Source> = e(state.db.list_sources(&notebook_id).await)?
+        .into_iter()
+        .filter(|s| s.source_type == "url" && s.image_url.is_empty() && is_web_url(&s.url))
+        .collect();
+    if targets.is_empty() {
+        return Ok(0);
+    }
+    let results: Vec<(String, Option<String>)> = futures::stream::iter(targets)
+        .map(|s| async move {
+            let img = ingest::fetch_lead_image(&s.url).await;
+            (s.id, img)
+        })
+        .buffer_unordered(4)
+        .collect()
+        .await;
+    let mut found = 0u32;
+    for (id, img) in results {
+        let stamp = match img {
+            Some(url) => {
+                found += 1;
+                url
+            }
+            None => "-".to_string(), // checked, none — don't re-sweep
+        };
+        e(state.db.set_source_image(&id, &stamp).await)?;
+    }
+    Ok(found)
 }
 
 // ---- Mac sources (cider) ---------------------------------------------------
@@ -1773,6 +1929,7 @@ pub(crate) async fn ingest_mac(
     // store_extracted stamps 0 for a nonexistent path, so set it after.
     let stamp = crate::mac::content_stamp(&text);
     let extracted = ingest::Extracted {
+        image_url: String::new(),
         author: String::new(),
         title,
         source_type: "mac".to_string(),
@@ -1832,6 +1989,7 @@ pub(crate) async fn resync_mac_source(
     let (_, text) = e(crate::mac::fetch(&existing.url).await)?;
     existing.mtime = crate::mac::content_stamp(&text);
     let extracted = ingest::Extracted {
+        image_url: String::new(),
         author: String::new(),
         title: existing.title.clone(),
         source_type: "mac".to_string(),
@@ -2206,6 +2364,7 @@ async fn store_failed_child(
     reason: String,
 ) -> anyhow::Result<()> {
     let source = Source {
+        image_url: String::new(),
         author: String::new(),
         id: new_id(),
         notebook_id: folder.notebook_id.clone(),
@@ -2234,6 +2393,7 @@ async fn store_placeholder_child(
     mtime: i64,
 ) -> anyhow::Result<()> {
     let source = Source {
+        image_url: String::new(),
         author: String::new(),
         id: new_id(),
         notebook_id: folder.notebook_id.clone(),
@@ -2676,6 +2836,7 @@ async fn rescan_one_folder_inner(
             .unwrap_or_default();
         if map != current {
             let extracted = ingest::Extracted {
+                image_url: String::new(),
                 author: String::new(),
                 title: folder.title.clone(),
                 source_type: folder.source_type.clone(),
@@ -2816,6 +2977,7 @@ pub async fn add_source_folder(
         "folder"
     };
     let folder = Source {
+        image_url: String::new(),
         author: String::new(),
         id: new_id(),
         notebook_id: notebook_id.clone(),
@@ -3385,6 +3547,7 @@ pub(crate) async fn resync_sources_inner(
                     let mut existing = src.clone();
                     existing.mtime = stamp;
                     let extracted = ingest::Extracted {
+                        image_url: String::new(),
                         author: String::new(),
                         title: existing.title.clone(),
                         source_type: "mac".to_string(),
@@ -3490,6 +3653,7 @@ pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u
                 s.notebook_id.clone(),
                 s.id.clone(),
                 ingest::Extracted {
+                    image_url: String::new(),
                     author: String::new(),
                     title: s.title.clone(),
                     source_type: s.source_type.clone(),
@@ -5528,6 +5692,7 @@ pub async fn convert_note_to_source(
 ) -> Result<Source, String> {
     let note = e(state.db.get_note(&note_id).await)?.ok_or_else(|| "Note not found".to_string())?;
     let extracted = ingest::Extracted {
+        image_url: String::new(),
         author: String::new(),
         title: note.title.clone(),
         source_type: "text".to_string(),
@@ -6734,12 +6899,19 @@ pub async fn list_recent_reports(
 pub struct CorpusStats {
     pub sources: i64,
     pub chars: i64,
+    pub notes: i64,
+    pub ledger: i64,
 }
 
 #[tauri::command]
 pub async fn corpus_stats(state: State<'_, AppState>) -> Result<CorpusStats, String> {
-    let (sources, chars) = e(state.db.corpus_stats().await)?;
-    Ok(CorpusStats { sources, chars })
+    let (sources, chars, notes, ledger) = e(state.db.corpus_stats().await)?;
+    Ok(CorpusStats {
+        sources,
+        chars,
+        notes,
+        ledger,
+    })
 }
 
 // ---- OKF export ------------------------------------------------------------
@@ -7232,6 +7404,7 @@ async fn import_bundle(
                 created_at: ts,
                 updated_at: ts,
                 color: NOTEBOOK_PALETTE[count.len() % NOTEBOOK_PALETTE.len()].to_string(),
+                status: String::new(),
                 source_count: 0,
             };
             e(state.db.create_notebook(&nb).await)?;
@@ -7279,6 +7452,7 @@ async fn import_bundle(
             None => String::new(),
         };
         let extracted = ingest::Extracted {
+            image_url: String::new(),
             author: String::new(),
             title,
             source_type,

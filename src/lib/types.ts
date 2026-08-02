@@ -13,6 +13,8 @@ export interface Notebook {
   createdAt: number;
   updatedAt: number;
   color: string;
+  /** "" (active) | "archived" — archived notebooks leave the main grid. */
+  status: "" | "archived";
   sourceCount: number;
 }
 
@@ -48,6 +50,9 @@ export interface Source {
   /** Embedded document authorship (PDF /Author, Office dc:creator, EXIF
    *  Artist) captured at ingest; empty when the format carries none. */
   author: string;
+  /** Gallery lead image (og:image) for url sources.
+   *  "" = unknown, "-" = checked and the page has none. */
+  imageUrl: string;
 }
 
 /** One pickable Mac-provider item (a calendar range, reminders list, note…). */
@@ -191,6 +196,8 @@ export interface Template {
 export interface CorpusStats {
   sources: number;
   chars: number;
+  notes: number;
+  ledger: number;
 }
 
 /** One exact-match window from the `/grep` chat command (Rust grep_sources). */

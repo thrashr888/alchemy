@@ -117,10 +117,18 @@ export const api = {
   setNotebookColor: (id: string, color: string) =>
     run(cmd<void>("set_notebook_color", { id, color })),
   deleteNotebook: (id: string) => run(cmd<void>("delete_notebook", { id })),
+  setNotebookStatus: (id: string, status: "" | "archived") =>
+    run(cmd<void>("set_notebook_status", { id, status })),
 
   // Sources
   listSources: (notebookId: string) =>
     run(query<Source[]>("list_sources", { notebookId })),
+  /** Base64 PNG for gallery cards (PDF first page / image file); "" = none. */
+  sourceThumbnail: (sourceId: string) =>
+    run(query<string>("source_thumbnail", { sourceId })),
+  /** Stamp lead images onto pre-gallery URL sources; returns how many gained one. */
+  backfillSourceImages: (notebookId: string) =>
+    run(slow<number>("backfill_source_images", { notebookId })),
   addSourceFile: (notebookId: string, path: string) =>
     run(ai<Source>("add_source_file", { notebookId, path })),
   addSourceFolder: (notebookId: string, path: string) =>

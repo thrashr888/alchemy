@@ -22,6 +22,7 @@ import {
   Eraser,
   FileText,
   FolderOutput,
+  LayoutGrid,
   Link2,
   MessageSquare,
   Palette,
@@ -283,6 +284,17 @@ export function CommandPalette() {
           },
         },
         {
+          id: "open-gallery",
+          group: "View",
+          label: "Browse source gallery",
+          keywords: "images cards grid explore visual masonry",
+          icon: <LayoutGrid className="h-3.5 w-3.5" />,
+          run: () => {
+            close();
+            useStore.setState({ galleryOpen: true, ledgerOpen: false });
+          },
+        },
+        {
           id: "close-notebook",
           group: "Navigate",
           label: "Back to all notebooks",
@@ -298,7 +310,7 @@ export function CommandPalette() {
 
     list.push(
       ...notebooks
-        .filter((n) => n.id !== currentId)
+        .filter((n) => n.id !== currentId && n.status !== "archived")
         .map((n): Command => ({
           id: `nb-${n.id}`,
           group: "Navigate",
@@ -310,7 +322,9 @@ export function CommandPalette() {
             void state().selectNotebook(n.id);
           },
         })),
-      ...notebooks.map((n): Command => ({
+      ...notebooks
+        .filter((n) => n.status !== "archived")
+        .map((n): Command => ({
         id: `nbw-${n.id}`,
         group: "Navigate",
         label: `Open in new window: ${n.title}`,

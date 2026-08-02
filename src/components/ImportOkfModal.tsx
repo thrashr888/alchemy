@@ -12,7 +12,9 @@ import { FileArchive, FolderOpen } from "lucide-react";
  */
 export function ImportOkfModal() {
   const isOpen = useStore((s) => s.importOkfOpen);
-  const notebooks = useStore((s) => s.notebooks);
+  const notebooks = useStore((s) => s.notebooks).filter(
+    (n) => n.status !== "archived",
+  );
   const importOkf = useStore((s) => s.importOkf);
   // Set when a bundle was dropped on the window — the file is already
   // chosen, so the dialog only asks where it should land.

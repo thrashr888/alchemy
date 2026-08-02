@@ -4,6 +4,7 @@ import { SourcesPanel } from "./SourcesPanel";
 import { ChatPanel } from "./ChatPanel";
 import { CenterModeTabs, ReaderPane } from "./ReaderPane";
 import { LedgerPane } from "./LedgerPane";
+import { GalleryPane } from "./GalleryPane";
 import { StudioPanel } from "./StudioPanel";
 import { AddSourceModal } from "./AddSourceModal";
 import { ExternalAddModal } from "./ExternalAddModal";
@@ -18,6 +19,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   const currentId = useStore((s) => s.currentId);
   const readerOpen = useStore((s) => s.reader.open);
   const ledgerOpen = useStore((s) => s.ledgerOpen);
+  const galleryOpen = useStore((s) => s.galleryOpen);
   const notebooks = useStore((s) => s.notebooks);
   const close = useStore((s) => s.closeNotebook);
   const sourcesOpen = useStore((s) => s.sourcesOpen);
@@ -124,7 +126,9 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
       <div className="flex flex-1 overflow-hidden">
         {sourcesOpen ? <SourcesPanel /> : <SourcesRail />}
         <div className="flex min-w-0 flex-1 overflow-hidden pt-1">
-          {ledgerOpen ? (
+          {galleryOpen ? (
+            <GalleryPane />
+          ) : ledgerOpen ? (
             <LedgerPane />
           ) : readerOpen ? (
             <ReaderPane />

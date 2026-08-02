@@ -45,6 +45,8 @@ pub struct ClipPayload {
     #[serde(default)]
     pub og_title: String,
     #[serde(default)]
+    pub og_image: String,
+    #[serde(default)]
     pub byline: String,
     #[serde(default)]
     pub published: String,
@@ -58,6 +60,7 @@ impl ClipPayload {
     /// normal fetch, so a broken clip never makes a source worse.
     pub fn into_extracted(self) -> Option<Extracted> {
         let meta = PageMeta {
+            og_image: self.og_image,
             og_title: self.og_title,
             byline: self.byline,
             published: self.published,
@@ -271,6 +274,7 @@ mod tests {
             url: url.to_string(),
             title: "T".into(),
             og_title: String::new(),
+            og_image: String::new(),
             byline: String::new(),
             published: String::new(),
             html: html.into(),
