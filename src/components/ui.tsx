@@ -177,7 +177,7 @@ export function useHoverCard(side: "left" | "right") {
               {state.data.meta.map((m: HoverCardData["meta"][number], i: number) => (
                 <div
                   key={i}
-                  className="flex min-w-0 items-center gap-2 text-caption"
+                  className="flex min-w-0 items-start gap-2 text-caption"
                 >
                   {m.icon && (
                     <span className="shrink-0 text-muted-foreground [&_svg]:h-3.5 [&_svg]:w-3.5">
@@ -188,7 +188,9 @@ export function useHoverCard(side: "left" | "right") {
                     {m.label}
                   </span>
                   {m.value && (
-                    <span className="ml-auto shrink-0 pl-2 text-foreground">
+                    // Values wrap (file paths, URLs) rather than clipping
+                    // out of the fixed-width card.
+                    <span className="ml-auto min-w-0 break-all pl-2 text-right text-foreground">
                       {m.value}
                     </span>
                   )}
