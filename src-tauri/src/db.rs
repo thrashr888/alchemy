@@ -230,83 +230,44 @@ impl Db {
         Ok(db)
     }
 
-    /// Add the `origin` column ("") to pre-existing ledger tables.
-    async fn migrate_ledger(&self) -> Result<()> {
-        let schema = self
-            .conn
-            .open_table(T_LEDGER)
-            .execute()
-            .await?
-            .schema()
-            .await?;
-        if schema.field_with_name("origin").is_ok() {
+    /// Add a missing string column in place with a constant default.
+    ///
+    /// This replaces the old collect → drop_table → recreate → refill
+    /// migration idiom, which had a fatal window: a kill between the drop
+    /// and the refill (dev-watcher restarts, quits, crashes) destroyed the
+    /// whole table. Lance's add_columns commits atomically — the table is
+    /// never not-there.
+    async fn add_string_column(&self, table: &str, column: &str, default: &str) -> Result<()> {
+        let tbl = self.conn.open_table(table).execute().await?;
+        if tbl.schema().await?.field_with_name(column).is_ok() {
             return Ok(());
         }
-        // The tolerant readers default the missing column; rebuild, refill.
-        let mut rows = Vec::new();
-        for b in &self.collect(T_LEDGER, None).await? {
-            let anchors = str_col(b, "anchors")?;
-            for i in 0..b.num_rows() {
-                rows.push(LedgerEntry {
-                    id: str_col(b, "id")?.value(i).to_string(),
-                    notebook_id: str_col(b, "notebook_id")?.value(i).to_string(),
-                    kind: str_col(b, "kind")?.value(i).to_string(),
-                    text: str_col(b, "text")?.value(i).to_string(),
-                    why: str_col(b, "why")?.value(i).to_string(),
-                    status: str_col(b, "status")?.value(i).to_string(),
-                    origin: String::new(),
-                    anchors: serde_json::from_str(anchors.value(i)).unwrap_or_default(),
-                    created_at: i64_col(b, "created_at")?.value(i),
-                    updated_at: i64_col(b, "updated_at")?.value(i),
-                });
-            }
-        }
-        self.conn.drop_table(T_LEDGER, &[]).await?;
-        self.ensure_table(T_LEDGER, ledger_schema()).await?;
-        for r in &rows {
-            self.add_ledger_entry(r).await?;
-        }
+        tbl.add_columns(
+            lancedb::table::NewColumnTransform::SqlExpressions(vec![(
+                column.to_string(),
+                format!("'{}'", esc(default)),
+            )]),
+            None,
+        )
+        .await
+        .with_context(|| format!("failed to add {table}.{column}"))?;
         Ok(())
+    }
+
+    /// Add the `origin` column ("") to pre-existing ledger tables.
+    async fn migrate_ledger(&self) -> Result<()> {
+        self.add_string_column(T_LEDGER, "origin", "").await
     }
 
     /// Add the `trigger` column ("interval") to pre-existing schedule tables.
     async fn migrate_reports(&self) -> Result<()> {
-        let schema = self
-            .conn
-            .open_table(T_REPORTS)
-            .execute()
-            .await?
-            .schema()
-            .await?;
-        if schema.field_with_name("trigger").is_ok() {
-            return Ok(());
-        }
-        // The tolerant reader defaults the missing column; rebuild and refill.
-        let rows = self.query_reports(None).await?;
-        self.conn.drop_table(T_REPORTS, &[]).await?;
-        self.ensure_table(T_REPORTS, reports_schema()).await?;
-        for r in &rows {
-            self.add_report_schedule(r).await?;
-        }
-        Ok(())
+        self.add_string_column(T_REPORTS, "trigger", "interval")
+            .await
     }
 
-    /// The events table gained `diff`; it's a rolling, disposable window, so
-    /// an old-shape table rebuilds empty rather than migrating rows.
+    /// Add the `diff` column ("") to pre-existing event tables.
     async fn migrate_source_events(&self) -> Result<()> {
-        let schema = self
-            .conn
-            .open_table(T_SOURCE_EVENTS)
-            .execute()
-            .await?
-            .schema()
-            .await?;
-        if schema.field_with_name("diff").is_ok() {
-            return Ok(());
-        }
-        self.conn.drop_table(T_SOURCE_EVENTS, &[]).await?;
-        self.ensure_table(T_SOURCE_EVENTS, source_events_schema())
-            .await
+        self.add_string_column(T_SOURCE_EVENTS, "diff", "").await
     }
 
     /// Backfill the `color` column on pre-existing `notebooks` tables.
@@ -2655,6 +2616,7 @@ fn ledger_batch(schema: &SchemaRef, e: &LedgerEntry) -> Result<RecordBatch> {
             Arc::new(StringArray::from(vec![e.text.clone()])),
             Arc::new(StringArray::from(vec![e.why.clone()])),
             Arc::new(StringArray::from(vec![e.status.clone()])),
+            Arc::new(StringArray::from(vec![e.origin.clone()])),
             Arc::new(StringArray::from(vec![
                 serde_json::to_string(&e.anchors).unwrap_or_default()
             ])),
