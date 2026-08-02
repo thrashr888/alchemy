@@ -166,6 +166,11 @@ export function StaffSidebar({
   const [status, setStatus] = useState<NightShiftStatus | null>(null);
   const [events, setEvents] = useState<SourceEvent[] | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
+  /** sourceId → type + path, so the watcher hover can say what changed
+   *  where without a click-through. */
+  const [sourceMeta, setSourceMeta] = useState<
+    Map<string, { type: string; path: string }>
+  >(new Map());
   const { show: showCard, hide: hideCard, card: hoverCard } = useHoverCard("right");
   const nb = (id: string) => notebookTitle.get(id) ?? "Unknown notebook";
 
@@ -173,7 +178,23 @@ export function StaffSidebar({
     void api.nightShiftStatus().then(setStatus).catch(() => {});
     void api
       .listSourceEvents(24)
-      .then(setEvents)
+      .then((evts) => {
+        setEvents(evts);
+        // Resolve type + path for the watched sources, one fetch per
+        // notebook the events touch.
+        const nbs = [...new Set(evts.map((e) => e.notebookId))];
+        void Promise.allSettled(nbs.map((id) => api.listSources(id))).then(
+          (results) => {
+            const map = new Map<string, { type: string; path: string }>();
+            for (const r of results) {
+              if (r.status !== "fulfilled") continue;
+              for (const s of r.value)
+                map.set(s.id, { type: s.sourceType, path: s.url });
+            }
+            setSourceMeta(map);
+          },
+        );
+      })
       .catch(() => setEvents([]));
   }, []);
 
@@ -353,7 +374,6 @@ export function StaffSidebar({
                     type="button"
                     onClick={() => onOpenNotebook(r.notebookId)}
                     className="min-w-0 truncate text-left text-caption text-foreground hover:underline"
-                    title={`Open "${notebookTitle.get(r.notebookId) ?? "notebook"}"`}
                   >
                     {r.name}
                   </button>
@@ -395,23 +415,32 @@ export function StaffSidebar({
                 key={event.id}
                 type="button"
                 onClick={() => onOpenEvent(event)}
-                onMouseEnter={(e) =>
+                onMouseEnter={(e) => {
+                  const src = sourceMeta.get(event.sourceId);
                   showCard(e, {
                     title: event.sourceTitle,
                     time: relativeTime(event.at),
                     meta: [
                       { icon: <BookOpen />, label: nb(event.notebookId) },
+                      ...(src
+                        ? [
+                            {
+                              icon: <FileText />,
+                              label: src.type,
+                              value: src.path,
+                            },
+                          ]
+                        : []),
                       { icon: <Zap />, label: event.detail },
                       ...event.diff
                         .split("\n")
                         .slice(0, 3)
                         .map((line) => ({ label: line })),
                     ],
-                  })
-                }
+                  });
+                }}
                 onMouseLeave={hideCard}
                 className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-surface-2"
-                title={`Read "${event.sourceTitle}"`}
               >
                 <span
                   className="h-2 w-2 shrink-0 rounded-full"

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import type { LedgerEntry } from "@/lib/types";
-import { Button, EmptyState, Input, RowMenu, useConfirm, useHoverCard } from "./ui";
+import { Button, EmptyState, Input, RowMenu, useConfirm } from "./ui";
 import { cn, relativeTime } from "@/lib/utils";
 import {
   HelpCircle,
@@ -63,7 +63,6 @@ export function LedgerPane() {
   const openSourceViewer = useStore((s) => s.openSourceViewer);
   const pushToast = useStore((s) => s.pushToast);
   const { confirm, dialog: confirmDialog } = useConfirm();
-  const { show: showCard, hide: hideCard, card: hoverCard } = useHoverCard("left");
 
   const [entries, setEntries] = useState<LedgerEntry[] | null>(null);
   const [filter, setFilter] = useState<"all" | Kind>("all");
@@ -287,24 +286,6 @@ export function LedgerPane() {
                 return (
                   <article
                     key={entry.id}
-                    onMouseEnter={(e) =>
-                      showCard(e, {
-                        title: meta?.label ?? entry.kind,
-                        time: relativeTime(entry.createdAt),
-                        meta: [
-                          { label: "Status", value: entry.status },
-                          {
-                            label: "Anchors",
-                            value: String(entry.anchors.length),
-                          },
-                          {
-                            label: "Updated",
-                            value: relativeTime(entry.updatedAt),
-                          },
-                        ],
-                      })
-                    }
-                    onMouseLeave={hideCard}
                     className="group border-b border-border py-3"
                   >
                     <div className="flex items-start gap-2.5">
@@ -414,7 +395,6 @@ export function LedgerPane() {
         </div>
       </div>
       {confirmDialog}
-      {hoverCard}
     </div>
   );
 }
