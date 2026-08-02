@@ -225,22 +225,23 @@ export function Switch({
         onChange={(e) => onChange(e.target.checked)}
         className="peer absolute inset-0 cursor-pointer rounded-full opacity-0"
       />
-      {/* macOS geometry: squat track, borderless (a border eats the inner
-          height and floats the thumb off-center), thumb exactly filling
-          track minus padding. */}
+      {/* Exact macOS geometry: 40×24 track, 20px thumb, an even 2px inset
+          on every side, 16px travel. Borderless track (a border eats inner
+          height and floats the thumb), soft drop shadow on the thumb only. */}
       <span
         aria-hidden
         className={cn(
-          "pointer-events-none flex h-5 w-9 items-center rounded-full p-[2px]",
-          "transition-colors duration-150",
+          "pointer-events-none flex h-6 w-10 shrink-0 items-center rounded-full p-[2px]",
+          "transition-colors duration-200 ease-out",
           "peer-focus-visible:ring-2 peer-focus-visible:ring-ring/60",
-          checked ? "bg-primary" : "bg-muted-foreground/30",
+          checked ? "bg-primary" : "bg-muted-foreground/35",
         )}
       >
         <span
           className={cn(
-            "h-4 w-4 rounded-full bg-white",
-            "shadow-[0_1px_2px_rgba(0,0,0,0.35)] transition-transform duration-150",
+            "h-5 w-5 rounded-full bg-white",
+            "shadow-[0_1px_3px_rgba(0,0,0,0.4),0_0_1px_rgba(0,0,0,0.25)]",
+            "transition-transform duration-200 ease-out",
             checked && "translate-x-4",
           )}
         />
