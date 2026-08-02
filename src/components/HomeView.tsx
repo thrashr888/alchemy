@@ -27,6 +27,7 @@ import type { Note } from "@/lib/types";
 import {
   BookOpen,
   Clock,
+  Moon,
   Plus,
   Power,
   Search,
@@ -38,6 +39,7 @@ import {
   Sparkles,
   FolderInput,
 } from "lucide-react";
+import { HomeBrief, HomeStaff } from "./HomeSections";
 
 // Keep this list in sync with Rust in `src-tauri/src/db.rs` (`NOTEBOOK_PALETTE`)
 // and the `set_notebook_color` validator in `src-tauri/src/commands.rs`.
@@ -70,6 +72,13 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     title: string;
   } | null>(null);
   const [colorPickerFor, setColorPickerFor] = useState<string | null>(null);
+  // The dashboard section switch (RFC-v12-steward UI §2): Notebooks is the
+  // default arrival; Brief and Staff swap the whole body. Registry joins
+  // when its pillar exists. Session state on purpose — every launch lands
+  // on Notebooks.
+  const [section, setSection] = useState<"notebooks" | "brief" | "staff">(
+    "notebooks",
+  );
   // The reports feed behaves like a sidebar: collapsible, persisted.
   const [reportsOpen, setReportsOpen] = useState(
     () => localStorage.getItem("homeReportsOpen") !== "0",
@@ -174,6 +183,33 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // ⌘1/2/3 switch Home sections — free here; inside a notebook they mean
+  // the Sources/Studio panels (RFC-v12-steward UI §2).
+  useEffect(() => {
+    const sections = {
+      "1": "notebooks",
+      "2": "brief",
+      "3": "staff",
+    } as const;
+    const onKey = (e: KeyboardEvent) => {
+      const target = sections[e.key as keyof typeof sections];
+      if ((e.metaKey || e.ctrlKey) && target && !shortcutBlocked(e)) {
+        e.preventDefault();
+        setSection(target);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // The Brief tab's unread dot: an unread report note in the Briefs notebook.
+  const briefNotes = reports.filter(
+    (r) => notebookTitle.get(r.notebookId) === "Briefs",
+  );
+  const briefUnread = briefNotes.some((r) =>
+    noteUnread(r, noteReads, noteReadsBaseline),
+  );
+
   // Backend already returns notebooks sorted by most-recently-updated.
   return (
     <div className="app-root flex h-dvh w-screen flex-col overflow-hidden text-foreground">
@@ -187,6 +223,39 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         <span className="text-section font-semibold tracking-tight">
           Alchemy
         </span>
+        {notebooks.length > 0 && (
+          <div className="mx-auto flex items-center gap-0.5 rounded-lg border border-border p-0.5">
+            {(
+              [
+                ["notebooks", <BookOpen key="i" className="h-3.5 w-3.5" />, "Notebooks", false],
+                ["brief", <Newspaper key="i" className="h-3.5 w-3.5" />, "Brief", briefUnread],
+                ["staff", <Moon key="i" className="h-3.5 w-3.5" />, "Staff", false],
+              ] as const
+            ).map(([id, icon, label, dot]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setSection(id)}
+                aria-pressed={section === id}
+                className={cn(
+                  "relative flex items-center gap-1.5 rounded-md px-2 py-1 text-caption font-medium transition-colors",
+                  section === id
+                    ? "bg-surface-2 text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {icon}
+                {label}
+                {dot && (
+                  <span
+                    className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-primary"
+                    aria-label="New brief"
+                  />
+                )}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="ml-auto flex items-center gap-3">
           <DevBadge />
           <Button
@@ -210,7 +279,26 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         </div>
       </header>
 
-      {notebooks.length === 0 ? (
+      {section === "brief" ? (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <HomeBrief
+            briefs={briefNotes}
+            schedules={allReports}
+            onRan={refreshActivity}
+          />
+        </div>
+      ) : section === "staff" ? (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <HomeStaff
+            schedules={allReports}
+            reports={reports}
+            notebookTitle={notebookTitle}
+            notebookColor={notebookColor}
+            onOpenNote={openNote}
+            onRan={refreshActivity}
+          />
+        </div>
+      ) : notebooks.length === 0 ? (
         <div className="flex-1">
           <AlchemyHero
             title="Alchemy"

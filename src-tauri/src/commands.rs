@@ -6572,6 +6572,45 @@ pub async fn list_recent_notes(
 
 /// The latest report notes across every notebook, newest first — the home
 /// page's report reader pages through these.
+/// Watcher activity for the Home Staff section (agents get the same signal
+/// via the MCP list_source_events tool).
+#[tauri::command]
+pub async fn list_source_events(
+    state: State<'_, AppState>,
+    hours: Option<u32>,
+) -> Result<Vec<crate::models::SourceEvent>, String> {
+    let hours = i64::from(hours.unwrap_or(24));
+    e(state
+        .db
+        .source_events_since(now() - hours * 3_600_000)
+        .await)
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct NightShiftStatus {
+    pub background_enabled: bool,
+    pub paused: bool,
+}
+
+#[tauri::command]
+pub async fn night_shift_status(state: State<'_, AppState>) -> Result<NightShiftStatus, String> {
+    let background_enabled = state.ai.read().await.config().background_enabled;
+    Ok(NightShiftStatus {
+        background_enabled,
+        paused: crate::scheduler::is_paused(),
+    })
+}
+
+/// The tray's "Pause until morning", callable from the Staff section too;
+/// returns the new paused state and keeps the tray label in step.
+#[tauri::command]
+pub async fn toggle_night_shift_pause(app: AppHandle) -> Result<bool, String> {
+    let paused = crate::scheduler::toggle_pause();
+    crate::integrations::set_tray_pause_label(&app, paused);
+    Ok(paused)
+}
+
 #[tauri::command]
 pub async fn list_recent_reports(
     state: State<'_, AppState>,

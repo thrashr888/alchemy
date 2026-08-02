@@ -39,7 +39,7 @@ pub fn set_tray_status(app: &AppHandle, text: &str) {
     }
 }
 
-fn set_tray_pause_label(app: &AppHandle, paused: bool) {
+pub(crate) fn set_tray_pause_label(app: &AppHandle, paused: bool) {
     if let Some(controls) = app.try_state::<TrayControls>() {
         let label = if paused {
             "Resume scheduled runs"

@@ -19,12 +19,14 @@ import type {
   MetaAnswer,
   ModelHealth,
   ModelStat,
+  NightShiftStatus,
   Note,
   NoteKind,
   Notebook,
   ReportSchedule,
   SearchHit,
   Source,
+  SourceEvent,
   Template,
 } from "./types";
 
@@ -343,6 +345,12 @@ export const api = {
   saveTemplate: (id: string | null, name: string, description: string, prompt: string) =>
     run(cmd<Template>("save_template", { id, name, description, prompt })),
   deleteTemplate: (id: string) => run(cmd<void>("delete_template", { id })),
+
+  // Night Shift (the Home Staff section)
+  listSourceEvents: (hours = 24) =>
+    run(query<SourceEvent[]>("list_source_events", { hours })),
+  nightShiftStatus: () => run(query<NightShiftStatus>("night_shift_status")),
+  toggleNightShiftPause: () => run(cmd<boolean>("toggle_night_shift_pause")),
 
   // Reports
   listReportSchedules: (notebookId: string) =>

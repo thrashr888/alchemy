@@ -258,6 +258,25 @@ export interface ReportSchedule {
   createdAt: number;
 }
 
+/** One observed source change (watchers, RFC-night-shift): written by the
+ *  refresh paths, read by the Brief, the Staff section, and agents. */
+export interface SourceEvent {
+  id: string;
+  notebookId: string;
+  sourceId: string;
+  sourceTitle: string;
+  kind: string;
+  detail: string;
+  /** Capped ±-prefixed line excerpt; empty when nothing textual changed. */
+  diff: string;
+  at: number;
+}
+
+export interface NightShiftStatus {
+  backgroundEnabled: boolean;
+  paused: boolean;
+}
+
 /** One configured inference provider (list entry in Settings → Models). */
 export interface ProviderEntry {
   id: string;
