@@ -119,33 +119,37 @@ export function ReportsFeed({
           </span>
         )}
         <div className="ml-auto flex items-center gap-2">
-          {total > 0 && (
-            <span className="text-micro tabular-nums text-subtle-foreground">
-              {current + 1} of {total}
-            </span>
+          {/* The cursor and chevrons only mean something over visible cards —
+              the caught-up state (nothing rendered) shows neither. */}
+          {rendered.length > 0 && (
+            <>
+              <span className="text-micro tabular-nums text-subtle-foreground">
+                {current + 1} of {total}
+              </span>
+              <div className="flex items-center">
+                <button
+                  type="button"
+                  onClick={() => step(-1)}
+                  disabled={current <= 0}
+                  title="Previous report"
+                  aria-label="Jump to the previous report"
+                  className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+                >
+                  <ChevronUp className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => step(1)}
+                  disabled={current >= total - 1}
+                  title="Next report"
+                  aria-label="Jump to the next report"
+                  className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+                >
+                  <ChevronDown className="h-4 w-4" />
+                </button>
+              </div>
+            </>
           )}
-          <div className="flex items-center">
-            <button
-              type="button"
-              onClick={() => step(-1)}
-              disabled={current <= 0}
-              title="Previous report"
-              aria-label="Jump to the previous report"
-              className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
-            >
-              <ChevronUp className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => step(1)}
-              disabled={current >= total - 1}
-              title="Next report"
-              aria-label="Jump to the next report"
-              className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
-            >
-              <ChevronDown className="h-4 w-4" />
-            </button>
-          </div>
           {unreadCount > 0 && (
             <button
               type="button"
