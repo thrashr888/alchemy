@@ -225,15 +225,16 @@ export function Switch({
         onChange={(e) => onChange(e.target.checked)}
         className="peer absolute inset-0 cursor-pointer rounded-full opacity-0"
       />
-      {/* macOS geometry: a long, flat ~2.2:1 pill (35×16), and a capsule
-          knob — a roundrect barely wider than tall (16×13), not a circle —
-          on a tight 1.5px inset so it fills the track. In dark themes the
-          knob is translucent, picking up the track's tint like the native
-          glass knob; in light themes it stays solid white. */}
+      {/* Native NSSwitch geometry, measured off a rendered control (dark
+          aqua): 2.25:1 pill, knob a 1.6:1 capsule spanning 59% of the track
+          width with an ~8% inset. At our scale: 36×16 track, 21×13 knob,
+          1.5px inset, 12px travel. In dark themes the knob is translucent,
+          picking up the track's tint like the native glass knob; in light
+          themes it stays solid white. */}
       <span
         aria-hidden
         className={cn(
-          "pointer-events-none flex h-4 w-[35px] shrink-0 items-center rounded-full p-[1.5px]",
+          "pointer-events-none flex h-4 w-9 shrink-0 items-center rounded-full p-[1.5px]",
           "transition-colors duration-200 ease-out",
           "peer-focus-visible:ring-2 peer-focus-visible:ring-ring/60",
           checked ? "bg-primary" : "bg-muted-foreground/35",
@@ -241,10 +242,10 @@ export function Switch({
       >
         <span
           className={cn(
-            "h-[13px] w-4 rounded-full bg-white [[data-scheme=dark]_&]:bg-white/85",
+            "h-[13px] w-[21px] rounded-full bg-white [[data-scheme=dark]_&]:bg-white/85",
             "shadow-[0_0_0_0.5px_rgba(0,0,0,0.05),0_1px_1px_rgba(0,0,0,0.16)]",
             "transition-transform duration-200 ease-out",
-            checked && "translate-x-4",
+            checked && "translate-x-3",
           )}
         />
       </span>
