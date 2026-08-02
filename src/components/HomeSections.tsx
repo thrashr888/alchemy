@@ -391,8 +391,10 @@ export function StaffSidebar({
             <StaffQuiet>No source changes observed.</StaffQuiet>
           ) : (
             events.slice(0, 10).map((event) => (
-              <div
+              <button
                 key={event.id}
+                type="button"
+                onClick={() => onOpenEvent(event)}
                 onMouseEnter={(e) =>
                   showCard(e, {
                     title: event.sourceTitle,
@@ -400,46 +402,29 @@ export function StaffSidebar({
                     meta: [
                       { icon: <BookOpen />, label: nb(event.notebookId) },
                       { icon: <Zap />, label: event.detail },
+                      ...event.diff
+                        .split("\n")
+                        .slice(0, 3)
+                        .map((line) => ({ label: line })),
                     ],
                   })
                 }
                 onMouseLeave={hideCard}
-                className="rounded-md px-1.5 py-1"
+                className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-surface-2"
+                title={`Read "${event.sourceTitle}"`}
               >
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => onOpenEvent(event)}
-                    className="min-w-0 truncate text-left text-caption text-foreground hover:underline"
-                    title={`Read "${event.sourceTitle}"`}
-                  >
-                    {event.sourceTitle}
-                  </button>
-                  <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
-                    {relativeTime(event.at)}
-                  </span>
-                </div>
-                <div className="flex min-w-0 items-center gap-1 text-micro text-subtle-foreground">
-                  <span
-                    className="h-1.5 w-1.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: notebookColor.get(event.notebookId) }}
-                    aria-hidden
-                  />
-                  <span className="shrink-0">{nb(event.notebookId)}</span>
-                  <span aria-hidden>·</span>
-                  <span className="truncate">{event.detail}</span>
-                </div>
-                {event.diff && (
-                  <details className="mt-0.5">
-                    <summary className="cursor-pointer text-micro text-subtle-foreground hover:text-foreground">
-                      diff
-                    </summary>
-                    <pre className="mt-1 overflow-x-auto rounded bg-surface-2 p-2 text-micro leading-relaxed text-muted-foreground">
-                      {event.diff}
-                    </pre>
-                  </details>
-                )}
-              </div>
+                <span
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{ backgroundColor: notebookColor.get(event.notebookId) }}
+                  aria-hidden
+                />
+                <span className="min-w-0 truncate text-caption text-foreground">
+                  {event.sourceTitle}
+                </span>
+                <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
+                  {relativeTime(event.at)}
+                </span>
+              </button>
             ))
           )}
         </StaffGroup>

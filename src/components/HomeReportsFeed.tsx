@@ -3,7 +3,7 @@ import { useStore } from "@/lib/store";
 import type { Note } from "@/lib/types";
 import { cn, noteUnread, relativeTime } from "@/lib/utils";
 import { Button } from "./ui";
-import { ChevronDown, ChevronUp, PanelRight } from "lucide-react";
+import { ChevronDown, ChevronUp, PanelRightClose } from "lucide-react";
 import { Markdown } from "./Markdown";
 
 /** One quiet line describing activity since the previous home visit. */
@@ -163,7 +163,7 @@ export function ReportsFeed({
               aria-label="Collapse the reports feed"
               className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
             >
-              <PanelRight className="h-4 w-4" />
+              <PanelRightClose className="h-4 w-4" />
             </button>
           )}
         </div>
