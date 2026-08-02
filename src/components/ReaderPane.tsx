@@ -53,7 +53,6 @@ import {
   ChevronsDownUp,
   ChevronsUpDown,
   ListOrdered,
-  Diamond,
 } from "lucide-react";
 
 /**
@@ -465,7 +464,7 @@ export function CenterModeTabs() {
           })),
         !hasDocs,
       )}
-      {tab("ledger", <Diamond className="h-3.5 w-3.5" />, "Ledger", () =>
+      {tab("ledger", <Scale className="h-3.5 w-3.5" />, "Ledger", () =>
         useStore.setState({ ledgerOpen: true }),
       )}
     </div>

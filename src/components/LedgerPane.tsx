@@ -5,12 +5,12 @@ import type { LedgerEntry } from "@/lib/types";
 import { Button, EmptyState, Input, RowMenu, useConfirm, useHoverCard } from "./ui";
 import { cn, relativeTime } from "@/lib/utils";
 import {
-  Diamond,
   HelpCircle,
   Info,
   Milestone,
   PenLine,
   Quote,
+  Scale,
   ShieldCheck,
   Trash2,
 } from "lucide-react";
@@ -68,7 +68,7 @@ export function LedgerPane() {
   const [entries, setEntries] = useState<LedgerEntry[] | null>(null);
   const [filter, setFilter] = useState<"all" | Kind>("all");
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [helpOpen, setHelpOpen] = useState(false);
+  const [helpHover, setHelpHover] = useState(false);
 
   // Composer: pick a kind, write the line. Why appears for decisions (their
   // because is the point) but every kind accepts one.
@@ -142,16 +142,36 @@ export function LedgerPane() {
         <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
           Ledger
         </span>
-        <button
-          type="button"
-          onClick={() => setHelpOpen((open) => !open)}
-          title="What is the ledger?"
-          aria-label="What is the ledger?"
-          aria-expanded={helpOpen}
-          className="rounded p-0.5 text-subtle-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-        >
-          <Info className="h-3.5 w-3.5" />
-        </button>
+        <span className="relative flex">
+          <button
+            type="button"
+            onMouseEnter={() => setHelpHover(true)}
+            onMouseLeave={() => setHelpHover(false)}
+            onFocus={() => setHelpHover(true)}
+            onBlur={() => setHelpHover(false)}
+            aria-label="What is the ledger?"
+            className="rounded p-0.5 text-subtle-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+          >
+            <Info className="h-3.5 w-3.5" />
+          </button>
+          {helpHover && (
+            <div className="pointer-events-none absolute left-0 top-full z-50 mt-2 w-96 rounded-lg border border-border-strong bg-surface-2 p-3 text-caption font-normal normal-case leading-relaxed tracking-normal text-muted-foreground shadow-2xl">
+              <p>
+                The ledger is this notebook&rsquo;s memory: assertions, facts,
+                decisions (with their why), open questions, and log lines —
+                each with a lifecycle, anchored to sources by exact quotes.
+              </p>
+              <p className="mt-1.5">
+                It mostly fills itself: chat answers that establish something
+                new land here as anchored assertions (marked auto), and agents
+                write entries over MCP. Record your own with the composer.
+                Click an anchor to open the source at the quoted passage; use
+                a row&rsquo;s menu to move it through its lifecycle as the
+                record corroborates, contradicts, or supersedes it.
+              </p>
+            </div>
+          )}
+        </span>
         {entries && entries.length > 0 && (
           <span className="text-micro tabular-nums text-subtle-foreground">
             {shown.length} of {entries.length}
@@ -179,27 +199,6 @@ export function LedgerPane() {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-3xl px-6 py-4">
-          {helpOpen && (
-            <div className="mb-4 rounded-lg border border-border bg-surface px-4 py-3 text-caption leading-relaxed text-muted-foreground">
-              <p>
-                The ledger is this notebook&rsquo;s memory: assertions, facts,
-                decisions (with their why), open questions, and log lines —
-                each with a lifecycle, anchored to sources by exact quotes.
-              </p>
-              <p className="mt-1.5">
-                It mostly fills itself: chat answers that establish something
-                new land here as anchored assertions (marked{" "}
-                <span className="rounded-full border border-border-strong px-1 text-badge uppercase">
-                  auto
-                </span>
-                ), and agents write entries over MCP. Record your own with the
-                composer below. Click an anchor to open the source at the
-                quoted passage; use a row&rsquo;s menu to move it through its
-                lifecycle as the record corroborates, contradicts, or
-                supersedes it.
-              </p>
-            </div>
-          )}
           {/* Composer: capture is one line, one motion. */}
           <div className="rounded-lg border border-border bg-surface p-3">
             <div className="flex items-center gap-1">
@@ -273,7 +272,7 @@ export function LedgerPane() {
           ) : shown.length === 0 ? (
             <div className="py-10">
               <EmptyState
-                icon={<Diamond className="h-7 w-7" />}
+                icon={<Scale className="h-7 w-7" />}
                 title={
                   filter === "all" ? "Nothing on the record yet" : "None yet"
                 }
@@ -284,7 +283,7 @@ export function LedgerPane() {
             <div className="mt-4 flex flex-col">
               {shown.map((entry) => {
                 const meta = kindMeta(entry.kind);
-                const Icon = meta?.icon ?? Diamond;
+                const Icon = meta?.icon ?? Scale;
                 return (
                   <article
                     key={entry.id}
