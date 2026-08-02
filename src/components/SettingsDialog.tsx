@@ -308,7 +308,8 @@ function SettingRow({
           {hint}
         </span>
       </span>
-      <Switch checked={checked} onChange={onChange} className="mt-0.5" />
+      {/* 1px, not 2: centers the 18px switch on the label's 20px line box. */}
+      <Switch checked={checked} onChange={onChange} className="mt-px" />
     </label>
   );
 }

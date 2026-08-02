@@ -240,10 +240,10 @@ export function Switch({
       >
         <span
           className={cn(
-            "h-3.5 w-5 rounded-full bg-white",
+            "h-3.5 w-[17px] rounded-full bg-white",
             "shadow-[0_0_0_0.5px_rgba(0,0,0,0.05),0_1px_1px_rgba(0,0,0,0.16)]",
             "transition-transform duration-200 ease-out",
-            checked && "translate-x-3",
+            checked && "translate-x-[15px]",
           )}
         />
       </span>
