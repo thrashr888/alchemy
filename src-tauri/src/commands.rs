@@ -1355,6 +1355,28 @@ async fn reingest(
         .db
         .touch_notebook(&existing.notebook_id, now())
         .await?;
+    // Change is an event, not a silent overwrite (RFC-night-shift §Watchers):
+    // every content refresh — file, folder child, Mac item, git, URL — lands
+    // here, so this is the one write point. Best-effort: an event miss must
+    // never fail the reingest that produced it.
+    let detail = match existing.source_type.as_str() {
+        "url" => "page re-fetched",
+        "mac" => "Mac item synced",
+        "git" => "repository synced",
+        _ => "file changed on disk",
+    };
+    let _ = state
+        .db
+        .add_source_event(&crate::models::SourceEvent {
+            id: new_id(),
+            notebook_id: existing.notebook_id.clone(),
+            source_id: existing.id.clone(),
+            source_title: updated.title.clone(),
+            kind: "updated".into(),
+            detail: detail.into(),
+            at: now(),
+        })
+        .await;
     // Refreshed content means a changed hash — let the sweep re-gist it.
     crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
     Ok(Source {

@@ -18,7 +18,9 @@ use lancedb::index::Index;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::Connection;
 
-use crate::models::{Citation, Message, Note, NoteUsage, Notebook, ReportSchedule, Source};
+use crate::models::{
+    Citation, Message, Note, NoteUsage, Notebook, ReportSchedule, Source, SourceEvent,
+};
 
 const T_NOTEBOOKS: &str = "notebooks";
 const T_SOURCES: &str = "sources";
@@ -28,6 +30,9 @@ const T_NOTES: &str = "notes";
 const T_NOTE_USAGE: &str = "note_usage";
 const T_REPORTS: &str = "report_schedules";
 const T_ROUTES: &str = "routes";
+const T_SOURCE_EVENTS: &str = "source_events";
+/// Source events prune past this window — a rolling record, not an archive.
+const SOURCE_EVENT_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 /// Note chunks share the chunks table with source chunks, stored under
 /// `source_id = "note:<note_id>"` — real source ids are UUIDs, so the prefix
 /// can't collide, and every existing notebook/source filter and delete
@@ -215,6 +220,8 @@ impl Db {
         db.ensure_table(T_NOTES, notes_schema()).await?;
         db.migrate_notes().await?;
         db.ensure_table(T_REPORTS, reports_schema()).await?;
+        db.ensure_table(T_SOURCE_EVENTS, source_events_schema())
+            .await?;
         Ok(db)
     }
 
@@ -1983,6 +1990,47 @@ impl Db {
         self.add_batch(T_REPORTS, schema, batch).await
     }
 
+    pub async fn add_source_event(&self, event: &SourceEvent) -> Result<()> {
+        let schema = source_events_schema();
+        let batch = source_event_batch(&schema, event)?;
+        self.add_batch(T_SOURCE_EVENTS, schema, batch).await
+    }
+
+    /// Events newer than `since`, newest first. Prunes the rolling window on
+    /// the way in — callers are periodic (the Brief, agents), so the table
+    /// stays bounded without a dedicated sweep.
+    pub async fn source_events_since(&self, since: i64) -> Result<Vec<SourceEvent>> {
+        let cutoff = crate::commands::now() - SOURCE_EVENT_WINDOW_MS;
+        self.delete_where(T_SOURCE_EVENTS, &format!("at < {cutoff}"))
+            .await?;
+        let batches = self
+            .collect(T_SOURCE_EVENTS, Some(&format!("at > {since}")))
+            .await?;
+        let mut out = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let nb = str_col(b, "notebook_id")?;
+            let sid = str_col(b, "source_id")?;
+            let title = str_col(b, "source_title")?;
+            let kind = str_col(b, "kind")?;
+            let detail = str_col(b, "detail")?;
+            let at = i64_col(b, "at")?;
+            for i in 0..b.num_rows() {
+                out.push(SourceEvent {
+                    id: id.value(i).to_string(),
+                    notebook_id: nb.value(i).to_string(),
+                    source_id: sid.value(i).to_string(),
+                    source_title: title.value(i).to_string(),
+                    kind: kind.value(i).to_string(),
+                    detail: detail.value(i).to_string(),
+                    at: at.value(i),
+                });
+            }
+        }
+        out.sort_by_key(|e| std::cmp::Reverse(e.at));
+        Ok(out)
+    }
+
     pub async fn update_report_schedule(
         &self,
         id: &str,
@@ -2355,6 +2403,33 @@ fn notes_schema() -> SchemaRef {
         Field::new("origin", DataType::Utf8, false),
         Field::new("status", DataType::Utf8, false),
     ]))
+}
+
+fn source_events_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("notebook_id", DataType::Utf8, false),
+        Field::new("source_id", DataType::Utf8, false),
+        Field::new("source_title", DataType::Utf8, false),
+        Field::new("kind", DataType::Utf8, false),
+        Field::new("detail", DataType::Utf8, false),
+        Field::new("at", DataType::Int64, false),
+    ]))
+}
+
+fn source_event_batch(schema: &SchemaRef, e: &SourceEvent) -> Result<RecordBatch> {
+    Ok(RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from(vec![e.id.clone()])),
+            Arc::new(StringArray::from(vec![e.notebook_id.clone()])),
+            Arc::new(StringArray::from(vec![e.source_id.clone()])),
+            Arc::new(StringArray::from(vec![e.source_title.clone()])),
+            Arc::new(StringArray::from(vec![e.kind.clone()])),
+            Arc::new(StringArray::from(vec![e.detail.clone()])),
+            Arc::new(Int64Array::from(vec![e.at])),
+        ],
+    )?)
 }
 
 fn reports_schema() -> SchemaRef {

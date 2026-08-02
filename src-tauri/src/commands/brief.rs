@@ -72,6 +72,14 @@ struct Collected {
 /// told to preserve it.
 async fn collect(state: &AppState, briefs_notebook_id: &str, since: i64) -> Collected {
     let notebooks = state.db.list_notebooks().await.unwrap_or_default();
+    // Updates come from the events the refresh paths write (accurate for
+    // every source class — mac/git content stamps aren't timestamps, so the
+    // old mtime heuristic missed them). Newest-first, one line per source.
+    let events = state
+        .db
+        .source_events_since(since)
+        .await
+        .unwrap_or_default();
     let mut attention = String::new();
     let mut changed = String::new();
     let mut quiet: Vec<String> = Vec::new();
@@ -82,6 +90,7 @@ async fn collect(state: &AppState, briefs_notebook_id: &str, since: i64) -> Coll
         let notes = state.db.list_notes(&nb.id).await.unwrap_or_default();
 
         let mut nb_changed = String::new();
+        let mut fresh: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for s in &sources {
             if s.status == "error" {
                 let reason = if s.error.is_empty() {
@@ -95,15 +104,23 @@ async fn collect(state: &AppState, briefs_notebook_id: &str, since: i64) -> Coll
                 ));
                 items += 1;
             } else if s.created_at > since {
+                fresh.insert(s.id.as_str());
                 nb_changed.push_str(&format!("  - new source: \u{201c}{}\u{201d}\n", s.title));
                 items += 1;
-            } else if s.mtime > since {
-                nb_changed.push_str(&format!(
-                    "  - source updated on disk: \u{201c}{}\u{201d}\n",
-                    s.title
-                ));
-                items += 1;
             }
+        }
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for event in events.iter().filter(|e| {
+            e.notebook_id == nb.id && e.kind == "updated" && !fresh.contains(e.source_id.as_str())
+        }) {
+            if !seen.insert(event.source_id.as_str()) {
+                continue; // several updates in the window — newest line wins
+            }
+            nb_changed.push_str(&format!(
+                "  - source updated ({}): \u{201c}{}\u{201d}\n",
+                event.detail, event.source_title
+            ));
+            items += 1;
         }
         for note in notes
             .iter()

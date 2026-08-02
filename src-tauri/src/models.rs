@@ -116,6 +116,25 @@ pub struct ModelStat {
 
 /// A periodic report definition. On its interval, the app refreshes the
 /// notebook's URL sources, then generates a timestamped note.
+/// One observed source change (docs/RFC-night-shift.md §"Watchers"): change
+/// becomes a first-class event instead of a silent overwrite. Written by the
+/// resync/refresh paths; read by the Brief's collector and agents. The
+/// events table is a rolling window, not an archive — old rows prune.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceEvent {
+    pub id: String,
+    pub notebook_id: String,
+    pub source_id: String,
+    pub source_title: String,
+    /// "updated" (more kinds as watcher classes land).
+    pub kind: String,
+    /// Short human line ("page re-fetched", "file changed on disk", …).
+    #[serde(default)]
+    pub detail: String,
+    pub at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReportSchedule {

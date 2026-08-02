@@ -30,9 +30,35 @@ struct SourceIdReq {
     source_id: String,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct ActivityReq {
+    /// Look-back window in hours (default 24, capped to the 30-day event
+    /// window the table keeps).
+    #[serde(default)]
+    hours: Option<u32>,
+}
+
 #[tool_router(router = sources_router, vis = "pub(super)")]
 impl AlchemyMcp {
     // -- Sources --
+
+    #[tool(
+        description = "Recent source-change events across ALL notebooks (what the resident scheduler's resyncs observed): each event has notebook_id, source_id, source_title, kind, a short detail, and a millisecond timestamp, newest first. The same signal the Morning Brief's \"what changed\" reads. Default window 24 hours."
+    )]
+    async fn list_source_events(
+        &self,
+        Parameters(ActivityReq { hours }): Parameters<ActivityReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let hours = i64::from(hours.unwrap_or(24));
+        let since = commands::now() - hours * 60 * 60 * 1000;
+        let events = self
+            .state()
+            .db
+            .source_events_since(since)
+            .await
+            .map_err(|e| invalid(format!("{e:#}")))?;
+        json_result(&events)
+    }
 
     #[tool(
         description = "List a notebook's sources (id, title, type, url, status, char/chunk counts). status \"error\" means the import failed — see the error field."
