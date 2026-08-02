@@ -38,7 +38,6 @@ import {
   Plus,
   Trash2,
   StickyNote,
-  Wand2,
   Square,
   PanelRightClose,
   Copy,
@@ -243,8 +242,7 @@ export function StudioPanel() {
         label="Resize studio panel"
       />
       <div className="flex items-center px-4 h-12 border-b border-border">
-        <Wand2 className="h-4 w-4 text-muted-foreground" />
-        <span className="ml-2 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
           Studio
         </span>
         <Button
