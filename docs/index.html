@@ -34,7 +34,9 @@
     --border-strong: rgba(255, 255, 255, 0.13);
     --primary: #5e6ad2;
     --primary-hover: #6975dd;
+    --primary-foreground: #ffffff;
     --accent-text: #8b95f5;
+    --selection: rgba(94, 106, 210, 0.35);
     --shader-bg: #101114;
     --shader-ink: #8b95f5;
     --shader-label: rgba(13, 14, 16, 0.88);
@@ -54,7 +56,9 @@
       --border-strong: rgba(20, 22, 26, 0.18);
       --primary: #5e6ad2;
       --primary-hover: #4f5bc6;
+      --primary-foreground: #ffffff;
       --accent-text: #4650b8;
+      --selection: rgba(94, 106, 210, 0.22);
       --shader-bg: #f4f5f7;
       --shader-ink: #4650b8;
       --shader-label: rgba(255, 255, 255, 0.88);
@@ -76,7 +80,7 @@
     overflow-x: hidden;
   }
 
-  ::selection { background: rgba(94, 106, 210, 0.35); }
+  ::selection { background: var(--selection); }
 
   a { color: inherit; }
   a, button { touch-action: manipulation; }
@@ -94,6 +98,18 @@
     max-width: 1120px;
     margin: 0 auto;
     padding-inline: 24px;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .skip-link {
@@ -203,7 +219,7 @@
   }
   .btn-primary {
     background: var(--primary);
-    color: #fff;
+    color: var(--primary-foreground);
     box-shadow: var(--btn-shadow);
   }
   .btn-primary:hover { background: var(--primary-hover); }
@@ -242,7 +258,7 @@
     position: relative;
     overflow: hidden;
     border: 1px solid var(--border-strong);
-    border-radius: 16px;
+    border-radius: 10px;
     background: var(--shader-bg);
     isolation: isolate;
   }
@@ -262,7 +278,7 @@
     overflow: hidden;
     padding: 8px;
     border: 1px solid var(--border-strong);
-    border-radius: 18px;
+    border-radius: 12px;
     background: var(--surface);
     box-shadow: 0 18px 55px rgba(0, 0, 0, 0.16);
   }
@@ -271,7 +287,7 @@
     width: 100%;
     height: auto;
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: 8px;
   }
   .hero-product figcaption {
     margin-top: 10px;
@@ -296,18 +312,10 @@
   .eyebrow {
     font-size: 11px;
     font-weight: 500;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--muted);
     padding-top: 7px;
-  }
-  .eyebrow .num {
-    display: block;
-    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
-    letter-spacing: 0;
-    color: var(--subtle);
-    margin-bottom: 5px;
   }
   .features-intro h2, .etc-head h2 {
     font-size: clamp(25px, 4vw, 36px);
@@ -336,7 +344,7 @@
     padding: 11px;
     overflow: hidden;
     border: 1px solid var(--border);
-    border-radius: 18px;
+    border-radius: 12px;
     background: var(--surface);
   }
   .feature-card.wide { grid-column: span 7; }
@@ -350,7 +358,7 @@
     position: absolute;
     inset: 9px;
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: 6px;
     pointer-events: none;
     z-index: 2;
   }
@@ -364,7 +372,9 @@
   .visual-pill {
     padding: 5px 9px;
     border-radius: 99px;
-    font: 500 10px/1.2 ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.2;
   }
   .visual-pill.top-left { top: 24px; left: 24px; }
   .visual-pill.top-right { top: 24px; right: 24px; }
@@ -395,14 +405,18 @@
     bottom: 24px;
     padding: 4px 8px;
     border-radius: 6px;
-    font-size: 10px;
+    font-size: 11px;
     transform: translateX(-50%);
   }
   .feature-copy { padding: 21px 17px 19px; }
   .feature-kicker {
     margin-bottom: 10px;
     color: var(--subtle);
-    font: 500 11px/1.2 ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    line-height: 1.2;
+    text-transform: uppercase;
   }
   .feature-card h3 {
     margin-bottom: 10px;
@@ -430,7 +444,7 @@
     border: 1px solid var(--border);
     border-radius: 99px;
     color: var(--subtle);
-    font-size: 10.5px;
+    font-size: 11px;
   }
 
   /* ---------- also in the box ---------- */
@@ -456,7 +470,7 @@
     min-width: 0;
     overflow: hidden;
     border: 1px solid var(--border);
-    border-radius: 18px;
+    border-radius: 12px;
     background: var(--surface);
   }
   .utility-card.large {
@@ -484,14 +498,18 @@
     inset: 9px;
     z-index: 2;
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: 6px;
     pointer-events: none;
   }
   .utility-copy { padding: 21px 17px 18px; }
   .utility-kicker {
     margin-bottom: 9px;
     color: var(--subtle);
-    font: 500 11px/1.2 ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    line-height: 1.2;
+    text-transform: uppercase;
   }
   .utility-card h3 {
     margin-bottom: 8px;
@@ -528,7 +546,7 @@
     padding-inline: 11px;
     border-bottom: 1px solid var(--border);
     color: var(--subtle);
-    font-size: 10px;
+    font-size: 11px;
   }
   .native-titlebar span:first-child { color: var(--foreground); font-weight: 500; }
   .native-body {
@@ -539,7 +557,7 @@
     padding: 17px;
   }
   .text-scale { display: grid; gap: 9px; }
-  .text-scale-label { display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; }
+  .text-scale-label { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; }
   .scale-track {
     position: relative;
     height: 3px;
@@ -563,7 +581,7 @@
     border: 1px solid var(--border);
     border-radius: 6px;
     color: var(--muted);
-    font-size: 9.5px;
+    font-size: 11px;
   }
   .native-status { color: var(--accent-text); }
   .command-demo, .reader-demo, .file-demo, .theme-demo {
@@ -580,14 +598,14 @@
     border-radius: 8px;
     background: var(--surface-2);
     color: var(--muted);
-    font-size: 10.5px;
+    font-size: 11px;
   }
   .command-demo kbd {
     padding: 2px 6px;
     border: 1px solid var(--border-strong);
     border-radius: 5px;
     color: var(--foreground);
-    font: 500 10px/1.5 ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    font: 500 11px/1.5 ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
   }
   .reader-demo {
     display: grid;
@@ -595,7 +613,7 @@
     padding: 9px 10px;
     border-left: 1px solid var(--border-strong);
     color: var(--subtle);
-    font-size: 10px;
+    font-size: 11px;
   }
   .reader-demo mark {
     width: fit-content;
@@ -616,7 +634,7 @@
     align-items: center;
     gap: 10px;
     color: var(--muted);
-    font: 500 10px/1.5 ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    font: 500 11px/1.5 ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
   }
   .file-badge {
     display: grid;
@@ -627,19 +645,74 @@
     border-radius: 7px;
     color: var(--accent-text);
   }
-  .theme-demo { display: flex; gap: 7px; }
-  .theme-demo i {
-    display: block;
-    width: 30px;
-    height: 30px;
-    border: 1px solid var(--border-strong);
-    border-radius: 7px;
+  .theme-demo {
+    display: grid;
+    gap: 11px;
+    border: 0;
   }
-  .theme-demo i:nth-child(1) { background: #08090a; }
-  .theme-demo i:nth-child(2) { background: #fdf6e3; }
-  .theme-demo i:nth-child(3) { background: #002b36; }
-  .theme-demo i:nth-child(4) { background: #241b2f; }
-  .theme-demo i:nth-child(5) { background: #f4f1ea; }
+  .theme-demo-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .theme-current {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--foreground);
+    font-size: 12px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .theme-system {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 28px;
+    padding-inline: 9px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--surface-2);
+    color: var(--muted);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .theme-system:hover,
+  .theme-system[aria-pressed="true"] { color: var(--foreground); }
+  .theme-system[aria-pressed="true"] { border-color: var(--primary); }
+  .theme-swatches {
+    display: grid;
+    grid-template-columns: repeat(8, 28px);
+    gap: 7px;
+  }
+  .theme-swatch {
+    position: relative;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--swatch-background);
+    cursor: pointer;
+  }
+  .theme-swatch::after {
+    content: "";
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    width: 8px;
+    height: 8px;
+    border: 1px solid var(--swatch-foreground);
+    border-radius: 50%;
+    background: var(--swatch-primary);
+  }
+  .theme-swatch:hover { border-color: var(--foreground); }
+  .theme-swatch[aria-pressed="true"] {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
 
   /* ---------- closing ---------- */
 
@@ -711,12 +784,11 @@
     .hero { padding-top: 56px; padding-bottom: 72px; }
     .site-head nav a:first-child { display: none; }
     .hero-product { margin-top: 42px; }
-    .hero-shot-frame { aspect-ratio: 1; padding: 4px; border-radius: 13px; }
-    .hero-shot-frame img { height: 100%; border-radius: 9px; object-fit: cover; object-position: center; }
+    .hero-shot-frame { aspect-ratio: 1; padding: 4px; border-radius: 10px; }
+    .hero-shot-frame img { height: 100%; border-radius: 6px; object-fit: cover; object-position: center; }
     .features { padding-block: 56px 64px; }
     .features-intro { grid-template-columns: 1fr; gap: 12px; }
     .eyebrow { padding-top: 0; }
-    .eyebrow .num { display: inline; margin-right: 8px; }
     .bento-grid { grid-template-columns: 1fr; }
     .feature-card, .feature-card.wide, .feature-card.narrow { grid-column: auto; }
     .feature-visual { min-height: 190px; }
@@ -739,6 +811,160 @@
 </style>
 </head>
 <body>
+
+<script>
+(() => {
+  // Keep this compact catalog synchronized with src/lib/themes.ts.
+  const rows = [
+    ["midnight","Midnight",true,"#08090a","#0d0e10","#141517","#18191c","#eceef1","#8a8f98","#7f848d","#5e6ad2","#6c78e0","#8b95f5","rgba(94,106,210,0.35)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["light","Light",false,"#ffffff","#fbfbfa","#f3f3f1","#ffffff","#1c1d20","#686d76","#656c75","#5e6ad2","#4f5bc4","#5159c9","rgba(94,106,210,0.22)","rgba(0,0,0,0.09)","rgba(0,0,0,0.16)"],
+    ["slate","Slate",true,"#0f172a","#141d33","#1e293b","#243044","#e2e8f0","#94a3b8","#909caf","#5d60f0","#6063f3","#818cf8","rgba(99,102,241,0.32)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["dracula","Dracula",true,"#21222c","#282a36","#343746","#3a3d4d","#f8f8f2","#a6abc7","#a0aac8","#bd93f9","#cbaaff","#8be9fd","rgba(189,147,249,0.35)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["monokai","Monokai",true,"#1e1f1c","#272822","#33342c","#3b3c33","#f8f8f2","#aba893","#aba896","#a6e22e","#b6ee48","#66d9ef","rgba(166,226,46,0.25)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["one-dark","One Dark",true,"#21252b","#282c34","#2c313a","#333842","#abb2bf","#9fa4ae","#9da3af","#61afef","#74baf3","#56b6c2","rgba(97,175,239,0.30)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["nord","Nord",true,"#2e3440","#3b4252","#434c5e","#4c566a","#eceff4","#c8cfdd","#cacfd9","#88c0d0","#96cbd9","#aac0d5","rgba(136,192,208,0.30)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["gruvbox","Gruvbox",true,"#1d2021","#282828","#3c3836","#504945","#ebdbb2","#c4baac","#c4bcb5","#fe8019","#fe9539","#8eada1","rgba(254,128,25,0.28)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["github","GitHub",true,"#0d1117","#11151c","#161b22","#1c2128","#c9d1d9","#8b949e","#848b96","#126ff6","#116ef6","#58a6ff","rgba(47,129,247,0.30)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["github-light","GitHub Light",false,"#ffffff","#f6f8fa","#eaeef2","#ffffff","#1f2328","#57606a","#616a74","#0969da","#0860ca","#0550ae","rgba(9,105,218,0.20)","rgba(0,0,0,0.09)","rgba(0,0,0,0.16)"],
+    ["solarized","Solarized",true,"#002b36","#073642","#0a4351","#0e4b5a","#93a1a1","#abb7b7","#a8b8be","#2076b3","#1e75b1","#32beb3","rgba(38,139,210,0.30)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["solarized-light","Solarized Light",false,"#fdf6e3","#f5eeda","#eee8d5","#fffbf0","#586e75","#55686e","#5c6a6a","#2076b3","#1c74b0","#1d706a","rgba(38,139,210,0.22)","rgba(0,0,0,0.09)","rgba(0,0,0,0.16)"],
+    ["tokyo-night","Tokyo Night",true,"#1a1b26","#1f2335","#24283b","#2a2e42","#c0caf5","#9aa5ce","#8f96b8","#7aa2f7","#8fb0f8","#7dcfff","rgba(122,162,247,0.32)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["matrix","Matrix",true,"#000a00","#001200","#001a00","#002200","#00ff41","#22a344","#1d9943","#00ff41","#33ff67","#7dffab","rgba(0,255,65,0.25)","rgba(0,255,65,0.12)","rgba(0,255,65,0.20)"],
+    ["synthwave","Synthwave '84",true,"#1e1a29","#262335","#2a2139","#34294f","#f4f2ff","#9096c3","#9a98b7","#ff7edb","#ff92df","#36f9f6","rgba(255,126,219,0.30)","rgba(176,132,235,0.16)","rgba(176,132,235,0.26)"],
+    ["claude","Claude",true,"#1f1e1b","#26241f","#302d27","#37332c","#f0eee6","#b0a99b","#a49e92","#d97757","#e08967","#cc8a63","rgba(217,119,87,0.30)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["openai","OpenAI",true,"#0d0d0d","#141414","#1d1d1d","#242424","#ececec","#9b9b9b","#8c8c8c","#0d8265","#138265","#19c37d","rgba(16,163,127,0.28)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["latte","Catppuccin Latte",false,"#eff1f5","#e6e9ef","#dce0e8","#ffffff","#4c4f69","#5e6174","#5a5f71","#8839ef","#7a2fe0","#0a53e4","rgba(136,57,239,0.18)","rgba(0,0,0,0.09)","rgba(0,0,0,0.16)"],
+    ["rose-pine-dawn","Rosé Pine Dawn",false,"#faf4ed","#fffaf3","#f2e9e1","#fffaf3","#575279","#67647f","#6a6478","#c44741","#bc524d","#745d8f","rgba(215,130,126,0.25)","rgba(0,0,0,0.09)","rgba(0,0,0,0.16)"],
+    ["carrera","Carrera",false,"#e4d8bf","#ddd0b4","#d3c5a5","#ede3ce","#241f18","#574d3e","#5b5142","#b30018","#9a0015","#61470d","rgba(179,0,24,0.22)","rgba(0,0,0,0.09)","rgba(0,0,0,0.16)"],
+    ["italia","Italia",true,"#0b0708","#130c0d","#1b1113","#241719","#f6f1ef","#ab9d9c","#a29493","#ff2800","#ff4a2b","#f5d000","rgba(255,40,0,0.30)","rgba(255,86,64,0.11)","rgba(255,86,64,0.20)"],
+    ["panigale","Panigale",true,"#1a1c1e","#202325","#282c2f","#31363a","#c6ced4","#a3abb1","#99a1a8","#da291c","#ea3a2c","#eef4f8","rgba(218,41,28,0.30)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["sepia","Sepia",false,"#f4ecd8","#efe5cf","#e7dbc0","#f6efde","#4a3b2a","#6b5d48","#685c47","#a0522d","#8f4624","#7b5530","rgba(160,82,45,0.22)","rgba(0,0,0,0.09)","rgba(0,0,0,0.16)"],
+  ];
+  const primaryForegrounds = {
+    midnight: "#ffffff", light: "#ffffff", slate: "#ffffff", dracula: "#21222c",
+    monokai: "#1e1f1c", "one-dark": "#21252b", nord: "#2e3440", gruvbox: "#1d2021",
+    github: "#ffffff", "github-light": "#ffffff", solarized: "#fdf6e3",
+    "solarized-light": "#fdf6e3", "tokyo-night": "#1a1b26", matrix: "#000a00",
+    synthwave: "#262335", claude: "#1f1e1b", openai: "#ffffff", latte: "#ffffff",
+    "rose-pine-dawn": "#fffaf3", carrera: "#ffffff", italia: "#0b0708",
+    panigale: "#ffffff", sepia: "#f8f1e0",
+  };
+
+  const themes = Object.fromEntries(rows.map(([
+    id, label, dark, background, surface, surface2, elevated, foreground,
+    muted, subtle, primary, primaryHover, citation, selection, border,
+    borderStrong,
+  ]) => [id, {
+    id, label, dark, background, surface, surface2, elevated, foreground,
+    muted, subtle, primary, primaryHover, primaryForeground: primaryForegrounds[id],
+    citation, selection, border,
+    borderStrong,
+  }]));
+  const root = document.documentElement;
+  const systemAppearance = window.matchMedia("(prefers-color-scheme: dark)");
+  const storageKey = "alchemy-site-theme";
+
+  function storedChoice() {
+    try { return localStorage.getItem(storageKey) || "system"; }
+    catch { return "system"; }
+  }
+
+  function resolveChoice(choice) {
+    if (choice === "system") return systemAppearance.matches ? "midnight" : "light";
+    return themes[choice] ? choice : "midnight";
+  }
+
+  function applyTheme(choice, persist = false) {
+    const safeChoice = choice === "system" || themes[choice] ? choice : "system";
+    const theme = themes[resolveChoice(safeChoice)];
+    const vars = {
+      background: theme.background,
+      surface: theme.surface,
+      "surface-2": theme.surface2,
+      elevated: theme.elevated,
+      foreground: theme.foreground,
+      muted: theme.muted,
+      subtle: theme.subtle,
+      border: theme.border,
+      "border-strong": theme.borderStrong,
+      primary: theme.primary,
+      "primary-hover": theme.primaryHover,
+      "primary-foreground": theme.primaryForeground,
+      "accent-text": theme.citation,
+      selection: theme.selection,
+      "shader-bg": theme.surface2,
+      "shader-ink": theme.citation,
+      "shader-label": theme.elevated,
+      "btn-shadow": theme.dark
+        ? "0 1px 2px rgba(0, 0, 0, 0.35)"
+        : "0 1px 2px rgba(20, 22, 26, 0.12)",
+    };
+    Object.entries(vars).forEach(([key, value]) => root.style.setProperty(`--${key}`, value));
+    root.dataset.siteTheme = theme.id;
+    root.dataset.siteThemeChoice = safeChoice;
+    root.style.colorScheme = theme.dark ? "dark" : "light";
+    document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
+      meta.setAttribute("content", theme.background);
+    });
+    if (persist) {
+      try { localStorage.setItem(storageKey, safeChoice); }
+      catch { /* The selected theme still applies for this page view. */ }
+    }
+    window.dispatchEvent(new CustomEvent("alchemy-theme-change", {
+      detail: { choice: safeChoice, theme },
+    }));
+  }
+
+  function initPicker() {
+    const swatches = document.getElementById("theme-swatches");
+    const current = document.getElementById("theme-current");
+    const systemButton = document.getElementById("theme-system");
+    if (!swatches || !current || !systemButton) return;
+
+    Object.values(themes)
+      .sort((a, b) => a.label.localeCompare(b.label))
+      .forEach((theme) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "theme-swatch";
+        button.dataset.themeChoice = theme.id;
+        button.title = theme.label;
+        button.setAttribute("aria-label", `Use ${theme.label} theme`);
+        button.style.setProperty("--swatch-background", theme.background);
+        button.style.setProperty("--swatch-primary", theme.primary);
+        button.style.setProperty("--swatch-foreground", theme.foreground);
+        button.addEventListener("click", () => applyTheme(theme.id, true));
+        swatches.appendChild(button);
+      });
+
+    function syncPicker(event) {
+      const choice = event?.detail?.choice || root.dataset.siteThemeChoice || "system";
+      const theme = event?.detail?.theme || themes[resolveChoice(choice)];
+      current.textContent = choice === "system" ? `System · ${theme.label}` : theme.label;
+      systemButton.setAttribute("aria-pressed", String(choice === "system"));
+      swatches.querySelectorAll(".theme-swatch").forEach((button) => {
+        button.setAttribute("aria-pressed", String(button.dataset.themeChoice === choice));
+      });
+    }
+
+    systemButton.addEventListener("click", () => applyTheme("system", true));
+    window.addEventListener("alchemy-theme-change", syncPicker);
+    syncPicker();
+  }
+
+  window.alchemySiteThemes = themes;
+  window.applyAlchemySiteTheme = applyTheme;
+  applyTheme(storedChoice());
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initPicker, { once: true });
+  } else {
+    initPicker();
+  }
+  systemAppearance.addEventListener("change", () => {
+    if (root.dataset.siteThemeChoice === "system") applyTheme("system");
+  });
+})();
+</script>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
@@ -814,7 +1040,7 @@
 
   <section class="features wrap" id="features" aria-labelledby="features-title">
     <div class="features-intro">
-      <div class="eyebrow"><span class="num">01—06</span>The difference</div>
+      <div class="eyebrow">Features</div>
       <div>
         <h2 id="features-title">Research on your Mac, from source to finished work.</h2>
         <p>Import source material and ask questions with citations. Generate a brief, deck, or podcast in the same notebook.</p>
@@ -834,7 +1060,7 @@
           </div>
         </div>
         <div class="feature-copy">
-          <div class="feature-kicker">01 / Models</div>
+          <div class="feature-kicker">Models</div>
           <h3>Use existing subscriptions and local models.</h3>
           <p>Alchemy connects to Claude Code, Codex, Gemini CLI, Copilot, Cursor, and other subscriptions you already use. It also supports 30+ gateways, OpenAI-compatible endpoints, Ollama, LM Studio, and Apple’s on-device model. Switch models mid-thread; Alchemy labels each response with its provider.</p>
           <div class="card-meta"><span>Existing sign-ins</span><span>30+ gateway presets</span></div>
@@ -853,7 +1079,7 @@
           </div>
         </div>
         <div class="feature-copy">
-          <div class="feature-kicker">02 / Sources</div>
+          <div class="feature-kicker">Sources</div>
           <h3>Sources keep their structure and stay current.</h3>
           <p>Add a Git repository or local checkout without flattening it into uploaded text. Alchemy embeds documentation, keeps code available for exact search, and re-syncs with your existing Git credentials. PDFs, Office files, folders, and cloud drives belong in the same notebook.</p>
           <div class="card-meta"><span>Uses your Git credentials</span></div>
@@ -871,7 +1097,7 @@
           </div>
         </div>
         <div class="feature-copy">
-          <div class="feature-kicker">03 / Retrieval</div>
+          <div class="feature-kicker">Retrieval</div>
           <h3>Evidence you can open.</h3>
           <p>Alchemy combines semantic similarity with BM25 exact-match search. Each citation opens the source at the highlighted passage. Deep Research runs additional searches for harder questions, while Ask Everything searches across notebooks.</p>
           <div class="card-meta"><span>Hybrid search</span><span>Tested from 1M to 10M characters</span></div>
@@ -890,7 +1116,7 @@
           </div>
         </div>
         <div class="feature-copy">
-          <div class="feature-kicker">04 / Studio</div>
+          <div class="feature-kicker">Studio</div>
           <h3>Create documents, decks, quizzes, and podcasts.</h3>
           <p>Create editable documents, 16:9 slide decks, quizzes, mind maps, and tables from the latest notebook sources. Audio Overview writes a two-host script with your chosen chat model and runs Kokoro speech synthesis on your Mac.</p>
           <div class="card-meta"><span>Editable output</span><span>Native PDF export</span></div>
@@ -909,7 +1135,7 @@
           </div>
         </div>
         <div class="feature-copy">
-          <div class="feature-kicker">05 / Agents</div>
+          <div class="feature-kicker">Agents</div>
           <h3>Give agents access to the same notebook.</h3>
           <p>The localhost MCP server lets Codex, Claude Code, Gemini CLI, and other agents search notebooks, add sources, and write notes. Their changes appear in Alchemy as they work, so you do not need to copy context between apps.</p>
           <div class="card-meta"><span>Localhost only</span></div>
@@ -927,7 +1153,7 @@
           </div>
         </div>
         <div class="feature-copy">
-          <div class="feature-kicker">06 / Privacy</div>
+          <div class="feature-kicker">Privacy</div>
           <h3>Your library stays on your Mac.</h3>
           <p>Alchemy extracts, chunks, embeds, and stores sources on your Mac. It sends only the chat context to the model provider you select. Choose Ollama or Apple’s on-device model to keep chat offline too.</p>
           <div class="card-meta"><span>No account</span><span>Offline with local models</span></div>
@@ -938,7 +1164,7 @@
 
   <section class="etc wrap" aria-labelledby="more-title">
     <div class="etc-head">
-      <div class="eyebrow"><span class="num">07</span>And</div>
+      <div class="eyebrow">More</div>
       <div><h2 id="more-title">Also in the box:</h2></div>
     </div>
     <div class="utility-grid">
@@ -1010,11 +1236,18 @@
         </div>
       </article>
 
-      <article class="utility-card compact">
-        <div class="theme-demo" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+      <article class="utility-card compact theme-card">
+        <fieldset class="theme-demo">
+          <legend class="sr-only">Choose a website color theme</legend>
+          <div class="theme-demo-head">
+            <span class="theme-current" id="theme-current" aria-live="polite">System</span>
+            <button class="theme-system" id="theme-system" type="button" aria-pressed="true">System</button>
+          </div>
+          <div class="theme-swatches" id="theme-swatches"></div>
+        </fieldset>
         <div>
-          <h3>23 themes, dark and light.</h3>
-          <p>Choose Midnight, Solarized, Synthwave ’84, or a quieter light scheme. The palette carries through the reader and code view.</p>
+          <h3>Try every Alchemy theme.</h3>
+          <p>Switch this page between all 23 app palettes. System follows your Mac; your choice stays in this browser.</p>
         </div>
       </article>
     </div>
@@ -1460,6 +1693,12 @@
     });
   });
   colorScheme.addEventListener("change", () => {
+    states.forEach((state) => {
+      state.updateColors();
+      if (state.isInView()) state.draw(performance.now());
+    });
+  });
+  window.addEventListener("alchemy-theme-change", () => {
     states.forEach((state) => {
       state.updateColors();
       if (state.isInView()) state.draw(performance.now());
