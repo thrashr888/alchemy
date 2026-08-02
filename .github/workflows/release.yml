@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install protoc (required by lance build scripts)
-        run: brew install protobuf
+        run: command -v protoc >/dev/null 2>&1 || brew install protobuf
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -57,7 +57,9 @@ jobs:
         run: scripts/build-fm-sidecar.sh
 
       - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
+        # The sidecars were built explicitly above; keep install from invoking
+        # the postinstall hook and rebuilding/checking them a second time.
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       # Code signing is optional: if APPLE_CERTIFICATE isn't set, an unsigned
       # build is produced (users open it via right-click → Open the first time).

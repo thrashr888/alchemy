@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install protoc (required by lance build scripts)
-        run: brew install protobuf
+        run: command -v protoc >/dev/null 2>&1 || brew install protobuf
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -39,11 +39,10 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
-      - name: Fetch PDFium (scanned-PDF OCR)
-        run: scripts/fetch-pdfium.sh
-
       - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
+        # CI runs the web build and Rust checks, not the Tauri bundle. Avoid
+        # downloading PDFium or compiling the Swift FM sidecar in postinstall.
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Frontend typecheck + build
         run: pnpm build
@@ -58,4 +57,7 @@ jobs:
 
       - name: Rust tests
         working-directory: src-tauri
-        run: cargo test
+        # The crate has no Rust integration-test files or binary tests; all
+        # executable coverage lives in the library test harness. Avoid
+        # linking an empty second harness and running empty doc-tests.
+        run: cargo test --lib

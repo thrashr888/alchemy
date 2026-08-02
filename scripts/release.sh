@@ -63,13 +63,13 @@ perl -i -pe 'if (!$d && /^version = /) { s/^version = ".*"/version = "'"$VERSION
 echo "==> Quality gate"
 # Releases run from an isolated clone (no node_modules yet); without this,
 # `pnpm exec tsc` silently falls through to whatever global tsc is on PATH.
-pnpm install --frozen-lockfile
+pnpm install --frozen-lockfile --ignore-scripts
 pnpm exec tsc --noEmit
 (
   cd src-tauri
   cargo fmt -- --check
   cargo clippy --no-default-features --features debug -- -D warnings
-  cargo test --no-default-features --features debug
+  cargo test --no-default-features --features debug --lib
 )
 
 # --- Build + sign ------------------------------------------------------------

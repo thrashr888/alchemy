@@ -33,3 +33,4 @@ sidecar/alchemy-fm/.build/
 # Staged by scripts/build-fm-sidecar.sh for bundling
 src-tauri/binaries/
 extension/chrome/*.zip
+.pnpm-store/
