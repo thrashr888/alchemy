@@ -12,6 +12,7 @@ use uuid::Uuid;
 mod brief;
 mod ledger;
 mod reports;
+mod weave;
 pub(crate) use brief::ensure_default_brief;
 pub use ledger::*;
 pub use reports::*;
@@ -639,6 +640,19 @@ async fn store_new_source(
     // the import returns before any distillation happens.
     if embed {
         crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
+    }
+
+    // Judgment on arrival for deliberate adds only — folder children skip
+    // (a bulk import judging hundreds of files against the ledger would be
+    // noise; their later CHANGES still weave via reingest).
+    if embed && parent_id.is_empty() {
+        weave::spawn_weave(
+            state.db.clone(),
+            state.ai.read().await.clone(),
+            notebook_id.to_string(),
+            source.title.clone(),
+            source.content.chars().take(4_000).collect(),
+        );
     }
 
     // Don't ship the full content back in the list payload.
@@ -1432,6 +1446,17 @@ async fn reingest(
     } else {
         format!("{verb} \u{00b7} {stats}")
     };
+    // Judgment on arrival (commands/weave.rs): the changed lines are weighed
+    // against this notebook's ledger. Fire-and-forget, capped, gated.
+    if !diff.is_empty() {
+        weave::spawn_weave(
+            state.db.clone(),
+            state.ai.read().await.clone(),
+            existing.notebook_id.clone(),
+            updated.title.clone(),
+            diff.clone(),
+        );
+    }
     let _ = state
         .db
         .add_source_event(&crate::models::SourceEvent {

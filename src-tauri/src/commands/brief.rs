@@ -89,8 +89,31 @@ async fn collect(state: &AppState, briefs_notebook_id: &str, since: i64) -> Coll
     for nb in notebooks.iter().filter(|n| n.id != briefs_notebook_id) {
         let sources = state.db.list_sources(&nb.id).await.unwrap_or_default();
         let notes = state.db.list_notes(&nb.id).await.unwrap_or_default();
+        let ledger = state.db.list_ledger(&nb.id).await.unwrap_or_default();
 
         let mut nb_changed = String::new();
+        // The Weave's verdicts lead the brief: a freshly contradicted row is
+        // exactly what needs a human; answered/superseded is news.
+        for entry in ledger.iter().filter(|l| l.updated_at > since) {
+            let last_why = entry.why.lines().last().unwrap_or("").trim();
+            match entry.status.as_str() {
+                "contradicted" => {
+                    attention.push_str(&format!(
+                        "- [{}] ledger {} now CONTRADICTED: \u{201c}{}\u{201d} ({})\n",
+                        nb.title, entry.kind, entry.text, last_why
+                    ));
+                    items += 1;
+                }
+                "superseded" | "answered" => {
+                    nb_changed.push_str(&format!(
+                        "  - ledger {} {}: \u{201c}{}\u{201d} ({})\n",
+                        entry.kind, entry.status, entry.text, last_why
+                    ));
+                    items += 1;
+                }
+                _ => {}
+            }
+        }
         let mut fresh: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for s in &sources {
             if s.status == "error" {
