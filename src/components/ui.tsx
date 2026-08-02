@@ -339,13 +339,22 @@ export function ResizeHandle({
         e.preventDefault();
       }}
       className={cn(
-        "absolute inset-y-0 z-20 w-1.5 cursor-col-resize transition-colors hover:bg-ring/30 active:bg-ring/40 focus-visible:bg-ring/30",
+        "group/resize absolute inset-y-0 z-20 w-1.5 cursor-col-resize transition-colors hover:bg-ring/30 active:bg-ring/40 focus-visible:bg-ring/30",
         // Fully inside the card edge: the panels clip at their rounded
         // border (overflow-hidden), so a straddling handle loses its
         // outer half to hit-testing.
         edge === "right" ? "right-0" : "left-0",
       )}
-    />
+    >
+      <span
+        aria-hidden
+        className="absolute top-1/2 left-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col gap-0.5 opacity-40 transition-opacity group-hover/resize:opacity-100 group-focus-visible/resize:opacity-100"
+      >
+        <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
+        <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
+        <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
+      </span>
+    </div>
   );
 }
 
