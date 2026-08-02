@@ -1,9 +1,20 @@
 import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
+import { api } from "@/lib/api";
 import { Button, EmptyState, Input, Textarea, Modal, Spinner } from "./ui";
 import { cn, fmtDay } from "@/lib/utils";
-import { Clock, Eye, EyeOff, Plus, Play, Trash2, Power, Pencil } from "lucide-react";
-import type { ReportSchedule } from "@/lib/types";
+import {
+  Clock,
+  Eye,
+  EyeOff,
+  FileText,
+  Plus,
+  Play,
+  Trash2,
+  Power,
+  Pencil,
+} from "lucide-react";
+import type { Note, ReportSchedule } from "@/lib/types";
 import { ARTIFACTS } from "./studioArtifacts";
 
 const INTERVALS = [
@@ -24,6 +35,24 @@ export function Reports() {
   const remove = useStore((s) => s.deleteReport);
   const runNow = useStore((s) => s.runReportNow);
   const generating = useStore((s) => s.generatingKind === "report");
+  const notes = useStore((s) => s.notes);
+  const markNotesRead = useStore((s) => s.markNotesRead);
+
+  // Each schedule keeps one living note (collapse_report_notes) titled after
+  // itself — that note IS the latest result.
+  const latestNote = (r: ReportSchedule): Note | undefined =>
+    notes.find(
+      (n) =>
+        n.kind === "report" &&
+        (n.title === r.name || n.title.startsWith(`${r.name} — `)),
+    );
+  const showLatest = (r: ReportSchedule) => {
+    const note = latestNote(r);
+    if (!note) return;
+    markNotesRead([note.id]);
+    void api.noteOpened(note.id).catch(() => {});
+    useStore.getState().openInReader({ type: "note", id: note.id });
+  };
 
   const templates = useStore((s) => s.templates);
   // One registry, every surface: any generator or user template schedules as
@@ -129,6 +158,16 @@ export function Reports() {
                 </div>
               </div>
               <div className="hidden items-center gap-0.5 group-hover:flex group-focus-within:flex">
+                <button
+                  type="button"
+                  className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
+                  onClick={() => showLatest(r)}
+                  disabled={!latestNote(r)}
+                  title="Open the latest result"
+                  aria-label={`Open the latest "${r.name}" note`}
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                </button>
                 <button
                   type="button"
                   className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-50"

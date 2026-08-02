@@ -2134,7 +2134,10 @@ function NoteReader({
             </div>
           ) : (
             <div
-              className={chatReadingClass(reading)}
+              className={cn(
+                chatReadingClass(reading),
+                note.kind === "report" && "prose-compact",
+              )}
               onClickCapture={docLinkClickHandler(undefined)}
             >
               {/* Briefs carry an audio edition; the player self-hides for

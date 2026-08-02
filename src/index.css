@@ -282,6 +282,23 @@ button {
   color: var(--citation);
   text-decoration: none;
 }
+/* Reports and briefs read as documents, not chat turns: the Home feed card's
+   tighter vertical rhythm, kept when the same note opens in the reader. */
+.prose-compact .prose h1,
+.prose-compact .prose h2,
+.prose-compact .prose h3 {
+  margin: 0.85em 0 0.3em;
+}
+.prose-compact .prose p {
+  margin: 0 0 0.5em;
+}
+.prose-compact .prose ul,
+.prose-compact .prose ol {
+  margin: 0 0 0.5em;
+}
+.prose-compact .prose li {
+  margin: 0.1em 0;
+}
 .prose strong {
   color: var(--foreground);
   font-weight: 600;

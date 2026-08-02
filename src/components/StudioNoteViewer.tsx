@@ -147,7 +147,7 @@ export function StudioNoteViewer({
                   <DialogueScript content={live.content} />
                 </div>
               ) : live.kind === "report" ? (
-                <div className="flex flex-col gap-4">
+                <div className="prose-compact flex flex-col gap-4">
                   <AudioPlayer noteId={live.id} title={live.title} />
                   <Markdown>{live.content}</Markdown>
                 </div>
