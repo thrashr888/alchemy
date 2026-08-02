@@ -13,6 +13,7 @@ import {
   Spinner,
   CardAction,
   useConfirm,
+  useHoverCard,
 } from "./ui";
 import { Reports } from "./Reports";
 import { RichEditor } from "./RichEditor";
@@ -153,6 +154,22 @@ export function StudioPanel() {
     void api.noteOpened(n.id).catch(() => {});
     useStore.getState().openInReader({ type: "note", id: n.id });
   };
+  const { show: showCard, hide: hideCard, card: hoverCard } = useHoverCard("left");
+  const noteCard = (n: Note) => ({
+    title: n.title,
+    time: relativeTime(n.updatedAt),
+    meta: [
+      { label: KIND_LABEL[n.kind] ?? n.kind },
+      {
+        label: "Length",
+        value: `${n.content.split(/\s+/).filter(Boolean).length.toLocaleString()} words`,
+      },
+      ...(n.origin === "auto"
+        ? [{ label: n.status === "stale" ? "Auto note · stale" : "Auto note" }]
+        : []),
+      { label: "Created", value: relativeTime(n.createdAt) },
+    ],
+  });
   // The user can hide the live preview without stopping the generation.
   const [previewHidden, setPreviewHidden] = useState(false);
   useEffect(() => setPreviewHidden(false), [generatingKind]);
@@ -443,6 +460,8 @@ export function StudioPanel() {
               {notes.filter((n) => n.status !== "archived").map((n) => (
                 <div
                   key={n.id}
+                  onMouseEnter={(e) => showCard(e, noteCard(n))}
+                  onMouseLeave={hideCard}
                   className={cn(
                     // has-: an open row menu must outrank the z-10 content of
                     // the rows after it (they'd paint over the dropdown
@@ -622,6 +641,7 @@ export function StudioPanel() {
       </Modal>
 
       {confirmDialog}
+      {hoverCard}
     </div>
   );
 }

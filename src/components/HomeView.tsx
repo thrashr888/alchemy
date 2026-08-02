@@ -8,6 +8,7 @@ import {
   EmptyState,
   Input,
   Modal,
+  ResizeHandle,
   RowMenu,
   useConfirm,
 } from "./ui";
@@ -94,6 +95,14 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     () => localStorage.getItem("homeBriefOpen") !== "0",
   );
   const clampSplit = (pct: number) => Math.min(75, Math.max(15, pct));
+  const clampStaffW = (w: number) => Math.min(440, Math.max(240, w));
+  const [staffWidth, setStaffWidth] = useState(() =>
+    clampStaffW(Number(localStorage.getItem("homeStaffWidth") ?? 300)),
+  );
+  const clampRightW = (w: number) => Math.min(820, Math.max(360, w));
+  const [rightWidth, setRightWidth] = useState(() =>
+    clampRightW(Number(localStorage.getItem("homeRightWidth") ?? 520)),
+  );
   const [briefSplit, setBriefSplit] = useState(() =>
     clampSplit(Number(localStorage.getItem("homeBriefSplit") ?? 40)),
   );
@@ -299,7 +308,21 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             Staff rail left, notebooks center, Brief + reports column right.
             Each sidebar collapses on its own. */}
           {staffOpen ? (
-            <aside className="side-card mx-2 mb-2 mt-1 hidden w-[300px] shrink-0 flex-col lg:flex">
+            <aside
+              className="side-card relative mx-2 mb-2 mt-1 hidden shrink-0 flex-col lg:flex"
+              style={{ width: staffWidth }}
+            >
+              <ResizeHandle
+                edge="right"
+                width={staffWidth}
+                defaultWidth={300}
+                label="Resize the Staff sidebar"
+                onResize={(w) => {
+                  const width = clampStaffW(w);
+                  setStaffWidth(width);
+                  localStorage.setItem("homeStaffWidth", String(Math.round(width)));
+                }}
+              />
               <StaffSidebar
                 schedules={allReports}
                 reports={reports}
@@ -621,8 +644,20 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           ) : (
             <div
               ref={rightColRef}
-              className="mx-2 mb-2 mt-1 hidden min-w-0 flex-1 flex-col lg:flex"
+              className="relative mx-2 mb-2 mt-1 hidden shrink-0 flex-col lg:flex"
+              style={{ width: rightWidth }}
             >
+              <ResizeHandle
+                edge="left"
+                width={rightWidth}
+                defaultWidth={520}
+                label="Resize the reading column"
+                onResize={(w) => {
+                  const width = clampRightW(w);
+                  setRightWidth(width);
+                  localStorage.setItem("homeRightWidth", String(Math.round(width)));
+                }}
+              />
               <>
                 <BriefSidebar
                   open={briefOpen}

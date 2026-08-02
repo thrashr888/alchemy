@@ -12,12 +12,14 @@ import {
   Spinner,
   CardAction,
   useConfirm,
+  useHoverCard,
 } from "./ui";
 import {
   cn,
   compactNumber,
   folderProvider,
   isWebUrl,
+  relativeTime,
   visibleTitle,
 } from "@/lib/utils";
 import { sourceIcon } from "@/lib/sourceIcon";
@@ -174,6 +176,33 @@ export function SourcesPanel() {
     const body = await api.macNoteBody(s.id);
     setEditing({ id: s.id, title: s.title, text: body, macNote: true });
   }
+
+  const { show: showCard, hide: hideCard, card: hoverCard } = useHoverCard("right");
+  // The hover card: type, size, freshness, status — the row itself stays
+  // quiet (name + status), ChatGPT-desktop style.
+  const sourceCard = (s: Source) => {
+    const meta: { label: string; value?: string }[] = [
+      {
+        label: s.parentId ? `${s.sourceType} · folder item` : s.sourceType,
+      },
+      {
+        label: "Size",
+        value: `${compactNumber(s.charCount)} chars · ${s.chunkCount} chunks`,
+      },
+      { label: "Added", value: relativeTime(s.createdAt) },
+    ];
+    // File mtimes are real clocks; mac/git stamps are content hashes — only
+    // show a time that is one.
+    if (s.mtime > 946_684_800_000 && s.mtime < Date.now() + 86_400_000) {
+      meta.push({ label: "File updated", value: relativeTime(s.mtime) });
+    }
+    if (s.status === "error") meta.push({ label: s.error || "Import failed" });
+    if (s.status === "placeholder")
+      meta.push({ label: "Cloud placeholder — not downloaded yet" });
+    if (s.author) meta.push({ label: "Author", value: s.author });
+    if (s.url) meta.push({ label: s.url });
+    return { title: s.title, meta };
+  };
 
   const totalChars = sources.reduce((sum, s) => sum + s.charCount, 0);
   const pct = Math.min(100, (totalChars / SCALE_TARGET_CHARS) * 100);
@@ -438,16 +467,10 @@ export function SourcesPanel() {
                     key={s.id}
                     // Row content is pointer-events-none (clicks go to the
                     // CardAction), so the row carries the hover detail the
-                    // truncated children can no longer show.
-                    title={[
-                      s.title,
-                      s.status === "error"
-                        ? s.error || "Import failed"
-                        : s.url || undefined,
-                      readable ? "Read source" : undefined,
-                    ]
-                      .filter(Boolean)
-                      .join("\n")}
+                    // truncated children can no longer show — as the floating
+                    // info card rather than a native tooltip.
+                    onMouseEnter={(e) => showCard(e, sourceCard(s))}
+                    onMouseLeave={hideCard}
                     className={cn(
                       // content of the rows after it (they'd paint over the
                       // dropdown otherwise — later DOM order wins at equal z).
@@ -779,6 +802,7 @@ export function SourcesPanel() {
       </Modal>
 
       {confirmDialog}
+      {hoverCard}
     </div>
   );
 }

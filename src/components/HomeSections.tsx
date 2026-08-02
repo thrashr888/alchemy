@@ -9,11 +9,13 @@ import type {
 } from "@/lib/types";
 import { AudioPlayer } from "./AudioNote";
 import { Markdown } from "./Markdown";
-import { Spinner } from "./ui";
+import { Spinner, useHoverCard } from "./ui";
 import { cn, relativeTime } from "@/lib/utils";
 import { intervalLabel } from "./Reports";
 import {
+  BookOpen,
   Clock,
+  FileText,
   Moon,
   Newspaper,
   PanelLeftClose,
@@ -164,6 +166,8 @@ export function StaffSidebar({
   const [status, setStatus] = useState<NightShiftStatus | null>(null);
   const [events, setEvents] = useState<SourceEvent[] | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
+  const { show: showCard, hide: hideCard, card: hoverCard } = useHoverCard("right");
+  const nb = (id: string) => notebookTitle.get(id) ?? "Unknown notebook";
 
   useEffect(() => {
     void api.nightShiftStatus().then(setStatus).catch(() => {});
@@ -265,7 +269,22 @@ export function StaffSidebar({
                 key={n.id}
                 type="button"
                 onClick={() => onOpenNote(n)}
-                title={`Open in "${notebookTitle.get(n.notebookId) ?? "notebook"}"`}
+                onMouseEnter={(e) =>
+                  showCard(e, {
+                    title: n.title,
+                    time: relativeTime(n.updatedAt),
+                    meta: [
+                      { icon: <BookOpen />, label: nb(n.notebookId) },
+                      { icon: <FileText />, label: "Report run" },
+                      {
+                        icon: <Clock />,
+                        label: "Updated",
+                        value: relativeTime(n.updatedAt),
+                      },
+                    ],
+                  })
+                }
+                onMouseLeave={hideCard}
                 className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-surface-2"
               >
                 <span
@@ -297,6 +316,31 @@ export function StaffSidebar({
               .map((r) => (
                 <div
                   key={r.id}
+                  onMouseEnter={(e) =>
+                    showCard(e, {
+                      title: r.name,
+                      time: r.lastRunAt > 0 ? relativeTime(r.lastRunAt) : "never run",
+                      meta: [
+                        { icon: <BookOpen />, label: nb(r.notebookId) },
+                        {
+                          icon: r.trigger === "change" ? <Zap /> : <Clock />,
+                          label:
+                            r.trigger === "change"
+                              ? "When sources change"
+                              : "On a schedule",
+                          value:
+                            r.trigger === "change"
+                              ? `at most ${intervalLabel(r.intervalSecs).toLowerCase()}`
+                              : intervalLabel(r.intervalSecs),
+                        },
+                        {
+                          icon: <Power />,
+                          label: r.enabled ? "Enabled" : "Paused",
+                        },
+                      ],
+                    })
+                  }
+                  onMouseLeave={hideCard}
                   className="group flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-surface-2"
                 >
                   <Power
@@ -347,7 +391,21 @@ export function StaffSidebar({
             <StaffQuiet>No source changes observed.</StaffQuiet>
           ) : (
             events.slice(0, 10).map((event) => (
-              <div key={event.id} className="rounded-md px-1.5 py-1">
+              <div
+                key={event.id}
+                onMouseEnter={(e) =>
+                  showCard(e, {
+                    title: event.sourceTitle,
+                    time: relativeTime(event.at),
+                    meta: [
+                      { icon: <BookOpen />, label: nb(event.notebookId) },
+                      { icon: <Zap />, label: event.detail },
+                    ],
+                  })
+                }
+                onMouseLeave={hideCard}
+                className="rounded-md px-1.5 py-1"
+              >
                 <div className="flex items-center gap-1.5">
                   <button
                     type="button"
@@ -361,8 +419,15 @@ export function StaffSidebar({
                     {relativeTime(event.at)}
                   </span>
                 </div>
-                <div className="truncate text-micro text-subtle-foreground">
-                  {event.detail}
+                <div className="flex min-w-0 items-center gap-1 text-micro text-subtle-foreground">
+                  <span
+                    className="h-1.5 w-1.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: notebookColor.get(event.notebookId) }}
+                    aria-hidden
+                  />
+                  <span className="shrink-0">{nb(event.notebookId)}</span>
+                  <span aria-hidden>·</span>
+                  <span className="truncate">{event.detail}</span>
                 </div>
                 {event.diff && (
                   <details className="mt-0.5">
@@ -379,6 +444,7 @@ export function StaffSidebar({
           )}
         </StaffGroup>
       </div>
+      {hoverCard}
     </>
   );
 }

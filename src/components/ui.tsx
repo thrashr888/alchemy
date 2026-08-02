@@ -105,6 +105,105 @@ export function Spinner({ className }: { className?: string }) {
   return <Loader2 className={cn("animate-spin", className)} />;
 }
 
+export interface HoverCardData {
+  title: string;
+  /** Right-aligned beside the title (e.g. a relative time). */
+  time?: string;
+  meta: { icon?: React.ReactNode; label: string; value?: string }[];
+}
+
+/** The quiet-row hover pattern: rows show name and status at rest; hovering
+ *  a beat floats an info card beside the list (sidebar-adjacent, like
+ *  ChatGPT desktop's nav). One hook per LIST — rows pass their data to
+ *  `show` in onMouseEnter — so it works inside .map without per-row hooks.
+ *  The card is info-only and pointer-events-none: actions stay on the row. */
+export function useHoverCard(side: "left" | "right") {
+  const [state, setState] = React.useState<{
+    top: number;
+    left: number;
+    data: HoverCardData;
+  } | null>(null);
+  const timer = React.useRef<number | undefined>(undefined);
+
+  const show = (e: React.MouseEvent<HTMLElement>, data: HoverCardData) => {
+    const el = e.currentTarget;
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => {
+      const r = el.getBoundingClientRect();
+      setState({
+        top: r.top,
+        left: side === "right" ? r.right + 10 : r.left - 10,
+        data,
+      });
+    }, 450);
+  };
+  const hide = () => {
+    window.clearTimeout(timer.current);
+    setState(null);
+  };
+  // Scrolling the list under the cursor won't fire mouseleave — drop the
+  // card on any scroll instead of letting it drift from its row.
+  React.useEffect(() => {
+    if (!state) return;
+    const drop = () => setState(null);
+    window.addEventListener("scroll", drop, true);
+    return () => window.removeEventListener("scroll", drop, true);
+  }, [state]);
+
+  const card = state
+    ? createPortal(
+        <div
+          className={cn(
+            "pointer-events-none fixed z-[100] w-64 rounded-lg border border-border-strong bg-surface-2 p-3 shadow-2xl",
+            side === "left" && "-translate-x-full",
+          )}
+          style={{
+            top: Math.max(8, Math.min(state.top, window.innerHeight - 200)),
+            left: state.left,
+          }}
+        >
+          <div className="flex items-baseline gap-2">
+            <span className="min-w-0 truncate text-body font-medium text-foreground">
+              {state.data.title}
+            </span>
+            {state.data.time && (
+              <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
+                {state.data.time}
+              </span>
+            )}
+          </div>
+          {state.data.meta.length > 0 && (
+            <div className="mt-2 flex flex-col gap-1.5">
+              {state.data.meta.map((m: HoverCardData["meta"][number], i: number) => (
+                <div
+                  key={i}
+                  className="flex min-w-0 items-center gap-2 text-caption"
+                >
+                  {m.icon && (
+                    <span className="shrink-0 text-muted-foreground [&_svg]:h-3.5 [&_svg]:w-3.5">
+                      {m.icon}
+                    </span>
+                  )}
+                  <span className="min-w-0 truncate text-muted-foreground">
+                    {m.label}
+                  </span>
+                  {m.value && (
+                    <span className="ml-auto shrink-0 pl-2 text-foreground">
+                      {m.value}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>,
+        document.body,
+      )
+    : null;
+
+  return { show, hide, card };
+}
+
 /** macOS-style toggle switch for settings rows: a pill track with a sliding
  *  thumb instead of a web checkbox. The real input stays underneath for
  *  keyboard focus and screen readers. */
