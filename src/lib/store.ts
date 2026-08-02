@@ -1389,11 +1389,11 @@ export const useStore = create<AppState>((set, get) => {
       if (nb) await get().selectNotebook(nb.id);
     },
 
-    createReport: (name, kind, prompt, intervalSecs) =>
+    createReport: (name, kind, prompt, trigger, intervalSecs) =>
       guard(async () => {
         const id = get().currentId;
         if (!id) return;
-        await api.createReportSchedule(id, name, kind, prompt, intervalSecs);
+        await api.createReportSchedule(id, name, kind, prompt, trigger, intervalSecs);
         set({ reportSchedules: await api.listReportSchedules(id) });
         get().pushToast("success", `Scheduled “${name}”`);
       }),
@@ -1405,6 +1405,7 @@ export const useStore = create<AppState>((set, get) => {
           r.name,
           r.kind,
           r.prompt,
+          r.trigger,
           r.intervalSecs,
           r.enabled,
         );

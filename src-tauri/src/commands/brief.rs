@@ -49,6 +49,7 @@ pub(crate) async fn ensure_default_brief(state: &AppState) {
         name: DEFAULT_BRIEF_NAME.into(),
         kind: BRIEF_KIND.into(),
         prompt: String::new(),
+        trigger: "interval".into(),
         interval_secs: 86_400,
         enabled: true,
         // Aligned so the first run lands at the next 7 AM local rather than
@@ -120,6 +121,11 @@ async fn collect(state: &AppState, briefs_notebook_id: &str, since: i64) -> Coll
                 "  - source updated ({}): \u{201c}{}\u{201d}\n",
                 event.detail, event.source_title
             ));
+            // A taste of the actual change grounds the writer — the diff's
+            // first lines, already ±-prefixed and capped at write time.
+            for line in event.diff.lines().take(3) {
+                nb_changed.push_str(&format!("      {line}\n"));
+            }
             items += 1;
         }
         for note in notes

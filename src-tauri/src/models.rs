@@ -82,6 +82,10 @@ impl FolderScan {
     }
 }
 
+fn default_trigger() -> String {
+    "interval".into()
+}
+
 fn default_status() -> String {
     "ready".to_string()
 }
@@ -129,9 +133,14 @@ pub struct SourceEvent {
     pub source_title: String,
     /// "updated" (more kinds as watcher classes land).
     pub kind: String,
-    /// Short human line ("page re-fetched", "file changed on disk", …).
+    /// Short human line ("page re-fetched · +12 −3 lines", …).
     #[serde(default)]
     pub detail: String,
+    /// Capped diff excerpt (± prefixed lines) computed at refresh time — the
+    /// old content is in hand at the reingest choke point, so no snapshot
+    /// table is needed. Empty when nothing textual changed (e.g. re-embeds).
+    #[serde(default)]
+    pub diff: String,
     pub at: i64,
 }
 
@@ -146,6 +155,11 @@ pub struct ReportSchedule {
     /// Custom instruction when `kind == "custom"`.
     #[serde(default)]
     pub prompt: String,
+    /// "interval" (the clock fires it) or "change" (a standing question —
+    /// source events in its notebook pull the trigger, with `interval_secs`
+    /// as the throttle floor between runs). RFC-night-shift §Staged.
+    #[serde(default = "default_trigger")]
+    pub trigger: String,
     pub interval_secs: i64,
     pub enabled: bool,
     /// Unix millis of the last successful run; 0 = never run.

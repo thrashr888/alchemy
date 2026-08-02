@@ -15,6 +15,14 @@ pub async fn list_all_report_schedules(
     e(state.db.all_report_schedules().await)
 }
 
+/// "interval" | "change", defaulted so pre-trigger callers keep working.
+fn resolve_trigger(trigger: Option<String>) -> String {
+    match trigger.as_deref() {
+        Some("change") => "change".to_string(),
+        _ => "interval".to_string(),
+    }
+}
+
 #[tauri::command]
 pub async fn create_report_schedule(
     state: State<'_, AppState>,
@@ -22,6 +30,7 @@ pub async fn create_report_schedule(
     name: String,
     kind: String,
     prompt: String,
+    trigger: Option<String>,
     interval_secs: i64,
 ) -> Result<ReportSchedule, String> {
     let schedule = ReportSchedule {
@@ -30,6 +39,7 @@ pub async fn create_report_schedule(
         name: name.trim().to_string(),
         kind,
         prompt,
+        trigger: resolve_trigger(trigger),
         interval_secs,
         enabled: true,
         last_run_at: 0,
@@ -40,18 +50,28 @@ pub async fn create_report_schedule(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn update_report_schedule(
     state: State<'_, AppState>,
     id: String,
     name: String,
     kind: String,
     prompt: String,
+    trigger: Option<String>,
     interval_secs: i64,
     enabled: bool,
 ) -> Result<(), String> {
     e(state
         .db
-        .update_report_schedule(&id, name.trim(), &kind, &prompt, interval_secs, enabled)
+        .update_report_schedule(
+            &id,
+            name.trim(),
+            &kind,
+            &prompt,
+            &resolve_trigger(trigger),
+            interval_secs,
+            enabled,
+        )
         .await)
 }
 

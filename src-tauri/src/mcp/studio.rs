@@ -47,6 +47,11 @@ struct ScheduleReportReq {
     /// What the report should cover (required for "custom").
     #[serde(default)]
     prompt: Option<String>,
+    /// "interval" (default — the clock fires it) or "change" (a standing
+    /// question: it runs when sources in the notebook change, with the
+    /// interval as the minimum time between runs).
+    #[serde(default)]
+    trigger: Option<String>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -191,9 +196,14 @@ impl AlchemyMcp {
             kind,
             interval,
             prompt,
+            trigger,
         }): Parameters<ScheduleReportReq>,
     ) -> Result<CallToolResult, McpError> {
         let prompt = prompt.unwrap_or_default();
+        let trigger = match trigger.as_deref() {
+            Some("change") => "change".to_string(),
+            _ => "interval".to_string(),
+        };
         // Same validator as the chat tool: registry kinds, live templates,
         // custom-with-prompt; anything else gets the message naming options.
         let kind = commands::resolve_report_kind(&kind, &prompt).map_err(invalid)?;
@@ -218,6 +228,7 @@ impl AlchemyMcp {
             name,
             kind,
             prompt,
+            trigger,
             interval_secs,
             enabled: true,
             last_run_at: 0,

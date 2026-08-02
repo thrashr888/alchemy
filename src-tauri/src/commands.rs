@@ -1285,6 +1285,64 @@ pub async fn add_source_text(
     e(store_extracted(&state, &notebook_id, extracted).await)
 }
 
+/// Deterministic line-level diff for change events: `(stats, excerpt)`.
+/// Multiset difference, not LCS — cheap at folder-sync scale and enough to
+/// say what moved; the excerpt shows a few added/removed lines verbatim,
+/// document-ordered, ± prefixed. Empty when nothing textual changed.
+fn diff_excerpt(old: &str, new: &str) -> (String, String) {
+    const EXCERPT_LINES: usize = 6;
+    const EXCERPT_CHARS: usize = 1_500;
+    const LINE_CHARS: usize = 160;
+    if old == new || old.is_empty() {
+        return (String::new(), String::new());
+    }
+    let mut counts: HashMap<&str, i64> = HashMap::new();
+    for line in old.lines() {
+        *counts.entry(line).or_default() -= 1;
+    }
+    for line in new.lines() {
+        *counts.entry(line).or_default() += 1;
+    }
+    let (mut added, mut removed) = (0i64, 0i64);
+    for (line, c) in &counts {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if *c > 0 {
+            added += c;
+        } else {
+            removed -= c;
+        }
+    }
+    if added == 0 && removed == 0 {
+        return (String::new(), String::new());
+    }
+    let stats = format!("+{added} \u{2212}{removed} lines");
+    let mut excerpt = String::new();
+    let mut sample = |lines: std::str::Lines<'_>, sign: i64, prefix: char| {
+        let mut shown = 0usize;
+        for line in lines {
+            if shown >= EXCERPT_LINES || excerpt.len() >= EXCERPT_CHARS {
+                break;
+            }
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Some(c) = counts.get_mut(line) {
+                if *c * sign > 0 {
+                    *c -= sign;
+                    let clipped: String = line.chars().take(LINE_CHARS).collect();
+                    excerpt.push_str(&format!("{prefix} {clipped}\n"));
+                    shown += 1;
+                }
+            }
+        }
+    };
+    sample(new.lines(), 1, '+');
+    sample(old.lines(), -1, '\u{2212}');
+    (stats, excerpt.trim_end().to_string())
+}
+
 /// Re-chunk, re-embed, and replace a source's content in place (edit /
 /// refresh). `code_ctx` as in `store_new_source`.
 async fn reingest(
@@ -1357,13 +1415,20 @@ async fn reingest(
         .await?;
     // Change is an event, not a silent overwrite (RFC-night-shift §Watchers):
     // every content refresh — file, folder child, Mac item, git, URL — lands
-    // here, so this is the one write point. Best-effort: an event miss must
-    // never fail the reingest that produced it.
-    let detail = match existing.source_type.as_str() {
+    // here, so this is the one write point, and the outgoing content is still
+    // in hand, so the diff needs no snapshot table. Best-effort: an event
+    // miss must never fail the reingest that produced it.
+    let verb = match existing.source_type.as_str() {
         "url" => "page re-fetched",
         "mac" => "Mac item synced",
         "git" => "repository synced",
         _ => "file changed on disk",
+    };
+    let (stats, diff) = diff_excerpt(&existing.content, &updated.content);
+    let detail = if stats.is_empty() {
+        verb.to_string()
+    } else {
+        format!("{verb} \u{00b7} {stats}")
     };
     let _ = state
         .db
@@ -1373,7 +1438,8 @@ async fn reingest(
             source_id: existing.id.clone(),
             source_title: updated.title.clone(),
             kind: "updated".into(),
-            detail: detail.into(),
+            detail,
+            diff,
             at: now(),
         })
         .await;
@@ -4333,6 +4399,7 @@ async fn try_tool_route(
                 name: name.trim().to_string(),
                 kind,
                 prompt,
+                trigger: "interval".into(),
                 interval_secs,
                 enabled: true,
                 last_run_at: 0,
@@ -4453,6 +4520,7 @@ async fn try_tool_route(
                     &schedule.name,
                     &schedule.kind,
                     &schedule.prompt,
+                    &schedule.trigger,
                     schedule.interval_secs,
                     schedule.enabled,
                 )

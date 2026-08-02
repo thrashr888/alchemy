@@ -249,6 +249,9 @@ export interface ReportSchedule {
   name: string;
   kind: string;
   prompt: string;
+  /** "interval" (clock-fired) or "change" (a standing question — runs when
+   *  sources in the notebook change, intervalSecs as the throttle floor). */
+  trigger: "interval" | "change";
   intervalSecs: number;
   enabled: boolean;
   lastRunAt: number;

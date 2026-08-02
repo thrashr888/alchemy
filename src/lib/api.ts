@@ -354,6 +354,7 @@ export const api = {
     name: string,
     kind: string,
     prompt: string,
+    trigger: string,
     intervalSecs: number,
   ) =>
     run(
@@ -362,6 +363,7 @@ export const api = {
         name,
         kind,
         prompt,
+        trigger,
         intervalSecs,
       }),
     ),
@@ -370,6 +372,7 @@ export const api = {
     name: string,
     kind: string,
     prompt: string,
+    trigger: string,
     intervalSecs: number,
     enabled: boolean,
   ) =>
@@ -379,6 +382,7 @@ export const api = {
         name,
         kind,
         prompt,
+        trigger,
         intervalSecs,
         enabled,
       }),

@@ -155,6 +155,7 @@ export interface AppState {
     name: string,
     kind: string,
     prompt: string,
+    trigger: string,
     intervalSecs: number,
   ) => Promise<void>;
   updateReport: (report: ReportSchedule) => Promise<void>;

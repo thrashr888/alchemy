@@ -220,9 +220,51 @@ impl Db {
         db.ensure_table(T_NOTES, notes_schema()).await?;
         db.migrate_notes().await?;
         db.ensure_table(T_REPORTS, reports_schema()).await?;
+        db.migrate_reports().await?;
         db.ensure_table(T_SOURCE_EVENTS, source_events_schema())
             .await?;
+        db.migrate_source_events().await?;
         Ok(db)
+    }
+
+    /// Add the `trigger` column ("interval") to pre-existing schedule tables.
+    async fn migrate_reports(&self) -> Result<()> {
+        let schema = self
+            .conn
+            .open_table(T_REPORTS)
+            .execute()
+            .await?
+            .schema()
+            .await?;
+        if schema.field_with_name("trigger").is_ok() {
+            return Ok(());
+        }
+        // The tolerant reader defaults the missing column; rebuild and refill.
+        let rows = self.query_reports(None).await?;
+        self.conn.drop_table(T_REPORTS, &[]).await?;
+        self.ensure_table(T_REPORTS, reports_schema()).await?;
+        for r in &rows {
+            self.add_report_schedule(r).await?;
+        }
+        Ok(())
+    }
+
+    /// The events table gained `diff`; it's a rolling, disposable window, so
+    /// an old-shape table rebuilds empty rather than migrating rows.
+    async fn migrate_source_events(&self) -> Result<()> {
+        let schema = self
+            .conn
+            .open_table(T_SOURCE_EVENTS)
+            .execute()
+            .await?
+            .schema()
+            .await?;
+        if schema.field_with_name("diff").is_ok() {
+            return Ok(());
+        }
+        self.conn.drop_table(T_SOURCE_EVENTS, &[]).await?;
+        self.ensure_table(T_SOURCE_EVENTS, source_events_schema())
+            .await
     }
 
     /// Backfill the `color` column on pre-existing `notebooks` tables.
@@ -1946,6 +1988,7 @@ impl Db {
             let name = str_col(b, "name")?;
             let kind = str_col(b, "kind")?;
             let prompt = str_col(b, "prompt")?;
+            let trigger = opt_str_col(b, "trigger");
             let interval = i64_col(b, "interval_secs")?;
             let enabled = i64_col(b, "enabled")?;
             let last = i64_col(b, "last_run_at")?;
@@ -1957,6 +2000,11 @@ impl Db {
                     name: name.value(i).to_string(),
                     kind: kind.value(i).to_string(),
                     prompt: prompt.value(i).to_string(),
+                    trigger: trigger
+                        .as_ref()
+                        .map(|c| c.value(i).to_string())
+                        .filter(|t| !t.is_empty())
+                        .unwrap_or_else(|| "interval".to_string()),
                     interval_secs: interval.value(i),
                     enabled: enabled.value(i) != 0,
                     last_run_at: last.value(i),
@@ -2014,6 +2062,7 @@ impl Db {
             let title = str_col(b, "source_title")?;
             let kind = str_col(b, "kind")?;
             let detail = str_col(b, "detail")?;
+            let diff = str_col(b, "diff")?;
             let at = i64_col(b, "at")?;
             for i in 0..b.num_rows() {
                 out.push(SourceEvent {
@@ -2023,6 +2072,7 @@ impl Db {
                     source_title: title.value(i).to_string(),
                     kind: kind.value(i).to_string(),
                     detail: detail.value(i).to_string(),
+                    diff: diff.value(i).to_string(),
                     at: at.value(i),
                 });
             }
@@ -2031,12 +2081,14 @@ impl Db {
         Ok(out)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_report_schedule(
         &self,
         id: &str,
         name: &str,
         kind: &str,
         prompt: &str,
+        trigger: &str,
         interval_secs: i64,
         enabled: bool,
     ) -> Result<()> {
@@ -2046,6 +2098,7 @@ impl Db {
             .column("name", format!("'{}'", esc(name)))
             .column("kind", format!("'{}'", esc(kind)))
             .column("prompt", format!("'{}'", esc(prompt)))
+            .column("trigger", format!("'{}'", esc(trigger)))
             .column("interval_secs", interval_secs.to_string())
             .column("enabled", i64::from(enabled).to_string())
             .execute()
@@ -2413,6 +2466,7 @@ fn source_events_schema() -> SchemaRef {
         Field::new("source_title", DataType::Utf8, false),
         Field::new("kind", DataType::Utf8, false),
         Field::new("detail", DataType::Utf8, false),
+        Field::new("diff", DataType::Utf8, false),
         Field::new("at", DataType::Int64, false),
     ]))
 }
@@ -2427,6 +2481,7 @@ fn source_event_batch(schema: &SchemaRef, e: &SourceEvent) -> Result<RecordBatch
             Arc::new(StringArray::from(vec![e.source_title.clone()])),
             Arc::new(StringArray::from(vec![e.kind.clone()])),
             Arc::new(StringArray::from(vec![e.detail.clone()])),
+            Arc::new(StringArray::from(vec![e.diff.clone()])),
             Arc::new(Int64Array::from(vec![e.at])),
         ],
     )?)
@@ -2439,6 +2494,7 @@ fn reports_schema() -> SchemaRef {
         Field::new("name", DataType::Utf8, false),
         Field::new("kind", DataType::Utf8, false),
         Field::new("prompt", DataType::Utf8, false),
+        Field::new("trigger", DataType::Utf8, false),
         Field::new("interval_secs", DataType::Int64, false),
         Field::new("enabled", DataType::Int64, false),
         Field::new("last_run_at", DataType::Int64, false),
@@ -2455,6 +2511,7 @@ fn report_batch(schema: &SchemaRef, r: &ReportSchedule) -> Result<RecordBatch> {
             Arc::new(StringArray::from(vec![r.name.clone()])),
             Arc::new(StringArray::from(vec![r.kind.clone()])),
             Arc::new(StringArray::from(vec![r.prompt.clone()])),
+            Arc::new(StringArray::from(vec![r.trigger.clone()])),
             Arc::new(Int64Array::from(vec![r.interval_secs])),
             Arc::new(Int64Array::from(vec![i64::from(r.enabled)])),
             Arc::new(Int64Array::from(vec![r.last_run_at])),

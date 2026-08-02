@@ -129,9 +129,35 @@ async fn run_pass(app: &AppHandle) {
                 Vec::new()
             }
         };
+        // Standing questions (trigger "change") fire when a source event
+        // landed in their notebook since the last run, with the interval as
+        // the throttle floor; one events read serves them all this pass.
+        let change_floor = schedules
+            .iter()
+            .filter(|s| s.enabled && s.trigger == "change")
+            .map(|s| s.last_run_at)
+            .min();
+        let events = match change_floor {
+            Some(floor) => state
+                .db
+                .source_events_since(floor)
+                .await
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
         let due: Vec<_> = schedules
             .into_iter()
-            .filter(|s| s.enabled && now_ms() - s.last_run_at >= s.interval_secs * 1000)
+            .filter(|s| {
+                if !s.enabled || now_ms() - s.last_run_at < s.interval_secs * 1000 {
+                    return false;
+                }
+                match s.trigger.as_str() {
+                    "change" => events
+                        .iter()
+                        .any(|e| e.notebook_id == s.notebook_id && e.at > s.last_run_at),
+                    _ => true,
+                }
+            })
             .collect();
         for schedule in due {
             match commands::run_report_inner(app, &state, &schedule.id).await {
