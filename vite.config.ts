@@ -10,6 +10,13 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
 
+  // The production bundle has many Shiki language chunks. Gzip-size
+  // reporting is useful for release analysis but adds avoidable work to every
+  // local and CI build.
+  build: {
+    reportCompressedSize: false,
+  },
+
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

@@ -105,6 +105,156 @@ export function Spinner({ className }: { className?: string }) {
   return <Loader2 className={cn("animate-spin", className)} />;
 }
 
+export interface HoverCardData {
+  title: string;
+  /** Right-aligned beside the title (e.g. a relative time). */
+  time?: string;
+  meta: { icon?: React.ReactNode; label: string; value?: string }[];
+}
+
+/** The quiet-row hover pattern: rows show name and status at rest; hovering
+ *  a beat floats an info card beside the list (sidebar-adjacent, like
+ *  ChatGPT desktop's nav). One hook per LIST — rows pass their data to
+ *  `show` in onMouseEnter — so it works inside .map without per-row hooks.
+ *  The card is info-only and pointer-events-none: actions stay on the row. */
+export function useHoverCard(side: "left" | "right") {
+  const [state, setState] = React.useState<{
+    top: number;
+    left: number;
+    data: HoverCardData;
+  } | null>(null);
+  const timer = React.useRef<number | undefined>(undefined);
+
+  const show = (e: React.MouseEvent<HTMLElement>, data: HoverCardData) => {
+    const el = e.currentTarget;
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => {
+      const r = el.getBoundingClientRect();
+      setState({
+        top: r.top,
+        left: side === "right" ? r.right + 10 : r.left - 10,
+        data,
+      });
+    }, 450);
+  };
+  const hide = () => {
+    window.clearTimeout(timer.current);
+    setState(null);
+  };
+  // Scrolling the list under the cursor won't fire mouseleave — drop the
+  // card on any scroll instead of letting it drift from its row.
+  React.useEffect(() => {
+    if (!state) return;
+    const drop = () => setState(null);
+    window.addEventListener("scroll", drop, true);
+    return () => window.removeEventListener("scroll", drop, true);
+  }, [state]);
+
+  const card = state
+    ? createPortal(
+        <div
+          className={cn(
+            "pointer-events-none fixed z-[100] w-64 rounded-lg border border-border-strong bg-surface-2 p-3 shadow-2xl",
+            side === "left" && "-translate-x-full",
+          )}
+          style={{
+            top: Math.max(8, Math.min(state.top, window.innerHeight - 200)),
+            left: state.left,
+          }}
+        >
+          <div className="flex items-baseline gap-2">
+            <span className="min-w-0 truncate text-body font-medium text-foreground">
+              {state.data.title}
+            </span>
+            {state.data.time && (
+              <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
+                {state.data.time}
+              </span>
+            )}
+          </div>
+          {state.data.meta.length > 0 && (
+            <div className="mt-2 flex flex-col gap-1.5">
+              {state.data.meta.map((m: HoverCardData["meta"][number], i: number) => (
+                <div
+                  key={i}
+                  className="flex min-w-0 items-start gap-2 text-caption"
+                >
+                  {m.icon && (
+                    <span className="shrink-0 text-muted-foreground [&_svg]:h-3.5 [&_svg]:w-3.5">
+                      {m.icon}
+                    </span>
+                  )}
+                  <span className="min-w-0 truncate text-muted-foreground">
+                    {m.label}
+                  </span>
+                  {m.value && (
+                    // Values wrap (file paths, URLs) rather than clipping
+                    // out of the fixed-width card.
+                    <span className="ml-auto min-w-0 break-all pl-2 text-right text-foreground">
+                      {m.value}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>,
+        document.body,
+      )
+    : null;
+
+  return { show, hide, card };
+}
+
+/** macOS-style toggle switch for settings rows: a pill track with a sliding
+ *  thumb instead of a web checkbox. The real input stays underneath for
+ *  keyboard focus and screen readers. */
+export function Switch({
+  checked,
+  onChange,
+  className,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  className?: string;
+}) {
+  return (
+    <span className={cn("relative inline-flex shrink-0", className)}>
+      <input
+        type="checkbox"
+        role="switch"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="peer absolute inset-0 cursor-pointer rounded-full opacity-0"
+      />
+      {/* Native NSSwitch geometry, measured off a rendered control (dark
+          aqua): 2.25:1 pill, knob a 1.6:1 capsule spanning 59% of the track
+          width with an ~8% inset. At our scale: 36×16 track, 21×13 knob,
+          1.5px inset, 12px travel. In dark themes the knob is translucent,
+          picking up the track's tint like the native glass knob; in light
+          themes it stays solid white. */}
+      <span
+        aria-hidden
+        className={cn(
+          "pointer-events-none flex h-4 w-9 shrink-0 items-center rounded-full p-[1.5px]",
+          "transition-colors duration-200 ease-out",
+          "peer-focus-visible:ring-2 peer-focus-visible:ring-ring/60",
+          checked ? "bg-primary" : "bg-muted-foreground/35",
+        )}
+      >
+        <span
+          className={cn(
+            "h-[13px] w-[21px] rounded-full bg-white [[data-scheme=dark]_&]:bg-white/85",
+            "shadow-[0_0_0_0.5px_rgba(0,0,0,0.05),0_1px_1px_rgba(0,0,0,0.16)]",
+            "transition-transform duration-200 ease-out",
+            checked && "translate-x-3",
+          )}
+        />
+      </span>
+    </span>
+  );
+}
+
 /**
  * Full-card primary action for cards that also contain sibling controls.
  * The button is a sibling, not a wrapper, so menus and checkboxes never become

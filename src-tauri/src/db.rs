@@ -18,7 +18,9 @@ use lancedb::index::Index;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::Connection;
 
-use crate::models::{Citation, Message, Note, NoteUsage, Notebook, ReportSchedule, Source};
+use crate::models::{
+    Citation, LedgerEntry, Message, Note, NoteUsage, Notebook, ReportSchedule, Source, SourceEvent,
+};
 
 const T_NOTEBOOKS: &str = "notebooks";
 const T_SOURCES: &str = "sources";
@@ -28,6 +30,10 @@ const T_NOTES: &str = "notes";
 const T_NOTE_USAGE: &str = "note_usage";
 const T_REPORTS: &str = "report_schedules";
 const T_ROUTES: &str = "routes";
+const T_SOURCE_EVENTS: &str = "source_events";
+const T_LEDGER: &str = "ledger";
+/// Source events prune past this window — a rolling record, not an archive.
+const SOURCE_EVENT_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 /// Note chunks share the chunks table with source chunks, stored under
 /// `source_id = "note:<note_id>"` — real source ids are UUIDs, so the prefix
 /// can't collide, and every existing notebook/source filter and delete
@@ -215,7 +221,53 @@ impl Db {
         db.ensure_table(T_NOTES, notes_schema()).await?;
         db.migrate_notes().await?;
         db.ensure_table(T_REPORTS, reports_schema()).await?;
+        db.migrate_reports().await?;
+        db.ensure_table(T_SOURCE_EVENTS, source_events_schema())
+            .await?;
+        db.migrate_source_events().await?;
+        db.ensure_table(T_LEDGER, ledger_schema()).await?;
+        db.migrate_ledger().await?;
         Ok(db)
+    }
+
+    /// Add a missing string column in place with a constant default.
+    ///
+    /// This replaces the old collect → drop_table → recreate → refill
+    /// migration idiom, which had a fatal window: a kill between the drop
+    /// and the refill (dev-watcher restarts, quits, crashes) destroyed the
+    /// whole table. Lance's add_columns commits atomically — the table is
+    /// never not-there.
+    async fn add_string_column(&self, table: &str, column: &str, default: &str) -> Result<()> {
+        let tbl = self.conn.open_table(table).execute().await?;
+        if tbl.schema().await?.field_with_name(column).is_ok() {
+            return Ok(());
+        }
+        tbl.add_columns(
+            lancedb::table::NewColumnTransform::SqlExpressions(vec![(
+                column.to_string(),
+                format!("'{}'", esc(default)),
+            )]),
+            None,
+        )
+        .await
+        .with_context(|| format!("failed to add {table}.{column}"))?;
+        Ok(())
+    }
+
+    /// Add the `origin` column ("") to pre-existing ledger tables.
+    async fn migrate_ledger(&self) -> Result<()> {
+        self.add_string_column(T_LEDGER, "origin", "").await
+    }
+
+    /// Add the `trigger` column ("interval") to pre-existing schedule tables.
+    async fn migrate_reports(&self) -> Result<()> {
+        self.add_string_column(T_REPORTS, "trigger", "interval")
+            .await
+    }
+
+    /// Add the `diff` column ("") to pre-existing event tables.
+    async fn migrate_source_events(&self) -> Result<()> {
+        self.add_string_column(T_SOURCE_EVENTS, "diff", "").await
     }
 
     /// Backfill the `color` column on pre-existing `notebooks` tables.
@@ -1939,6 +1991,7 @@ impl Db {
             let name = str_col(b, "name")?;
             let kind = str_col(b, "kind")?;
             let prompt = str_col(b, "prompt")?;
+            let trigger = opt_str_col(b, "trigger");
             let interval = i64_col(b, "interval_secs")?;
             let enabled = i64_col(b, "enabled")?;
             let last = i64_col(b, "last_run_at")?;
@@ -1950,6 +2003,11 @@ impl Db {
                     name: name.value(i).to_string(),
                     kind: kind.value(i).to_string(),
                     prompt: prompt.value(i).to_string(),
+                    trigger: trigger
+                        .as_ref()
+                        .map(|c| c.value(i).to_string())
+                        .filter(|t| !t.is_empty())
+                        .unwrap_or_else(|| "interval".to_string()),
                     interval_secs: interval.value(i),
                     enabled: enabled.value(i) != 0,
                     last_run_at: last.value(i),
@@ -1983,12 +2041,158 @@ impl Db {
         self.add_batch(T_REPORTS, schema, batch).await
     }
 
+    pub async fn add_source_event(&self, event: &SourceEvent) -> Result<()> {
+        let schema = source_events_schema();
+        let batch = source_event_batch(&schema, event)?;
+        self.add_batch(T_SOURCE_EVENTS, schema, batch).await
+    }
+
+    /// Events newer than `since`, newest first. Prunes the rolling window on
+    /// the way in — callers are periodic (the Brief, agents), so the table
+    /// stays bounded without a dedicated sweep.
+    pub async fn source_events_since(&self, since: i64) -> Result<Vec<SourceEvent>> {
+        let cutoff = crate::commands::now() - SOURCE_EVENT_WINDOW_MS;
+        self.delete_where(T_SOURCE_EVENTS, &format!("at < {cutoff}"))
+            .await?;
+        let batches = self
+            .collect(T_SOURCE_EVENTS, Some(&format!("at > {since}")))
+            .await?;
+        let mut out = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let nb = str_col(b, "notebook_id")?;
+            let sid = str_col(b, "source_id")?;
+            let title = str_col(b, "source_title")?;
+            let kind = str_col(b, "kind")?;
+            let detail = str_col(b, "detail")?;
+            let diff = str_col(b, "diff")?;
+            let at = i64_col(b, "at")?;
+            for i in 0..b.num_rows() {
+                out.push(SourceEvent {
+                    id: id.value(i).to_string(),
+                    notebook_id: nb.value(i).to_string(),
+                    source_id: sid.value(i).to_string(),
+                    source_title: title.value(i).to_string(),
+                    kind: kind.value(i).to_string(),
+                    detail: detail.value(i).to_string(),
+                    diff: diff.value(i).to_string(),
+                    at: at.value(i),
+                });
+            }
+        }
+        out.sort_by_key(|e| std::cmp::Reverse(e.at));
+        Ok(out)
+    }
+
+    pub async fn add_ledger_entry(&self, entry: &LedgerEntry) -> Result<()> {
+        let schema = ledger_schema();
+        let batch = ledger_batch(&schema, entry)?;
+        self.add_batch(T_LEDGER, schema, batch).await
+    }
+
+    pub async fn list_ledger(&self, notebook_id: &str) -> Result<Vec<LedgerEntry>> {
+        let batches = self
+            .collect(
+                T_LEDGER,
+                Some(&format!("notebook_id = '{}'", esc(notebook_id))),
+            )
+            .await?;
+        let mut out = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let nb = str_col(b, "notebook_id")?;
+            let kind = str_col(b, "kind")?;
+            let text = str_col(b, "text")?;
+            let why = str_col(b, "why")?;
+            let status = str_col(b, "status")?;
+            let origin = opt_str_col(b, "origin");
+            let anchors = str_col(b, "anchors")?;
+            let created = i64_col(b, "created_at")?;
+            let updated = i64_col(b, "updated_at")?;
+            for i in 0..b.num_rows() {
+                out.push(LedgerEntry {
+                    id: id.value(i).to_string(),
+                    notebook_id: nb.value(i).to_string(),
+                    kind: kind.value(i).to_string(),
+                    text: text.value(i).to_string(),
+                    why: why.value(i).to_string(),
+                    status: status.value(i).to_string(),
+                    origin: origin
+                        .as_ref()
+                        .map(|c| c.value(i).to_string())
+                        .unwrap_or_default(),
+                    anchors: serde_json::from_str(anchors.value(i)).unwrap_or_default(),
+                    created_at: created.value(i),
+                    updated_at: updated.value(i),
+                });
+            }
+        }
+        // Newest first — the ledger reads as a record, latest on top.
+        out.sort_by_key(|e| std::cmp::Reverse(e.created_at));
+        Ok(out)
+    }
+
+    pub async fn get_ledger_entry(&self, id: &str) -> Result<Option<LedgerEntry>> {
+        let batches = self
+            .collect(T_LEDGER, Some(&format!("id = '{}'", esc(id))))
+            .await?;
+        for b in &batches {
+            if b.num_rows() > 0 {
+                let anchors = str_col(b, "anchors")?;
+                return Ok(Some(LedgerEntry {
+                    id: str_col(b, "id")?.value(0).to_string(),
+                    notebook_id: str_col(b, "notebook_id")?.value(0).to_string(),
+                    kind: str_col(b, "kind")?.value(0).to_string(),
+                    text: str_col(b, "text")?.value(0).to_string(),
+                    why: str_col(b, "why")?.value(0).to_string(),
+                    status: str_col(b, "status")?.value(0).to_string(),
+                    origin: opt_str_col(b, "origin")
+                        .as_ref()
+                        .map(|c| c.value(0).to_string())
+                        .unwrap_or_default(),
+                    anchors: serde_json::from_str(anchors.value(0)).unwrap_or_default(),
+                    created_at: i64_col(b, "created_at")?.value(0),
+                    updated_at: i64_col(b, "updated_at")?.value(0),
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Update text/why/status in place; anchors travel whole as JSON.
+    pub async fn update_ledger_entry(&self, entry: &LedgerEntry) -> Result<()> {
+        let tbl = self.conn.open_table(T_LEDGER).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(&entry.id)))
+            .column("text", format!("'{}'", esc(&entry.text)))
+            .column("why", format!("'{}'", esc(&entry.why)))
+            .column("status", format!("'{}'", esc(&entry.status)))
+            .column(
+                "anchors",
+                format!(
+                    "'{}'",
+                    esc(&serde_json::to_string(&entry.anchors).unwrap_or_default())
+                ),
+            )
+            .column("updated_at", entry.updated_at.to_string())
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn delete_ledger_entry(&self, id: &str) -> Result<()> {
+        self.delete_where(T_LEDGER, &format!("id = '{}'", esc(id)))
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_report_schedule(
         &self,
         id: &str,
         name: &str,
         kind: &str,
         prompt: &str,
+        trigger: &str,
         interval_secs: i64,
         enabled: bool,
     ) -> Result<()> {
@@ -1998,6 +2202,7 @@ impl Db {
             .column("name", format!("'{}'", esc(name)))
             .column("kind", format!("'{}'", esc(kind)))
             .column("prompt", format!("'{}'", esc(prompt)))
+            .column("trigger", format!("'{}'", esc(trigger)))
             .column("interval_secs", interval_secs.to_string())
             .column("enabled", i64::from(enabled).to_string())
             .execute()
@@ -2357,6 +2562,70 @@ fn notes_schema() -> SchemaRef {
     ]))
 }
 
+fn source_events_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("notebook_id", DataType::Utf8, false),
+        Field::new("source_id", DataType::Utf8, false),
+        Field::new("source_title", DataType::Utf8, false),
+        Field::new("kind", DataType::Utf8, false),
+        Field::new("detail", DataType::Utf8, false),
+        Field::new("diff", DataType::Utf8, false),
+        Field::new("at", DataType::Int64, false),
+    ]))
+}
+
+fn source_event_batch(schema: &SchemaRef, e: &SourceEvent) -> Result<RecordBatch> {
+    Ok(RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from(vec![e.id.clone()])),
+            Arc::new(StringArray::from(vec![e.notebook_id.clone()])),
+            Arc::new(StringArray::from(vec![e.source_id.clone()])),
+            Arc::new(StringArray::from(vec![e.source_title.clone()])),
+            Arc::new(StringArray::from(vec![e.kind.clone()])),
+            Arc::new(StringArray::from(vec![e.detail.clone()])),
+            Arc::new(StringArray::from(vec![e.diff.clone()])),
+            Arc::new(Int64Array::from(vec![e.at])),
+        ],
+    )?)
+}
+
+fn ledger_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("notebook_id", DataType::Utf8, false),
+        Field::new("kind", DataType::Utf8, false),
+        Field::new("text", DataType::Utf8, false),
+        Field::new("why", DataType::Utf8, false),
+        Field::new("status", DataType::Utf8, false),
+        Field::new("origin", DataType::Utf8, false),
+        Field::new("anchors", DataType::Utf8, false),
+        Field::new("created_at", DataType::Int64, false),
+        Field::new("updated_at", DataType::Int64, false),
+    ]))
+}
+
+fn ledger_batch(schema: &SchemaRef, e: &LedgerEntry) -> Result<RecordBatch> {
+    Ok(RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from(vec![e.id.clone()])),
+            Arc::new(StringArray::from(vec![e.notebook_id.clone()])),
+            Arc::new(StringArray::from(vec![e.kind.clone()])),
+            Arc::new(StringArray::from(vec![e.text.clone()])),
+            Arc::new(StringArray::from(vec![e.why.clone()])),
+            Arc::new(StringArray::from(vec![e.status.clone()])),
+            Arc::new(StringArray::from(vec![e.origin.clone()])),
+            Arc::new(StringArray::from(vec![
+                serde_json::to_string(&e.anchors).unwrap_or_default()
+            ])),
+            Arc::new(Int64Array::from(vec![e.created_at])),
+            Arc::new(Int64Array::from(vec![e.updated_at])),
+        ],
+    )?)
+}
+
 fn reports_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -2364,6 +2633,7 @@ fn reports_schema() -> SchemaRef {
         Field::new("name", DataType::Utf8, false),
         Field::new("kind", DataType::Utf8, false),
         Field::new("prompt", DataType::Utf8, false),
+        Field::new("trigger", DataType::Utf8, false),
         Field::new("interval_secs", DataType::Int64, false),
         Field::new("enabled", DataType::Int64, false),
         Field::new("last_run_at", DataType::Int64, false),
@@ -2380,6 +2650,7 @@ fn report_batch(schema: &SchemaRef, r: &ReportSchedule) -> Result<RecordBatch> {
             Arc::new(StringArray::from(vec![r.name.clone()])),
             Arc::new(StringArray::from(vec![r.kind.clone()])),
             Arc::new(StringArray::from(vec![r.prompt.clone()])),
+            Arc::new(StringArray::from(vec![r.trigger.clone()])),
             Arc::new(Int64Array::from(vec![r.interval_secs])),
             Arc::new(Int64Array::from(vec![i64::from(r.enabled)])),
             Arc::new(Int64Array::from(vec![r.last_run_at])),

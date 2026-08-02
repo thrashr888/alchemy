@@ -9,8 +9,15 @@ use chrono::Utc;
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
+mod brief;
+mod ledger;
 mod reports;
+mod second_look;
+mod weave;
+pub(crate) use brief::ensure_default_brief;
+pub use ledger::*;
 pub use reports::*;
+pub use second_look::*;
 
 use crate::ai::{Ai, AiConfig, GenStats};
 use crate::db::Db;
@@ -635,6 +642,19 @@ async fn store_new_source(
     // the import returns before any distillation happens.
     if embed {
         crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
+    }
+
+    // Judgment on arrival for deliberate adds only — folder children skip
+    // (a bulk import judging hundreds of files against the ledger would be
+    // noise; their later CHANGES still weave via reingest).
+    if embed && parent_id.is_empty() {
+        weave::spawn_weave(
+            state.db.clone(),
+            state.ai.read().await.clone(),
+            notebook_id.to_string(),
+            source.title.clone(),
+            source.content.chars().take(4_000).collect(),
+        );
     }
 
     // Don't ship the full content back in the list payload.
@@ -1283,6 +1303,64 @@ pub async fn add_source_text(
     e(store_extracted(&state, &notebook_id, extracted).await)
 }
 
+/// Deterministic line-level diff for change events: `(stats, excerpt)`.
+/// Multiset difference, not LCS — cheap at folder-sync scale and enough to
+/// say what moved; the excerpt shows a few added/removed lines verbatim,
+/// document-ordered, ± prefixed. Empty when nothing textual changed.
+fn diff_excerpt(old: &str, new: &str) -> (String, String) {
+    const EXCERPT_LINES: usize = 6;
+    const EXCERPT_CHARS: usize = 1_500;
+    const LINE_CHARS: usize = 160;
+    if old == new || old.is_empty() {
+        return (String::new(), String::new());
+    }
+    let mut counts: HashMap<&str, i64> = HashMap::new();
+    for line in old.lines() {
+        *counts.entry(line).or_default() -= 1;
+    }
+    for line in new.lines() {
+        *counts.entry(line).or_default() += 1;
+    }
+    let (mut added, mut removed) = (0i64, 0i64);
+    for (line, c) in &counts {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if *c > 0 {
+            added += c;
+        } else {
+            removed -= c;
+        }
+    }
+    if added == 0 && removed == 0 {
+        return (String::new(), String::new());
+    }
+    let stats = format!("+{added} \u{2212}{removed} lines");
+    let mut excerpt = String::new();
+    let mut sample = |lines: std::str::Lines<'_>, sign: i64, prefix: char| {
+        let mut shown = 0usize;
+        for line in lines {
+            if shown >= EXCERPT_LINES || excerpt.len() >= EXCERPT_CHARS {
+                break;
+            }
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Some(c) = counts.get_mut(line) {
+                if *c * sign > 0 {
+                    *c -= sign;
+                    let clipped: String = line.chars().take(LINE_CHARS).collect();
+                    excerpt.push_str(&format!("{prefix} {clipped}\n"));
+                    shown += 1;
+                }
+            }
+        }
+    };
+    sample(new.lines(), 1, '+');
+    sample(old.lines(), -1, '\u{2212}');
+    (stats, excerpt.trim_end().to_string())
+}
+
 /// Re-chunk, re-embed, and replace a source's content in place (edit /
 /// refresh). `code_ctx` as in `store_new_source`.
 async fn reingest(
@@ -1353,6 +1431,47 @@ async fn reingest(
         .db
         .touch_notebook(&existing.notebook_id, now())
         .await?;
+    // Change is an event, not a silent overwrite (RFC-night-shift §Watchers):
+    // every content refresh — file, folder child, Mac item, git, URL — lands
+    // here, so this is the one write point, and the outgoing content is still
+    // in hand, so the diff needs no snapshot table. Best-effort: an event
+    // miss must never fail the reingest that produced it.
+    let verb = match existing.source_type.as_str() {
+        "url" => "page re-fetched",
+        "mac" => "Mac item synced",
+        "git" => "repository synced",
+        _ => "file changed on disk",
+    };
+    let (stats, diff) = diff_excerpt(&existing.content, &updated.content);
+    let detail = if stats.is_empty() {
+        verb.to_string()
+    } else {
+        format!("{verb} \u{00b7} {stats}")
+    };
+    // Judgment on arrival (commands/weave.rs): the changed lines are weighed
+    // against this notebook's ledger. Fire-and-forget, capped, gated.
+    if !diff.is_empty() {
+        weave::spawn_weave(
+            state.db.clone(),
+            state.ai.read().await.clone(),
+            existing.notebook_id.clone(),
+            updated.title.clone(),
+            diff.clone(),
+        );
+    }
+    let _ = state
+        .db
+        .add_source_event(&crate::models::SourceEvent {
+            id: new_id(),
+            notebook_id: existing.notebook_id.clone(),
+            source_id: existing.id.clone(),
+            source_title: updated.title.clone(),
+            kind: "updated".into(),
+            detail,
+            diff,
+            at: now(),
+        })
+        .await;
     // Refreshed content means a changed hash — let the sweep re-gist it.
     crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
     Ok(Source {
@@ -3114,26 +3233,37 @@ async fn note_curator_tick(app: &AppHandle, state: &AppState) {
 }
 
 /// Rescan every folder source and re-embed loose file sources whose on-disk
-/// file changed (the frontend ticks this once a minute from the main window,
-/// and on notebook open). Emits `sources://changed` per notebook that
-/// actually changed. Missing files never remove a loose source — uploads are
-/// snapshots; the origin path is only a refresh hint.
+/// file changed (the resident scheduler ticks this once a minute —
+/// scheduler.rs — and the frontend calls it on notebook open). Emits
+/// `sources://changed` per notebook that actually changed. Missing files
+/// never remove a loose source — uploads are snapshots; the origin path is
+/// only a refresh hint.
 #[tauri::command]
 pub async fn resync_sources(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<FolderScan, String> {
+    resync_sources_inner(&app, &state).await
+}
+
+/// The command's body, callable from the resident scheduler (scheduler.rs)
+/// with no Tauri `State` wrapper in sight.
+pub(crate) async fn resync_sources_inner(
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<FolderScan, String> {
+    let app = app.clone();
     // The Spotlight index rides the same tick (internally ~10-min throttled).
     #[cfg(target_os = "macos")]
-    crate::spotlight::refresh_if_due(&state).await;
+    crate::spotlight::refresh_if_due(state).await;
     // One-shot per app run: index notes written before notes joined the
     // retrieval index (or whose indexing failed at write time).
-    backfill_note_index(&state).await;
+    backfill_note_index(state).await;
     // One-shot per app run: collapse timestamped report piles from before
     // reports became living notes (one note per schedule, newest wins).
-    collapse_old_report_piles(&state).await;
+    collapse_old_report_piles(state).await;
     // Curator: track app-open days; runs its pass at most weekly.
-    note_curator_tick(&app, &state).await;
+    note_curator_tick(&app, state).await;
     // A manual folder add/refresh is already scanning — skip this tick rather
     // than queue behind it and ingest the same files twice.
     let Ok(_guard) = state.folder_scan_lock.try_lock() else {
@@ -3152,7 +3282,7 @@ pub async fn resync_sources(
             && sync_minutes > 0
             && crate::git::remote_probe_due(&folder.id, sync_minutes)
         {
-            let dir = crate::git::cache_dir(&app_data_dir(&state), &folder.id);
+            let dir = crate::git::cache_dir(&app_data_dir(state), &folder.id);
             match crate::git::sync_remote(&dir).await {
                 Ok(Some(sha)) => {
                     let stamp = crate::mac::content_stamp(&sha);
@@ -3173,7 +3303,7 @@ pub async fn resync_sources(
             if let (Some(page_id), false) =
                 (crate::notion::detect_page(&folder.url), token.is_empty())
             {
-                let dir = crate::notion::cache_dir(&app_data_dir(&state), &folder.id);
+                let dir = crate::notion::cache_dir(&app_data_dir(state), &folder.id);
                 match crate::notion::NotionClient::new(&token)
                     .export_tree(&page_id, &dir)
                     .await
@@ -3189,7 +3319,7 @@ pub async fn resync_sources(
                 }
             }
         }
-        match rescan_one_folder(Some(&app), &state, &folder, false).await {
+        match rescan_one_folder(Some(&app), state, &folder, false).await {
             Ok(scan) => {
                 per_notebook
                     .entry(folder.notebook_id.clone())
@@ -3207,7 +3337,7 @@ pub async fn resync_sources(
     // Loose file sources (added or dropped individually) re-embed when their
     // file changes. Deleted files leave the source untouched; cloud-evicted
     // files aren't read (that would force a download).
-    let data_dir = app_data_dir(&state);
+    let data_dir = app_data_dir(state);
     for src in e(state.db.all_loose_sources().await)? {
         // Git-backed singles (README/blob) sync hourly from their cache
         // clone. The cache dir is the definitive marker — plain page
@@ -3220,7 +3350,7 @@ pub async fn resync_sources(
             match crate::git::sync_remote(&dir).await {
                 Ok(Some(sha)) => {
                     let scan = per_notebook.entry(src.notebook_id.clone()).or_default();
-                    match reextract_git_single(&state, &src, &sha).await {
+                    match reextract_git_single(state, &src, &sha).await {
                         Ok(_) => {
                             scan.updated += 1;
                             total.updated += 1;
@@ -3262,7 +3392,7 @@ pub async fn resync_sources(
                         text,
                     };
                     let scan = per_notebook.entry(src.notebook_id.clone()).or_default();
-                    match reingest(&state, &existing, extracted, None, true).await {
+                    match reingest(state, &existing, extracted, None, true).await {
                         Ok(_) => {
                             scan.updated += 1;
                             total.updated += 1;
@@ -3300,13 +3430,13 @@ pub async fn resync_sources(
             continue;
         }
         let scan = per_notebook.entry(src.notebook_id.clone()).or_default();
-        match extract_any_file(&state, &src.url).await {
+        match extract_any_file(state, &src.url).await {
             Ok(mut extracted) => {
                 let mut existing = src.clone();
                 existing.mtime = mtime;
                 // Content changed, not the file's name — keep the stored title.
                 extracted.title = existing.title.clone();
-                match reingest(&state, &existing, extracted, None, true).await {
+                match reingest(state, &existing, extracted, None, true).await {
                     Ok(_) => {
                         scan.updated += 1;
                         total.updated += 1;
@@ -3933,6 +4063,12 @@ fn parse_tool_action(raw: &str) -> ToolAction {
 /// polite refusal message for the chat transcript.
 pub(crate) fn resolve_report_kind(kind: &str, prompt: &str) -> Result<String, String> {
     let kind = kind.trim();
+    // The cross-notebook brief (docs/RFC-brief.md) — distinct from the
+    // per-notebook "briefing" generator. Reads across every notebook; its
+    // runs land in the notebook the schedule lives in (best: "Briefs").
+    if kind.eq_ignore_ascii_case(brief::BRIEF_KIND) {
+        return Ok(brief::BRIEF_KIND.to_string());
+    }
     if rag::ARTIFACT_KINDS.contains(&kind) {
         return Ok(kind.to_string());
     }
@@ -4292,6 +4428,7 @@ async fn try_tool_route(
                 name: name.trim().to_string(),
                 kind,
                 prompt,
+                trigger: "interval".into(),
                 interval_secs,
                 enabled: true,
                 last_run_at: 0,
@@ -4412,6 +4549,7 @@ async fn try_tool_route(
                     &schedule.name,
                     &schedule.kind,
                     &schedule.prompt,
+                    &schedule.trigger,
                     schedule.interval_secs,
                     schedule.enabled,
                 )
@@ -4945,6 +5083,80 @@ async fn auto_evidence(
         note
     };
 
+    // The same conclusion lands on the ledger as an anchored assertion —
+    // the passive fill (RFC-v12-steward pillar 2): ordinary chat use builds
+    // the record, no ceremony. Same discipline as the note: dedup by title
+    // overlap against AUTO assertions only, merge instead of siblings, and
+    // a failure here never fails the pass.
+    let claim = note.title.clone();
+    let anchors: Vec<crate::models::LedgerAnchor> = {
+        let mut seen = HashSet::new();
+        sources
+            .iter()
+            // Gist rows are distilled, not verbatim — no anchor material.
+            .filter(|c| !c.gist && seen.insert(c.source_id.clone()))
+            .take(4)
+            .map(|c| crate::models::LedgerAnchor {
+                source_id: c.source_id.clone(),
+                quote: c.snippet.chars().take(220).collect(),
+            })
+            .collect()
+    };
+    let prior_entry = state
+        .db
+        .list_ledger(notebook_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|entry| entry.kind == "assertion" && entry.origin == "auto")
+        .find(|entry| title_overlap(&entry.text, &claim) >= 0.6);
+    let ledger_result = match prior_entry {
+        Some(mut prior) => {
+            prior.text = claim;
+            // Fresh evidence revives a stale row; a contradicted one stays
+            // contradicted — only the user (or, later, the Weave) clears it.
+            if prior.status == "stale" {
+                prior.status = "asserted".into();
+            }
+            for anchor in anchors {
+                if !prior
+                    .anchors
+                    .iter()
+                    .any(|a| a.source_id == anchor.source_id)
+                {
+                    prior.anchors.push(anchor);
+                }
+            }
+            prior.anchors.truncate(6);
+            prior.updated_at = now();
+            state.db.update_ledger_entry(&prior).await
+        }
+        None => {
+            let ts = now();
+            state
+                .db
+                .add_ledger_entry(&crate::models::LedgerEntry {
+                    id: new_id(),
+                    notebook_id: notebook_id.to_string(),
+                    kind: "assertion".into(),
+                    text: claim,
+                    why: format!(
+                        "From chat: {}",
+                        question.chars().take(160).collect::<String>()
+                    ),
+                    status: "asserted".into(),
+                    origin: "auto".into(),
+                    anchors,
+                    created_at: ts,
+                    updated_at: ts,
+                })
+                .await
+        }
+    };
+    if let Err(err) = ledger_result {
+        eprintln!("auto evidence: ledger write failed: {err:#}");
+    }
+
     // Same event the MCP server emits — open windows refresh their notes
     // list live, with the arrival chime announcing the new record.
     #[derive(serde::Serialize, Clone)]
@@ -4957,6 +5169,13 @@ async fn auto_evidence(
         "mcp://changed",
         Changed {
             scope: "notes",
+            notebook_id: Some(&note.notebook_id),
+        },
+    );
+    let _ = app.emit(
+        "mcp://changed",
+        Changed {
+            scope: "ledger",
             notebook_id: Some(&note.notebook_id),
         },
     );
@@ -6463,6 +6682,45 @@ pub async fn list_recent_notes(
 
 /// The latest report notes across every notebook, newest first — the home
 /// page's report reader pages through these.
+/// Watcher activity for the Home Staff section (agents get the same signal
+/// via the MCP list_source_events tool).
+#[tauri::command]
+pub async fn list_source_events(
+    state: State<'_, AppState>,
+    hours: Option<u32>,
+) -> Result<Vec<crate::models::SourceEvent>, String> {
+    let hours = i64::from(hours.unwrap_or(24));
+    e(state
+        .db
+        .source_events_since(now() - hours * 3_600_000)
+        .await)
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct NightShiftStatus {
+    pub background_enabled: bool,
+    pub paused: bool,
+}
+
+#[tauri::command]
+pub async fn night_shift_status(state: State<'_, AppState>) -> Result<NightShiftStatus, String> {
+    let background_enabled = state.ai.read().await.config().background_enabled;
+    Ok(NightShiftStatus {
+        background_enabled,
+        paused: crate::scheduler::is_paused(),
+    })
+}
+
+/// The tray's "Pause until morning", callable from the Staff section too;
+/// returns the new paused state and keeps the tray label in step.
+#[tauri::command]
+pub async fn toggle_night_shift_pause(app: AppHandle) -> Result<bool, String> {
+    let paused = crate::scheduler::toggle_pause();
+    crate::integrations::set_tray_pause_label(&app, paused);
+    Ok(paused)
+}
+
 #[tauri::command]
 pub async fn list_recent_reports(
     state: State<'_, AppState>,
@@ -8177,6 +8435,9 @@ mod tool_tests {
         // The dispatch-time validator: registry kinds pass, unknown kinds get
         // the refusal that names alternatives, custom demands a prompt.
         assert_eq!(resolve_report_kind("briefing", ""), Ok("briefing".into()));
+        // The cross-notebook brief is its own kind, distinct from "briefing".
+        assert_eq!(resolve_report_kind("brief", ""), Ok("brief".into()));
+        assert_eq!(resolve_report_kind("Brief", ""), Ok("brief".into()));
         assert_eq!(
             resolve_report_kind("round_table", ""),
             Ok("round_table".into())

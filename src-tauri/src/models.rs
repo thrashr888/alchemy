@@ -82,6 +82,10 @@ impl FolderScan {
     }
 }
 
+fn default_trigger() -> String {
+    "interval".into()
+}
+
 fn default_status() -> String {
     "ready".to_string()
 }
@@ -114,6 +118,70 @@ pub struct ModelStat {
     pub samples: u64,
 }
 
+/// One anchor pinning a ledger entry to verbatim source text. The quote is
+/// the anchor — it survives re-chunking and drives find-in-source
+/// highlighting, the same contract citations already use.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerAnchor {
+    pub source_id: String,
+    #[serde(default)]
+    pub quote: String,
+}
+
+/// One typed ledger row (RFC-v12-steward pillar 2): memory the machine can
+/// act on. Kinds and their lifecycles:
+///   assertion: asserted → corroborated | contradicted | stale
+///   fact:      current → superseded
+///   decision:  decided → superseded
+///   question:  open → answered
+///   log:       logged (terminal — a log line is what happened)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerEntry {
+    pub id: String,
+    pub notebook_id: String,
+    /// "assertion" | "fact" | "decision" | "question" | "log"
+    pub kind: String,
+    pub text: String,
+    /// The because: rationale for decisions, context for others. Optional.
+    #[serde(default)]
+    pub why: String,
+    pub status: String,
+    /// "" for user- and agent-written rows, "auto" for rows the chat
+    /// post-pass minted on its own (same contract as auto notes).
+    #[serde(default)]
+    pub origin: String,
+    #[serde(default)]
+    pub anchors: Vec<LedgerAnchor>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// One observed source change (docs/RFC-night-shift.md §"Watchers"): change
+/// becomes a first-class event instead of a silent overwrite. Written by the
+/// resync/refresh paths; read by the Brief's collector and agents. The
+/// events table is a rolling window, not an archive — old rows prune.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceEvent {
+    pub id: String,
+    pub notebook_id: String,
+    pub source_id: String,
+    pub source_title: String,
+    /// "updated" (more kinds as watcher classes land).
+    pub kind: String,
+    /// Short human line ("page re-fetched · +12 −3 lines", …).
+    #[serde(default)]
+    pub detail: String,
+    /// Capped diff excerpt (± prefixed lines) computed at refresh time — the
+    /// old content is in hand at the reingest choke point, so no snapshot
+    /// table is needed. Empty when nothing textual changed (e.g. re-embeds).
+    #[serde(default)]
+    pub diff: String,
+    pub at: i64,
+}
+
 /// A periodic report definition. On its interval, the app refreshes the
 /// notebook's URL sources, then generates a timestamped note.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,6 +195,11 @@ pub struct ReportSchedule {
     /// Custom instruction when `kind == "custom"`.
     #[serde(default)]
     pub prompt: String,
+    /// "interval" (the clock fires it) or "change" (a standing question —
+    /// source events in its notebook pull the trigger, with `interval_secs`
+    /// as the throttle floor between runs). RFC-night-shift §Staged.
+    #[serde(default = "default_trigger")]
+    pub trigger: String,
     pub interval_secs: i64,
     pub enabled: bool,
     /// Unix millis of the last successful run; 0 = never run.

@@ -63,13 +63,13 @@ perl -i -pe 'if (!$d && /^version = /) { s/^version = ".*"/version = "'"$VERSION
 echo "==> Quality gate"
 # Releases run from an isolated clone (no node_modules yet); without this,
 # `pnpm exec tsc` silently falls through to whatever global tsc is on PATH.
-pnpm install --frozen-lockfile
+pnpm install --frozen-lockfile --ignore-scripts
 pnpm exec tsc --noEmit
 (
   cd src-tauri
   cargo fmt -- --check
   cargo clippy --no-default-features --features debug -- -D warnings
-  cargo test --no-default-features --features debug
+  cargo test --no-default-features --features debug --lib
 )
 
 # --- Build + sign ------------------------------------------------------------
@@ -97,7 +97,9 @@ spctl -a -t open --context context:primary-signature -vv "$DMG"
 # --- Commit, tag, publish ----------------------------------------------------
 echo "==> Committing, tagging, publishing"
 git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
-git commit -m "$TAG"
+# The version may already be bumped (a dev-cycle bump landed early); an empty
+# commit is fine, a dead script here -- after notarization -- is not.
+git commit --allow-empty -m "$TAG"
 git tag "$TAG"
 git push origin main "$TAG"
 

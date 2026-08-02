@@ -19,12 +19,16 @@ import type {
   MetaAnswer,
   ModelHealth,
   ModelStat,
+  LedgerAnchor,
+  LedgerEntry,
+  NightShiftStatus,
   Note,
   NoteKind,
   Notebook,
   ReportSchedule,
   SearchHit,
   Source,
+  SourceEvent,
   Template,
 } from "./types";
 
@@ -344,6 +348,38 @@ export const api = {
     run(cmd<Template>("save_template", { id, name, description, prompt })),
   deleteTemplate: (id: string) => run(cmd<void>("delete_template", { id })),
 
+  // The Ledger
+  listLedger: (notebookId: string) =>
+    run(query<LedgerEntry[]>("list_ledger", { notebookId })),
+  addLedgerEntry: (
+    notebookId: string,
+    kind: string,
+    text: string,
+    why?: string,
+    anchors?: LedgerAnchor[],
+  ) =>
+    run(
+      cmd<LedgerEntry>("add_ledger_entry", {
+        notebookId,
+        kind,
+        text,
+        why,
+        anchors,
+      }),
+    ),
+  updateLedgerEntry: (
+    id: string,
+    patch: { text?: string; why?: string; status?: string },
+  ) => run(cmd<LedgerEntry>("update_ledger_entry", { id, ...patch })),
+  deleteLedgerEntry: (id: string) =>
+    run(cmd<void>("delete_ledger_entry", { id })),
+
+  // Night Shift (the Home Staff section)
+  listSourceEvents: (hours = 24) =>
+    run(query<SourceEvent[]>("list_source_events", { hours })),
+  nightShiftStatus: () => run(query<NightShiftStatus>("night_shift_status")),
+  toggleNightShiftPause: () => run(cmd<boolean>("toggle_night_shift_pause")),
+
   // Reports
   listReportSchedules: (notebookId: string) =>
     run(query<ReportSchedule[]>("list_report_schedules", { notebookId })),
@@ -354,6 +390,7 @@ export const api = {
     name: string,
     kind: string,
     prompt: string,
+    trigger: string,
     intervalSecs: number,
   ) =>
     run(
@@ -362,6 +399,7 @@ export const api = {
         name,
         kind,
         prompt,
+        trigger,
         intervalSecs,
       }),
     ),
@@ -370,6 +408,7 @@ export const api = {
     name: string,
     kind: string,
     prompt: string,
+    trigger: string,
     intervalSecs: number,
     enabled: boolean,
   ) =>
@@ -379,6 +418,7 @@ export const api = {
         name,
         kind,
         prompt,
+        trigger,
         intervalSecs,
         enabled,
       }),
@@ -387,6 +427,8 @@ export const api = {
     run(cmd<void>("delete_report_schedule", { id })),
   runReport: (scheduleId: string) =>
     run(ai<Note>("run_report", { scheduleId })),
+  runSecondLook: (noteId: string) =>
+    run(cmd<void>("run_second_look", { noteId })),
 
   // Settings / health
   getAiConfig: () => run(query<AiConfig>("get_ai_config")),

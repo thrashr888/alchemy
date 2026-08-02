@@ -1,9 +1,21 @@
 import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
+import { api } from "@/lib/api";
 import { Button, EmptyState, Input, Textarea, Modal, Spinner } from "./ui";
 import { cn, fmtDay } from "@/lib/utils";
-import { Clock, Eye, EyeOff, Plus, Play, Trash2, Power, Pencil } from "lucide-react";
-import type { ReportSchedule } from "@/lib/types";
+import {
+  Clock,
+  Eye,
+  EyeOff,
+  FileText,
+  Plus,
+  Play,
+  Trash2,
+  Power,
+  Pencil,
+  Zap,
+} from "lucide-react";
+import type { Note, ReportSchedule } from "@/lib/types";
 import { ARTIFACTS } from "./studioArtifacts";
 
 const INTERVALS = [
@@ -24,6 +36,24 @@ export function Reports() {
   const remove = useStore((s) => s.deleteReport);
   const runNow = useStore((s) => s.runReportNow);
   const generating = useStore((s) => s.generatingKind === "report");
+  const notes = useStore((s) => s.notes);
+  const markNotesRead = useStore((s) => s.markNotesRead);
+
+  // Each schedule keeps one living note (collapse_report_notes) titled after
+  // itself — that note IS the latest result.
+  const latestNote = (r: ReportSchedule): Note | undefined =>
+    notes.find(
+      (n) =>
+        n.kind === "report" &&
+        (n.title === r.name || n.title.startsWith(`${r.name} — `)),
+    );
+  const showLatest = (r: ReportSchedule) => {
+    const note = latestNote(r);
+    if (!note) return;
+    markNotesRead([note.id]);
+    void api.noteOpened(note.id).catch(() => {});
+    useStore.getState().openInReader({ type: "note", id: note.id });
+  };
 
   const templates = useStore((s) => s.templates);
   // One registry, every surface: any generator or user template schedules as
@@ -54,6 +84,7 @@ export function Reports() {
   const [name, setName] = useState("");
   const [kind, setKind] = useState("briefing");
   const [prompt, setPrompt] = useState("");
+  const [trigger, setTrigger] = useState<"interval" | "change">("interval");
   const [intervalSecs, setIntervalSecs] = useState(86400);
 
   function openEditor() {
@@ -61,6 +92,7 @@ export function Reports() {
     setName("");
     setKind("briefing");
     setPrompt("");
+    setTrigger("interval");
     setIntervalSecs(86400);
     setEditing(true);
   }
@@ -70,6 +102,7 @@ export function Reports() {
     setName(r.name);
     setKind(r.kind);
     setPrompt(r.prompt);
+    setTrigger(r.trigger === "change" ? "change" : "interval");
     setIntervalSecs(r.intervalSecs);
     setEditing(true);
   }
@@ -123,12 +156,28 @@ export function Reports() {
                   {r.name}
                 </div>
                 <div className="flex items-center gap-1 text-micro text-subtle-foreground">
-                  <Clock className="h-2.5 w-2.5" />
-                  {intervalLabel(r.intervalSecs)}
+                  {r.trigger === "change" ? (
+                    <Zap className="h-2.5 w-2.5" />
+                  ) : (
+                    <Clock className="h-2.5 w-2.5" />
+                  )}
+                  {r.trigger === "change"
+                    ? `On change · at most ${intervalLabel(r.intervalSecs).toLowerCase()}`
+                    : intervalLabel(r.intervalSecs)}
                   {r.lastRunAt > 0 && <span>· last {fmtDay(r.lastRunAt)}</span>}
                 </div>
               </div>
               <div className="hidden items-center gap-0.5 group-hover:flex group-focus-within:flex">
+                <button
+                  type="button"
+                  className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
+                  onClick={() => showLatest(r)}
+                  disabled={!latestNote(r)}
+                  title="Open the latest result"
+                  aria-label={`Open the latest "${r.name}" note`}
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                </button>
                 <button
                   type="button"
                   className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
@@ -174,8 +223,9 @@ export function Reports() {
             e.preventDefault();
             setEditing(false);
             const p = kind === "custom" ? prompt : "";
-            if (editTarget) void update({ ...editTarget, name, kind, prompt: p, intervalSecs });
-            else void create(name, kind, p, intervalSecs);
+            if (editTarget)
+              void update({ ...editTarget, name, kind, prompt: p, trigger, intervalSecs });
+            else void create(name, kind, p, trigger, intervalSecs);
           }}
           className="flex flex-col gap-3"
         >
@@ -190,7 +240,21 @@ export function Reports() {
               <Textarea id="report-prompt" name="report-prompt" rows={4} placeholder="What should this report cover?" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
             </Field>
           )}
-          <Field label="Frequency" htmlFor="report-frequency">
+          <Field label="Runs" htmlFor="report-trigger">
+            <Select
+              id="report-trigger"
+              value={trigger}
+              onChange={(v) => setTrigger(v === "change" ? "change" : "interval")}
+              options={[
+                { value: "interval", label: "On a schedule" },
+                { value: "change", label: "When sources change" },
+              ]}
+            />
+          </Field>
+          <Field
+            label={trigger === "change" ? "At most" : "Frequency"}
+            htmlFor="report-frequency"
+          >
             <Select
               id="report-frequency"
               value={String(intervalSecs)}

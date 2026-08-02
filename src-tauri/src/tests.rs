@@ -606,3 +606,46 @@ fn outro_stripping() {
     // No outro → unchanged.
     assert_eq!(strip_outro("HOST: A.\nGUEST: B."), "HOST: A.\nGUEST: B.");
 }
+
+/// Ledger rows survive a full write → read → update round trip. Regression:
+/// ledger_batch once omitted the `origin` column, so every add failed with a
+/// column-count mismatch — and the old drop-and-refill migration turned that
+/// same failure into a wiped table.
+#[tokio::test]
+async fn ledger_round_trip() {
+    use crate::models::{LedgerAnchor, LedgerEntry};
+    let dir = std::env::temp_dir().join(format!("nbl-ledger-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let now = crate::commands::now();
+    let entry = LedgerEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        notebook_id: "nb-1".into(),
+        kind: "assertion".into(),
+        text: "Kenya AA extracts best at 93C".into(),
+        why: "Dial-in session".into(),
+        status: "asserted".into(),
+        origin: "auto".into(),
+        anchors: vec![LedgerAnchor {
+            source_id: "src-1".into(),
+            quote: "start at 93C".into(),
+        }],
+        created_at: now,
+        updated_at: now,
+    };
+    db.add_ledger_entry(&entry).await.expect("add entry");
+
+    let listed = db.list_ledger("nb-1").await.expect("list");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].origin, "auto");
+    assert_eq!(listed[0].anchors.len(), 1);
+    assert_eq!(listed[0].text, entry.text);
+
+    let mut updated = listed[0].clone();
+    updated.status = "contradicted".into();
+    updated.why = format!("{}\nWeave: contradicted", updated.why);
+    db.update_ledger_entry(&updated).await.expect("update");
+    let back = db.get_ledger_entry(&entry.id).await.expect("get").unwrap();
+    assert_eq!(back.status, "contradicted");
+    assert_eq!(back.origin, "auto");
+    std::fs::remove_dir_all(&dir).ok();
+}

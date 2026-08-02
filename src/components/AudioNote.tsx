@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
@@ -14,14 +15,22 @@ export function AudioPlayer({ noteId, title }: { noteId: string; title: string }
   const [src, setSrc] = useState<string | null>(null);
   useEffect(() => {
     let stale = false;
-    api
-      .getAudioPath(noteId)
-      .then((p) => {
-        if (!stale) setSrc(p ? convertFileSrc(p) : null);
-      })
-      .catch(() => {});
+    const load = () =>
+      api
+        .getAudioPath(noteId)
+        .then((p) => {
+          if (!stale) setSrc(p ? convertFileSrc(p) : null);
+        })
+        .catch(() => {});
+    void load();
+    // Brief audio synthesizes in the background after the note lands
+    // (commands/brief.rs); the backend announces when the file exists.
+    const unlisten = listen<string>("audio://ready", (event) => {
+      if (event.payload === noteId) void load();
+    });
     return () => {
       stale = true;
+      void unlisten.then((fn) => fn());
     };
   }, [noteId]);
   if (!src) return null;

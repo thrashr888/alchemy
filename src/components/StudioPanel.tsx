@@ -13,6 +13,7 @@ import {
   Spinner,
   CardAction,
   useConfirm,
+  useHoverCard,
 } from "./ui";
 import { Reports } from "./Reports";
 import { RichEditor } from "./RichEditor";
@@ -37,10 +38,10 @@ import {
   Plus,
   Trash2,
   StickyNote,
-  Wand2,
   Square,
   PanelRightClose,
   Copy,
+  ShieldCheck,
   FolderOpen,
   ChevronDown,
   ChevronUp,
@@ -153,6 +154,22 @@ export function StudioPanel() {
     void api.noteOpened(n.id).catch(() => {});
     useStore.getState().openInReader({ type: "note", id: n.id });
   };
+  const { show: showCard, hide: hideCard, card: hoverCard } = useHoverCard("left");
+  const noteCard = (n: Note) => ({
+    title: n.title,
+    time: relativeTime(n.updatedAt),
+    meta: [
+      { label: KIND_LABEL[n.kind] ?? n.kind },
+      {
+        label: "Length",
+        value: `${n.content.split(/\s+/).filter(Boolean).length.toLocaleString()} words`,
+      },
+      ...(n.origin === "auto"
+        ? [{ label: n.status === "stale" ? "Auto note · stale" : "Auto note" }]
+        : []),
+      { label: "Created", value: relativeTime(n.createdAt) },
+    ],
+  });
   // The user can hide the live preview without stopping the generation.
   const [previewHidden, setPreviewHidden] = useState(false);
   useEffect(() => setPreviewHidden(false), [generatingKind]);
@@ -226,8 +243,7 @@ export function StudioPanel() {
         label="Resize studio panel"
       />
       <div className="flex items-center px-4 h-12 border-b border-border">
-        <Wand2 className="h-4 w-4 text-muted-foreground" />
-        <span className="ml-2 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
           Studio
         </span>
         <Button
@@ -443,6 +459,8 @@ export function StudioPanel() {
               {notes.filter((n) => n.status !== "archived").map((n) => (
                 <div
                   key={n.id}
+                  onMouseEnter={(e) => showCard(e, noteCard(n))}
+                  onMouseLeave={hideCard}
                   className={cn(
                     // has-: an open row menu must outrank the z-10 content of
                     // the rows after it (they'd paint over the dropdown
@@ -489,6 +507,28 @@ export function StudioPanel() {
                             useStore
                               .getState()
                               .pushToast("success", "Note copied");
+                          },
+                        },
+                        {
+                          label: "Second Look",
+                          icon: <ShieldCheck className="h-3.5 w-3.5" />,
+                          onClick: () => {
+                            void api.runSecondLook(n.id).then(
+                              () =>
+                                useStore
+                                  .getState()
+                                  .pushToast(
+                                    "success",
+                                    "Second Look running — the verdict note will appear here",
+                                  ),
+                              (e: unknown) =>
+                                useStore
+                                  .getState()
+                                  .pushToast(
+                                    "error",
+                                    e instanceof Error ? e.message : String(e),
+                                  ),
+                            );
                           },
                         },
                         {
@@ -622,6 +662,7 @@ export function StudioPanel() {
       </Modal>
 
       {confirmDialog}
+      {hoverCard}
     </div>
   );
 }

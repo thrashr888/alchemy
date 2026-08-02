@@ -3,7 +3,7 @@ import { useStore } from "@/lib/store";
 import type { Note } from "@/lib/types";
 import { cn, noteUnread, relativeTime } from "@/lib/utils";
 import { Button } from "./ui";
-import { PanelRight } from "lucide-react";
+import { ChevronDown, ChevronUp, PanelRightClose } from "lucide-react";
 import { Markdown } from "./Markdown";
 
 /** One quiet line describing activity since the previous home visit. */
@@ -69,6 +69,44 @@ export function ReportsFeed({
   const visibleRead = read.slice(0, readShown);
   const remaining = read.length - visibleRead.length;
 
+  // Prev/next stepping with an "n of M" cursor — a long feed is hard to
+  // place yourself in by scroll alone. The cursor follows manual scrolling
+  // (topmost visible card wins) and stepping past the rendered tail loads
+  // more read reports first.
+  const rendered = [...unread, ...visibleRead];
+  const orderedIds = [...unread, ...read].map((n) => n.id);
+  const total = reports.length;
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const cardRefs = useRef(new Map<string, HTMLDivElement>());
+  const [current, setCurrent] = useState(0);
+
+  const syncCurrent = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const top = el.getBoundingClientRect().top;
+    let idx = 0;
+    rendered.forEach((n, i) => {
+      const rect = cardRefs.current.get(n.id)?.getBoundingClientRect();
+      if (rect && rect.top - top <= 24) idx = i;
+    });
+    setCurrent(idx);
+  };
+
+  const step = (delta: number) => {
+    const target = Math.max(0, Math.min(total - 1, current + delta));
+    const needShown = target - unread.length + 1;
+    if (needShown > readShown) setReadShown(needShown);
+    // Two frames: one for the newly shown card to mount, one to scroll it.
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        cardRefs.current
+          .get(orderedIds[target])
+          ?.scrollIntoView({ block: "start", behavior: "smooth" });
+        setCurrent(target);
+      }),
+    );
+  };
+
   return (
     <>
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-6">
@@ -81,6 +119,37 @@ export function ReportsFeed({
           </span>
         )}
         <div className="ml-auto flex items-center gap-2">
+          {/* The cursor and chevrons only mean something over visible cards —
+              the caught-up state (nothing rendered) shows neither. */}
+          {rendered.length > 0 && (
+            <>
+              <span className="text-micro tabular-nums text-subtle-foreground">
+                {current + 1} of {total}
+              </span>
+              <div className="flex items-center">
+                <button
+                  type="button"
+                  onClick={() => step(-1)}
+                  disabled={current <= 0}
+                  title="Previous report"
+                  aria-label="Jump to the previous report"
+                  className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+                >
+                  <ChevronUp className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => step(1)}
+                  disabled={current >= total - 1}
+                  title="Next report"
+                  aria-label="Jump to the next report"
+                  className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+                >
+                  <ChevronDown className="h-4 w-4" />
+                </button>
+              </div>
+            </>
+          )}
           {unreadCount > 0 && (
             <button
               type="button"
@@ -98,30 +167,38 @@ export function ReportsFeed({
               aria-label="Collapse the reports feed"
               className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
             >
-              <PanelRight className="h-4 w-4" />
+              <PanelRightClose className="h-4 w-4" />
             </button>
           )}
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {unread.length === 0 && (
+      <div ref={scrollRef} onScroll={syncCurrent} className="min-h-0 flex-1 overflow-y-auto">
+        {/* Once older reports are loaded, the space belongs to them. */}
+        {unread.length === 0 && readShown === 0 && (
           <div className="px-6 py-6 text-center text-caption text-subtle-foreground">
             You’re all caught up.
           </div>
         )}
-        {[...unread, ...visibleRead].map((note) => (
-          <ReportCard
+        {rendered.map((note) => (
+          <div
             key={note.id}
-            note={note}
-            unread={isUnread(note)}
-            onSeen={() => markRead([note.id])}
-            notebook={notebookTitle.get(note.notebookId) ?? "Unknown notebook"}
-            color={notebookColor.get(note.notebookId) || fallbackColor}
-            onOpen={() => {
-              markRead([note.id]);
-              onOpen(note);
+            ref={(el) => {
+              if (el) cardRefs.current.set(note.id, el);
+              else cardRefs.current.delete(note.id);
             }}
-          />
+          >
+            <ReportCard
+              note={note}
+              unread={isUnread(note)}
+              onSeen={() => markRead([note.id])}
+              notebook={notebookTitle.get(note.notebookId) ?? "Unknown notebook"}
+              color={notebookColor.get(note.notebookId) || fallbackColor}
+              onOpen={() => {
+                markRead([note.id]);
+                onOpen(note);
+              }}
+            />
+          </div>
         ))}
         {remaining > 0 && (
           <div className="flex justify-center px-6 py-5">

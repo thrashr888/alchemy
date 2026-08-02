@@ -8,7 +8,21 @@
 set -eu
 [ "$(uname -s)" = "Darwin" ] || exit 0
 cd "$(dirname "$0")/.."
-(cd sidecar/alchemy-fm && swift build -c release)
-mkdir -p src-tauri/binaries
-cp sidecar/alchemy-fm/.build/release/alchemy-fm src-tauri/binaries/alchemy-fm
+SOURCE_DIR="sidecar/alchemy-fm"
+DEST="src-tauri/binaries/alchemy-fm"
+
+# pnpm install invokes this hook even when the Swift package has not changed.
+# Reuse the staged executable until a tracked package/source file is newer;
+# this also makes the explicit CI/release preparation step cheap after install.
+if [ -f "$DEST" ] \
+  && [ -f "$SOURCE_DIR/Package.swift" ] \
+  && [ -f "$SOURCE_DIR/Sources/alchemy-fm/main.swift" ] \
+  && [ -z "$(find "$SOURCE_DIR" -path "$SOURCE_DIR/.build" -prune -o -type f -newer "$DEST" -print -quit)" ]; then
+  echo "up to date: $DEST"
+  exit 0
+fi
+
+(cd "$SOURCE_DIR" && swift build -c release)
+mkdir -p "$(dirname "$DEST")"
+cp "$SOURCE_DIR/.build/release/alchemy-fm" "$DEST"
 echo "staged: src-tauri/binaries/alchemy-fm"

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { DevBadge } from "./DevBadge";
 import {
@@ -8,13 +8,13 @@ import {
   EmptyState,
   Input,
   Modal,
+  ResizeHandle,
   RowMenu,
   useConfirm,
 } from "./ui";
 import { AlchemyHero } from "./AlchemyHero";
 import { currentEpigraph } from "@/lib/epigraph";
 import { DitherBackground } from "./DitherBackground";
-import { intervalLabel } from "./Reports";
 import { useHomeActivity } from "./useHomeActivity";
 import { AwayDigest, ReportsFeed } from "./HomeReportsFeed";
 import {
@@ -23,12 +23,11 @@ import {
   relativeTime,
   shortcutBlocked,
 } from "@/lib/utils";
-import type { Note } from "@/lib/types";
+import type { Note, SourceEvent } from "@/lib/types";
 import {
   BookOpen,
-  Clock,
+  PanelRight,
   Plus,
-  Power,
   Search,
   Settings,
   Trash2,
@@ -38,6 +37,7 @@ import {
   Sparkles,
   FolderInput,
 } from "lucide-react";
+import { BriefSidebar, SidebarRail, StaffSidebar } from "./HomeSections";
 
 // Keep this list in sync with Rust in `src-tauri/src/db.rs` (`NOTEBOOK_PALETTE`)
 // and the `set_notebook_color` validator in `src-tauri/src/commands.rs`.
@@ -70,13 +70,65 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     title: string;
   } | null>(null);
   const [colorPickerFor, setColorPickerFor] = useState<string | null>(null);
-  // The reports feed behaves like a sidebar: collapsible, persisted.
+  // The Steward's sidebars (RFC-v12-steward UI §2, as sidebars): Staff on
+  // the left, Brief above Latest Reports on the right. Each collapses on
+  // its own, persisted. Registry joins when its pillar exists.
   const [reportsOpen, setReportsOpen] = useState(
     () => localStorage.getItem("homeReportsOpen") !== "0",
   );
   const toggleReports = () => {
     setReportsOpen((open) => {
       localStorage.setItem("homeReportsOpen", open ? "0" : "1");
+      return !open;
+    });
+  };
+  const [staffOpen, setStaffOpen] = useState(
+    () => localStorage.getItem("homeStaffOpen") !== "0",
+  );
+  const toggleStaff = () => {
+    setStaffOpen((open) => {
+      localStorage.setItem("homeStaffOpen", open ? "0" : "1");
+      return !open;
+    });
+  };
+  const [briefOpen, setBriefOpen] = useState(
+    () => localStorage.getItem("homeBriefOpen") !== "0",
+  );
+  const clampSplit = (pct: number) => Math.min(75, Math.max(15, pct));
+  const clampStaffW = (w: number) => Math.min(440, Math.max(240, w));
+  const [staffWidth, setStaffWidth] = useState(() =>
+    clampStaffW(Number(localStorage.getItem("homeStaffWidth") ?? 300)),
+  );
+  const clampRightW = (w: number) => Math.min(820, Math.max(360, w));
+  const [rightWidth, setRightWidth] = useState(() =>
+    clampRightW(Number(localStorage.getItem("homeRightWidth") ?? 520)),
+  );
+  const [briefSplit, setBriefSplit] = useState(() =>
+    clampSplit(Number(localStorage.getItem("homeBriefSplit") ?? 40)),
+  );
+  const rightColRef = useRef<HTMLDivElement>(null);
+  const onSplitDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const col = rightColRef.current;
+    if (!col) return;
+    const rect = col.getBoundingClientRect();
+    const move = (ev: PointerEvent) => {
+      const pct = clampSplit(((ev.clientY - rect.top) / rect.height) * 100);
+      setBriefSplit(pct);
+      localStorage.setItem("homeBriefSplit", String(Math.round(pct)));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.style.cursor = "";
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    document.body.style.cursor = "row-resize";
+  };
+  const toggleBrief = () => {
+    setBriefOpen((open) => {
+      localStorage.setItem("homeBriefOpen", open ? "0" : "1");
       return !open;
     });
   };
@@ -161,6 +213,14 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     void open(note.notebookId);
   }
 
+  // A watcher event reads in its source's own notebook: switch, then open
+  // the reader on the source (same shape as the alchemy:// deep links).
+  function openEventSource(event: SourceEvent) {
+    void open(event.notebookId).then(() => {
+      useStore.getState().openInReader({ type: "source", id: event.sourceId });
+    });
+  }
+
   // Cmd/Ctrl+N: new notebook.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -173,6 +233,18 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Briefs live in their own sidebar card, not the reports feed — the feed
+  // would double-show them one card below.
+  const briefNotes = reports.filter(
+    (r) => notebookTitle.get(r.notebookId) === "Briefs",
+  );
+  const feedReports = reports.filter(
+    (r) => notebookTitle.get(r.notebookId) !== "Briefs",
+  );
+  const briefUnread = briefNotes.some((r) =>
+    noteUnread(r, noteReads, noteReadsBaseline),
+  );
 
   // Backend already returns notebooks sorted by most-recently-updated.
   return (
@@ -232,8 +304,42 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         </div>
       ) : (
         <div className="relative flex min-h-0 flex-1">
-          {/* Left pane: notebooks & activity. Right pane: the reports feed.
-            Two independent scroll regions, same idiom as the notebook view. */}
+          {/* Three regions, same side-card idiom as the notebook view:
+            Staff rail left, notebooks center, Brief + reports column right.
+            Each sidebar collapses on its own. */}
+          {staffOpen ? (
+            <aside
+              className="side-card relative mx-2 mb-2 mt-1 hidden shrink-0 flex-col lg:flex"
+              style={{ width: staffWidth }}
+            >
+              <ResizeHandle
+                edge="right"
+                width={staffWidth}
+                defaultWidth={300}
+                label="Resize the Staff sidebar"
+                onResize={(w) => {
+                  const width = clampStaffW(w);
+                  setStaffWidth(width);
+                  localStorage.setItem("homeStaffWidth", String(Math.round(width)));
+                }}
+              />
+              <StaffSidebar
+                schedules={allReports}
+                reports={reports}
+                notebookTitle={notebookTitle}
+                notebookColor={notebookColor}
+                onOpenNote={openNote}
+                onOpenNotebook={(id) => void open(id)}
+                onOpenEvent={openEventSource}
+                onRan={refreshActivity}
+                onCollapse={toggleStaff}
+              />
+            </aside>
+          ) : (
+            <div className="side-card absolute left-4 top-1 z-20 hidden w-12 flex-col items-center py-2 lg:flex">
+              <SidebarRail icon="staff" title="Show Staff" onClick={toggleStaff} />
+            </div>
+          )}
           <div className="relative min-w-0 flex-1 overflow-y-auto">
             {/* The dither shader from the hero, as a banner behind the heading —
             it fades into the background before the notebook grid starts. */}
@@ -515,99 +621,93 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 </div>
               )}
 
-              {/* Scheduled reports across all notebooks — the app's ongoing activity. */}
-              {allReports.length > 0 && (
-                <div className="mt-10">
-                  <div className="mb-2 text-micro font-medium uppercase tracking-wide text-subtle-foreground">
-                    Scheduled reports
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    {[...allReports]
-                      .sort((a, b) =>
-                        a.enabled !== b.enabled
-                          ? a.enabled
-                            ? -1
-                            : 1
-                          : b.lastRunAt - a.lastRunAt,
-                      )
-                      .map((r) => (
-                        <button
-                          type="button"
-                          key={r.id}
-                          onClick={() => open(r.notebookId)}
-                          title={`Open "${notebookTitle.get(r.notebookId) ?? "notebook"}"`}
-                          className="flex w-full cursor-pointer items-center gap-2.5 rounded-md border border-border bg-surface px-3 py-2 text-left transition-colors hover:border-border-strong hover:bg-surface-2"
-                        >
-                          <Power
-                            className={cn(
-                              "h-3.5 w-3.5 shrink-0",
-                              r.enabled
-                                ? "text-success"
-                                : "text-subtle-foreground",
-                            )}
-                          />
-                          <span className="truncate text-body text-foreground">
-                            {r.name}
-                          </span>
-                          <Badge className="shrink-0 gap-1">
-                            <BookOpen className="h-2.5 w-2.5" />
-                            <span className="max-w-[160px] truncate">
-                              {notebookTitle.get(r.notebookId) ??
-                                "Unknown notebook"}
-                            </span>
-                          </Badge>
-                          <span className="ml-auto flex shrink-0 items-center gap-1 text-micro text-subtle-foreground">
-                            <Clock className="h-2.5 w-2.5" />
-                            {intervalLabel(r.intervalSecs)}
-                            {r.lastRunAt > 0 ? (
-                              <span>· last {relativeTime(r.lastRunAt)}</span>
-                            ) : (
-                              <span>· never run</span>
-                            )}
-                            {!r.enabled && <span>· paused</span>}
-                          </span>
-                        </button>
-                      ))}
-                  </div>
-                </div>
-              )}
             </div>
           </div>
 
-          {/* Reports feed: unread first as a continuously scrolling read —
-            the homepage doubles as the morning-read surface. */}
-          {!reportsOpen && (
-            <div className="side-card absolute right-4 top-1 z-20 hidden w-12 flex-col items-center py-2 lg:flex">
-              <button
-                type="button"
-                onClick={toggleReports}
-                title="Show latest reports"
-                aria-label="Show the reports feed"
-                className="relative rounded-md p-2 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-              >
-                <Newspaper className="h-4 w-4" />
-                {totalUnread > 0 && (
-                  <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-primary" />
-                )}
-              </button>
-            </div>
-          )}
-          <aside
-            className={cn(
-              "side-card mx-2 mb-2 mt-1 min-w-0 flex-1 flex-col",
-              reportsOpen ? "hidden lg:flex" : "hidden",
-            )}
-          >
-            {reports.length > 0 ? (
-              <ReportsFeed
-                onCollapse={toggleReports}
-                reports={reports}
-                  notebookTitle={notebookTitle}
-                  notebookColor={notebookColor}
-                  fallbackColor={NOTEBOOK_PALETTE[0]}
-                  onOpen={openNote}
+          {/* Right column: the Brief card above the reports feed — the
+            morning-read surface, arrival point first. */}
+          {!briefOpen && !reportsOpen ? (
+            <div className="side-card absolute right-4 top-1 z-20 hidden w-12 flex-col items-center gap-1 py-2 lg:flex">
+              <SidebarRail
+                icon="brief"
+                title="Show the brief"
+                dot={briefUnread}
+                onClick={toggleBrief}
               />
-            ) : activityLoading ? (
+              <SidebarRail
+                icon="reports"
+                title="Show latest reports"
+                dot={totalUnread > 0}
+                onClick={toggleReports}
+              />
+            </div>
+          ) : (
+            <div
+              ref={rightColRef}
+              className="relative mx-2 mb-2 mt-1 hidden shrink-0 flex-col lg:flex"
+              style={{ width: rightWidth }}
+            >
+              <ResizeHandle
+                edge="left"
+                width={rightWidth}
+                defaultWidth={520}
+                label="Resize the reading column"
+                onResize={(w) => {
+                  const width = clampRightW(w);
+                  setRightWidth(width);
+                  localStorage.setItem("homeRightWidth", String(Math.round(width)));
+                }}
+              />
+              <>
+                <BriefSidebar
+                  open={briefOpen}
+                  onToggle={toggleBrief}
+                  briefs={briefNotes}
+                  schedules={allReports}
+                  unread={briefUnread}
+                  onRan={refreshActivity}
+                  className={cn(
+                    briefOpen && !reportsOpen && "min-h-0 flex-1",
+                    briefOpen && reportsOpen && "shrink-0",
+                  )}
+                  style={
+                    briefOpen && reportsOpen
+                      ? { height: `${briefSplit}%` }
+                      : undefined
+                  }
+                />
+                {briefOpen && reportsOpen ? (
+                  <div
+                    role="separator"
+                    aria-orientation="horizontal"
+                    aria-label="Resize the brief"
+                    onPointerDown={onSplitDrag}
+                    onDoubleClick={() => {
+                      setBriefSplit(40);
+                      localStorage.setItem("homeBriefSplit", "40");
+                    }}
+                    className="h-2 shrink-0 cursor-row-resize rounded transition-colors hover:bg-ring/30 active:bg-ring/40"
+                  />
+                ) : (
+                  <div className="h-2 shrink-0" />
+                )}
+                <aside
+                  className={cn(
+                    "side-card flex min-h-0 flex-col",
+                    reportsOpen && "flex-1",
+                  )}
+                >
+                  {reportsOpen ? (
+                    feedReports.length > 0 ? (
+                      <ReportsFeed
+                        onCollapse={toggleReports}
+                        reports={feedReports}
+                        notebookTitle={notebookTitle}
+                        notebookColor={notebookColor}
+                        fallbackColor={NOTEBOOK_PALETTE[0]}
+                        onOpen={openNote}
+                      />
+                    ) : activityLoading ? (
               <div
                 role="status"
                 className="flex flex-1 items-center justify-center p-8 text-caption text-muted-foreground"
@@ -636,8 +736,32 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   )}
                 </EmptyState>
               </div>
-            )}
-          </aside>
+                    )
+                  ) : (
+                    <div className="flex h-12 shrink-0 items-center gap-2 px-6">
+                      <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+                        Latest reports
+                      </span>
+                      {totalUnread > 0 && (
+                        <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-badge font-medium tabular-nums text-citation">
+                          {totalUnread} unread
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={toggleReports}
+                        title="Show latest reports"
+                        aria-expanded={false}
+                        className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+                      >
+                        <PanelRight className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
+                </aside>
+              </>
+            </div>
+          )}
         </div>
       )}
 

@@ -80,6 +80,11 @@ export function NoteWindow({ noteId }: { noteId: string }) {
               <AudioPlayer noteId={note.id} title={note.title} key={note.updatedAt} />
               <DialogueScript content={note.content} />
             </div>
+          ) : note.kind === "report" ? (
+            <div className="prose-compact flex flex-col gap-4">
+              <AudioPlayer noteId={note.id} title={note.title} />
+              <Markdown>{note.content}</Markdown>
+            </div>
           ) : (
             <Markdown>{note.content}</Markdown>
           )}

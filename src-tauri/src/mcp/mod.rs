@@ -20,6 +20,7 @@ use crate::commands::{self, AppState};
 use crate::db::NOTEBOOK_PALETTE;
 use crate::models::{Note, Notebook, Source};
 
+mod ledger;
 mod mac;
 mod notebooks;
 mod notes;
@@ -242,7 +243,8 @@ impl AlchemyMcp {
     + Self::mac_router()
     + Self::search_router()
     + Self::notes_router()
-    + Self::studio_router()))]
+    + Self::studio_router()
+    + Self::ledger_router()))]
 impl ServerHandler for AlchemyMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())

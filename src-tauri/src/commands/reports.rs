@@ -15,6 +15,14 @@ pub async fn list_all_report_schedules(
     e(state.db.all_report_schedules().await)
 }
 
+/// "interval" | "change", defaulted so pre-trigger callers keep working.
+fn resolve_trigger(trigger: Option<String>) -> String {
+    match trigger.as_deref() {
+        Some("change") => "change".to_string(),
+        _ => "interval".to_string(),
+    }
+}
+
 #[tauri::command]
 pub async fn create_report_schedule(
     state: State<'_, AppState>,
@@ -22,6 +30,7 @@ pub async fn create_report_schedule(
     name: String,
     kind: String,
     prompt: String,
+    trigger: Option<String>,
     interval_secs: i64,
 ) -> Result<ReportSchedule, String> {
     let schedule = ReportSchedule {
@@ -30,6 +39,7 @@ pub async fn create_report_schedule(
         name: name.trim().to_string(),
         kind,
         prompt,
+        trigger: resolve_trigger(trigger),
         interval_secs,
         enabled: true,
         last_run_at: 0,
@@ -40,18 +50,28 @@ pub async fn create_report_schedule(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn update_report_schedule(
     state: State<'_, AppState>,
     id: String,
     name: String,
     kind: String,
     prompt: String,
+    trigger: Option<String>,
     interval_secs: i64,
     enabled: bool,
 ) -> Result<(), String> {
     e(state
         .db
-        .update_report_schedule(&id, name.trim(), &kind, &prompt, interval_secs, enabled)
+        .update_report_schedule(
+            &id,
+            name.trim(),
+            &kind,
+            &prompt,
+            &resolve_trigger(trigger),
+            interval_secs,
+            enabled,
+        )
         .await)
 }
 
@@ -115,20 +135,37 @@ pub async fn run_report(
     state: State<'_, AppState>,
     schedule_id: String,
 ) -> Result<Note, String> {
+    run_report_inner(&app, &state, &schedule_id).await
+}
+
+/// The command's body, callable from the resident scheduler (scheduler.rs).
+pub(crate) async fn run_report_inner(
+    app: &AppHandle,
+    state: &AppState,
+    schedule_id: &str,
+) -> Result<Note, String> {
+    let app = app.clone();
+    let schedule_id = schedule_id.to_string();
     let schedule = e(state.db.get_report_schedule(&schedule_id).await)?
         .ok_or_else(|| "Report schedule not found".to_string())?;
 
-    refresh_notebook_urls(&app, &state, &schedule.notebook_id).await;
+    // Briefs are schedules too (kind "brief"), but they read across every
+    // notebook instead of generating from one — see commands/brief.rs.
+    if schedule.kind == super::brief::BRIEF_KIND {
+        return super::brief::run_brief(&app, state, schedule).await;
+    }
+
+    refresh_notebook_urls(&app, state, &schedule.notebook_id).await;
 
     // Collapse before generating so the survivor doubles as the prior run —
     // its content lets the model report changes since last time (its first
     // line is the `_Run …_` stamp, so the date travels with it).
-    let existing = e(collapse_report_notes(&state, &schedule.notebook_id, &schedule.name).await)?;
+    let existing = e(collapse_report_notes(state, &schedule.notebook_id, &schedule.name).await)?;
     let prior_content = existing.as_ref().map(|note| note.content.clone());
 
     let _ = app.emit("report://step", "Generating report".to_string());
     let (_title, content) = e(generate_content(
-        &state,
+        state,
         None,
         &schedule.notebook_id,
         &schedule.kind,
@@ -138,6 +175,20 @@ pub async fn run_report(
     )
     .await)?;
 
+    persist_report_run(&app, state, &schedule, existing, content).await
+}
+
+/// The write side of any scheduled run — reports and briefs share it: stamp
+/// the run, update the living note (or create it), re-index, mark the
+/// schedule run, and announce. The survivor note doubles as the next run's
+/// prior for change tracking.
+pub(super) async fn persist_report_run(
+    app: &AppHandle,
+    state: &AppState,
+    schedule: &ReportSchedule,
+    existing: Option<Note>,
+    content: String,
+) -> Result<Note, String> {
     let timestamp = now();
     let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
     let content = format!("_Run {stamp}_\n\n{content}");
@@ -149,7 +200,7 @@ pub async fn run_report(
                 .await)?;
             match e(state.db.get_note(&prior.id).await)? {
                 Some(note) => {
-                    index_note(&state, &note).await;
+                    index_note(state, &note).await;
                     note
                 }
                 None => return Err("Report note vanished mid-update".into()),
@@ -168,11 +219,11 @@ pub async fn run_report(
                 created_at: timestamp,
                 updated_at: timestamp,
             };
-            e(add_note_indexed(&state, &note).await)?;
+            e(add_note_indexed(state, &note).await)?;
             note
         }
     };
-    e(state.db.set_report_last_run(&schedule_id, timestamp).await)?;
+    e(state.db.set_report_last_run(&schedule.id, timestamp).await)?;
     e(state
         .db
         .touch_notebook(&schedule.notebook_id, timestamp)

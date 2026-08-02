@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { playDone } from "@/lib/sound";
 import { checkForUpdates, type UpdateFlow } from "@/lib/updates";
-import { Button, Input, Modal, Spinner } from "./ui";
+import { Button, Input, Modal, Spinner, Switch } from "./ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "@/lib/utils";
 import { MacConnect } from "./MacConnect";
@@ -213,7 +213,17 @@ export function SettingsDialog({
           ))}
         </nav>
 
-        <div className="flex max-h-[calc(92vh-8.5rem)] min-w-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* Pane header: names the active tab and pushes the content below
+              the modal's floating close button (which otherwise collides
+              with the first row's trailing switch). pr-10 keeps a long tab
+              name from running under the X. */}
+          <h2 className="pb-3 pl-1 pr-10 pt-0.5 text-body font-semibold text-foreground">
+            {TABS.find((t) => t.id === tab)?.label}
+          </h2>
+          {/* The scroll cap MUST stay a definite height on this column (see
+              the note above); 11rem additionally clears the pane header. */}
+          <div className="flex max-h-[calc(92vh-11rem)] min-w-0 flex-col gap-4 overflow-y-auto px-1">
           {tab === "general" && <GeneralTab />}
           {tab === "sources" && <SourcesTab />}
           {tab === "studio" && <StudioTab />}
@@ -240,6 +250,7 @@ export function SettingsDialog({
           {tab === "shortcuts" && <ShortcutsTab />}
 
           {tab === "about" && <AboutTab />}
+          </div>
         </div>
       </div>
 
@@ -277,6 +288,32 @@ export function SettingsDialog({
 }
 
 /** Toggle row: label + native checkbox, persisted to localStorage. */
+/** A macOS-style settings row: label and hint leading, Switch trailing. */
+function SettingRow({
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  label: ReactNode;
+  hint: ReactNode;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start justify-between gap-4">
+      <span className="flex flex-col gap-0.5">
+        <span className="text-body text-foreground">{label}</span>
+        <span className="text-micro leading-relaxed text-subtle-foreground">
+          {hint}
+        </span>
+      </span>
+      {/* Centers the 16px switch on the label's 20px line box. */}
+      <Switch checked={checked} onChange={onChange} className="mt-0.5" />
+    </label>
+  );
+}
+
 function PrefToggle({
   storageKey,
   label,
@@ -290,23 +327,16 @@ function PrefToggle({
 }) {
   const [on, setOn] = useState(localStorage.getItem(storageKey) !== "false");
   return (
-    <label className="flex cursor-pointer items-start gap-2.5">
-      <input
-        type="checkbox"
-        checked={on}
-        onChange={(e) => {
-          const v = e.target.checked;
-          localStorage.setItem(storageKey, String(v));
-          setOn(v);
-          if (v) onEnable?.();
-        }}
-        className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
-      />
-      <span className="flex flex-col gap-0.5">
-        <span className="text-body text-foreground">{label}</span>
-        <span className="text-micro text-subtle-foreground">{hint}</span>
-      </span>
-    </label>
+    <SettingRow
+      label={label}
+      hint={hint}
+      checked={on}
+      onChange={(v) => {
+        localStorage.setItem(storageKey, String(v));
+        setOn(v);
+        if (v) onEnable?.();
+      }}
+    />
   );
 }
 
@@ -379,17 +409,14 @@ function GeneralTab() {
         </div>
       </div>
 
-      <PrefToggle
-        storageKey="showNotifications"
-        label="Show notifications"
-        hint="Desktop notification when a document, rebuild, or report finishes."
-      />
+      <NotificationsToggle />
       <PrefToggle
         storageKey="playSounds"
         label="Play sounds"
-        hint="Soft event cues: work finishing, new arrivals while the app is in the background, and errors. Never clicks or hovers."
+        hint="Soft cues for finished work, new arrivals, and errors."
         onEnable={playDone}
       />
+      <BackgroundToggle />
       <TrayToggle />
     </div>
   );
@@ -402,9 +429,8 @@ function SourcesTab() {
       <div className="flex flex-col gap-1.5">
         <div className="text-body">Mac apps</div>
         <p className="text-micro leading-relaxed text-subtle-foreground">
-          Calendar, Reminders, and Apple Notes can be added as auto-syncing
-          sources. Connecting here triggers the macOS permission prompts once,
-          so adding them to a notebook later just works.
+          Connect once to grant macOS permissions; any notebook can then add
+          Calendar, Reminders, and Apple Notes as auto-syncing sources.
         </p>
         <MacConnect showInstallHint />
       </div>
@@ -437,20 +463,10 @@ function WebClipperToggle() {
   return (
     <div className="flex flex-col gap-1.5">
       <div className="text-body">Web clipper</div>
-      <label className="flex cursor-pointer items-start gap-2.5">
-        <input
-          type="checkbox"
-          checked={aiConfig.clipEnabled}
-          onChange={(e) =>
-            void saveAiConfig({ ...aiConfig, clipEnabled: e.target.checked })
-          }
-          className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
-        />
-        <span className="flex flex-col gap-0.5">
-          <span className="text-body text-foreground">
-            Accept pages from the browser extension
-          </span>
-          <span className="text-micro leading-relaxed text-subtle-foreground">
+      <SettingRow
+        label="Accept pages from the browser extension"
+        hint={
+          <>
             The{" "}
             <button
               type="button"
@@ -459,12 +475,13 @@ function WebClipperToggle() {
             >
               Alchemy Web Clipper
             </button>{" "}
-            captures the page you're viewing — including private and
-            login-walled pages the app can't fetch itself — and hands it to
+            sends the page you're viewing — including login-walled pages — to
             Alchemy over a local endpoint.
-          </span>
-        </span>
-      </label>
+          </>
+        }
+        checked={aiConfig.clipEnabled}
+        onChange={(v) => void saveAiConfig({ ...aiConfig, clipEnabled: v })}
+      />
     </div>
   );
 }
@@ -555,9 +572,8 @@ function NotionTokenField() {
         >
           notion.so/my-integrations
         </button>
-        , then share pages with it in Notion (••• → Connections). Pasting a page
-        URL here after that imports the page and its children as a living source
-        that re-syncs on the cadence above. Stored locally; sent only to Notion.
+        , share pages with it (••• → Connections), then paste a page URL into
+        any notebook. The token stays on this Mac.
       </span>
     </div>
   );
@@ -571,9 +587,8 @@ function StudioTab() {
       <div className="flex flex-col gap-1.5">
         <div className="text-body">Studio templates</div>
         <p className="text-micro leading-relaxed text-subtle-foreground">
-          Custom generators live in ~/Documents/Alchemy/templates — one .md file
-          per generator. Deleting a file removes its tile for good; this puts
-          the default pack back (without touching files you've edited).
+          One .md file per generator in ~/Documents/Alchemy/templates. This
+          restores the default pack without touching files you've edited.
         </p>
         <div>
           <Button
@@ -619,30 +634,14 @@ function CuratorToggle() {
   const saveAiConfig = useStore((s) => s.saveAiConfig);
   if (!aiConfig) return null;
   return (
-    <label className="flex cursor-pointer items-start gap-2.5">
-      <input
-        type="checkbox"
-        checked={aiConfig.curatorConsolidate}
-        onChange={(e) =>
-          void saveAiConfig({
-            ...aiConfig,
-            curatorConsolidate: e.target.checked,
-          })
-        }
-        className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
-      />
-      <span className="flex flex-col gap-0.5">
-        <span className="text-body text-foreground">
-          Consolidate auto notes weekly
-        </span>
-        <span className="text-micro leading-relaxed text-subtle-foreground">
-          Once a week, while you're away, the model merges chat-created evidence
-          notes that state the same claim. The merged-away note is archived,
-          never deleted, and each notebook's Curator report lists what happened.
-          Uses your chat model.
-        </span>
-      </span>
-    </label>
+    <SettingRow
+      label="Consolidate auto notes weekly"
+      hint="Weekly, while you're away, merges chat-created notes that state the same claim. Merged notes are archived, and each notebook's Curator report lists what happened."
+      checked={aiConfig.curatorConsolidate}
+      onChange={(v) =>
+        void saveAiConfig({ ...aiConfig, curatorConsolidate: v })
+      }
+    />
   );
 }
 
@@ -677,37 +676,60 @@ function GitSyncSelect() {
         </select>
       </label>
       <span className="text-micro leading-relaxed text-subtle-foreground">
-        Remote repos re-fetch when their branch moves, using your own git
-        credentials — Alchemy never stores tokens. Manual Refresh always syncs,
-        even when this is off.
+        Re-fetches when the branch moves, with your own git credentials —
+        Alchemy stores no tokens.
       </span>
     </div>
   );
 }
 
 /** Menu bar extra on/off — lives in AiConfig so the backend applies it live. */
+/** Config-backed (not localStorage) so the Night Shift's resident scheduler
+ *  can honor it with no window open; mirrored to localStorage for notify()'s
+ *  synchronous check. */
+function NotificationsToggle() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  if (!aiConfig) return null;
+  return (
+    <SettingRow
+      label="Show notifications"
+      hint="When imports, rebuilds, and reports finish — even with no window open."
+      checked={aiConfig.showNotifications}
+      onChange={(v) => {
+        localStorage.setItem("showNotifications", String(v));
+        void saveAiConfig({ ...aiConfig, showNotifications: v });
+      }}
+    />
+  );
+}
+
+/** The Night Shift master switch (docs/RFC-night-shift.md). */
+function BackgroundToggle() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  if (!aiConfig) return null;
+  return (
+    <SettingRow
+      label="Night Shift"
+      hint="Runs scheduled reports and source syncing with the window closed. Off, Alchemy works only when you ask."
+      checked={aiConfig.backgroundEnabled}
+      onChange={(v) => void saveAiConfig({ ...aiConfig, backgroundEnabled: v })}
+    />
+  );
+}
+
 function TrayToggle() {
   const aiConfig = useStore((s) => s.aiConfig);
   const saveAiConfig = useStore((s) => s.saveAiConfig);
   if (!aiConfig) return null;
   return (
-    <label className="flex cursor-pointer items-start gap-2.5">
-      <input
-        type="checkbox"
-        checked={aiConfig.trayEnabled}
-        onChange={(e) =>
-          void saveAiConfig({ ...aiConfig, trayEnabled: e.target.checked })
-        }
-        className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
-      />
-      <span className="flex flex-col gap-0.5">
-        <span className="text-body text-foreground">Show menu bar icon</span>
-        <span className="text-micro leading-relaxed text-subtle-foreground">
-          Ask Alchemy, add the clipboard as a source, and jump to recent
-          notebooks from the menu bar. ⌥Space summons Alchemy either way.
-        </span>
-      </span>
-    </label>
+    <SettingRow
+      label="Show menu bar icon"
+      hint="Closing the window keeps Alchemy running in the menu bar; off, it quits."
+      checked={aiConfig.trayEnabled}
+      onChange={(v) => void saveAiConfig({ ...aiConfig, trayEnabled: v })}
+    />
   );
 }
 
@@ -765,32 +787,17 @@ function AgentsTab() {
 
   return (
     <div className="flex flex-col gap-5">
-      <label className="flex cursor-pointer items-start gap-2.5">
-        <input
-          type="checkbox"
-          checked={aiConfig.mcpEnabled}
-          onChange={(e) => {
-            void saveAiConfig({
-              ...aiConfig,
-              mcpEnabled: e.target.checked,
-            }).then(() =>
-              // The server starts/stops on save; give it a beat before polling.
-              setTimeout(refresh, 400),
-            );
-          }}
-          className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
-        />
-        <span className="flex flex-col gap-0.5">
-          <span className="text-body text-foreground">
-            Let AI agents use Alchemy (MCP)
-          </span>
-          <span className="text-micro text-subtle-foreground">
-            Agents can create notebooks, add sources, search, and write notes —
-            changes appear live in the app. Local-only: the server listens on
-            127.0.0.1 and nothing leaves this Mac.
-          </span>
-        </span>
-      </label>
+      <SettingRow
+        label="Let AI agents use Alchemy (MCP)"
+        hint="Agents can create notebooks, add sources, search, and write notes. The server listens on 127.0.0.1 only."
+        checked={aiConfig.mcpEnabled}
+        onChange={(v) => {
+          void saveAiConfig({ ...aiConfig, mcpEnabled: v }).then(() =>
+            // The server starts/stops on save; give it a beat before polling.
+            setTimeout(refresh, 400),
+          );
+        }}
+      />
 
       <div className="flex items-center gap-2 text-caption">
         <span
@@ -825,7 +832,7 @@ function AgentsTab() {
 
       <Field
         label="Clients"
-        hint="Connect writes the client's own MCP config and installs the Alchemy skill where supported. The copy button gives the same setup as a command or snippet."
+        hint="Connect writes the client's MCP config and installs the Alchemy skill where supported."
       >
         <div className="flex flex-col divide-y divide-border rounded-md border border-border">
           {sorted.map((c) => (
@@ -939,7 +946,7 @@ function PodcastVoicesSection() {
   return (
     <Field
       label="Podcast voices"
-      hint="Audio Overview speaks with Kokoro-82M, a neural TTS that runs entirely on-device (one-time ~93 MB download). The generator appears in the Studio once the voices are downloaded and verified with a test synthesis."
+      hint="Audio Overview speaks with Kokoro-82M, on-device TTS (~93 MB download). The generator appears once a test synthesis verifies the voices."
     >
       <div className="flex items-center gap-3 rounded-md border border-border bg-surface-2/60 px-3 py-2.5">
         <AudioLines className="h-4 w-4 shrink-0 text-muted-foreground" />

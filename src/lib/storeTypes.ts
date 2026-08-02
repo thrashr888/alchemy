@@ -102,6 +102,10 @@ export interface AppState {
   pendingAsk: string | null;
   toasts: Toast[];
   justCreatedNoteId: string | null;
+  /** Center-column Ledger mode; reader wins below it, chat is the default. */
+  ledgerOpen: boolean;
+  /** Bumped when an agent writes the ledger (mcp://changed scope "ledger"). */
+  ledgerBump: number;
   pendingNewNote: boolean;
   artifactStreamText: string;
   audioProgress: { done: number; total: number } | null;
@@ -155,19 +159,18 @@ export interface AppState {
     name: string,
     kind: string,
     prompt: string,
+    trigger: string,
     intervalSecs: number,
   ) => Promise<void>;
   updateReport: (report: ReportSchedule) => Promise<void>;
   deleteReport: (id: string) => Promise<void>;
   runReportNow: (id: string) => Promise<void>;
-  startReportScheduler: () => void;
 
   pickAndAddFiles: () => Promise<void>;
   /** Open the folder picker (optionally rooted at a cloud sync folder) and add
    *  the chosen subfolder as a source. */
   pickAndAddFolder: (defaultPath?: string) => Promise<void>;
   addSourceFiles: (paths: string[]) => Promise<void>;
-  startSourceSync: () => void;
   addSourceUrl: (url: string, include?: string) => Promise<void>;
   addSourceText: (title: string, text: string) => Promise<void>;
   addSourceMac: (provider: string, collection: string, label: string) => Promise<void>;

@@ -24,6 +24,32 @@ pub struct RouterState(pub std::sync::Mutex<Router>);
 /// menu's Open Recent (rebuild_app_menu fills both).
 pub struct TrayRecents(pub tauri::menu::Submenu<Wry>);
 
+/// The tray's Night Shift items, mutated in place by the resident scheduler
+/// (status line) and the pause toggle. Tray menu only — the app menu is
+/// built once and never rebuilt (AppKit's Window list empties otherwise).
+pub struct TrayControls {
+    pub status: tauri::menu::MenuItem<Wry>,
+    pub pause: tauri::menu::MenuItem<Wry>,
+}
+
+/// Update the tray's status line ("Synced 7:41 AM · 2 reports ready").
+pub fn set_tray_status(app: &AppHandle, text: &str) {
+    if let Some(controls) = app.try_state::<TrayControls>() {
+        let _ = controls.status.set_text(text);
+    }
+}
+
+pub(crate) fn set_tray_pause_label(app: &AppHandle, paused: bool) {
+    if let Some(controls) = app.try_state::<TrayControls>() {
+        let label = if paused {
+            "Resume scheduled runs"
+        } else {
+            "Pause until morning"
+        };
+        let _ = controls.pause.set_text(label);
+    }
+}
+
 /// Deliver an alchemy:// URL to the frontend router (or hold it for init).
 /// Every intent also summons the window — that's the point of all of them.
 pub fn route_url(app: &AppHandle, url: String) {
@@ -236,7 +262,15 @@ pub fn setup(
     crate::menu::fill_recents(&handle, &recent_menu, recents)?;
     // Capture verbs live here: the menu bar extra is where things get INTO
     // Alchemy from anywhere; the in-app add modal keeps the full tile set.
+    // The top block is the Night Shift's face: what the staff did, and the
+    // snooze/quit controls residency requires (docs/RFC-night-shift.md).
+    let status_item = MenuItemBuilder::with_id("tray:status", "Starting…")
+        .enabled(false)
+        .build(app)?;
+    let pause_item = MenuItemBuilder::with_id("tray:pause", "Pause until morning").build(app)?;
     let tray_menu = MenuBuilder::new(app)
+        .item(&status_item)
+        .separator()
         .item(&MenuItemBuilder::with_id("tray:open", "Open Alchemy").build(app)?)
         .item(
             &MenuItemBuilder::with_id("tray:ask", "Ask Alchemy")
@@ -249,8 +283,15 @@ pub fn setup(
         .item(&MenuItemBuilder::with_id("tray:add-text", "Add Text Source…").build(app)?)
         .separator()
         .item(&recent_menu)
+        .separator()
+        .item(&pause_item)
+        .item(&MenuItemBuilder::with_id("tray:quit", "Quit Alchemy").build(app)?)
         .build()?;
     app.manage(TrayRecents(recent_menu));
+    app.manage(TrayControls {
+        status: status_item,
+        pause: pause_item,
+    });
 
     // The menu bar wants a monochrome template glyph, not the app icon (the
     // squircle just flattens to a rounded blob). tray.png is the sigil drawn
@@ -268,6 +309,11 @@ pub fn setup(
             "tray:clipboard" => add_clipboard(app),
             "tray:add-url" => summon_add_step(app, "url"),
             "tray:add-text" => summon_add_step(app, "text"),
+            "tray:pause" => {
+                let paused = crate::scheduler::toggle_pause();
+                set_tray_pause_label(app, paused);
+            }
+            "tray:quit" => crate::scheduler::request_quit(app),
             id if id.starts_with("recent:") => {
                 focus_main(app);
                 crate::menu::handle_event(app, id);

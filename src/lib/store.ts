@@ -11,14 +11,18 @@ import { notify } from "./notify";
 import { playArrival, playDone, playError } from "./sound";
 import { autoUpdateEnabled, checkForUpdatesQuietly } from "./updates";
 import { DEFAULT_CHAT_CONFIG, DEFAULT_READING_PREFS } from "./types";
-import type { AppState, Migration, QueueItem } from "./storeTypes";
+import type {
+  AppState,
+  Migration,
+  QueueItem,
+  ReaderDoc,
+} from "./storeTypes";
 export type { ExternalAdd, Migration, QueueItem } from "./storeTypes";
 import type {
   ChatConfig,
   Message,
   Note,
   ReadingPrefs,
-  ReportSchedule,
   Source,
 } from "./types";
 
@@ -104,10 +108,6 @@ function loadNoteReadsBaseline(): number {
   return now;
 }
 
-// Module-level guard so the report scheduler is only started once.
-let schedulerStarted = false;
-// Same guard for the source-resync loop.
-let sourceSyncStarted = false;
 // Global Tauri event listeners bind once per page — React StrictMode runs
 // init() twice in dev, and a doubled menu listener spawns doubled windows.
 let listenersBound = false;
@@ -237,6 +237,10 @@ export const useStore = create<AppState>((set, get) => {
     error: null,
     toasts: [],
     justCreatedNoteId: null,
+    // Center-column Ledger mode (Chat | Reader | Ledger) + a bump counter
+    // the pane watches so agent writes appear live (mcp://changed).
+    ledgerOpen: false,
+    ledgerBump: 0,
     pendingNewNote: false,
     artifactStreamText: "",
     audioProgress: null,
@@ -296,6 +300,20 @@ export const useStore = create<AppState>((set, get) => {
         api.listTemplates().catch(() => []),
       ]);
       set({ notebooks, aiConfig, ollamaOk, templates });
+      // showNotifications lives in config now (the Night Shift's resident
+      // scheduler reads it backend-side). Honor a pre-migration localStorage
+      // opt-out once, then mirror config down for notify()'s sync check.
+      if (
+        localStorage.getItem("showNotifications") === "false" &&
+        aiConfig.showNotifications
+      ) {
+        void api.setAiConfig({ ...aiConfig, showNotifications: false });
+      } else {
+        localStorage.setItem(
+          "showNotifications",
+          String(aiConfig.showNotifications),
+        );
+      }
       void get().refreshModelHealth();
       void get().refreshModelStats();
       void get().refreshKokoroStatus();
@@ -310,13 +328,28 @@ export const useStore = create<AppState>((set, get) => {
       if (boot && notebooks.some((n) => n.id === boot)) {
         await get().selectNotebook(boot);
       } else if (!window.__ALCHEMY_FRESH__ && !boot) {
-        const last = localStorage.getItem("lastNotebookId");
+        // Restore the precise last view: the dashboard stays the dashboard
+        // (an explicit lastView with nb: null beats lastNotebookId), and a
+        // notebook reopens in its center mode — chat, reader, or ledger.
+        let view: {
+          nb: string | null;
+          mode: "chat" | "reader" | "ledger";
+          doc?: ReaderDoc;
+        } | null = null;
+        try {
+          view = JSON.parse(localStorage.getItem("lastView") ?? "null");
+        } catch {
+          /* ignore */
+        }
+        const last =
+          view === null ? localStorage.getItem("lastNotebookId") : view.nb;
         if (last && notebooks.some((n) => n.id === last)) {
           await get().selectNotebook(last);
+          if (view?.mode === "ledger") set({ ledgerOpen: true });
+          else if (view?.mode === "reader" && view.doc)
+            get().openInReader(view.doc);
         }
       }
-      get().startReportScheduler();
-      get().startSourceSync();
       void api.rebuildAppMenu();
       // Quiet update check, once per launch, main window only.
       if (getCurrentWebview().label === "main" && autoUpdateEnabled()) {
@@ -396,6 +429,8 @@ export const useStore = create<AppState>((set, get) => {
             void api.listSources(current).then((sources) => set({ sources }));
           if (scope === "notes")
             void api.listNotes(current).then((notes) => set({ notes }));
+          if (scope === "ledger")
+            set((state) => ({ ledgerBump: state.ledgerBump + 1 }));
           if (scope === "reports")
             void api
               .listReportSchedules(current)
@@ -821,25 +856,6 @@ export const useStore = create<AppState>((set, get) => {
       }
     },
 
-    startSourceSync: () => {
-      if (sourceSyncStarted) return;
-      // Main window only — the backend serializes scans, but one tick loop per
-      // app is still one too few reasons to run N of them.
-      if (getCurrentWebview().label !== "main") return;
-      sourceSyncStarted = true;
-      const tick = async () => {
-        try {
-          await api.resyncSources();
-          // Changed notebooks are announced via sources://changed; every window
-          // (including this one) refreshes from its own listener.
-        } catch {
-          /* disk or embedder hiccup — next tick retries */
-        }
-      };
-      void tick();
-      setInterval(() => void tick(), 60_000);
-    },
-
     addSourceFiles: async (paths) => {
       const id = get().currentId;
       if (!id || paths.length === 0) return;
@@ -1083,14 +1099,20 @@ export const useStore = create<AppState>((set, get) => {
       const current = history[index];
       // Re-opening the current doc just updates the highlight in place —
       // clicking three citations into one source is one history entry.
+      // Opening a document is an explicit trip to the Reader, so it always
+      // leaves Ledger mode — the ledger otherwise wins the center column
+      // and the reader opens invisibly underneath it.
       if (current && current.type === doc.type && current.id === doc.id) {
         const next = [...history];
         next[index] = doc;
-        set({ reader: { open: true, history: next, index } });
+        set({ ledgerOpen: false, reader: { open: true, history: next, index } });
         return;
       }
       const next = [...history.slice(0, index + 1), doc];
-      set({ reader: { open: true, history: next, index: next.length - 1 } });
+      set({
+        ledgerOpen: false,
+        reader: { open: true, history: next, index: next.length - 1 },
+      });
     },
 
     closeReader: () =>
@@ -1401,11 +1423,11 @@ export const useStore = create<AppState>((set, get) => {
       if (nb) await get().selectNotebook(nb.id);
     },
 
-    createReport: (name, kind, prompt, intervalSecs) =>
+    createReport: (name, kind, prompt, trigger, intervalSecs) =>
       guard(async () => {
         const id = get().currentId;
         if (!id) return;
-        await api.createReportSchedule(id, name, kind, prompt, intervalSecs);
+        await api.createReportSchedule(id, name, kind, prompt, trigger, intervalSecs);
         set({ reportSchedules: await api.listReportSchedules(id) });
         get().pushToast("success", `Scheduled “${name}”`);
       }),
@@ -1417,6 +1439,7 @@ export const useStore = create<AppState>((set, get) => {
           r.name,
           r.kind,
           r.prompt,
+          r.trigger,
           r.intervalSecs,
           r.enabled,
         );
@@ -1454,44 +1477,6 @@ export const useStore = create<AppState>((set, get) => {
       } finally {
         set({ generatingKind: null });
       }
-    },
-
-    startReportScheduler: () => {
-      if (schedulerStarted) return;
-      // Only the main window runs the scheduler — one tick loop per app, not
-      // one per window, or reports would generate once per open window.
-      if (getCurrentWebview().label !== "main") return;
-      schedulerStarted = true;
-      const tick = async () => {
-        let due: ReportSchedule[];
-        try {
-          const all = await api.listAllReportSchedules();
-          const now = Date.now();
-          due = all.filter(
-            (s) => s.enabled && now - s.lastRunAt >= s.intervalSecs * 1000,
-          );
-        } catch {
-          return;
-        }
-        for (const s of due) {
-          try {
-            await api.runReport(s.id);
-            void notify("Report ready", `“${s.name}” was generated.`);
-            playArrival();
-            const cur = get().currentId;
-            if (cur === s.notebookId) {
-              set({
-                notes: await api.listNotes(cur),
-                reportSchedules: await api.listReportSchedules(cur),
-              });
-            }
-          } catch {
-            /* try again next tick */
-          }
-        }
-      };
-      void tick();
-      setInterval(() => void tick(), 60_000);
     },
 
     refreshKokoroStatus: async () => {
@@ -1558,6 +1543,32 @@ useStore.subscribe((s, prev) => {
   if (s.toasts.length > prev.toasts.length && latest?.kind === "error")
     playError();
 });
+
+// Remember the precise open view — dashboard vs notebook, and the center
+// mode (chat / reader / ledger) with the reader's current doc — so a reload
+// or relaunch lands back exactly where the user was. Main window only:
+// secondary windows share localStorage and would clobber the main spot.
+// Settings is deliberately not a view; dialogs don't survive reloads.
+if (getCurrentWebview().label === "main") {
+  useStore.subscribe((s, prev) => {
+    if (
+      s.currentId === prev.currentId &&
+      s.ledgerOpen === prev.ledgerOpen &&
+      s.reader === prev.reader
+    )
+      return;
+    const doc = s.reader.open ? s.reader.history[s.reader.index] : undefined;
+    localStorage.setItem(
+      "lastView",
+      JSON.stringify({
+        nb: s.currentId,
+        mode: s.ledgerOpen ? "ledger" : s.reader.open ? "reader" : "chat",
+        // Highlight is a one-time citation jump, not a place — drop it.
+        doc: doc && { type: doc.type, id: doc.id },
+      }),
+    );
+  });
+}
 
 // The store rides on `window` in every build — debugging in dev, and a
 // window into live UI state for users' AI agents in prod (the debug

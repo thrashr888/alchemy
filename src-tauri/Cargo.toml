@@ -80,7 +80,10 @@ tauri-plugin-global-shortcut = "2.3.2"
 htmd = "0.5.4"
 window-vibrancy = "0.8.0"
 tauri-plugin-liquid-glass = "0.1.6"
-ast-grep-language = { version = "0.44.1", default-features = false, features = ["builtin-parser", "tree-sitter-rust", "tree-sitter-typescript", "tree-sitter-javascript", "tree-sitter-python", "tree-sitter-go", "tree-sitter-ruby", "tree-sitter-java", "tree-sitter-swift", "tree-sitter-c", "tree-sitter-cpp", "tree-sitter-php", "tree-sitter-html", "tree-sitter-bash", "tree-sitter-hcl"] }
+# Keep the grammar set aligned with outline.rs::lang_for. The crate's
+# builtin-parser feature enables every bundled grammar, including languages
+# Alchemy never dispatches to, which needlessly expands clean Rust builds.
+ast-grep-language = { version = "0.44.1", default-features = false, features = ["tree-sitter-rust", "tree-sitter-typescript", "tree-sitter-javascript", "tree-sitter-python", "tree-sitter-go", "tree-sitter-ruby", "tree-sitter-java", "tree-sitter-swift", "tree-sitter-c", "tree-sitter-cpp", "tree-sitter-php", "tree-sitter-html", "tree-sitter-bash", "tree-sitter-hcl"] }
 ast-grep-core = "0.44.1"
 exif = { version = "0.6.1", package = "kamadak-exif" }
 
@@ -106,4 +109,11 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
+# Tests use the same heavy dependency graph as development builds, but do not
+# need debug symbols. Omitting them keeps test compilation and linking from
+# carrying the full Lance/Arrow/DataFusion tree.
+[profile.test]
+debug = 0
 
+[profile.test.package."*"]
+debug = false

@@ -249,10 +249,55 @@ export interface ReportSchedule {
   name: string;
   kind: string;
   prompt: string;
+  /** "interval" (clock-fired) or "change" (a standing question — runs when
+   *  sources in the notebook change, intervalSecs as the throttle floor). */
+  trigger: "interval" | "change";
   intervalSecs: number;
   enabled: boolean;
   lastRunAt: number;
   createdAt: number;
+}
+
+/** One anchor pinning a ledger entry to verbatim source text. */
+export interface LedgerAnchor {
+  sourceId: string;
+  quote: string;
+}
+
+/** One typed ledger row (the Steward's memory): kind-specific lifecycles —
+ *  assertion asserted→corroborated|contradicted|stale, fact current→
+ *  superseded, decision decided→superseded, question open→answered, log. */
+export interface LedgerEntry {
+  id: string;
+  notebookId: string;
+  kind: "assertion" | "fact" | "decision" | "question" | "log";
+  text: string;
+  why: string;
+  status: string;
+  /** "" for user/agent rows, "auto" for chat-minted rows. */
+  origin: string;
+  anchors: LedgerAnchor[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** One observed source change (watchers, RFC-night-shift): written by the
+ *  refresh paths, read by the Brief, the Staff section, and agents. */
+export interface SourceEvent {
+  id: string;
+  notebookId: string;
+  sourceId: string;
+  sourceTitle: string;
+  kind: string;
+  detail: string;
+  /** Capped ±-prefixed line excerpt; empty when nothing textual changed. */
+  diff: string;
+  at: number;
+}
+
+export interface NightShiftStatus {
+  backgroundEnabled: boolean;
+  paused: boolean;
 }
 
 /** One configured inference provider (list entry in Settings → Models). */
@@ -290,8 +335,16 @@ export interface AiConfig {
    *  the user's logged-in tab, see docs/RFC-page-capture.md §8). */
   clipEnabled: boolean;
   clipPort: number;
-  /** Menu bar extra (tray icon); Settings → General toggles it live. */
+  /** Menu bar extra (tray icon); Settings → General toggles it live. Also
+   *  the residency switch: tray on = closing the window leaves Alchemy
+   *  running in the menu bar (docs/RFC-night-shift.md). */
   trayEnabled: boolean;
+  /** Night Shift master switch: scheduled reports + automatic source
+   *  resyncs from the resident scheduler. Off = on-demand only. */
+  backgroundEnabled: boolean;
+  /** Desktop notifications; in config (not localStorage) so the resident
+   *  scheduler can honor it with no window open. */
+  showNotifications: boolean;
   /** Weekly LLM consolidation of auto-created evidence notes (note curator
    *  phase 5). On by default — idle-gated, capped, fully recoverable; the
    *  toggle is for cost control. */
