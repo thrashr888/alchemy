@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { playDone } from "@/lib/sound";
 import { checkForUpdates, type UpdateFlow } from "@/lib/updates";
-import { Button, Input, Modal, Spinner } from "./ui";
+import { Button, Input, Modal, Spinner, Switch } from "./ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "@/lib/utils";
 import { MacConnect } from "./MacConnect";
@@ -277,6 +277,31 @@ export function SettingsDialog({
 }
 
 /** Toggle row: label + native checkbox, persisted to localStorage. */
+/** A macOS-style settings row: label and hint leading, Switch trailing. */
+function SettingRow({
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  label: ReactNode;
+  hint: ReactNode;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start justify-between gap-4">
+      <span className="flex flex-col gap-0.5">
+        <span className="text-body text-foreground">{label}</span>
+        <span className="text-micro leading-relaxed text-subtle-foreground">
+          {hint}
+        </span>
+      </span>
+      <Switch checked={checked} onChange={onChange} className="mt-0.5" />
+    </label>
+  );
+}
+
 function PrefToggle({
   storageKey,
   label,
@@ -290,23 +315,16 @@ function PrefToggle({
 }) {
   const [on, setOn] = useState(localStorage.getItem(storageKey) !== "false");
   return (
-    <label className="flex cursor-pointer items-start gap-2.5">
-      <input
-        type="checkbox"
-        checked={on}
-        onChange={(e) => {
-          const v = e.target.checked;
-          localStorage.setItem(storageKey, String(v));
-          setOn(v);
-          if (v) onEnable?.();
-        }}
-        className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
-      />
-      <span className="flex flex-col gap-0.5">
-        <span className="text-body text-foreground">{label}</span>
-        <span className="text-micro text-subtle-foreground">{hint}</span>
-      </span>
-    </label>
+    <SettingRow
+      label={label}
+      hint={hint}
+      checked={on}
+      onChange={(v) => {
+        localStorage.setItem(storageKey, String(v));
+        setOn(v);
+        if (v) onEnable?.();
+      }}
+    />
   );
 }
 
@@ -434,20 +452,10 @@ function WebClipperToggle() {
   return (
     <div className="flex flex-col gap-1.5">
       <div className="text-body">Web clipper</div>
-      <label className="flex cursor-pointer items-start gap-2.5">
-        <input
-          type="checkbox"
-          checked={aiConfig.clipEnabled}
-          onChange={(e) =>
-            void saveAiConfig({ ...aiConfig, clipEnabled: e.target.checked })
-          }
-          className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
-        />
-        <span className="flex flex-col gap-0.5">
-          <span className="text-body text-foreground">
-            Accept pages from the browser extension
-          </span>
-          <span className="text-micro leading-relaxed text-subtle-foreground">
+      <SettingRow
+        label="Accept pages from the browser extension"
+        hint={
+          <>
             The{" "}
             <button
               type="button"
@@ -459,9 +467,11 @@ function WebClipperToggle() {
             captures the page you're viewing — including private and
             login-walled pages the app can't fetch itself — and hands it to
             Alchemy over a local endpoint.
-          </span>
-        </span>
-      </label>
+          </>
+        }
+        checked={aiConfig.clipEnabled}
+        onChange={(v) => void saveAiConfig({ ...aiConfig, clipEnabled: v })}
+      />
     </div>
   );
 }
@@ -616,30 +626,14 @@ function CuratorToggle() {
   const saveAiConfig = useStore((s) => s.saveAiConfig);
   if (!aiConfig) return null;
   return (
-    <label className="flex cursor-pointer items-start gap-2.5">
-      <input
-        type="checkbox"
-        checked={aiConfig.curatorConsolidate}
-        onChange={(e) =>
-          void saveAiConfig({
-            ...aiConfig,
-            curatorConsolidate: e.target.checked,
-          })
-        }
-        className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
-      />
-      <span className="flex flex-col gap-0.5">
-        <span className="text-body text-foreground">
-          Consolidate auto notes weekly
-        </span>
-        <span className="text-micro leading-relaxed text-subtle-foreground">
-          Once a week, while you're away, the model merges chat-created evidence
-          notes that state the same claim. The merged-away note is archived,
-          never deleted, and each notebook's Curator report lists what happened.
-          Uses your chat model.
-        </span>
-      </span>
-    </label>
+    <SettingRow
+      label="Consolidate auto notes weekly"
+      hint="Once a week, while you're away, the model merges chat-created evidence notes that state the same claim. The merged-away note is archived, never deleted, and each notebook's Curator report lists what happened. Uses your chat model."
+      checked={aiConfig.curatorConsolidate}
+      onChange={(v) =>
+        void saveAiConfig({ ...aiConfig, curatorConsolidate: v })
+      }
+    />
   );
 }
 
@@ -691,27 +685,15 @@ function NotificationsToggle() {
   const saveAiConfig = useStore((s) => s.saveAiConfig);
   if (!aiConfig) return null;
   return (
-    <label className="flex cursor-pointer items-start gap-2.5">
-      <input
-        type="checkbox"
-        checked={aiConfig.showNotifications}
-        onChange={(e) => {
-          localStorage.setItem("showNotifications", String(e.target.checked));
-          void saveAiConfig({
-            ...aiConfig,
-            showNotifications: e.target.checked,
-          });
-        }}
-        className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
-      />
-      <span className="flex flex-col gap-0.5">
-        <span className="text-body text-foreground">Show notifications</span>
-        <span className="text-micro leading-relaxed text-subtle-foreground">
-          Desktop notification when a document, rebuild, or report finishes —
-          including reports that run with no window open.
-        </span>
-      </span>
-    </label>
+    <SettingRow
+      label="Show notifications"
+      hint="Desktop notification when a document, rebuild, or report finishes — including reports that run with no window open."
+      checked={aiConfig.showNotifications}
+      onChange={(v) => {
+        localStorage.setItem("showNotifications", String(v));
+        void saveAiConfig({ ...aiConfig, showNotifications: v });
+      }}
+    />
   );
 }
 
@@ -721,27 +703,12 @@ function BackgroundToggle() {
   const saveAiConfig = useStore((s) => s.saveAiConfig);
   if (!aiConfig) return null;
   return (
-    <label className="flex cursor-pointer items-start gap-2.5">
-      <input
-        type="checkbox"
-        checked={aiConfig.backgroundEnabled}
-        onChange={(e) =>
-          void saveAiConfig({
-            ...aiConfig,
-            backgroundEnabled: e.target.checked,
-          })
-        }
-        className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
-      />
-      <span className="flex flex-col gap-0.5">
-        <span className="text-body text-foreground">Background work</span>
-        <span className="text-micro leading-relaxed text-subtle-foreground">
-          Scheduled reports and automatic source syncing, even with the window
-          closed. Off means Alchemy works only when you ask — Run Now and
-          manual Refresh still work.
-        </span>
-      </span>
-    </label>
+    <SettingRow
+      label="Night Shift"
+      hint="Scheduled reports and automatic source syncing, even with the window closed. Off means Alchemy works only when you ask — Run Now and manual Refresh still work."
+      checked={aiConfig.backgroundEnabled}
+      onChange={(v) => void saveAiConfig({ ...aiConfig, backgroundEnabled: v })}
+    />
   );
 }
 
@@ -750,25 +717,12 @@ function TrayToggle() {
   const saveAiConfig = useStore((s) => s.saveAiConfig);
   if (!aiConfig) return null;
   return (
-    <label className="flex cursor-pointer items-start gap-2.5">
-      <input
-        type="checkbox"
-        checked={aiConfig.trayEnabled}
-        onChange={(e) =>
-          void saveAiConfig({ ...aiConfig, trayEnabled: e.target.checked })
-        }
-        className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
-      />
-      <span className="flex flex-col gap-0.5">
-        <span className="text-body text-foreground">Show menu bar icon</span>
-        <span className="text-micro leading-relaxed text-subtle-foreground">
-          Ask Alchemy, add the clipboard as a source, and jump to recent
-          notebooks from the menu bar. With the icon on, closing the window
-          keeps Alchemy running there; off, closing the window quits.
-          ⌥Space summons Alchemy either way.
-        </span>
-      </span>
-    </label>
+    <SettingRow
+      label="Show menu bar icon"
+      hint="Ask Alchemy, add the clipboard as a source, and jump to recent notebooks from the menu bar. With the icon on, closing the window keeps Alchemy running there; off, closing the window quits. ⌥Space summons Alchemy either way."
+      checked={aiConfig.trayEnabled}
+      onChange={(v) => void saveAiConfig({ ...aiConfig, trayEnabled: v })}
+    />
   );
 }
 
@@ -826,32 +780,17 @@ function AgentsTab() {
 
   return (
     <div className="flex flex-col gap-5">
-      <label className="flex cursor-pointer items-start gap-2.5">
-        <input
-          type="checkbox"
-          checked={aiConfig.mcpEnabled}
-          onChange={(e) => {
-            void saveAiConfig({
-              ...aiConfig,
-              mcpEnabled: e.target.checked,
-            }).then(() =>
-              // The server starts/stops on save; give it a beat before polling.
-              setTimeout(refresh, 400),
-            );
-          }}
-          className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
-        />
-        <span className="flex flex-col gap-0.5">
-          <span className="text-body text-foreground">
-            Let AI agents use Alchemy (MCP)
-          </span>
-          <span className="text-micro text-subtle-foreground">
-            Agents can create notebooks, add sources, search, and write notes —
-            changes appear live in the app. Local-only: the server listens on
-            127.0.0.1 and nothing leaves this Mac.
-          </span>
-        </span>
-      </label>
+      <SettingRow
+        label="Let AI agents use Alchemy (MCP)"
+        hint="Agents can create notebooks, add sources, search, and write notes — changes appear live in the app. Local-only: the server listens on 127.0.0.1 and nothing leaves this Mac."
+        checked={aiConfig.mcpEnabled}
+        onChange={(v) => {
+          void saveAiConfig({ ...aiConfig, mcpEnabled: v }).then(() =>
+            // The server starts/stops on save; give it a beat before polling.
+            setTimeout(refresh, 400),
+          );
+        }}
+      />
 
       <div className="flex items-center gap-2 text-caption">
         <span

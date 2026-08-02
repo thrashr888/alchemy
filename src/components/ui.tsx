@@ -105,6 +105,48 @@ export function Spinner({ className }: { className?: string }) {
   return <Loader2 className={cn("animate-spin", className)} />;
 }
 
+/** macOS-style toggle switch for settings rows: a pill track with a sliding
+ *  thumb instead of a web checkbox. The real input stays underneath for
+ *  keyboard focus and screen readers. */
+export function Switch({
+  checked,
+  onChange,
+  className,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  className?: string;
+}) {
+  return (
+    <span className={cn("relative inline-flex shrink-0", className)}>
+      <input
+        type="checkbox"
+        role="switch"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="peer absolute inset-0 cursor-pointer rounded-full opacity-0"
+      />
+      <span
+        aria-hidden
+        className={cn(
+          "pointer-events-none flex h-[22px] w-9 items-center rounded-full p-0.5",
+          "border border-border-strong transition-colors duration-150",
+          "peer-focus-visible:ring-2 peer-focus-visible:ring-ring/60",
+          checked ? "border-transparent bg-primary" : "bg-surface-2",
+        )}
+      >
+        <span
+          className={cn(
+            "h-[18px] w-[18px] rounded-full bg-white",
+            "shadow-[0_1px_2px_rgba(0,0,0,0.35)] transition-transform duration-150",
+            checked && "translate-x-[14px]",
+          )}
+        />
+      </span>
+    </span>
+  );
+}
+
 /**
  * Full-card primary action for cards that also contain sibling controls.
  * The button is a sibling, not a wrapper, so menus and checkboxes never become
