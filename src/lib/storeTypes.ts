@@ -102,6 +102,10 @@ export interface AppState {
   pendingAsk: string | null;
   toasts: Toast[];
   justCreatedNoteId: string | null;
+  /** Center-column Ledger mode; reader wins below it, chat is the default. */
+  ledgerOpen: boolean;
+  /** Bumped when an agent writes the ledger (mcp://changed scope "ledger"). */
+  ledgerBump: number;
   pendingNewNote: boolean;
   artifactStreamText: string;
   audioProgress: { done: number; total: number } | null;

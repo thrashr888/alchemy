@@ -232,6 +232,10 @@ export const useStore = create<AppState>((set, get) => {
     error: null,
     toasts: [],
     justCreatedNoteId: null,
+    // Center-column Ledger mode (Chat | Reader | Ledger) + a bump counter
+    // the pane watches so agent writes appear live (mcp://changed).
+    ledgerOpen: false,
+    ledgerBump: 0,
     pendingNewNote: false,
     artifactStreamText: "",
     audioProgress: null,
@@ -403,6 +407,8 @@ export const useStore = create<AppState>((set, get) => {
             void api.listSources(current).then((sources) => set({ sources }));
           if (scope === "notes")
             void api.listNotes(current).then((notes) => set({ notes }));
+          if (scope === "ledger")
+            set((state) => ({ ledgerBump: state.ledgerBump + 1 }));
           if (scope === "reports")
             void api
               .listReportSchedules(current)

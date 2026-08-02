@@ -19,6 +19,8 @@ import type {
   MetaAnswer,
   ModelHealth,
   ModelStat,
+  LedgerAnchor,
+  LedgerEntry,
   NightShiftStatus,
   Note,
   NoteKind,
@@ -345,6 +347,32 @@ export const api = {
   saveTemplate: (id: string | null, name: string, description: string, prompt: string) =>
     run(cmd<Template>("save_template", { id, name, description, prompt })),
   deleteTemplate: (id: string) => run(cmd<void>("delete_template", { id })),
+
+  // The Ledger
+  listLedger: (notebookId: string) =>
+    run(query<LedgerEntry[]>("list_ledger", { notebookId })),
+  addLedgerEntry: (
+    notebookId: string,
+    kind: string,
+    text: string,
+    why?: string,
+    anchors?: LedgerAnchor[],
+  ) =>
+    run(
+      cmd<LedgerEntry>("add_ledger_entry", {
+        notebookId,
+        kind,
+        text,
+        why,
+        anchors,
+      }),
+    ),
+  updateLedgerEntry: (
+    id: string,
+    patch: { text?: string; why?: string; status?: string },
+  ) => run(cmd<LedgerEntry>("update_ledger_entry", { id, ...patch })),
+  deleteLedgerEntry: (id: string) =>
+    run(cmd<void>("delete_ledger_entry", { id })),
 
   // Night Shift (the Home Staff section)
   listSourceEvents: (hours = 24) =>

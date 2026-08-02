@@ -120,6 +120,42 @@ pub struct ModelStat {
 
 /// A periodic report definition. On its interval, the app refreshes the
 /// notebook's URL sources, then generates a timestamped note.
+/// One anchor pinning a ledger entry to verbatim source text. The quote is
+/// the anchor — it survives re-chunking and drives find-in-source
+/// highlighting, the same contract citations already use.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerAnchor {
+    pub source_id: String,
+    #[serde(default)]
+    pub quote: String,
+}
+
+/// One typed ledger row (RFC-v12-steward pillar 2): memory the machine can
+/// act on. Kinds and their lifecycles:
+///   assertion: asserted → corroborated | contradicted | stale
+///   fact:      current → superseded
+///   decision:  decided → superseded
+///   question:  open → answered
+///   log:       logged (terminal — a log line is what happened)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerEntry {
+    pub id: String,
+    pub notebook_id: String,
+    /// "assertion" | "fact" | "decision" | "question" | "log"
+    pub kind: String,
+    pub text: String,
+    /// The because: rationale for decisions, context for others. Optional.
+    #[serde(default)]
+    pub why: String,
+    pub status: String,
+    #[serde(default)]
+    pub anchors: Vec<LedgerAnchor>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 /// One observed source change (docs/RFC-night-shift.md §"Watchers"): change
 /// becomes a first-class event instead of a silent overwrite. Written by the
 /// resync/refresh paths; read by the Brief's collector and agents. The

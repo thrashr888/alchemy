@@ -53,6 +53,7 @@ import {
   ChevronsDownUp,
   ChevronsUpDown,
   ListOrdered,
+  Diamond,
 } from "lucide-react";
 
 /**
@@ -418,9 +419,11 @@ function useElementWidth(ref: React.RefObject<HTMLElement | null>): number {
  *  document has been opened, so fresh notebooks keep the plain toolbar. */
 export function CenterModeTabs() {
   const hasDocs = useStore((s) => s.reader.history.length > 0);
-  const active = useStore((s) => (s.reader.open ? "reader" : "chat"));
+  const active = useStore((s) =>
+    s.ledgerOpen ? "ledger" : s.reader.open ? "reader" : "chat",
+  );
   const tab = (
-    id: "chat" | "reader",
+    id: "chat" | "reader" | "ledger",
     icon: React.ReactNode,
     label: string,
     onClick: () => void,
@@ -447,15 +450,23 @@ export function CenterModeTabs() {
   const s = useStore.getState();
   return (
     <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5">
-      {tab("chat", <MessageSquare className="h-3.5 w-3.5" />, "Chat", () =>
-        s.closeReader(),
-      )}
+      {tab("chat", <MessageSquare className="h-3.5 w-3.5" />, "Chat", () => {
+        useStore.setState({ ledgerOpen: false });
+        s.closeReader();
+      })}
       {tab(
         "reader",
         <BookOpen className="h-3.5 w-3.5" />,
         "Reader",
-        () => useStore.setState((st) => ({ reader: { ...st.reader, open: true } })),
+        () =>
+          useStore.setState((st) => ({
+            ledgerOpen: false,
+            reader: { ...st.reader, open: true },
+          })),
         !hasDocs,
+      )}
+      {tab("ledger", <Diamond className="h-3.5 w-3.5" />, "Ledger", () =>
+        useStore.setState({ ledgerOpen: true }),
       )}
     </div>
   );

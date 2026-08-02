@@ -258,6 +258,27 @@ export interface ReportSchedule {
   createdAt: number;
 }
 
+/** One anchor pinning a ledger entry to verbatim source text. */
+export interface LedgerAnchor {
+  sourceId: string;
+  quote: string;
+}
+
+/** One typed ledger row (the Steward's memory): kind-specific lifecycles —
+ *  assertion asserted→corroborated|contradicted|stale, fact current→
+ *  superseded, decision decided→superseded, question open→answered, log. */
+export interface LedgerEntry {
+  id: string;
+  notebookId: string;
+  kind: "assertion" | "fact" | "decision" | "question" | "log";
+  text: string;
+  why: string;
+  status: string;
+  anchors: LedgerAnchor[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 /** One observed source change (watchers, RFC-night-shift): written by the
  *  refresh paths, read by the Brief, the Staff section, and agents. */
 export interface SourceEvent {
