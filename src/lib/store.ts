@@ -1077,14 +1077,20 @@ export const useStore = create<AppState>((set, get) => {
       const current = history[index];
       // Re-opening the current doc just updates the highlight in place —
       // clicking three citations into one source is one history entry.
+      // Opening a document is an explicit trip to the Reader, so it always
+      // leaves Ledger mode — the ledger otherwise wins the center column
+      // and the reader opens invisibly underneath it.
       if (current && current.type === doc.type && current.id === doc.id) {
         const next = [...history];
         next[index] = doc;
-        set({ reader: { open: true, history: next, index } });
+        set({ ledgerOpen: false, reader: { open: true, history: next, index } });
         return;
       }
       const next = [...history.slice(0, index + 1), doc];
-      set({ reader: { open: true, history: next, index: next.length - 1 } });
+      set({
+        ledgerOpen: false,
+        reader: { open: true, history: next, index: next.length - 1 },
+      });
     },
 
     closeReader: () =>
