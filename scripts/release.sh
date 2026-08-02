@@ -64,6 +64,11 @@ echo "==> Quality gate"
 # Releases run from an isolated clone (no node_modules yet); without this,
 # `pnpm exec tsc` silently falls through to whatever global tsc is on PATH.
 pnpm install --frozen-lockfile --ignore-scripts
+# The natives must exist before ANY cargo step: tauri's build script
+# resolves libs/libpdfium.dylib and binaries/alchemy-fm as resources, so
+# even the clippy gate needs them in a fresh clone. Both are idempotent.
+scripts/fetch-pdfium.sh
+scripts/build-fm-sidecar.sh
 pnpm exec tsc --noEmit
 (
   cd src-tauri
