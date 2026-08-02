@@ -3,7 +3,7 @@ import { useStore } from "@/lib/store";
 import type { Note } from "@/lib/types";
 import { cn, noteUnread, relativeTime } from "@/lib/utils";
 import { Button } from "./ui";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, PanelRight } from "lucide-react";
 import { Markdown } from "./Markdown";
 
 /** One quiet line describing activity since the previous home visit. */
@@ -163,13 +163,14 @@ export function ReportsFeed({
               aria-label="Collapse the reports feed"
               className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
             >
-              <ChevronUp className="h-4 w-4" />
+              <PanelRight className="h-4 w-4" />
             </button>
           )}
         </div>
       </div>
       <div ref={scrollRef} onScroll={syncCurrent} className="min-h-0 flex-1 overflow-y-auto">
-        {unread.length === 0 && (
+        {/* Once older reports are loaded, the space belongs to them. */}
+        {unread.length === 0 && readShown === 0 && (
           <div className="px-6 py-6 text-center text-caption text-subtle-foreground">
             You’re all caught up.
           </div>

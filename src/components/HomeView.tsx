@@ -14,7 +14,6 @@ import {
 import { AlchemyHero } from "./AlchemyHero";
 import { currentEpigraph } from "@/lib/epigraph";
 import { DitherBackground } from "./DitherBackground";
-import { intervalLabel } from "./Reports";
 import { useHomeActivity } from "./useHomeActivity";
 import { AwayDigest, ReportsFeed } from "./HomeReportsFeed";
 import {
@@ -26,10 +25,8 @@ import {
 import type { Note } from "@/lib/types";
 import {
   BookOpen,
-  Clock,
-  ChevronDown,
+  PanelRight,
   Plus,
-  Power,
   Search,
   Settings,
   Trash2,
@@ -282,17 +279,11 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               />
             </aside>
           ) : (
-            <div className="mx-2 mt-1 hidden lg:block">
-              <div className="side-card flex w-12 flex-col items-center py-2">
-                <SidebarRail
-                  icon="staff"
-                  title="Show Staff"
-                  onClick={toggleStaff}
-                />
-              </div>
+            <div className="side-card absolute left-4 top-1 z-20 hidden w-12 flex-col items-center py-2 lg:flex">
+              <SidebarRail icon="staff" title="Show Staff" onClick={toggleStaff} />
             </div>
           )}
-          <div className="relative min-w-0 flex-1 overflow-y-auto">
+          <div className="relative min-w-0 flex-[2] overflow-y-auto">
             {/* The dither shader from the hero, as a banner behind the heading —
             it fades into the background before the notebook grid starts. */}
             {!glassOn && (
@@ -573,89 +564,28 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 </div>
               )}
 
-              {/* Scheduled reports across all notebooks — the app's ongoing activity. */}
-              {allReports.length > 0 && (
-                <div className="mt-10">
-                  <div className="mb-2 text-micro font-medium uppercase tracking-wide text-subtle-foreground">
-                    Scheduled reports
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    {[...allReports]
-                      .sort((a, b) =>
-                        a.enabled !== b.enabled
-                          ? a.enabled
-                            ? -1
-                            : 1
-                          : b.lastRunAt - a.lastRunAt,
-                      )
-                      .map((r) => (
-                        <button
-                          type="button"
-                          key={r.id}
-                          onClick={() => open(r.notebookId)}
-                          title={`Open "${notebookTitle.get(r.notebookId) ?? "notebook"}"`}
-                          className="flex w-full cursor-pointer items-center gap-2.5 rounded-md border border-border bg-surface px-3 py-2 text-left transition-colors hover:border-border-strong hover:bg-surface-2"
-                        >
-                          <Power
-                            className={cn(
-                              "h-3.5 w-3.5 shrink-0",
-                              r.enabled
-                                ? "text-success"
-                                : "text-subtle-foreground",
-                            )}
-                          />
-                          <span className="truncate text-body text-foreground">
-                            {r.name}
-                          </span>
-                          <Badge className="shrink-0 gap-1">
-                            <BookOpen className="h-2.5 w-2.5" />
-                            <span className="max-w-[160px] truncate">
-                              {notebookTitle.get(r.notebookId) ??
-                                "Unknown notebook"}
-                            </span>
-                          </Badge>
-                          <span className="ml-auto flex shrink-0 items-center gap-1 text-micro text-subtle-foreground">
-                            <Clock className="h-2.5 w-2.5" />
-                            {intervalLabel(r.intervalSecs)}
-                            {r.lastRunAt > 0 ? (
-                              <span>· last {relativeTime(r.lastRunAt)}</span>
-                            ) : (
-                              <span>· never run</span>
-                            )}
-                            {!r.enabled && <span>· paused</span>}
-                          </span>
-                        </button>
-                      ))}
-                  </div>
-                </div>
-              )}
             </div>
           </div>
 
           {/* Right column: the Brief card above the reports feed — the
             morning-read surface, arrival point first. */}
-          <div
-            className={cn(
-              "mx-2 mb-2 mt-1 hidden min-w-0 flex-col gap-2 lg:flex",
-              briefOpen || reportsOpen ? "flex-1" : "w-12 shrink-0",
-            )}
-          >
-            {!briefOpen && !reportsOpen ? (
-              <div className="side-card flex w-12 flex-col items-center gap-1 py-2">
-                <SidebarRail
-                  icon="brief"
-                  title="Show the brief"
-                  dot={briefUnread}
-                  onClick={toggleBrief}
-                />
-                <SidebarRail
-                  icon="reports"
-                  title="Show latest reports"
-                  dot={totalUnread > 0}
-                  onClick={toggleReports}
-                />
-              </div>
-            ) : (
+          {!briefOpen && !reportsOpen ? (
+            <div className="side-card absolute right-4 top-1 z-20 hidden w-12 flex-col items-center gap-1 py-2 lg:flex">
+              <SidebarRail
+                icon="brief"
+                title="Show the brief"
+                dot={briefUnread}
+                onClick={toggleBrief}
+              />
+              <SidebarRail
+                icon="reports"
+                title="Show latest reports"
+                dot={totalUnread > 0}
+                onClick={toggleReports}
+              />
+            </div>
+          ) : (
+            <div className="mx-2 mb-2 mt-1 hidden min-w-0 flex-[3] flex-col gap-2 lg:flex">
               <>
                 <BriefSidebar
                   open={briefOpen}
@@ -728,14 +658,14 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                         aria-expanded={false}
                         className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
                       >
-                        <ChevronDown className="h-4 w-4" />
+                        <PanelRight className="h-4 w-4" />
                       </button>
                     </div>
                   )}
                 </aside>
               </>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       )}
 

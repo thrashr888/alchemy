@@ -13,12 +13,11 @@ import { Spinner } from "./ui";
 import { cn, relativeTime } from "@/lib/utils";
 import { intervalLabel } from "./Reports";
 import {
-  ChevronDown,
-  ChevronUp,
   Clock,
   Moon,
   Newspaper,
   PanelLeft,
+  PanelRight,
   Pause,
   Play,
   Power,
@@ -109,11 +108,7 @@ export function BriefSidebar({
             aria-expanded={open}
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
           >
-            {open ? (
-              <ChevronUp className="h-4 w-4" />
-            ) : (
-              <ChevronDown className="h-4 w-4" />
-            )}
+            <PanelRight className="h-4 w-4" />
           </button>
         </div>
       </div>
