@@ -225,13 +225,14 @@ export function Switch({
         onChange={(e) => onChange(e.target.checked)}
         className="peer absolute inset-0 cursor-pointer rounded-full opacity-0"
       />
-      {/* Exact macOS geometry: 40×24 track, 20px thumb, an even 2px inset
-          on every side, 16px travel. Borderless track (a border eats inner
-          height and floats the thumb), soft drop shadow on the thumb only. */}
+      {/* macOS geometry: a squat 2:1 pill (36×18) that minimizes vertical
+          weight, and a capsule knob — a roundrect wider than tall, not a
+          circle. 2px inset, 12px travel. Borderless track; hairline edge
+          and a whisper of a drop on the knob, nothing heavier. */}
       <span
         aria-hidden
         className={cn(
-          "pointer-events-none flex h-6 w-10 shrink-0 items-center rounded-full p-[2px]",
+          "pointer-events-none flex h-[18px] w-9 shrink-0 items-center rounded-full p-[2px]",
           "transition-colors duration-200 ease-out",
           "peer-focus-visible:ring-2 peer-focus-visible:ring-ring/60",
           checked ? "bg-primary" : "bg-muted-foreground/35",
@@ -239,13 +240,10 @@ export function Switch({
       >
         <span
           className={cn(
-            "h-5 w-5 rounded-full bg-white",
-            // macOS knob paint: a hairline edge and a whisper of a drop —
-            // anything heavier eats the 2px track rim and the knob reads as
-            // a blob bulging out of the pill.
+            "h-3.5 w-5 rounded-full bg-white",
             "shadow-[0_0_0_0.5px_rgba(0,0,0,0.05),0_1px_1px_rgba(0,0,0,0.16)]",
             "transition-transform duration-200 ease-out",
-            checked && "translate-x-4",
+            checked && "translate-x-3",
           )}
         />
       </span>

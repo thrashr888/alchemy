@@ -412,7 +412,7 @@ function GeneralTab() {
       <PrefToggle
         storageKey="playSounds"
         label="Play sounds"
-        hint="Soft event cues: work finishing, new arrivals while the app is in the background, and errors. Never clicks or hovers."
+        hint="Soft cues for finished work, new arrivals, and errors."
         onEnable={playDone}
       />
       <BackgroundToggle />
@@ -428,9 +428,8 @@ function SourcesTab() {
       <div className="flex flex-col gap-1.5">
         <div className="text-body">Mac apps</div>
         <p className="text-micro leading-relaxed text-subtle-foreground">
-          Calendar, Reminders, and Apple Notes can be added as auto-syncing
-          sources. Connecting here triggers the macOS permission prompts once,
-          so adding them to a notebook later just works.
+          Connect once to grant macOS permissions; any notebook can then add
+          Calendar, Reminders, and Apple Notes as auto-syncing sources.
         </p>
         <MacConnect showInstallHint />
       </div>
@@ -475,8 +474,7 @@ function WebClipperToggle() {
             >
               Alchemy Web Clipper
             </button>{" "}
-            captures the page you're viewing — including private and
-            login-walled pages the app can't fetch itself — and hands it to
+            sends the page you're viewing — including login-walled pages — to
             Alchemy over a local endpoint.
           </>
         }
@@ -573,9 +571,8 @@ function NotionTokenField() {
         >
           notion.so/my-integrations
         </button>
-        , then share pages with it in Notion (••• → Connections). Pasting a page
-        URL here after that imports the page and its children as a living source
-        that re-syncs on the cadence above. Stored locally; sent only to Notion.
+        , share pages with it (••• → Connections), then paste a page URL into
+        any notebook. The token stays on this Mac.
       </span>
     </div>
   );
@@ -589,9 +586,8 @@ function StudioTab() {
       <div className="flex flex-col gap-1.5">
         <div className="text-body">Studio templates</div>
         <p className="text-micro leading-relaxed text-subtle-foreground">
-          Custom generators live in ~/Documents/Alchemy/templates — one .md file
-          per generator. Deleting a file removes its tile for good; this puts
-          the default pack back (without touching files you've edited).
+          One .md file per generator in ~/Documents/Alchemy/templates. This
+          restores the default pack without touching files you've edited.
         </p>
         <div>
           <Button
@@ -639,7 +635,7 @@ function CuratorToggle() {
   return (
     <SettingRow
       label="Consolidate auto notes weekly"
-      hint="Once a week, while you're away, the model merges chat-created evidence notes that state the same claim. The merged-away note is archived, never deleted, and each notebook's Curator report lists what happened. Uses your chat model."
+      hint="Weekly, while you're away, merges chat-created notes that state the same claim. Merged notes are archived, and each notebook's Curator report lists what happened."
       checked={aiConfig.curatorConsolidate}
       onChange={(v) =>
         void saveAiConfig({ ...aiConfig, curatorConsolidate: v })
@@ -679,9 +675,8 @@ function GitSyncSelect() {
         </select>
       </label>
       <span className="text-micro leading-relaxed text-subtle-foreground">
-        Remote repos re-fetch when their branch moves, using your own git
-        credentials — Alchemy never stores tokens. Manual Refresh always syncs,
-        even when this is off.
+        Re-fetches when the branch moves, with your own git credentials —
+        Alchemy stores no tokens.
       </span>
     </div>
   );
@@ -698,7 +693,7 @@ function NotificationsToggle() {
   return (
     <SettingRow
       label="Show notifications"
-      hint="Desktop notification when a document, rebuild, or report finishes — including reports that run with no window open."
+      hint="When imports, rebuilds, and reports finish — even with no window open."
       checked={aiConfig.showNotifications}
       onChange={(v) => {
         localStorage.setItem("showNotifications", String(v));
@@ -716,7 +711,7 @@ function BackgroundToggle() {
   return (
     <SettingRow
       label="Night Shift"
-      hint="Scheduled reports and automatic source syncing, even with the window closed. Off means Alchemy works only when you ask — Run Now and manual Refresh still work."
+      hint="Runs scheduled reports and source syncing with the window closed. Off, Alchemy works only when you ask."
       checked={aiConfig.backgroundEnabled}
       onChange={(v) => void saveAiConfig({ ...aiConfig, backgroundEnabled: v })}
     />
@@ -730,7 +725,7 @@ function TrayToggle() {
   return (
     <SettingRow
       label="Show menu bar icon"
-      hint="Ask Alchemy, add the clipboard as a source, and jump to recent notebooks from the menu bar. With the icon on, closing the window keeps Alchemy running there; off, closing the window quits. ⌥Space summons Alchemy either way."
+      hint="Closing the window keeps Alchemy running in the menu bar; off, it quits."
       checked={aiConfig.trayEnabled}
       onChange={(v) => void saveAiConfig({ ...aiConfig, trayEnabled: v })}
     />
@@ -793,7 +788,7 @@ function AgentsTab() {
     <div className="flex flex-col gap-5">
       <SettingRow
         label="Let AI agents use Alchemy (MCP)"
-        hint="Agents can create notebooks, add sources, search, and write notes — changes appear live in the app. Local-only: the server listens on 127.0.0.1 and nothing leaves this Mac."
+        hint="Agents can create notebooks, add sources, search, and write notes. The server listens on 127.0.0.1 only."
         checked={aiConfig.mcpEnabled}
         onChange={(v) => {
           void saveAiConfig({ ...aiConfig, mcpEnabled: v }).then(() =>
@@ -836,7 +831,7 @@ function AgentsTab() {
 
       <Field
         label="Clients"
-        hint="Connect writes the client's own MCP config and installs the Alchemy skill where supported. The copy button gives the same setup as a command or snippet."
+        hint="Connect writes the client's MCP config and installs the Alchemy skill where supported."
       >
         <div className="flex flex-col divide-y divide-border rounded-md border border-border">
           {sorted.map((c) => (
@@ -950,7 +945,7 @@ function PodcastVoicesSection() {
   return (
     <Field
       label="Podcast voices"
-      hint="Audio Overview speaks with Kokoro-82M, a neural TTS that runs entirely on-device (one-time ~93 MB download). The generator appears in the Studio once the voices are downloaded and verified with a test synthesis."
+      hint="Audio Overview speaks with Kokoro-82M, on-device TTS (~93 MB download). The generator appears once a test synthesis verifies the voices."
     >
       <div className="flex items-center gap-3 rounded-md border border-border bg-surface-2/60 px-3 py-2.5">
         <AudioLines className="h-4 w-4 shrink-0 text-muted-foreground" />
