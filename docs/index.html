@@ -7,7 +7,7 @@
 <meta name="description" content="Alchemy is a local-first research notebook for macOS. Import sources, ask questions with citations, and generate documents or podcasts with subscriptions, gateways, or local models.">
 <meta name="color-scheme" content="dark light">
 <meta name="theme-color" content="#08090a" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#fbfbfc" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta property="og:title" content="Alchemy — a local-first research notebook for macOS">
 <meta property="og:description" content="Your sources, your machine, your models. Grounded chat, git repos as living sources, on-device podcasts, and MCP agent access.">
 <meta property="og:type" content="website">
@@ -29,39 +29,41 @@
     --elevated: #18191c;
     --foreground: #eceef1;
     --muted: #8a8f98;
-    --subtle: #6b7079;
+    --subtle: #7f848d;
     --border: rgba(255, 255, 255, 0.07);
-    --border-strong: rgba(255, 255, 255, 0.13);
+    --border-strong: rgba(255, 255, 255, 0.12);
+    --ring: #5e6ad2;
     --primary: #5e6ad2;
-    --primary-hover: #6975dd;
+    --primary-hover: #6c78e0;
     --primary-foreground: #ffffff;
     --accent-text: #8b95f5;
     --selection: rgba(94, 106, 210, 0.35);
-    --shader-bg: #101114;
+    --shader-bg: #141517;
     --shader-ink: #8b95f5;
-    --shader-label: rgba(13, 14, 16, 0.88);
+    --shader-label: #18191c;
     --btn-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
   }
   @media (prefers-color-scheme: light) {
     :root {
       color-scheme: light;
-      --background: #fbfbfc;
-      --surface: #ffffff;
-      --surface-2: #f1f2f4;
+      --background: #ffffff;
+      --surface: #fbfbfa;
+      --surface-2: #f3f3f1;
       --elevated: #ffffff;
-      --foreground: #16181d;
-      --muted: #5c616b;
-      --subtle: #878c95;
-      --border: rgba(20, 22, 26, 0.09);
-      --border-strong: rgba(20, 22, 26, 0.18);
+      --foreground: #1c1d20;
+      --muted: #686d76;
+      --subtle: #656c75;
+      --border: rgba(0, 0, 0, 0.09);
+      --border-strong: rgba(0, 0, 0, 0.16);
+      --ring: #5e6ad2;
       --primary: #5e6ad2;
-      --primary-hover: #4f5bc6;
+      --primary-hover: #4f5bc4;
       --primary-foreground: #ffffff;
-      --accent-text: #4650b8;
+      --accent-text: #5159c9;
       --selection: rgba(94, 106, 210, 0.22);
-      --shader-bg: #f4f5f7;
-      --shader-ink: #4650b8;
-      --shader-label: rgba(255, 255, 255, 0.88);
+      --shader-bg: #f3f3f1;
+      --shader-ink: #5159c9;
+      --shader-label: #ffffff;
       --btn-shadow: 0 1px 2px rgba(20, 22, 26, 0.12);
     }
   }
@@ -85,7 +87,7 @@
   a { color: inherit; }
   a, button { touch-action: manipulation; }
   a:focus-visible, button:focus-visible {
-    outline: 2px solid var(--primary);
+    outline: 2px solid var(--ring);
     outline-offset: 2px;
     border-radius: 4px;
   }
@@ -295,27 +297,21 @@
     color: var(--muted);
     font-size: 11px;
   }
+  .hero-product figcaption a {
+    color: var(--accent-text);
+    text-underline-offset: 2px;
+  }
 
   /* ---------- feature bento ---------- */
 
   .features {
-    padding-block: 78px 92px;
-    border-top: 1px solid var(--border);
+    padding-block: 80px 96px;
   }
   #features { scroll-margin-top: 24px; }
-  .features-intro {
-    display: grid;
-    grid-template-columns: 180px minmax(0, 620px);
-    gap: 40px;
-    margin-bottom: 36px;
-  }
-  .eyebrow {
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--muted);
-    padding-top: 7px;
+  .features-intro, .etc-head {
+    max-width: 720px;
+    margin: 0 auto 40px;
+    text-align: center;
   }
   .features-intro h2, .etc-head h2 {
     font-size: clamp(25px, 4vw, 36px);
@@ -324,7 +320,7 @@
     text-wrap: balance;
   }
   .features-intro p {
-    margin-top: 14px;
+    margin: 16px auto 0;
     max-width: 58ch;
     font-size: 15px;
     line-height: 1.65;
@@ -334,33 +330,24 @@
   .bento-grid {
     display: grid;
     grid-template-columns: repeat(12, minmax(0, 1fr));
-    gap: 14px;
+    gap: 16px;
   }
   .feature-card {
     display: flex;
     flex-direction: column;
     min-width: 0;
     grid-column: span 6;
-    padding: 11px;
+    padding: 12px;
     overflow: hidden;
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: 10px;
     background: var(--surface);
   }
   .feature-card.wide { grid-column: span 7; }
   .feature-card.narrow { grid-column: span 5; }
   .feature-visual {
-    min-height: 218px;
+    min-height: 216px;
     border-color: var(--border);
-  }
-  .feature-visual::after {
-    content: "";
-    position: absolute;
-    inset: 9px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    pointer-events: none;
-    z-index: 2;
   }
   .visual-pill, .visual-core, .visual-note {
     position: absolute;
@@ -370,7 +357,7 @@
     color: var(--muted);
   }
   .visual-pill {
-    padding: 5px 9px;
+    padding: 4px 8px;
     border-radius: 99px;
     font-size: 11px;
     font-weight: 500;
@@ -386,9 +373,9 @@
     display: grid;
     place-items: center;
     min-width: 76px;
-    min-height: 38px;
-    padding: 7px 12px;
-    border-radius: 9px;
+    min-height: 40px;
+    padding: 8px 12px;
+    border-radius: 6px;
     color: var(--foreground);
     font-size: 11px;
     font-weight: 600;
@@ -400,6 +387,61 @@
     height: 94px;
     border-radius: 50%;
   }
+  .model-preview, .chat-preview {
+    position: absolute;
+    z-index: 3;
+    left: 50%;
+    top: 50%;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--shader-label);
+    transform: translate(-50%, -50%);
+  }
+  .model-preview {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+  }
+  .model-preview span {
+    padding: 4px 8px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.2;
+  }
+  .model-preview .active {
+    border-color: var(--border-strong);
+    background: var(--surface-2);
+    color: var(--foreground);
+  }
+  .chat-preview {
+    display: grid;
+    width: min(58%, 252px);
+    gap: 8px;
+    padding: 8px 12px;
+  }
+  .chat-preview-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: var(--foreground);
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .chat-preview-head span:last-child {
+    color: var(--accent-text);
+    font-weight: 600;
+  }
+  .chat-preview-lines { display: grid; gap: 4px; }
+  .chat-preview-lines i {
+    display: block;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--border-strong);
+  }
+  .chat-preview-lines i:nth-child(2) { width: 86%; }
+  .chat-preview-lines i:nth-child(3) { width: 68%; }
   .visual-note {
     left: 50%;
     bottom: 24px;
@@ -408,9 +450,9 @@
     font-size: 11px;
     transform: translateX(-50%);
   }
-  .feature-copy { padding: 21px 17px 19px; }
+  .feature-copy { padding: 20px 16px; }
   .feature-kicker {
-    margin-bottom: 10px;
+    margin-bottom: 8px;
     color: var(--subtle);
     font-size: 11px;
     font-weight: 500;
@@ -419,8 +461,8 @@
     text-transform: uppercase;
   }
   .feature-card h3 {
-    margin-bottom: 10px;
-    font-size: 21px;
+    margin-bottom: 8px;
+    font-size: 20px;
     font-weight: 600;
     line-height: 1.22;
     text-wrap: balance;
@@ -436,7 +478,7 @@
   .card-meta {
     display: flex;
     flex-wrap: wrap;
-    gap: 7px;
+    gap: 8px;
     margin-top: 16px;
   }
   .card-meta span {
@@ -450,27 +492,20 @@
   /* ---------- also in the box ---------- */
 
   .etc {
-    padding-block: 78px;
-    border-top: 1px solid var(--border);
-  }
-  .etc-head {
-    display: grid;
-    grid-template-columns: 180px minmax(0, 620px);
-    gap: 40px;
-    margin-bottom: 36px;
+    padding-block: 80px;
   }
   .utility-grid {
     display: grid;
     grid-template-columns: repeat(12, minmax(0, 1fr));
-    grid-auto-rows: minmax(178px, auto);
-    gap: 14px;
+    grid-auto-rows: minmax(176px, auto);
+    gap: 16px;
   }
   .utility-card {
     position: relative;
     min-width: 0;
     overflow: hidden;
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: 10px;
     background: var(--surface);
   }
   .utility-card.large {
@@ -478,32 +513,23 @@
     grid-column: span 7;
     grid-row: span 2;
     flex-direction: column;
-    padding: 11px;
+    padding: 12px;
   }
   .utility-card.compact {
     display: flex;
     grid-column: span 5;
     flex-direction: column;
     justify-content: space-between;
-    min-height: 178px;
-    padding: 19px;
+    min-height: 176px;
+    padding: 20px;
   }
   .utility-visual {
-    min-height: 195px;
+    min-height: 192px;
     border-color: var(--border);
   }
-  .utility-visual::after {
-    content: "";
-    position: absolute;
-    inset: 9px;
-    z-index: 2;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    pointer-events: none;
-  }
-  .utility-copy { padding: 21px 17px 18px; }
+  .utility-copy { padding: 20px 16px; }
   .utility-kicker {
-    margin-bottom: 9px;
+    margin-bottom: 8px;
     color: var(--subtle);
     font-size: 11px;
     font-weight: 500;
@@ -513,7 +539,7 @@
   }
   .utility-card h3 {
     margin-bottom: 8px;
-    font-size: 19px;
+    font-size: 20px;
     font-weight: 600;
     line-height: 1.25;
     text-wrap: balance;
@@ -535,7 +561,7 @@
     z-index: 3;
     overflow: hidden;
     border: 1px solid var(--border-strong);
-    border-radius: 11px;
+    border-radius: 10px;
     background: var(--shader-label);
   }
   .native-titlebar {
@@ -543,7 +569,7 @@
     align-items: center;
     justify-content: space-between;
     min-height: 34px;
-    padding-inline: 11px;
+    padding-inline: 12px;
     border-bottom: 1px solid var(--border);
     color: var(--subtle);
     font-size: 11px;
@@ -552,11 +578,11 @@
   .native-body {
     display: grid;
     grid-template-columns: 1fr auto;
-    gap: 14px;
+    gap: 16px;
     align-items: center;
-    padding: 17px;
+    padding: 16px;
   }
-  .text-scale { display: grid; gap: 9px; }
+  .text-scale { display: grid; gap: 8px; }
   .text-scale-label { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; }
   .scale-track {
     position: relative;
@@ -592,8 +618,8 @@
   .command-demo {
     display: flex;
     align-items: center;
-    gap: 9px;
-    padding: 9px 10px;
+    gap: 8px;
+    padding: 8px 12px;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--surface-2);
@@ -609,8 +635,8 @@
   }
   .reader-demo {
     display: grid;
-    gap: 7px;
-    padding: 9px 10px;
+    gap: 8px;
+    padding: 8px 12px;
     border-left: 1px solid var(--border-strong);
     color: var(--subtle);
     font-size: 11px;
@@ -647,14 +673,12 @@
   }
   .theme-demo {
     display: grid;
-    gap: 11px;
+    gap: 12px;
     border: 0;
   }
   .theme-demo-head {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 10px;
   }
   .theme-current {
     min-width: 0;
@@ -665,30 +689,24 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .theme-system {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    height: 28px;
-    padding-inline: 9px;
-    border: 1px solid var(--border-strong);
-    border-radius: 6px;
-    background: var(--surface-2);
-    color: var(--muted);
-    font: inherit;
-    font-size: 11px;
-    cursor: pointer;
-  }
-  .theme-system:hover,
-  .theme-system[aria-pressed="true"] { color: var(--foreground); }
-  .theme-system[aria-pressed="true"] { border-color: var(--primary); }
   .theme-swatches {
     display: grid;
     grid-template-columns: repeat(8, 28px);
-    gap: 7px;
+    gap: 8px;
+  }
+  .theme-choice {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
   }
   .theme-swatch {
     position: relative;
+    display: grid;
+    place-items: center;
     width: 28px;
     height: 28px;
     padding: 0;
@@ -709,9 +727,22 @@
     background: var(--swatch-primary);
   }
   .theme-swatch:hover { border-color: var(--foreground); }
-  .theme-swatch[aria-pressed="true"] {
-    outline: 2px solid var(--primary);
+  .theme-choice:focus-visible + .theme-swatch {
+    outline: 2px solid var(--ring);
     outline-offset: 2px;
+  }
+  .theme-choice:checked + .theme-swatch {
+    box-shadow: inset 0 0 0 2px var(--swatch-foreground);
+  }
+  .theme-swatch--system {
+    background: var(--surface-2);
+    color: var(--foreground);
+    --swatch-foreground: var(--foreground);
+  }
+  .theme-swatch--system::after { display: none; }
+  .theme-swatch-symbol {
+    font-size: 14px;
+    line-height: 1;
   }
 
   /* ---------- closing ---------- */
@@ -719,7 +750,6 @@
   .get {
     text-align: center;
     padding-block: 92px;
-    border-top: 1px solid var(--border);
   }
   .get .sigil { margin-bottom: 26px; }
   .get h2 {
@@ -738,9 +768,6 @@
 
   /* ---------- footer ---------- */
 
-  .site-foot {
-    border-top: 1px solid var(--border);
-  }
   .site-foot .wrap {
     display: flex;
     justify-content: space-between;
@@ -763,14 +790,14 @@
 
   @media (prefers-reduced-motion: no-preference) {
     .hero-copy > *, .hero-product {
-      animation: rise 0.4s cubic-bezier(0.2, 0.6, 0.2, 1) both;
+      animation: rise 0.2s ease-out both;
     }
-    .hero-copy > *:nth-child(2) { animation-delay: 0.04s; }
-    .hero-copy > *:nth-child(3) { animation-delay: 0.08s; }
-    .hero-copy > *:nth-child(4) { animation-delay: 0.12s; }
-    .hero-copy > *:nth-child(5) { animation-delay: 0.16s; }
-    .hero-copy > *:nth-child(6) { animation-delay: 0.2s; }
-    .hero-product { animation-delay: 0.2s; }
+    .hero-copy > *:nth-child(2) { animation-delay: 0.03s; }
+    .hero-copy > *:nth-child(3) { animation-delay: 0.06s; }
+    .hero-copy > *:nth-child(4) { animation-delay: 0.09s; }
+    .hero-copy > *:nth-child(5) { animation-delay: 0.12s; }
+    .hero-copy > *:nth-child(6) { animation-delay: 0.12s; }
+    .hero-product { animation-delay: 0.12s; }
     @keyframes rise {
       from { opacity: 0; transform: translateY(6px); }
       to { opacity: 1; transform: none; }
@@ -787,19 +814,22 @@
     .hero-shot-frame { aspect-ratio: 1; padding: 4px; border-radius: 10px; }
     .hero-shot-frame img { height: 100%; border-radius: 6px; object-fit: cover; object-position: center; }
     .features { padding-block: 56px 64px; }
-    .features-intro { grid-template-columns: 1fr; gap: 12px; }
-    .eyebrow { padding-top: 0; }
+    .features-intro, .etc-head { margin-bottom: 28px; }
     .bento-grid { grid-template-columns: 1fr; }
     .feature-card, .feature-card.wide, .feature-card.narrow { grid-column: auto; }
     .feature-visual { min-height: 190px; }
     .feature-copy { padding: 18px 12px 16px; }
-    .etc-head { grid-template-columns: 1fr; gap: 12px; }
     .utility-grid { grid-template-columns: 1fr; grid-auto-rows: auto; }
     .utility-card.large, .utility-card.compact { grid-column: auto; grid-row: auto; }
     .utility-card.compact { min-height: 174px; }
     .utility-visual { min-height: 190px; }
     .native-window { inset: 18px; }
     .get { padding-block: 68px; }
+  }
+
+  @media (max-width: 700px) {
+    .theme-swatches { grid-template-columns: repeat(auto-fit, minmax(28px, 1fr)); }
+    .theme-swatch { width: 100%; height: auto; min-height: 28px; aspect-ratio: 1; }
   }
 
   @media (min-width: 641px) and (max-width: 860px) {
@@ -849,6 +879,23 @@
     "rose-pine-dawn": "#fffaf3", carrera: "#ffffff", italia: "#0b0708",
     panigale: "#ffffff", sepia: "#f8f1e0",
   };
+  const rings = {
+    midnight: "#5e6ad2", light: "#5e6ad2", slate: "#6366f1", dracula: "#bd93f9",
+    monokai: "#a6e22e", "one-dark": "#61afef", nord: "#88c0d0", gruvbox: "#fe8019",
+    github: "#2f81f7", "github-light": "#0969da", solarized: "#268bd2",
+    "solarized-light": "#268bd2", "tokyo-night": "#7aa2f7", matrix: "#00ff41",
+    synthwave: "#ff7edb", claude: "#d97757", openai: "#10a37f", latte: "#8839ef",
+    "rose-pine-dawn": "#d7827e", carrera: "#b30018", italia: "#f5d000",
+    panigale: "#da291c", sepia: "#a0522d",
+  };
+  const personalities = {
+    matrix: { shader: "rain", sigil: 3 },
+    synthwave: { shader: "horizon", sigil: 4 },
+    carrera: { shader: "dial", sigil: 3 },
+    italia: { shader: "slipstream", sigil: 2 },
+    panigale: { shader: "trellis", sigil: 1 },
+    sepia: { shader: "grain", sigil: 0 },
+  };
 
   const themes = Object.fromEntries(rows.map(([
     id, label, dark, background, surface, surface2, elevated, foreground,
@@ -856,9 +903,9 @@
     borderStrong,
   ]) => [id, {
     id, label, dark, background, surface, surface2, elevated, foreground,
-    muted, subtle, primary, primaryHover, primaryForeground: primaryForegrounds[id],
+    muted, subtle, primary, primaryHover, primaryForeground: primaryForegrounds[id], ring: rings[id],
     citation, selection, border,
-    borderStrong,
+    borderStrong, shader: personalities[id]?.shader || "mist", sigil: personalities[id]?.sigil ?? "default",
   }]));
   const root = document.documentElement;
   const systemAppearance = window.matchMedia("(prefers-color-scheme: dark)");
@@ -874,6 +921,12 @@
     return themes[choice] ? choice : "midnight";
   }
 
+  function updateSiteSigils(theme) {
+    document.querySelectorAll("use[data-site-sigil]").forEach((use) => {
+      use.setAttribute("href", `#sigil-${theme.sigil}`);
+    });
+  }
+
   function applyTheme(choice, persist = false) {
     const safeChoice = choice === "system" || themes[choice] ? choice : "system";
     const theme = themes[resolveChoice(safeChoice)];
@@ -887,6 +940,7 @@
       subtle: theme.subtle,
       border: theme.border,
       "border-strong": theme.borderStrong,
+      ring: theme.ring,
       primary: theme.primary,
       "primary-hover": theme.primaryHover,
       "primary-foreground": theme.primaryForeground,
@@ -902,6 +956,8 @@
     Object.entries(vars).forEach(([key, value]) => root.style.setProperty(`--${key}`, value));
     root.dataset.siteTheme = theme.id;
     root.dataset.siteThemeChoice = safeChoice;
+    root.dataset.siteThemeVariant = theme.shader;
+    root.dataset.siteSigil = theme.sigil;
     root.style.colorScheme = theme.dark ? "dark" : "light";
     document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
       meta.setAttribute("content", theme.background);
@@ -910,6 +966,7 @@
       try { localStorage.setItem(storageKey, safeChoice); }
       catch { /* The selected theme still applies for this page view. */ }
     }
+    updateSiteSigils(theme);
     window.dispatchEvent(new CustomEvent("alchemy-theme-change", {
       detail: { choice: safeChoice, theme },
     }));
@@ -918,36 +975,68 @@
   function initPicker() {
     const swatches = document.getElementById("theme-swatches");
     const current = document.getElementById("theme-current");
-    const systemButton = document.getElementById("theme-system");
-    if (!swatches || !current || !systemButton) return;
+    if (!swatches || !current) return;
+
+    function currentLabel(choice, theme, prefix = "Theme") {
+      return choice === "system"
+        ? `${prefix}: System · ${theme.label}`
+        : `${prefix}: ${theme.label}`;
+    }
+
+    function appendChoice(choice, theme) {
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = "alchemy-site-theme";
+      input.id = `theme-choice-${choice}`;
+      input.className = "theme-choice";
+      input.value = choice;
+      input.dataset.themeChoice = choice;
+      input.setAttribute(
+        "aria-label",
+        choice === "system" ? "Use System theme, following your Mac" : `Use ${theme.label} theme`,
+      );
+
+      const label = document.createElement("label");
+      label.className = choice === "system" ? "theme-swatch theme-swatch--system" : "theme-swatch";
+      label.htmlFor = input.id;
+      label.title = choice === "system" ? "System — follows your Mac" : theme.label;
+      if (choice === "system") {
+        label.innerHTML = '<span class="theme-swatch-symbol" aria-hidden="true">◐</span>';
+      } else {
+        label.style.setProperty("--swatch-background", theme.background);
+        label.style.setProperty("--swatch-primary", theme.primary);
+        label.style.setProperty("--swatch-foreground", theme.foreground);
+      }
+
+      input.addEventListener("change", () => {
+        if (input.checked) applyTheme(choice, true);
+      });
+      input.addEventListener("focus", () => {
+        current.textContent = currentLabel(choice, choice === "system" ? themes[resolveChoice(choice)] : theme, "Preview");
+      });
+      input.addEventListener("blur", () => syncPicker());
+      label.addEventListener("pointerenter", () => {
+        current.textContent = currentLabel(choice, choice === "system" ? themes[resolveChoice(choice)] : theme, "Preview");
+      });
+      label.addEventListener("pointerleave", () => syncPicker());
+      swatches.append(input, label);
+    }
 
     Object.values(themes)
       .sort((a, b) => a.label.localeCompare(b.label))
-      .forEach((theme) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "theme-swatch";
-        button.dataset.themeChoice = theme.id;
-        button.title = theme.label;
-        button.setAttribute("aria-label", `Use ${theme.label} theme`);
-        button.style.setProperty("--swatch-background", theme.background);
-        button.style.setProperty("--swatch-primary", theme.primary);
-        button.style.setProperty("--swatch-foreground", theme.foreground);
-        button.addEventListener("click", () => applyTheme(theme.id, true));
-        swatches.appendChild(button);
-      });
+      .forEach((theme) => appendChoice(theme.id, theme));
+    appendChoice("system", themes[resolveChoice("system")]);
 
     function syncPicker(event) {
       const choice = event?.detail?.choice || root.dataset.siteThemeChoice || "system";
       const theme = event?.detail?.theme || themes[resolveChoice(choice)];
-      current.textContent = choice === "system" ? `System · ${theme.label}` : theme.label;
-      systemButton.setAttribute("aria-pressed", String(choice === "system"));
-      swatches.querySelectorAll(".theme-swatch").forEach((button) => {
-        button.setAttribute("aria-pressed", String(button.dataset.themeChoice === choice));
+      current.textContent = currentLabel(choice, theme);
+      swatches.querySelectorAll(".theme-choice").forEach((input) => {
+        input.checked = input.dataset.themeChoice === choice;
       });
+      updateSiteSigils(theme);
     }
 
-    systemButton.addEventListener("click", () => applyTheme("system", true));
     window.addEventListener("alchemy-theme-change", syncPicker);
     syncPicker();
   }
@@ -968,7 +1057,7 @@
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
-    <symbol id="sigil" viewBox="0 0 96 96">
+    <symbol id="sigil-default" viewBox="0 0 96 96">
       <g fill="none" stroke="currentColor" stroke-width="1.25">
         <circle cx="48" cy="48" r="45" opacity="0.85"/>
         <circle cx="48" cy="48" r="40" opacity="0.4"/>
@@ -981,6 +1070,50 @@
         <circle cx="13.4" cy="68" r="1.7"/>
       </g>
     </symbol>
+    <symbol id="sigil-0" viewBox="0 0 100 100">
+      <g fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round">
+        <circle cx="50" cy="50" r="44"/>
+        <rect x="19" y="19" width="62" height="62"/>
+        <path d="M50 12 84 74H16Z"/>
+        <circle cx="50" cy="50" r="15"/>
+      </g>
+      <circle cx="50" cy="50" r="2.2" fill="currentColor"/>
+    </symbol>
+    <symbol id="sigil-1" viewBox="0 0 100 100">
+      <g fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round">
+        <circle cx="50" cy="50" r="44"/>
+        <path d="M50 14 82 68H18Z"/>
+        <path d="M50 86 18 32h64Z"/>
+        <circle cx="50" cy="50" r="10"/>
+      </g>
+    </symbol>
+    <symbol id="sigil-2" viewBox="0 0 100 100">
+      <g fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round">
+        <circle cx="50" cy="50" r="44"/>
+        <path d="M50 10 26.5 82.4 88 37.6H12l61.5 44.8Z"/>
+        <circle cx="50" cy="50" r="9"/>
+      </g>
+    </symbol>
+    <symbol id="sigil-3" viewBox="0 0 100 100">
+      <g fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round">
+        <circle cx="50" cy="50" r="44"/>
+        <circle cx="50" cy="50" r="30"/>
+        <path d="M50 20v60M20 50h60"/>
+        <circle cx="50" cy="20" r="5"/>
+        <circle cx="50" cy="80" r="5"/>
+        <circle cx="20" cy="50" r="5"/>
+        <circle cx="80" cy="50" r="5"/>
+      </g>
+    </symbol>
+    <symbol id="sigil-4" viewBox="0 0 100 100">
+      <g fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round">
+        <circle cx="50" cy="50" r="44"/>
+        <path d="M16 30h68L50 88Z"/>
+        <circle cx="50" cy="44" r="13"/>
+        <circle cx="50" cy="26" r="4"/>
+      </g>
+      <circle cx="50" cy="44" r="2.2" fill="currentColor"/>
+    </symbol>
     <symbol id="github-logo" viewBox="0 0 24 24">
       <path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.084-.729.084-.729 1.205.084 1.84 1.237 1.84 1.237 1.07 1.835 2.809 1.305 3.495.998.108-.776.418-1.305.762-1.605-2.665-.305-5.466-1.334-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23a11.5 11.5 0 0 1 3.003-.404c1.02.005 2.045.138 3.003.404 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.62-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>
     </symbol>
@@ -990,11 +1123,11 @@
 <a class="skip-link" href="#main-content">Skip to content</a>
 
 <header class="site-head wrap">
-  <a class="mark" href="https://github.com/thrashr888/alchemy">
-    <svg width="18" height="18" aria-hidden="true"><use href="#sigil"/></svg>
+  <a class="mark" href="./" aria-label="Alchemy home">
+    <svg width="18" height="18" aria-hidden="true"><use href="#sigil-default" data-site-sigil/></svg>
     Alchemy
   </a>
-  <nav>
+  <nav aria-label="Primary navigation">
     <a href="#features">Features</a>
     <a href="https://github.com/thrashr888/alchemy/releases">Releases</a>
     <a class="github-link" href="https://github.com/thrashr888/alchemy" aria-label="Alchemy on GitHub">
@@ -1007,7 +1140,7 @@
 
   <section class="hero wrap">
     <div class="hero-copy">
-      <svg class="sigil" width="76" height="76" aria-hidden="true"><use href="#sigil"/></svg>
+      <svg class="sigil" width="76" height="76" aria-hidden="true"><use href="#sigil-default" data-site-sigil/></svg>
       <h1>Your sources, your machine, your models.</h1>
       <p class="lede">
         Alchemy is a <strong>local-first research notebook</strong> for macOS.
@@ -1034,17 +1167,14 @@
           decoding="async"
         >
       </div>
-      <figcaption>Actual Alchemy workspace on macOS.</figcaption>
+      <figcaption>Actual Alchemy workspace on macOS. <a href="screenshot-app.png">View full workspace</a></figcaption>
     </figure>
   </section>
 
   <section class="features wrap" id="features" aria-labelledby="features-title">
     <div class="features-intro">
-      <div class="eyebrow">Features</div>
-      <div>
-        <h2 id="features-title">Research on your Mac, from source to finished work.</h2>
-        <p>Import source material and ask questions with citations. Generate a brief, deck, or podcast in the same notebook.</p>
-      </div>
+      <h2 id="features-title">Research on your Mac, from source to finished work.</h2>
+      <p>Import source material and ask questions with citations. Generate a brief, deck, or podcast in the same notebook.</p>
     </div>
 
     <div class="bento-grid">
@@ -1054,7 +1184,7 @@
           <div aria-hidden="true">
             <span class="visual-pill top-left">CLI subscriptions</span>
             <span class="visual-pill top-right">API gateways</span>
-            <span class="visual-core">Model switch</span>
+            <span class="model-preview"><span>Claude</span><span class="active">Local</span><span>Gateway</span></span>
             <span class="visual-pill bottom-left">Ollama</span>
             <span class="visual-pill bottom-right">Apple on-device</span>
           </div>
@@ -1062,7 +1192,7 @@
         <div class="feature-copy">
           <div class="feature-kicker">Models</div>
           <h3>Use existing subscriptions and local models.</h3>
-          <p>Alchemy connects to Claude Code, Codex, Gemini CLI, Copilot, Cursor, and other subscriptions you already use. It also supports 30+ gateways, OpenAI-compatible endpoints, Ollama, LM Studio, and Apple’s on-device model. Switch models mid-thread; Alchemy labels each response with its provider.</p>
+          <p>Bring your Claude Code, Codex, Gemini CLI, Copilot, or Cursor subscription. Route a thread through a gateway, Ollama, LM Studio, or Apple’s on-device model—and see which provider answered.</p>
           <div class="card-meta"><span>Existing sign-ins</span><span>30+ gateway presets</span></div>
         </div>
       </article>
@@ -1081,30 +1211,33 @@
         <div class="feature-copy">
           <div class="feature-kicker">Sources</div>
           <h3>Sources keep their structure and stay current.</h3>
-          <p>Add a Git repository or local checkout without flattening it into uploaded text. Alchemy embeds documentation, keeps code available for exact search, and re-syncs with your existing Git credentials. PDFs, Office files, folders, and cloud drives belong in the same notebook.</p>
+          <p>Add a Git repository or local checkout without turning it into a text upload. Documentation stays navigable, code stays searchable, and Alchemy re-syncs through your Git credentials.</p>
           <div class="card-meta"><span>Uses your Git credentials</span></div>
         </div>
       </article>
 
-      <article class="feature-card narrow">
+      <article class="feature-card wide">
         <div class="feature-visual shader-roundrect">
           <canvas class="shader-canvas" data-shader="retrieval" aria-hidden="true"></canvas>
           <div aria-hidden="true">
             <span class="visual-pill top-left">Vector</span>
             <span class="visual-pill top-right">Exact match</span>
-            <span class="visual-core">Cited answer</span>
-            <span class="visual-note">click → highlighted passage</span>
+            <span class="chat-preview">
+              <span class="chat-preview-head"><span>CHAT</span><span>1&nbsp;&nbsp;4&nbsp;&nbsp;5</span></span>
+              <span class="chat-preview-lines"><i></i><i></i><i></i></span>
+            </span>
+            <span class="visual-note">citation → highlighted passage</span>
           </div>
         </div>
         <div class="feature-copy">
           <div class="feature-kicker">Retrieval</div>
           <h3>Evidence you can open.</h3>
-          <p>Alchemy combines semantic similarity with BM25 exact-match search. Each citation opens the source at the highlighted passage. Deep Research runs additional searches for harder questions, while Ask Everything searches across notebooks.</p>
+          <p>Hybrid semantic and exact search finds the evidence. Each citation opens the source at the matching passage; Deep Research and Ask Everything widen the search only when needed.</p>
           <div class="card-meta"><span>Hybrid search</span><span>Tested from 1M to 10M characters</span></div>
         </div>
       </article>
 
-      <article class="feature-card wide">
+      <article class="feature-card narrow">
         <div class="feature-visual shader-roundrect">
           <canvas class="shader-canvas" data-shader="studio" aria-hidden="true"></canvas>
           <div aria-hidden="true">
@@ -1118,7 +1251,7 @@
         <div class="feature-copy">
           <div class="feature-kicker">Studio</div>
           <h3>Create documents, decks, quizzes, and podcasts.</h3>
-          <p>Create editable documents, 16:9 slide decks, quizzes, mind maps, and tables from the latest notebook sources. Audio Overview writes a two-host script with your chosen chat model and runs Kokoro speech synthesis on your Mac.</p>
+          <p>Turn current notebook sources into editable documents, 16:9 decks, quizzes, mind maps, tables, or a narrated Audio Overview—without exporting your context first.</p>
           <div class="card-meta"><span>Editable output</span><span>Native PDF export</span></div>
         </div>
       </article>
@@ -1137,7 +1270,7 @@
         <div class="feature-copy">
           <div class="feature-kicker">Agents</div>
           <h3>Give agents access to the same notebook.</h3>
-          <p>The localhost MCP server lets Codex, Claude Code, Gemini CLI, and other agents search notebooks, add sources, and write notes. Their changes appear in Alchemy as they work, so you do not need to copy context between apps.</p>
+          <p>The localhost MCP server lets Codex, Claude Code, Gemini CLI, and other agents search, add, and write in the notebook you already use—no copy/paste handoff.</p>
           <div class="card-meta"><span>Localhost only</span></div>
         </div>
       </article>
@@ -1155,7 +1288,7 @@
         <div class="feature-copy">
           <div class="feature-kicker">Privacy</div>
           <h3>Your library stays on your Mac.</h3>
-          <p>Alchemy extracts, chunks, embeds, and stores sources on your Mac. It sends only the chat context to the model provider you select. Choose Ollama or Apple’s on-device model to keep chat offline too.</p>
+          <p>Sources are extracted, embedded, and stored on your Mac. You choose what chat context reaches a provider; Ollama and Apple’s on-device model keep chat offline.</p>
           <div class="card-meta"><span>No account</span><span>Offline with local models</span></div>
         </div>
       </article>
@@ -1164,8 +1297,7 @@
 
   <section class="etc wrap" aria-labelledby="more-title">
     <div class="etc-head">
-      <div class="eyebrow">More</div>
-      <div><h2 id="more-title">Also in the box:</h2></div>
+      <h2 id="more-title">Also in the box:</h2>
     </div>
     <div class="utility-grid">
       <article class="utility-card large">
@@ -1240,8 +1372,7 @@
         <fieldset class="theme-demo">
           <legend class="sr-only">Choose a website color theme</legend>
           <div class="theme-demo-head">
-            <span class="theme-current" id="theme-current" aria-live="polite">System</span>
-            <button class="theme-system" id="theme-system" type="button" aria-pressed="true">System</button>
+            <span class="theme-current" id="theme-current" aria-live="polite">Theme: System</span>
           </div>
           <div class="theme-swatches" id="theme-swatches"></div>
         </fieldset>
@@ -1254,7 +1385,7 @@
   </section>
 
   <section class="get wrap">
-    <svg class="sigil" width="44" height="44" aria-hidden="true"><use href="#sigil"/></svg>
+    <svg class="sigil" width="44" height="44" aria-hidden="true"><use href="#sigil-default" data-site-sigil/></svg>
     <h2>Get Alchemy</h2>
     <p class="sub">
       Free and open source under MPL-2.0. Requires a Mac with Apple
@@ -1273,7 +1404,7 @@
 <footer class="site-foot">
   <div class="wrap">
     <span>&copy; 2026 Paul Thrasher &middot; Alchemy &middot; MPL-2.0 &middot; Built with Tauri, Rust, and LanceDB</span>
-    <nav>
+    <nav aria-label="Footer navigation">
       <a href="https://github.com/thrashr888/alchemy/releases">Releases</a>
       <a class="github-link" href="https://github.com/thrashr888/alchemy" aria-label="Alchemy on GitHub">
         <svg aria-hidden="true"><use href="#github-logo"/></svg>
@@ -1309,6 +1440,7 @@
     uniform vec2 u_resolution;
     uniform float u_time;
     uniform float u_scene;
+    uniform float u_theme;
     uniform vec3 u_background;
     uniform vec3 u_ink;
 
@@ -1508,6 +1640,56 @@
       return f;
     }
 
+    float themeMotif(vec2 p) {
+      if (u_theme < 0.5) return 0.0;
+
+      // Matrix: sparse code-rain columns, quiet enough to remain behind the diagram.
+      if (u_theme < 1.5) {
+        float column = floor((p.x + 1.0) * 26.0);
+        float speed = 0.030 + 0.045 * hash(vec2(column, 7.0));
+        float stream = fract(p.y * 3.2 - u_time * speed);
+        return 0.28 * smoothstep(0.80, 0.96, stream) * smoothstep(1.2, 0.0, abs(p.x));
+      }
+
+      // Synthwave: a spare sun-and-horizon field rather than a generic glow.
+      if (u_theme < 2.5) {
+        float sun = 0.38 * ring(p, vec2(0.0, 0.08), 0.22, 0.008);
+        float horizon = 0.22 * line(p, vec2(-0.9, -0.10), vec2(0.9, -0.10), 0.006);
+        float rows = 0.12 * step(0.78, fract((p.y + 0.42) * 14.0)) * (1.0 - smoothstep(-0.46, -0.12, p.y));
+        return max(max(sun, horizon), rows);
+      }
+
+      // Sepia: static paper grain.
+      if (u_theme < 3.5) {
+        return (0.05 + 0.20 * noise(p * 26.0)) * smoothstep(1.1, 0.25, length(p));
+      }
+
+      // Carrera: a restrained instrument bezel and tick scale.
+      if (u_theme < 4.5) {
+        float radius = length(p);
+        float angle = atan(p.y, p.x);
+        float bezel = 0.36 * ring(p, vec2(0.0), 0.33, 0.006);
+        float ticks = smoothstep(0.92, 0.99, abs(sin(angle * 18.0)));
+        ticks *= smoothstep(0.36, 0.32, radius) * smoothstep(0.28, 0.32, radius);
+        return max(bezel, 0.26 * ticks);
+      }
+
+      // Italia: horizontal slipstream.
+      if (u_theme < 5.5) {
+        float lane = floor((p.y + 0.5) * 35.0);
+        float speed = 0.18 + 0.18 * hash(vec2(lane, 3.0));
+        float streak = smoothstep(0.72, 0.95, noise(vec2(p.x * 3.0 - u_time * speed, lane * 0.37)));
+        return 0.28 * streak * smoothstep(0.72, 0.0, abs(p.y));
+      }
+
+      // Panigale: trellis-frame lattice.
+      float a = abs(fract((p.x + p.y * 0.577) * 7.0) - 0.5);
+      float b = abs(fract((p.x - p.y * 0.577) * 7.0) - 0.5);
+      float c = abs(fract(p.y * 8.0) - 0.5);
+      float lattice = 1.0 - smoothstep(0.025, 0.055, min(a, min(b, c)));
+      return 0.24 * lattice * smoothstep(1.15, 0.10, length(p));
+    }
+
     void main() {
       vec2 p = (gl_FragCoord.xy - 0.5 * u_resolution) / u_resolution.y;
       float field;
@@ -1522,19 +1704,20 @@
       else field = captureScene(p);
 
       float atmosphere = noise(p * 3.1 + vec2(u_time * 0.025, -u_time * 0.018));
-      atmosphere *= smoothstep(1.35, 0.05, length(p)) * 0.16;
-      field = clamp(max(field, atmosphere), 0.0, 1.0);
+      atmosphere *= smoothstep(1.35, 0.05, length(p)) * 0.12;
+      field = clamp(max(max(field, atmosphere), themeMotif(p)), 0.0, 1.0);
 
       float threshold = bayer4(gl_FragCoord.xy) - 0.5;
       float quantized = floor(field * 5.0 + threshold + 0.5) / 5.0;
-      vec3 color = mix(u_background, u_ink, clamp(quantized * 0.58, 0.0, 0.72));
+      vec3 color = mix(u_background, u_ink, clamp(quantized * 0.50, 0.0, 0.64));
       gl_FragColor = vec4(color, 1.0);
     }
   `;
 
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   const colorScheme = window.matchMedia("(prefers-color-scheme: light)");
-  const states = [];
+  const themeVariants = { mist: 0, rain: 1, horizon: 2, grain: 3, dial: 4, slipstream: 5, trellis: 6 };
+  const states = new Map();
 
   function cssHex(name, fallback) {
     const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -1592,6 +1775,7 @@
       resolution: gl.getUniformLocation(program, "u_resolution"),
       time: gl.getUniformLocation(program, "u_time"),
       scene: gl.getUniformLocation(program, "u_scene"),
+      theme: gl.getUniformLocation(program, "u_theme"),
       background: gl.getUniformLocation(program, "u_background"),
       ink: gl.getUniformLocation(program, "u_ink"),
     };
@@ -1606,12 +1790,13 @@
       gl.useProgram(program);
       gl.uniform3fv(uniforms.background, cssHex("--shader-bg", [0.06, 0.067, 0.078]));
       gl.uniform3fv(uniforms.ink, cssHex("--shader-ink", [0.55, 0.58, 0.96]));
+      gl.uniform1f(uniforms.theme, themeVariants[document.documentElement.dataset.siteThemeVariant] ?? 0);
     }
 
-    function resize() {
+    function resize(cssWidth, cssHeight) {
       const scale = Math.min(window.devicePixelRatio || 1, 1.5);
-      const width = Math.max(1, Math.floor(canvas.clientWidth * scale));
-      const height = Math.max(1, Math.floor(canvas.clientHeight * scale));
+      const width = Math.max(1, Math.floor(cssWidth * scale));
+      const height = Math.max(1, Math.floor(cssHeight * scale));
       if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width;
         canvas.height = height;
@@ -1621,7 +1806,6 @@
     }
 
     function draw(now) {
-      resize();
       const time = reducedMotion.matches ? 4.0 : (now - startedAt) / 1000;
       gl.uniform1f(uniforms.time, time);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -1658,7 +1842,10 @@
     }
 
     updateColors();
-    const resizeObserver = new ResizeObserver(() => {
+    resize(canvas.clientWidth, canvas.clientHeight);
+    const resizeObserver = new ResizeObserver((entries) => {
+      const { width, height } = entries[0].contentRect;
+      resize(width, height);
       if (inView) draw(performance.now());
     });
     resizeObserver.observe(canvas);
@@ -1666,20 +1853,25 @@
     return { canvas, start, stop, pause, draw, updateColors, isInView: () => inView };
   }
 
-  document.querySelectorAll("canvas[data-shader]").forEach((canvas) => {
-    const state = initShader(canvas);
-    if (state) states.push(state);
-  });
-
   const intersectionObserver = new IntersectionObserver((entries) => {
     entries.forEach((entry) => {
-      const state = states.find((candidate) => candidate.canvas === entry.target);
-      if (!state) return;
-      if (entry.isIntersecting) state.start();
-      else state.stop();
+      let state = states.get(entry.target);
+      if (entry.isIntersecting) {
+        if (!state) {
+          state = initShader(entry.target);
+          if (!state) {
+            intersectionObserver.unobserve(entry.target);
+            return;
+          }
+          states.set(entry.target, state);
+        }
+        state.start();
+      } else {
+        state?.stop();
+      }
     });
   }, { rootMargin: "120px 0px", threshold: 0.01 });
-  states.forEach((state) => intersectionObserver.observe(state.canvas));
+  document.querySelectorAll("canvas[data-shader]").forEach((canvas) => intersectionObserver.observe(canvas));
 
   document.addEventListener("visibilitychange", () => {
     states.forEach((state) => {
