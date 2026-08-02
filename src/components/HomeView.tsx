@@ -27,7 +27,7 @@ import type { Note } from "@/lib/types";
 import {
   BookOpen,
   Clock,
-  Moon,
+  ChevronDown,
   Plus,
   Power,
   Search,
@@ -39,7 +39,7 @@ import {
   Sparkles,
   FolderInput,
 } from "lucide-react";
-import { HomeBrief, HomeStaff } from "./HomeSections";
+import { BriefSidebar, SidebarRail, StaffSidebar } from "./HomeSections";
 
 // Keep this list in sync with Rust in `src-tauri/src/db.rs` (`NOTEBOOK_PALETTE`)
 // and the `set_notebook_color` validator in `src-tauri/src/commands.rs`.
@@ -72,20 +72,33 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     title: string;
   } | null>(null);
   const [colorPickerFor, setColorPickerFor] = useState<string | null>(null);
-  // The dashboard section switch (RFC-v12-steward UI §2): Notebooks is the
-  // default arrival; Brief and Staff swap the whole body. Registry joins
-  // when its pillar exists. Session state on purpose — every launch lands
-  // on Notebooks.
-  const [section, setSection] = useState<"notebooks" | "brief" | "staff">(
-    "notebooks",
-  );
-  // The reports feed behaves like a sidebar: collapsible, persisted.
+  // The Steward's sidebars (RFC-v12-steward UI §2, as sidebars): Staff on
+  // the left, Brief above Latest Reports on the right. Each collapses on
+  // its own, persisted. Registry joins when its pillar exists.
   const [reportsOpen, setReportsOpen] = useState(
     () => localStorage.getItem("homeReportsOpen") !== "0",
   );
   const toggleReports = () => {
     setReportsOpen((open) => {
       localStorage.setItem("homeReportsOpen", open ? "0" : "1");
+      return !open;
+    });
+  };
+  const [staffOpen, setStaffOpen] = useState(
+    () => localStorage.getItem("homeStaffOpen") !== "0",
+  );
+  const toggleStaff = () => {
+    setStaffOpen((open) => {
+      localStorage.setItem("homeStaffOpen", open ? "0" : "1");
+      return !open;
+    });
+  };
+  const [briefOpen, setBriefOpen] = useState(
+    () => localStorage.getItem("homeBriefOpen") !== "0",
+  );
+  const toggleBrief = () => {
+    setBriefOpen((open) => {
+      localStorage.setItem("homeBriefOpen", open ? "0" : "1");
       return !open;
     });
   };
@@ -183,28 +196,13 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // ⌘1/2/3 switch Home sections — free here; inside a notebook they mean
-  // the Sources/Studio panels (RFC-v12-steward UI §2).
-  useEffect(() => {
-    const sections = {
-      "1": "notebooks",
-      "2": "brief",
-      "3": "staff",
-    } as const;
-    const onKey = (e: KeyboardEvent) => {
-      const target = sections[e.key as keyof typeof sections];
-      if ((e.metaKey || e.ctrlKey) && target && !shortcutBlocked(e)) {
-        e.preventDefault();
-        setSection(target);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  // The Brief tab's unread dot: an unread report note in the Briefs notebook.
+  // Briefs live in their own sidebar card, not the reports feed — the feed
+  // would double-show them one card below.
   const briefNotes = reports.filter(
     (r) => notebookTitle.get(r.notebookId) === "Briefs",
+  );
+  const feedReports = reports.filter(
+    (r) => notebookTitle.get(r.notebookId) !== "Briefs",
   );
   const briefUnread = briefNotes.some((r) =>
     noteUnread(r, noteReads, noteReadsBaseline),
@@ -223,39 +221,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         <span className="text-section font-semibold tracking-tight">
           Alchemy
         </span>
-        {notebooks.length > 0 && (
-          <div className="mx-auto flex items-center gap-0.5 rounded-lg border border-border p-0.5">
-            {(
-              [
-                ["notebooks", <BookOpen key="i" className="h-3.5 w-3.5" />, "Notebooks", false],
-                ["brief", <Newspaper key="i" className="h-3.5 w-3.5" />, "Brief", briefUnread],
-                ["staff", <Moon key="i" className="h-3.5 w-3.5" />, "Staff", false],
-              ] as const
-            ).map(([id, icon, label, dot]) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => setSection(id)}
-                aria-pressed={section === id}
-                className={cn(
-                  "relative flex items-center gap-1.5 rounded-md px-2 py-1 text-caption font-medium transition-colors",
-                  section === id
-                    ? "bg-surface-2 text-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {icon}
-                {label}
-                {dot && (
-                  <span
-                    className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-primary"
-                    aria-label="New brief"
-                  />
-                )}
-              </button>
-            ))}
-          </div>
-        )}
         <div className="ml-auto flex items-center gap-3">
           <DevBadge />
           <Button
@@ -279,26 +244,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         </div>
       </header>
 
-      {section === "brief" ? (
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <HomeBrief
-            briefs={briefNotes}
-            schedules={allReports}
-            onRan={refreshActivity}
-          />
-        </div>
-      ) : section === "staff" ? (
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <HomeStaff
-            schedules={allReports}
-            reports={reports}
-            notebookTitle={notebookTitle}
-            notebookColor={notebookColor}
-            onOpenNote={openNote}
-            onRan={refreshActivity}
-          />
-        </div>
-      ) : notebooks.length === 0 ? (
+      {notebooks.length === 0 ? (
         <div className="flex-1">
           <AlchemyHero
             title="Alchemy"
@@ -320,8 +266,32 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         </div>
       ) : (
         <div className="relative flex min-h-0 flex-1">
-          {/* Left pane: notebooks & activity. Right pane: the reports feed.
-            Two independent scroll regions, same idiom as the notebook view. */}
+          {/* Three regions, same side-card idiom as the notebook view:
+            Staff rail left, notebooks center, Brief + reports column right.
+            Each sidebar collapses on its own. */}
+          {staffOpen ? (
+            <aside className="side-card mx-2 mb-2 mt-1 hidden w-[300px] shrink-0 flex-col lg:flex">
+              <StaffSidebar
+                schedules={allReports}
+                reports={reports}
+                notebookTitle={notebookTitle}
+                notebookColor={notebookColor}
+                onOpenNote={openNote}
+                onRan={refreshActivity}
+                onCollapse={toggleStaff}
+              />
+            </aside>
+          ) : (
+            <div className="mx-2 mt-1 hidden lg:block">
+              <div className="side-card flex w-12 flex-col items-center py-2">
+                <SidebarRail
+                  icon="staff"
+                  title="Show Staff"
+                  onClick={toggleStaff}
+                />
+              </div>
+            </div>
+          )}
           <div className="relative min-w-0 flex-1 overflow-y-auto">
             {/* The dither shader from the hero, as a banner behind the heading —
             it fades into the background before the notebook grid starts. */}
@@ -662,40 +632,56 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             </div>
           </div>
 
-          {/* Reports feed: unread first as a continuously scrolling read —
-            the homepage doubles as the morning-read surface. */}
-          {!reportsOpen && (
-            <div className="side-card absolute right-4 top-1 z-20 hidden w-12 flex-col items-center py-2 lg:flex">
-              <button
-                type="button"
-                onClick={toggleReports}
-                title="Show latest reports"
-                aria-label="Show the reports feed"
-                className="relative rounded-md p-2 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-              >
-                <Newspaper className="h-4 w-4" />
-                {totalUnread > 0 && (
-                  <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-primary" />
-                )}
-              </button>
-            </div>
-          )}
-          <aside
+          {/* Right column: the Brief card above the reports feed — the
+            morning-read surface, arrival point first. */}
+          <div
             className={cn(
-              "side-card mx-2 mb-2 mt-1 min-w-0 flex-1 flex-col",
-              reportsOpen ? "hidden lg:flex" : "hidden",
+              "mx-2 mb-2 mt-1 hidden min-w-0 flex-col gap-2 lg:flex",
+              briefOpen || reportsOpen ? "flex-1" : "w-12 shrink-0",
             )}
           >
-            {reports.length > 0 ? (
-              <ReportsFeed
-                onCollapse={toggleReports}
-                reports={reports}
-                  notebookTitle={notebookTitle}
-                  notebookColor={notebookColor}
-                  fallbackColor={NOTEBOOK_PALETTE[0]}
-                  onOpen={openNote}
-              />
-            ) : activityLoading ? (
+            {!briefOpen && !reportsOpen ? (
+              <div className="side-card flex w-12 flex-col items-center gap-1 py-2">
+                <SidebarRail
+                  icon="brief"
+                  title="Show the brief"
+                  dot={briefUnread}
+                  onClick={toggleBrief}
+                />
+                <SidebarRail
+                  icon="reports"
+                  title="Show latest reports"
+                  dot={totalUnread > 0}
+                  onClick={toggleReports}
+                />
+              </div>
+            ) : (
+              <>
+                <BriefSidebar
+                  open={briefOpen}
+                  onToggle={toggleBrief}
+                  briefs={briefNotes}
+                  schedules={allReports}
+                  unread={briefUnread}
+                  onRan={refreshActivity}
+                />
+                <aside
+                  className={cn(
+                    "side-card flex min-h-0 flex-col",
+                    reportsOpen && "flex-1",
+                  )}
+                >
+                  {reportsOpen ? (
+                    feedReports.length > 0 ? (
+                      <ReportsFeed
+                        onCollapse={toggleReports}
+                        reports={feedReports}
+                        notebookTitle={notebookTitle}
+                        notebookColor={notebookColor}
+                        fallbackColor={NOTEBOOK_PALETTE[0]}
+                        onOpen={openNote}
+                      />
+                    ) : activityLoading ? (
               <div
                 role="status"
                 className="flex flex-1 items-center justify-center p-8 text-caption text-muted-foreground"
@@ -724,8 +710,32 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   )}
                 </EmptyState>
               </div>
+                    )
+                  ) : (
+                    <div className="flex h-12 shrink-0 items-center gap-2 px-6">
+                      <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+                        Latest reports
+                      </span>
+                      {totalUnread > 0 && (
+                        <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-badge font-medium tabular-nums text-citation">
+                          {totalUnread} unread
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={toggleReports}
+                        title="Show latest reports"
+                        aria-expanded={false}
+                        className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+                      >
+                        <ChevronDown className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
+                </aside>
+              </>
             )}
-          </aside>
+          </div>
         </div>
       )}
 
