@@ -181,7 +181,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Schedule a recurring report in a notebook: any generator kind, one of the user's templates (by template:<id> or name), or \"custom\" with a prompt. Interval is hourly, daily, or weekly. Each run refreshes URL sources first, then writes a timestamped note the user sees in Studio → Reports."
+        description = "Schedule a recurring report in a notebook: any generator kind, one of the user's templates (by template:<id> or name), \"custom\" with a prompt, or \"brief\" — the cross-notebook morning brief (reads across ALL notebooks, ranked needs-you → changed → record; schedule it in the \"Briefs\" notebook). Interval is hourly, daily, or weekly. Each run refreshes URL sources first, then writes a timestamped note the user sees in Studio → Reports."
     )]
     async fn schedule_report(
         &self,

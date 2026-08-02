@@ -314,7 +314,10 @@ pub fn run() {
                     api.prevent_exit();
                 }
             }
-            // Dock icon click while the main window is hidden.
+            // Dock icon click while the main window is hidden. (Verified
+            // live: fires on real Dock clicks; the synthetic AppleScript
+            // `reopen` event does NOT reach tao's delegate — don't let a
+            // scripted test convince you this is broken.)
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => integrations::focus_main(app),
             _ => {}

@@ -3946,6 +3946,12 @@ fn parse_tool_action(raw: &str) -> ToolAction {
 /// polite refusal message for the chat transcript.
 pub(crate) fn resolve_report_kind(kind: &str, prompt: &str) -> Result<String, String> {
     let kind = kind.trim();
+    // The cross-notebook brief (docs/RFC-brief.md) — distinct from the
+    // per-notebook "briefing" generator. Reads across every notebook; its
+    // runs land in the notebook the schedule lives in (best: "Briefs").
+    if kind.eq_ignore_ascii_case(brief::BRIEF_KIND) {
+        return Ok(brief::BRIEF_KIND.to_string());
+    }
     if rag::ARTIFACT_KINDS.contains(&kind) {
         return Ok(kind.to_string());
     }
@@ -8190,6 +8196,9 @@ mod tool_tests {
         // The dispatch-time validator: registry kinds pass, unknown kinds get
         // the refusal that names alternatives, custom demands a prompt.
         assert_eq!(resolve_report_kind("briefing", ""), Ok("briefing".into()));
+        // The cross-notebook brief is its own kind, distinct from "briefing".
+        assert_eq!(resolve_report_kind("brief", ""), Ok("brief".into()));
+        assert_eq!(resolve_report_kind("Brief", ""), Ok("brief".into()));
         assert_eq!(
             resolve_report_kind("round_table", ""),
             Ok("round_table".into())
