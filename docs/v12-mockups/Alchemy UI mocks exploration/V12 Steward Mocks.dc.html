@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics><meta name="design_doc_mode" content="canvas"><style>body{margin:0;background:#f0eee9;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,"Segoe UI",sans-serif}a{color:#5159c9;text-decoration:none}a:hover{color:#4f5bc4}summary{list-style:none;cursor:pointer}summary::-webkit-details-marker{display:none}.dv-turn{padding:40px 44px 32px;border-bottom:1px solid rgba(0,0,0,.08);scroll-margin-top:16px}.dv-thd{display:flex;align-items:baseline;gap:10px;margin:0 0 20px}.dv-tid{font:600 10px ui-monospace,Menlo,monospace;padding:3px 7px;background:#1a1a1a;color:#fff;border-radius:4px;text-decoration:none}.dv-tname{font:600 13px/1.2 system-ui,sans-serif;color:#1a1a1a}.dv-opts{display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start}.dv-opt{flex:none;display:flex;flex-direction:column;gap:9px;scroll-margin-top:16px}.dv-oid{font:600 10.5px ui-monospace,Menlo,monospace;padding:3px 7px;background:rgba(0,0,0,.08);color:#1a1a1a;border-radius:5px;text-decoration:none}.dv-olabel{display:flex;align-items:baseline;gap:8px;font:400 11px/1.3 system-ui,sans-serif;color:rgba(0,0,0,.55)}.dv-card{max-width:100%;background:#fff;border:1px solid rgba(0,0,0,.08);border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.06);overflow:hidden}.dv-opt:target .dv-oid{background:#2a78d6;color:#fff}.dv-next{margin:22px 0 0;font:12px/1.5 system-ui,sans-serif;color:rgba(0,0,0,.5)}.dv-group{flex-basis:100%;font:600 11px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:rgba(0,0,0,.45);margin:6px 0 -14px}</style></helmet>
+<section class="dv-turn" id="t1">
+<div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Alchemy V12 — the Night Shift &amp; the Brief (Light theme)</span></div>
+<div style="max-width:880px;margin:0 0 24px;padding:14px 16px;background:#fff;border:1px solid rgba(0,0,0,.08);border-radius:8px;font-size:12px;line-height:1.55;color:rgba(0,0,0,.6)">
+<strong style="color:#1a1a1a">Assumptions &amp; grounding.</strong> Everything is built from the repo's own light theme (<span style="font-family:ui-monospace,Menlo,monospace">themes.ts</span> "light" vars, <span style="font-family:ui-monospace,Menlo,monospace">index.css</span> type scale 10/11/12/13/14/15/22px, <span style="font-family:ui-monospace,Menlo,monospace">ui.tsx</span> button/badge idioms, HomeView + HomeReportsFeed layouts). Night Shift is shown at three altitudes: the home digest (<a class="dv-oid" href="#1a">1a</a>), the menu-bar tray (<a class="dv-oid" href="#1b">1b</a>), and a full console (<a class="dv-oid" href="#1c">1c</a>). The Brief likewise: the home rail evolved from ReportsFeed (<a class="dv-oid" href="#1d">1d</a>), a full morning-read surface (<a class="dv-oid" href="#1e">1e</a>), and the weekly household cadence (<a class="dv-oid" href="#1f">1f</a>). Content mixes the Work and Life personas from the plan. Rows expand on click; hover states live.
+</div>
+<div class="dv-opts">
+<div class="dv-group">Pillar 1 · The Night Shift</div>
+
+<div class="dv-opt" id="1a"><div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a>Home + "Overnight" strip — by-the-book extension of HomeView</div>
+<div class="dv-card" style="width:900px;color:#1c1d20;font-size:13px">
+  <div style="display:flex;align-items:center;gap:10px;height:44px;padding:0 16px;background:#f5f5f4;border-bottom:1px solid rgba(0,0,0,.09)">
+    <span style="display:flex;gap:7px"><span style="width:11px;height:11px;border-radius:50%;background:#ff5f57"></span><span style="width:11px;height:11px;border-radius:50%;background:#febc2e"></span><span style="width:11px;height:11px;border-radius:50%;background:#28c840"></span></span>
+    <span style="display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px;background:rgba(94,106,210,.15);color:#5e6ad2;margin-left:8px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg></span>
+    <span style="font-size:15px;font-weight:600;letter-spacing:-.01em">Alchemy</span>
+    <span style="margin-left:auto;display:flex;gap:6px;color:#686d76">
+      <span style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px" style-hover="background:#f3f3f1;color:#1c1d20"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg></span>
+      <span style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px" style-hover="background:#f3f3f1;color:#1c1d20"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg></span>
+    </span>
+  </div>
+  <div style="padding:28px 36px 32px;background:#fff">
+    <h1 style="margin:0;font-size:22px;font-weight:600;letter-spacing:-.01em">Your notebooks</h1>
+    <p style="margin:4px 0 0;color:#686d76">6 notebooks · 87 sources · 4,218,304 chars indexed</p>
+    <p style="display:flex;align-items:center;gap:6px;margin:6px 0 0;font-size:12px;color:#656c75"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#5e6ad2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>The Night Shift ran 3 times while you slept · finished 4:12 AM · $0.58 metered · <a href="#1a">2 items for review</a></p>
+    <div style="display:flex;align-items:center;gap:6px;margin:20px 0 26px;padding:6px;border:1px solid rgba(0,0,0,.09);border-radius:12px;background:rgba(251,251,250,.8);box-shadow:0 1px 2px rgba(0,0,0,.03)">
+      <svg style="margin-left:8px;flex:none" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5159c9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"></path></svg>
+      <span style="flex:1;padding:0 6px;color:#656c75">Ask or search across all your notebooks…</span>
+      <span style="display:flex;align-items:center;gap:6px;padding:0 8px;height:32px;border-radius:8px;font-size:12px;color:#686d76"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg><kbd style="border:1px solid rgba(0,0,0,.09);background:#f3f3f1;border-radius:4px;padding:1px 4px;font-size:10px;color:#656c75;font-family:inherit">⌘K</kbd></span>
+      <span style="display:inline-flex;align-items:center;height:28px;padding:0 10px;border-radius:6px;background:#5e6ad2;color:#fff;font-size:12px;font-weight:500;box-shadow:0 1px 2px rgba(0,0,0,.3)">Ask</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin:0 0 8px">
+      <span style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.05em;color:#656c75">Overnight</span>
+      <span style="display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:99px;background:rgba(94,106,210,.15);color:#5159c9;font-size:10px;font-weight:500">2 need review</span>
+      <span style="margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11px;color:#656c75">Budget <span style="display:inline-block;width:72px;height:4px;border-radius:99px;background:#f3f3f1;overflow:hidden"><span style="display:block;width:29%;height:100%;background:#5e6ad2"></span></span> $0.58 / $2.00</span>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:30px">
+      <details open="open" style="border:1px solid rgba(0,0,0,.09);border-radius:8px;background:#fbfbfa">
+        <summary style="display:flex;align-items:center;gap:10px;padding:10px 12px" style-hover="background:#f3f3f1">
+          <span style="display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:6px;background:rgba(94,155,210,.16);color:#3d7cb8;flex:none"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span>
+          <span style="flex:1;min-width:0;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">lancedb 0.9.0 tagged — impact match hit 3 of your call sites</span>
+          <span style="display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:4px;background:rgba(94,155,210,.14);color:#3d7cb8;font-size:11px;font-weight:500;flex:none">impact</span>
+          <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:#656c75;flex:none"><span style="width:7px;height:7px;border-radius:50%;background:#5e9bd2"></span>Vector Search PRD · 2:14 AM</span>
+        </summary>
+        <div style="padding:2px 12px 12px 48px">
+          <div style="padding:8px 10px;border:1px solid rgba(0,0,0,.09);border-radius:6px;background:#fff;font-family:'SF Mono',ui-monospace,monospace;font-size:11px;line-height:1.7;color:#686d76"><span style="color:#d42828">- search_chunks(query, k)</span> deprecated in 0.9 → <span style="color:#2f9e6b">search().limit(k)</span><br>your call sites: db.rs:412 · db.rs:731 · commands.rs:2781</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+            <span style="display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:6px;border:1px solid rgba(0,0,0,.16);background:#f3f3f1;font-size:12px;font-weight:500" style-hover="background:#fff">Open triage note</span>
+            <span style="display:inline-flex;align-items:center;height:26px;padding:0 10px;border-radius:6px;color:#686d76;font-size:12px;font-weight:500" style-hover="background:#f3f3f1;color:#1c1d20">Dismiss</span>
+            <span style="margin-left:auto;font-size:11px;color:#656c75">AST + grep match · a note, never a patch</span>
+          </div>
+        </div>
+      </details>
+      <details style="border:1px solid rgba(0,0,0,.09);border-radius:8px;background:#fbfbfa">
+        <summary style="display:flex;align-items:center;gap:10px;padding:10px 12px" style-hover="background:#f3f3f1">
+          <span style="display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:6px;background:rgba(232,163,61,.16);color:#a8721c;flex:none"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v14"></path><path d="M5 10h14"></path><path d="M5 21h14"></path></svg></span>
+          <span style="flex:1;min-width:0;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">State Farm declarations page changed — premium up 13.8% year over year</span>
+          <span style="display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:4px;background:rgba(94,106,210,.12);color:#5159c9;font-size:11px;font-weight:500;flex:none">changed</span>
+          <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:#656c75;flex:none"><span style="width:7px;height:7px;border-radius:50%;background:#4cb782"></span>Household · 1:52 AM</span>
+        </summary>
+        <div style="padding:2px 12px 12px 48px;font-size:12px;color:#686d76">Diffed against the 2025 declarations page (year-over-year sweep). Premium $1,284 → $1,462; deductible unchanged. Judged <em>complicates</em> assertion A7 — "premium stable through 2026."</div>
+      </details>
+      <details style="border:1px solid rgba(0,0,0,.09);border-radius:8px;background:#fbfbfa">
+        <summary style="display:flex;align-items:center;gap:10px;padding:10px 12px" style-hover="background:#f3f3f1">
+          <span style="display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:6px;background:rgba(76,183,130,.16);color:#2f9e6b;flex:none"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"></rect><path d="M16 2v4"></path><path d="M8 2v4"></path><path d="M3 10h18"></path></svg></span>
+          <span style="flex:1;min-width:0;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Vehicle registration renewal — due Sep 3, fired at its 21-day lead</span>
+          <span style="display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:4px;background:rgba(232,163,61,.14);color:#a8721c;font-size:11px;font-weight:500;flex:none">obligation</span>
+          <span style="display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;border-radius:6px;border:1px solid rgba(0,0,0,.16);background:#fff;font-size:11px;font-weight:500;color:#1c1d20;flex:none" style-hover="background:#f3f3f1">Add to Reminders</span>
+        </summary>
+        <div style="padding:2px 12px 12px 48px;font-size:12px;color:#686d76">The Tickler proposes to Apple Reminders and stops — one confirmed click, nothing more. Today's frontend tick would have missed this entirely (store.ts:1470).</div>
+      </details>
+    </div>
+    <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.05em;color:#656c75;margin-bottom:8px">Your notebooks</div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:112px;border:1px dashed rgba(0,0,0,.16);border-radius:8px;background:rgba(251,251,250,.4);color:#686d76" style-hover="border-color:rgba(94,106,210,.5);color:#1c1d20"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg><span style="font-weight:500">New notebook</span></div>
+      <div style="display:flex;flex-direction:column;min-height:112px;border:1px solid rgba(0,0,0,.09);border-radius:8px;background:#fbfbfa;padding:14px" style-hover="border-color:rgba(0,0,0,.16);background:#f3f3f1">
+        <span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;background:rgba(94,155,210,.16);color:#5e9bd2;margin-bottom:auto"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg></span>
+        <span style="display:flex;align-items:center;gap:6px;margin-top:10px;font-size:14px;font-weight:500">Vector Search PRD<span style="width:6px;height:6px;border-radius:50%;background:#5e6ad2"></span></span>
+        <span style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:11px;color:#656c75"><span style="display:inline-flex;align-items:center;gap:4px;height:18px;padding:0 6px;border-radius:4px;background:#f3f3f1;border:1px solid rgba(0,0,0,.09);font-weight:500;color:#686d76"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path></svg>31</span>· 8h ago</span>
+      </div>
+      <div style="display:flex;flex-direction:column;min-height:112px;border:1px solid rgba(0,0,0,.09);border-radius:8px;background:#fbfbfa;padding:14px" style-hover="border-color:rgba(0,0,0,.16);background:#f3f3f1">
+        <span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;background:rgba(76,183,130,.16);color:#4cb782;margin-bottom:auto"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg></span>
+        <span style="display:flex;align-items:center;gap:6px;margin-top:10px;font-size:14px;font-weight:500">Household<span style="width:6px;height:6px;border-radius:50%;background:#5e6ad2"></span></span>
+        <span style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:11px;color:#656c75"><span style="display:inline-flex;align-items:center;gap:4px;height:18px;padding:0 6px;border-radius:4px;background:#f3f3f1;border:1px solid rgba(0,0,0,.09);font-weight:500;color:#686d76"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path></svg>44</span>· overnight</span>
+      </div>
+      <div style="display:flex;flex-direction:column;min-height:112px;border:1px solid rgba(0,0,0,.09);border-radius:8px;background:#fbfbfa;padding:14px" style-hover="border-color:rgba(0,0,0,.16);background:#f3f3f1">
+        <span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;background:rgba(235,87,87,.14);color:#eb5757;margin-bottom:auto"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg></span>
+        <span style="margin-top:10px;font-size:14px;font-weight:500">Ducati 916</span>
+        <span style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:11px;color:#656c75"><span style="display:inline-flex;align-items:center;gap:4px;height:18px;padding:0 6px;border-radius:4px;background:#f3f3f1;border:1px solid rgba(0,0,0,.09);font-weight:500;color:#686d76"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path></svg>12</span>· 2d ago</span>
+      </div>
+    </div>
+  </div>
+</div></div>
+
+<div class="dv-opt" id="1b"><div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a>Menu-bar tray — the resident steward, no window open</div>
+<div class="dv-card" style="width:380px;background:#e8e6e1;padding:0 0 24px">
+  <div style="display:flex;align-items:center;justify-content:flex-end;gap:14px;height:26px;padding:0 14px;background:rgba(250,250,249,.85);border-bottom:1px solid rgba(0,0,0,.06);font-size:12px;color:#1c1d20">
+    <span style="display:flex;align-items:center;justify-content:center;width:24px;height:20px;border-radius:4px;background:rgba(0,0,0,.12)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#1c1d20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg></span>
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#1c1d20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
+    <span>Tue 7:38 AM</span>
+  </div>
+  <div style="width:324px;margin:8px auto 0;background:rgba(255,255,255,.92);border:1px solid rgba(0,0,0,.09);border-radius:12px;box-shadow:0 12px 32px -8px rgba(0,0,0,.25);color:#1c1d20;font-size:13px;overflow:hidden">
+    <div style="padding:12px 14px 10px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="width:8px;height:8px;border-radius:50%;background:#2f9e6b"></span>
+        <span style="font-weight:600">The Steward</span>
+        <span style="margin-left:auto;display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:6px;color:#686d76" style-hover="background:#f3f3f1;color:#1c1d20"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="4" width="4" height="16" rx="1"></rect><rect x="6" y="4" width="4" height="16" rx="1"></rect></svg></span>
+      </div>
+      <div style="margin-top:2px;font-size:11px;color:#656c75">Resident · watching 14 sources · you've been idle 2h 4m</div>
+    </div>
+    <div style="height:1px;background:rgba(0,0,0,.07)"></div>
+    <div style="padding:10px 14px">
+      <div style="font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:#656c75;margin-bottom:6px">Last night</div>
+      <div style="display:flex;align-items:center;gap:7px;padding:3px 0;font-size:12px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#2f9e6b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>3 runs finished 4:12 AM · 41 steps · $0.58 metered</div>
+      <div style="display:flex;align-items:center;gap:7px;padding:3px 0;font-size:12px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#a8721c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.73 18l-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>2 items for review · 1 contradiction, 1 obligation</div>
+      <div style="display:flex;align-items:center;gap:7px;margin-top:6px;padding:7px 9px;border:1px solid rgba(0,0,0,.09);border-radius:7px;background:#fbfbfa;font-weight:500;font-size:12px" style-hover="background:#f3f3f1"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#5159c9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"></path><path d="M18 14h-8"></path><path d="M15 18h-5"></path><path d="M10 6h8v4h-8V6Z"></path></svg>Open the Tuesday brief<span style="margin-left:auto;color:#656c75">7:40</span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#686d76" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transform:rotate(180deg)"><path d="m15 18-6-6 6-6"></path></svg></div>
+    </div>
+    <div style="height:1px;background:rgba(0,0,0,.07)"></div>
+    <div style="padding:10px 14px">
+      <div style="font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:#656c75;margin-bottom:6px">Tonight · 1:00 AM</div>
+      <div style="display:flex;align-items:center;gap:7px;padding:3px 0;font-size:12px"><span style="width:7px;height:7px;border-radius:50%;background:#5e9bd2;flex:none"></span>Weekly Shipping Record<span style="margin-left:auto;font-size:11px;color:#656c75">Vector Search PRD</span></div>
+      <div style="display:flex;align-items:center;gap:7px;padding:3px 0;font-size:12px"><span style="width:7px;height:7px;border-radius:50%;background:#686d76;flex:none"></span>Refresh watchers<span style="margin-left:auto;font-size:11px;color:#656c75">6 URLs · 2 folders · git</span></div>
+      <div style="display:flex;align-items:center;gap:7px;padding:3px 0;font-size:12px"><span style="width:7px;height:7px;border-radius:50%;background:#e8a33d;flex:none"></span>Tax-year sweep<span style="margin-left:auto;font-size:11px;color:#a8721c">1099-B still absent</span></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:11px;color:#656c75">Budget<span style="flex:1;height:4px;border-radius:99px;background:#f3f3f1;overflow:hidden"><span style="display:block;width:0%;height:100%;background:#5e6ad2"></span></span>$2.00 · 400 steps · degrades to local</div>
+    </div>
+    <div style="height:1px;background:rgba(0,0,0,.07)"></div>
+    <div style="display:flex;align-items:center;gap:7px;padding:9px 14px;font-size:11px;color:#656c75">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+      Health · Money — sealed, zero egress last night<a style="margin-left:auto" href="#1b">receipt</a>
+    </div>
+    <div style="display:flex;gap:8px;padding:10px 14px;background:#fbfbfa;border-top:1px solid rgba(0,0,0,.07)">
+      <span style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;height:28px;border-radius:6px;border:1px solid rgba(0,0,0,.16);background:#fff;font-size:12px;font-weight:500" style-hover="background:#f3f3f1">Ask<kbd style="border:1px solid rgba(0,0,0,.09);background:#f3f3f1;border-radius:3px;padding:0 4px;font-size:10px;color:#656c75;font-family:inherit">⌥Space</kbd></span>
+      <span style="flex:1;display:inline-flex;align-items:center;justify-content:center;height:28px;border-radius:6px;background:#5e6ad2;color:#fff;font-size:12px;font-weight:500;box-shadow:0 1px 2px rgba(0,0,0,.3)">Open Alchemy</span>
+    </div>
+  </div>
+</div></div>
+
+<div class="dv-opt" id="1c"><div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a>Night Shift console — runs, triggers, and budgets as a first-class surface</div>
+<div class="dv-card" style="width:900px;color:#1c1d20;font-size:13px">
+  <div style="display:flex;align-items:center;gap:8px;height:44px;padding:0 12px;background:#f5f5f4;border-bottom:1px solid rgba(0,0,0,.09)">
+    <span style="display:flex;gap:7px"><span style="width:11px;height:11px;border-radius:50%;background:#ff5f57"></span><span style="width:11px;height:11px;border-radius:50%;background:#febc2e"></span><span style="width:11px;height:11px;border-radius:50%;background:#28c840"></span></span>
+    <span style="display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;margin-left:6px;border-radius:6px;color:#686d76;font-size:12px;font-weight:500" style-hover="background:#f3f3f1;color:#1c1d20"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"></path></svg>Notebooks</span>
+    <span style="width:1px;height:16px;background:rgba(0,0,0,.09)"></span>
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#5e6ad2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>
+    <span style="font-weight:600">Night Shift</span>
+    <span style="display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:4px;background:#f3f3f1;border:1px solid rgba(0,0,0,.09);font-size:11px;font-weight:500;color:#686d76">all notebooks</span>
+    <span style="margin-left:auto;display:flex;gap:6px;color:#686d76">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
+    </span>
+  </div>
+  <div style="padding:20px 28px 26px;background:#fff">
+    <div style="display:flex;align-items:baseline;gap:10px">
+      <span style="font-size:15px;font-weight:600">Last night</span>
+      <span style="font-size:12px;color:#686d76">Mon Aug 11 → Tue Aug 12 · 3 runs · 41 steps · 52 min wall-clock · $0.58 metered · no cap hit</span>
+      <span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:6px;border:1px solid rgba(0,0,0,.16);background:#f3f3f1;font-size:12px;font-weight:500" style-hover="background:#fff"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>Earlier nights</span>
+    </div>
+    <div style="position:relative;height:96px;margin:16px 0 22px;border:1px solid rgba(0,0,0,.09);border-radius:8px;background:#fbfbfa;overflow:hidden">
+      <div style="position:absolute;inset:0;display:flex">
+        <span style="flex:1;border-right:1px solid rgba(0,0,0,.05)"></span><span style="flex:1;border-right:1px solid rgba(0,0,0,.05)"></span><span style="flex:1;border-right:1px solid rgba(0,0,0,.05)"></span><span style="flex:1;border-right:1px solid rgba(0,0,0,.05)"></span><span style="flex:1;border-right:1px solid rgba(0,0,0,.05)"></span><span style="flex:1;border-right:1px solid rgba(0,0,0,.05)"></span><span style="flex:1;border-right:1px solid rgba(0,0,0,.05)"></span><span style="flex:1"></span>
+      </div>
+      <div style="position:absolute;left:0;right:0;top:6px;display:flex;padding:0 0;font-size:10px;color:#656c75">
+        <span style="flex:1;padding-left:6px">11 PM</span><span style="flex:1;padding-left:6px">12 AM</span><span style="flex:1;padding-left:6px">1 AM</span><span style="flex:1;padding-left:6px">2 AM</span><span style="flex:1;padding-left:6px">3 AM</span><span style="flex:1;padding-left:6px">4 AM</span><span style="flex:1;padding-left:6px">5 AM</span><span style="flex:1;padding-left:6px">6 AM</span>
+      </div>
+      <div style="position:absolute;left:25.5%;width:5%;top:32px;height:16px;border-radius:4px;background:rgba(94,106,210,.8)" title="Watcher sweep 1:00–1:22"></div>
+      <div style="position:absolute;left:39%;width:6%;top:52px;height:16px;border-radius:4px;background:rgba(94,155,210,.85)" title="Impact match 2:05–2:31"></div>
+      <div style="position:absolute;left:63.5%;width:2.5%;top:32px;height:16px;border-radius:4px;background:rgba(76,183,130,.85)" title="Brief build 4:02–4:12"></div>
+      <div style="position:absolute;left:25.5%;top:34px;transform:translateY(-100%);font-size:10px;color:#5159c9;padding-bottom:2px">watchers</div>
+      <div style="position:absolute;left:39%;top:54px;transform:translateY(-100%);font-size:10px;color:#3d7cb8;padding-bottom:2px">impact match</div>
+      <div style="position:absolute;left:63.5%;top:34px;transform:translateY(-100%);font-size:10px;color:#2f9e6b;padding-bottom:2px">brief</div>
+      <div style="position:absolute;left:88%;top:0;bottom:0;width:1px;background:rgba(212,40,40,.4)"></div>
+      <div style="position:absolute;left:88.5%;bottom:6px;font-size:10px;color:#d42828">you, 7:38</div>
+    </div>
+    <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.05em;color:#656c75;margin-bottom:8px">Runs</div>
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <details open="open" style="border:1px solid rgba(0,0,0,.09);border-radius:8px;background:#fbfbfa">
+        <summary style="display:flex;align-items:center;gap:10px;padding:10px 12px" style-hover="background:#f3f3f1">
+          <span style="font-family:'SF Mono',ui-monospace,monospace;font-size:11px;color:#656c75;width:56px;flex:none">1:00 AM</span>
+          <span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:6px;background:rgba(94,106,210,.14);color:#5e6ad2;flex:none"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></span>
+          <span style="flex:1;font-weight:500">Watcher sweep — 6 URLs, 2 folders, 1 repo</span>
+          <span style="display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:4px;background:rgba(94,106,210,.12);color:#5159c9;font-size:11px;font-weight:500">2 diffs</span>
+          <span style="font-size:11px;color:#656c75">22 min · 18 steps · $0.31</span>
+        </summary>
+        <div style="padding:4px 12px 12px 78px">
+          <div style="border-left:2px solid rgba(0,0,0,.09);padding-left:14px;display:flex;flex-direction:column;gap:7px;font-size:12px;color:#686d76">
+            <div><span style="font-family:'SF Mono',ui-monospace,monospace;font-size:10.5px;color:#656c75">1:00:04</span> · watcher <strong style="color:#1c1d20;font-weight:500">statefarm.com/declarations</strong> — changed (hash diff)</div>
+            <div><span style="font-family:'SF Mono',ui-monospace,monospace;font-size:10.5px;color:#656c75">1:00:31</span> · weave: year-over-year diff vs 2025 declarations — premium <span style="color:#d42828">+13.8%</span></div>
+            <div><span style="font-family:'SF Mono',ui-monospace,monospace;font-size:10.5px;color:#656c75">1:01:02</span> · judgment: <span style="display:inline-flex;align-items:center;height:16px;padding:0 5px;border-radius:4px;background:rgba(232,163,61,.14);color:#a8721c;font-size:10.5px;font-weight:500">complicates</span> assertion A7 — "premium stable through 2026"</div>
+            <div><span style="font-family:'SF Mono',ui-monospace,monospace;font-size:10.5px;color:#656c75">1:01:19</span> · note written → <span style="color:#1c1d20">Household › Insurance</span> · both passages pinned</div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:2px;font-size:11px;color:#656c75">Run budget<span style="width:100px;height:4px;border-radius:99px;background:#f3f3f1;overflow:hidden"><span style="display:block;width:22%;height:100%;background:#5e6ad2"></span></span>18 / 80 steps · degraded to local twice (cap fine)</div>
+          </div>
+        </div>
+      </details>
+      <details style="border:1px solid rgba(0,0,0,.09);border-radius:8px;background:#fbfbfa">
+        <summary style="display:flex;align-items:center;gap:10px;padding:10px 12px" style-hover="background:#f3f3f1">
+          <span style="font-family:'SF Mono',ui-monospace,monospace;font-size:11px;color:#656c75;width:56px;flex:none">2:05 AM</span>
+          <span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:6px;background:rgba(94,155,210,.16);color:#3d7cb8;flex:none"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span>
+          <span style="flex:1;font-weight:500">Standing question fired — "does a lancedb release touch our call sites?"</span>
+          <span style="display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:4px;background:rgba(94,155,210,.14);color:#3d7cb8;font-size:11px;font-weight:500">impact</span>
+          <span style="font-size:11px;color:#656c75">26 min · 19 steps · $0.27</span>
+        </summary>
+        <div style="padding:4px 12px 12px 78px;font-size:12px;color:#686d76">git watcher saw the 0.9.0 tag → AST + grep against your three repos → 3 call sites matched → triage note written to Vector Search PRD. A note, never a PR.</div>
+      </details>
+      <details style="border:1px solid rgba(0,0,0,.09);border-radius:8px;background:#fbfbfa">
+        <summary style="display:flex;align-items:center;gap:10px;padding:10px 12px" style-hover="background:#f3f3f1">
+          <span style="font-family:'SF Mono',ui-monospace,monospace;font-size:11px;color:#656c75;width:56px;flex:none">4:02 AM</span>
+          <span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:6px;background:rgba(76,183,130,.16);color:#2f9e6b;flex:none"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"></path><path d="M18 14h-8"></path><path d="M15 18h-5"></path><path d="M10 6h8v4h-8V6Z"></path></svg></span>
+          <span style="flex:1;font-weight:500">Tuesday brief assembled — ranked by <em>needs a decision</em></span>
+          <span style="display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:4px;background:rgba(47,158,107,.12);color:#2f9e6b;font-size:11px;font-weight:500">5 items</span>
+          <span style="font-size:11px;color:#656c75">10 min · 4 steps · $0.00 local</span>
+        </summary>
+        <div style="padding:4px 12px 12px 78px;font-size:12px;color:#686d76">Map-reduce over gist rows, all local. Audio edition voiced by Kokoro (4:32). Waiting at 7:40, your cadence.</div>
+      </details>
+    </div>
+  </div>
+</div></div>
+
+<div class="dv-group">Pillar 2 · The Brief</div>
+
+<div class="dv-opt" id="1d"><div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a>Brief rail — the ReportsFeed sidebar, promoted to a triage</div>
+<div class="dv-card" style="width:400px;border-radius:12px;color:#1c1d20;font-size:13px">
+  <div style="display:flex;align-items:center;gap:8px;height:48px;padding:0 16px;border-bottom:1px solid rgba(0,0,0,.09)">
+    <span style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:#686d76">Tuesday brief</span>
+    <span style="display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:99px;background:rgba(94,106,210,.15);color:#5159c9;font-size:10px;font-weight:500">5 new</span>
+    <span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;border-radius:99px;border:1px solid rgba(0,0,0,.09);background:#fbfbfa;font-size:11px;color:#686d76" style-hover="background:#f3f3f1;color:#1c1d20"><svg width="11" height="11" viewBox="0 0 24 24" fill="#5e6ad2" stroke="#5e6ad2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>4:32</span>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px;padding:10px 16px;background:rgba(212,40,40,.05);border-bottom:1px solid rgba(0,0,0,.07)">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d42828" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><rect x="3" y="4" width="18" height="18" rx="2"></rect><path d="M16 2v4"></path><path d="M8 2v4"></path><path d="M3 10h18"></path></svg>
+    <span style="flex:1;min-width:0;font-size:12px"><strong style="font-weight:600">Registration renewal</strong> — due Sep 3 · 21-day lead</span>
+    <span style="display:inline-flex;align-items:center;height:24px;padding:0 9px;border-radius:6px;border:1px solid rgba(0,0,0,.16);background:#fff;font-size:11px;font-weight:500;flex:none" style-hover="background:#f3f3f1">→ Reminders</span>
+  </div>
+  <div style="display:flex;flex-direction:column">
+    <div style="display:flex;gap:10px;padding:12px 16px;border-bottom:1px solid rgba(0,0,0,.07)" style-hover="background:#fbfbfa">
+      <span style="display:flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;background:#f3f3f1;font-family:'SF Mono',ui-monospace,monospace;font-size:10px;color:#656c75;flex:none;margin-top:1px">1</span>
+      <span style="flex:1;min-width:0">
+        <span style="display:block;font-weight:500;line-height:1.4">PR/FAQ assertion A3 contradicted by the competitor changelog</span>
+        <span style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:11px;color:#656c75"><span style="width:6px;height:6px;border-radius:50%;background:#5e9bd2"></span>Vector Search PRD<span style="display:inline-flex;align-items:center;height:16px;padding:0 5px;border-radius:4px;background:rgba(212,40,40,.08);color:#d42828;font-size:10.5px;font-weight:500">contradicts</span>needs a decision</span>
+      </span>
+    </div>
+    <div style="display:flex;gap:10px;padding:12px 16px;border-bottom:1px solid rgba(0,0,0,.07)" style-hover="background:#fbfbfa">
+      <span style="display:flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;background:#f3f3f1;font-family:'SF Mono',ui-monospace,monospace;font-size:10px;color:#656c75;flex:none;margin-top:1px">2</span>
+      <span style="flex:1;min-width:0">
+        <span style="display:block;font-weight:500;line-height:1.4">lancedb 0.9 deprecates <span style="font-family:'SF Mono',ui-monospace,monospace;font-size:11.5px">search_chunks()</span> — 3 call sites</span>
+        <span style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:11px;color:#656c75"><span style="width:6px;height:6px;border-radius:50%;background:#5e9bd2"></span>Vector Search PRD<span style="display:inline-flex;align-items:center;height:16px;padding:0 5px;border-radius:4px;background:rgba(94,155,210,.14);color:#3d7cb8;font-size:10.5px;font-weight:500">impact</span>triage note ready</span>
+      </span>
+    </div>
+    <div style="display:flex;gap:10px;padding:12px 16px;border-bottom:1px solid rgba(0,0,0,.07)" style-hover="background:#fbfbfa">
+      <span style="display:flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;background:#f3f3f1;font-family:'SF Mono',ui-monospace,monospace;font-size:10px;color:#656c75;flex:none;margin-top:1px">3</span>
+      <span style="flex:1;min-width:0">
+        <span style="display:block;font-weight:500;line-height:1.4">Provider bill asks $137 — the EOB says $88</span>
+        <span style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:11px;color:#656c75"><span style="width:6px;height:6px;border-radius:50%;background:#4cb782"></span>Household<span style="display:inline-flex;align-items:center;height:16px;padding:0 5px;border-radius:4px;background:rgba(212,40,40,.08);color:#d42828;font-size:10.5px;font-weight:500">mismatch</span>appeal draftable</span>
+      </span>
+    </div>
+    <div style="display:flex;gap:10px;padding:12px 16px;border-bottom:1px solid rgba(0,0,0,.07)" style-hover="background:#fbfbfa">
+      <span style="display:flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;background:#f3f3f1;font-family:'SF Mono',ui-monospace,monospace;font-size:10px;color:#656c75;flex:none;margin-top:1px">4</span>
+      <span style="flex:1;min-width:0">
+        <span style="display:block;font-weight:500;line-height:1.4">Interview 15 transcribed — two new theme candidates</span>
+        <span style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:11px;color:#656c75"><span style="width:6px;height:6px;border-radius:50%;background:#5e9bd2"></span>Vector Search PRD<span style="display:inline-flex;align-items:center;height:16px;padding:0 5px;border-radius:4px;background:rgba(47,158,107,.12);color:#2f9e6b;font-size:10.5px;font-weight:500">extends</span>theme map updated</span>
+      </span>
+    </div>
+    <div style="display:flex;gap:10px;padding:12px 16px;color:#656c75" style-hover="background:#fbfbfa">
+      <span style="display:flex;align-items:center;justify-content:center;width:18px;height:18px;flex:none;margin-top:1px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path><path d="m1 1 22 22"></path></svg></span>
+      <span style="flex:1;min-width:0;font-size:12px">Skip: "RAG survey v3" — <a href="#1d">you read its substance in March</a></span>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:6px;padding:10px 16px;border-top:1px solid rgba(0,0,0,.09);background:#fbfbfa;font-size:11px;color:#656c75">
+    Ranked by <strong style="color:#1c1d20;font-weight:500">needs a decision</strong> · Work temperament
+    <a style="margin-left:auto" href="#1d">Mark all read</a>
+  </div>
+</div></div>
+
+<div class="dv-opt" id="1e"><div class="dv-olabel"><a class="dv-oid" href="#1e">1e</a>The full morning read — one arrival point, ranked and receipted</div>
+<div class="dv-card" style="width:860px;color:#1c1d20;font-size:13px">
+  <div style="display:flex;align-items:center;gap:10px;height:44px;padding:0 16px;background:#f5f5f4;border-bottom:1px solid rgba(0,0,0,.09)">
+    <span style="display:flex;gap:7px"><span style="width:11px;height:11px;border-radius:50%;background:#ff5f57"></span><span style="width:11px;height:11px;border-radius:50%;background:#febc2e"></span><span style="width:11px;height:11px;border-radius:50%;background:#28c840"></span></span>
+    <span style="display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;margin-left:6px;border-radius:6px;color:#686d76;font-size:12px;font-weight:500" style-hover="background:#f3f3f1;color:#1c1d20"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"></path></svg>Home</span>
+  </div>
+  <div style="background:#fff;padding:36px 0 40px">
+    <div style="max-width:620px;margin:0 auto;padding:0 24px">
+      <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;color:#5159c9">The Brief · Work</div>
+      <h1 style="margin:6px 0 0;font-size:26px;font-weight:600;letter-spacing:-.015em">Tuesday, August 12</h1>
+      <p style="margin:4px 0 0;font-size:12px;color:#686d76">Assembled 4:12 AM · waiting since 7:40 · 5 items, ranked by <em>needs a decision</em></p>
+      <div style="display:flex;align-items:center;gap:10px;margin:16px 0 30px;padding:8px 12px;border:1px solid rgba(0,0,0,.09);border-radius:99px;background:#fbfbfa">
+        <span style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:#5e6ad2;color:#fff;flex:none"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg></span>
+        <span style="display:flex;align-items:center;gap:2px;flex:1;height:16px;overflow:hidden">
+          <span style="width:3px;height:6px;border-radius:2px;background:rgba(94,106,210,.5)"></span><span style="width:3px;height:11px;border-radius:2px;background:rgba(94,106,210,.5)"></span><span style="width:3px;height:8px;border-radius:2px;background:rgba(94,106,210,.5)"></span><span style="width:3px;height:14px;border-radius:2px;background:rgba(94,106,210,.5)"></span><span style="width:3px;height:7px;border-radius:2px;background:rgba(94,106,210,.5)"></span><span style="width:3px;height:12px;border-radius:2px;background:rgba(94,106,210,.5)"></span><span style="width:3px;height:5px;border-radius:2px;background:rgba(94,106,210,.35)"></span><span style="width:3px;height:10px;border-radius:2px;background:rgba(94,106,210,.35)"></span><span style="width:3px;height:13px;border-radius:2px;background:rgba(94,106,210,.35)"></span><span style="width:3px;height:6px;border-radius:2px;background:rgba(94,106,210,.35)"></span><span style="width:3px;height:9px;border-radius:2px;background:rgba(94,106,210,.25)"></span><span style="width:3px;height:12px;border-radius:2px;background:rgba(94,106,210,.25)"></span><span style="width:3px;height:7px;border-radius:2px;background:rgba(94,106,210,.25)"></span><span style="width:3px;height:10px;border-radius:2px;background:rgba(94,106,210,.25)"></span><span style="width:3px;height:5px;border-radius:2px;background:rgba(94,106,210,.2)"></span><span style="width:3px;height:8px;border-radius:2px;background:rgba(94,106,210,.2)"></span></span>
+        <span style="font-size:11px;color:#656c75;flex:none">Audio edition · 4:32 · two voices, on-device</span>
+      </div>
+      <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:#656c75;padding-bottom:6px;border-bottom:1px solid rgba(0,0,0,.09)">Needs a decision</div>
+      <article style="padding:16px 0;border-bottom:1px solid rgba(0,0,0,.07)">
+        <h3 style="margin:0;font-size:15px;font-weight:600;line-height:1.35">The competitor's changelog contradicts PR/FAQ assumption A3</h3>
+        <p style="margin:6px 0 0;line-height:1.6;color:#3d4045">Their v4.2 notes ship exactly the "no one does hybrid rerank locally" capability A3 assumes away. The Weave flagged it <span style="display:inline-flex;align-items:center;height:16px;padding:0 5px;border-radius:4px;background:rgba(212,40,40,.08);color:#d42828;font-size:10.5px;font-weight:500;vertical-align:1px">contradicts</span> and pinned both passages — nothing was merged.</p>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap">
+          <span style="display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:99px;border:1px solid rgba(0,0,0,.09);background:#fbfbfa;font-size:11px;color:#686d76"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path></svg>competitor changelog · Apr → Aug diff</span>
+          <span style="display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:99px;border:1px solid rgba(0,0,0,.09);background:#fbfbfa;font-size:11px;color:#686d76"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path></svg>PR/FAQ § Assumptions · A3</span>
+          <span style="margin-left:auto;display:inline-flex;align-items:center;height:26px;padding:0 10px;border-radius:6px;border:1px solid rgba(0,0,0,.16);background:#f3f3f1;font-size:12px;font-weight:500;white-space:nowrap;flex:none" style-hover="background:#fff">Open side by side</span>
+          <span style="display:inline-flex;align-items:center;height:26px;padding:0 10px;border-radius:6px;color:#686d76;font-size:12px;font-weight:500;white-space:nowrap;flex:none" style-hover="background:#f3f3f1;color:#1c1d20">Record a decision…</span>
+        </div>
+      </article>
+      <article style="padding:16px 0;border-bottom:1px solid rgba(0,0,0,.07);margin-bottom:26px">
+        <h3 style="margin:0;font-size:15px;font-weight:600;line-height:1.35">Provider bill asks $137; the EOB you scanned says $88</h3>
+        <p style="margin:6px 0 0;line-height:1.6;color:#3d4045">Monday's phone-scanned EOB was filed to Health, fact-extracted overnight, and matched against the provider's bill. The $49 gap has no covering line item.</p>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap">
+          <span style="display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:99px;border:1px solid rgba(0,0,0,.09);background:#fbfbfa;font-size:11px;color:#686d76"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path></svg>EOB 2026-08-09 · scan</span>
+          <span style="display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:99px;border:1px solid rgba(0,0,0,.09);background:#fbfbfa;font-size:11px;color:#686d76"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path></svg>provider bill · watched folder</span>
+          <span style="margin-left:auto;display:inline-flex;align-items:center;height:26px;padding:0 10px;border-radius:6px;border:1px solid rgba(0,0,0,.16);background:#f3f3f1;font-size:12px;font-weight:500;white-space:nowrap;flex:none" style-hover="background:#fff">Draft the appeal</span>
+          <span style="display:inline-flex;align-items:center;height:26px;padding:0 10px;border-radius:6px;color:#686d76;font-size:12px;font-weight:500;white-space:nowrap;flex:none" style-hover="background:#f3f3f1;color:#1c1d20">Second Look before sending</span>
+        </div>
+      </article>
+      <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:#656c75;padding-bottom:6px;border-bottom:1px solid rgba(0,0,0,.09)">Changed overnight</div>
+      <div style="display:flex;flex-direction:column;gap:8px;padding:14px 0;border-bottom:1px solid rgba(0,0,0,.07);margin-bottom:26px">
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid rgba(0,0,0,.09);border-radius:8px;background:#fbfbfa">
+          <span style="flex:1;min-width:0"><strong style="font-weight:500">State Farm declarations 2026</strong><span style="color:#686d76"> — diffed against last year's</span></span>
+          <span style="font-family:'SF Mono',ui-monospace,monospace;font-size:12px;color:#686d76">$1,284 → <span style="color:#d42828">$1,462</span></span>
+          <span style="display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:4px;background:rgba(212,40,40,.08);color:#d42828;font-size:11px;font-weight:500">+13.8%</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid rgba(0,0,0,.09);border-radius:8px;background:#fbfbfa">
+          <span style="flex:1;min-width:0"><strong style="font-weight:500">lancedb 0.9.0</strong><span style="color:#686d76"> — deprecation touches db.rs:412, db.rs:731, commands.rs:2781</span></span>
+          <span style="display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:4px;background:rgba(94,155,210,.14);color:#3d7cb8;font-size:11px;font-weight:500">triage note</span>
+        </div>
+      </div>
+      <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:#656c75;padding-bottom:6px;border-bottom:1px solid rgba(0,0,0,.09)">Due</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;padding:14px 0;border-bottom:1px solid rgba(0,0,0,.07);margin-bottom:26px">
+        <div><div style="font-size:10px;font-weight:600;color:#d42828;margin-bottom:6px">NEXT 30 DAYS</div><div style="font-size:12px;line-height:1.7;color:#3d4045">Registration renewal · Sep 3<br>RFC review closes · Aug 21</div></div>
+        <div><div style="font-size:10px;font-weight:600;color:#a8721c;margin-bottom:6px">30–60</div><div style="font-size:12px;line-height:1.7;color:#3d4045">Umbrella policy renews · Sep 28</div></div>
+        <div><div style="font-size:10px;font-weight:600;color:#656c75;margin-bottom:6px">60–90</div><div style="font-size:12px;line-height:1.7;color:#3d4045">Passport expires · Nov 4<br>Q4 estimated taxes · Oct 15</div></div>
+      </div>
+      <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:#656c75;padding-bottom:6px;border-bottom:1px solid rgba(0,0,0,.09)">Skip</div>
+      <p style="margin:12px 0 0;font-size:12px;color:#686d76">"RAG survey v3" made the rounds again — <a href="#1e">you read its substance in March</a>; nothing new past §4. Skipping it saved you ~40 minutes.</p>
+      <div style="display:flex;align-items:center;gap:7px;margin-top:30px;padding-top:12px;border-top:1px solid rgba(0,0,0,.09);font-size:11px;color:#656c75">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+        $0.58 metered last night · everything else local · Health and Money sealed, zero egress
+        <a style="margin-left:auto" href="#1e">egress receipt</a>
+      </div>
+    </div>
+  </div>
+</div></div>
+
+<div class="dv-opt" id="1f"><div class="dv-olabel"><a class="dv-oid" href="#1f">1f</a>Sunday household brief — weekly cadence, Tickler confirms inline</div>
+<div class="dv-card" style="width:520px;border-radius:12px;color:#1c1d20;font-size:13px">
+  <div style="display:flex;align-items:center;gap:8px;height:48px;padding:0 16px;border-bottom:1px solid rgba(0,0,0,.09)">
+    <span style="width:8px;height:8px;border-radius:50%;background:#4cb782"></span>
+    <span style="font-weight:600">Sunday brief · Household</span>
+    <span style="display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:4px;background:#f3f3f1;border:1px solid rgba(0,0,0,.09);font-size:11px;font-weight:500;color:#686d76">Weekly · 9:00 AM</span>
+    <span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;border-radius:99px;border:1px solid rgba(0,0,0,.09);background:#fbfbfa;font-size:11px;color:#686d76" style-hover="background:#f3f3f1;color:#1c1d20"><svg width="11" height="11" viewBox="0 0 24 24" fill="#5e6ad2" stroke="#5e6ad2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>3:05</span>
+  </div>
+  <div style="padding:16px">
+    <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:#656c75;margin-bottom:8px">Arrived this week</div>
+    <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:18px">
+      <div style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid rgba(0,0,0,.09);border-radius:8px;background:#fbfbfa">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#2f9e6b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M20 6 9 17l-5-5"></path></svg>
+        <span style="flex:1;min-width:0;font-size:12px"><strong style="font-weight:500">EOB · Dr. Okafor</strong> — scanned, filed, fact-extracted</span>
+        <span style="display:inline-flex;align-items:center;height:16px;padding:0 5px;border-radius:4px;background:rgba(212,40,40,.08);color:#d42828;font-size:10.5px;font-weight:500">$137 vs $88</span>
+        <span style="display:inline-flex;align-items:center;height:24px;padding:0 9px;border-radius:6px;border:1px solid rgba(0,0,0,.16);background:#fff;font-size:11px;font-weight:500;flex:none" style-hover="background:#f3f3f1">Draft the ask</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid rgba(232,163,61,.4);border-radius:8px;background:rgba(232,163,61,.06)">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a8721c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M21.73 18l-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>
+        <span style="flex:1;min-width:0;font-size:12px"><strong style="font-weight:500">1099-B still hasn't arrived</strong> — expected in February; flagged by absence</span>
+        <span style="display:inline-flex;align-items:center;height:24px;padding:0 9px;border-radius:6px;border:1px solid rgba(0,0,0,.16);background:#fff;font-size:11px;font-weight:500;flex:none" style-hover="background:#f3f3f1">Note to Tax-Year 2026</span>
+      </div>
+    </div>
+    <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:#656c75;margin-bottom:8px">Due in 30 · 60 · 90</div>
+    <div style="display:flex;flex-direction:column;gap:2px;margin-bottom:18px">
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 4px;border-bottom:1px solid rgba(0,0,0,.06)">
+        <span style="display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:4px;background:rgba(212,40,40,.08);color:#d42828;font-size:10.5px;font-weight:600;font-family:'SF Mono',ui-monospace,monospace;flex:none">21d</span>
+        <span style="flex:1;min-width:0;font-size:12px">Vehicle registration renewal — Sep 3</span>
+        <span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#2f9e6b;flex:none"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>In Reminders</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 4px;border-bottom:1px solid rgba(0,0,0,.06)">
+        <span style="display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:4px;background:rgba(232,163,61,.14);color:#a8721c;font-size:10.5px;font-weight:600;font-family:'SF Mono',ui-monospace,monospace;flex:none">47d</span>
+        <span style="flex:1;min-width:0;font-size:12px">Umbrella policy renews — Sep 28 · premium history on the card</span>
+        <span style="display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;border:1px solid rgba(0,0,0,.16);background:#fff;font-size:11px;font-weight:500;flex:none" style-hover="background:#f3f3f1">→ Reminders</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 4px">
+        <span style="display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:4px;background:#f3f3f1;color:#656c75;font-size:10.5px;font-weight:600;font-family:'SF Mono',ui-monospace,monospace;flex:none">84d</span>
+        <span style="flex:1;min-width:0;font-size:12px">Passport expires — Nov 4 · renewal takes 6–8 weeks</span>
+        <span style="display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;border:1px solid rgba(0,0,0,.16);background:#fff;font-size:11px;font-weight:500;flex:none" style-hover="background:#f3f3f1">→ Reminders</span>
+      </div>
+    </div>
+    <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:#656c75;margin-bottom:8px">What changed</div>
+    <div style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid rgba(0,0,0,.09);border-radius:8px;background:#fbfbfa;margin-bottom:16px">
+      <span style="flex:1;min-width:0;font-size:12px"><strong style="font-weight:500">State Farm premium</strong> — $1,284 → $1,462 year over year</span>
+      <span style="display:inline-flex;align-items:center;height:16px;padding:0 5px;border-radius:4px;background:rgba(212,40,40,.08);color:#d42828;font-size:10.5px;font-weight:500">+13.8%</span>
+      <a style="font-size:11px" href="#1f">see the diff</a>
+    </div>
+    <div style="display:flex;align-items:center;gap:7px;padding-top:12px;border-top:1px solid rgba(0,0,0,.09);font-size:11px;color:#656c75">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+      Sealed — zero gateway calls this week · $0.00 metered
+      <a style="margin-left:auto" href="#1f">egress receipt</a>
+    </div>
+  </div>
+</div></div>
+
+</div>
+<p class="dv-next">Try next: "make <a class="dv-oid" href="#1d">1d</a> the home right rail in full context" · "riff on <a class="dv-oid" href="#1b">1b</a> with a condensed two-section tray" · "add the Ledger or the Weave next" · "show <a class="dv-oid" href="#1e">1e</a> in Midnight too"</p>
+</section>
+</x-dc>
+</body>
+</html>

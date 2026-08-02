@@ -1,0 +1,3031 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Alchemy Steward RFC Mockups</title>
+<style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
+</head>
+<body>
+<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="Alchemy Steward RFC Mockups" srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;en&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+&lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
+&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
+&lt;title&gt;Alchemy Steward RFC Mockups&lt;/title&gt;
+&lt;style&gt;:root {
+  color-scheme: light dark;
+  background-color: var(
+    --background,
+    var(--color-background-primary, light-dark(rgb(255 255 255), rgb(24 24 24)))
+  ) !important;
+
+  /* Agent-facing contract; keep in sync with SKILL.md. */
+  --background: var(
+    --color-background-primary,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --card: color-mix(in oklab, var(--foreground) 5%, var(--background));
+  --card-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --popover: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255), rgb(45 45 45))
+  );
+  --popover-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --primary: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --primary-foreground: var(
+    --color-text-inverse,
+    light-dark(rgb(255 255 255), rgb(13 13 13))
+  );
+  --secondary: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%))
+  );
+  --secondary-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --muted-foreground: var(
+    --color-text-secondary,
+    light-dark(rgb(26 28 31 / 49.4%), rgb(255 255 255 / 49.8%))
+  );
+  --accent: var(
+    --color-background-info,
+    light-dark(rgb(229 242 255), rgb(13 39 63))
+  );
+  --accent-foreground: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --destructive: var(
+    --color-text-warning,
+    light-dark(rgb(226 85 7), rgb(255 133 73))
+  );
+  --border: var(
+    --color-border-secondary,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+  --input: var(
+    --color-border-primary,
+    light-dark(
+      rgb(26 28 31 / 11.8%),
+      color-mix(in oklab, rgb(0 0 0) 10%, transparent)
+    )
+  );
+  --ring: var(
+    --color-ring-primary,
+    light-dark(rgb(51 156 255), rgb(131 195 255 / 76%))
+  );
+  --font-size-base: var(--font-text-md-size, 14px);
+  --red: light-dark(rgb(186 38 35), rgb(250 66 62));
+  --green: light-dark(rgb(0 162 64), rgb(64 201 119));
+  --viz-series-1: var(--primary);
+  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
+  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
+  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+
+  /* Internal implementation variables; not part of the agent contract. */
+  --font-sans: -apple-system, system-ui, &quot;Segoe UI&quot;, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, &quot;Liberation Mono&quot;,
+    monospace;
+  --font-size-normal: max(11px, var(--font-size-base));
+  --font-size-tooltip: calc(var(--font-size-base) - 1px);
+  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
+  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
+  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+  --font-weight-normal: 430;
+  --font-weight-medium: 500;
+  --line-height-normal: calc(var(--font-size-normal) * 1.5);
+  --line-height-tooltip: calc(var(--font-size-tooltip) * 1.4285714286);
+  --line-height-small: calc(var(--font-size-small) + 4px);
+  --radius: var(--border-radius-lg, 12.5px);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-2xl: calc(var(--radius) * 1.6);
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --checkmark-image: url(&quot;data:image/svg+xml,%3Csvg xmlns=&#x27;http://www.w3.org/2000/svg&#x27; viewBox=&#x27;0 0 17 17&#x27;%3E%3Cpath d=&#x27;M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z&#x27;/%3E%3C/svg%3E&quot;);
+
+  /* Legacy aliases; not part of the current agent contract. */
+  --viz-bg: transparent;
+  --viz-panel: var(--card);
+  --viz-border: var(--border);
+  --viz-text: var(--foreground);
+  --viz-muted: var(--muted-foreground);
+  --viz-accent: var(--primary);
+  --viz-accent-text: var(--primary-foreground);
+  --viz-accent-bg: var(--accent);
+  --viz-font-size: var(--font-size-base);
+  --viz-warning: var(--destructive);
+}
+
+:root[data-theme=&quot;light&quot;] {
+  color-scheme: light;
+}
+
+:root[data-theme=&quot;dark&quot;] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html &gt; body {
+  /* Preserve MCP aliases for older inline renderers without creating :root cycles. */
+  --color-background-primary: var(
+    --background,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --color-text-primary: var(
+    --foreground,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --color-border-secondary: var(
+    --border,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+
+  margin: 0;
+  padding: 5px;
+  color: var(--foreground);
+  background: transparent !important;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-normal);
+  font-weight: var(--font-weight-normal);
+  line-height: var(--line-height-normal);
+}
+
+a {
+  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
+  cursor: pointer;
+  font-weight: var(--font-weight-medium, 500);
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+a:is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 0.5px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-block: 0;
+}
+
+h1 {
+  font-size: var(--font-size-h1);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: var(--font-size-h3);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.3;
+}
+
+b,
+strong,
+th {
+  font-weight: var(--font-weight-medium);
+}
+
+code:not(pre code) {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  word-break: break-word;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+}
+
+.table :is(th, td) {
+  padding-block: 10px;
+  padding-inline: 0 24px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+}
+
+.table-responsive &gt; .table :is(th, td) {
+  overflow-wrap: break-word;
+}
+
+.table :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+
+.table :is(caption, thead th) {
+  font-weight: 600;
+}
+
+.table thead th {
+  padding-block: 8px;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+
+.table.table-sm :is(th, td) {
+  padding-block: 6px;
+}
+
+.table.table-sm :is(th, td):not(:last-child) {
+  padding-inline-end: 16px;
+}
+
+.table :is(.text-end, [align=&quot;right&quot;]) {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.table :is(.text-center, [align=&quot;center&quot;]) {
+  text-align: center;
+}
+
+.table .text-nowrap {
+  white-space: nowrap;
+}
+
+#widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  background: transparent !important;
+}
+
+.card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-2xl);
+  corner-shape: superellipse(1.5);
+  color: var(--card-foreground);
+  background: var(--card);
+}
+
+#widget &gt; :not(.card) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(
+    20rem,
+    var(--tooltip-available-width, calc(100vw - 10px)),
+    calc(100vw - 10px)
+  );
+  max-height: min(
+    var(--tooltip-available-height, calc(100vh - 10px)),
+    calc(100vh - 10px)
+  );
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--popover-foreground);
+  background: var(--popover);
+  box-shadow: none;
+  font-size: var(--font-size-tooltip);
+  line-height: var(--line-height-tooltip);
+  overflow-wrap: break-word;
+  white-space: normal;
+  pointer-events: none;
+  user-select: none;
+}
+
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
+  gap: 10px;
+}
+
+.viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-stat-value {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+.viz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.viz-badge {
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  color: var(--accent-foreground);
+  background: var(--accent);
+  font-weight: var(--font-weight-medium);
+}
+
+small,
+.text-small,
+.viz-badge {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-controls &gt; .form-label {
+  display: grid;
+  min-width: min(100%, 260px);
+  flex: 1 1 280px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 0;
+}
+
+.viz-controls &gt; .form-label &gt; :is(.form-control, .form-range, .form-select) {
+  grid-column: 1 / -1;
+}
+
+.btn,
+.form-check-input,
+.form-control,
+.form-range,
+.form-select {
+  font: inherit;
+}
+
+.btn {
+  appearance: button;
+  display: inline-flex;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: var(--cursor-interaction, pointer);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.btn:is(.btn-block, .viz-tile) {
+  inline-size: 100%;
+}
+
+.btn.viz-tile {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+a.btn {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn-primary {
+  border-color: transparent;
+  color: var(--primary-foreground);
+  background: var(--foreground);
+  background-clip: padding-box;
+}
+
+.btn-primary .text-muted {
+  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
+}
+
+.btn-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 80%, transparent);
+  background-clip: padding-box;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+[data-lucide] {
+  stroke-width: 1.6;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--foreground);
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background: var(--secondary);
+}
+
+.form-control::placeholder {
+  color: var(--muted-foreground);
+}
+
+.form-control[type=&quot;file&quot;] {
+  padding: 0;
+  overflow: hidden;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control[type=&quot;file&quot;]::file-selector-button {
+  min-height: 26px;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--input);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: inherit;
+  font: inherit;
+}
+
+.form-control[type=&quot;file&quot;]:not(:disabled):hover::file-selector-button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-control-color[type=&quot;color&quot;] {
+  width: 40px;
+  height: 28px;
+  padding: 3px;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  corner-shape: superellipse(1.5);
+}
+
+textarea.form-control {
+  height: auto;
+  min-height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.form-control:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.form-select {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 32px 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background-color: var(--secondary);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-select:not(:disabled):hover {
+  background-color: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-select:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-check {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-check-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--input);
+  color: var(--primary-foreground);
+  background-color: transparent;
+  cursor: var(--cursor-interaction, default);
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
+  border-color: var(--input);
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background-color: var(--secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input:not(:disabled):not(:checked):hover {
+  background-color: var(--card);
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;]:checked {
+  border-color: var(--primary);
+  background-color: var(--primary);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:checked::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--primary-foreground);
+  content: &quot;&quot;;
+  mask: var(--checkmark-image) center / 12px 12px no-repeat;
+}
+
+.form-check-input[type=&quot;radio&quot;] {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+}
+
+.form-check-input[type=&quot;radio&quot;]:checked {
+  border: 2px solid var(--primary);
+  background:
+    radial-gradient(circle, var(--primary-foreground) 0 2.5px, transparent 3px),
+    var(--primary);
+}
+
+.form-check:not(.form-switch) .form-check-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+}
+
+.form-switch .form-check-input:disabled,
+.form-switch .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.form-check-label {
+  color: var(--foreground);
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-switch .form-check-input {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  box-shadow: none;
+  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+  box-shadow: var(--shadow-sm);
+  content: &quot;&quot;;
+  transform: translate(2px, -50%);
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input:checked {
+  background: var(--primary);
+}
+
+.form-switch .form-check-input:checked::before {
+  transform: translate(14px, -50%);
+}
+
+.form-switch .form-check-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.form-range {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 28px;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  outline: none;
+  border: 0;
+  accent-color: var(--primary);
+  background: linear-gradient(
+      color-mix(in srgb, var(--foreground) 7%, transparent),
+      color-mix(in srgb, var(--foreground) 7%, transparent)
+    )
+    center / 100% 2px no-repeat;
+}
+
+.form-range::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-webkit-slider-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range::-moz-range-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-moz-range-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn:not(.btn-primary, .viz-tile):is(
+    [aria-pressed=&quot;true&quot;],
+    [aria-selected=&quot;true&quot;],
+    .is-selected
+  ) {
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+.btn.viz-tile:is([aria-pressed=&quot;true&quot;], [aria-selected=&quot;true&quot;], .is-selected) {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#widget &gt; svg {
+  width: 100%;
+}
+
+/* Model-authored chart rules can otherwise stretch icons after these styles load. */
+svg.lucide {
+  display: block;
+  width: 16px !important;
+  height: 16px !important;
+  flex: none;
+  margin: 0 !important;
+  stroke-width: 1.6;
+}
+
+.text-warning,
+.text-destructive {
+  color: var(--destructive);
+}
+
+html&gt;body{padding:0}&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;alchemy-steward-rfc-concepts&quot;&gt;
+  &lt;div class=&quot;viz-controls alchemy-rfc-switcher&quot; role=&quot;tablist&quot; aria-label=&quot;Alchemy RFC mockup versions&quot;&gt;
+    &lt;button class=&quot;btn&quot; id=&quot;alchemy-rfc-tab-reports&quot; type=&quot;button&quot; role=&quot;tab&quot; aria-selected=&quot;true&quot; aria-controls=&quot;alchemy-rfc-panel-reports&quot; data-alchemy-rfc-view=&quot;reports&quot;&gt;Reports after close · Night Shift v1&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; id=&quot;alchemy-rfc-tab-residency&quot; type=&quot;button&quot; role=&quot;tab&quot; aria-selected=&quot;false&quot; aria-controls=&quot;alchemy-rfc-panel-residency&quot; data-alchemy-rfc-view=&quot;residency&quot;&gt;Residency controls · Night Shift v1&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; id=&quot;alchemy-rfc-tab-staff&quot; type=&quot;button&quot; role=&quot;tab&quot; aria-selected=&quot;false&quot; aria-controls=&quot;alchemy-rfc-panel-staff&quot; data-alchemy-rfc-view=&quot;staff&quot;&gt;Home · Staff · Full V12 target&lt;/button&gt;
+  &lt;/div&gt;
+
+  &lt;section class=&quot;alchemy-rfc-version&quot; id=&quot;alchemy-rfc-panel-reports&quot; role=&quot;tabpanel&quot; aria-labelledby=&quot;alchemy-rfc-tab-reports&quot; data-alchemy-rfc-panel=&quot;reports&quot;&gt;
+    &lt;div class=&quot;alchemy-rfc-window&quot;&gt;
+      &lt;header class=&quot;alchemy-rfc-titlebar&quot;&gt;
+        &lt;div class=&quot;alchemy-rfc-traffic&quot; aria-hidden=&quot;true&quot;&gt;&lt;span&gt;&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;/div&gt;
+        &lt;span class=&quot;alchemy-rfc-back&quot; aria-hidden=&quot;true&quot;&gt;‹&lt;/span&gt;
+        &lt;span class=&quot;alchemy-rfc-muted&quot;&gt;Notebooks&lt;/span&gt;
+        &lt;span class=&quot;alchemy-rfc-divider&quot; aria-hidden=&quot;true&quot;&gt;&lt;/span&gt;
+        &lt;span class=&quot;alchemy-rfc-book&quot; aria-hidden=&quot;true&quot;&gt;▥&lt;/span&gt;
+        &lt;strong&gt;Alchemy Development&lt;/strong&gt;
+        &lt;span class=&quot;alchemy-rfc-title-spacer&quot;&gt;&lt;/span&gt;
+        &lt;span class=&quot;alchemy-rfc-title-chip alchemy-rfc-local&quot;&gt;● On this Mac&lt;/span&gt;
+        &lt;button class=&quot;alchemy-rfc-icon-button&quot; type=&quot;button&quot; aria-label=&quot;Search&quot;&gt;⌕&lt;/button&gt;
+        &lt;button class=&quot;alchemy-rfc-icon-button&quot; type=&quot;button&quot; aria-label=&quot;Settings&quot;&gt;⚙&lt;/button&gt;
+      &lt;/header&gt;
+
+      &lt;div class=&quot;alchemy-rfc-workspace&quot;&gt;
+        &lt;aside class=&quot;alchemy-rfc-side alchemy-rfc-left&quot;&gt;
+          &lt;div class=&quot;alchemy-rfc-side-header&quot;&gt;
+            &lt;span&gt;SOURCES &lt;small&gt;204&lt;/small&gt;&lt;/span&gt;
+            &lt;span class=&quot;alchemy-rfc-side-actions&quot; aria-hidden=&quot;true&quot;&gt;＋　▣&lt;/span&gt;
+          &lt;/div&gt;
+          &lt;div class=&quot;alchemy-rfc-capacity&quot;&gt;
+            &lt;div&gt;&lt;span&gt;2,357,140 chars&lt;/span&gt;&lt;span&gt;24% of 10M&lt;/span&gt;&lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-meter&quot;&gt;&lt;span style=&quot;width:24%&quot;&gt;&lt;/span&gt;&lt;/div&gt;
+          &lt;/div&gt;
+          &lt;div class=&quot;alchemy-rfc-list-label&quot;&gt;ALL SELECTED&lt;/div&gt;
+          &lt;div class=&quot;alchemy-rfc-source-list&quot;&gt;
+            &lt;div class=&quot;alchemy-rfc-source-row is-selected&quot;&gt;
+              &lt;span class=&quot;alchemy-rfc-source-icon&quot;&gt;#&lt;/span&gt;
+              &lt;span class=&quot;alchemy-rfc-source-copy&quot;&gt;&lt;strong&gt;Alchemy Local-First Research&lt;/strong&gt;&lt;small&gt;Notebook overview&lt;/small&gt;&lt;/span&gt;
+              &lt;span class=&quot;alchemy-rfc-check&quot;&gt;✓&lt;/span&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-source-row&quot;&gt;
+              &lt;span class=&quot;alchemy-rfc-source-icon&quot;&gt;#&lt;/span&gt;
+              &lt;span class=&quot;alchemy-rfc-source-copy&quot;&gt;&lt;strong&gt;Releasing Alchemy&lt;/strong&gt;&lt;small&gt;Updated yesterday&lt;/small&gt;&lt;/span&gt;
+              &lt;span class=&quot;alchemy-rfc-check&quot;&gt;✓&lt;/span&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-source-row&quot;&gt;
+              &lt;span class=&quot;alchemy-rfc-source-icon&quot;&gt;#&lt;/span&gt;
+              &lt;span class=&quot;alchemy-rfc-source-copy&quot;&gt;&lt;strong&gt;Architecture&lt;/strong&gt;&lt;small&gt;18 anchored sections&lt;/small&gt;&lt;/span&gt;
+              &lt;span class=&quot;alchemy-rfc-check&quot;&gt;✓&lt;/span&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-source-row&quot;&gt;
+              &lt;span class=&quot;alchemy-rfc-source-icon&quot;&gt;⌘&lt;/span&gt;
+              &lt;span class=&quot;alchemy-rfc-source-copy&quot;&gt;&lt;strong&gt;notebooklm-local&lt;/strong&gt;&lt;small&gt;Git repository · synced&lt;/small&gt;&lt;/span&gt;
+              &lt;span class=&quot;alchemy-rfc-check&quot;&gt;✓&lt;/span&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-source-row&quot;&gt;
+              &lt;span class=&quot;alchemy-rfc-source-icon&quot;&gt;◉&lt;/span&gt;
+              &lt;span class=&quot;alchemy-rfc-source-copy&quot;&gt;&lt;strong&gt;Customer interviews&lt;/strong&gt;&lt;small&gt;14 recordings&lt;/small&gt;&lt;/span&gt;
+              &lt;span class=&quot;alchemy-rfc-check&quot;&gt;✓&lt;/span&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-source-row&quot;&gt;
+              &lt;span class=&quot;alchemy-rfc-source-icon&quot;&gt;▤&lt;/span&gt;
+              &lt;span class=&quot;alchemy-rfc-source-copy&quot;&gt;&lt;strong&gt;Release checklist&lt;/strong&gt;&lt;small&gt;Current note&lt;/small&gt;&lt;/span&gt;
+              &lt;span class=&quot;alchemy-rfc-check&quot;&gt;✓&lt;/span&gt;
+            &lt;/div&gt;
+          &lt;/div&gt;
+          &lt;div class=&quot;alchemy-rfc-side-footer&quot;&gt;&lt;span class=&quot;alchemy-rfc-status-dot&quot;&gt;&lt;/span&gt; Reports ran while the window was closed&lt;/div&gt;
+        &lt;/aside&gt;
+
+        &lt;main class=&quot;alchemy-rfc-center&quot;&gt;
+          &lt;div class=&quot;alchemy-rfc-center-toolbar&quot;&gt;
+            &lt;span class=&quot;alchemy-rfc-toolbar-tab&quot;&gt;▢ Chat&lt;/span&gt;
+            &lt;span class=&quot;alchemy-rfc-toolbar-tab&quot;&gt;▤ Reader&lt;/span&gt;
+            &lt;span class=&quot;alchemy-rfc-toolbar-tab is-active&quot;&gt;≋ Reports&lt;/span&gt;
+            &lt;span class=&quot;alchemy-rfc-toolbar-spacer&quot;&gt;&lt;/span&gt;
+            &lt;span class=&quot;alchemy-rfc-toolbar-action&quot;&gt;✓ Reports up to date&lt;/span&gt;
+          &lt;/div&gt;
+          &lt;article class=&quot;alchemy-rfc-paper alchemy-rfc-report-paper&quot;&gt;
+            &lt;div class=&quot;alchemy-rfc-kicker&quot;&gt;NIGHT SHIFT V1 · SINCE YOU CLOSED THE WINDOW&lt;/div&gt;
+            &lt;h1&gt;Two reports are ready.&lt;/h1&gt;
+            &lt;p class=&quot;alchemy-rfc-lede&quot;&gt;Last night: 2 reports · sources synced 4 min ago&lt;/p&gt;
+
+            &lt;section class=&quot;alchemy-rfc-report-row is-unread&quot;&gt;
+              &lt;div class=&quot;alchemy-rfc-report-marker&quot; aria-hidden=&quot;true&quot;&gt;&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-report-copy&quot;&gt;
+                &lt;div class=&quot;alchemy-rfc-section-heading&quot;&gt;
+                  &lt;span class=&quot;alchemy-rfc-verdict alchemy-rfc-verdict-pink&quot;&gt;UNREAD&lt;/span&gt;
+                  &lt;span class=&quot;alchemy-rfc-timestamp&quot;&gt;Completed 2:13 AM&lt;/span&gt;
+                &lt;/div&gt;
+                &lt;h2&gt;Dependency review&lt;/h2&gt;
+                &lt;p&gt;LanceDB’s release notes deprecate a call used in three places. The report found the affected files and linked the March hold decision.&lt;/p&gt;
+                &lt;div class=&quot;alchemy-rfc-inline-meta&quot;&gt;&lt;span&gt;12 sources&lt;/span&gt;&lt;span&gt;8 citations&lt;/span&gt;&lt;span&gt;Ran locally&lt;/span&gt;&lt;/div&gt;
+              &lt;/div&gt;
+              &lt;button class=&quot;alchemy-rfc-button is-primary&quot; type=&quot;button&quot;&gt;Open report&lt;/button&gt;
+            &lt;/section&gt;
+
+            &lt;section class=&quot;alchemy-rfc-report-row is-unread&quot;&gt;
+              &lt;div class=&quot;alchemy-rfc-report-marker&quot; aria-hidden=&quot;true&quot;&gt;&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-report-copy&quot;&gt;
+                &lt;div class=&quot;alchemy-rfc-section-heading&quot;&gt;
+                  &lt;span class=&quot;alchemy-rfc-verdict alchemy-rfc-verdict-pink&quot;&gt;UNREAD&lt;/span&gt;
+                  &lt;span class=&quot;alchemy-rfc-timestamp&quot;&gt;Completed 3:08 AM&lt;/span&gt;
+                &lt;/div&gt;
+                &lt;h2&gt;Interview follow-ups&lt;/h2&gt;
+                &lt;p&gt;Three interviews repeated the same export concern. The report grouped the passages and drafted two questions for the next call.&lt;/p&gt;
+                &lt;div class=&quot;alchemy-rfc-inline-meta&quot;&gt;&lt;span&gt;6 recordings&lt;/span&gt;&lt;span&gt;11 citations&lt;/span&gt;&lt;span&gt;Ran locally&lt;/span&gt;&lt;/div&gt;
+              &lt;/div&gt;
+              &lt;button class=&quot;alchemy-rfc-button&quot; type=&quot;button&quot;&gt;Open report&lt;/button&gt;
+            &lt;/section&gt;
+
+            &lt;div class=&quot;alchemy-rfc-handoff-note&quot;&gt;
+              &lt;span class=&quot;alchemy-rfc-handoff-icon&quot; aria-hidden=&quot;true&quot;&gt;☾&lt;/span&gt;
+              &lt;div&gt;&lt;strong&gt;The window stayed closed.&lt;/strong&gt;&lt;small&gt;Scheduled reports and source syncs continued from the menu bar.&lt;/small&gt;&lt;/div&gt;
+            &lt;/div&gt;
+          &lt;/article&gt;
+        &lt;/main&gt;
+
+        &lt;aside class=&quot;alchemy-rfc-side alchemy-rfc-right&quot;&gt;
+          &lt;div class=&quot;alchemy-rfc-side-header&quot;&gt;&lt;span&gt;REPORTS&lt;/span&gt;&lt;span aria-hidden=&quot;true&quot;&gt;＋&lt;/span&gt;&lt;/div&gt;
+          &lt;div class=&quot;alchemy-rfc-rail-body&quot;&gt;
+            &lt;div class=&quot;alchemy-rfc-rail-status&quot;&gt;
+              &lt;span class=&quot;alchemy-rfc-status-dot&quot;&gt;&lt;/span&gt;
+              &lt;span&gt;&lt;strong&gt;Night Shift on&lt;/strong&gt;&lt;small&gt;Next due · tomorrow after 2:13 AM&lt;/small&gt;&lt;/span&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-rail-section&quot;&gt;
+              &lt;div class=&quot;alchemy-rfc-rail-label&quot;&gt;SCHEDULED&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-schedule-row&quot;&gt;
+                &lt;div&gt;&lt;strong&gt;Dependency review&lt;/strong&gt;&lt;small&gt;Daily · last ran 2:13 AM&lt;/small&gt;&lt;/div&gt;
+                &lt;div class=&quot;alchemy-rfc-schedule-actions&quot;&gt;&lt;span class=&quot;alchemy-rfc-state alchemy-rfc-state-on&quot;&gt;● On&lt;/span&gt;&lt;button type=&quot;button&quot;&gt;Run now&lt;/button&gt;&lt;/div&gt;
+              &lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-schedule-row&quot;&gt;
+                &lt;div&gt;&lt;strong&gt;Interview follow-ups&lt;/strong&gt;&lt;small&gt;Weekly · last ran 3:08 AM&lt;/small&gt;&lt;/div&gt;
+                &lt;div class=&quot;alchemy-rfc-schedule-actions&quot;&gt;&lt;span class=&quot;alchemy-rfc-state alchemy-rfc-state-on&quot;&gt;● On&lt;/span&gt;&lt;button type=&quot;button&quot;&gt;Run now&lt;/button&gt;&lt;/div&gt;
+              &lt;/div&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-rail-section&quot;&gt;
+              &lt;div class=&quot;alchemy-rfc-rail-label&quot;&gt;LAST RUN&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-receipt&quot;&gt;&lt;span&gt;Reports completed&lt;/span&gt;&lt;strong&gt;2 of 2&lt;/strong&gt;&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-receipt&quot;&gt;&lt;span&gt;Finished&lt;/span&gt;&lt;strong&gt;3:08 AM&lt;/strong&gt;&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-receipt&quot;&gt;&lt;span&gt;Sources&lt;/span&gt;&lt;strong&gt;Synced&lt;/strong&gt;&lt;/div&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-rail-section&quot;&gt;
+              &lt;button class=&quot;alchemy-rfc-button alchemy-rfc-button-block&quot; type=&quot;button&quot;&gt;Edit schedules&lt;/button&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-quiet-note&quot;&gt;Due reports run one at a time. After sleep, each runs once on wake.&lt;/div&gt;
+          &lt;/div&gt;
+        &lt;/aside&gt;
+      &lt;/div&gt;
+    &lt;/div&gt;
+  &lt;/section&gt;
+
+  &lt;section class=&quot;alchemy-rfc-version&quot; id=&quot;alchemy-rfc-panel-residency&quot; role=&quot;tabpanel&quot; aria-labelledby=&quot;alchemy-rfc-tab-residency&quot; data-alchemy-rfc-panel=&quot;residency&quot; hidden&gt;
+    &lt;div class=&quot;alchemy-rfc-window alchemy-rfc-settings-window&quot;&gt;
+      &lt;header class=&quot;alchemy-rfc-titlebar&quot;&gt;
+        &lt;div class=&quot;alchemy-rfc-traffic&quot; aria-hidden=&quot;true&quot;&gt;&lt;span&gt;&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;/div&gt;
+        &lt;span class=&quot;alchemy-rfc-settings-mark&quot; aria-hidden=&quot;true&quot;&gt;⚗&lt;/span&gt;
+        &lt;strong&gt;Alchemy Settings&lt;/strong&gt;
+        &lt;span class=&quot;alchemy-rfc-title-spacer&quot;&gt;&lt;/span&gt;
+        &lt;span class=&quot;alchemy-rfc-title-chip alchemy-rfc-local&quot;&gt;● Running in menu bar&lt;/span&gt;
+      &lt;/header&gt;
+
+      &lt;div class=&quot;alchemy-rfc-settings-layout&quot;&gt;
+        &lt;aside class=&quot;alchemy-rfc-settings-nav&quot;&gt;
+          &lt;button class=&quot;alchemy-rfc-settings-nav-row is-selected&quot; type=&quot;button&quot;&gt;&lt;span aria-hidden=&quot;true&quot;&gt;⚙&lt;/span&gt;&lt;span&gt;General&lt;/span&gt;&lt;/button&gt;
+          &lt;button class=&quot;alchemy-rfc-settings-nav-row&quot; type=&quot;button&quot;&gt;&lt;span aria-hidden=&quot;true&quot;&gt;⌕&lt;/span&gt;&lt;span&gt;Search &amp;amp; retrieval&lt;/span&gt;&lt;/button&gt;
+          &lt;button class=&quot;alchemy-rfc-settings-nav-row&quot; type=&quot;button&quot;&gt;&lt;span aria-hidden=&quot;true&quot;&gt;⌾&lt;/span&gt;&lt;span&gt;Models&lt;/span&gt;&lt;/button&gt;
+          &lt;button class=&quot;alchemy-rfc-settings-nav-row&quot; type=&quot;button&quot;&gt;&lt;span aria-hidden=&quot;true&quot;&gt;▥&lt;/span&gt;&lt;span&gt;Storage&lt;/span&gt;&lt;/button&gt;
+          &lt;button class=&quot;alchemy-rfc-settings-nav-row&quot; type=&quot;button&quot;&gt;&lt;span aria-hidden=&quot;true&quot;&gt;◇&lt;/span&gt;&lt;span&gt;Privacy&lt;/span&gt;&lt;/button&gt;
+          &lt;div class=&quot;alchemy-rfc-settings-version&quot;&gt;Night Shift v1 concept&lt;br&gt;Alchemy for macOS&lt;/div&gt;
+        &lt;/aside&gt;
+
+        &lt;main class=&quot;alchemy-rfc-settings-main&quot;&gt;
+          &lt;div class=&quot;alchemy-rfc-settings-heading&quot;&gt;
+            &lt;div class=&quot;alchemy-rfc-kicker&quot;&gt;NIGHT SHIFT V1 · GENERAL&lt;/div&gt;
+            &lt;h1&gt;Keep Alchemy close at hand&lt;/h1&gt;
+            &lt;p&gt;When the menu bar icon is on, closing the window leaves Alchemy available so scheduled reports and source syncs can keep running.&lt;/p&gt;
+          &lt;/div&gt;
+
+          &lt;section class=&quot;alchemy-rfc-settings-section&quot;&gt;
+            &lt;div class=&quot;alchemy-rfc-settings-copy&quot;&gt;&lt;strong&gt;Menu bar&lt;/strong&gt;&lt;small&gt;See status and return to Alchemy without keeping a window open.&lt;/small&gt;&lt;/div&gt;
+            &lt;label class=&quot;alchemy-rfc-switch-row&quot; for=&quot;alchemy-rfc-show-menu&quot;&gt;
+              &lt;span&gt;&lt;strong&gt;Show menu bar icon&lt;/strong&gt;&lt;small&gt;Turn off to quit Alchemy when its last window closes&lt;/small&gt;&lt;/span&gt;
+              &lt;input id=&quot;alchemy-rfc-show-menu&quot; type=&quot;checkbox&quot; checked&gt;
+            &lt;/label&gt;
+            &lt;label class=&quot;alchemy-rfc-switch-row&quot; for=&quot;alchemy-rfc-launch-login&quot;&gt;
+              &lt;span&gt;&lt;strong&gt;Launch at login&lt;/strong&gt;&lt;small&gt;Starts Alchemy when you sign in&lt;/small&gt;&lt;/span&gt;
+              &lt;input id=&quot;alchemy-rfc-launch-login&quot; type=&quot;checkbox&quot; checked&gt;
+            &lt;/label&gt;
+            &lt;label class=&quot;alchemy-rfc-switch-row&quot; for=&quot;alchemy-rfc-notifications&quot;&gt;
+              &lt;span&gt;&lt;strong&gt;Show notifications&lt;/strong&gt;&lt;small&gt;Notify when scheduled reports are ready&lt;/small&gt;&lt;/span&gt;
+              &lt;input id=&quot;alchemy-rfc-notifications&quot; type=&quot;checkbox&quot; checked&gt;
+            &lt;/label&gt;
+          &lt;/section&gt;
+
+          &lt;section class=&quot;alchemy-rfc-settings-section&quot;&gt;
+            &lt;div class=&quot;alchemy-rfc-settings-copy&quot;&gt;&lt;strong&gt;Closing Alchemy&lt;/strong&gt;&lt;small&gt;The red window button closes the window, not the app.&lt;/small&gt;&lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-behavior-row&quot;&gt;&lt;span aria-hidden=&quot;true&quot;&gt;⌁&lt;/span&gt;&lt;div&gt;&lt;strong&gt;Reports keep their schedule&lt;/strong&gt;&lt;small&gt;Runs continue while the menu bar icon is present.&lt;/small&gt;&lt;/div&gt;&lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-behavior-row&quot;&gt;&lt;span aria-hidden=&quot;true&quot;&gt;↻&lt;/span&gt;&lt;div&gt;&lt;strong&gt;Source sync continues&lt;/strong&gt;&lt;small&gt;Current notebook sources stay fresh in the background.&lt;/small&gt;&lt;/div&gt;&lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-behavior-row&quot;&gt;&lt;span aria-hidden=&quot;true&quot;&gt;⌘&lt;/span&gt;&lt;div&gt;&lt;strong&gt;Quit is explicit&lt;/strong&gt;&lt;small&gt;Use ⌘Q, the app menu’s Quit, or tray Quit Alchemy to stop all background work.&lt;/small&gt;&lt;/div&gt;&lt;/div&gt;
+          &lt;/section&gt;
+        &lt;/main&gt;
+
+        &lt;aside class=&quot;alchemy-rfc-settings-context&quot;&gt;
+          &lt;div class=&quot;alchemy-rfc-rail-label&quot;&gt;CURRENT STATUS&lt;/div&gt;
+          &lt;div class=&quot;alchemy-rfc-context-status&quot;&gt;&lt;span class=&quot;alchemy-rfc-status-dot&quot;&gt;&lt;/span&gt;&lt;div&gt;&lt;strong&gt;Night Shift on&lt;/strong&gt;&lt;small&gt;2 reports scheduled&lt;/small&gt;&lt;/div&gt;&lt;/div&gt;
+          &lt;div class=&quot;alchemy-rfc-context-rule&quot;&gt;&lt;/div&gt;
+          &lt;div class=&quot;alchemy-rfc-receipt&quot;&gt;&lt;span&gt;Last report&lt;/span&gt;&lt;strong&gt;3:08 AM&lt;/strong&gt;&lt;/div&gt;
+          &lt;div class=&quot;alchemy-rfc-receipt&quot;&gt;&lt;span&gt;Sources&lt;/span&gt;&lt;strong&gt;Synced&lt;/strong&gt;&lt;/div&gt;
+          &lt;div class=&quot;alchemy-rfc-receipt&quot;&gt;&lt;span&gt;Next due&lt;/span&gt;&lt;strong&gt;Tomorrow after 2:13 AM&lt;/strong&gt;&lt;/div&gt;
+          &lt;p class=&quot;alchemy-rfc-context-note&quot;&gt;Pause stops report runs until 6:00 AM. Source sync continues.&lt;/p&gt;
+        &lt;/aside&gt;
+      &lt;/div&gt;
+
+      &lt;div class=&quot;alchemy-rfc-menubar-caret&quot; aria-hidden=&quot;true&quot;&gt;&lt;/div&gt;
+      &lt;div class=&quot;alchemy-rfc-menubar-popover&quot; role=&quot;menu&quot; aria-label=&quot;Alchemy menu bar controls&quot;&gt;
+        &lt;div class=&quot;alchemy-rfc-menu-statusline&quot; id=&quot;alchemy-rfc-menu-status&quot; aria-disabled=&quot;true&quot;&gt;Last night: 2 reports · sources synced 4 min ago&lt;/div&gt;
+        &lt;button class=&quot;alchemy-rfc-menu-item is-emphasis&quot; type=&quot;button&quot; role=&quot;menuitem&quot;&gt;&lt;span&gt;Open Reports&lt;/span&gt;&lt;span aria-hidden=&quot;true&quot;&gt;2 unread&lt;/span&gt;&lt;/button&gt;
+        &lt;div class=&quot;alchemy-rfc-menu-rule&quot;&gt;&lt;/div&gt;
+        &lt;button class=&quot;alchemy-rfc-menu-item&quot; type=&quot;button&quot; role=&quot;menuitem&quot;&gt;&lt;span&gt;Open Alchemy&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;/button&gt;
+        &lt;button class=&quot;alchemy-rfc-menu-item&quot; type=&quot;button&quot; role=&quot;menuitem&quot;&gt;&lt;span&gt;Ask Alchemy…&lt;/span&gt;&lt;span aria-hidden=&quot;true&quot;&gt;⌥Space&lt;/span&gt;&lt;/button&gt;
+        &lt;div class=&quot;alchemy-rfc-menu-rule&quot;&gt;&lt;/div&gt;
+        &lt;button class=&quot;alchemy-rfc-menu-item&quot; type=&quot;button&quot; role=&quot;menuitem&quot;&gt;&lt;span&gt;Add Clipboard Source…&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;/button&gt;
+        &lt;button class=&quot;alchemy-rfc-menu-item&quot; type=&quot;button&quot; role=&quot;menuitem&quot;&gt;&lt;span&gt;Add URL Source…&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;/button&gt;
+        &lt;button class=&quot;alchemy-rfc-menu-item&quot; type=&quot;button&quot; role=&quot;menuitem&quot;&gt;&lt;span&gt;Add Text Source…&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;/button&gt;
+        &lt;div class=&quot;alchemy-rfc-menu-rule&quot;&gt;&lt;/div&gt;
+        &lt;div class=&quot;alchemy-rfc-menu-heading&quot;&gt;RECENT NOTEBOOKS&lt;/div&gt;
+        &lt;button class=&quot;alchemy-rfc-menu-item&quot; type=&quot;button&quot; role=&quot;menuitem&quot;&gt;&lt;span&gt;Alchemy Development&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;/button&gt;
+        &lt;div class=&quot;alchemy-rfc-menu-rule&quot;&gt;&lt;/div&gt;
+        &lt;button class=&quot;alchemy-rfc-menu-item&quot; id=&quot;alchemy-rfc-pause-button&quot; type=&quot;button&quot; role=&quot;menuitem&quot;&gt;&lt;span id=&quot;alchemy-rfc-pause-label&quot;&gt;Pause until morning&lt;/span&gt;&lt;span aria-hidden=&quot;true&quot;&gt;☾&lt;/span&gt;&lt;/button&gt;
+        &lt;div class=&quot;alchemy-rfc-menu-rule&quot;&gt;&lt;/div&gt;
+        &lt;button class=&quot;alchemy-rfc-menu-item&quot; type=&quot;button&quot; role=&quot;menuitem&quot;&gt;&lt;span&gt;Quit Alchemy&lt;/span&gt;&lt;span aria-hidden=&quot;true&quot;&gt;⌘Q&lt;/span&gt;&lt;/button&gt;
+      &lt;/div&gt;
+
+      &lt;div class=&quot;alchemy-rfc-notification&quot; role=&quot;status&quot; aria-label=&quot;Alchemy background notification&quot;&gt;
+        &lt;span class=&quot;alchemy-rfc-notification-preview&quot;&gt;ONE-TIME FIRST-CLOSE PREVIEW&lt;/span&gt;
+        &lt;div class=&quot;alchemy-rfc-notification-icon&quot; aria-hidden=&quot;true&quot;&gt;⚗&lt;/div&gt;
+        &lt;div&gt;&lt;strong&gt;Alchemy is still working&lt;/strong&gt;&lt;p&gt;Alchemy keeps working in the menu bar — reports and syncs run on schedule. Quit from the menu bar icon.&lt;/p&gt;&lt;/div&gt;
+        &lt;span class=&quot;alchemy-rfc-notification-time&quot;&gt;now&lt;/span&gt;
+      &lt;/div&gt;
+    &lt;/div&gt;
+  &lt;/section&gt;
+
+  &lt;section class=&quot;alchemy-rfc-version&quot; id=&quot;alchemy-rfc-panel-staff&quot; role=&quot;tabpanel&quot; aria-labelledby=&quot;alchemy-rfc-tab-staff&quot; data-alchemy-rfc-panel=&quot;staff&quot; hidden&gt;
+    &lt;div class=&quot;alchemy-rfc-window alchemy-rfc-staff-window&quot;&gt;
+      &lt;header class=&quot;alchemy-rfc-homebar&quot;&gt;
+        &lt;div class=&quot;alchemy-rfc-traffic&quot; aria-hidden=&quot;true&quot;&gt;&lt;span&gt;&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;/div&gt;
+        &lt;div class=&quot;alchemy-rfc-home-brand&quot;&gt;&lt;span aria-hidden=&quot;true&quot;&gt;⚗&lt;/span&gt;&lt;strong&gt;Alchemy&lt;/strong&gt;&lt;/div&gt;
+        &lt;nav class=&quot;alchemy-rfc-home-tabs&quot; aria-label=&quot;Alchemy sections&quot;&gt;
+          &lt;button type=&quot;button&quot;&gt;Notebooks&lt;/button&gt;
+          &lt;button type=&quot;button&quot;&gt;Brief&lt;/button&gt;
+          &lt;button type=&quot;button&quot;&gt;Registry&lt;/button&gt;
+          &lt;button class=&quot;is-selected&quot; type=&quot;button&quot; aria-current=&quot;page&quot;&gt;Staff&lt;/button&gt;
+        &lt;/nav&gt;
+        &lt;span class=&quot;alchemy-rfc-title-spacer&quot;&gt;&lt;/span&gt;
+        &lt;button class=&quot;alchemy-rfc-icon-button&quot; type=&quot;button&quot; aria-label=&quot;Search&quot;&gt;⌕&lt;/button&gt;
+        &lt;button class=&quot;alchemy-rfc-icon-button&quot; type=&quot;button&quot; aria-label=&quot;Settings&quot;&gt;⚙&lt;/button&gt;
+      &lt;/header&gt;
+
+      &lt;div class=&quot;alchemy-rfc-staff-layout&quot;&gt;
+        &lt;aside class=&quot;alchemy-rfc-staff-nav&quot;&gt;
+          &lt;div class=&quot;alchemy-rfc-side-header&quot;&gt;&lt;span&gt;STAFF&lt;/span&gt;&lt;/div&gt;
+          &lt;div class=&quot;alchemy-rfc-list-label&quot;&gt;OVERVIEW&lt;/div&gt;
+          &lt;button class=&quot;alchemy-rfc-staff-nav-row is-selected&quot; type=&quot;button&quot;&gt;&lt;span aria-hidden=&quot;true&quot;&gt;☾&lt;/span&gt;&lt;span&gt;&lt;strong&gt;Last night&lt;/strong&gt;&lt;small&gt;3 runs · 2 flags&lt;/small&gt;&lt;/span&gt;&lt;span class=&quot;alchemy-rfc-new-dot&quot;&gt;&lt;/span&gt;&lt;/button&gt;
+          &lt;button class=&quot;alchemy-rfc-staff-nav-row&quot; type=&quot;button&quot;&gt;&lt;span aria-hidden=&quot;true&quot;&gt;◷&lt;/span&gt;&lt;span&gt;&lt;strong&gt;Scheduled&lt;/strong&gt;&lt;small&gt;4 recurring runs&lt;/small&gt;&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;/button&gt;
+          &lt;button class=&quot;alchemy-rfc-staff-nav-row&quot; type=&quot;button&quot;&gt;&lt;span aria-hidden=&quot;true&quot;&gt;⌁&lt;/span&gt;&lt;span&gt;&lt;strong&gt;Watchers&lt;/strong&gt;&lt;small&gt;6 sources watched&lt;/small&gt;&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;/button&gt;
+          &lt;div class=&quot;alchemy-rfc-list-label&quot;&gt;RECENT WORK&lt;/div&gt;
+          &lt;button class=&quot;alchemy-rfc-staff-nav-row&quot; type=&quot;button&quot;&gt;&lt;span aria-hidden=&quot;true&quot;&gt;#&lt;/span&gt;&lt;span&gt;&lt;strong&gt;Alchemy Development&lt;/strong&gt;&lt;small&gt;Dependency watch&lt;/small&gt;&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;/button&gt;
+          &lt;button class=&quot;alchemy-rfc-staff-nav-row&quot; type=&quot;button&quot;&gt;&lt;span aria-hidden=&quot;true&quot;&gt;◉&lt;/span&gt;&lt;span&gt;&lt;strong&gt;Customer Research&lt;/strong&gt;&lt;small&gt;Interview synthesis&lt;/small&gt;&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;/button&gt;
+          &lt;button class=&quot;alchemy-rfc-staff-nav-row&quot; type=&quot;button&quot;&gt;&lt;span aria-hidden=&quot;true&quot;&gt;▤&lt;/span&gt;&lt;span&gt;&lt;strong&gt;Health &amp;amp; Insurance&lt;/strong&gt;&lt;small&gt;Claim check&lt;/small&gt;&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;/button&gt;
+          &lt;div class=&quot;alchemy-rfc-staff-nav-footer&quot;&gt;&lt;span class=&quot;alchemy-rfc-status-dot&quot;&gt;&lt;/span&gt; Resident · this Mac&lt;/div&gt;
+        &lt;/aside&gt;
+
+        &lt;main class=&quot;alchemy-rfc-staff-main&quot;&gt;
+          &lt;div class=&quot;alchemy-rfc-staff-toolbar&quot;&gt;
+            &lt;div&gt;&lt;div class=&quot;alchemy-rfc-kicker&quot;&gt;FULL V12 TARGET · THURSDAY · 7:42 AM&lt;/div&gt;&lt;h1&gt;Overnight: 3 runs, 2 flags · $0.58&lt;/h1&gt;&lt;/div&gt;
+            &lt;button class=&quot;alchemy-rfc-button&quot; type=&quot;button&quot;&gt;Pause until morning&lt;/button&gt;
+          &lt;/div&gt;
+
+          &lt;section class=&quot;alchemy-rfc-staff-section&quot;&gt;
+            &lt;div class=&quot;alchemy-rfc-staff-section-heading&quot;&gt;&lt;span&gt;LAST NIGHT&#x27;S RUNS&lt;/span&gt;&lt;span&gt;3 complete · 1 sealed&lt;/span&gt;&lt;/div&gt;
+            &lt;article class=&quot;alchemy-rfc-work-row&quot;&gt;
+              &lt;div class=&quot;alchemy-rfc-work-icon is-flag&quot; aria-hidden=&quot;true&quot;&gt;!&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-work-copy&quot;&gt;&lt;div&gt;&lt;strong&gt;Dependency watch&lt;/strong&gt;&lt;span class=&quot;alchemy-rfc-verdict alchemy-rfc-verdict-pink&quot;&gt;IMPACT MATCH&lt;/span&gt;&lt;/div&gt;&lt;p&gt;LanceDB deprecated a call used in three places; the March hold condition may now be satisfied.&lt;/p&gt;&lt;small&gt;Alchemy Development · 2:13 AM · 8 citations&lt;/small&gt;&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-work-action&quot;&gt;&lt;strong&gt;$0.39&lt;/strong&gt;&lt;button type=&quot;button&quot;&gt;Open report&lt;/button&gt;&lt;/div&gt;
+            &lt;/article&gt;
+            &lt;div class=&quot;alchemy-rfc-boundary-note&quot;&gt;&lt;span aria-hidden=&quot;true&quot;&gt;⌾&lt;/span&gt;&lt;span&gt;&lt;strong&gt;Prepared for you.&lt;/strong&gt; It will not change the repository.&lt;/span&gt;&lt;/div&gt;
+            &lt;article class=&quot;alchemy-rfc-work-row&quot;&gt;
+              &lt;div class=&quot;alchemy-rfc-work-icon is-ready&quot; aria-hidden=&quot;true&quot;&gt;✓&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-work-copy&quot;&gt;&lt;div&gt;&lt;strong&gt;Interview synthesis&lt;/strong&gt;&lt;span class=&quot;alchemy-rfc-verdict alchemy-rfc-verdict-mint&quot;&gt;READY&lt;/span&gt;&lt;/div&gt;&lt;p&gt;Three interviews repeated the same export concern. Two follow-up questions are drafted.&lt;/p&gt;&lt;small&gt;Customer Research · 3:08 AM · 11 citations&lt;/small&gt;&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-work-action&quot;&gt;&lt;strong&gt;$0.19&lt;/strong&gt;&lt;button type=&quot;button&quot;&gt;Open note&lt;/button&gt;&lt;/div&gt;
+            &lt;/article&gt;
+            &lt;article class=&quot;alchemy-rfc-work-row&quot;&gt;
+              &lt;div class=&quot;alchemy-rfc-work-icon is-flag&quot; aria-hidden=&quot;true&quot;&gt;!&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-work-copy&quot;&gt;&lt;div&gt;&lt;strong&gt;Claim reconciliation&lt;/strong&gt;&lt;span class=&quot;alchemy-rfc-verdict alchemy-rfc-verdict-pink&quot;&gt;MISMATCH&lt;/span&gt;&lt;/div&gt;&lt;p&gt;A new provider bill asks for $49 more than the EOB states as patient responsibility.&lt;/p&gt;&lt;small&gt;Health &amp;amp; Insurance · 4:26 AM · 5 citations&lt;/small&gt;&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-work-action&quot;&gt;&lt;strong&gt;$0.00&lt;/strong&gt;&lt;button type=&quot;button&quot;&gt;Review difference&lt;/button&gt;&lt;/div&gt;
+            &lt;/article&gt;
+          &lt;/section&gt;
+
+          &lt;section class=&quot;alchemy-rfc-staff-section alchemy-rfc-upcoming-section&quot;&gt;
+            &lt;div class=&quot;alchemy-rfc-staff-section-heading&quot;&gt;&lt;span&gt;UPCOMING&lt;/span&gt;&lt;span&gt;Next 24 hours&lt;/span&gt;&lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-upcoming-row&quot;&gt;&lt;span class=&quot;alchemy-rfc-state alchemy-rfc-state-on&quot;&gt;● Scheduled&lt;/span&gt;&lt;strong&gt;Release brief&lt;/strong&gt;&lt;span&gt;Today · 6:00 PM&lt;/span&gt;&lt;span&gt;Alchemy Development&lt;/span&gt;&lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-upcoming-row&quot;&gt;&lt;span class=&quot;alchemy-rfc-state alchemy-rfc-state-on&quot;&gt;● Watching&lt;/span&gt;&lt;strong&gt;Pricing page changes&lt;/strong&gt;&lt;span&gt;Checks every 4 hours&lt;/span&gt;&lt;span&gt;Market Research&lt;/span&gt;&lt;/div&gt;
+          &lt;/section&gt;
+
+          &lt;section class=&quot;alchemy-rfc-staff-section alchemy-rfc-watcher-section&quot;&gt;
+            &lt;div class=&quot;alchemy-rfc-staff-section-heading&quot;&gt;&lt;span&gt;LATEST WATCHER DIFF&lt;/span&gt;&lt;span&gt;4 min ago&lt;/span&gt;&lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-watcher-row&quot;&gt;&lt;span aria-hidden=&quot;true&quot;&gt;⌁&lt;/span&gt;&lt;div&gt;&lt;div class=&quot;alchemy-rfc-watcher-title&quot;&gt;&lt;strong&gt;Kokoro model card changed&lt;/strong&gt;&lt;span class=&quot;alchemy-rfc-verdict alchemy-rfc-verdict-mint&quot;&gt;STILL HOLDS&lt;/span&gt;&lt;/div&gt;&lt;p&gt;New Apple Silicon memory guidance was added. No tracked conclusion changed.&lt;/p&gt;&lt;/div&gt;&lt;button type=&quot;button&quot;&gt;Inspect diff&lt;/button&gt;&lt;/div&gt;
+          &lt;/section&gt;
+
+          &lt;form class=&quot;alchemy-rfc-ask&quot; onsubmit=&quot;return false&quot;&gt;
+            &lt;label for=&quot;alchemy-rfc-ask-field&quot;&gt;Ask across your work, life, and notebooks&lt;/label&gt;
+            &lt;div&gt;&lt;input id=&quot;alchemy-rfc-ask-field&quot; type=&quot;text&quot; placeholder=&quot;What ran while I was away?&quot; aria-label=&quot;Ask Alchemy&quot;&gt;&lt;button type=&quot;submit&quot; aria-label=&quot;Send&quot;&gt;↑&lt;/button&gt;&lt;/div&gt;
+          &lt;/form&gt;
+        &lt;/main&gt;
+
+        &lt;aside class=&quot;alchemy-rfc-staff-rail&quot;&gt;
+          &lt;div class=&quot;alchemy-rfc-side-header&quot;&gt;&lt;span&gt;METER &amp;amp; SEAL&lt;/span&gt;&lt;span aria-hidden=&quot;true&quot;&gt;◫&lt;/span&gt;&lt;/div&gt;
+          &lt;div class=&quot;alchemy-rfc-rail-body&quot;&gt;
+            &lt;div class=&quot;alchemy-rfc-seal&quot;&gt;
+              &lt;span aria-hidden=&quot;true&quot;&gt;⌾&lt;/span&gt;
+              &lt;span&gt;&lt;strong&gt;Health &amp;amp; Insurance · Never leaves this Mac&lt;/strong&gt;&lt;small&gt;0 gateway calls · 0 agent CLI&lt;/small&gt;&lt;/span&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-rail-section&quot;&gt;
+              &lt;div class=&quot;alchemy-rfc-rail-label&quot;&gt;OVERNIGHT METER&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-receipt&quot;&gt;&lt;span&gt;Metered calls&lt;/span&gt;&lt;strong&gt;3&lt;/strong&gt;&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-receipt&quot;&gt;&lt;span&gt;Gateway spend&lt;/span&gt;&lt;strong&gt;$0.58&lt;/strong&gt;&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-receipt&quot;&gt;&lt;span&gt;Sealed runs&lt;/span&gt;&lt;strong&gt;1 local&lt;/strong&gt;&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-budget&quot;&gt;&lt;div&gt;&lt;span&gt;Nightly cap&lt;/span&gt;&lt;strong&gt;$1.00&lt;/strong&gt;&lt;/div&gt;&lt;div&gt;&lt;span style=&quot;width:58%&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
+              &lt;p class=&quot;alchemy-rfc-cap-note&quot;&gt;&lt;strong&gt;At cap:&lt;/strong&gt; degrades to local&lt;/p&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-rail-section&quot;&gt;
+              &lt;div class=&quot;alchemy-rfc-rail-label&quot;&gt;EGRESS RECEIPT&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-egress-row&quot;&gt;&lt;strong&gt;Alchemy Development&lt;/strong&gt;&lt;small&gt;OpenAI · 2 calls · $0.39&lt;/small&gt;&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-egress-row&quot;&gt;&lt;strong&gt;Customer Research&lt;/strong&gt;&lt;small&gt;Anthropic · 1 call · $0.19&lt;/small&gt;&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-egress-row&quot;&gt;&lt;strong&gt;Health &amp;amp; Insurance&lt;/strong&gt;&lt;small&gt;Ollama local · 0 gateway calls · 0 agent CLI&lt;/small&gt;&lt;/div&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-rail-section&quot;&gt;
+              &lt;div class=&quot;alchemy-rfc-rail-label&quot;&gt;LAST NIGHT&#x27;S AUTHORITY&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-authority-row&quot;&gt;&lt;span class=&quot;alchemy-rfc-check&quot;&gt;✓&lt;/span&gt;&lt;span&gt;&lt;strong&gt;Read scheduled scopes&lt;/strong&gt;&lt;small&gt;Selected sources in 3 notebooks&lt;/small&gt;&lt;/span&gt;&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-authority-row&quot;&gt;&lt;span class=&quot;alchemy-rfc-check&quot;&gt;✓&lt;/span&gt;&lt;span&gt;&lt;strong&gt;Write reports &amp;amp; notes&lt;/strong&gt;&lt;small&gt;Findings link to their anchors&lt;/small&gt;&lt;/span&gt;&lt;/div&gt;
+              &lt;div class=&quot;alchemy-rfc-authority-row&quot;&gt;&lt;span class=&quot;alchemy-rfc-muted&quot;&gt;—&lt;/span&gt;&lt;span&gt;&lt;strong&gt;No outward actions in these runs&lt;/strong&gt;&lt;small&gt;Files, email, and repositories unchanged&lt;/small&gt;&lt;/span&gt;&lt;/div&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;alchemy-rfc-rail-section&quot;&gt;
+              &lt;div class=&quot;alchemy-rfc-rail-label&quot;&gt;NEXT RUN&lt;/div&gt;
+              &lt;strong class=&quot;alchemy-rfc-rail-block&quot;&gt;Release brief · 6:00 PM&lt;/strong&gt;
+              &lt;button class=&quot;alchemy-rfc-button alchemy-rfc-button-block&quot; type=&quot;button&quot;&gt;Pause until morning&lt;/button&gt;
+            &lt;/div&gt;
+          &lt;/div&gt;
+        &lt;/aside&gt;
+      &lt;/div&gt;
+    &lt;/div&gt;
+  &lt;/section&gt;
+
+  &lt;style&gt;
+    #alchemy-steward-rfc-concepts {
+      --alchemy-rfc-canvas: #1e1a29;
+      --alchemy-rfc-surface: #262335;
+      --alchemy-rfc-surface-2: #2a2139;
+      --alchemy-rfc-elevated: #34294f;
+      --alchemy-rfc-side: #2e2b3d;
+      --alchemy-rfc-fg: #f4f2ff;
+      --alchemy-rfc-muted: #9096c3;
+      --alchemy-rfc-subtle: #777b9f;
+      --alchemy-rfc-pink: #ff7edb;
+      --alchemy-rfc-cyan: #36f9f6;
+      --alchemy-rfc-mint: #72f1b8;
+      --alchemy-rfc-red: #fe4a56;
+      --alchemy-rfc-amber: #e8a33d;
+      --alchemy-rfc-border: rgba(176, 132, 235, 0.16);
+      --alchemy-rfc-border-strong: rgba(176, 132, 235, 0.28);
+      width: 100%;
+      color: var(--alchemy-rfc-fg);
+    }
+
+    #alchemy-steward-rfc-concepts * {
+      box-sizing: border-box;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-switcher {
+      margin-bottom: 0.75rem;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-version[hidden] {
+      display: none !important;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-window {
+      position: relative;
+      overflow: hidden;
+      width: 100%;
+      min-width: 0;
+      border: 1px solid var(--alchemy-rfc-border-strong);
+      border-radius: 14px;
+      background: var(--alchemy-rfc-canvas);
+      color: var(--alchemy-rfc-fg);
+      font-family: -apple-system, BlinkMacSystemFont, &quot;SF Pro Text&quot;, system-ui, sans-serif;
+      font-size: 13px;
+      font-weight: 400;
+      box-shadow: 0 16px 40px rgba(7, 5, 14, 0.24);
+    }
+
+    #alchemy-steward-rfc-concepts button,
+    #alchemy-steward-rfc-concepts input {
+      font: inherit;
+    }
+
+    #alchemy-steward-rfc-concepts button {
+      cursor: default;
+    }
+
+    #alchemy-steward-rfc-concepts strong {
+      font-weight: 500;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-titlebar,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-homebar {
+      display: flex;
+      min-width: 0;
+      height: 48px;
+      align-items: center;
+      gap: 10px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--alchemy-rfc-border);
+      background: var(--alchemy-rfc-canvas);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-homebar {
+      height: 54px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-traffic {
+      display: flex;
+      gap: 6px;
+      margin-right: 20px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-traffic span {
+      display: block;
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-traffic span:nth-child(1) { background: #ff5f57; }
+    #alchemy-steward-rfc-concepts .alchemy-rfc-traffic span:nth-child(2) { background: #febc2e; }
+    #alchemy-steward-rfc-concepts .alchemy-rfc-traffic span:nth-child(3) { background: #28c840; }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-back,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-book,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-mark,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-home-brand &gt; span {
+      color: var(--alchemy-rfc-cyan);
+      font-size: 16px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-back {
+      color: var(--alchemy-rfc-muted);
+      font-size: 20px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-muted {
+      color: var(--alchemy-rfc-muted);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-divider {
+      width: 1px;
+      height: 20px;
+      margin: 0 2px;
+      background: var(--alchemy-rfc-border);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-title-spacer,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-toolbar-spacer {
+      flex: 1;
+      min-width: 6px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-title-chip {
+      max-width: 240px;
+      overflow: hidden;
+      border: 1px solid var(--alchemy-rfc-border);
+      border-radius: 6px;
+      padding: 3px 8px;
+      color: var(--alchemy-rfc-muted);
+      background: var(--alchemy-rfc-surface-2);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-title-chip.alchemy-rfc-local {
+      color: var(--alchemy-rfc-mint);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-icon-button,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-button {
+      border: 1px solid var(--alchemy-rfc-border-strong);
+      color: var(--alchemy-rfc-fg);
+      background: var(--alchemy-rfc-surface-2);
+      font-weight: 500;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-icon-button {
+      display: grid;
+      width: 28px;
+      height: 28px;
+      place-items: center;
+      border-color: transparent;
+      background: transparent;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-button {
+      min-height: 32px;
+      border-radius: 6px;
+      padding: 6px 11px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-button.is-primary {
+      border-color: var(--alchemy-rfc-pink);
+      color: var(--alchemy-rfc-canvas);
+      background: var(--alchemy-rfc-pink);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-button.is-quiet {
+      border-color: transparent;
+      color: var(--alchemy-rfc-muted);
+      background: transparent;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-button-block {
+      width: 100%;
+      margin-top: 8px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-workspace {
+      display: grid;
+      min-height: 674px;
+      grid-template-columns: clamp(170px, 21.8%, 270px) minmax(0, 1fr) clamp(218px, 25%, 318px);
+      gap: 10px;
+      padding: 4px 8px 8px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-side {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid var(--alchemy-rfc-border);
+      border-radius: 12px;
+      background: var(--alchemy-rfc-side);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-side-header {
+      display: flex;
+      height: 48px;
+      flex: 0 0 48px;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--alchemy-rfc-border);
+      color: var(--alchemy-rfc-muted);
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-side-header small {
+      margin-left: 4px;
+      color: var(--alchemy-rfc-subtle);
+      font: inherit;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-side-actions {
+      font-size: 15px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-capacity {
+      padding: 10px 14px 11px;
+      border-bottom: 1px solid var(--alchemy-rfc-border);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-capacity &gt; div:first-child {
+      display: flex;
+      justify-content: space-between;
+      color: var(--alchemy-rfc-muted);
+      font-size: 11px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-meter {
+      height: 5px;
+      margin-top: 8px;
+      overflow: hidden;
+      border-radius: 4px;
+      background: var(--alchemy-rfc-surface-2);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-meter span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--alchemy-rfc-pink);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-list-label,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-rail-label,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-kicker {
+      color: var(--alchemy-rfc-subtle);
+      font-size: 10px;
+      font-weight: 500;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-list-label {
+      padding: 11px 14px 6px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-source-list {
+      min-height: 0;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-source-row {
+      display: grid;
+      min-width: 0;
+      grid-template-columns: 22px minmax(0, 1fr) 18px;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-top: 1px solid transparent;
+      border-bottom: 1px solid transparent;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-source-row.is-selected {
+      border-color: var(--alchemy-rfc-border);
+      background: var(--alchemy-rfc-surface-2);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-source-icon {
+      color: var(--alchemy-rfc-cyan);
+      font-size: 15px;
+      text-align: center;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-source-copy {
+      min-width: 0;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-source-copy strong,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-source-copy small {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-source-copy strong {
+      font-size: 12px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-source-copy small {
+      margin-top: 2px;
+      color: var(--alchemy-rfc-muted);
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-check {
+      color: var(--alchemy-rfc-mint);
+      text-align: center;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-new-dot,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-status-dot,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-report-marker {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--alchemy-rfc-pink);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-status-dot {
+      margin-top: 4px;
+      background: var(--alchemy-rfc-mint);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-side-footer,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-staff-nav-footer {
+      margin-top: auto;
+      padding: 11px 14px;
+      border-top: 1px solid var(--alchemy-rfc-border);
+      color: var(--alchemy-rfc-muted);
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-side-footer .alchemy-rfc-status-dot,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-staff-nav-footer .alchemy-rfc-status-dot {
+      margin: 0 6px 0 0;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-center {
+      min-width: 0;
+      background: var(--alchemy-rfc-canvas);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-center-toolbar {
+      display: flex;
+      height: 48px;
+      align-items: center;
+      gap: 6px;
+      border-bottom: 1px solid var(--alchemy-rfc-border);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-toolbar-tab,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-toolbar-action {
+      padding: 14px 9px 12px;
+      color: var(--alchemy-rfc-muted);
+      white-space: nowrap;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-toolbar-action {
+      color: var(--alchemy-rfc-mint);
+      font-size: 11px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-toolbar-tab.is-active {
+      border-bottom: 2px solid var(--alchemy-rfc-pink);
+      color: var(--alchemy-rfc-fg);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-paper {
+      max-width: 780px;
+      margin: 0 auto;
+      padding: 26px 18px 22px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-paper h1,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-paper h2,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-paper p,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-main h1,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-main p,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-staff-main h1,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-work-copy p,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-watcher-row p {
+      margin: 0;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-paper h1,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-main h1,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-staff-main h1 {
+      margin-top: 6px;
+      color: var(--alchemy-rfc-fg);
+      font-size: 22px;
+      font-weight: 500;
+      line-height: 1.22;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-paper h2 {
+      color: var(--alchemy-rfc-fg);
+      font-size: 15px;
+      font-weight: 500;
+      line-height: 1.35;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-paper p {
+      color: var(--alchemy-rfc-muted);
+      line-height: 1.5;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-lede {
+      margin-top: 8px !important;
+      font-size: 13px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-report-row {
+      display: grid;
+      grid-template-columns: 10px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+      margin-top: 18px;
+      padding: 17px 0;
+      border-top: 1px solid var(--alchemy-rfc-border-strong);
+      border-bottom: 1px solid var(--alchemy-rfc-border);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-report-row + .alchemy-rfc-report-row {
+      margin-top: 0;
+      border-top: 0;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-report-marker {
+      align-self: start;
+      margin-top: 6px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-section-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 7px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-report-copy &gt; p {
+      margin-top: 6px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-verdict {
+      display: inline-flex;
+      align-items: center;
+      min-height: 20px;
+      border: 1px solid currentColor;
+      border-radius: 5px;
+      padding: 2px 6px;
+      font-size: 10px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-verdict-pink { color: var(--alchemy-rfc-pink); background: rgba(255, 126, 219, 0.08); }
+    #alchemy-steward-rfc-concepts .alchemy-rfc-verdict-mint { color: var(--alchemy-rfc-mint); background: rgba(114, 241, 184, 0.08); }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-timestamp {
+      color: var(--alchemy-rfc-subtle);
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-inline-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 9px;
+      color: var(--alchemy-rfc-subtle);
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-inline-meta span + span::before {
+      margin-right: 8px;
+      color: var(--alchemy-rfc-border-strong);
+      content: &quot;·&quot;;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-handoff-note {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 22px;
+      padding-top: 15px;
+      border-top: 1px solid var(--alchemy-rfc-border);
+      color: var(--alchemy-rfc-muted);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-handoff-icon {
+      color: var(--alchemy-rfc-cyan);
+      font-size: 18px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-handoff-note strong,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-handoff-note small {
+      display: block;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-handoff-note strong {
+      color: var(--alchemy-rfc-fg);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-handoff-note small {
+      margin-top: 2px;
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-rail-body {
+      min-height: 0;
+      padding: 14px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-rail-status,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-context-status {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-rail-status strong,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-rail-status small,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-context-status strong,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-context-status small {
+      display: block;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-rail-status small,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-context-status small {
+      margin-top: 2px;
+      color: var(--alchemy-rfc-muted);
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-rail-section {
+      margin-top: 15px;
+      padding-top: 15px;
+      border-top: 1px solid var(--alchemy-rfc-border);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-schedule-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--alchemy-rfc-border);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-schedule-row strong,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-schedule-row small {
+      display: block;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-schedule-row small {
+      margin-top: 3px;
+      color: var(--alchemy-rfc-muted);
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-schedule-actions {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: flex-end;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-schedule-actions button {
+      border: 0;
+      padding: 0;
+      color: var(--alchemy-rfc-cyan);
+      background: transparent;
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-state {
+      flex: 0 0 auto;
+      font-size: 10px;
+      font-weight: 500;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-state-on {
+      color: var(--alchemy-rfc-mint);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-receipt {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 8px;
+      color: var(--alchemy-rfc-muted);
+      font-size: 11px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-receipt strong {
+      color: var(--alchemy-rfc-fg);
+      text-align: right;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-quiet-note,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-context-note,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-cap-note {
+      margin: 16px 0 0;
+      color: var(--alchemy-rfc-muted);
+      font-size: 10px;
+      line-height: 1.45;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-window {
+      min-height: 722px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-layout {
+      display: grid;
+      min-height: 674px;
+      grid-template-columns: minmax(180px, 230px) minmax(0, 1fr) minmax(190px, 250px);
+      background: var(--alchemy-rfc-canvas);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-nav,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-context {
+      padding: 16px 12px;
+      border-right: 1px solid var(--alchemy-rfc-border);
+      background: var(--alchemy-rfc-side);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-context {
+      padding: 24px 18px;
+      border-right: 0;
+      border-left: 1px solid var(--alchemy-rfc-border);
+      background: var(--alchemy-rfc-surface);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-nav {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-nav-row {
+      display: grid;
+      min-height: 38px;
+      grid-template-columns: 22px minmax(0, 1fr);
+      align-items: center;
+      gap: 7px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      padding: 7px 10px;
+      color: var(--alchemy-rfc-muted);
+      background: transparent;
+      text-align: left;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-nav-row.is-selected {
+      border-color: var(--alchemy-rfc-border);
+      color: var(--alchemy-rfc-fg);
+      background: var(--alchemy-rfc-surface-2);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-nav-row span:first-child {
+      color: var(--alchemy-rfc-cyan);
+      text-align: center;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-version {
+      margin-top: auto;
+      padding: 12px 10px;
+      color: var(--alchemy-rfc-subtle);
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-main {
+      min-width: 0;
+      padding: 38px clamp(24px, 5vw, 72px) 32px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-heading {
+      max-width: 660px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-heading &gt; p {
+      margin-top: 9px;
+      color: var(--alchemy-rfc-muted);
+      line-height: 1.5;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-section {
+      max-width: 660px;
+      margin-top: 30px;
+      border-top: 1px solid var(--alchemy-rfc-border-strong);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-copy {
+      padding: 15px 0 9px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-copy strong,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-copy small {
+      display: block;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-settings-copy small {
+      margin-top: 3px;
+      color: var(--alchemy-rfc-muted);
+      line-height: 1.45;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-switch-row {
+      display: flex;
+      min-height: 54px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--alchemy-rfc-border);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-switch-row span strong,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-switch-row span small {
+      display: block;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-switch-row span small {
+      margin-top: 2px;
+      color: var(--alchemy-rfc-muted);
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-switch-row input {
+      appearance: none;
+      width: 38px;
+      height: 22px;
+      flex: 0 0 38px;
+      border: 1px solid var(--alchemy-rfc-border-strong);
+      border-radius: 12px;
+      background: var(--alchemy-rfc-surface-2);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-switch-row input::after {
+      display: block;
+      width: 16px;
+      height: 16px;
+      margin: 2px;
+      border-radius: 50%;
+      background: var(--alchemy-rfc-muted);
+      content: &quot;&quot;;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-switch-row input:checked {
+      border-color: var(--alchemy-rfc-pink);
+      background: var(--alchemy-rfc-pink);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-switch-row input:checked::after {
+      margin-left: 18px;
+      background: var(--alchemy-rfc-canvas);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-behavior-row {
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr);
+      gap: 9px;
+      padding: 9px 0;
+      color: var(--alchemy-rfc-cyan);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-behavior-row strong,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-behavior-row small {
+      display: block;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-behavior-row strong {
+      color: var(--alchemy-rfc-fg);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-behavior-row small {
+      margin-top: 2px;
+      color: var(--alchemy-rfc-muted);
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-context-rule {
+      margin: 18px 0;
+      border-top: 1px solid var(--alchemy-rfc-border);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-menubar-caret {
+      position: absolute;
+      z-index: 5;
+      top: 44px;
+      right: 179px;
+      width: 14px;
+      height: 14px;
+      border-top: 1px solid var(--alchemy-rfc-border-strong);
+      border-left: 1px solid var(--alchemy-rfc-border-strong);
+      background: var(--alchemy-rfc-elevated);
+      transform: rotate(45deg);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-menubar-popover {
+      position: absolute;
+      z-index: 4;
+      top: 50px;
+      right: 48px;
+      width: 318px;
+      overflow: hidden;
+      border: 1px solid var(--alchemy-rfc-border-strong);
+      border-radius: 10px;
+      padding: 8px;
+      background: var(--alchemy-rfc-elevated);
+      box-shadow: 0 18px 48px rgba(5, 3, 12, 0.42);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-menu-statusline {
+      padding: 8px 9px 10px;
+      color: var(--alchemy-rfc-muted);
+      font-size: 10px;
+      line-height: 1.35;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-menu-heading {
+      padding: 4px 9px 2px;
+      color: var(--alchemy-rfc-subtle);
+      font-size: 9px;
+      font-weight: 500;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-menu-brand {
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr);
+      gap: 9px;
+      padding: 8px 9px 11px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-menu-symbol {
+      display: grid;
+      width: 30px;
+      height: 30px;
+      place-items: center;
+      border: 1px solid var(--alchemy-rfc-border-strong);
+      border-radius: 7px;
+      color: var(--alchemy-rfc-pink);
+      background: var(--alchemy-rfc-surface-2);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-menu-brand strong,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-menu-brand small {
+      display: block;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-menu-brand small {
+      margin-top: 3px;
+      color: var(--alchemy-rfc-muted);
+      font-size: 10px;
+      line-height: 1.35;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-menu-item {
+      display: flex;
+      width: 100%;
+      min-height: 34px;
+      align-items: center;
+      justify-content: space-between;
+      border: 0;
+      border-radius: 6px;
+      padding: 7px 9px;
+      color: var(--alchemy-rfc-fg);
+      background: transparent;
+      text-align: left;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-menu-item.is-emphasis {
+      color: var(--alchemy-rfc-canvas);
+      background: var(--alchemy-rfc-pink);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-menu-item span:last-child {
+      color: inherit;
+      opacity: 0.72;
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-menu-rule {
+      margin: 5px 0;
+      border-top: 1px solid var(--alchemy-rfc-border);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-notification {
+      position: absolute;
+      z-index: 3;
+      right: 22px;
+      bottom: 22px;
+      display: grid;
+      width: min(410px, calc(100% - 44px));
+      grid-template-columns: 38px minmax(0, 1fr) auto;
+      gap: 10px;
+      border: 1px solid var(--alchemy-rfc-border-strong);
+      border-radius: 12px;
+      padding: 12px;
+      color: var(--alchemy-rfc-fg);
+      background: var(--alchemy-rfc-elevated);
+      box-shadow: 0 18px 48px rgba(5, 3, 12, 0.42);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-notification-preview {
+      grid-column: 1 / -1;
+      color: var(--alchemy-rfc-subtle);
+      font-size: 9px;
+      font-weight: 500;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-notification-icon {
+      display: grid;
+      width: 36px;
+      height: 36px;
+      place-items: center;
+      border: 1px solid var(--alchemy-rfc-border-strong);
+      border-radius: 9px;
+      color: var(--alchemy-rfc-pink);
+      background: var(--alchemy-rfc-surface-2);
+      font-size: 18px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-notification p {
+      margin: 3px 0 0;
+      color: var(--alchemy-rfc-muted);
+      font-size: 10px;
+      line-height: 1.4;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-notification-time {
+      color: var(--alchemy-rfc-subtle);
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-home-brand {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-right: 26px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-home-tabs {
+      display: flex;
+      height: 34px;
+      align-items: center;
+      gap: 2px;
+      border: 1px solid var(--alchemy-rfc-border);
+      border-radius: 8px;
+      padding: 3px;
+      background: var(--alchemy-rfc-surface-2);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-home-tabs button {
+      border: 0;
+      border-radius: 5px;
+      padding: 5px 11px;
+      color: var(--alchemy-rfc-muted);
+      background: transparent;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-home-tabs button.is-selected {
+      color: var(--alchemy-rfc-fg);
+      background: var(--alchemy-rfc-elevated);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-staff-layout {
+      display: grid;
+      min-height: 668px;
+      grid-template-columns: clamp(180px, 20%, 250px) minmax(0, 1fr) clamp(220px, 24%, 300px);
+      gap: 10px;
+      padding: 5px 8px 8px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-staff-nav,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-staff-rail {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid var(--alchemy-rfc-border);
+      border-radius: 12px;
+      background: var(--alchemy-rfc-side);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-staff-nav-row {
+      display: grid;
+      min-width: 0;
+      grid-template-columns: 20px minmax(0, 1fr) 12px;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid transparent;
+      padding: 9px 11px;
+      color: var(--alchemy-rfc-muted);
+      background: transparent;
+      text-align: left;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-staff-nav-row.is-selected {
+      border-top-color: var(--alchemy-rfc-border);
+      border-bottom-color: var(--alchemy-rfc-border);
+      color: var(--alchemy-rfc-fg);
+      background: var(--alchemy-rfc-surface-2);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-staff-nav-row &gt; span:first-child {
+      color: var(--alchemy-rfc-cyan);
+      text-align: center;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-staff-nav-row strong,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-staff-nav-row small {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-staff-nav-row small {
+      margin-top: 2px;
+      color: var(--alchemy-rfc-muted);
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-staff-main {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      padding: 20px 16px 12px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-staff-toolbar {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 18px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--alchemy-rfc-border-strong);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-staff-main h1 {
+      font-size: 20px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-staff-section {
+      border-bottom: 1px solid var(--alchemy-rfc-border-strong);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-staff-section-heading {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 13px 2px 8px;
+      color: var(--alchemy-rfc-subtle);
+      font-size: 10px;
+      font-weight: 500;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-work-row {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr) 100px;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 2px;
+      border-top: 1px solid var(--alchemy-rfc-border);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-work-icon {
+      display: grid;
+      width: 24px;
+      height: 24px;
+      place-items: center;
+      border: 1px solid currentColor;
+      border-radius: 50%;
+      font-size: 10px;
+      font-weight: 500;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-work-icon.is-flag { color: var(--alchemy-rfc-pink); }
+    #alchemy-steward-rfc-concepts .alchemy-rfc-work-icon.is-ready { color: var(--alchemy-rfc-mint); }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-work-copy &gt; div {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-work-copy p {
+      margin-top: 4px;
+      color: var(--alchemy-rfc-muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-work-copy small {
+      display: block;
+      margin-top: 4px;
+      color: var(--alchemy-rfc-subtle);
+      font-size: 9px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-work-action {
+      text-align: right;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-work-action strong,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-work-action button {
+      display: block;
+      margin-left: auto;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-work-action strong {
+      color: var(--alchemy-rfc-muted);
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-work-action button,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-watcher-row button {
+      margin-top: 4px;
+      border: 0;
+      padding: 0;
+      color: var(--alchemy-rfc-cyan);
+      background: transparent;
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-boundary-note {
+      display: flex;
+      gap: 7px;
+      margin-left: 38px;
+      padding: 7px 10px;
+      border: 1px solid var(--alchemy-rfc-border);
+      border-radius: 6px;
+      color: var(--alchemy-rfc-muted);
+      background: var(--alchemy-rfc-surface-2);
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-boundary-note &gt; span:first-child {
+      color: var(--alchemy-rfc-mint);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-upcoming-row {
+      display: grid;
+      grid-template-columns: 76px minmax(130px, 1fr) minmax(110px, 0.8fr) minmax(120px, 0.8fr);
+      gap: 10px;
+      padding: 8px 2px;
+      border-top: 1px solid var(--alchemy-rfc-border);
+      color: var(--alchemy-rfc-muted);
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-upcoming-row strong {
+      color: var(--alchemy-rfc-fg);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-watcher-section {
+      border-bottom: 0;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-watcher-row {
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 9px;
+      padding: 9px 2px;
+      border-top: 1px solid var(--alchemy-rfc-border);
+      color: var(--alchemy-rfc-cyan);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-watcher-row p {
+      margin-top: 3px;
+      color: var(--alchemy-rfc-muted);
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-watcher-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-ask {
+      margin-top: auto;
+      padding-top: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-ask label {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--alchemy-rfc-subtle);
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-ask &gt; div {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 34px;
+      overflow: hidden;
+      border: 1px solid var(--alchemy-rfc-border-strong);
+      border-radius: 8px;
+      background: var(--alchemy-rfc-surface);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-ask input,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-ask button {
+      height: 38px;
+      border: 0;
+      color: var(--alchemy-rfc-fg);
+      background: transparent;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-ask input {
+      min-width: 0;
+      padding: 0 11px;
+      outline-offset: -2px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-ask input::placeholder {
+      color: var(--alchemy-rfc-muted);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-ask button {
+      margin: 4px;
+      height: 30px;
+      border-radius: 6px;
+      color: var(--alchemy-rfc-canvas);
+      background: var(--alchemy-rfc-pink);
+      font-weight: 500;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-seal {
+      display: flex;
+      gap: 8px;
+      padding: 10px;
+      border: 1px solid rgba(114, 241, 184, 0.24);
+      border-radius: 8px;
+      color: var(--alchemy-rfc-mint);
+      background: rgba(114, 241, 184, 0.06);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-seal strong,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-seal small,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-authority-row strong,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-authority-row small {
+      display: block;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-seal small,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-authority-row small {
+      margin-top: 2px;
+      color: var(--alchemy-rfc-muted);
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-budget {
+      margin-top: 14px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-budget &gt; div:first-child {
+      display: flex;
+      justify-content: space-between;
+      color: var(--alchemy-rfc-muted);
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-budget &gt; div:last-child {
+      height: 5px;
+      margin-top: 7px;
+      overflow: hidden;
+      border-radius: 4px;
+      background: var(--alchemy-rfc-surface-2);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-budget &gt; div:last-child span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--alchemy-rfc-pink);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-authority-row {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      gap: 7px;
+      padding: 7px 0;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-egress-row {
+      padding: 7px 0;
+      border-bottom: 1px solid var(--alchemy-rfc-border);
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-egress-row strong,
+    #alchemy-steward-rfc-concepts .alchemy-rfc-egress-row small {
+      display: block;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-egress-row small {
+      margin-top: 2px;
+      color: var(--alchemy-rfc-muted);
+      font-size: 10px;
+    }
+
+    #alchemy-steward-rfc-concepts .alchemy-rfc-rail-block {
+      display: block;
+      margin-top: 7px;
+    }
+
+    @media (max-width: 900px) {
+      #alchemy-steward-rfc-concepts .alchemy-rfc-window {
+        font-size: 12px;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-workspace {
+        grid-template-columns: 150px minmax(0, 1fr) 205px;
+        gap: 6px;
+        padding-right: 5px;
+        padding-left: 5px;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-title-chip {
+        display: none;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-paper {
+        padding-right: 12px;
+        padding-left: 12px;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-settings-layout {
+        grid-template-columns: 170px minmax(0, 1fr) 190px;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-settings-main {
+        padding-right: 26px;
+        padding-left: 26px;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-staff-layout {
+        grid-template-columns: 165px minmax(0, 1fr) 205px;
+        gap: 6px;
+        padding-right: 5px;
+        padding-left: 5px;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-home-brand {
+        margin-right: 8px;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-home-tabs button {
+        padding: 0 8px;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-upcoming-row {
+        grid-template-columns: 70px minmax(100px, 1fr) minmax(90px, 0.8fr);
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-upcoming-row span:last-child {
+        display: none;
+      }
+    }
+
+    @media (max-width: 736px) {
+      #alchemy-steward-rfc-concepts .alchemy-rfc-traffic {
+        margin-right: 3px;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-workspace,
+      #alchemy-steward-rfc-concepts .alchemy-rfc-staff-layout {
+        grid-template-columns: minmax(0, 1fr) 190px;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-left,
+      #alchemy-steward-rfc-concepts .alchemy-rfc-staff-nav {
+        display: none;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-settings-layout {
+        grid-template-columns: 150px minmax(0, 1fr);
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-settings-context {
+        display: none;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-menubar-popover {
+        right: 18px;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-menubar-caret {
+        right: 145px;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-home-tabs button {
+        padding: 0 6px;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-work-row {
+        grid-template-columns: 24px minmax(0, 1fr);
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-work-action {
+        grid-column: 2;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        text-align: left;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-work-action strong,
+      #alchemy-steward-rfc-concepts .alchemy-rfc-work-action button {
+        display: inline-block;
+        margin: 0;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-boundary-note {
+        margin-left: 34px;
+      }
+    }
+
+    @media (max-width: 520px) {
+      #alchemy-steward-rfc-concepts .alchemy-rfc-titlebar,
+      #alchemy-steward-rfc-concepts .alchemy-rfc-homebar {
+        gap: 6px;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-titlebar .alchemy-rfc-muted,
+      #alchemy-steward-rfc-concepts .alchemy-rfc-titlebar .alchemy-rfc-divider,
+      #alchemy-steward-rfc-concepts .alchemy-rfc-titlebar .alchemy-rfc-book,
+      #alchemy-steward-rfc-concepts .alchemy-rfc-titlebar .alchemy-rfc-icon-button:first-of-type,
+      #alchemy-steward-rfc-concepts .alchemy-rfc-home-brand strong,
+      #alchemy-steward-rfc-concepts .alchemy-rfc-home-tabs button:nth-child(2),
+      #alchemy-steward-rfc-concepts .alchemy-rfc-home-tabs button:nth-child(3) {
+        display: none;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-workspace,
+      #alchemy-steward-rfc-concepts .alchemy-rfc-staff-layout,
+      #alchemy-steward-rfc-concepts .alchemy-rfc-settings-layout {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-right,
+      #alchemy-steward-rfc-concepts .alchemy-rfc-staff-rail,
+      #alchemy-steward-rfc-concepts .alchemy-rfc-settings-nav {
+        display: none;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-report-row {
+        grid-template-columns: 8px minmax(0, 1fr);
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-report-row &gt; .alchemy-rfc-button {
+        grid-column: 2;
+        justify-self: start;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-settings-main {
+        padding: 28px 18px 180px;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-menubar-popover {
+        top: 54px;
+        right: 10px;
+        width: min(300px, calc(100% - 20px));
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-menubar-caret {
+        display: none;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-notification {
+        right: 10px;
+        bottom: 10px;
+        width: calc(100% - 20px);
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-staff-main {
+        padding-right: 12px;
+        padding-left: 12px;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-staff-toolbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-upcoming-row {
+        grid-template-columns: 74px minmax(0, 1fr);
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-upcoming-row span:nth-child(3) {
+        display: none;
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-watcher-row {
+        grid-template-columns: 20px minmax(0, 1fr);
+      }
+
+      #alchemy-steward-rfc-concepts .alchemy-rfc-watcher-row button {
+        grid-column: 2;
+        justify-self: start;
+      }
+    }
+  &lt;/style&gt;
+
+  &lt;script&gt;
+    (() =&gt; {
+      const root = document.getElementById(&quot;alchemy-steward-rfc-concepts&quot;);
+      if (!root) return;
+
+      const tabs = Array.from(root.querySelectorAll(&quot;[data-alchemy-rfc-view]&quot;));
+      const panels = Array.from(root.querySelectorAll(&quot;[data-alchemy-rfc-panel]&quot;));
+
+      tabs.forEach((tab) =&gt; {
+        tab.addEventListener(&quot;click&quot;, () =&gt; {
+          const next = tab.dataset.alchemyRfcView;
+          tabs.forEach((candidate) =&gt; candidate.setAttribute(&quot;aria-selected&quot;, String(candidate === tab)));
+          panels.forEach((panel) =&gt; {
+            panel.hidden = panel.dataset.alchemyRfcPanel !== next;
+          });
+        });
+      });
+
+      const pauseButton = root.querySelector(&quot;#alchemy-rfc-pause-button&quot;);
+      const pauseLabel = root.querySelector(&quot;#alchemy-rfc-pause-label&quot;);
+      const menuStatus = root.querySelector(&quot;#alchemy-rfc-menu-status&quot;);
+      let paused = false;
+
+      if (pauseButton &amp;&amp; pauseLabel &amp;&amp; menuStatus) {
+        pauseButton.addEventListener(&quot;click&quot;, () =&gt; {
+          paused = !paused;
+          pauseLabel.textContent = paused ? &quot;Resume&quot; : &quot;Pause until morning&quot;;
+          menuStatus.textContent = paused
+            ? &quot;Reports paused until 6:00 AM · source sync continues&quot;
+            : &quot;Last night: 2 reports · sources synced 4 min ago&quot;;
+        });
+      }
+    })();
+  &lt;/script&gt;
+&lt;/div&gt;
+
+&lt;script src=&quot;https://unpkg.com/@floating-ui/core@1.7.3/dist/floating-ui.core.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script src=&quot;https://unpkg.com/@floating-ui/dom@1.7.4/dist/floating-ui.dom.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  if (window.FloatingUIDOM == null) {
+    return;
+  }
+  const { autoUpdate, computePosition, flip, offset, shift, size } =
+    window.FloatingUIDOM;
+  const tooltipPlacements = new Set([&quot;top&quot;, &quot;right&quot;, &quot;bottom&quot;, &quot;left&quot;]);
+  const tooltipId = `codex-visualization-tooltip-${
+    window.crypto?.randomUUID?.() ?? Date.now().toString(36)
+  }`;
+  const tooltipGap = 5;
+  const hoverDelay = 700;
+  const skipDelay = 300;
+  let activeTrigger = null;
+  let pendingTrigger = null;
+  let tooltip = null;
+  let openTimeout = null;
+  let autoUpdateCleanup = null;
+  let positionRequest = 0;
+  let skipDelayUntil = 0;
+
+  const getTrigger = (target) =&gt;
+    target?.nodeType === Node.ELEMENT_NODE
+      ? target.closest(&quot;[data-tooltip]&quot;)
+      : null;
+  const containsTarget = (trigger, target) =&gt;
+    target?.nodeType != null &amp;&amp; trigger.contains(target);
+  const getContent = (trigger) =&gt;
+    trigger.getAttribute(&quot;data-tooltip&quot;)?.trim() ?? &quot;&quot;;
+  const getPlacement = (trigger) =&gt; {
+    const placement = trigger.getAttribute(&quot;data-tooltip-placement&quot;);
+    return tooltipPlacements.has(placement) ? placement : &quot;top&quot;;
+  };
+  const getTooltip = () =&gt; {
+    if (tooltip == null) {
+      tooltip = document.createElement(&quot;div&quot;);
+      tooltip.id = tooltipId;
+      tooltip.className = &quot;tooltip&quot;;
+      tooltip.setAttribute(&quot;role&quot;, &quot;tooltip&quot;);
+    }
+    return tooltip;
+  };
+  const setDescribedBy = (trigger, described) =&gt; {
+    const ids = new Set(
+      (trigger.getAttribute(&quot;aria-describedby&quot;) ?? &quot;&quot;)
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    if (described) {
+      ids.add(tooltipId);
+    } else {
+      ids.delete(tooltipId);
+    }
+    if (ids.size === 0) {
+      trigger.removeAttribute(&quot;aria-describedby&quot;);
+    } else {
+      trigger.setAttribute(&quot;aria-describedby&quot;, [...ids].join(&quot; &quot;));
+    }
+  };
+  const clearOpenTimeout = () =&gt; {
+    if (openTimeout != null) {
+      window.clearTimeout(openTimeout);
+      openTimeout = null;
+    }
+    pendingTrigger = null;
+  };
+  const closeTooltip = (activateSkipDelay = true) =&gt; {
+    clearOpenTimeout();
+    positionRequest += 1;
+    autoUpdateCleanup?.();
+    autoUpdateCleanup = null;
+    if (activeTrigger == null) {
+      return;
+    }
+    setDescribedBy(activeTrigger, false);
+    activeTrigger = null;
+    tooltip?.remove();
+    if (activateSkipDelay) {
+      skipDelayUntil = Date.now() + skipDelay;
+    }
+  };
+  const updatePosition = (trigger, floating) =&gt; {
+    const request = ++positionRequest;
+    void computePosition(trigger, floating, {
+      middleware: [
+        offset(tooltipGap),
+        flip({ padding: tooltipGap }),
+        shift({ padding: tooltipGap }),
+        size({
+          padding: tooltipGap,
+          apply({ availableHeight, availableWidth, elements }) {
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-width&quot;,
+              `${Math.max(0, availableWidth)}px`,
+            );
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-height&quot;,
+              `${Math.max(0, availableHeight)}px`,
+            );
+          },
+        }),
+      ],
+      placement: getPlacement(trigger),
+      strategy: &quot;fixed&quot;,
+    })
+      .then(({ x, y }) =&gt; {
+        if (activeTrigger !== trigger || request !== positionRequest) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        floating.style.transform = `translate(${Math.round(x * scale) / scale}px, ${Math.round(y * scale) / scale}px)`;
+        floating.style.visibility = &quot;visible&quot;;
+      })
+      .catch(() =&gt; {
+        if (activeTrigger === trigger &amp;&amp; request === positionRequest) {
+          closeTooltip(false);
+        }
+      });
+  };
+  const openTooltip = (trigger) =&gt; {
+    const content = getContent(trigger);
+    if (!trigger.isConnected || content.length === 0) {
+      return;
+    }
+    clearOpenTimeout();
+    if (activeTrigger === trigger) {
+      return;
+    }
+    closeTooltip();
+    const floating = getTooltip();
+    floating.textContent = content;
+    floating.style.visibility = &quot;hidden&quot;;
+    floating.style.transform = &quot;translate(0, 0)&quot;;
+    document.body.appendChild(floating);
+    activeTrigger = trigger;
+    setDescribedBy(trigger, true);
+    autoUpdateCleanup = autoUpdate(trigger, floating, () =&gt; {
+      updatePosition(trigger, floating);
+    });
+  };
+  const requestOpen = (trigger, immediate = false) =&gt; {
+    if (
+      getContent(trigger).length === 0 ||
+      activeTrigger === trigger ||
+      pendingTrigger === trigger
+    ) {
+      return;
+    }
+    clearOpenTimeout();
+    pendingTrigger = trigger;
+    const delay =
+      immediate || activeTrigger != null || Date.now() &lt; skipDelayUntil
+        ? 0
+        : hoverDelay;
+    if (delay === 0) {
+      openTooltip(trigger);
+      return;
+    }
+    openTimeout = window.setTimeout(() =&gt; {
+      openTimeout = null;
+      pendingTrigger = null;
+      openTooltip(trigger);
+    }, delay);
+  };
+  const handlePointerOpen = (event) =&gt; {
+    if (event.pointerType === &quot;touch&quot;) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    requestOpen(trigger);
+  };
+  const handleLeave = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handleFocusIn = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger?.matches(&quot;:focus-visible&quot;)) {
+      requestOpen(trigger, true);
+    }
+  };
+  const handleKeyDown = (event) =&gt; {
+    if (event.key === &quot;Escape&quot;) {
+      closeTooltip();
+    }
+  };
+  const handleContextMenu = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const destroy = () =&gt; {
+    closeTooltip(false);
+    document.removeEventListener(&quot;pointerover&quot;, handlePointerOpen);
+    document.removeEventListener(&quot;pointerout&quot;, handleLeave);
+    document.removeEventListener(&quot;focusin&quot;, handleFocusIn);
+    document.removeEventListener(&quot;focusout&quot;, handleLeave);
+    document.removeEventListener(&quot;keydown&quot;, handleKeyDown);
+    document.removeEventListener(&quot;contextmenu&quot;, handleContextMenu);
+    tooltip = null;
+  };
+
+  document.addEventListener(&quot;pointerover&quot;, handlePointerOpen);
+  document.addEventListener(&quot;pointerout&quot;, handleLeave);
+  document.addEventListener(&quot;focusin&quot;, handleFocusIn);
+  document.addEventListener(&quot;focusout&quot;, handleLeave);
+  document.addEventListener(&quot;keydown&quot;, handleKeyDown);
+  document.addEventListener(&quot;contextmenu&quot;, handleContextMenu);
+  window.addEventListener(&quot;pagehide&quot;, destroy, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-lucide&quot; async src=&quot;https://unpkg.com/lucide@1.17.0/dist/umd/lucide.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  const initialize = () =&gt; {
+    globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
+  };
+  if (globalThis.lucide != null) {
+    initialize();
+    return;
+  }
+  document
+    .getElementById(&quot;codex-visualization-lucide&quot;)
+    ?.addEventListener(&quot;load&quot;, initialize, { once: true });
+})();
+&lt;/script&gt;
+
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+</body>
+</html>
