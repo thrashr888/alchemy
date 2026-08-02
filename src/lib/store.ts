@@ -11,7 +11,12 @@ import { notify } from "./notify";
 import { playArrival, playDone, playError } from "./sound";
 import { autoUpdateEnabled, checkForUpdatesQuietly } from "./updates";
 import { DEFAULT_CHAT_CONFIG, DEFAULT_READING_PREFS } from "./types";
-import type { AppState, Migration, QueueItem } from "./storeTypes";
+import type {
+  AppState,
+  Migration,
+  QueueItem,
+  ReaderDoc,
+} from "./storeTypes";
 export type { ExternalAdd, Migration, QueueItem } from "./storeTypes";
 import type {
   ChatConfig,
@@ -323,9 +328,26 @@ export const useStore = create<AppState>((set, get) => {
       if (boot && notebooks.some((n) => n.id === boot)) {
         await get().selectNotebook(boot);
       } else if (!window.__ALCHEMY_FRESH__ && !boot) {
-        const last = localStorage.getItem("lastNotebookId");
+        // Restore the precise last view: the dashboard stays the dashboard
+        // (an explicit lastView with nb: null beats lastNotebookId), and a
+        // notebook reopens in its center mode — chat, reader, or ledger.
+        let view: {
+          nb: string | null;
+          mode: "chat" | "reader" | "ledger";
+          doc?: ReaderDoc;
+        } | null = null;
+        try {
+          view = JSON.parse(localStorage.getItem("lastView") ?? "null");
+        } catch {
+          /* ignore */
+        }
+        const last =
+          view === null ? localStorage.getItem("lastNotebookId") : view.nb;
         if (last && notebooks.some((n) => n.id === last)) {
           await get().selectNotebook(last);
+          if (view?.mode === "ledger") set({ ledgerOpen: true });
+          else if (view?.mode === "reader" && view.doc)
+            get().openInReader(view.doc);
         }
       }
       void api.rebuildAppMenu();
@@ -1521,6 +1543,32 @@ useStore.subscribe((s, prev) => {
   if (s.toasts.length > prev.toasts.length && latest?.kind === "error")
     playError();
 });
+
+// Remember the precise open view — dashboard vs notebook, and the center
+// mode (chat / reader / ledger) with the reader's current doc — so a reload
+// or relaunch lands back exactly where the user was. Main window only:
+// secondary windows share localStorage and would clobber the main spot.
+// Settings is deliberately not a view; dialogs don't survive reloads.
+if (getCurrentWebview().label === "main") {
+  useStore.subscribe((s, prev) => {
+    if (
+      s.currentId === prev.currentId &&
+      s.ledgerOpen === prev.ledgerOpen &&
+      s.reader === prev.reader
+    )
+      return;
+    const doc = s.reader.open ? s.reader.history[s.reader.index] : undefined;
+    localStorage.setItem(
+      "lastView",
+      JSON.stringify({
+        nb: s.currentId,
+        mode: s.ledgerOpen ? "ledger" : s.reader.open ? "reader" : "chat",
+        // Highlight is a one-time citation jump, not a place — drop it.
+        doc: doc && { type: doc.type, id: doc.id },
+      }),
+    );
+  });
+}
 
 // The store rides on `window` in every build — debugging in dev, and a
 // window into live UI state for users' AI agents in prod (the debug
