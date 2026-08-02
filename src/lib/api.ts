@@ -427,6 +427,8 @@ export const api = {
     run(cmd<void>("delete_report_schedule", { id })),
   runReport: (scheduleId: string) =>
     run(ai<Note>("run_report", { scheduleId })),
+  runSecondLook: (noteId: string) =>
+    run(cmd<void>("run_second_look", { noteId })),
 
   // Settings / health
   getAiConfig: () => run(query<AiConfig>("get_ai_config")),

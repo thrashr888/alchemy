@@ -287,6 +287,7 @@ pub fn run() {
             commands::add_ledger_entry,
             commands::update_ledger_entry,
             commands::delete_ledger_entry,
+            commands::run_second_look,
             commands::create_report_schedule,
             commands::update_report_schedule,
             commands::delete_report_schedule,

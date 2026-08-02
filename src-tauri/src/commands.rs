@@ -12,10 +12,12 @@ use uuid::Uuid;
 mod brief;
 mod ledger;
 mod reports;
+mod second_look;
 mod weave;
 pub(crate) use brief::ensure_default_brief;
 pub use ledger::*;
 pub use reports::*;
+pub use second_look::*;
 
 use crate::ai::{Ai, AiConfig, GenStats};
 use crate::db::Db;

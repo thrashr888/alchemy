@@ -242,4 +242,54 @@ impl AlchemyMcp {
         self.changed("reports", Some(&notebook_id));
         json_result(&schedule)
     }
+
+    #[tool(
+        description = "Second Look: claim-by-claim verification of a draft against the notebook, searched fresh (docs/RFC-second-look.md). Pass a note_id to check an existing note, or text (with a title) to check a draft before filing it. Each claim is re-retrieved with hybrid search — excluding the draft itself — and judged supported/weak/unsupported/contradicted by a different engine than the author. Writes a verdict report note and returns the structured verdicts."
+    )]
+    async fn second_look(
+        &self,
+        Parameters(SecondLookReq {
+            notebook_id,
+            note_id,
+            title,
+            text,
+        }): Parameters<SecondLookReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let (title, text, exclude) = match (note_id, text) {
+            (Some(id), _) => {
+                let Some(note) = state.db.get_note(&id).await.map_err(internal)? else {
+                    return Err(invalid("no note with that id"));
+                };
+                (note.title.clone(), note.content.clone(), Some(note.id))
+            }
+            (None, Some(text)) => (title.unwrap_or_else(|| "draft".into()), text, None),
+            (None, None) => return Err(invalid("pass note_id or text")),
+        };
+        let (report, verdicts) =
+            commands::second_look_pass(&state, &notebook_id, exclude.as_deref(), &title, &text)
+                .await
+                .map_err(internal)?;
+        self.changed("notes", Some(&notebook_id));
+        json_result(&serde_json::json!({
+            "reportNoteId": report.id,
+            "summary": commands::count_line(&verdicts),
+            "verdicts": verdicts,
+        }))
+    }
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct SecondLookReq {
+    /// Notebook whose corpus verifies the draft.
+    notebook_id: String,
+    /// Existing note to check (mutually exclusive with text).
+    #[serde(default)]
+    note_id: Option<String>,
+    /// Title for a raw-text draft.
+    #[serde(default)]
+    title: Option<String>,
+    /// Raw draft text to check without filing it as a note first.
+    #[serde(default)]
+    text: Option<String>,
 }

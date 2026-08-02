@@ -41,6 +41,7 @@ import {
   Square,
   PanelRightClose,
   Copy,
+  ShieldCheck,
   FolderOpen,
   ChevronDown,
   ChevronUp,
@@ -506,6 +507,28 @@ export function StudioPanel() {
                             useStore
                               .getState()
                               .pushToast("success", "Note copied");
+                          },
+                        },
+                        {
+                          label: "Second Look",
+                          icon: <ShieldCheck className="h-3.5 w-3.5" />,
+                          onClick: () => {
+                            void api.runSecondLook(n.id).then(
+                              () =>
+                                useStore
+                                  .getState()
+                                  .pushToast(
+                                    "success",
+                                    "Second Look running — the verdict note will appear here",
+                                  ),
+                              (e: unknown) =>
+                                useStore
+                                  .getState()
+                                  .pushToast(
+                                    "error",
+                                    e instanceof Error ? e.message : String(e),
+                                  ),
+                            );
                           },
                         },
                         {
