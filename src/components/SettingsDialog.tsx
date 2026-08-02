@@ -213,7 +213,17 @@ export function SettingsDialog({
           ))}
         </nav>
 
-        <div className="flex max-h-[calc(92vh-8.5rem)] min-w-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* Pane header: names the active tab and pushes the content below
+              the modal's floating close button (which otherwise collides
+              with the first row's trailing switch). pr-10 keeps a long tab
+              name from running under the X. */}
+          <h2 className="pb-3 pr-10 pt-0.5 text-body font-semibold text-foreground">
+            {TABS.find((t) => t.id === tab)?.label}
+          </h2>
+          {/* The scroll cap MUST stay a definite height on this column (see
+              the note above); 11rem additionally clears the pane header. */}
+          <div className="flex max-h-[calc(92vh-11rem)] min-w-0 flex-col gap-4 overflow-y-auto pr-1">
           {tab === "general" && <GeneralTab />}
           {tab === "sources" && <SourcesTab />}
           {tab === "studio" && <StudioTab />}
@@ -240,6 +250,7 @@ export function SettingsDialog({
           {tab === "shortcuts" && <ShortcutsTab />}
 
           {tab === "about" && <AboutTab />}
+          </div>
         </div>
       </div>
 
