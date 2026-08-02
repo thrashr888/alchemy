@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Alchemy — a local-first research notebook for macOS</title>
-<meta name="description" content="Alchemy is a local-first research notebook for macOS. Import sources, chat grounded in citations, and generate documents and podcasts — with your subscriptions, gateways, or local models.">
+<meta name="description" content="Alchemy is a local-first research notebook for macOS. Import sources, ask questions with citations, and generate documents or podcasts with subscriptions, gateways, or local models.">
 <meta name="color-scheme" content="dark light">
 <meta name="theme-color" content="#08090a" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#fbfbfc" media="(prefers-color-scheme: light)">
@@ -34,8 +34,12 @@
     --border-strong: rgba(255, 255, 255, 0.13);
     --primary: #5e6ad2;
     --primary-hover: #6975dd;
+    --primary-foreground: #ffffff;
     --accent-text: #8b95f5;
-    --dot: rgba(236, 238, 241, 0.055);
+    --selection: rgba(94, 106, 210, 0.35);
+    --shader-bg: #101114;
+    --shader-ink: #8b95f5;
+    --shader-label: rgba(13, 14, 16, 0.88);
     --btn-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
   }
   @media (prefers-color-scheme: light) {
@@ -52,8 +56,12 @@
       --border-strong: rgba(20, 22, 26, 0.18);
       --primary: #5e6ad2;
       --primary-hover: #4f5bc6;
+      --primary-foreground: #ffffff;
       --accent-text: #4650b8;
-      --dot: rgba(22, 24, 29, 0.09);
+      --selection: rgba(94, 106, 210, 0.22);
+      --shader-bg: #f4f5f7;
+      --shader-ink: #4650b8;
+      --shader-label: rgba(255, 255, 255, 0.88);
       --btn-shadow: 0 1px 2px rgba(20, 22, 26, 0.12);
     }
   }
@@ -72,9 +80,10 @@
     overflow-x: hidden;
   }
 
-  ::selection { background: rgba(94, 106, 210, 0.35); }
+  ::selection { background: var(--selection); }
 
   a { color: inherit; }
+  a, button { touch-action: manipulation; }
   a:focus-visible, button:focus-visible {
     outline: 2px solid var(--primary);
     outline-offset: 2px;
@@ -86,10 +95,39 @@
   }
 
   .wrap {
-    max-width: 760px;
+    max-width: 1120px;
     margin: 0 auto;
     padding-inline: 24px;
   }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .skip-link {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 10;
+    padding: 8px 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--elevated);
+    color: var(--foreground);
+    font-size: 13px;
+    text-decoration: none;
+    transform: translateY(-160%);
+    transition: transform 0.15s ease-out;
+  }
+  .skip-link:focus { transform: translateY(0); }
 
   /* ---------- header ---------- */
 
@@ -111,6 +149,7 @@
   .mark svg { color: var(--muted); }
   .site-head nav {
     display: flex;
+    align-items: center;
     gap: 22px;
     font-size: 13.5px;
   }
@@ -120,6 +159,15 @@
     transition: color 0.12s ease;
   }
   .site-head nav a:hover { color: var(--foreground); }
+  .github-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    margin-block: -7px;
+  }
+  .github-link svg { width: 18px; height: 18px; }
 
   /* ---------- hero ---------- */
 
@@ -129,18 +177,7 @@
     padding-top: 88px;
     padding-bottom: 96px;
   }
-  .hero::before {
-    content: "";
-    position: absolute;
-    inset: -140px 0 auto 0;
-    height: 560px;
-    background-image: radial-gradient(var(--dot) 1px, transparent 1.4px);
-    background-size: 14px 14px;
-    -webkit-mask-image: radial-gradient(ellipse 75% 62% at 50% 12%, #000 25%, transparent 74%);
-    mask-image: radial-gradient(ellipse 75% 62% at 50% 12%, #000 25%, transparent 74%);
-    pointer-events: none;
-    z-index: -1;
-  }
+  .hero-copy { max-width: 760px; margin-inline: auto; }
   .sigil {
     color: var(--subtle);
     margin-bottom: 34px;
@@ -182,7 +219,7 @@
   }
   .btn-primary {
     background: var(--primary);
-    color: #fff;
+    color: var(--primary-foreground);
     box-shadow: var(--btn-shadow);
   }
   .btn-primary:hover { background: var(--primary-hover); }
@@ -215,95 +252,467 @@
   }
   .brew .prompt { color: var(--subtle); user-select: none; }
 
-  /* ---------- feature sections ---------- */
+  /* ---------- product visual ---------- */
 
-  .feature {
-    display: grid;
-    grid-template-columns: 158px 1fr;
-    gap: 40px;
-    padding-block: 68px;
+  .shader-roundrect {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    background: var(--shader-bg);
+    isolation: isolate;
+  }
+  .shader-canvas {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+  }
+  .hero-product {
+    margin-top: 58px;
+    text-align: left;
+  }
+  .hero-shot-frame {
+    overflow: hidden;
+    padding: 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
+    background: var(--surface);
+    box-shadow: 0 18px 55px rgba(0, 0, 0, 0.16);
+  }
+  .hero-shot-frame img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .hero-product figcaption {
+    margin-top: 10px;
+    padding-inline: 9px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  /* ---------- feature bento ---------- */
+
+  .features {
+    padding-block: 78px 92px;
     border-top: 1px solid var(--border);
+  }
+  #features { scroll-margin-top: 24px; }
+  .features-intro {
+    display: grid;
+    grid-template-columns: 180px minmax(0, 620px);
+    gap: 40px;
+    margin-bottom: 36px;
   }
   .eyebrow {
     font-size: 11px;
     font-weight: 500;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--muted);
     padding-top: 7px;
   }
-  .eyebrow .num {
-    display: block;
-    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
-    letter-spacing: 0;
-    color: var(--subtle);
-    margin-bottom: 5px;
-  }
-  .feature h2 {
-    font-size: 22px;
+  .features-intro h2, .etc-head h2 {
+    font-size: clamp(25px, 4vw, 36px);
     font-weight: 600;
-    letter-spacing: -0.017em;
-    line-height: 1.25;
-    margin-bottom: 14px;
+    line-height: 1.12;
     text-wrap: balance;
   }
-  .feature p {
+  .features-intro p {
+    margin-top: 14px;
+    max-width: 58ch;
     font-size: 15px;
-    line-height: 1.68;
+    line-height: 1.65;
     color: var(--muted);
-    max-width: 70ch;
     text-wrap: pretty;
   }
-  .feature p + p { margin-top: 13px; }
-  .feature p strong { color: var(--foreground); font-weight: 500; }
-
-  .meta-row {
-    margin-top: 18px;
-    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
-    line-height: 1.9;
-    color: var(--subtle);
+  .bento-grid {
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 14px;
   }
-
-  .chips {
+  .feature-card {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    grid-column: span 6;
+    padding: 11px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+  }
+  .feature-card.wide { grid-column: span 7; }
+  .feature-card.narrow { grid-column: span 5; }
+  .feature-visual {
+    min-height: 218px;
+    border-color: var(--border);
+  }
+  .feature-visual::after {
+    content: "";
+    position: absolute;
+    inset: 9px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    pointer-events: none;
+    z-index: 2;
+  }
+  .visual-pill, .visual-core, .visual-note {
+    position: absolute;
+    z-index: 3;
+    border: 1px solid var(--border-strong);
+    background: var(--shader-label);
+    color: var(--muted);
+  }
+  .visual-pill {
+    padding: 5px 9px;
+    border-radius: 99px;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.2;
+  }
+  .visual-pill.top-left { top: 24px; left: 24px; }
+  .visual-pill.top-right { top: 24px; right: 24px; }
+  .visual-pill.bottom-left { bottom: 24px; left: 24px; }
+  .visual-pill.bottom-right { right: 24px; bottom: 24px; }
+  .visual-core {
+    top: 50%;
+    left: 50%;
+    display: grid;
+    place-items: center;
+    min-width: 76px;
+    min-height: 38px;
+    padding: 7px 12px;
+    border-radius: 9px;
+    color: var(--foreground);
+    font-size: 11px;
+    font-weight: 600;
+    text-align: center;
+    transform: translate(-50%, -50%);
+  }
+  .visual-core.local {
+    width: 94px;
+    height: 94px;
+    border-radius: 50%;
+  }
+  .visual-note {
+    left: 50%;
+    bottom: 24px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    transform: translateX(-50%);
+  }
+  .feature-copy { padding: 21px 17px 19px; }
+  .feature-kicker {
+    margin-bottom: 10px;
+    color: var(--subtle);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+  .feature-card h3 {
+    margin-bottom: 10px;
+    font-size: 21px;
+    font-weight: 600;
+    line-height: 1.22;
+    text-wrap: balance;
+  }
+  .feature-card p {
+    max-width: 62ch;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.65;
+    text-wrap: pretty;
+  }
+  .feature-card p strong { color: var(--foreground); font-weight: 500; }
+  .card-meta {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 18px;
-    list-style: none;
+    gap: 7px;
+    margin-top: 16px;
   }
-  .chips li {
-    font-size: 12px;
-    color: var(--muted);
+  .card-meta span {
+    padding: 3px 8px;
     border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 3px 11px;
-    white-space: nowrap;
+    border-radius: 99px;
+    color: var(--subtle);
+    font-size: 11px;
   }
 
   /* ---------- also in the box ---------- */
 
   .etc {
-    padding-block: 68px;
+    padding-block: 78px;
     border-top: 1px solid var(--border);
   }
-  .etc-head { margin-bottom: 34px; }
-  .etc-head h2 {
-    font-size: 22px;
-    font-weight: 600;
-    letter-spacing: -0.017em;
-    margin-top: 10px;
-  }
-  .etc-grid {
+  .etc-head {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 22px 44px;
+    grid-template-columns: 180px minmax(0, 620px);
+    gap: 40px;
+    margin-bottom: 36px;
   }
-  .etc-item { font-size: 14px; line-height: 1.6; }
-  .etc-item .t { color: var(--foreground); font-weight: 500; }
-  .etc-item .d { color: var(--muted); }
-  .etc-item .d a { color: var(--accent-text); text-decoration: underline; text-underline-offset: 2px; }
+  .utility-grid {
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    grid-auto-rows: minmax(178px, auto);
+    gap: 14px;
+  }
+  .utility-card {
+    position: relative;
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+  }
+  .utility-card.large {
+    display: flex;
+    grid-column: span 7;
+    grid-row: span 2;
+    flex-direction: column;
+    padding: 11px;
+  }
+  .utility-card.compact {
+    display: flex;
+    grid-column: span 5;
+    flex-direction: column;
+    justify-content: space-between;
+    min-height: 178px;
+    padding: 19px;
+  }
+  .utility-visual {
+    min-height: 195px;
+    border-color: var(--border);
+  }
+  .utility-visual::after {
+    content: "";
+    position: absolute;
+    inset: 9px;
+    z-index: 2;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    pointer-events: none;
+  }
+  .utility-copy { padding: 21px 17px 18px; }
+  .utility-kicker {
+    margin-bottom: 9px;
+    color: var(--subtle);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+  .utility-card h3 {
+    margin-bottom: 8px;
+    font-size: 19px;
+    font-weight: 600;
+    line-height: 1.25;
+    text-wrap: balance;
+  }
+  .utility-card p {
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.62;
+    text-wrap: pretty;
+  }
+  .utility-card p a {
+    color: var(--accent-text);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .native-window {
+    position: absolute;
+    inset: 20px 30px;
+    z-index: 3;
+    overflow: hidden;
+    border: 1px solid var(--border-strong);
+    border-radius: 11px;
+    background: var(--shader-label);
+  }
+  .native-titlebar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 34px;
+    padding-inline: 11px;
+    border-bottom: 1px solid var(--border);
+    color: var(--subtle);
+    font-size: 11px;
+  }
+  .native-titlebar span:first-child { color: var(--foreground); font-weight: 500; }
+  .native-body {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 14px;
+    align-items: center;
+    padding: 17px;
+  }
+  .text-scale { display: grid; gap: 9px; }
+  .text-scale-label { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; }
+  .scale-track {
+    position: relative;
+    height: 3px;
+    border-radius: 99px;
+    background: var(--border-strong);
+  }
+  .scale-track::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 63%;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--primary);
+    transform: translate(-50%, -50%);
+  }
+  .native-hooks { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .native-hooks span, .native-status {
+    padding: 4px 7px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .native-status { color: var(--accent-text); }
+  .command-demo, .reader-demo, .file-demo, .theme-demo {
+    position: relative;
+    z-index: 1;
+    margin-bottom: 16px;
+  }
+  .command-demo {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 9px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-2);
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .command-demo kbd {
+    padding: 2px 6px;
+    border: 1px solid var(--border-strong);
+    border-radius: 5px;
+    color: var(--foreground);
+    font: 500 11px/1.5 ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  }
+  .reader-demo {
+    display: grid;
+    gap: 7px;
+    padding: 9px 10px;
+    border-left: 1px solid var(--border-strong);
+    color: var(--subtle);
+    font-size: 11px;
+  }
+  .reader-demo mark {
+    width: fit-content;
+    padding: 1px 3px;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--primary) 16%, transparent);
+    color: var(--foreground);
+  }
+  .reader-actions { display: flex; gap: 6px; }
+  .reader-actions span {
+    padding: 3px 7px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--muted);
+  }
+  .file-demo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--muted);
+    font: 500 11px/1.5 ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  }
+  .file-badge {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 46px;
+    border: 1px solid var(--border-strong);
+    border-radius: 7px;
+    color: var(--accent-text);
+  }
+  .theme-demo {
+    display: grid;
+    gap: 11px;
+    border: 0;
+  }
+  .theme-demo-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .theme-current {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--foreground);
+    font-size: 12px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .theme-system {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 28px;
+    padding-inline: 9px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--surface-2);
+    color: var(--muted);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .theme-system:hover,
+  .theme-system[aria-pressed="true"] { color: var(--foreground); }
+  .theme-system[aria-pressed="true"] { border-color: var(--primary); }
+  .theme-swatches {
+    display: grid;
+    grid-template-columns: repeat(8, 28px);
+    gap: 7px;
+  }
+  .theme-swatch {
+    position: relative;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--swatch-background);
+    cursor: pointer;
+  }
+  .theme-swatch::after {
+    content: "";
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    width: 8px;
+    height: 8px;
+    border: 1px solid var(--swatch-foreground);
+    border-radius: 50%;
+    background: var(--swatch-primary);
+  }
+  .theme-swatch:hover { border-color: var(--foreground); }
+  .theme-swatch[aria-pressed="true"] {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
 
   /* ---------- closing ---------- */
 
@@ -348,19 +757,20 @@
     transition: color 0.12s ease;
   }
   .site-foot a:hover { color: var(--foreground); }
-  .site-foot nav { display: flex; gap: 20px; }
+  .site-foot nav { display: flex; align-items: center; gap: 20px; }
 
   /* ---------- motion ---------- */
 
   @media (prefers-reduced-motion: no-preference) {
-    .hero > * {
+    .hero-copy > *, .hero-product {
       animation: rise 0.4s cubic-bezier(0.2, 0.6, 0.2, 1) both;
     }
-    .hero > *:nth-child(2) { animation-delay: 0.04s; }
-    .hero > *:nth-child(3) { animation-delay: 0.08s; }
-    .hero > *:nth-child(4) { animation-delay: 0.12s; }
-    .hero > *:nth-child(5) { animation-delay: 0.16s; }
-    .hero > *:nth-child(6) { animation-delay: 0.2s; }
+    .hero-copy > *:nth-child(2) { animation-delay: 0.04s; }
+    .hero-copy > *:nth-child(3) { animation-delay: 0.08s; }
+    .hero-copy > *:nth-child(4) { animation-delay: 0.12s; }
+    .hero-copy > *:nth-child(5) { animation-delay: 0.16s; }
+    .hero-copy > *:nth-child(6) { animation-delay: 0.2s; }
+    .hero-product { animation-delay: 0.2s; }
     @keyframes rise {
       from { opacity: 0; transform: translateY(6px); }
       to { opacity: 1; transform: none; }
@@ -372,19 +782,189 @@
   @media (max-width: 640px) {
     .wrap { padding-inline: 20px; }
     .hero { padding-top: 56px; padding-bottom: 72px; }
-    .feature {
-      grid-template-columns: 1fr;
-      gap: 14px;
-      padding-block: 52px;
-    }
+    .site-head nav a:first-child { display: none; }
+    .hero-product { margin-top: 42px; }
+    .hero-shot-frame { aspect-ratio: 1; padding: 4px; border-radius: 10px; }
+    .hero-shot-frame img { height: 100%; border-radius: 6px; object-fit: cover; object-position: center; }
+    .features { padding-block: 56px 64px; }
+    .features-intro { grid-template-columns: 1fr; gap: 12px; }
     .eyebrow { padding-top: 0; }
-    .eyebrow .num { display: inline; margin-right: 8px; }
-    .etc-grid { grid-template-columns: 1fr; }
+    .bento-grid { grid-template-columns: 1fr; }
+    .feature-card, .feature-card.wide, .feature-card.narrow { grid-column: auto; }
+    .feature-visual { min-height: 190px; }
+    .feature-copy { padding: 18px 12px 16px; }
+    .etc-head { grid-template-columns: 1fr; gap: 12px; }
+    .utility-grid { grid-template-columns: 1fr; grid-auto-rows: auto; }
+    .utility-card.large, .utility-card.compact { grid-column: auto; grid-row: auto; }
+    .utility-card.compact { min-height: 174px; }
+    .utility-visual { min-height: 190px; }
+    .native-window { inset: 18px; }
     .get { padding-block: 68px; }
+  }
+
+  @media (min-width: 641px) and (max-width: 860px) {
+    .bento-grid { grid-template-columns: 1fr 1fr; }
+    .feature-card, .feature-card.wide, .feature-card.narrow { grid-column: span 1; }
+    .utility-grid { grid-template-columns: 1fr 1fr; grid-auto-rows: auto; }
+    .utility-card.large, .utility-card.compact { grid-column: span 1; grid-row: auto; }
   }
 </style>
 </head>
 <body>
+
+<script>
+(() => {
+  // Keep this compact catalog synchronized with src/lib/themes.ts.
+  const rows = [
+    ["midnight","Midnight",true,"#08090a","#0d0e10","#141517","#18191c","#eceef1","#8a8f98","#7f848d","#5e6ad2","#6c78e0","#8b95f5","rgba(94,106,210,0.35)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["light","Light",false,"#ffffff","#fbfbfa","#f3f3f1","#ffffff","#1c1d20","#686d76","#656c75","#5e6ad2","#4f5bc4","#5159c9","rgba(94,106,210,0.22)","rgba(0,0,0,0.09)","rgba(0,0,0,0.16)"],
+    ["slate","Slate",true,"#0f172a","#141d33","#1e293b","#243044","#e2e8f0","#94a3b8","#909caf","#5d60f0","#6063f3","#818cf8","rgba(99,102,241,0.32)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["dracula","Dracula",true,"#21222c","#282a36","#343746","#3a3d4d","#f8f8f2","#a6abc7","#a0aac8","#bd93f9","#cbaaff","#8be9fd","rgba(189,147,249,0.35)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["monokai","Monokai",true,"#1e1f1c","#272822","#33342c","#3b3c33","#f8f8f2","#aba893","#aba896","#a6e22e","#b6ee48","#66d9ef","rgba(166,226,46,0.25)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["one-dark","One Dark",true,"#21252b","#282c34","#2c313a","#333842","#abb2bf","#9fa4ae","#9da3af","#61afef","#74baf3","#56b6c2","rgba(97,175,239,0.30)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["nord","Nord",true,"#2e3440","#3b4252","#434c5e","#4c566a","#eceff4","#c8cfdd","#cacfd9","#88c0d0","#96cbd9","#aac0d5","rgba(136,192,208,0.30)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["gruvbox","Gruvbox",true,"#1d2021","#282828","#3c3836","#504945","#ebdbb2","#c4baac","#c4bcb5","#fe8019","#fe9539","#8eada1","rgba(254,128,25,0.28)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["github","GitHub",true,"#0d1117","#11151c","#161b22","#1c2128","#c9d1d9","#8b949e","#848b96","#126ff6","#116ef6","#58a6ff","rgba(47,129,247,0.30)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["github-light","GitHub Light",false,"#ffffff","#f6f8fa","#eaeef2","#ffffff","#1f2328","#57606a","#616a74","#0969da","#0860ca","#0550ae","rgba(9,105,218,0.20)","rgba(0,0,0,0.09)","rgba(0,0,0,0.16)"],
+    ["solarized","Solarized",true,"#002b36","#073642","#0a4351","#0e4b5a","#93a1a1","#abb7b7","#a8b8be","#2076b3","#1e75b1","#32beb3","rgba(38,139,210,0.30)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["solarized-light","Solarized Light",false,"#fdf6e3","#f5eeda","#eee8d5","#fffbf0","#586e75","#55686e","#5c6a6a","#2076b3","#1c74b0","#1d706a","rgba(38,139,210,0.22)","rgba(0,0,0,0.09)","rgba(0,0,0,0.16)"],
+    ["tokyo-night","Tokyo Night",true,"#1a1b26","#1f2335","#24283b","#2a2e42","#c0caf5","#9aa5ce","#8f96b8","#7aa2f7","#8fb0f8","#7dcfff","rgba(122,162,247,0.32)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["matrix","Matrix",true,"#000a00","#001200","#001a00","#002200","#00ff41","#22a344","#1d9943","#00ff41","#33ff67","#7dffab","rgba(0,255,65,0.25)","rgba(0,255,65,0.12)","rgba(0,255,65,0.20)"],
+    ["synthwave","Synthwave '84",true,"#1e1a29","#262335","#2a2139","#34294f","#f4f2ff","#9096c3","#9a98b7","#ff7edb","#ff92df","#36f9f6","rgba(255,126,219,0.30)","rgba(176,132,235,0.16)","rgba(176,132,235,0.26)"],
+    ["claude","Claude",true,"#1f1e1b","#26241f","#302d27","#37332c","#f0eee6","#b0a99b","#a49e92","#d97757","#e08967","#cc8a63","rgba(217,119,87,0.30)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["openai","OpenAI",true,"#0d0d0d","#141414","#1d1d1d","#242424","#ececec","#9b9b9b","#8c8c8c","#0d8265","#138265","#19c37d","rgba(16,163,127,0.28)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["latte","Catppuccin Latte",false,"#eff1f5","#e6e9ef","#dce0e8","#ffffff","#4c4f69","#5e6174","#5a5f71","#8839ef","#7a2fe0","#0a53e4","rgba(136,57,239,0.18)","rgba(0,0,0,0.09)","rgba(0,0,0,0.16)"],
+    ["rose-pine-dawn","Rosé Pine Dawn",false,"#faf4ed","#fffaf3","#f2e9e1","#fffaf3","#575279","#67647f","#6a6478","#c44741","#bc524d","#745d8f","rgba(215,130,126,0.25)","rgba(0,0,0,0.09)","rgba(0,0,0,0.16)"],
+    ["carrera","Carrera",false,"#e4d8bf","#ddd0b4","#d3c5a5","#ede3ce","#241f18","#574d3e","#5b5142","#b30018","#9a0015","#61470d","rgba(179,0,24,0.22)","rgba(0,0,0,0.09)","rgba(0,0,0,0.16)"],
+    ["italia","Italia",true,"#0b0708","#130c0d","#1b1113","#241719","#f6f1ef","#ab9d9c","#a29493","#ff2800","#ff4a2b","#f5d000","rgba(255,40,0,0.30)","rgba(255,86,64,0.11)","rgba(255,86,64,0.20)"],
+    ["panigale","Panigale",true,"#1a1c1e","#202325","#282c2f","#31363a","#c6ced4","#a3abb1","#99a1a8","#da291c","#ea3a2c","#eef4f8","rgba(218,41,28,0.30)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
+    ["sepia","Sepia",false,"#f4ecd8","#efe5cf","#e7dbc0","#f6efde","#4a3b2a","#6b5d48","#685c47","#a0522d","#8f4624","#7b5530","rgba(160,82,45,0.22)","rgba(0,0,0,0.09)","rgba(0,0,0,0.16)"],
+  ];
+  const primaryForegrounds = {
+    midnight: "#ffffff", light: "#ffffff", slate: "#ffffff", dracula: "#21222c",
+    monokai: "#1e1f1c", "one-dark": "#21252b", nord: "#2e3440", gruvbox: "#1d2021",
+    github: "#ffffff", "github-light": "#ffffff", solarized: "#fdf6e3",
+    "solarized-light": "#fdf6e3", "tokyo-night": "#1a1b26", matrix: "#000a00",
+    synthwave: "#262335", claude: "#1f1e1b", openai: "#ffffff", latte: "#ffffff",
+    "rose-pine-dawn": "#fffaf3", carrera: "#ffffff", italia: "#0b0708",
+    panigale: "#ffffff", sepia: "#f8f1e0",
+  };
+
+  const themes = Object.fromEntries(rows.map(([
+    id, label, dark, background, surface, surface2, elevated, foreground,
+    muted, subtle, primary, primaryHover, citation, selection, border,
+    borderStrong,
+  ]) => [id, {
+    id, label, dark, background, surface, surface2, elevated, foreground,
+    muted, subtle, primary, primaryHover, primaryForeground: primaryForegrounds[id],
+    citation, selection, border,
+    borderStrong,
+  }]));
+  const root = document.documentElement;
+  const systemAppearance = window.matchMedia("(prefers-color-scheme: dark)");
+  const storageKey = "alchemy-site-theme";
+
+  function storedChoice() {
+    try { return localStorage.getItem(storageKey) || "system"; }
+    catch { return "system"; }
+  }
+
+  function resolveChoice(choice) {
+    if (choice === "system") return systemAppearance.matches ? "midnight" : "light";
+    return themes[choice] ? choice : "midnight";
+  }
+
+  function applyTheme(choice, persist = false) {
+    const safeChoice = choice === "system" || themes[choice] ? choice : "system";
+    const theme = themes[resolveChoice(safeChoice)];
+    const vars = {
+      background: theme.background,
+      surface: theme.surface,
+      "surface-2": theme.surface2,
+      elevated: theme.elevated,
+      foreground: theme.foreground,
+      muted: theme.muted,
+      subtle: theme.subtle,
+      border: theme.border,
+      "border-strong": theme.borderStrong,
+      primary: theme.primary,
+      "primary-hover": theme.primaryHover,
+      "primary-foreground": theme.primaryForeground,
+      "accent-text": theme.citation,
+      selection: theme.selection,
+      "shader-bg": theme.surface2,
+      "shader-ink": theme.citation,
+      "shader-label": theme.elevated,
+      "btn-shadow": theme.dark
+        ? "0 1px 2px rgba(0, 0, 0, 0.35)"
+        : "0 1px 2px rgba(20, 22, 26, 0.12)",
+    };
+    Object.entries(vars).forEach(([key, value]) => root.style.setProperty(`--${key}`, value));
+    root.dataset.siteTheme = theme.id;
+    root.dataset.siteThemeChoice = safeChoice;
+    root.style.colorScheme = theme.dark ? "dark" : "light";
+    document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
+      meta.setAttribute("content", theme.background);
+    });
+    if (persist) {
+      try { localStorage.setItem(storageKey, safeChoice); }
+      catch { /* The selected theme still applies for this page view. */ }
+    }
+    window.dispatchEvent(new CustomEvent("alchemy-theme-change", {
+      detail: { choice: safeChoice, theme },
+    }));
+  }
+
+  function initPicker() {
+    const swatches = document.getElementById("theme-swatches");
+    const current = document.getElementById("theme-current");
+    const systemButton = document.getElementById("theme-system");
+    if (!swatches || !current || !systemButton) return;
+
+    Object.values(themes)
+      .sort((a, b) => a.label.localeCompare(b.label))
+      .forEach((theme) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "theme-swatch";
+        button.dataset.themeChoice = theme.id;
+        button.title = theme.label;
+        button.setAttribute("aria-label", `Use ${theme.label} theme`);
+        button.style.setProperty("--swatch-background", theme.background);
+        button.style.setProperty("--swatch-primary", theme.primary);
+        button.style.setProperty("--swatch-foreground", theme.foreground);
+        button.addEventListener("click", () => applyTheme(theme.id, true));
+        swatches.appendChild(button);
+      });
+
+    function syncPicker(event) {
+      const choice = event?.detail?.choice || root.dataset.siteThemeChoice || "system";
+      const theme = event?.detail?.theme || themes[resolveChoice(choice)];
+      current.textContent = choice === "system" ? `System · ${theme.label}` : theme.label;
+      systemButton.setAttribute("aria-pressed", String(choice === "system"));
+      swatches.querySelectorAll(".theme-swatch").forEach((button) => {
+        button.setAttribute("aria-pressed", String(button.dataset.themeChoice === choice));
+      });
+    }
+
+    systemButton.addEventListener("click", () => applyTheme("system", true));
+    window.addEventListener("alchemy-theme-change", syncPicker);
+    syncPicker();
+  }
+
+  window.alchemySiteThemes = themes;
+  window.applyAlchemySiteTheme = applyTheme;
+  applyTheme(storedChoice());
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initPicker, { once: true });
+  } else {
+    initPicker();
+  }
+  systemAppearance.addEventListener("change", () => {
+    if (root.dataset.siteThemeChoice === "system") applyTheme("system");
+  });
+})();
+</script>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
@@ -401,8 +981,13 @@
         <circle cx="13.4" cy="68" r="1.7"/>
       </g>
     </symbol>
+    <symbol id="github-logo" viewBox="0 0 24 24">
+      <path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.084-.729.084-.729 1.205.084 1.84 1.237 1.84 1.237 1.07 1.835 2.809 1.305 3.495.998.108-.776.418-1.305.762-1.605-2.665-.305-5.466-1.334-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23a11.5 11.5 0 0 1 3.003-.404c1.02.005 2.045.138 3.003.404 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.62-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>
+    </symbol>
   </defs>
 </svg>
+
+<a class="skip-link" href="#main-content">Skip to content</a>
 
 <header class="site-head wrap">
   <a class="mark" href="https://github.com/thrashr888/alchemy">
@@ -410,200 +995,261 @@
     Alchemy
   </a>
   <nav>
+    <a href="#features">Features</a>
     <a href="https://github.com/thrashr888/alchemy/releases">Releases</a>
-    <a href="https://github.com/thrashr888/alchemy">GitHub</a>
+    <a class="github-link" href="https://github.com/thrashr888/alchemy" aria-label="Alchemy on GitHub">
+      <svg aria-hidden="true"><use href="#github-logo"/></svg>
+    </a>
   </nav>
 </header>
 
-<main>
+<main id="main-content">
 
   <section class="hero wrap">
-    <svg class="sigil" width="76" height="76" aria-hidden="true"><use href="#sigil"/></svg>
-    <h1>Your sources, your machine, your&nbsp;models.</h1>
-    <p class="lede">
-      Alchemy is a <strong>local-first research notebook</strong> for macOS.
-      Import what you're working on — papers, repos, folders, links — chat
-      with it grounded in citations, and turn notebooks into documents,
-      decks, and podcasts. Everything is indexed and stored on a Mac you
-      control.
-    </p>
-    <div class="cta">
-      <a class="btn btn-primary" href="https://github.com/thrashr888/alchemy/releases/latest">Download for macOS</a>
-      <a class="btn btn-secondary" href="https://github.com/thrashr888/alchemy">View on GitHub</a>
+    <div class="hero-copy">
+      <svg class="sigil" width="76" height="76" aria-hidden="true"><use href="#sigil"/></svg>
+      <h1>Your sources, your machine, your models.</h1>
+      <p class="lede">
+        Alchemy is a <strong>local-first research notebook</strong> for macOS.
+        Import papers, repositories, folders, and links. Ask questions with
+        citations, then create documents, decks, and podcasts. Alchemy indexes
+        and stores the library on your Mac.
+      </p>
+      <div class="cta">
+        <a class="btn btn-primary" href="https://github.com/thrashr888/alchemy/releases/latest">Download for macOS</a>
+        <a class="btn btn-secondary" href="https://github.com/thrashr888/alchemy">View on GitHub</a>
+      </div>
+      <p class="fineprint">Requires macOS on Apple Silicon &middot; Signed and notarized &middot; Free and open source (MPL-2.0)</p>
+      <code class="brew"><span class="prompt">$</span>brew install --cask thrashr888/tap/alchemy</code>
     </div>
-    <p class="fineprint">Requires macOS on Apple Silicon &middot; Signed and notarized &middot; Free and open source (MPL-2.0)</p>
-    <code class="brew"><span class="prompt">$</span>brew install --cask thrashr888/tap/alchemy</code>
+
+    <figure class="hero-product">
+      <div class="hero-shot-frame">
+        <img
+          src="screenshot-app.png"
+          width="2340"
+          height="1332"
+          alt="Alchemy showing notebook sources, a cited chat answer, and Studio tools in a three-pane macOS workspace"
+          fetchpriority="high"
+          decoding="async"
+        >
+      </div>
+      <figcaption>Actual Alchemy workspace on macOS.</figcaption>
+    </figure>
   </section>
 
-  <section class="feature wrap">
-    <div class="eyebrow"><span class="num">01</span>Models</div>
-    <div>
-      <h2>Chat with any model you already have.</h2>
-      <p>
-        One provider list covers the <strong>subscriptions you already pay
-        for</strong> — Claude Code, Codex, Gemini CLI, Copilot, and friends,
-        run headless so your existing sign-ins carry the bill — plus 30+
-        API gateway presets, any OpenAI-compatible endpoint, and local
-        servers like Ollama and LM Studio. On macOS 26 with Apple
-        Intelligence, <strong>Apple's on-device model</strong> answers
-        entirely offline.
-      </p>
-      <p>
-        Switch from the model pill in the chat box; every answer is
-        captioned with the model that wrote it. Provider failures land in
-        the transcript in plain language — out of credit, sign-in expired —
-        with a Retry button or the exact terminal command that fixes it.
-      </p>
-      <p class="meta-row">claude code &middot; codex &middot; gemini cli &middot; cursor &middot; opencode &middot; copilot &middot; hermes &middot; ibm bob &middot; ollama &middot; lm studio &middot; openrouter &middot; groq &middot; apple on-device</p>
+  <section class="features wrap" id="features" aria-labelledby="features-title">
+    <div class="features-intro">
+      <div class="eyebrow">Features</div>
+      <div>
+        <h2 id="features-title">Research on your Mac, from source to finished work.</h2>
+        <p>Import source material and ask questions with citations. Generate a brief, deck, or podcast in the same notebook.</p>
+      </div>
     </div>
-  </section>
 
-  <section class="feature wrap">
-    <div class="eyebrow"><span class="num">02</span>Sources</div>
-    <div>
-      <h2>Git repositories are living sources.</h2>
-      <p>
-        Paste a GitHub or any git URL, or point Alchemy at a local
-        checkout. A ladder in the add dialog — <strong>README, docs,
-        everything</strong> — lets you pull only the written knowledge when
-        that's all you want. Docs are embedded; code stays
-        searchable-not-embedded, so a monorepo costs almost nothing at
-        rest. When a question looks like code, a ripgrep pass joins
-        retrieval, and per-file symbol outlines make definitions findable
-        by name.
-      </p>
-      <p>
-        Repos re-sync on a cadence you set, using your own SSH keys,
-        credential helpers, and <span class="mono">gh</span> auth —
-        <strong>Alchemy never stores a token</strong>. A built-in reader
-        gives you the file tree, syntax highlighting matched to your
-        theme, and select-code-to-chat.
-      </p>
-      <p>
-        Everything else imports too: PDFs, Office files, CSVs, images,
-        URLs, whole folders — and Apple Notes, Reminders, and Calendar as
-        live sources.
-      </p>
-      <p>
-        Can't remember where a file lives? <strong>Search your Mac</strong>
-        right from Add Source and add the hit in one click. Cloud drives are
-        first-class — Box, Dropbox, iCloud, Google Drive, and OneDrive are
-        detected as sync roots, with Box Notes and Dropbox Paper read as real
-        documents instead of opaque stubs.
-      </p>
-    </div>
-  </section>
+    <div class="bento-grid">
+      <article class="feature-card wide">
+        <div class="feature-visual shader-roundrect">
+          <canvas class="shader-canvas" data-shader="models" aria-hidden="true"></canvas>
+          <div aria-hidden="true">
+            <span class="visual-pill top-left">CLI subscriptions</span>
+            <span class="visual-pill top-right">API gateways</span>
+            <span class="visual-core">Model switch</span>
+            <span class="visual-pill bottom-left">Ollama</span>
+            <span class="visual-pill bottom-right">Apple on-device</span>
+          </div>
+        </div>
+        <div class="feature-copy">
+          <div class="feature-kicker">Models</div>
+          <h3>Use existing subscriptions and local models.</h3>
+          <p>Alchemy connects to Claude Code, Codex, Gemini CLI, Copilot, Cursor, and other subscriptions you already use. It also supports 30+ gateways, OpenAI-compatible endpoints, Ollama, LM Studio, and Apple’s on-device model. Switch models mid-thread; Alchemy labels each response with its provider.</p>
+          <div class="card-meta"><span>Existing sign-ins</span><span>30+ gateway presets</span></div>
+        </div>
+      </article>
 
-  <section class="feature wrap">
-    <div class="eyebrow"><span class="num">03</span>Retrieval</div>
-    <div>
-      <h2>Answers cite their sources. Citations open them.</h2>
-      <p>
-        Every question runs <strong>hybrid retrieval</strong>: vector
-        similarity finds paraphrases, BM25 full-text finds the exact names,
-        codes, and numbers embeddings miss, and the two lists fuse
-        deterministically — the same question cites the same passages.
-        Answers cite the passages they drew from; click a citation and the
-        source opens in the reader, scrolled to the highlighted text.
-      </p>
-      <p>
-        For harder questions, a <strong>deep-research mode</strong> plans
-        its own retrieval — searching, reading, and distilling evidence
-        until it has enough to answer. And Ask Everything (&#8997;Space)
-        answers across all your notebooks at once.
-      </p>
-      <p>
-        Retrieval holds up as a library grows — search quality is
-        <strong>verified flat from 1M to 10M characters</strong>, so a large
-        source list stays fully searchable instead of diluting every answer.
-        In the background, each source gets a distilled <strong>gist</strong>
-        that powers corpus-wide "what's in here?" questions, and broad asks —
-        "summarize the themes," "what do these disagree on?" — are assembled
-        across every relevant source, not just the closest passages.
-      </p>
-    </div>
-  </section>
+      <article class="feature-card narrow">
+        <div class="feature-visual shader-roundrect">
+          <canvas class="shader-canvas" data-shader="sources" aria-hidden="true"></canvas>
+          <div aria-hidden="true">
+            <span class="visual-pill top-left">Git repos</span>
+            <span class="visual-pill top-right">Folders</span>
+            <span class="visual-core">Living index</span>
+            <span class="visual-pill bottom-left">PDF + Office</span>
+            <span class="visual-pill bottom-right">Cloud drives</span>
+          </div>
+        </div>
+        <div class="feature-copy">
+          <div class="feature-kicker">Sources</div>
+          <h3>Sources keep their structure and stay current.</h3>
+          <p>Add a Git repository or local checkout without flattening it into uploaded text. Alchemy embeds documentation, keeps code available for exact search, and re-syncs with your existing Git credentials. PDFs, Office files, folders, and cloud drives belong in the same notebook.</p>
+          <div class="card-meta"><span>Uses your Git credentials</span></div>
+        </div>
+      </article>
 
-  <section class="feature wrap">
-    <div class="eyebrow"><span class="num">04</span>Studio</div>
-    <div>
-      <h2>Notebooks become artifacts.</h2>
-      <p>
-        One click generates a document against the latest sources — and
-        artifacts are real, not text dumps. <strong>Flashcards</strong> are
-        a flippable deck with spaced repetition, <strong>quizzes</strong>
-        grade themselves, <strong>slide decks</strong> render as true 16:9
-        slides with a Present mode, and <strong>mind maps</strong> land on
-        a pannable canvas. All export to PDF through the native print
-        system.
-      </p>
-      <p>
-        <strong>Audio Overview</strong> turns a notebook into a two-host
-        podcast episode — scripted by your chat model, voiced entirely
-        on-device by Kokoro neural TTS. The script stays editable as a
-        note; the episode plays inline.
-      </p>
-      <ul class="chips">
-        <li>Summary</li><li>FAQ</li><li>Study guide</li><li>Briefing</li>
-        <li>Timeline</li><li>Insights</li><li>Data table</li><li>Problems</li>
-        <li>Flashcards</li><li>Quiz</li><li>Slide deck</li><li>Mind map</li>
-        <li>PRD</li><li>PR/FAQ</li><li>RFC</li><li>Skill</li><li>Podcast</li>
-      </ul>
-    </div>
-  </section>
+      <article class="feature-card narrow">
+        <div class="feature-visual shader-roundrect">
+          <canvas class="shader-canvas" data-shader="retrieval" aria-hidden="true"></canvas>
+          <div aria-hidden="true">
+            <span class="visual-pill top-left">Vector</span>
+            <span class="visual-pill top-right">Exact match</span>
+            <span class="visual-core">Cited answer</span>
+            <span class="visual-note">click → highlighted passage</span>
+          </div>
+        </div>
+        <div class="feature-copy">
+          <div class="feature-kicker">Retrieval</div>
+          <h3>Evidence you can open.</h3>
+          <p>Alchemy combines semantic similarity with BM25 exact-match search. Each citation opens the source at the highlighted passage. Deep Research runs additional searches for harder questions, while Ask Everything searches across notebooks.</p>
+          <div class="card-meta"><span>Hybrid search</span><span>Tested from 1M to 10M characters</span></div>
+        </div>
+      </article>
 
-  <section class="feature wrap">
-    <div class="eyebrow"><span class="num">05</span>Agents</div>
-    <div>
-      <h2>Agents get the same notebook you do.</h2>
-      <p>
-        An embedded <strong>MCP server</strong> — localhost-only — lets
-        agents create notebooks, add sources, run the same hybrid search,
-        write notes, and grep or structurally search your repositories.
-        Watch a notebook fill in live while an agent researches. One-click
-        connect ships for a dozen agent tools in Settings.
-      </p>
-      <p class="meta-row">claude code &middot; codex &middot; copilot &middot; vs code &middot; opencode &middot; gemini cli &middot; antigravity &middot; factory droid &middot; aws kiro &middot; ibm bob &middot; hermes</p>
-    </div>
-  </section>
+      <article class="feature-card wide">
+        <div class="feature-visual shader-roundrect">
+          <canvas class="shader-canvas" data-shader="studio" aria-hidden="true"></canvas>
+          <div aria-hidden="true">
+            <span class="visual-pill top-left">Documents</span>
+            <span class="visual-pill top-right">Slide decks</span>
+            <span class="visual-core">Generate</span>
+            <span class="visual-pill bottom-left">Quiz + cards</span>
+            <span class="visual-pill bottom-right">Podcast</span>
+          </div>
+        </div>
+        <div class="feature-copy">
+          <div class="feature-kicker">Studio</div>
+          <h3>Create documents, decks, quizzes, and podcasts.</h3>
+          <p>Create editable documents, 16:9 slide decks, quizzes, mind maps, and tables from the latest notebook sources. Audio Overview writes a two-host script with your chosen chat model and runs Kokoro speech synthesis on your Mac.</p>
+          <div class="card-meta"><span>Editable output</span><span>Native PDF export</span></div>
+        </div>
+      </article>
 
-  <section class="feature wrap">
-    <div class="eyebrow"><span class="num">06</span>Privacy</div>
-    <div>
-      <h2>Local-first is the architecture.</h2>
-      <p>
-        Sources are extracted, chunked, and embedded on your machine and
-        stored in an embedded database in your app-data folder — no
-        server, no account. <strong>Embeddings run on a built-in on-device
-        model</strong> even when chat goes through a gateway, so nothing
-        but your chat turns leaves the machine.
-      </p>
-      <p>
-        API keys live in a local config file and are sent only to the
-        gateway you configured. Podcast audio is synthesized on-device.
-        With Ollama or Apple's on-device model, the whole loop runs
-        offline.
-      </p>
+      <article class="feature-card wide">
+        <div class="feature-visual shader-roundrect">
+          <canvas class="shader-canvas" data-shader="agents" aria-hidden="true"></canvas>
+          <div aria-hidden="true">
+            <span class="visual-pill top-left">Codex</span>
+            <span class="visual-pill top-right">Claude Code</span>
+            <span class="visual-core">Notebook MCP</span>
+            <span class="visual-pill bottom-left">VS Code</span>
+            <span class="visual-pill bottom-right">Gemini CLI</span>
+          </div>
+        </div>
+        <div class="feature-copy">
+          <div class="feature-kicker">Agents</div>
+          <h3>Give agents access to the same notebook.</h3>
+          <p>The localhost MCP server lets Codex, Claude Code, Gemini CLI, and other agents search notebooks, add sources, and write notes. Their changes appear in Alchemy as they work, so you do not need to copy context between apps.</p>
+          <div class="card-meta"><span>Localhost only</span></div>
+        </div>
+      </article>
+
+      <article class="feature-card narrow">
+        <div class="feature-visual shader-roundrect">
+          <canvas class="shader-canvas" data-shader="privacy" aria-hidden="true"></canvas>
+          <div aria-hidden="true">
+            <span class="visual-pill top-left">Embeddings</span>
+            <span class="visual-pill top-right">Database</span>
+            <span class="visual-core local">On your Mac</span>
+            <span class="visual-note">no account · no server</span>
+          </div>
+        </div>
+        <div class="feature-copy">
+          <div class="feature-kicker">Privacy</div>
+          <h3>Your library stays on your Mac.</h3>
+          <p>Alchemy extracts, chunks, embeds, and stores sources on your Mac. It sends only the chat context to the model provider you select. Choose Ollama or Apple’s on-device model to keep chat offline too.</p>
+          <div class="card-meta"><span>No account</span><span>Offline with local models</span></div>
+        </div>
+      </article>
     </div>
   </section>
 
-  <section class="etc wrap">
+  <section class="etc wrap" aria-labelledby="more-title">
     <div class="etc-head">
-      <div class="eyebrow"><span class="num">07</span>And</div>
-      <h2>Also in the box.</h2>
+      <div class="eyebrow">More</div>
+      <div><h2 id="more-title">Also in the box:</h2></div>
     </div>
-    <div class="etc-grid">
-      <p class="etc-item"><span class="t">Command menu.</span> <span class="d">&#8984;K searches notebooks, adds sources, generates documents, and switches themes.</span></p>
-      <p class="etc-item"><span class="t">Slash commands.</span> <span class="d">Type / in the composer for every generator and action — including /grep, an exact-match search with no model call.</span></p>
-      <p class="etc-item"><span class="t">Your text size.</span> <span class="d">The whole interface scales to the macOS Accessibility text-size setting, live.</span></p>
-      <p class="etc-item"><span class="t">Part of the Mac.</span> <span class="d">Menu bar extra, "Add to Alchemy" in the Services menu, Spotlight-indexed notebooks, and alchemy:// deep links.</span></p>
-      <p class="etc-item"><span class="t">Web clipper.</span> <span class="d">The <a href="https://chromewebstore.google.com/detail/alchemy-web-clipper/bdiidbpifneigmcknjbgolbclbbgjheh">Chrome extension</a> clips a page, link, or selection to a notebook — including pages behind a login, read from your own tab. Loads in Firefox and Safari too.</span></p>
-      <p class="etc-item"><span class="t">Reader.</span> <span class="d">Browser-style back/forward, find-in-source, and select-to-ask: Explain or Compare any passage.</span></p>
-      <p class="etc-item"><span class="t">Folder sources.</span> <span class="d">Point at a folder — iCloud, Dropbox, OneDrive included — and it keeps syncing.</span></p>
-      <p class="etc-item"><span class="t">OCR.</span> <span class="d">Images and scanned PDFs are transcribed by a local vision model.</span></p>
-      <p class="etc-item"><span class="t">Scheduled reports.</span> <span class="d">A notebook refreshes its URL sources on an interval and reports what changed.</span></p>
-      <p class="etc-item"><span class="t">Share notebooks.</span> <span class="d">Export sources and notes as a plain-markdown OKF bundle; import merges and re-embeds locally.</span></p>
-      <p class="etc-item"><span class="t">20 themes.</span> <span class="d">Midnight to Solarized to Synthwave '84, dark and light, carried through every surface.</span></p>
+    <div class="utility-grid">
+      <article class="utility-card large">
+        <div class="utility-visual shader-roundrect">
+          <canvas class="shader-canvas" data-shader="native" aria-hidden="true"></canvas>
+          <div class="native-window" aria-hidden="true">
+            <div class="native-titlebar"><span>Alchemy</span><span class="native-status">macOS</span></div>
+            <div class="native-body">
+              <div class="text-scale">
+                <div class="text-scale-label"><span>Text size</span><span>Aa</span></div>
+                <div class="scale-track"></div>
+                <div class="native-hooks"><span>Spotlight</span><span>Services</span><span>Menu bar</span><span>Deep links</span></div>
+              </div>
+              <span class="native-status">Local</span>
+            </div>
+          </div>
+        </div>
+        <div class="utility-copy">
+          <div class="utility-kicker">macOS</div>
+          <h3>Made for your Mac.</h3>
+          <p>Alchemy follows your macOS text size, adds notebooks to Spotlight, and accepts links from Services. A menu bar extra and <span class="mono">alchemy://</span> links keep it close at hand.</p>
+        </div>
+      </article>
+
+      <article class="utility-card compact">
+        <div class="command-demo" aria-hidden="true"><kbd>&#8984; K</kbd><span>Search or run a command</span></div>
+        <div>
+          <h3>Command anywhere.</h3>
+          <p>Press &#8984;K to open a notebook, add a source, or run a generator. Type <span class="mono">/</span> for the same actions in chat.</p>
+        </div>
+      </article>
+
+      <article class="utility-card compact">
+        <div class="reader-demo" aria-hidden="true">
+          <span>Find the exact passage, then</span>
+          <mark>select text in the source</mark>
+          <span class="reader-actions"><span>Explain</span><span>Compare</span></span>
+        </div>
+        <div>
+          <h3>Read in context.</h3>
+          <p>Move back and forward, find text in a source, then ask Alchemy to explain or compare any selected passage.</p>
+        </div>
+      </article>
+
+      <article class="utility-card large">
+        <div class="utility-visual shader-roundrect">
+          <canvas class="shader-canvas" data-shader="capture" aria-hidden="true"></canvas>
+          <div aria-hidden="true">
+            <span class="visual-pill top-left">Web page</span>
+            <span class="visual-pill top-right">Folder</span>
+            <span class="visual-core">Synced source</span>
+            <span class="visual-pill bottom-left">Local OCR</span>
+            <span class="visual-pill bottom-right">Scheduled refresh</span>
+          </div>
+        </div>
+        <div class="utility-copy">
+          <div class="utility-kicker">Capture and sync</div>
+          <h3>Bring in the source. Keep it current.</h3>
+          <p>The <a href="https://chromewebstore.google.com/detail/alchemy-web-clipper/bdiidbpifneigmcknjbgolbclbbgjheh">web clipper</a> reads signed-in pages from your own tab. Folder sources keep syncing, a local vision model reads scans, and scheduled reports refresh URLs to show what changed.</p>
+        </div>
+      </article>
+
+      <article class="utility-card compact">
+        <div class="file-demo" aria-hidden="true"><span class="file-badge">OKF</span><span>sources/<br>notes/</span></div>
+        <div>
+          <h3>Share notebooks as files.</h3>
+          <p>Export a notebook as an OKF bundle. Import restores the sources and re-embeds them on the receiving Mac.</p>
+        </div>
+      </article>
+
+      <article class="utility-card compact theme-card">
+        <fieldset class="theme-demo">
+          <legend class="sr-only">Choose a website color theme</legend>
+          <div class="theme-demo-head">
+            <span class="theme-current" id="theme-current" aria-live="polite">System</span>
+            <button class="theme-system" id="theme-system" type="button" aria-pressed="true">System</button>
+          </div>
+          <div class="theme-swatches" id="theme-swatches"></div>
+        </fieldset>
+        <div>
+          <h3>Try every Alchemy theme.</h3>
+          <p>Switch this page between all 23 app palettes. System follows your Mac; your choice stays in this browser.</p>
+        </div>
+      </article>
     </div>
   </section>
 
@@ -612,8 +1258,8 @@
     <h2>Get Alchemy</h2>
     <p class="sub">
       Free and open source under MPL-2.0. Requires a Mac with Apple
-      Silicon; builds are signed and notarized. Bring a subscription, an
-      API key, or run fully local.
+      Silicon; builds are signed and notarized. Use an existing subscription
+      or API key. Ollama and Apple’s on-device model work offline.
     </p>
     <div class="cta">
       <a class="btn btn-primary" href="https://github.com/thrashr888/alchemy/releases/latest">Download for macOS</a>
@@ -626,13 +1272,440 @@
 
 <footer class="site-foot">
   <div class="wrap">
-    <span>Alchemy &middot; MPL-2.0 &middot; Built with Tauri, Rust, and LanceDB</span>
+    <span>&copy; 2026 Paul Thrasher &middot; Alchemy &middot; MPL-2.0 &middot; Built with Tauri, Rust, and LanceDB</span>
     <nav>
       <a href="https://github.com/thrashr888/alchemy/releases">Releases</a>
-      <a href="https://github.com/thrashr888/alchemy">GitHub</a>
+      <a class="github-link" href="https://github.com/thrashr888/alchemy" aria-label="Alchemy on GitHub">
+        <svg aria-hidden="true"><use href="#github-logo"/></svg>
+      </a>
     </nav>
   </div>
 </footer>
+
+<script>
+(() => {
+  const sceneIds = {
+    overview: 0,
+    models: 1,
+    sources: 2,
+    retrieval: 3,
+    studio: 4,
+    agents: 5,
+    privacy: 6,
+    native: 7,
+    capture: 8,
+  };
+
+  const vertexSource = `
+    attribute vec2 a_position;
+    void main() {
+      gl_Position = vec4(a_position, 0.0, 1.0);
+    }
+  `;
+
+  const fragmentSource = `
+    precision highp float;
+
+    uniform vec2 u_resolution;
+    uniform float u_time;
+    uniform float u_scene;
+    uniform vec3 u_background;
+    uniform vec3 u_ink;
+
+    float hash(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+    }
+
+    float noise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(
+        mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+        mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x),
+        f.y
+      );
+    }
+
+    float bayer4(vec2 p) {
+      vec2 a = mod(p, 2.0);
+      vec2 b = floor(0.5 * mod(p, 4.0));
+      float lo = 4.0 * mix(mix(0.0, 2.0, a.x), mix(3.0, 1.0, a.x), a.y);
+      float hi = mix(mix(0.0, 2.0, b.x), mix(3.0, 1.0, b.x), b.y);
+      return (lo + hi) / 16.0;
+    }
+
+    float sdSegment(vec2 p, vec2 a, vec2 b) {
+      vec2 pa = p - a;
+      vec2 ba = b - a;
+      float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+      return length(pa - ba * h);
+    }
+
+    float line(vec2 p, vec2 a, vec2 b, float width) {
+      return 1.0 - smoothstep(width, width + 0.008, sdSegment(p, a, b));
+    }
+
+    float disc(vec2 p, vec2 c, float radius) {
+      return 1.0 - smoothstep(radius, radius + 0.009, length(p - c));
+    }
+
+    float ring(vec2 p, vec2 c, float radius, float width) {
+      return 1.0 - smoothstep(width, width + 0.008, abs(length(p - c) - radius));
+    }
+
+    float boxLine(vec2 p, vec2 c, vec2 halfSize, float width) {
+      vec2 d = abs(p - c) - halfSize;
+      float outside = length(max(d, 0.0));
+      float inside = min(max(d.x, d.y), 0.0);
+      float distanceToBox = outside + inside;
+      return 1.0 - smoothstep(width, width + 0.008, abs(distanceToBox));
+    }
+
+    float packet(vec2 p, vec2 a, vec2 b, float phase) {
+      float travel = fract(u_time * 0.075 + phase);
+      return disc(p, mix(a, b, travel), 0.018);
+    }
+
+    float overviewScene(vec2 p) {
+      vec2 a = vec2(-0.82, 0.0);
+      vec2 b = vec2(0.0, 0.0);
+      vec2 c = vec2(0.82, 0.0);
+      float f = line(p, a, b, 0.008) + line(p, b, c, 0.008);
+      f += 0.45 * ring(p, a, 0.18, 0.007);
+      f += 0.55 * ring(p, b, 0.24, 0.008);
+      f += 0.45 * ring(p, c, 0.18, 0.007);
+      f += disc(p, a, 0.026) + disc(p, b, 0.032) + disc(p, c, 0.026);
+      f += packet(p, a, b, 0.1) + packet(p, b, c, 0.55);
+      return f;
+    }
+
+    float modelsScene(vec2 p) {
+      vec2 c = vec2(0.0, 0.0);
+      vec2 a = vec2(-0.62, 0.25);
+      vec2 b = vec2(0.62, 0.25);
+      vec2 d = vec2(-0.62, -0.25);
+      vec2 e = vec2(0.62, -0.25);
+      float f = 0.42 * ring(p, c, 0.21, 0.007) + 0.25 * ring(p, c, 0.34, 0.006);
+      f += 0.35 * (line(p, a, c, 0.007) + line(p, b, c, 0.007));
+      f += 0.35 * (line(p, d, c, 0.007) + line(p, e, c, 0.007));
+      f += disc(p, c, 0.03);
+      f += 0.7 * (disc(p, a, 0.022) + disc(p, b, 0.022) + disc(p, d, 0.022) + disc(p, e, 0.022));
+      f += packet(p, a, c, 0.05) + packet(p, b, c, 0.32);
+      f += packet(p, d, c, 0.58) + packet(p, e, c, 0.83);
+      return f;
+    }
+
+    float sourcesScene(vec2 p) {
+      vec2 a = vec2(-0.68, 0.28);
+      vec2 b = vec2(-0.68, -0.28);
+      vec2 c = vec2(-0.20, 0.11);
+      vec2 d = vec2(-0.20, -0.11);
+      vec2 hub = vec2(0.10, 0.0);
+      vec2 outPoint = vec2(0.68, 0.0);
+      float f = 0.45 * (line(p, a, c, 0.008) + line(p, b, d, 0.008));
+      f += 0.55 * (line(p, c, hub, 0.008) + line(p, d, hub, 0.008));
+      f += line(p, hub, outPoint, 0.009);
+      f += disc(p, a, 0.022) + disc(p, b, 0.022);
+      f += 0.75 * (disc(p, c, 0.018) + disc(p, d, 0.018));
+      f += disc(p, hub, 0.03) + disc(p, outPoint, 0.024);
+      f += packet(p, a, c, 0.1) + packet(p, b, d, 0.54);
+      f += packet(p, hub, outPoint, 0.72);
+      return f;
+    }
+
+    float retrievalScene(vec2 p) {
+      vec2 vectorStart = vec2(-0.68, 0.23);
+      vec2 exactStart = vec2(0.68, 0.23);
+      vec2 leftJoin = vec2(-0.20, 0.06);
+      vec2 rightJoin = vec2(0.20, 0.06);
+      vec2 answer = vec2(0.0, -0.08);
+      float f = 0.5 * line(p, vectorStart, leftJoin, 0.008);
+      f += 0.5 * line(p, exactStart, rightJoin, 0.008);
+      f += 0.7 * line(p, leftJoin, answer, 0.009);
+      f += 0.7 * line(p, rightJoin, answer, 0.009);
+      f += disc(p, vectorStart, 0.022) + disc(p, exactStart, 0.022);
+      f += disc(p, answer, 0.034) + 0.35 * ring(p, answer, 0.19, 0.007);
+      f += packet(p, vectorStart, leftJoin, 0.16);
+      f += packet(p, exactStart, rightJoin, 0.58);
+      f += packet(p, leftJoin, answer, 0.78);
+      return f;
+    }
+
+    float studioScene(vec2 p) {
+      vec2 c = vec2(0.0, 0.0);
+      vec2 a = vec2(-0.62, 0.25);
+      vec2 b = vec2(0.62, 0.25);
+      vec2 d = vec2(-0.62, -0.25);
+      vec2 e = vec2(0.62, -0.25);
+      float f = 0.28 * (line(p, c, a, 0.007) + line(p, c, b, 0.007));
+      f += 0.28 * (line(p, c, d, 0.007) + line(p, c, e, 0.007));
+      f += 0.75 * boxLine(p, a, vec2(0.14, 0.085), 0.007);
+      f += 0.75 * boxLine(p, b, vec2(0.14, 0.085), 0.007);
+      f += 0.75 * boxLine(p, d, vec2(0.14, 0.085), 0.007);
+      f += 0.75 * boxLine(p, e, vec2(0.14, 0.085), 0.007);
+      f += 0.45 * ring(p, c, 0.20, 0.007) + disc(p, c, 0.03);
+      f += packet(p, c, a, 0.08) + packet(p, c, b, 0.34);
+      f += packet(p, c, d, 0.60) + packet(p, c, e, 0.86);
+      return f;
+    }
+
+    float agentsScene(vec2 p) {
+      vec2 c = vec2(0.0, 0.0);
+      vec2 a = vec2(-0.63, 0.27);
+      vec2 b = vec2(0.63, 0.27);
+      vec2 d = vec2(-0.63, -0.27);
+      vec2 e = vec2(0.63, -0.27);
+      float f = 0.48 * (line(p, a, c, 0.008) + line(p, b, c, 0.008));
+      f += 0.48 * (line(p, d, c, 0.008) + line(p, e, c, 0.008));
+      f += 0.18 * (line(p, a, b, 0.006) + line(p, d, e, 0.006));
+      f += 0.4 * ring(p, c, 0.22, 0.007) + disc(p, c, 0.035);
+      f += disc(p, a, 0.023) + disc(p, b, 0.023) + disc(p, d, 0.023) + disc(p, e, 0.023);
+      f += packet(p, a, c, 0.03) + packet(p, b, c, 0.28);
+      f += packet(p, c, d, 0.53) + packet(p, c, e, 0.78);
+      return f;
+    }
+
+    float privacyScene(vec2 p) {
+      vec2 c = vec2(0.0, 0.0);
+      float breathe = 0.31 + 0.012 * sin(u_time * 0.7);
+      float f = 0.7 * ring(p, c, breathe, 0.009);
+      f += 0.25 * ring(p, c, 0.43, 0.006);
+      f += 0.55 * boxLine(p, c, vec2(0.13, 0.09), 0.008);
+      f += disc(p, vec2(-0.045, 0.0), 0.018) + disc(p, vec2(0.045, 0.0), 0.018);
+      f += 0.45 * disc(p, vec2(-0.60, 0.23), 0.02);
+      f += 0.45 * disc(p, vec2(0.60, 0.23), 0.02);
+      f += 0.45 * disc(p, vec2(-0.60, -0.23), 0.02);
+      f += 0.45 * disc(p, vec2(0.60, -0.23), 0.02);
+      return f;
+    }
+
+    float nativeScene(vec2 p) {
+      vec2 c = vec2(0.0, 0.0);
+      float f = 0.55 * boxLine(p, c, vec2(0.68, 0.34), 0.007);
+      f += 0.28 * line(p, vec2(-0.68, 0.19), vec2(0.68, 0.19), 0.006);
+      f += disc(p, vec2(-0.58, 0.265), 0.014);
+      f += disc(p, vec2(-0.53, 0.265), 0.014);
+      f += disc(p, vec2(-0.48, 0.265), 0.014);
+      f += 0.32 * ring(p, c, 0.23, 0.006);
+      f += packet(p, vec2(-0.56, -0.23), vec2(0.56, -0.23), 0.22);
+      return f;
+    }
+
+    float captureScene(vec2 p) {
+      vec2 c = vec2(0.0, 0.0);
+      vec2 a = vec2(-0.68, 0.27);
+      vec2 b = vec2(0.68, 0.27);
+      vec2 d = vec2(-0.68, -0.27);
+      vec2 e = vec2(0.68, -0.27);
+      float f = 0.48 * (line(p, a, c, 0.008) + line(p, b, c, 0.008));
+      f += 0.48 * (line(p, d, c, 0.008) + line(p, e, c, 0.008));
+      f += 0.5 * ring(p, c, 0.20, 0.007) + disc(p, c, 0.033);
+      f += 0.7 * (disc(p, a, 0.022) + disc(p, b, 0.022));
+      f += 0.7 * (disc(p, d, 0.022) + disc(p, e, 0.022));
+      f += packet(p, a, c, 0.08) + packet(p, b, c, 0.34);
+      f += packet(p, d, c, 0.60) + packet(p, e, c, 0.86);
+      return f;
+    }
+
+    void main() {
+      vec2 p = (gl_FragCoord.xy - 0.5 * u_resolution) / u_resolution.y;
+      float field;
+      if (u_scene < 0.5) field = overviewScene(p);
+      else if (u_scene < 1.5) field = modelsScene(p);
+      else if (u_scene < 2.5) field = sourcesScene(p);
+      else if (u_scene < 3.5) field = retrievalScene(p);
+      else if (u_scene < 4.5) field = studioScene(p);
+      else if (u_scene < 5.5) field = agentsScene(p);
+      else if (u_scene < 6.5) field = privacyScene(p);
+      else if (u_scene < 7.5) field = nativeScene(p);
+      else field = captureScene(p);
+
+      float atmosphere = noise(p * 3.1 + vec2(u_time * 0.025, -u_time * 0.018));
+      atmosphere *= smoothstep(1.35, 0.05, length(p)) * 0.16;
+      field = clamp(max(field, atmosphere), 0.0, 1.0);
+
+      float threshold = bayer4(gl_FragCoord.xy) - 0.5;
+      float quantized = floor(field * 5.0 + threshold + 0.5) / 5.0;
+      vec3 color = mix(u_background, u_ink, clamp(quantized * 0.58, 0.0, 0.72));
+      gl_FragColor = vec4(color, 1.0);
+    }
+  `;
+
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const colorScheme = window.matchMedia("(prefers-color-scheme: light)");
+  const states = [];
+
+  function cssHex(name, fallback) {
+    const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    const match = /^#?([0-9a-f]{6})$/i.exec(value);
+    if (!match) return fallback;
+    const number = parseInt(match[1], 16);
+    return [(number >> 16) / 255, ((number >> 8) & 255) / 255, (number & 255) / 255];
+  }
+
+  function compile(gl, type, source) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      console.warn("Alchemy website shader:", gl.getShaderInfoLog(shader));
+      gl.deleteShader(shader);
+      return null;
+    }
+    return shader;
+  }
+
+  function createProgram(gl) {
+    const vertex = compile(gl, gl.VERTEX_SHADER, vertexSource);
+    const fragment = compile(gl, gl.FRAGMENT_SHADER, fragmentSource);
+    if (!vertex || !fragment) return null;
+    const program = gl.createProgram();
+    gl.attachShader(program, vertex);
+    gl.attachShader(program, fragment);
+    gl.linkProgram(program);
+    gl.deleteShader(vertex);
+    gl.deleteShader(fragment);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      console.warn("Alchemy website shader:", gl.getProgramInfoLog(program));
+      gl.deleteProgram(program);
+      return null;
+    }
+    return program;
+  }
+
+  function initShader(canvas) {
+    const gl = canvas.getContext("webgl", { antialias: false, alpha: false, powerPreference: "low-power" });
+    if (!gl) return null;
+    const program = createProgram(gl);
+    if (!program) return null;
+    gl.useProgram(program);
+
+    const buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    const position = gl.getAttribLocation(program, "a_position");
+    gl.enableVertexAttribArray(position);
+    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+
+    const uniforms = {
+      resolution: gl.getUniformLocation(program, "u_resolution"),
+      time: gl.getUniformLocation(program, "u_time"),
+      scene: gl.getUniformLocation(program, "u_scene"),
+      background: gl.getUniformLocation(program, "u_background"),
+      ink: gl.getUniformLocation(program, "u_ink"),
+    };
+    gl.uniform1f(uniforms.scene, sceneIds[canvas.dataset.shader] ?? 0);
+
+    let frame = 0;
+    let inView = false;
+    let lastDraw = 0;
+    const startedAt = performance.now();
+
+    function updateColors() {
+      gl.useProgram(program);
+      gl.uniform3fv(uniforms.background, cssHex("--shader-bg", [0.06, 0.067, 0.078]));
+      gl.uniform3fv(uniforms.ink, cssHex("--shader-ink", [0.55, 0.58, 0.96]));
+    }
+
+    function resize() {
+      const scale = Math.min(window.devicePixelRatio || 1, 1.5);
+      const width = Math.max(1, Math.floor(canvas.clientWidth * scale));
+      const height = Math.max(1, Math.floor(canvas.clientHeight * scale));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      gl.viewport(0, 0, width, height);
+      gl.uniform2f(uniforms.resolution, width, height);
+    }
+
+    function draw(now) {
+      resize();
+      const time = reducedMotion.matches ? 4.0 : (now - startedAt) / 1000;
+      gl.uniform1f(uniforms.time, time);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+
+    function loop(now) {
+      frame = 0;
+      if (!inView || document.hidden || reducedMotion.matches) return;
+      if (now - lastDraw >= 40) {
+        lastDraw = now;
+        draw(now);
+      }
+      frame = requestAnimationFrame(loop);
+    }
+
+    function start() {
+      inView = true;
+      if (document.hidden) return;
+      if (reducedMotion.matches) {
+        draw(performance.now());
+      } else if (!frame) {
+        frame = requestAnimationFrame(loop);
+      }
+    }
+
+    function stop() {
+      inView = false;
+      pause();
+    }
+
+    function pause() {
+      cancelAnimationFrame(frame);
+      frame = 0;
+    }
+
+    updateColors();
+    const resizeObserver = new ResizeObserver(() => {
+      if (inView) draw(performance.now());
+    });
+    resizeObserver.observe(canvas);
+
+    return { canvas, start, stop, pause, draw, updateColors, isInView: () => inView };
+  }
+
+  document.querySelectorAll("canvas[data-shader]").forEach((canvas) => {
+    const state = initShader(canvas);
+    if (state) states.push(state);
+  });
+
+  const intersectionObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      const state = states.find((candidate) => candidate.canvas === entry.target);
+      if (!state) return;
+      if (entry.isIntersecting) state.start();
+      else state.stop();
+    });
+  }, { rootMargin: "120px 0px", threshold: 0.01 });
+  states.forEach((state) => intersectionObserver.observe(state.canvas));
+
+  document.addEventListener("visibilitychange", () => {
+    states.forEach((state) => {
+      if (document.hidden) state.pause();
+      else if (state.isInView()) state.start();
+    });
+  });
+  reducedMotion.addEventListener("change", () => {
+    states.forEach((state) => {
+      if (state.isInView()) state.start();
+    });
+  });
+  colorScheme.addEventListener("change", () => {
+    states.forEach((state) => {
+      state.updateColors();
+      if (state.isInView()) state.draw(performance.now());
+    });
+  });
+  window.addEventListener("alchemy-theme-change", () => {
+    states.forEach((state) => {
+      state.updateColors();
+      if (state.isInView()) state.draw(performance.now());
+    });
+  });
+})();
+</script>
 
 </body>
 </html>
