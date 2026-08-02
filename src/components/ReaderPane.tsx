@@ -43,7 +43,7 @@ import {
   MessageSquarePlus,
   Pencil,
   RefreshCw,
-  Scale,
+  Logs,
   Link2,
   ListTree,
   Search,
@@ -464,7 +464,7 @@ export function CenterModeTabs() {
           })),
         !hasDocs,
       )}
-      {tab("ledger", <Scale className="h-3.5 w-3.5" />, "Ledger", () =>
+      {tab("ledger", <Logs className="h-3.5 w-3.5" />, "Ledger", () =>
         useStore.setState({ ledgerOpen: true }),
       )}
     </div>
@@ -1863,7 +1863,7 @@ function SourceReader({
               onClick={() => askAbout(`Explain this passage from "${source.title}":`)}
             />
             <SelAction
-              icon={<Scale className="h-3.5 w-3.5" />}
+              icon={<Logs className="h-3.5 w-3.5" />}
               label="Compare sources"
               disabled={sending}
               onClick={() =>

@@ -10,7 +10,7 @@ import {
   Milestone,
   PenLine,
   Quote,
-  Scale,
+  Logs,
   ShieldCheck,
   Trash2,
 } from "lucide-react";
@@ -272,7 +272,7 @@ export function LedgerPane() {
           ) : shown.length === 0 ? (
             <div className="py-10">
               <EmptyState
-                icon={<Scale className="h-7 w-7" />}
+                icon={<Logs className="h-7 w-7" />}
                 title={
                   filter === "all" ? "Nothing on the record yet" : "None yet"
                 }
@@ -283,7 +283,7 @@ export function LedgerPane() {
             <div className="mt-4 flex flex-col">
               {shown.map((entry) => {
                 const meta = kindMeta(entry.kind);
-                const Icon = meta?.icon ?? Scale;
+                const Icon = meta?.icon ?? Logs;
                 return (
                   <article
                     key={entry.id}
