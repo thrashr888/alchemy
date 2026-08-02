@@ -274,6 +274,8 @@ export interface LedgerEntry {
   text: string;
   why: string;
   status: string;
+  /** "" for user/agent rows, "auto" for chat-minted rows. */
+  origin: string;
   anchors: LedgerAnchor[];
   createdAt: number;
   updatedAt: number;

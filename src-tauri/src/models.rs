@@ -118,8 +118,6 @@ pub struct ModelStat {
     pub samples: u64,
 }
 
-/// A periodic report definition. On its interval, the app refreshes the
-/// notebook's URL sources, then generates a timestamped note.
 /// One anchor pinning a ledger entry to verbatim source text. The quote is
 /// the anchor — it survives re-chunking and drives find-in-source
 /// highlighting, the same contract citations already use.
@@ -150,6 +148,10 @@ pub struct LedgerEntry {
     #[serde(default)]
     pub why: String,
     pub status: String,
+    /// "" for user- and agent-written rows, "auto" for rows the chat
+    /// post-pass minted on its own (same contract as auto notes).
+    #[serde(default)]
+    pub origin: String,
     #[serde(default)]
     pub anchors: Vec<LedgerAnchor>,
     pub created_at: i64,
@@ -180,6 +182,8 @@ pub struct SourceEvent {
     pub at: i64,
 }
 
+/// A periodic report definition. On its interval, the app refreshes the
+/// notebook's URL sources, then generates a timestamped note.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReportSchedule {

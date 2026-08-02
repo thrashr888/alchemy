@@ -93,6 +93,7 @@ impl AlchemyMcp {
             kind,
             text,
             why: why.unwrap_or_default().trim().to_string(),
+            origin: String::new(),
             anchors: anchors
                 .unwrap_or_default()
                 .into_iter()

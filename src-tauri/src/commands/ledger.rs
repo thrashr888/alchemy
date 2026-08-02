@@ -74,6 +74,7 @@ pub async fn add_ledger_entry(
         kind,
         text,
         why: why.unwrap_or_default().trim().to_string(),
+        origin: String::new(),
         anchors: anchors.unwrap_or_default(),
         created_at: ts,
         updated_at: ts,

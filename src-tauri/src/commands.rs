@@ -5056,6 +5056,80 @@ async fn auto_evidence(
         note
     };
 
+    // The same conclusion lands on the ledger as an anchored assertion —
+    // the passive fill (RFC-v12-steward pillar 2): ordinary chat use builds
+    // the record, no ceremony. Same discipline as the note: dedup by title
+    // overlap against AUTO assertions only, merge instead of siblings, and
+    // a failure here never fails the pass.
+    let claim = note.title.clone();
+    let anchors: Vec<crate::models::LedgerAnchor> = {
+        let mut seen = HashSet::new();
+        sources
+            .iter()
+            // Gist rows are distilled, not verbatim — no anchor material.
+            .filter(|c| !c.gist && seen.insert(c.source_id.clone()))
+            .take(4)
+            .map(|c| crate::models::LedgerAnchor {
+                source_id: c.source_id.clone(),
+                quote: c.snippet.chars().take(220).collect(),
+            })
+            .collect()
+    };
+    let prior_entry = state
+        .db
+        .list_ledger(notebook_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|entry| entry.kind == "assertion" && entry.origin == "auto")
+        .find(|entry| title_overlap(&entry.text, &claim) >= 0.6);
+    let ledger_result = match prior_entry {
+        Some(mut prior) => {
+            prior.text = claim;
+            // Fresh evidence revives a stale row; a contradicted one stays
+            // contradicted — only the user (or, later, the Weave) clears it.
+            if prior.status == "stale" {
+                prior.status = "asserted".into();
+            }
+            for anchor in anchors {
+                if !prior
+                    .anchors
+                    .iter()
+                    .any(|a| a.source_id == anchor.source_id)
+                {
+                    prior.anchors.push(anchor);
+                }
+            }
+            prior.anchors.truncate(6);
+            prior.updated_at = now();
+            state.db.update_ledger_entry(&prior).await
+        }
+        None => {
+            let ts = now();
+            state
+                .db
+                .add_ledger_entry(&crate::models::LedgerEntry {
+                    id: new_id(),
+                    notebook_id: notebook_id.to_string(),
+                    kind: "assertion".into(),
+                    text: claim,
+                    why: format!(
+                        "From chat: {}",
+                        question.chars().take(160).collect::<String>()
+                    ),
+                    status: "asserted".into(),
+                    origin: "auto".into(),
+                    anchors,
+                    created_at: ts,
+                    updated_at: ts,
+                })
+                .await
+        }
+    };
+    if let Err(err) = ledger_result {
+        eprintln!("auto evidence: ledger write failed: {err:#}");
+    }
+
     // Same event the MCP server emits — open windows refresh their notes
     // list live, with the arrival chime announcing the new record.
     #[derive(serde::Serialize, Clone)]
@@ -5068,6 +5142,13 @@ async fn auto_evidence(
         "mcp://changed",
         Changed {
             scope: "notes",
+            notebook_id: Some(&note.notebook_id),
+        },
+    );
+    let _ = app.emit(
+        "mcp://changed",
+        Changed {
+            scope: "ledger",
             notebook_id: Some(&note.notebook_id),
         },
     );

@@ -7,6 +7,7 @@ import { cn, relativeTime } from "@/lib/utils";
 import {
   Diamond,
   HelpCircle,
+  Info,
   Milestone,
   PenLine,
   Quote,
@@ -67,6 +68,7 @@ export function LedgerPane() {
   const [entries, setEntries] = useState<LedgerEntry[] | null>(null);
   const [filter, setFilter] = useState<"all" | Kind>("all");
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   // Composer: pick a kind, write the line. Why appears for decisions (their
   // because is the point) but every kind accepts one.
@@ -140,6 +142,16 @@ export function LedgerPane() {
         <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
           Ledger
         </span>
+        <button
+          type="button"
+          onClick={() => setHelpOpen((open) => !open)}
+          title="What is the ledger?"
+          aria-label="What is the ledger?"
+          aria-expanded={helpOpen}
+          className="rounded p-0.5 text-subtle-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+        >
+          <Info className="h-3.5 w-3.5" />
+        </button>
         {entries && entries.length > 0 && (
           <span className="text-micro tabular-nums text-subtle-foreground">
             {shown.length} of {entries.length}
@@ -167,6 +179,27 @@ export function LedgerPane() {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-3xl px-6 py-4">
+          {helpOpen && (
+            <div className="mb-4 rounded-lg border border-border bg-surface px-4 py-3 text-caption leading-relaxed text-muted-foreground">
+              <p>
+                The ledger is this notebook&rsquo;s memory: assertions, facts,
+                decisions (with their why), open questions, and log lines —
+                each with a lifecycle, anchored to sources by exact quotes.
+              </p>
+              <p className="mt-1.5">
+                It mostly fills itself: chat answers that establish something
+                new land here as anchored assertions (marked{" "}
+                <span className="rounded-full border border-border-strong px-1 text-badge uppercase">
+                  auto
+                </span>
+                ), and agents write entries over MCP. Record your own with the
+                composer below. Click an anchor to open the source at the
+                quoted passage; use a row&rsquo;s menu to move it through its
+                lifecycle as the record corroborates, contradicts, or
+                supersedes it.
+              </p>
+            </div>
+          )}
           {/* Composer: capture is one line, one motion. */}
           <div className="rounded-lg border border-border bg-surface p-3">
             <div className="flex items-center gap-1">
@@ -298,6 +331,14 @@ export function LedgerPane() {
                           >
                             {entry.status}
                           </span>
+                          {entry.origin === "auto" && (
+                            <span
+                              className="rounded-full border border-border-strong px-1.5 py-px text-badge font-medium uppercase tracking-wide text-subtle-foreground"
+                              title="Recorded automatically from chat"
+                            >
+                              auto
+                            </span>
+                          )}
                           {entry.anchors.length > 0 && (
                             <button
                               type="button"

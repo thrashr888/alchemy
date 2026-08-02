@@ -226,7 +226,47 @@ impl Db {
             .await?;
         db.migrate_source_events().await?;
         db.ensure_table(T_LEDGER, ledger_schema()).await?;
+        db.migrate_ledger().await?;
         Ok(db)
+    }
+
+    /// Add the `origin` column ("") to pre-existing ledger tables.
+    async fn migrate_ledger(&self) -> Result<()> {
+        let schema = self
+            .conn
+            .open_table(T_LEDGER)
+            .execute()
+            .await?
+            .schema()
+            .await?;
+        if schema.field_with_name("origin").is_ok() {
+            return Ok(());
+        }
+        // The tolerant readers default the missing column; rebuild, refill.
+        let mut rows = Vec::new();
+        for b in &self.collect(T_LEDGER, None).await? {
+            let anchors = str_col(b, "anchors")?;
+            for i in 0..b.num_rows() {
+                rows.push(LedgerEntry {
+                    id: str_col(b, "id")?.value(i).to_string(),
+                    notebook_id: str_col(b, "notebook_id")?.value(i).to_string(),
+                    kind: str_col(b, "kind")?.value(i).to_string(),
+                    text: str_col(b, "text")?.value(i).to_string(),
+                    why: str_col(b, "why")?.value(i).to_string(),
+                    status: str_col(b, "status")?.value(i).to_string(),
+                    origin: String::new(),
+                    anchors: serde_json::from_str(anchors.value(i)).unwrap_or_default(),
+                    created_at: i64_col(b, "created_at")?.value(i),
+                    updated_at: i64_col(b, "updated_at")?.value(i),
+                });
+            }
+        }
+        self.conn.drop_table(T_LEDGER, &[]).await?;
+        self.ensure_table(T_LEDGER, ledger_schema()).await?;
+        for r in &rows {
+            self.add_ledger_entry(r).await?;
+        }
+        Ok(())
     }
 
     /// Add the `trigger` column ("interval") to pre-existing schedule tables.
@@ -2104,6 +2144,7 @@ impl Db {
             let text = str_col(b, "text")?;
             let why = str_col(b, "why")?;
             let status = str_col(b, "status")?;
+            let origin = opt_str_col(b, "origin");
             let anchors = str_col(b, "anchors")?;
             let created = i64_col(b, "created_at")?;
             let updated = i64_col(b, "updated_at")?;
@@ -2115,6 +2156,10 @@ impl Db {
                     text: text.value(i).to_string(),
                     why: why.value(i).to_string(),
                     status: status.value(i).to_string(),
+                    origin: origin
+                        .as_ref()
+                        .map(|c| c.value(i).to_string())
+                        .unwrap_or_default(),
                     anchors: serde_json::from_str(anchors.value(i)).unwrap_or_default(),
                     created_at: created.value(i),
                     updated_at: updated.value(i),
@@ -2140,6 +2185,10 @@ impl Db {
                     text: str_col(b, "text")?.value(0).to_string(),
                     why: str_col(b, "why")?.value(0).to_string(),
                     status: str_col(b, "status")?.value(0).to_string(),
+                    origin: opt_str_col(b, "origin")
+                        .as_ref()
+                        .map(|c| c.value(0).to_string())
+                        .unwrap_or_default(),
                     anchors: serde_json::from_str(anchors.value(0)).unwrap_or_default(),
                     created_at: i64_col(b, "created_at")?.value(0),
                     updated_at: i64_col(b, "updated_at")?.value(0),
@@ -2589,6 +2638,7 @@ fn ledger_schema() -> SchemaRef {
         Field::new("text", DataType::Utf8, false),
         Field::new("why", DataType::Utf8, false),
         Field::new("status", DataType::Utf8, false),
+        Field::new("origin", DataType::Utf8, false),
         Field::new("anchors", DataType::Utf8, false),
         Field::new("created_at", DataType::Int64, false),
         Field::new("updated_at", DataType::Int64, false),
