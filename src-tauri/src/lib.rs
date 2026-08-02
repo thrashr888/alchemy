@@ -21,6 +21,7 @@ mod outline;
 mod pdf;
 mod rag;
 mod router;
+mod scheduler;
 #[cfg(target_os = "macos")]
 mod services;
 #[cfg(target_os = "macos")]
@@ -59,6 +60,25 @@ pub fn run() {
 
     builder
         .on_window_event(|window, event| match event {
+            // Close-to-tray (docs/RFC-night-shift.md): with the menu bar icon
+            // on, closing the main window hides it and Alchemy stays resident
+            // — the scheduler keeps running. Tray off = close quits as before.
+            // Child windows (notes, mind maps) close normally either way.
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                if window.label() != "main" {
+                    return;
+                }
+                let app = window.app_handle();
+                let resident = app
+                    .try_state::<commands::AppState>()
+                    .and_then(|s| s.ai.try_read().ok().map(|ai| ai.config().tray_enabled))
+                    .unwrap_or(true);
+                if resident {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    scheduler::first_close_notice(app);
+                }
+            }
             // Evict per-window glass memos when a window is destroyed so a
             // recreated window with the same label re-applies from scratch.
             tauri::WindowEvent::Destroyed => {
@@ -159,6 +179,10 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 clip::apply_config(&handle, clip_enabled, clip_port).await;
             });
+
+            // The Night Shift's resident scheduler (docs/RFC-night-shift.md):
+            // source resync + due report runs, window or no window.
+            scheduler::start(app.handle().clone());
 
             // Seed the current accessibility text scale so the first window
             // focus doesn't spuriously broadcast; the frontend reads it at boot
@@ -271,6 +295,28 @@ pub fn run() {
             textsize::get_system_text_scale,
             textsize::dump_text_size_signals,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| match event {
+            // Residency (docs/RFC-night-shift.md): with the main window
+            // hidden rather than destroyed this rarely fires, but child-
+            // window-only exits and platform quirks land here. Explicit quit
+            // paths (⌘Q, tray Quit) set QUIT_REQUESTED or exit with a code.
+            tauri::RunEvent::ExitRequested { code, api, .. } => {
+                let resident = app
+                    .try_state::<commands::AppState>()
+                    .and_then(|s| s.ai.try_read().ok().map(|ai| ai.config().tray_enabled))
+                    .unwrap_or(true);
+                if resident
+                    && code.is_none()
+                    && !scheduler::QUIT_REQUESTED.load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    api.prevent_exit();
+                }
+            }
+            // Dock icon click while the main window is hidden.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => integrations::focus_main(app),
+            _ => {}
+        });
 }

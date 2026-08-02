@@ -18,7 +18,6 @@ import type {
   Message,
   Note,
   ReadingPrefs,
-  ReportSchedule,
   Source,
 } from "./types";
 
@@ -104,10 +103,6 @@ function loadNoteReadsBaseline(): number {
   return now;
 }
 
-// Module-level guard so the report scheduler is only started once.
-let schedulerStarted = false;
-// Same guard for the source-resync loop.
-let sourceSyncStarted = false;
 // Global Tauri event listeners bind once per page — React StrictMode runs
 // init() twice in dev, and a doubled menu listener spawns doubled windows.
 let listenersBound = false;
@@ -296,6 +291,20 @@ export const useStore = create<AppState>((set, get) => {
         api.listTemplates().catch(() => []),
       ]);
       set({ notebooks, aiConfig, ollamaOk, templates });
+      // showNotifications lives in config now (the Night Shift's resident
+      // scheduler reads it backend-side). Honor a pre-migration localStorage
+      // opt-out once, then mirror config down for notify()'s sync check.
+      if (
+        localStorage.getItem("showNotifications") === "false" &&
+        aiConfig.showNotifications
+      ) {
+        void api.setAiConfig({ ...aiConfig, showNotifications: false });
+      } else {
+        localStorage.setItem(
+          "showNotifications",
+          String(aiConfig.showNotifications),
+        );
+      }
       void get().refreshModelHealth();
       void get().refreshModelStats();
       void get().refreshKokoroStatus();
@@ -315,8 +324,6 @@ export const useStore = create<AppState>((set, get) => {
           await get().selectNotebook(last);
         }
       }
-      get().startReportScheduler();
-      get().startSourceSync();
       void api.rebuildAppMenu();
       // Quiet update check, once per launch, main window only.
       if (getCurrentWebview().label === "main" && autoUpdateEnabled()) {
@@ -819,25 +826,6 @@ export const useStore = create<AppState>((set, get) => {
       } else {
         set({ sources: get().sources.filter((s) => s.id !== tempId) });
       }
-    },
-
-    startSourceSync: () => {
-      if (sourceSyncStarted) return;
-      // Main window only — the backend serializes scans, but one tick loop per
-      // app is still one too few reasons to run N of them.
-      if (getCurrentWebview().label !== "main") return;
-      sourceSyncStarted = true;
-      const tick = async () => {
-        try {
-          await api.resyncSources();
-          // Changed notebooks are announced via sources://changed; every window
-          // (including this one) refreshes from its own listener.
-        } catch {
-          /* disk or embedder hiccup — next tick retries */
-        }
-      };
-      void tick();
-      setInterval(() => void tick(), 60_000);
     },
 
     addSourceFiles: async (paths) => {
@@ -1454,44 +1442,6 @@ export const useStore = create<AppState>((set, get) => {
       } finally {
         set({ generatingKind: null });
       }
-    },
-
-    startReportScheduler: () => {
-      if (schedulerStarted) return;
-      // Only the main window runs the scheduler — one tick loop per app, not
-      // one per window, or reports would generate once per open window.
-      if (getCurrentWebview().label !== "main") return;
-      schedulerStarted = true;
-      const tick = async () => {
-        let due: ReportSchedule[];
-        try {
-          const all = await api.listAllReportSchedules();
-          const now = Date.now();
-          due = all.filter(
-            (s) => s.enabled && now - s.lastRunAt >= s.intervalSecs * 1000,
-          );
-        } catch {
-          return;
-        }
-        for (const s of due) {
-          try {
-            await api.runReport(s.id);
-            void notify("Report ready", `“${s.name}” was generated.`);
-            playArrival();
-            const cur = get().currentId;
-            if (cur === s.notebookId) {
-              set({
-                notes: await api.listNotes(cur),
-                reportSchedules: await api.listReportSchedules(cur),
-              });
-            }
-          } catch {
-            /* try again next tick */
-          }
-        }
-      };
-      void tick();
-      setInterval(() => void tick(), 60_000);
     },
 
     refreshKokoroStatus: async () => {

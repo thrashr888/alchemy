@@ -82,8 +82,21 @@ pub struct AiConfig {
     #[serde(default = "default_clip_port")]
     pub clip_port: u16,
     /// Menu bar extra (tray icon). Settings → General toggles it live.
+    /// Also the residency switch: with the tray on, closing the last window
+    /// leaves Alchemy running in the menu bar (docs/RFC-night-shift.md);
+    /// with it off, window close quits as before.
     #[serde(default = "default_true")]
     pub tray_enabled: bool,
+    /// The Night Shift master switch (docs/RFC-night-shift.md): scheduled
+    /// reports and automatic source resyncs from the resident scheduler.
+    /// Off means on-demand only — Run Now and manual Refresh still work.
+    #[serde(default = "default_true")]
+    pub background_enabled: bool,
+    /// Desktop notifications (report ready, work finishing). Lives in config
+    /// rather than webview localStorage so the resident scheduler can honor
+    /// it with no window open; the frontend mirrors it for its own checks.
+    #[serde(default = "default_true")]
+    pub show_notifications: bool,
     /// Weekly LLM consolidation of auto-created evidence notes (the note
     /// curator's phase-5 pass, docs/RFC-note-curator.md). On by default —
     /// smart defaults over opt-ins; the pass is idle-gated, capped, and
@@ -302,6 +315,8 @@ impl Default for AiConfig {
             clip_enabled: default_true(),
             clip_port: default_clip_port(),
             tray_enabled: default_true(),
+            background_enabled: default_true(),
+            show_notifications: default_true(),
             curator_consolidate: default_true(),
             source_gists: default_true(),
             vision_provider: String::new(),

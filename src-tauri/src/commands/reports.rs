@@ -115,20 +115,31 @@ pub async fn run_report(
     state: State<'_, AppState>,
     schedule_id: String,
 ) -> Result<Note, String> {
+    run_report_inner(&app, &state, &schedule_id).await
+}
+
+/// The command's body, callable from the resident scheduler (scheduler.rs).
+pub(crate) async fn run_report_inner(
+    app: &AppHandle,
+    state: &AppState,
+    schedule_id: &str,
+) -> Result<Note, String> {
+    let app = app.clone();
+    let schedule_id = schedule_id.to_string();
     let schedule = e(state.db.get_report_schedule(&schedule_id).await)?
         .ok_or_else(|| "Report schedule not found".to_string())?;
 
-    refresh_notebook_urls(&app, &state, &schedule.notebook_id).await;
+    refresh_notebook_urls(&app, state, &schedule.notebook_id).await;
 
     // Collapse before generating so the survivor doubles as the prior run —
     // its content lets the model report changes since last time (its first
     // line is the `_Run …_` stamp, so the date travels with it).
-    let existing = e(collapse_report_notes(&state, &schedule.notebook_id, &schedule.name).await)?;
+    let existing = e(collapse_report_notes(state, &schedule.notebook_id, &schedule.name).await)?;
     let prior_content = existing.as_ref().map(|note| note.content.clone());
 
     let _ = app.emit("report://step", "Generating report".to_string());
     let (_title, content) = e(generate_content(
-        &state,
+        state,
         None,
         &schedule.notebook_id,
         &schedule.kind,
@@ -149,7 +160,7 @@ pub async fn run_report(
                 .await)?;
             match e(state.db.get_note(&prior.id).await)? {
                 Some(note) => {
-                    index_note(&state, &note).await;
+                    index_note(state, &note).await;
                     note
                 }
                 None => return Err("Report note vanished mid-update".into()),
@@ -168,7 +179,7 @@ pub async fn run_report(
                 created_at: timestamp,
                 updated_at: timestamp,
             };
-            e(add_note_indexed(&state, &note).await)?;
+            e(add_note_indexed(state, &note).await)?;
             note
         }
     };

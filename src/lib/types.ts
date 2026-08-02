@@ -290,8 +290,16 @@ export interface AiConfig {
    *  the user's logged-in tab, see docs/RFC-page-capture.md §8). */
   clipEnabled: boolean;
   clipPort: number;
-  /** Menu bar extra (tray icon); Settings → General toggles it live. */
+  /** Menu bar extra (tray icon); Settings → General toggles it live. Also
+   *  the residency switch: tray on = closing the window leaves Alchemy
+   *  running in the menu bar (docs/RFC-night-shift.md). */
   trayEnabled: boolean;
+  /** Night Shift master switch: scheduled reports + automatic source
+   *  resyncs from the resident scheduler. Off = on-demand only. */
+  backgroundEnabled: boolean;
+  /** Desktop notifications; in config (not localStorage) so the resident
+   *  scheduler can honor it with no window open. */
+  showNotifications: boolean;
   /** Weekly LLM consolidation of auto-created evidence notes (note curator
    *  phase 5). On by default — idle-gated, capped, fully recoverable; the
    *  toggle is for cost control. */

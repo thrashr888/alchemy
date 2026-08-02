@@ -379,17 +379,14 @@ function GeneralTab() {
         </div>
       </div>
 
-      <PrefToggle
-        storageKey="showNotifications"
-        label="Show notifications"
-        hint="Desktop notification when a document, rebuild, or report finishes."
-      />
+      <NotificationsToggle />
       <PrefToggle
         storageKey="playSounds"
         label="Play sounds"
         hint="Soft event cues: work finishing, new arrivals while the app is in the background, and errors. Never clicks or hovers."
         onEnable={playDone}
       />
+      <BackgroundToggle />
       <TrayToggle />
     </div>
   );
@@ -686,6 +683,68 @@ function GitSyncSelect() {
 }
 
 /** Menu bar extra on/off — lives in AiConfig so the backend applies it live. */
+/** Config-backed (not localStorage) so the Night Shift's resident scheduler
+ *  can honor it with no window open; mirrored to localStorage for notify()'s
+ *  synchronous check. */
+function NotificationsToggle() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  if (!aiConfig) return null;
+  return (
+    <label className="flex cursor-pointer items-start gap-2.5">
+      <input
+        type="checkbox"
+        checked={aiConfig.showNotifications}
+        onChange={(e) => {
+          localStorage.setItem("showNotifications", String(e.target.checked));
+          void saveAiConfig({
+            ...aiConfig,
+            showNotifications: e.target.checked,
+          });
+        }}
+        className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
+      />
+      <span className="flex flex-col gap-0.5">
+        <span className="text-body text-foreground">Show notifications</span>
+        <span className="text-micro leading-relaxed text-subtle-foreground">
+          Desktop notification when a document, rebuild, or report finishes —
+          including reports that run with no window open.
+        </span>
+      </span>
+    </label>
+  );
+}
+
+/** The Night Shift master switch (docs/RFC-night-shift.md). */
+function BackgroundToggle() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  if (!aiConfig) return null;
+  return (
+    <label className="flex cursor-pointer items-start gap-2.5">
+      <input
+        type="checkbox"
+        checked={aiConfig.backgroundEnabled}
+        onChange={(e) =>
+          void saveAiConfig({
+            ...aiConfig,
+            backgroundEnabled: e.target.checked,
+          })
+        }
+        className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
+      />
+      <span className="flex flex-col gap-0.5">
+        <span className="text-body text-foreground">Background work</span>
+        <span className="text-micro leading-relaxed text-subtle-foreground">
+          Scheduled reports and automatic source syncing, even with the window
+          closed. Off means Alchemy works only when you ask — Run Now and
+          manual Refresh still work.
+        </span>
+      </span>
+    </label>
+  );
+}
+
 function TrayToggle() {
   const aiConfig = useStore((s) => s.aiConfig);
   const saveAiConfig = useStore((s) => s.saveAiConfig);
@@ -704,7 +763,9 @@ function TrayToggle() {
         <span className="text-body text-foreground">Show menu bar icon</span>
         <span className="text-micro leading-relaxed text-subtle-foreground">
           Ask Alchemy, add the clipboard as a source, and jump to recent
-          notebooks from the menu bar. ⌥Space summons Alchemy either way.
+          notebooks from the menu bar. With the icon on, closing the window
+          keeps Alchemy running there; off, closing the window quits.
+          ⌥Space summons Alchemy either way.
         </span>
       </span>
     </label>

@@ -160,14 +160,12 @@ export interface AppState {
   updateReport: (report: ReportSchedule) => Promise<void>;
   deleteReport: (id: string) => Promise<void>;
   runReportNow: (id: string) => Promise<void>;
-  startReportScheduler: () => void;
 
   pickAndAddFiles: () => Promise<void>;
   /** Open the folder picker (optionally rooted at a cloud sync folder) and add
    *  the chosen subfolder as a source. */
   pickAndAddFolder: (defaultPath?: string) => Promise<void>;
   addSourceFiles: (paths: string[]) => Promise<void>;
-  startSourceSync: () => void;
   addSourceUrl: (url: string, include?: string) => Promise<void>;
   addSourceText: (title: string, text: string) => Promise<void>;
   addSourceMac: (provider: string, collection: string, label: string) => Promise<void>;

@@ -3114,26 +3114,37 @@ async fn note_curator_tick(app: &AppHandle, state: &AppState) {
 }
 
 /// Rescan every folder source and re-embed loose file sources whose on-disk
-/// file changed (the frontend ticks this once a minute from the main window,
-/// and on notebook open). Emits `sources://changed` per notebook that
-/// actually changed. Missing files never remove a loose source — uploads are
-/// snapshots; the origin path is only a refresh hint.
+/// file changed (the resident scheduler ticks this once a minute —
+/// scheduler.rs — and the frontend calls it on notebook open). Emits
+/// `sources://changed` per notebook that actually changed. Missing files
+/// never remove a loose source — uploads are snapshots; the origin path is
+/// only a refresh hint.
 #[tauri::command]
 pub async fn resync_sources(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<FolderScan, String> {
+    resync_sources_inner(&app, &state).await
+}
+
+/// The command's body, callable from the resident scheduler (scheduler.rs)
+/// with no Tauri `State` wrapper in sight.
+pub(crate) async fn resync_sources_inner(
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<FolderScan, String> {
+    let app = app.clone();
     // The Spotlight index rides the same tick (internally ~10-min throttled).
     #[cfg(target_os = "macos")]
-    crate::spotlight::refresh_if_due(&state).await;
+    crate::spotlight::refresh_if_due(state).await;
     // One-shot per app run: index notes written before notes joined the
     // retrieval index (or whose indexing failed at write time).
-    backfill_note_index(&state).await;
+    backfill_note_index(state).await;
     // One-shot per app run: collapse timestamped report piles from before
     // reports became living notes (one note per schedule, newest wins).
-    collapse_old_report_piles(&state).await;
+    collapse_old_report_piles(state).await;
     // Curator: track app-open days; runs its pass at most weekly.
-    note_curator_tick(&app, &state).await;
+    note_curator_tick(&app, state).await;
     // A manual folder add/refresh is already scanning — skip this tick rather
     // than queue behind it and ingest the same files twice.
     let Ok(_guard) = state.folder_scan_lock.try_lock() else {
@@ -3152,7 +3163,7 @@ pub async fn resync_sources(
             && sync_minutes > 0
             && crate::git::remote_probe_due(&folder.id, sync_minutes)
         {
-            let dir = crate::git::cache_dir(&app_data_dir(&state), &folder.id);
+            let dir = crate::git::cache_dir(&app_data_dir(state), &folder.id);
             match crate::git::sync_remote(&dir).await {
                 Ok(Some(sha)) => {
                     let stamp = crate::mac::content_stamp(&sha);
@@ -3173,7 +3184,7 @@ pub async fn resync_sources(
             if let (Some(page_id), false) =
                 (crate::notion::detect_page(&folder.url), token.is_empty())
             {
-                let dir = crate::notion::cache_dir(&app_data_dir(&state), &folder.id);
+                let dir = crate::notion::cache_dir(&app_data_dir(state), &folder.id);
                 match crate::notion::NotionClient::new(&token)
                     .export_tree(&page_id, &dir)
                     .await
@@ -3189,7 +3200,7 @@ pub async fn resync_sources(
                 }
             }
         }
-        match rescan_one_folder(Some(&app), &state, &folder, false).await {
+        match rescan_one_folder(Some(&app), state, &folder, false).await {
             Ok(scan) => {
                 per_notebook
                     .entry(folder.notebook_id.clone())
@@ -3207,7 +3218,7 @@ pub async fn resync_sources(
     // Loose file sources (added or dropped individually) re-embed when their
     // file changes. Deleted files leave the source untouched; cloud-evicted
     // files aren't read (that would force a download).
-    let data_dir = app_data_dir(&state);
+    let data_dir = app_data_dir(state);
     for src in e(state.db.all_loose_sources().await)? {
         // Git-backed singles (README/blob) sync hourly from their cache
         // clone. The cache dir is the definitive marker — plain page
@@ -3220,7 +3231,7 @@ pub async fn resync_sources(
             match crate::git::sync_remote(&dir).await {
                 Ok(Some(sha)) => {
                     let scan = per_notebook.entry(src.notebook_id.clone()).or_default();
-                    match reextract_git_single(&state, &src, &sha).await {
+                    match reextract_git_single(state, &src, &sha).await {
                         Ok(_) => {
                             scan.updated += 1;
                             total.updated += 1;
@@ -3262,7 +3273,7 @@ pub async fn resync_sources(
                         text,
                     };
                     let scan = per_notebook.entry(src.notebook_id.clone()).or_default();
-                    match reingest(&state, &existing, extracted, None, true).await {
+                    match reingest(state, &existing, extracted, None, true).await {
                         Ok(_) => {
                             scan.updated += 1;
                             total.updated += 1;
@@ -3300,13 +3311,13 @@ pub async fn resync_sources(
             continue;
         }
         let scan = per_notebook.entry(src.notebook_id.clone()).or_default();
-        match extract_any_file(&state, &src.url).await {
+        match extract_any_file(state, &src.url).await {
             Ok(mut extracted) => {
                 let mut existing = src.clone();
                 existing.mtime = mtime;
                 // Content changed, not the file's name — keep the stored title.
                 extracted.title = existing.title.clone();
-                match reingest(&state, &existing, extracted, None, true).await {
+                match reingest(state, &existing, extracted, None, true).await {
                     Ok(_) => {
                         scan.updated += 1;
                         total.updated += 1;

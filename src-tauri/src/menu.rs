@@ -53,7 +53,14 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
         .hide_others()
         .show_all()
         .separator()
-        .quit()
+        // A custom Quit instead of the predefined item: quitting must set the
+        // intentional-exit flag, or the residency guard in lib.rs would
+        // prevent it (docs/RFC-night-shift.md).
+        .item(
+            &MenuItemBuilder::with_id("menu-quit", "Quit Alchemy")
+                .accelerator("CmdOrCtrl+Q")
+                .build(app)?,
+        )
         .build()?;
 
     let recent_menu = SubmenuBuilder::new(app, "Open Recent").build()?;
@@ -153,6 +160,10 @@ pub fn handle_event(app: &AppHandle, id: &str) {
     // Clipboard adds run entirely backend-side (pasteboard access).
     if id == "menu-add-clipboard" {
         crate::integrations::add_clipboard(app);
+        return;
+    }
+    if id == "menu-quit" {
+        crate::scheduler::request_quit(app);
         return;
     }
     let windows = app.webview_windows();
