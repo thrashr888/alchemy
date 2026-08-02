@@ -97,7 +97,9 @@ spctl -a -t open --context context:primary-signature -vv "$DMG"
 # --- Commit, tag, publish ----------------------------------------------------
 echo "==> Committing, tagging, publishing"
 git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
-git commit -m "$TAG"
+# The version may already be bumped (a dev-cycle bump landed early); an empty
+# commit is fine, a dead script here -- after notarization -- is not.
+git commit --allow-empty -m "$TAG"
 git tag "$TAG"
 git push origin main "$TAG"
 
