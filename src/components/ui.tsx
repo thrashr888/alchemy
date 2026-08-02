@@ -240,7 +240,10 @@ export function Switch({
         <span
           className={cn(
             "h-5 w-5 rounded-full bg-white",
-            "shadow-[0_1px_3px_rgba(0,0,0,0.4),0_0_1px_rgba(0,0,0,0.25)]",
+            // macOS knob paint: a hairline edge and a whisper of a drop —
+            // anything heavier eats the 2px track rim and the knob reads as
+            // a blob bulging out of the pill.
+            "shadow-[0_0_0_0.5px_rgba(0,0,0,0.05),0_1px_1px_rgba(0,0,0,0.16)]",
             "transition-transform duration-200 ease-out",
             checked && "translate-x-4",
           )}
