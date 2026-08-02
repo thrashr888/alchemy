@@ -41,20 +41,21 @@ pub fn toggle_pause() -> bool {
         PAUSED_UNTIL.store(0, Ordering::Relaxed);
         false
     } else {
-        PAUSED_UNTIL.store(next_six_am_ms(), Ordering::Relaxed);
+        PAUSED_UNTIL.store(next_local_hour_ms(6), Ordering::Relaxed);
         true
     }
 }
 
-/// The next 6:00 AM local, when a pause auto-clears.
-fn next_six_am_ms() -> i64 {
+/// The next occurrence of a local wall-clock hour (6 → pause auto-clear,
+/// 7 → the default brief's morning alignment).
+pub(crate) fn next_local_hour_ms(hour: u32) -> i64 {
     let now = chrono::Local::now();
-    let six = chrono::NaiveTime::from_hms_opt(6, 0, 0).expect("valid time");
+    let at = chrono::NaiveTime::from_hms_opt(hour, 0, 0).expect("valid time");
     let mut day = now.date_naive();
-    if now.time() >= six {
+    if now.time() >= at {
         day = day.checked_add_days(chrono::Days::new(1)).unwrap_or(day);
     }
-    day.and_time(six)
+    day.and_time(at)
         .and_local_timezone(chrono::Local)
         .earliest()
         .map(|dt| dt.timestamp_millis())
@@ -87,6 +88,12 @@ pub fn first_close_notice(app: &AppHandle) {
 /// loop's leading `void tick()`.
 pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
+        // Smart defaults: the daily Morning Brief exists unless the user
+        // deleted it (docs/RFC-brief.md) — offered exactly once, ever.
+        {
+            let state = app.state::<AppState>();
+            commands::ensure_default_brief(&state).await;
+        }
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -131,12 +138,18 @@ async fn run_pass(app: &AppHandle) {
                 Ok(_) => {
                     ran += 1;
                     if notify {
-                        let _ = app
-                            .notification()
-                            .builder()
-                            .title("Report ready")
-                            .body(format!("\u{201c}{}\u{201d} was generated.", schedule.name))
-                            .show();
+                        let (title, body) = if schedule.kind == "brief" {
+                            (
+                                "Your brief is ready",
+                                format!("\u{201c}{}\u{201d} has the rundown.", schedule.name),
+                            )
+                        } else {
+                            (
+                                "Report ready",
+                                format!("\u{201c}{}\u{201d} was generated.", schedule.name),
+                            )
+                        };
+                        let _ = app.notification().builder().title(title).body(body).show();
                     }
                 }
                 Err(err) => eprintln!("night shift: report {} failed: {err}", schedule.name),

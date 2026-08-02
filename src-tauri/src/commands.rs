@@ -9,7 +9,9 @@ use chrono::Utc;
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
+mod brief;
 mod reports;
+pub(crate) use brief::ensure_default_brief;
 pub use reports::*;
 
 use crate::ai::{Ai, AiConfig, GenStats};

@@ -129,6 +129,12 @@ pub(crate) async fn run_report_inner(
     let schedule = e(state.db.get_report_schedule(&schedule_id).await)?
         .ok_or_else(|| "Report schedule not found".to_string())?;
 
+    // Briefs are schedules too (kind "brief"), but they read across every
+    // notebook instead of generating from one — see commands/brief.rs.
+    if schedule.kind == super::brief::BRIEF_KIND {
+        return super::brief::run_brief(&app, state, schedule).await;
+    }
+
     refresh_notebook_urls(&app, state, &schedule.notebook_id).await;
 
     // Collapse before generating so the survivor doubles as the prior run —
@@ -149,6 +155,20 @@ pub(crate) async fn run_report_inner(
     )
     .await)?;
 
+    persist_report_run(&app, state, &schedule, existing, content).await
+}
+
+/// The write side of any scheduled run — reports and briefs share it: stamp
+/// the run, update the living note (or create it), re-index, mark the
+/// schedule run, and announce. The survivor note doubles as the next run's
+/// prior for change tracking.
+pub(super) async fn persist_report_run(
+    app: &AppHandle,
+    state: &AppState,
+    schedule: &ReportSchedule,
+    existing: Option<Note>,
+    content: String,
+) -> Result<Note, String> {
     let timestamp = now();
     let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
     let content = format!("_Run {stamp}_\n\n{content}");
@@ -183,7 +203,7 @@ pub(crate) async fn run_report_inner(
             note
         }
     };
-    e(state.db.set_report_last_run(&schedule_id, timestamp).await)?;
+    e(state.db.set_report_last_run(&schedule.id, timestamp).await)?;
     e(state
         .db
         .touch_notebook(&schedule.notebook_id, timestamp)

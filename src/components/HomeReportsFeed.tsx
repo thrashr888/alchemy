@@ -109,20 +109,30 @@ export function ReportsFeed({
             You’re all caught up.
           </div>
         )}
-        {[...unread, ...visibleRead].map((note) => (
-          <ReportCard
-            key={note.id}
-            note={note}
-            unread={isUnread(note)}
-            onSeen={() => markRead([note.id])}
-            notebook={notebookTitle.get(note.notebookId) ?? "Unknown notebook"}
-            color={notebookColor.get(note.notebookId) || fallbackColor}
-            onOpen={() => {
-              markRead([note.id]);
-              onOpen(note);
-            }}
-          />
-        ))}
+        {(() => {
+          // The brief pins first — it's the arrival point, not one report
+          // among many (docs/RFC-brief.md).
+          const isBrief = (note: Note) =>
+            notebookTitle.get(note.notebookId) === "Briefs";
+          const ordered = [...unread, ...visibleRead];
+          const briefIdx = ordered.findIndex(isBrief);
+          if (briefIdx > 0) ordered.unshift(ordered.splice(briefIdx, 1)[0]);
+          return ordered.map((note) => (
+            <ReportCard
+              key={note.id}
+              note={note}
+              brief={isBrief(note)}
+              unread={isUnread(note)}
+              onSeen={() => markRead([note.id])}
+              notebook={notebookTitle.get(note.notebookId) ?? "Unknown notebook"}
+              color={notebookColor.get(note.notebookId) || fallbackColor}
+              onOpen={() => {
+                markRead([note.id]);
+                onOpen(note);
+              }}
+            />
+          ));
+        })()}
         {remaining > 0 && (
           <div className="flex justify-center px-6 py-5">
             <Button
@@ -146,6 +156,7 @@ function ReportCard({
   notebook,
   color,
   onOpen,
+  brief,
 }: {
   note: Note;
   unread: boolean;
@@ -153,6 +164,7 @@ function ReportCard({
   notebook: string;
   color: string;
   onOpen: () => void;
+  brief?: boolean;
 }) {
   const endRef = useRef<HTMLDivElement>(null);
   const seenRef = useRef(onSeen);
@@ -181,6 +193,11 @@ function ReportCard({
           style={{ backgroundColor: color }}
           aria-hidden="true"
         />
+        {brief && (
+          <span className="shrink-0 rounded-full border border-citation/40 px-1.5 py-px text-badge font-medium uppercase tracking-wide text-citation">
+            Brief
+          </span>
+        )}
         <span className="truncate">{notebook}</span>
         <span>·</span>
         <span className="shrink-0">{relativeTime(note.updatedAt)}</span>
