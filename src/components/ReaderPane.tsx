@@ -2137,6 +2137,11 @@ function NoteReader({
               className={chatReadingClass(reading)}
               onClickCapture={docLinkClickHandler(undefined)}
             >
+              {/* Briefs carry an audio edition; the player self-hides for
+                  every report note without one. */}
+              {note.kind === "report" && (
+                <AudioPlayer noteId={note.id} title={note.title} />
+              )}
               <Markdown>{note.content}</Markdown>
             </div>
           )}

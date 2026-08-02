@@ -211,5 +211,72 @@ pub(crate) async fn run_brief(
         .await
         .map_err(|e| format!("{e:#}"))?;
 
-    persist_report_run(app, state, &schedule, existing, content).await
+    let note = persist_report_run(app, state, &schedule, existing, content).await?;
+
+    // The audio edition rides behind the note, fire-and-forget: the text
+    // brief is the deliverable, audio is the commute upgrade. Any failure
+    // degrades to text, silently (RFC-brief §2.4).
+    let app = app.clone();
+    let spoken = note.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = synthesize_brief_audio(&app, &spoken).await {
+            eprintln!("brief audio: {err:#}");
+        }
+    });
+    Ok(note)
+}
+
+/// Markdown brief → a single-narrator HOST script for the existing Kokoro
+/// pipeline. Deterministic — no model call: the brief is already written to
+/// be read, so the audio edition is the brief, verbatim, with section
+/// headers spoken as transitions and notebook tags spoken as "In X:".
+fn brief_script(content: &str) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for raw in content.lines() {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed.starts_with("_Run ") {
+            continue;
+        }
+        if let Some(header) = trimmed.strip_prefix("## ") {
+            let intro = match header {
+                "Needs you" => "First: what needs you.",
+                "What changed" => "Next: what changed.",
+                "For the record" => "And for the record.",
+                other => other,
+            };
+            lines.push(format!("HOST: {intro}"));
+            continue;
+        }
+        let body = trimmed.trim_start_matches(['-', '*', ' ']).trim();
+        if body.is_empty() {
+            continue;
+        }
+        let spoken = match body.strip_prefix('[').and_then(|rest| rest.split_once(']')) {
+            Some((notebook, tail)) => format!(
+                "In {notebook}: {}",
+                tail.trim_start_matches([':', ' ', '\u{2014}', '-'])
+            ),
+            None => body.to_string(),
+        };
+        lines.push(format!("HOST: {spoken}"));
+    }
+    lines.join("\n")
+}
+
+/// Voice the brief on-device. Quietly a no-op when the Kokoro voices aren't
+/// set up — the text edition stands alone.
+async fn synthesize_brief_audio(app: &AppHandle, note: &Note) -> anyhow::Result<()> {
+    let dir = kokoro_dir(app)?;
+    if !crate::tts::kokoro_files_present(&dir) {
+        return Ok(());
+    }
+    let script = brief_script(&note.content);
+    if script.is_empty() {
+        return Ok(());
+    }
+    let cancel = tokio_util::sync::CancellationToken::new();
+    synthesize_audio(app, &note.id, &script, &cancel).await?;
+    // Open windows refresh their player; no window, no listener, no-op.
+    let _ = app.emit("audio://ready", &note.id);
+    Ok(())
 }

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import type { Note } from "@/lib/types";
 import { cn, noteUnread, relativeTime } from "@/lib/utils";
+import { AudioPlayer } from "./AudioNote";
 import { Button } from "./ui";
 import { PanelRight } from "lucide-react";
 import { Markdown } from "./Markdown";
@@ -217,6 +218,11 @@ function ReportCard({
           {note.title}
         </h3>
       </button>
+      {brief && (
+        <div className="mt-2">
+          <AudioPlayer noteId={note.id} title={note.title} />
+        </div>
+      )}
       <div className="mt-2 text-body leading-relaxed">
         <Markdown>{note.content}</Markdown>
       </div>
