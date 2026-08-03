@@ -337,6 +337,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               <StaffSidebar
                 schedules={allReports}
                 reports={reports}
+                recentNotes={recentNotes}
                 notebookTitle={notebookTitle}
                 notebookColor={notebookColor}
                 onOpenNote={openNote}
@@ -687,41 +688,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 </div>
               )}
 
-              {/* The last few generated/edited documents across all notebooks. */}
-              {recentNotes.length > 0 && (
-                <div className="mt-10">
-                  <div className="mb-2 text-micro font-medium uppercase tracking-wide text-subtle-foreground">
-                    Recent notes
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    {recentNotes.map((n) => (
-                      <button
-                        type="button"
-                        key={n.id}
-                        onClick={() => openNote(n)}
-                        title={`Open in "${notebookTitle.get(n.notebookId) ?? "notebook"}"`}
-                        className="flex w-full cursor-pointer items-center gap-2.5 rounded-md border border-border bg-surface px-3 py-2 text-left transition-colors hover:border-border-strong hover:bg-surface-2"
-                      >
-                        <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                        <span className="truncate text-body text-foreground">
-                          {n.title}
-                        </span>
-                        <Badge className="shrink-0 gap-1">
-                          <BookOpen className="h-2.5 w-2.5" />
-                          <span className="max-w-[160px] truncate">
-                            {notebookTitle.get(n.notebookId) ??
-                              "Unknown notebook"}
-                          </span>
-                        </Badge>
-                        <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
-                          {relativeTime(n.updatedAt)}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
+              {/* Recent notes live in the Staff sidebar now — the center
+                  column is just the notebook shelves. */}
               </div>
             </div>
           </div>

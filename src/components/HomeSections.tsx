@@ -144,6 +144,7 @@ export function BriefSidebar({
 export function StaffSidebar({
   schedules,
   reports,
+  recentNotes,
   notebookTitle,
   notebookColor,
   onOpenNote,
@@ -154,6 +155,8 @@ export function StaffSidebar({
 }: {
   schedules: ReportSchedule[];
   reports: Note[];
+  /** The last few written/generated documents across all notebooks. */
+  recentNotes: Note[];
   notebookTitle: Map<string, string>;
   notebookColor: Map<string, string>;
   onOpenNote: (note: Note) => void;
@@ -452,6 +455,48 @@ export function StaffSidebar({
                 </span>
                 <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
                   {relativeTime(event.at)}
+                </span>
+              </button>
+            ))
+          )}
+        </StaffGroup>
+
+        <StaffGroup title="Recent notes">
+          {recentNotes.length === 0 ? (
+            <StaffQuiet>Notes you write or generate land here.</StaffQuiet>
+          ) : (
+            recentNotes.slice(0, 8).map((n) => (
+              <button
+                key={n.id}
+                type="button"
+                onClick={() => onOpenNote(n)}
+                onMouseEnter={(e) =>
+                  showCard(e, {
+                    title: n.title,
+                    time: relativeTime(n.updatedAt),
+                    meta: [
+                      { icon: <BookOpen />, label: nb(n.notebookId) },
+                      {
+                        icon: <Clock />,
+                        label: "Updated",
+                        value: relativeTime(n.updatedAt),
+                      },
+                    ],
+                  })
+                }
+                onMouseLeave={hideCard}
+                className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-surface-2"
+              >
+                <span
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{ backgroundColor: notebookColor.get(n.notebookId) }}
+                  aria-hidden
+                />
+                <span className="min-w-0 truncate text-caption text-foreground">
+                  {n.title}
+                </span>
+                <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
+                  {relativeTime(n.updatedAt)}
                 </span>
               </button>
             ))

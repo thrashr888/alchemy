@@ -587,8 +587,20 @@ impl Db {
         Ok(())
     }
 
+    /// Append a batch, conformed to the LIVE table schema first. The dev
+    /// build and the installed app share one store, so a newer binary may
+    /// have migrated columns this binary doesn't know about. Reads already
+    /// tolerate that; appends must too — Lance rejects a batch whose fields
+    /// don't match the table ("Append with different schema … missing=[…]"),
+    /// which bricked every insert in the installed app the first time dev
+    /// added a column. Unknown columns are filled with defaults ("", 0);
+    /// anything unsynthesizable falls through so the original error surfaces.
     async fn add_batch(&self, table: &str, schema: SchemaRef, batch: RecordBatch) -> Result<()> {
         let tbl = self.conn.open_table(table).execute().await?;
+        let (schema, batch) = match tbl.schema().await {
+            Ok(live) => conform_to_live(&live, schema, batch),
+            Err(_) => (schema, batch),
+        };
         let reader = RecordBatchIterator::new(vec![Ok(batch)], schema);
         let boxed: Box<dyn arrow_array::RecordBatchReader + Send> = Box::new(reader);
         tbl.add(boxed).execute().await?;
@@ -2524,6 +2536,52 @@ fn esc(s: &str) -> String {
     s.replace('\'', "''")
 }
 
+/// Rebuild `batch` in the live table's shape when they differ: columns the
+/// table has but the batch lacks get default values, matching-name columns
+/// carry over in the table's order. Falls back to the original pair when a
+/// missing column's type can't be synthesized (e.g. vectors) or when
+/// anything about the rebuild fails — the plain append then reports the real
+/// mismatch. See `add_batch` for why this exists (shared dev/prod store).
+fn conform_to_live(
+    live: &SchemaRef,
+    ours: SchemaRef,
+    batch: RecordBatch,
+) -> (SchemaRef, RecordBatch) {
+    let same = live.fields().len() == ours.fields().len()
+        && live
+            .fields()
+            .iter()
+            .zip(ours.fields().iter())
+            .all(|(a, b)| a.name() == b.name());
+    if same {
+        return (ours, batch);
+    }
+    let rows = batch.num_rows();
+    let mut cols: Vec<ArrayRef> = Vec::with_capacity(live.fields().len());
+    for field in live.fields() {
+        if let Some((idx, our_field)) = ours.column_with_name(field.name()) {
+            if our_field.data_type() != field.data_type() {
+                return (ours, batch); // type drift — let the append report it
+            }
+            cols.push(batch.column(idx).clone());
+            continue;
+        }
+        let filler: ArrayRef = match field.data_type() {
+            DataType::Utf8 => Arc::new(StringArray::from(vec![""; rows])),
+            DataType::Int64 => Arc::new(Int64Array::from(vec![0i64; rows])),
+            DataType::Int32 => Arc::new(Int32Array::from(vec![0i32; rows])),
+            DataType::Float32 => Arc::new(arrow_array::Float32Array::from(vec![0f32; rows])),
+            DataType::Boolean => Arc::new(arrow_array::BooleanArray::from(vec![false; rows])),
+            _ => return (ours, batch), // vectors etc. — nothing sane to invent
+        };
+        cols.push(filler);
+    }
+    match RecordBatch::try_new(live.clone(), cols) {
+        Ok(conformed) => (live.clone(), conformed),
+        Err(_) => (ours, batch),
+    }
+}
+
 // ---- Schemas -------------------------------------------------------------
 
 fn notebooks_schema() -> SchemaRef {
@@ -2767,6 +2825,75 @@ fn note_batch(schema: &SchemaRef, notes: &[Note]) -> Result<RecordBatch> {
 mod tests {
     use super::*;
     use std::cmp::Ordering;
+
+    /// The prod-bricking bug: dev migrated the shared store (added
+    /// `image_url`), and the installed binary's appends — batches built
+    /// from its older compiled schema — failed with "Append with different
+    /// schema". `add_batch` must conform an old-shape batch to the live
+    /// table, filling unknown columns with defaults.
+    #[tokio::test]
+    async fn append_from_older_schema_conforms_to_live_table() {
+        let dir = std::env::temp_dir().join(format!("nbl-conform-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+
+        // An "old binary" batch for notebooks: no `status` column.
+        let old_schema: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("title", DataType::Utf8, false),
+            Field::new("created_at", DataType::Int64, false),
+            Field::new("updated_at", DataType::Int64, false),
+            Field::new("color", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            old_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["old-id"])),
+                Arc::new(StringArray::from(vec!["From the old binary"])),
+                Arc::new(Int64Array::from(vec![1i64])),
+                Arc::new(Int64Array::from(vec![2i64])),
+                Arc::new(StringArray::from(vec!["#eb5757"])),
+            ],
+        )
+        .expect("old batch");
+
+        db.add_batch(T_NOTEBOOKS, old_schema, batch)
+            .await
+            .expect("old-schema append must conform, not error");
+
+        let nbs = db.list_notebooks().await.expect("list");
+        let nb = nbs.iter().find(|n| n.id == "old-id").expect("row landed");
+        assert_eq!(nb.title, "From the old binary");
+        assert_eq!(nb.status, "", "unknown column filled with its default");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn conform_falls_back_on_type_drift_and_unknown_types() {
+        let ours: SchemaRef = Arc::new(Schema::new(vec![Field::new("id", DataType::Utf8, false)]));
+        let batch = RecordBatch::try_new(
+            ours.clone(),
+            vec![Arc::new(StringArray::from(vec!["x"])) as ArrayRef],
+        )
+        .unwrap();
+
+        // Same-name column with a different type: hands back the original.
+        let drift: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let (schema, _) = conform_to_live(&drift, ours.clone(), batch.clone());
+        assert_eq!(schema, ours);
+
+        // Missing column of a type we can't invent (vector): original too.
+        let vec_live: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new(
+                "embedding",
+                DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, true)), 4),
+                false,
+            ),
+        ]));
+        let (schema, _) = conform_to_live(&vec_live, ours.clone(), batch);
+        assert_eq!(schema, ours);
+    }
 
     /// The RRF tie case that motivated the recency tie-break: a vector-only
     /// and an FTS-only hit at the same rank score identically. Newer owner

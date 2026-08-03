@@ -13,7 +13,6 @@ import {
 } from "./ui";
 import { cn, isWebUrl, relativeTime, urlHost } from "@/lib/utils";
 import { Favicon, sourceHoverData } from "./SourcesPanel";
-import { useElementWidth } from "./ReaderPane";
 import { sourceIcon } from "@/lib/sourceIcon";
 import {
   ArrowLeft,
@@ -186,18 +185,36 @@ export function GalleryPane() {
   // reliably hit-tests but does NOT reliably paint later multicol columns
   // (cards were clickable yet invisible). Round-robin keeps sort order
   // roughly row-wise.
-  const scrollerRef = useRef<HTMLDivElement>(null);
-  const width = useElementWidth(scrollerRef);
+  //
+  // The scroller mounts LATE when the gallery is the landing view (sources
+  // arrive async, the empty state renders first) — so width measurement
+  // hangs off a callback ref, not a mount-once effect, or the pane would
+  // stay one-column forever.
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const [scrollerEl, setScrollerEl] = useState<HTMLDivElement | null>(null);
+  const attachScroller = (el: HTMLDivElement | null) => {
+    scrollerRef.current = el;
+    setScrollerEl((cur) => (cur === el ? cur : el));
+  };
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    if (!scrollerEl) return;
+    const measure = () => setWidth(scrollerEl.getBoundingClientRect().width);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(scrollerEl);
+    return () => ro.disconnect();
+  }, [scrollerEl]);
   const colCount = Math.min(4, Math.max(1, Math.floor((width + 12) / 232)));
   const columns: Source[][] = Array.from({ length: colCount }, () => []);
   cards.forEach((s, i) => columns[i % colCount].push(s));
 
-  // Sticky scroll per notebook+level: restore after layout, save as it moves.
+  // Sticky scroll per notebook+level: restore once the scroller exists,
+  // save as it moves.
   const scrollKey = `${currentId}:${folderId ?? "root"}`;
   useLayoutEffect(() => {
-    const el = scrollerRef.current;
-    if (el) el.scrollTop = scrollMemory.get(scrollKey) ?? 0;
-  }, [scrollKey]);
+    if (scrollerEl) scrollerEl.scrollTop = scrollMemory.get(scrollKey) ?? 0;
+  }, [scrollerEl, scrollKey]);
 
   const setSortMode = (mode: SortMode) => {
     setSort(mode);
@@ -386,12 +403,14 @@ export function GalleryPane() {
         </div>
       ) : (
         <div
-          ref={scrollerRef}
+          ref={attachScroller}
           onScroll={(e) =>
             scrollMemory.set(scrollKey, e.currentTarget.scrollTop)
           }
           className="min-h-0 flex-1 overflow-y-auto px-6 py-4"
         >
+          {/* Skip the one-column flash while the first measure lands. */}
+          {width > 0 && (
           <div className="flex items-start gap-3">
             {columns.map((col, i) => (
               <div key={i} className="flex min-w-0 flex-1 flex-col gap-3">
@@ -422,6 +441,7 @@ export function GalleryPane() {
               </div>
             ))}
           </div>
+          )}
         </div>
       )}
       {confirmDialog}
