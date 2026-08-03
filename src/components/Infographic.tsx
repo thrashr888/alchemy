@@ -43,6 +43,9 @@ function percentOf(value: string): number {
 export type InfographicBlock =
   | { type: "stats"; items: { value: string; label: string }[] }
   | { type: "bars"; rows: { label: string; value: number; display: string }[] }
+  | { type: "funnel"; rows: { label: string; value: number; display: string }[] }
+  | { type: "timeline"; items: { date: string; text: string }[] }
+  | { type: "compare"; sides: { label: string; items: string[] }[] }
   | { type: "facts"; items: string[] }
   | { type: "quote"; text: string; attribution?: string }
   | { type: "prose"; text: string };
@@ -61,14 +64,21 @@ export interface InfographicDoc {
 /** `**<value>** — <label>` (any dash or colon separator survives models). */
 const STAT_RE = /^\*\*(.+?)\*\*\s*[—–:-]+\s*(.+)$/;
 
+/** `2019 — text` | `Q3 2025 — text` | `March 2024 — text`: a dated bullet.
+ *  A bullet run is a timeline only when EVERY item matches (ranking lists
+ *  and ordinary facts must never get a rail). */
+const TIMELINE_RE = /^((?:Q[1-4]\s+)?\d{4}|[A-Z][a-z]{2,9}\.?\s+\d{4}|\d{4}\s*[–-]\s*\d{2,4})\s*[—–:-]+\s*(.+)$/;
+
 /** First number in a table cell, commas tolerated ("1,204 ms" → 1204). */
 function cellNumber(display: string): number {
   const m = /-?\d[\d,]*(?:\.\d+)?/.exec(display);
   return m ? parseFloat(m[0].replace(/,/g, "")) : NaN;
 }
 
-/** A GFM table becomes bars when every data row's second cell is numeric;
- *  anything else stays prose (Markdown renders the table as-is). */
+/** A GFM table becomes bars when every data row's second cell is numeric —
+ *  or a funnel when its first header cell is `Stage` (the spec's explicit
+ *  marker: decreasing values alone would misread ranking tables as funnels).
+ *  Anything else stays prose (Markdown renders the table as-is). */
 function tableBlock(lines: string[]): InfographicBlock {
   const rows = lines
     .map((line) =>
@@ -89,7 +99,29 @@ function tableBlock(lines: string[]): InfographicBlock {
     bars.push({ label: cells[0], value, display: cells[1] });
   }
   if (bars.length < 2) return { type: "prose", text: lines.join("\n") };
-  return { type: "bars", rows: bars };
+  const isFunnel = rows[0]?.[0]?.toLowerCase() === "stage";
+  return { type: isFunnel ? "funnel" : "bars", rows: bars };
+}
+
+/** Exactly two `### name` subheadings, each followed only by bullets,
+ *  make a head-to-head comparison; any other use of `###` falls through
+ *  to the ordinary line-shape parser. */
+function compareBlock(lines: string[]): InfographicBlock | null {
+  const sides: { label: string; items: string[] }[] = [];
+  for (const raw of lines) {
+    const t = raw.trim();
+    if (!t) continue;
+    const h3 = /^###\s+(.+)$/.exec(t);
+    if (h3) {
+      sides.push({ label: h3[1].trim(), items: [] });
+      continue;
+    }
+    if (!/^[-*•]\s+/.test(t) || sides.length === 0) return null;
+    sides[sides.length - 1].items.push(t.replace(/^[-*•]\s+/, "").trim());
+  }
+  if (sides.length !== 2 || sides.some((side) => side.items.length === 0))
+    return null;
+  return { type: "compare", sides };
 }
 
 type Shape = "stat" | "table" | "quote" | "bullet" | "text";
@@ -105,6 +137,11 @@ function shapeOf(line: string): Shape {
 
 /** Group a section body into typed blocks by line shape. */
 function parseBlocks(lines: string[]): InfographicBlock[] {
+  // A body that is exactly two ###-led bullet groups is a comparison.
+  const compare = lines.some((line) => /^###\s+/.test(line.trim()))
+    ? compareBlock(lines)
+    : null;
+  if (compare) return [compare];
   const blocks: InfographicBlock[] = [];
   let i = 0;
   while (i < lines.length) {
@@ -156,12 +193,19 @@ function parseBlocks(lines: string[]): InfographicBlock[] {
         if (text) blocks.push({ type: "quote", text, attribution });
         break;
       }
-      case "bullet":
-        blocks.push({
-          type: "facts",
-          items: run.map((line) => line.replace(/^[-*•]\s+/, "").trim()),
-        });
+      case "bullet": {
+        const items = run.map((line) => line.replace(/^[-*•]\s+/, "").trim());
+        const dated = items.map((item) => TIMELINE_RE.exec(item));
+        if (items.length >= 3 && dated.every(Boolean)) {
+          blocks.push({
+            type: "timeline",
+            items: dated.map((m) => ({ date: m![1].trim(), text: m![2].trim() })),
+          });
+        } else {
+          blocks.push({ type: "facts", items });
+        }
         break;
+      }
       default:
         blocks.push({ type: "prose", text: run.join("\n") });
     }
@@ -320,6 +364,110 @@ function BlockView({
         </div>
       );
     }
+    case "funnel": {
+      const max = Math.max(...block.rows.map((row) => row.value), 0);
+      return (
+        <div className="flex flex-col items-center gap-1.5">
+          {block.rows.map((row, i) => {
+            const color = hue(i);
+            const width = max > 0 ? Math.max((row.value / max) * 100, 18) : 18;
+            return (
+              <div
+                key={i}
+                className="flex items-center justify-between gap-3 rounded-lg px-4 py-2 transition-[width] duration-700 ease-out"
+                style={{
+                  width: `${grown ? width : 18}%`,
+                  minWidth: "fit-content",
+                  background: wash(color, 16),
+                }}
+              >
+                <span className="truncate text-caption font-medium" title={row.label}>
+                  <Inline text={row.label} />
+                </span>
+                <span
+                  className="shrink-0 text-caption font-bold tabular-nums"
+                  style={{ color }}
+                >
+                  {row.display}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+    case "timeline":
+      return (
+        <div className="flex flex-col">
+          {block.items.map((item, i) => {
+            const color = hue(i);
+            return (
+              <div key={i} className="grid grid-cols-[7rem_auto_1fr] gap-x-3">
+                <div
+                  className="pt-0.5 text-right text-caption font-bold tabular-nums"
+                  style={{ color }}
+                >
+                  {item.date}
+                </div>
+                {/* The rail: a dot per event, a hairline thread between. */}
+                <div className="flex flex-col items-center" aria-hidden>
+                  <span
+                    className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ background: color }}
+                  />
+                  {i < block.items.length - 1 && (
+                    <span className="w-px flex-1 bg-border-strong" />
+                  )}
+                </div>
+                <div className="pb-4 text-body leading-relaxed">
+                  <Inline text={item.text} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    case "compare":
+      return (
+        <div className="grid grid-cols-[1fr_auto_1fr] items-stretch gap-2.5">
+          {block.sides.map((side, i) => {
+            const color = hue(i * 2); // skip a hue so the two sides contrast
+            return (
+              <div
+                key={side.label}
+                className="flex flex-col gap-2.5 rounded-xl px-4 py-3.5"
+                style={{ background: wash(color, 8), order: i * 2 }}
+              >
+                <div
+                  className="text-[0.9375rem] font-bold tracking-tight"
+                  style={{ color }}
+                >
+                  <Inline text={side.label} />
+                </div>
+                <ul className="flex flex-col gap-1.5 text-caption leading-relaxed">
+                  {side.items.map((item, j) => (
+                    <li key={j} className="flex gap-2">
+                      <span
+                        aria-hidden
+                        className="mt-[7px] h-1 w-1 shrink-0 rounded-full"
+                        style={{ background: color }}
+                      />
+                      <span>
+                        <Inline text={item} />
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+          <div className="grid place-items-center" style={{ order: 1 }} aria-hidden>
+            <span className="rounded-full bg-surface-2 px-2 py-1 text-micro font-bold uppercase text-muted-foreground">
+              vs
+            </span>
+          </div>
+        </div>
+      );
     case "facts":
       return (
         <ul className="flex flex-col gap-2">
@@ -514,6 +662,75 @@ function PrintInfographic({ doc }: { doc: InfographicDoc }) {
           </div>
         );
       }
+      case "funnel": {
+        const max = Math.max(...block.rows.map((row) => row.value), 0);
+        return (
+          <div
+            key={key}
+            style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}
+          >
+            {block.rows.map((row, i) => (
+              <div
+                key={i}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  padding: "4px 12px",
+                  borderRadius: 6,
+                  background: "#e4e4e4",
+                  width: `${max > 0 ? Math.max((row.value / max) * 100, 18) : 18}%`,
+                  minWidth: "fit-content",
+                  fontSize: 10.5,
+                }}
+              >
+                <span>{plain(row.label)}</span>
+                <span style={{ fontWeight: 650, fontVariantNumeric: "tabular-nums" }}>
+                  {row.display}
+                </span>
+              </div>
+            ))}
+          </div>
+        );
+      }
+      case "timeline":
+        return (
+          <div key={key} style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            {block.items.map((item, i) => (
+              <div key={i} style={{ display: "flex", gap: 10, fontSize: 11 }}>
+                <span
+                  style={{
+                    width: 90,
+                    textAlign: "right",
+                    fontWeight: 650,
+                    fontVariantNumeric: "tabular-nums",
+                    flexShrink: 0,
+                  }}
+                >
+                  {item.date}
+                </span>
+                <span>{plain(item.text)}</span>
+              </div>
+            ))}
+          </div>
+        );
+      case "compare":
+        return (
+          <div key={key} style={{ display: "flex", gap: 8 }}>
+            {block.sides.map((side) => (
+              <div key={side.label} style={{ ...card, flex: 1 }}>
+                <div style={{ fontWeight: 650, fontSize: 11.5, marginBottom: 4 }}>
+                  {plain(side.label)}
+                </div>
+                {side.items.map((item, j) => (
+                  <div key={j} style={{ fontSize: 10.5, marginTop: 2 }}>
+                    • {plain(item)}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        );
       case "facts":
         return (
           <div key={key} style={{ display: "flex", flexDirection: "column", gap: 6 }}>

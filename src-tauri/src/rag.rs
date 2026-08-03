@@ -726,6 +726,15 @@ pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
                plain number in one consistent unit (a suffix like `%` or `ms` is fine); 3-8 \
                rows. The renderer draws proportional bars from the numbers.\n\
              - Fact cards: 3-5 `- ` bullets, each a self-contained fact under 20 words.\n\
+             - Timeline: 3-6 `- ` bullets, EVERY one starting with a date then a dash \
+               (`- 2019 — first pilot`, `- Q3 2025 — 1M users`), in chronological order. \
+               Use only when the sources give real dates.\n\
+             - Funnel: a 2-column GFM table whose first header cell is exactly `Stage`, \
+               stages in order with decreasing numbers (pipelines, conversions, drop-offs). \
+               Any other numeric table renders as a bar chart, so the `Stage` header is what \
+               makes it a funnel.\n\
+             - Comparison: exactly two `### <name>` subheadings, each followed by 2-4 `- ` \
+               bullets — for a head-to-head contrast of two options, eras, or rivals.\n\
              - Callout: one `> ` blockquote with a genuinely quotable line from the sources, \
                then an attribution line starting with `—` if the speaker is known.\n\
              - Narrative: one short paragraph of 2-3 sentences — at most once in the piece.\n\
@@ -743,6 +752,10 @@ pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
              | Diesel | 92 |\n\
              | Hybrid | 71 |\n\
              | Electric | 38 |\n\
+             ## The road here\n\
+             - 2019 — three-bus pilot approved\n\
+             - 2021 — first depot fully converted\n\
+             - 2024 — electric passes 50% of fleet\n\
              Every number and claim must come from the sources — never invent, estimate, or \
              round beyond what they state; if the corpus lacks concrete numbers for tiles or \
              bars, use fact cards instead of manufacturing data. Cover the whole corpus, \

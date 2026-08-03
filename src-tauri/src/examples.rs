@@ -419,6 +419,8 @@ async fn seed_notebook(
             mtime: 0,
             image_url: String::new(),
             author: String::new(),
+            tags: String::new(),
+            note: String::new(),
         };
         db.insert_source(&source, &p.chunks, &p.embeddings).await?;
     }

@@ -97,12 +97,21 @@ unchanged; sections are `print-card` so pages never break inside one.
   as `slide_deck`); it scrolls rather than filling the pane, so it keeps
   `DocProperties` and the counts footer.
 
+> Rev 2 (2026-08-02): three more inferred shapes, taxonomy borrowed from the
+> most-installed infographic skill on skills.sh (timelines, funnels, and
+> comparisons are what people actually reach for): **timeline** (a bullet run
+> where every item starts with a date), **funnel** (a 2-column table whose
+> first header cell is `Stage` — an explicit marker, because "decreasing
+> values" would misread ranking tables), and **comparison** (exactly two
+> `###` subheadings with bullets, rendered as vs-cards). Layout stays
+> inferred, never declared.
+
 ## Out of scope (v1)
 
 - Image generation (still no local imagegen worth shipping) and any raster
   export beyond the PDF.
 - More chart types (donut/line/sparkline), multi-series bars, or declared
-  layouts — the five inferred shapes cover what small models can reliably
+  layouts — the eight inferred shapes cover what small models can reliably
   produce.
 - Themed poster palettes à la slide decks (`theme:` front-matter); the app
   theme is the poster theme in v1.
