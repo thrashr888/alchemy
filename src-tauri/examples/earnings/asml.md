@@ -1,0 +1,7 @@
+Example data: figures summarized from public FY2024–FY2025 reporting; verify before relying on them.
+
+ASML Holding N.V. (ASML), headquartered in Veldhoven, the Netherlands, is the world's only manufacturer of extreme ultraviolet (EUV) lithography machines — the $200-million-plus systems required to print the most advanced chips — plus a large installed base of deep ultraviolet (DUV) tools and services. Its customers are essentially three: TSMC, Samsung, and Intel, plus memory makers. In fiscal 2024, ASML reported net sales of about €28 billion and net income of roughly €7.6 billion, with a record order backlog entering 2025.
+
+Strategic themes: the ramp of High-NA EUV, the next-generation platform priced around €350 million per system, with early units installed at Intel and other leading-edge customers while volume adoption timing remains debated; AI as the demand engine — logic and HBM memory capacity buildouts drive EUV utilization — even as non-AI semiconductor markets stayed sluggish; export controls as a persistent constraint, with Dutch and U.S. restrictions progressively cutting what can ship to China, which had swelled to a large share of DUV sales in 2023–2024; customer concentration risk when any one fab operator delays capacity; and a services and upgrades business that compounds with the installed base. ASML guides to substantial long-term growth on the premise that transistor demand keeps scaling; it returns cash through dividends and buybacks.
+
+Latest reports: investor relations at https://www.asml.com/en/investors.

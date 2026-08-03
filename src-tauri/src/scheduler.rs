@@ -7,7 +7,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
 use crate::commands::{self, AppState};
@@ -93,6 +93,18 @@ pub fn start(app: AppHandle) {
         {
             let state = app.state::<AppState>();
             commands::ensure_default_brief(&state).await;
+            // First-run example notebooks, same once-ever marker contract.
+            // A first-ever launch may embed ~56 sources here; delaying the
+            // opening tick by that much is harmless (it's all background
+            // work), and every later launch is a marker stat.
+            if crate::examples::ensure_example_notebooks(&state).await {
+                // Same event the MCP mutations use, so an already-open home
+                // screen shows the new notebooks without a restart.
+                let _ = app.emit(
+                    "mcp://changed",
+                    serde_json::json!({ "scope": "notebooks", "notebookId": null }),
+                );
+            }
         }
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);

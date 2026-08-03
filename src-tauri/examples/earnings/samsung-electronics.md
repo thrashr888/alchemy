@@ -1,0 +1,7 @@
+Example data: figures summarized from public FY2024–FY2025 reporting; verify before relying on them.
+
+Samsung Electronics Co., Ltd. (KRX: 005930), headquartered in Suwon, South Korea, is the world's largest memory chipmaker and a top smartphone and consumer electronics manufacturer, with divisions spanning memory (DRAM, NAND), foundry and system LSI, mobile (Galaxy), displays, and appliances. In fiscal 2024, Samsung reported revenue of roughly 300 trillion won (about $220 billion) and operating profit of about 33 trillion won (roughly $24 billion), a strong recovery from 2023's memory downturn.
+
+The uncomfortable theme of the period: Samsung lagged in high-bandwidth memory (HBM), the premium DRAM stacked next to AI accelerators, where smaller rival SK Hynix seized leadership as NVIDIA's primary supplier. Samsung's HBM3E qualification at NVIDIA came late, and management publicly apologized for disappointing results in late 2024. The foundry business also struggled with yields and lost leading-edge customers to TSMC, running heavy losses — partially offset in 2025 by a landmark multi-year deal to manufacture Tesla's AI chips in Texas. Brighter spots: Galaxy S24/S25 flagships leaned into on-device AI features; memory pricing surged again in 2025 as AI data center demand absorbed supply; and the chairman was finally cleared of long-running legal charges. Samsung retains unmatched vertical breadth and balance-sheet strength, but the AI era has tested its execution.
+
+Latest reports: investor relations at https://www.samsung.com/global/ir/.
