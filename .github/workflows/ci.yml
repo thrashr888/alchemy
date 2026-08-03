@@ -40,9 +40,12 @@ jobs:
           workspaces: './src-tauri -> target'
 
       - name: Install frontend dependencies
-        # CI runs the web build and Rust checks, not the Tauri bundle. Avoid
-        # downloading PDFium or compiling the Swift FM sidecar in postinstall.
-        run: pnpm install --frozen-lockfile --ignore-scripts
+        # Postinstall fetches PDFium and builds the Swift FM sidecar. Both are
+        # required even for `cargo clippy`: tauri.conf.json lists them as
+        # bundle resources/externalBin, and Tauri's build script hard-fails
+        # when a listed resource is missing (--ignore-scripts kept CI red
+        # from the night-shift merge to v0.30.0).
+        run: pnpm install --frozen-lockfile
 
       - name: Frontend typecheck + build
         run: pnpm build
