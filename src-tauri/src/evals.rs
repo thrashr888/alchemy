@@ -228,6 +228,8 @@ pub(crate) async fn seed_docs(
             error: String::new(),
             parent_id: String::new(),
             mtime: 0,
+            tags: String::new(),
+            note: String::new(),
         };
         db.insert_source(&source, &tuples, &embeddings)
             .await
@@ -395,6 +397,7 @@ async fn eval_rerank_surfaces_buried_hit() {
             source_path: String::new(),
             note_id: String::new(),
             gist: false,
+            snote: false,
             ordinal: i,
             snippet: format!(
                 "Entry {i}: tomatoes prefer full sun and weekly deep watering in raised beds."
@@ -412,6 +415,7 @@ async fn eval_rerank_surfaces_buried_hit() {
             source_path: String::new(),
             note_id: String::new(),
             gist: false,
+            snote: false,
             ordinal: 0,
             snippet: "The homeowner's policy deductible is two thousand five hundred dollars \
                       for wind and hail damage."

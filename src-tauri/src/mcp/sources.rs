@@ -88,6 +88,24 @@ struct UpdateSourceReq {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+struct SetTagsReq {
+    /// Source id (from list_sources).
+    source_id: String,
+    /// Tags as free text — `#` prefixes, commas, and mixed case are all
+    /// accepted; stored normalized (lowercase, deduped, space-separated).
+    /// Empty clears all tags.
+    tags: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct SetNoteReq {
+    /// Source id (from list_sources).
+    source_id: String,
+    /// The annotation text ("why this source matters"). Empty clears it.
+    note: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 struct ActivityReq {
     /// Look-back window in hours (default 24, capped to the 30-day event
     /// window the table keeps).
@@ -118,7 +136,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "List a notebook's sources (id, title, type, url, status, char/chunk counts, image_url — the page's lead image for url sources; \"-\" means checked and none). status \"error\" means the import failed — see the error field."
+        description = "List a notebook's sources (id, title, type, url, status, char/chunk counts, tags and note — the user's own labels and annotation — and image_url, the page's lead image for url sources; \"-\" means checked and none). status \"error\" means the import failed — see the error field."
     )]
     async fn list_sources(
         &self,
@@ -200,7 +218,9 @@ impl AlchemyMcp {
         json_result(&source)
     }
 
-    #[tool(description = "Read a source's metadata and full extracted text content.")]
+    #[tool(
+        description = "Read a source's metadata (including its user tags and annotation note) and full extracted text content."
+    )]
     async fn get_source(
         &self,
         Parameters(SourceIdReq { source_id }): Parameters<SourceIdReq>,
@@ -258,6 +278,36 @@ impl AlchemyMcp {
             .map_err(internal)?;
         self.changed("sources", Some(&source.notebook_id));
         json_result(&slim(source))
+    }
+
+    #[tool(
+        description = "Set a source's tags (user organization that retrieval also uses: tags join the source's route summary and the chat manifest). Free-form input — '#' prefixes, commas, mixed case all accepted; stored normalized (lowercase, deduped, space-separated). Empty tags clears them. Returns the updated source."
+    )]
+    async fn set_source_tags(
+        &self,
+        Parameters(SetTagsReq { source_id, tags }): Parameters<SetTagsReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let source = commands::set_source_tags_impl(&state, &source_id, &tags)
+            .await
+            .map_err(internal)?;
+        self.changed("sources", Some(&source.notebook_id));
+        json_result(&source)
+    }
+
+    #[tool(
+        description = "Set the user annotation on a source (one editable note per source: \"why this was saved\"). The note is indexed for retrieval and surfaces in chat labeled as the user's own judgment. Empty note clears it. Returns the updated source."
+    )]
+    async fn set_source_note(
+        &self,
+        Parameters(SetNoteReq { source_id, note }): Parameters<SetNoteReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let source = commands::set_source_note_impl(&state, &source_id, &note)
+            .await
+            .map_err(internal)?;
+        self.changed("sources", Some(&source.notebook_id));
+        json_result(&source)
     }
 
     #[tool(description = "Delete a source and its chunks from a notebook.")]

@@ -1348,6 +1348,17 @@ function DocProperties({
       label: "Size",
       value: `${source.charCount.toLocaleString()} chars · ${source.chunkCount} chunks`,
     });
+    // User metadata (RFC-source-tags) — edited from the sources panel's ⋯
+    // menu; shown here so the reader carries the "why" beside the "what".
+    if (source.tags)
+      rows.push({
+        label: "Tags",
+        value: source.tags
+          .split(" ")
+          .map((t) => `#${t}`)
+          .join(" "),
+      });
+    if (source.note) rows.push({ label: "Note", value: source.note });
   } else if (note) {
     rows.push({ label: "Type", value: KIND_LABEL[note.kind] ?? "Note" });
     if (note.origin === "auto") rows.push({ label: "Origin", value: "From chat" });

@@ -263,15 +263,16 @@ pub struct Excerpts<'a> {
 
 /// Build the chat message list from the retrieved excerpts and the question.
 /// The citation list becomes excerpts [1..n] in order. `sources` is
-/// the full (title, url) list for the notebook — url empty for local files —
-/// so the model can answer corpus-level questions ("what documents do we
+/// the full (title, url, tags) list for the notebook — url empty for local
+/// files, tags the user's normalized tag string ("" for untagged) — so the
+/// model can answer corpus-level questions ("what documents do we
 /// have?") even when top-k retrieval only surfaced chunks from a few of them,
 /// and can propose new addable URLs derived from existing ones.
 pub fn build_chat_messages(
     history: &[ChatTurn],
     question: &str,
     excerpts: Excerpts<'_>,
-    sources: &[(String, String)],
+    sources: &[(String, String, String)],
     extra_system: &str,
     persona: &str,
     profile: &crate::inference::ContextProfile,
@@ -284,7 +285,11 @@ pub fn build_chat_messages(
         for (i, c) in citations.iter().enumerate() {
             // Notes are prior conclusions, not source documents — say so, so
             // the model never presents its own earlier synthesis as evidence.
-            let tier = if c.note_id.is_empty() {
+            // The user's own per-source annotation (RFC-source-tags) is
+            // labeled as their judgment, not corpus evidence.
+            let tier = if c.snote {
+                "your note on"
+            } else if c.note_id.is_empty() {
                 "from"
             } else {
                 "from note"
@@ -349,12 +354,16 @@ pub fn build_chat_messages(
     } else {
         let mut out = String::new();
         let mut shown = 0usize;
-        for (title, url) in sources {
-            let line = if url.is_empty() {
-                format!("- {title}")
-            } else {
-                format!("- {title} — {url}")
-            };
+        for (title, url, tags) in sources {
+            // `- {title} · {tags} — {url}` — the tag arm only when the user
+            // tagged the source (RFC-source-tags §Prompt surfaces).
+            let mut line = format!("- {title}");
+            if !tags.is_empty() {
+                line.push_str(&format!(" · {tags}"));
+            }
+            if !url.is_empty() {
+                line.push_str(&format!(" — {url}"));
+            }
             if !out.is_empty() && out.len() + line.len() + 1 > profile.manifest_chars {
                 break;
             }
@@ -953,10 +962,53 @@ mod tests {
             source_path: String::new(),
             note_id: String::new(),
             gist: false,
+            snote: false,
             ordinal: 0,
             snippet: snippet.into(),
             distance: 0.0,
         }
+    }
+
+    /// RFC-source-tags: manifest lines carry the user's tags between title
+    /// and url (`- {title} · {tags} — {url}`), untagged sources keep the old
+    /// shape, and an snote hit is labeled as the user's own judgment.
+    #[test]
+    fn manifest_carries_tags_and_snote_hits_are_labeled() {
+        let snote_hit = Citation {
+            snote: true,
+            ..cite("c1", "saved this for the benchmarks chapter")
+        };
+        let sources = vec![
+            (
+                "Tagged Doc".to_string(),
+                "https://x.dev".to_string(),
+                "rust lance".to_string(),
+            ),
+            ("Plain Doc".to_string(), String::new(), String::new()),
+        ];
+        let messages = build_chat_messages(
+            &[],
+            "q",
+            Excerpts {
+                citations: &[snote_hit],
+                expanded: &HashMap::new(),
+            },
+            &sources,
+            "",
+            "",
+            &crate::inference::ContextProfile::default(),
+        );
+        let prompt = messages
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(prompt.contains("- Tagged Doc · rust lance — https://x.dev"));
+        assert!(prompt.contains("- Plain Doc\n"), "untagged line unchanged");
+        assert!(
+            prompt.contains("(your note on \"Doc\")"),
+            "snote excerpts read as the user's judgment: {prompt}"
+        );
     }
 
     /// The clarify instruction is gated on retrieval thinness: a healthy

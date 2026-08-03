@@ -683,6 +683,8 @@ async fn store_new_source(
         error,
         parent_id: parent_id.to_string(),
         mtime,
+        tags: String::new(),
+        note: String::new(),
     };
     state
         .db
@@ -740,6 +742,8 @@ async fn store_failed_url(
         error: reason,
         parent_id: String::new(),
         mtime: 0,
+        tags: String::new(),
+        note: String::new(),
     };
     state.db.insert_source(&source, &[], &[]).await?;
     state.db.touch_notebook(notebook_id, now()).await?;
@@ -1110,6 +1114,8 @@ pub(crate) async fn ingest_git(
                 error: String::new(),
                 parent_id: String::new(),
                 mtime: crate::mac::content_stamp(&staged.sha),
+                tags: String::new(),
+                note: String::new(),
             };
             state.db.insert_source(&parent, &[], &[]).await?;
             crate::git::adopt_cache(&staged.dir, &data_dir, &parent.id)
@@ -1161,6 +1167,8 @@ pub(crate) async fn ingest_notion(
         error: String::new(),
         parent_id: String::new(),
         mtime: stats.max_edited_ms,
+        tags: String::new(),
+        note: String::new(),
     };
     state.db.insert_source(&parent, &[], &[]).await?;
     let _guard = state.folder_scan_lock.lock().await;
@@ -1317,6 +1325,7 @@ async fn grep_leg(
                 source_path: path.clone(),
                 note_id: String::new(),
                 gist: false,
+                snote: false,
                 ordinal: 0,
                 snippet: h.window,
                 // Not a vector hit — match count carried the ranking; the
@@ -1486,6 +1495,10 @@ pub(crate) async fn reingest(
         // that re-ingests a changed file passes `existing` with a fresh mtime.
         parent_id: existing.parent_id.clone(),
         mtime: existing.mtime,
+        // User metadata survives every re-embed: tags and the annotation
+        // describe why the source matters, not what its bytes say.
+        tags: existing.tags.clone(),
+        note: existing.note.clone(),
     };
     state
         .db
@@ -1585,6 +1598,130 @@ pub async fn update_source_text(
         e(state.db.get_source(&source_id).await)?.ok_or_else(|| "Source not found".to_string())?;
     let extracted = e(ingest::extract_pasted(&title, &text))?;
     e(reingest(&state, &existing, extracted, None, true).await)
+}
+
+/// Normalize a raw tag string into the stored form (docs/RFC-source-tags.md):
+/// split on whitespace and commas, strip a leading `#`, lowercase, drop
+/// empties, dedupe preserving first-seen order, join with single spaces.
+pub(crate) fn normalize_tags(raw: &str) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+    for token in raw.split(|c: char| c.is_whitespace() || c == ',') {
+        let t = token.trim_start_matches('#').to_lowercase();
+        if !t.is_empty() && seen.insert(t.clone()) {
+            out.push(t);
+        }
+    }
+    out.join(" ")
+}
+
+/// Stamp a source's tags (normalized on write) and return the updated row
+/// in list-payload shape (content stripped). Shared by the Tauri command
+/// and the MCP tool. Routes fold the tags in on the next self-healing sweep
+/// — the summary string changes, so the diff re-embeds; no extra machinery.
+pub(crate) async fn set_source_tags_impl(
+    state: &AppState,
+    source_id: &str,
+    tags: &str,
+) -> anyhow::Result<Source> {
+    let existing = state
+        .db
+        .get_source(source_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Source not found"))?;
+    let tags = normalize_tags(tags);
+    state.db.set_source_tags(source_id, &tags).await?;
+    state
+        .db
+        .touch_notebook(&existing.notebook_id, now())
+        .await?;
+    Ok(Source {
+        tags,
+        content: String::new(),
+        ..existing
+    })
+}
+
+/// Store the user's annotation on a source and (re)index it under
+/// `snote:<source_id>` so retrieval can surface "why I saved this"
+/// (docs/RFC-source-tags.md). Empty note = clear both row field and index.
+/// The row is the truth; indexing is best-effort like `index_note` — a
+/// failed embed logs and the next edit retries.
+pub(crate) async fn set_source_note_impl(
+    state: &AppState,
+    source_id: &str,
+    note: &str,
+) -> anyhow::Result<Source> {
+    let existing = state
+        .db
+        .get_source(source_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Source not found"))?;
+    let note = note.trim().to_string();
+    state.db.set_source_note(source_id, &note).await?;
+    if let Err(err) = index_snote(state, &existing, &note).await {
+        eprintln!("indexing note on source {source_id} failed: {err:#}");
+    }
+    state
+        .db
+        .touch_notebook(&existing.notebook_id, now())
+        .await?;
+    Ok(Source {
+        note,
+        content: String::new(),
+        ..existing
+    })
+}
+
+/// (Re)build the chunk rows for a source annotation — the `index_note`
+/// pattern with the `snote:` owner prefix. No confabulation gate: the user
+/// wrote it (RFC-source-tags §Per-source notes).
+async fn index_snote(state: &AppState, source: &Source, note: &str) -> anyhow::Result<()> {
+    state.db.delete_snote_chunks(&source.id).await?;
+    if note.is_empty() {
+        return Ok(());
+    }
+    let chunks = ingest::chunk_text(&source.title, note);
+    if chunks.is_empty() {
+        return Ok(());
+    }
+    let inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
+    let embeddings = {
+        let ai = state.ai.read().await.clone();
+        ai.embed(&inputs).await?
+    };
+    let tuples: Vec<(String, i32, String)> = chunks
+        .iter()
+        .enumerate()
+        .map(|(j, c)| (new_id(), j as i32, c.text.clone()))
+        .collect();
+    state
+        .db
+        .add_chunks(
+            &source.notebook_id,
+            &format!("{}{}", crate::db::SNOTE_CHUNK_PREFIX, source.id),
+            &tuples,
+            &embeddings,
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn set_source_tags(
+    state: State<'_, AppState>,
+    source_id: String,
+    tags: String,
+) -> Result<Source, String> {
+    e(set_source_tags_impl(&state, &source_id, &tags).await)
+}
+
+#[tauri::command]
+pub async fn set_source_note(
+    state: State<'_, AppState>,
+    source_id: String,
+    note: String,
+) -> Result<Source, String> {
+    e(set_source_note_impl(&state, &source_id, &note).await)
 }
 
 /// Does this source origin point at the web (vs. a local file path)?
@@ -2520,6 +2657,8 @@ async fn store_failed_child(
         error: reason,
         parent_id: folder.id.clone(),
         mtime,
+        tags: String::new(),
+        note: String::new(),
     };
     state.db.insert_source(&source, &[], &[]).await
 }
@@ -2549,6 +2688,8 @@ async fn store_placeholder_child(
         error: String::new(),
         parent_id: folder.id.clone(),
         mtime,
+        tags: String::new(),
+        note: String::new(),
     };
     state.db.insert_source(&source, &[], &[]).await
 }
@@ -3133,6 +3274,8 @@ pub async fn add_source_folder(
         error: String::new(),
         parent_id: String::new(),
         mtime: 0,
+        tags: String::new(),
+        note: String::new(),
     };
     e(state.db.insert_source(&folder, &[], &[]).await)?;
     e(rescan_one_folder(Some(&app), &state, &folder, true).await)?;
@@ -5025,13 +5168,14 @@ pub async fn send_message(
         std::collections::HashMap::new()
     };
 
-    // Full source manifest (title + url) so corpus-level questions are
-    // answerable regardless of which chunks the top-k search happened to
-    // surface, and the model can propose new addable URLs. Respects the
-    // source selection so deselected sources stay out of the prompt.
-    let source_manifest: Vec<(String, String)> = selected_sources
+    // Full source manifest (title + url + user tags) so corpus-level
+    // questions are answerable regardless of which chunks the top-k search
+    // happened to surface, and the model can propose new addable URLs.
+    // Respects the source selection so deselected sources stay out of the
+    // prompt.
+    let source_manifest: Vec<(String, String, String)> = selected_sources
         .into_iter()
-        .map(|s| (s.title, s.url))
+        .map(|s| (s.title, s.url, s.tags))
         .collect();
 
     // Build prompt with short history (exclude the just-added user msg from window).
@@ -8506,6 +8650,18 @@ pub async fn check_ollama(state: State<'_, AppState>) -> Result<bool, String> {
 #[cfg(test)]
 mod tool_tests {
     use super::*;
+
+    /// RFC-source-tags: `#foo` → `foo`, lowercase, dedupe (first-seen order
+    /// kept), whitespace/commas both split, empties vanish.
+    #[test]
+    fn normalize_tags_strips_lowercases_dedupes() {
+        assert_eq!(normalize_tags("#Rust  lance,RUST"), "rust lance");
+        assert_eq!(normalize_tags("  "), "");
+        assert_eq!(normalize_tags("#a, #B\n#a"), "a b");
+        assert_eq!(normalize_tags("one-tag two_tag"), "one-tag two_tag");
+        assert_eq!(normalize_tags("#,, ,#"), "");
+        assert_eq!(normalize_tags("Ökologie"), "ökologie");
+    }
 
     #[test]
     fn blank_title_catches_invisible_content() {

@@ -221,6 +221,8 @@ pub fn run() {
             commands::add_source_url,
             commands::add_source_text,
             commands::update_source_text,
+            commands::set_source_tags,
+            commands::set_source_note,
             commands::refresh_source_url,
             commands::get_source_content,
             commands::delete_source,

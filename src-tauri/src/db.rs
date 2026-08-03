@@ -49,6 +49,13 @@ pub const NOTE_CHUNK_PREFIX: &str = "note:";
 /// text it was distilled from — the staleness signal for the gist sweep —
 /// not a position.
 pub const GIST_CHUNK_PREFIX: &str = "gist:";
+
+/// `source_id = "snote:<source_id>"` marks the user's own annotation on a
+/// source (docs/RFC-source-tags.md): one editable note per source, indexed
+/// in the chunks table so "why did I save this" is retrievable. Unlike
+/// gists these rows are user ground truth, so they stay IN the per-notebook
+/// search path (no exclusion filter) and need no confabulation gate.
+pub const SNOTE_CHUNK_PREFIX: &str = "snote:";
 pub const NOTEBOOK_PALETTE: [&str; 8] = [
     "#eb5757", "#e8a33d", "#4cb782", "#5e9bd2", "#9b87f5", "#e274b6", "#4fc1c9", "#98a562",
 ];
@@ -124,6 +131,10 @@ fn apply_diversity(
         }
         let (nb, c) = &hit;
         let is_note = !c.note_id.is_empty();
+        // Annotation rows (snote) reach here with source_id resolved, so
+        // they share their source's per-owner budget — the annotation is
+        // evidence about the source, not a bonus slot for it. They are not
+        // gists, so `max_gists` never suppresses them.
         let owner = if is_note {
             format!("{NOTE_CHUNK_PREFIX}{}", c.note_id)
         } else {
@@ -217,6 +228,7 @@ impl Db {
         db.ensure_table(T_SOURCES, sources_schema()).await?;
         db.migrate_sources().await?;
         db.migrate_source_image().await?;
+        db.migrate_source_tags_note().await?;
         db.backfill_blank_titles().await?;
         db.ensure_table(T_MESSAGES, messages_schema()).await?;
         db.migrate_messages().await?;
@@ -528,6 +540,8 @@ impl Db {
                 sources.push(Source {
                     author: String::new(),
                     image_url: String::new(),
+                    tags: String::new(),
+                    note: String::new(),
                     id: id.value(i).to_string(),
                     notebook_id: nb.value(i).to_string(),
                     title: title.value(i).to_string(),
@@ -564,6 +578,16 @@ impl Db {
             return Ok(());
         }
         self.add_string_column(T_SOURCES, "image_url", "").await
+    }
+
+    /// Add the `tags` / `note` columns ("") to pre-existing source tables
+    /// (docs/RFC-source-tags.md).
+    async fn migrate_source_tags_note(&self) -> Result<()> {
+        if !self.table_exists(T_SOURCES).await? {
+            return Ok(());
+        }
+        self.add_string_column(T_SOURCES, "tags", "").await?;
+        self.add_string_column(T_SOURCES, "note", "").await
     }
 
     async fn table_exists(&self, name: &str) -> Result<bool> {
@@ -770,10 +794,14 @@ impl Db {
             let mtime = i64_col(b, "mtime")?;
             let author = str_col(b, "author")?;
             let image = str_col(b, "image_url")?;
+            let tags = str_col(b, "tags")?;
+            let note = str_col(b, "note")?;
             for i in 0..b.num_rows() {
                 sources.push(Source {
                     author: author.value(i).to_string(),
                     image_url: image.value(i).to_string(),
+                    tags: tags.value(i).to_string(),
+                    note: note.value(i).to_string(),
                     id: id.value(i).to_string(),
                     notebook_id: nb.value(i).to_string(),
                     title: title.value(i).to_string(),
@@ -859,6 +887,39 @@ impl Db {
             .execute()
             .await?;
         Ok(())
+    }
+
+    /// Stamp a source's normalized tag string (docs/RFC-source-tags.md)
+    /// without touching content or chunks. Routes pick the change up on the
+    /// next self-healing sweep (the summary string diff re-embeds).
+    pub async fn set_source_tags(&self, source_id: &str, tags: &str) -> Result<()> {
+        let tbl = self.conn.open_table(T_SOURCES).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(source_id)))
+            .column("tags", format!("'{}'", esc(tags)))
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    /// Store the user's annotation on a source (docs/RFC-source-tags.md)
+    /// without touching content or chunks. The caller (re)indexes the
+    /// matching `snote:<id>` chunk rows.
+    pub async fn set_source_note(&self, source_id: &str, note: &str) -> Result<()> {
+        let tbl = self.conn.open_table(T_SOURCES).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(source_id)))
+            .column("note", format!("'{}'", esc(note)))
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    /// Drop the indexed chunk rows for a source's annotation (owner
+    /// `snote:<source_id>`), ahead of a re-index or when the note is cleared.
+    pub async fn delete_snote_chunks(&self, source_id: &str) -> Result<()> {
+        let pred = format!("source_id = '{SNOTE_CHUNK_PREFIX}{}'", esc(source_id));
+        self.delete_where(T_CHUNKS, &pred).await
     }
 
     /// Flip a source's `source_type` in place (no child/chunk disturbance) —
@@ -1026,10 +1087,12 @@ impl Db {
     }
 
     pub async fn delete_source(&self, source_id: &str) -> Result<()> {
-        // Chunks and the source's gist row go together (the gist sweep would
-        // also catch a stray gist later, but immediate is cleaner).
+        // Chunks, the source's gist row, and its annotation rows go together
+        // (the gist sweep would also catch a stray gist later, but immediate
+        // is cleaner).
         let pred = format!(
-            "source_id = '{0}' OR source_id = '{GIST_CHUNK_PREFIX}{0}'",
+            "source_id = '{0}' OR source_id = '{GIST_CHUNK_PREFIX}{0}' \
+             OR source_id = '{SNOTE_CHUNK_PREFIX}{0}'",
             esc(source_id)
         );
         self.delete_where(T_CHUNKS, &pred).await?;
@@ -1056,9 +1119,10 @@ impl Db {
                 .join(", ")
         };
         let pred = format!(
-            "source_id IN ({}) OR source_id IN ({})",
+            "source_id IN ({}) OR source_id IN ({}) OR source_id IN ({})",
             quoted(""),
-            quoted(GIST_CHUNK_PREFIX)
+            quoted(GIST_CHUNK_PREFIX),
+            quoted(SNOTE_CHUNK_PREFIX)
         );
         self.delete_where(T_CHUNKS, &pred).await?;
         // One delete for the folder row and every row parented to it.
@@ -1144,6 +1208,8 @@ impl Db {
             if s.url.starts_with('/') {
                 paths.insert(s.id.clone(), s.url.clone());
             }
+            // Annotation rows (`snote:<id>`) display their source's title.
+            titles.insert(format!("{SNOTE_CHUNK_PREFIX}{}", s.id), s.title.clone());
             titles.insert(s.id, s.title);
         }
         for n in self.list_notes(notebook_id).await? {
@@ -1154,6 +1220,8 @@ impl Db {
         // Gist rows are corpus-wide evidence (meta-chat, MCP search); the
         // per-notebook chat path stays verbatim-passages-only until the
         // citation reader can render a gist hit (RFC-infinite-context §1).
+        // Annotation rows (`snote:%`) are deliberately NOT excluded: they're
+        // the user's own words, not a machine distillate (RFC-source-tags).
         let mut filter = format!(
             "notebook_id = '{}' AND source_id NOT LIKE '{GIST_CHUNK_PREFIX}%'",
             esc(notebook_id)
@@ -1573,6 +1641,7 @@ impl Db {
         let mut recency: HashMap<String, i64> = HashMap::new();
         for (id, _nb, title, created_at) in self.all_source_meta().await? {
             titles.insert(format!("{GIST_CHUNK_PREFIX}{id}"), title.clone());
+            titles.insert(format!("{SNOTE_CHUNK_PREFIX}{id}"), title.clone());
             recency.insert(id.clone(), created_at);
             titles.insert(id, title);
         }
@@ -2395,17 +2464,20 @@ fn owner_recency(recency: &HashMap<String, i64>, c: &Citation) -> i64 {
     }
 }
 
-/// Decode a stored chunk owner id into (source_id, note_id, is_gist).
-/// Note rows set `note_id`; gist rows resolve to their source id with the
-/// flag set; plain rows are just the source id.
-fn split_owner(stored: &str) -> (String, String, bool) {
+/// Decode a stored chunk owner id into (source_id, note_id, is_gist,
+/// is_snote). Note rows set `note_id`; gist and snote rows resolve to their
+/// source id with the matching flag set; plain rows are just the source id.
+fn split_owner(stored: &str) -> (String, String, bool, bool) {
+    if let Some(source_id) = stored.strip_prefix(SNOTE_CHUNK_PREFIX) {
+        return (source_id.to_string(), String::new(), false, true);
+    }
     if let Some(note_id) = stored.strip_prefix(NOTE_CHUNK_PREFIX) {
-        return (String::new(), note_id.to_string(), false);
+        return (String::new(), note_id.to_string(), false, false);
     }
     if let Some(source_id) = stored.strip_prefix(GIST_CHUNK_PREFIX) {
-        return (source_id.to_string(), String::new(), true);
+        return (source_id.to_string(), String::new(), true, false);
     }
-    (stored.to_string(), String::new(), false)
+    (stored.to_string(), String::new(), false, false)
 }
 
 fn citations_from_batches(
@@ -2426,7 +2498,7 @@ fn citations_from_batches(
         });
         for i in 0..b.num_rows() {
             let stored = sid.value(i).to_string();
-            let (source_id, note_id, gist) = split_owner(&stored);
+            let (source_id, note_id, gist, snote) = split_owner(&stored);
             citations.push(Citation {
                 chunk_id: id.value(i).to_string(),
                 source_title: titles.get(&stored).cloned().unwrap_or_default(),
@@ -2436,6 +2508,7 @@ fn citations_from_batches(
                 source_id,
                 note_id,
                 gist,
+                snote,
                 ordinal: ord.value(i),
                 snippet: text.value(i).to_string(),
                 distance: dist.as_ref().map(|d| d.value(i)).unwrap_or(0.0),
@@ -2501,6 +2574,8 @@ fn source_batch(schema: &SchemaRef, sources: &[Source]) -> Result<RecordBatch> {
             i(|x| x.mtime),
             s(|x| x.author.clone()),
             s(|x| x.image_url.clone()),
+            s(|x| x.tags.clone()),
+            s(|x| x.note.clone()),
         ],
     )?)
 }
@@ -2612,6 +2687,8 @@ fn sources_schema() -> SchemaRef {
         Field::new("mtime", DataType::Int64, false),
         Field::new("author", DataType::Utf8, false),
         Field::new("image_url", DataType::Utf8, false),
+        Field::new("tags", DataType::Utf8, false),
+        Field::new("note", DataType::Utf8, false),
     ]))
 }
 
@@ -2867,6 +2944,128 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The same shared-store guarantee for the tags/note columns
+    /// (docs/RFC-source-tags.md): an installed binary compiled before the
+    /// columns existed appends source batches without them, and those must
+    /// conform to the migrated live table with "" defaults — never brick.
+    #[tokio::test]
+    async fn source_append_without_tags_note_conforms() {
+        let dir = std::env::temp_dir().join(format!("nbl-conform-src-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+
+        // The pre-tags sources schema (through image_url, no tags/note).
+        let old_schema: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("notebook_id", DataType::Utf8, false),
+            Field::new("title", DataType::Utf8, false),
+            Field::new("source_type", DataType::Utf8, false),
+            Field::new("url", DataType::Utf8, false),
+            Field::new("content", DataType::Utf8, false),
+            Field::new("char_count", DataType::Int64, false),
+            Field::new("chunk_count", DataType::Int64, false),
+            Field::new("created_at", DataType::Int64, false),
+            Field::new("status", DataType::Utf8, false),
+            Field::new("error", DataType::Utf8, false),
+            Field::new("parent_id", DataType::Utf8, false),
+            Field::new("mtime", DataType::Int64, false),
+            Field::new("author", DataType::Utf8, false),
+            Field::new("image_url", DataType::Utf8, false),
+        ]));
+        let s = |v: &str| Arc::new(StringArray::from(vec![v])) as ArrayRef;
+        let i = |v: i64| Arc::new(Int64Array::from(vec![v])) as ArrayRef;
+        let batch = RecordBatch::try_new(
+            old_schema.clone(),
+            vec![
+                s("old-src"),
+                s("nb-1"),
+                s("From the old binary"),
+                s("text"),
+                s(""),
+                s("hello"),
+                i(5),
+                i(1),
+                i(42),
+                s("ready"),
+                s(""),
+                s(""),
+                i(0),
+                s(""),
+                s(""),
+            ],
+        )
+        .expect("old batch");
+
+        db.add_batch(T_SOURCES, old_schema, batch)
+            .await
+            .expect("pre-tags append must conform, not error");
+
+        let src = db
+            .get_source("old-src")
+            .await
+            .expect("get")
+            .expect("row landed");
+        assert_eq!(src.title, "From the old binary");
+        assert_eq!(src.tags, "", "tags filled with its default");
+        assert_eq!(src.note, "", "note filled with its default");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Tags and notes round-trip through their update helpers, and clearing
+    /// the annotation deletes its `snote:` chunk rows.
+    #[tokio::test]
+    async fn source_tags_and_note_round_trip() {
+        let dir = std::env::temp_dir().join(format!("nbl-tags-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+        let src = Source {
+            id: "s-1".into(),
+            notebook_id: "nb".into(),
+            title: "Doc".into(),
+            source_type: "text".into(),
+            url: String::new(),
+            content: "body".into(),
+            char_count: 4,
+            chunk_count: 0,
+            created_at: 1,
+            status: "ready".into(),
+            error: String::new(),
+            parent_id: String::new(),
+            mtime: 0,
+            author: String::new(),
+            image_url: String::new(),
+            tags: String::new(),
+            note: String::new(),
+        };
+        db.insert_source(&src, &[], &[]).await.expect("insert");
+
+        db.set_source_tags("s-1", "rust retrieval")
+            .await
+            .expect("tags");
+        db.set_source_note("s-1", "why I saved it")
+            .await
+            .expect("note");
+        let got = db.get_source("s-1").await.expect("get").expect("found");
+        assert_eq!(got.tags, "rust retrieval");
+        assert_eq!(got.note, "why I saved it");
+
+        // An snote chunk row is owned by `snote:<id>` and dies with its text.
+        db.add_chunks(
+            "nb",
+            &format!("{SNOTE_CHUNK_PREFIX}s-1"),
+            &[("sc-1".into(), 0, "why I saved it".into())],
+            &[vec![0.0; 4]],
+        )
+        .await
+        .expect("index snote");
+        db.delete_snote_chunks("s-1").await.expect("clear");
+        let batches = db
+            .collect(T_CHUNKS, Some("source_id = 'snote:s-1'"))
+            .await
+            .expect("collect");
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 0, "cleared annotation leaves no chunk rows");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn conform_falls_back_on_type_drift_and_unknown_types() {
         let ours: SchemaRef = Arc::new(Schema::new(vec![Field::new("id", DataType::Utf8, false)]));
@@ -2936,6 +3135,7 @@ mod tests {
             source_path: String::new(),
             note_id: String::new(),
             gist: false,
+            snote: false,
             ordinal: 0,
             snippet: String::new(),
             distance: 0.0,
@@ -2993,6 +3193,7 @@ mod tests {
             source_path: String::new(),
             note_id: String::new(),
             gist: false,
+            snote: false,
             ordinal,
             snippet: snippet.into(),
             distance: 0.0,

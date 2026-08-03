@@ -88,6 +88,8 @@ async fn rag_round_trip() {
         error: String::new(),
         parent_id: String::new(),
         mtime: 0,
+        tags: String::new(),
+        note: String::new(),
     };
     db.insert_source(&source, &chunk_tuples, &embeddings)
         .await
@@ -136,7 +138,7 @@ async fn rag_round_trip() {
             citations: &citations,
             expanded: &no_expansion,
         },
-        &[("src-1".to_string(), String::new())],
+        &[("src-1".to_string(), String::new(), String::new())],
         "",
         "",
         &crate::inference::ContextProfile::default(),

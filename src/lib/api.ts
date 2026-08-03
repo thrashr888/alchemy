@@ -178,6 +178,14 @@ export const api = {
     run(ai<Source>("add_source_text", { notebookId, title, text })),
   updateSourceText: (sourceId: string, title: string, text: string) =>
     run(ai<Source>("update_source_text", { sourceId, title, text })),
+  /** Set a source's tags (free text; the backend normalizes: strips "#",
+   *  lowercases, dedupes). Returns the updated source, content stripped. */
+  setSourceTags: (sourceId: string, tags: string) =>
+    run(cmd<Source>("set_source_tags", { sourceId, tags })),
+  /** Set the user annotation on a source (empty clears). Re-embeds the
+   *  annotation for retrieval, hence the ai budget. */
+  setSourceNote: (sourceId: string, note: string) =>
+    run(ai<Source>("set_source_note", { sourceId, note })),
   refreshSourceUrl: (sourceId: string) =>
     run(ai<Source>("refresh_source_url", { sourceId })),
   getSourceContent: (sourceId: string) =>

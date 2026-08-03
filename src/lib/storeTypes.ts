@@ -198,6 +198,10 @@ export interface AppState {
   addSourceText: (title: string, text: string) => Promise<void>;
   addSourceMac: (provider: string, collection: string, label: string) => Promise<void>;
   editSourceText: (sourceId: string, title: string, text: string) => Promise<void>;
+  /** Set a source's tags (backend normalizes) and refresh the list. */
+  setSourceTags: (sourceId: string, tags: string) => Promise<void>;
+  /** Set/clear the user annotation on a source and refresh the list. */
+  setSourceNote: (sourceId: string, note: string) => Promise<void>;
   refreshSource: (sourceId: string) => Promise<void>;
   handleIntegrationUrl: (raw: string) => Promise<void>;
   pendingExternalAdd: ExternalAdd | null;

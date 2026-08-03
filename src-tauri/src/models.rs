@@ -65,6 +65,17 @@ pub struct Source {
     /// `url` sources. "" = unknown, "-" = checked and the page has none.
     #[serde(default)]
     pub image_url: String,
+    /// User-assigned tags: space-separated normalized tokens (lowercase, no
+    /// `#`, deduped — see `commands::normalize_tags`). Ground truth from the
+    /// user, folded into routes and the chat manifest
+    /// (docs/RFC-source-tags.md).
+    #[serde(default)]
+    pub tags: String,
+    /// The user's one editable annotation on this source ("why I saved
+    /// this"). Indexed as a chunk row under `snote:<source_id>` so retrieval
+    /// can surface it (docs/RFC-source-tags.md).
+    #[serde(default)]
+    pub note: String,
 }
 
 /// Tally of what a folder rescan changed across the scanned folder sources.
@@ -254,6 +265,13 @@ pub struct Citation {
     /// the content hash the gist was distilled from, not a position.
     #[serde(default)]
     pub gist: bool,
+    /// True when this row is the user's own annotation on a source
+    /// (docs/RFC-source-tags.md) — stored under `snote:<source_id>`.
+    /// `source_id` still names the annotated source. Prompts label these
+    /// `(your note on "…")` so the model knows it's the user's judgment,
+    /// not corpus evidence.
+    #[serde(default)]
+    pub snote: bool,
     pub ordinal: i32,
     pub snippet: String,
     pub distance: f32,

@@ -96,6 +96,9 @@ export function GalleryPane() {
   const [sweeping, setSweeping] = useState(false);
   const [folderId, setFolderId] = useState<string | null>(null);
   const [filter, setFilter] = useState<TypeGroup>("all");
+  /** Tag chip filter (RFC-source-tags): null = all. Chips show only tags
+   *  present at this level, so the row disappears in untagged notebooks. */
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [sort, setSort] = useState<SortMode>(
     () => (localStorage.getItem("gallerySort") as SortMode) || "recent",
   );
@@ -127,6 +130,7 @@ export function GalleryPane() {
   useEffect(() => {
     setFolderId(null);
     setFilter("all");
+    setTagFilter(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentId]);
   const folder = folderId
@@ -149,9 +153,18 @@ export function GalleryPane() {
     ).filter((g) => present.has(g)),
   ];
   const effectiveFilter = groups.includes(filter) ? filter : "all";
+  // Every tag present at this level, alphabetical, for the chip row.
+  const levelTags = [
+    ...new Set(level.flatMap((s) => (s.tags ? s.tags.split(" ") : []))),
+  ].sort((a, b) => a.localeCompare(b));
+  const effectiveTag =
+    tagFilter && levelTags.includes(tagFilter) ? tagFilter : null;
   const cards = level
     .filter(
       (s) => effectiveFilter === "all" || GROUP_OF[s.sourceType] === effectiveFilter,
+    )
+    .filter(
+      (s) => !effectiveTag || (s.tags ? s.tags.split(" ") : []).includes(effectiveTag),
     )
     .sort((a, b) =>
       sort === "title"
@@ -385,17 +398,52 @@ export function GalleryPane() {
           ))}
         </div>
       )}
+      {levelTags.length > 0 && (
+        <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-4 py-1.5">
+          <button
+            type="button"
+            onClick={() => setTagFilter(null)}
+            aria-pressed={effectiveTag === null}
+            className={cn(
+              "rounded-md px-2 py-1 text-caption transition-colors",
+              effectiveTag === null
+                ? "bg-surface-2 font-medium text-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            All tags
+          </button>
+          {levelTags.map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTagFilter((cur) => (cur === t ? null : t))}
+              aria-pressed={effectiveTag === t}
+              className={cn(
+                "rounded-md px-2 py-1 text-caption transition-colors",
+                effectiveTag === t
+                  ? "bg-surface-2 font-medium text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              #{t}
+            </button>
+          ))}
+        </div>
+      )}
       {cards.length === 0 ? (
         <div className="flex flex-1 items-center justify-center">
           <EmptyState
             icon={<LayoutGrid className="h-5 w-5" />}
             title={
-              effectiveFilter === "all"
-                ? "Nothing to explore yet"
-                : "Nothing of this type here"
+              effectiveTag !== null
+                ? "Nothing with this tag here"
+                : effectiveFilter === "all"
+                  ? "Nothing to explore yet"
+                  : "Nothing of this type here"
             }
             hint={
-              effectiveFilter === "all"
+              effectiveFilter === "all" && effectiveTag === null
                 ? "Add sources and they'll appear here as cards."
                 : undefined
             }
