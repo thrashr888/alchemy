@@ -177,6 +177,7 @@ pub async fn run(
                             source_path: String::new(),
                             note_id: String::new(),
                             gist: false,
+                            snote: false,
                             ordinal: 0,
                             snippet: evidence,
                             distance: 0.0,
@@ -199,9 +200,9 @@ pub async fn run(
     }
 
     emit_step(app, "Writing answer".into());
-    let source_manifest: Vec<(String, String)> = sources
+    let source_manifest: Vec<(String, String, String)> = sources
         .iter()
-        .map(|s| (s.title.clone(), s.url.clone()))
+        .map(|s| (s.title.clone(), s.url.clone(), s.tags.clone()))
         .collect();
     let persona = rag::persona_block(&ollama.config().profile);
     // The agentic loop always drives a full-size model; the default profile's

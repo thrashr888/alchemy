@@ -23,6 +23,26 @@ const ROUTE_POOL: usize = 24;
 /// bounded so one verbose distillate can't dominate embedding time.
 const ROUTE_SUMMARY_CHARS: usize = 480;
 
+/// One route summary string: `"{title} [{tags}] — {gist}"`, brackets omitted
+/// when the source has no tags, the gist arm omitted when there is none,
+/// capped to `ROUTE_SUMMARY_CHARS`. Tags are user ground truth
+/// (docs/RFC-source-tags.md) — a few tag tokens meaningfully shift a short
+/// summary's embedding, and the self-healing diff re-embeds on any change.
+fn route_summary(title: &str, tags: &str, gist: Option<&str>) -> String {
+    let mut summary = if tags.is_empty() {
+        title.to_string()
+    } else {
+        format!("{title} [{tags}]")
+    };
+    if let Some(g) = gist {
+        summary = format!("{summary} — {g}");
+    }
+    if summary.chars().count() > ROUTE_SUMMARY_CHARS {
+        summary = summary.chars().take(ROUTE_SUMMARY_CHARS).collect();
+    }
+    summary
+}
+
 /// One route per source and per note, not one per notebook: a notebook
 /// holding invoices AND travel journals AND recipes has no single point in
 /// embedding space, and a merged summary dilutes every topic in it (measured:
@@ -35,6 +55,7 @@ async fn desired_routes(db: &Db) -> Result<Vec<Route>> {
     // is ABOUT, which is exactly the signal routing lacks when titles are
     // opaque ("IMG_4032.pdf"). Self-heals through the same summary diff —
     // a new gist changes the summary string, which re-embeds the route.
+    // User tags ride along the same way (RFC-source-tags §Retrieval).
     let gists: std::collections::HashMap<String, String> = db
         .list_gists()
         .await?
@@ -44,16 +65,7 @@ async fn desired_routes(db: &Db) -> Result<Vec<Route>> {
     let mut desired: Vec<Route> = Vec::new();
     for nb in db.list_notebooks().await? {
         for s in db.list_sources(&nb.id).await? {
-            let summary = match gists.get(&s.id) {
-                Some(g) => {
-                    let mut s2 = format!("{} — {}", s.title, g);
-                    if s2.chars().count() > ROUTE_SUMMARY_CHARS {
-                        s2 = s2.chars().take(ROUTE_SUMMARY_CHARS).collect();
-                    }
-                    s2
-                }
-                None => s.title.clone(),
-            };
+            let summary = route_summary(&s.title, &s.tags, gists.get(&s.id).map(String::as_str));
             desired.push(Route {
                 id: format!("src:{}", s.id),
                 kind: "source".into(),
@@ -125,4 +137,27 @@ pub async fn route_notebooks(db: &Db, query_vec: Vec<f32>, k: usize) -> Result<V
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// RFC-source-tags: tags join the route summary in brackets, vanish
+    /// without residue when empty, compose with the gist arm, and the cap
+    /// still applies to the combined string.
+    #[test]
+    fn route_summary_folds_tags_and_gist() {
+        assert_eq!(route_summary("Doc", "", None), "Doc");
+        assert_eq!(route_summary("Doc", "rust lance", None), "Doc [rust lance]");
+        assert_eq!(route_summary("Doc", "", Some("about x")), "Doc — about x");
+        assert_eq!(
+            route_summary("Doc", "rust", Some("about x")),
+            "Doc [rust] — about x"
+        );
+        let long_gist = "g".repeat(ROUTE_SUMMARY_CHARS * 2);
+        let capped = route_summary("Doc", "rust", Some(&long_gist));
+        assert_eq!(capped.chars().count(), ROUTE_SUMMARY_CHARS);
+        assert!(capped.starts_with("Doc [rust] — g"));
+    }
 }

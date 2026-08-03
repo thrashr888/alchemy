@@ -53,6 +53,12 @@ export interface Source {
   /** Gallery lead image (og:image) for url sources.
    *  "" = unknown, "-" = checked and the page has none. */
   imageUrl: string;
+  /** User tags: space-separated normalized tokens (lowercase, no "#").
+   *  Fold into routing and the chat manifest (RFC-source-tags). */
+  tags: string;
+  /** The user's one annotation on this source ("why I saved this");
+   *  indexed for retrieval as their own judgment. */
+  note: string;
 }
 
 /** One pickable Mac-provider item (a calendar range, reminders list, note…). */
@@ -113,6 +119,11 @@ export interface Citation {
    * context §1). Optional: citations persisted before gists existed lack it.
    */
   gist?: boolean;
+  /**
+   * True for the user's own per-source annotation (RFC-source-tags);
+   * sourceId names the annotated source. Optional: older citations lack it.
+   */
+  snote?: boolean;
   ordinal: number;
   snippet: string;
   distance: number;

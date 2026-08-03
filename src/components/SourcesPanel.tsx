@@ -39,6 +39,8 @@ import {
   Pencil,
   RefreshCw,
   Cloud,
+  StickyNote,
+  Tag,
 } from "lucide-react";
 
 // Reference scale for the "how big is this notebook" gauge. Not a capacity —
@@ -93,6 +95,14 @@ export function sourceHoverData(s: Source) {
   if (s.status === "placeholder")
     meta.push({ label: "Cloud placeholder — not downloaded yet" });
   if (s.author) meta.push({ label: "Author", value: s.author });
+  if (s.tags)
+    meta.push({
+      label: "Tags",
+      value: s.tags
+        .split(" ")
+        .map((t) => `#${t}`)
+        .join(" "),
+    });
   if (s.url) meta.push({ label: s.url });
   return { title: s.title, meta };
 }
@@ -168,6 +178,8 @@ export function SourcesPanel() {
   const folderScan = useStore((s) => s.folderScan);
   const editSourceText = useStore((s) => s.editSourceText);
   const updateMacNote = useStore((s) => s.updateMacNote);
+  const setSourceTags = useStore((s) => s.setSourceTags);
+  const setSourceNote = useStore((s) => s.setSourceNote);
   const addMacReminder = useStore((s) => s.addMacReminder);
   const refreshSource = useStore((s) => s.refreshSource);
   const deleteSource = useStore((s) => s.deleteSource);
@@ -189,6 +201,18 @@ export function SourcesPanel() {
   const [addingReminder, setAddingReminder] = useState<{
     sourceId: string;
     list: string;
+  } | null>(null);
+  // Inline metadata editors (RFC-source-tags): tags as one input line,
+  // the annotation as a small textarea — same modal idiom as Edit source.
+  const [tagEdit, setTagEdit] = useState<{
+    id: string;
+    title: string;
+    value: string;
+  } | null>(null);
+  const [noteEdit, setNoteEdit] = useState<{
+    id: string;
+    title: string;
+    value: string;
   } | null>(null);
 
   async function startEdit(s: Source) {
@@ -646,6 +670,26 @@ export function SourcesPanel() {
                                   ]
                                 : []),
                               {
+                                label: s.tags ? "Edit tags…" : "Add tags…",
+                                icon: <Tag className="h-3.5 w-3.5" />,
+                                onClick: () =>
+                                  setTagEdit({
+                                    id: s.id,
+                                    title: s.title,
+                                    value: s.tags,
+                                  }),
+                              },
+                              {
+                                label: s.note ? "Edit note…" : "Add note…",
+                                icon: <StickyNote className="h-3.5 w-3.5" />,
+                                onClick: () =>
+                                  setNoteEdit({
+                                    id: s.id,
+                                    title: s.title,
+                                    value: s.note,
+                                  }),
+                              },
+                              {
                                 label: "Remove",
                                 icon: <Trash2 className="h-3.5 w-3.5" />,
                                 danger: true,
@@ -829,6 +873,85 @@ export function SourcesPanel() {
           }}
           onCancel={() => setAddingReminder(null)}
         />
+      </Modal>
+
+      <Modal
+        open={!!tagEdit}
+        onClose={() => setTagEdit(null)}
+        title={`Tags for "${tagEdit?.title ?? ""}"`}
+        width="max-w-md"
+      >
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            if (!tagEdit) return;
+            const { id, value } = tagEdit;
+            setTagEdit(null);
+            await setSourceTags(id, value);
+          }}
+          className="flex flex-col gap-3"
+        >
+          <Input
+            autoFocus
+            name="source-tags"
+            aria-label="Source tags"
+            placeholder="research rust retrieval"
+            value={tagEdit?.value ?? ""}
+            onChange={(e) =>
+              setTagEdit((s) => (s ? { ...s, value: e.target.value } : s))
+            }
+          />
+          <p className="text-micro leading-relaxed text-subtle-foreground">
+            Space-separated; "#" and case don't matter. Tags sharpen
+            cross-notebook routing and show up in chat's source list.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => setTagEdit(null)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary">
+              Save
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        open={!!noteEdit}
+        onClose={() => setNoteEdit(null)}
+        title={`Note on "${noteEdit?.title ?? ""}"`}
+        width="max-w-md"
+      >
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            if (!noteEdit) return;
+            const { id, value } = noteEdit;
+            setNoteEdit(null);
+            await setSourceNote(id, value);
+          }}
+          className="flex flex-col gap-3"
+        >
+          <Textarea
+            autoFocus
+            rows={5}
+            name="source-note"
+            aria-label="Source note"
+            placeholder="Why did you save this? Chat can recall it."
+            value={noteEdit?.value ?? ""}
+            onChange={(e) =>
+              setNoteEdit((s) => (s ? { ...s, value: e.target.value } : s))
+            }
+          />
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => setNoteEdit(null)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary">
+              Save
+            </Button>
+          </div>
+        </form>
       </Modal>
 
       {confirmDialog}

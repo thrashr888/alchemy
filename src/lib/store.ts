@@ -864,6 +864,8 @@ export const useStore = create<AppState>((set, get) => {
         createdAt: Date.now(),
         parentId: "",
         mtime: 0,
+        tags: "",
+        note: "",
       };
       set({
         ingestQueue: [...get().ingestQueue, item],
@@ -960,6 +962,29 @@ export const useStore = create<AppState>((set, get) => {
       );
       if (get().currentId === id) set({ sources: await api.listSources(id) });
     },
+
+    // Tag/note edits are quick metadata writes: update in place from the
+    // returned row (no ingest-queue theater), fall back to a full re-list
+    // only via guard's error surface.
+    setSourceTags: (sourceId, tags) =>
+      guard(async () => {
+        const updated = await api.setSourceTags(sourceId, tags);
+        set({
+          sources: get().sources.map((s) =>
+            s.id === sourceId ? { ...s, tags: updated.tags } : s,
+          ),
+        });
+      }),
+
+    setSourceNote: (sourceId, note) =>
+      guard(async () => {
+        const updated = await api.setSourceNote(sourceId, note);
+        set({
+          sources: get().sources.map((s) =>
+            s.id === sourceId ? { ...s, note: updated.note } : s,
+          ),
+        });
+      }),
 
     refreshSource: async (sourceId) => {
       const id = get().currentId;
