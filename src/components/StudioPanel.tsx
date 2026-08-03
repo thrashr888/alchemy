@@ -497,6 +497,7 @@ export function StudioPanel() {
                     )}
                     <RowMenu
                       className="pointer-events-auto z-20"
+                      onOpen={hideCard}
                       label={`Options for "${n.title}"`}
                       items={[
                         {

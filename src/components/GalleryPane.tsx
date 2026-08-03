@@ -503,13 +503,15 @@ export function GalleryPane() {
 function CardMenu({
   label,
   items,
+  onOpen,
 }: {
   label: string;
   items: React.ComponentProps<typeof RowMenu>["items"];
+  onOpen?: () => void;
 }) {
   return (
     <div className="absolute right-1.5 top-1.5 z-20 rounded-md bg-surface/80 opacity-0 backdrop-blur-sm transition group-hover:opacity-100 group-focus-within:opacity-100">
-      <RowMenu label={label} items={items} />
+      <RowMenu label={label} items={items} onOpen={onOpen} />
     </div>
   );
 }
@@ -542,7 +544,7 @@ function FolderCard({
         onClick={onOpen}
         className="z-10 cursor-pointer"
       />
-      <CardMenu label={`Options for ${s.title}`} items={menuItems} />
+      <CardMenu label={`Options for ${s.title}`} items={menuItems} onOpen={onLeave} />
       <div className="p-3">
         <div className="flex items-center gap-1.5">
           {sourceIcon(s.sourceType, s.url)}
@@ -644,7 +646,7 @@ function GalleryCard({
         onClick={() => openSourceViewer(s.id, s.title)}
         className="z-10 cursor-pointer"
       />
-      <CardMenu label={`Options for ${s.title}`} items={menuItems} />
+      <CardMenu label={`Options for ${s.title}`} items={menuItems} onOpen={onLeave} />
       {visual && (
         <img
           src={visual}

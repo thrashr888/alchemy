@@ -609,6 +609,7 @@ export function SourcesPanel() {
                         {!importing && (
                           <RowMenu
                             className="pointer-events-auto z-20"
+                            onOpen={hideCard}
                             label={`Options for "${s.title}"`}
                             items={[
                               // url holds the origin: a web URL, an on-disk path, or

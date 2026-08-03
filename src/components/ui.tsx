@@ -680,10 +680,14 @@ export function RowMenu({
   items,
   label = "Options",
   className,
+  onOpen,
 }: {
   items: RowMenuItem[];
   label?: string;
   className?: string;
+  /** Fires when the menu opens — hosts use it to dismiss hover cards,
+   *  which never get their mouseleave once a menu/dialog takes the pointer. */
+  onOpen?: () => void;
 }) {
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef<HTMLDivElement>(null);
@@ -735,6 +739,13 @@ export function RowMenu({
     row.addEventListener("contextmenu", onContextMenu);
     return () => row.removeEventListener("contextmenu", onContextMenu);
   }, []);
+
+  // One notification point for every way the menu opens (button, context
+  // menu, keyboard).
+  React.useEffect(() => {
+    if (open) onOpen?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   React.useEffect(() => {
     if (!open) return;

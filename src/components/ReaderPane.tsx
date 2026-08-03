@@ -1306,6 +1306,68 @@ function TemplateEditor({ template }: { template: Template }) {
   );
 }
 
+/** A properties row the user can edit in place: click the value, type,
+ *  Enter or blur saves, Escape cancels. Lives inside DocProperties' grid. */
+function MetaEditable({
+  label,
+  raw,
+  display,
+  placeholder,
+  onSave,
+}: {
+  label: string;
+  raw: string;
+  display: string;
+  placeholder: string;
+  onSave: (value: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(raw);
+  useEffect(() => setValue(raw), [raw]);
+  const commit = () => {
+    setEditing(false);
+    if (value !== raw) onSave(value);
+  };
+  return (
+    <>
+      <span className="pt-px text-subtle-foreground">{label}</span>
+      {editing ? (
+        <input
+          autoFocus
+          aria-label={label}
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              commit();
+            } else if (event.key === "Escape") {
+              setValue(raw);
+              setEditing(false);
+            }
+          }}
+          className="min-w-0 rounded-sm border border-input bg-transparent px-1 text-caption text-foreground outline-none focus:border-ring"
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          title={display || placeholder}
+          className={cn(
+            "min-w-0 truncate text-left",
+            display
+              ? "text-muted-foreground hover:text-foreground"
+              : "italic text-subtle-foreground hover:text-muted-foreground",
+          )}
+        >
+          {display || placeholder}
+        </button>
+      )}
+    </>
+  );
+}
+
 function DocProperties({
   source,
   note,
@@ -1348,17 +1410,6 @@ function DocProperties({
       label: "Size",
       value: `${source.charCount.toLocaleString()} chars · ${source.chunkCount} chunks`,
     });
-    // User metadata (RFC-source-tags) — edited from the sources panel's ⋯
-    // menu; shown here so the reader carries the "why" beside the "what".
-    if (source.tags)
-      rows.push({
-        label: "Tags",
-        value: source.tags
-          .split(" ")
-          .map((t) => `#${t}`)
-          .join(" "),
-      });
-    if (source.note) rows.push({ label: "Note", value: source.note });
   } else if (note) {
     rows.push({ label: "Type", value: KIND_LABEL[note.kind] ?? "Note" });
     if (note.origin === "auto") rows.push({ label: "Origin", value: "From chat" });
@@ -1366,7 +1417,7 @@ function DocProperties({
     if (fmtDay(note.updatedAt) !== fmtDay(note.createdAt))
       rows.push({ label: "Updated", value: fmtDay(note.updatedAt) });
   }
-  if (rows.length === 0) return null;
+  if (rows.length === 0 && !source) return null;
   return (
     // data-doc-meta: excluded from find-in-source and citation anchoring —
     // matching "example.com" against the Site row would be noise.
@@ -1380,6 +1431,30 @@ function DocProperties({
             </span>
           </Fragment>
         ))}
+        {/* User metadata (RFC-source-tags): always present for sources —
+            click to edit in place, so the empty state teaches the feature. */}
+        {source && (
+          <>
+            <MetaEditable
+              label="Tags"
+              raw={source.tags}
+              display={source.tags
+                .split(" ")
+                .filter(Boolean)
+                .map((t) => `#${t}`)
+                .join(" ")}
+              placeholder="Add tags…"
+              onSave={(v) => void useStore.getState().setSourceTags(source.id, v)}
+            />
+            <MetaEditable
+              label="Note"
+              raw={source.note}
+              display={source.note}
+              placeholder="Add a note…"
+              onSave={(v) => void useStore.getState().setSourceNote(source.id, v)}
+            />
+          </>
+        )}
       </div>
     </div>
   );
