@@ -351,7 +351,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               <SidebarRail icon="staff" title="Show Staff" onClick={toggleStaff} />
             </div>
           )}
-          <div className="relative min-w-0 flex-1 overflow-y-auto">
+          <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
             {/* The dither shader from the hero, as a banner behind the heading —
             it fades into the background before the notebook grid starts. */}
             {!glassOn && (
@@ -363,7 +363,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               <div className="absolute inset-0 bg-[linear-gradient(to_bottom,transparent_55%,var(--background)_100%)]" />
             </div>
             )}
-            <div className="relative mx-auto max-w-[960px] px-6 py-10">
+            {/* Heading + ask box stay put; only the shelves below scroll. */}
+            <div className="relative z-10 mx-auto w-full max-w-[960px] shrink-0 px-6 pt-10">
               <div className="mb-5 flex items-end justify-between">
                 <div>
                   <h1 className="text-page font-semibold tracking-tight">
@@ -466,7 +467,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   </div>
                 )}
               </div>
+            </div>
 
+            <div className="relative min-h-0 flex-1 overflow-y-auto">
+              <div className="mx-auto w-full max-w-[960px] px-6 pb-10">
               <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
                 {/* New-notebook tile */}
                 <button
@@ -718,6 +722,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 </div>
               )}
 
+              </div>
             </div>
           </div>
 
