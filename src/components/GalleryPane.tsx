@@ -378,57 +378,63 @@ export function GalleryPane() {
           ))}
         </div>
       </div>
-      {groups.length > 2 && (
-        <div className="flex shrink-0 items-center gap-1 border-b border-border px-4 py-1.5">
-          {groups.map((g) => (
-            <button
-              key={g}
-              type="button"
-              onClick={() => setFilter(g)}
-              aria-pressed={effectiveFilter === g}
-              className={cn(
-                "rounded-md px-2 py-1 text-caption transition-colors",
-                effectiveFilter === g
-                  ? "bg-surface-2 font-medium text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {g === "all" ? "All" : GROUP_LABEL[g]}
-            </button>
-          ))}
-        </div>
-      )}
-      {levelTags.length > 0 && (
+      {/* One filter bar: type groups, then tag chips — independent axes
+          (a source matches both filters), separated by a hairline dot. */}
+      {(groups.length > 2 || levelTags.length > 0) && (
         <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-4 py-1.5">
-          <button
-            type="button"
-            onClick={() => setTagFilter(null)}
-            aria-pressed={effectiveTag === null}
-            className={cn(
-              "rounded-md px-2 py-1 text-caption transition-colors",
-              effectiveTag === null
-                ? "bg-surface-2 font-medium text-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            All tags
-          </button>
-          {levelTags.map((t) => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => setTagFilter((cur) => (cur === t ? null : t))}
-              aria-pressed={effectiveTag === t}
-              className={cn(
-                "rounded-md px-2 py-1 text-caption transition-colors",
-                effectiveTag === t
-                  ? "bg-surface-2 font-medium text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              #{t}
-            </button>
-          ))}
+          {groups.length > 2 &&
+            groups.map((g) => (
+              <button
+                key={g}
+                type="button"
+                onClick={() => setFilter(g)}
+                aria-pressed={effectiveFilter === g}
+                className={cn(
+                  "rounded-md px-2 py-1 text-caption transition-colors",
+                  effectiveFilter === g
+                    ? "bg-surface-2 font-medium text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {g === "all" ? "All" : GROUP_LABEL[g]}
+              </button>
+            ))}
+          {groups.length > 2 && levelTags.length > 0 && (
+            <span aria-hidden className="mx-1.5 h-3.5 w-px bg-border-strong" />
+          )}
+          {levelTags.length > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={() => setTagFilter(null)}
+                aria-pressed={effectiveTag === null}
+                className={cn(
+                  "rounded-md px-2 py-1 text-caption transition-colors",
+                  effectiveTag === null
+                    ? "bg-surface-2 font-medium text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                All tags
+              </button>
+              {levelTags.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setTagFilter((cur) => (cur === t ? null : t))}
+                  aria-pressed={effectiveTag === t}
+                  className={cn(
+                    "rounded-md px-2 py-1 text-caption transition-colors",
+                    effectiveTag === t
+                      ? "bg-surface-2 font-medium text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  #{t}
+                </button>
+              ))}
+            </>
+          )}
         </div>
       )}
       {cards.length === 0 ? (
