@@ -3,6 +3,7 @@ import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { MermaidBlock } from "./MermaidBlock";
 
 /**
  * GitHub-flavored markdown allows a subset of inline HTML (<details>,
@@ -14,6 +15,23 @@ const REHYPE_PLUGINS = [
   rehypeRaw,
   [rehypeSanitize, defaultSchema],
 ] as import("react-markdown").Options["rehypePlugins"];
+
+/** ```mermaid fences render as diagrams; every other fence stays a code
+ *  block. Shared by both renderer configurations below. */
+function CodeBlock({
+  className,
+  children,
+  ...props
+}: React.HTMLAttributes<HTMLElement>) {
+  if (className === "language-mermaid") {
+    return <MermaidBlock code={String(children).replace(/\n$/, "")} />;
+  }
+  return (
+    <code className={className} {...props}>
+      {children}
+    </code>
+  );
+}
 
 /** External links must open in the system browser, not navigate the webview. */
 function ExternalLink({
@@ -177,6 +195,7 @@ export function Markdown<C extends { snippet: string }>({
           interactive
             ? {
                 table: ScrollableTable,
+                code: CodeBlock,
                 a: ({ href, children: linkChildren, ...props }) => {
                   const n = href?.startsWith("#cite-") ? Number(href.slice(6)) : NaN;
                   const cite = Number.isInteger(n) ? citations[n - 1] : undefined;
@@ -197,7 +216,7 @@ export function Markdown<C extends { snippet: string }>({
                   );
                 },
               }
-            : { table: ScrollableTable, a: ExternalLink }
+            : { table: ScrollableTable, code: CodeBlock, a: ExternalLink }
         }
       >
         {children}
