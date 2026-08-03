@@ -2114,7 +2114,11 @@ function SourceEditor({
   onDone: (saved: boolean) => void;
 }) {
   const editSourceText = useStore((s) => s.editSourceText);
+  const setSourceTags = useStore((s) => s.setSourceTags);
+  const setSourceNote = useStore((s) => s.setSourceNote);
   const [title, setTitle] = useState(source.title);
+  const [tags, setTags] = useState(source.tags);
+  const [note, setNote] = useState(source.note);
   const [text, setText] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -2148,7 +2152,13 @@ function SourceEditor({
         event.preventDefault();
         if (saving) return;
         setSaving(true);
-        void editSourceText(source.id, title, text)
+        // Tags/note ride the same Save: cheap column updates first (they
+        // don't re-index the body), then the text edit which re-embeds.
+        const meta: Promise<unknown>[] = [];
+        if (tags !== source.tags) meta.push(setSourceTags(source.id, tags));
+        if (note !== source.note) meta.push(setSourceNote(source.id, note));
+        void Promise.all(meta)
+          .then(() => editSourceText(source.id, title, text))
           .then(() => onDone(true))
           .finally(() => setSaving(false));
       }}
@@ -2159,6 +2169,24 @@ function SourceEditor({
         value={title}
         onChange={(event) => setTitle(event.target.value)}
       />
+      <div className="flex gap-3">
+        <Input
+          name="source-tags"
+          aria-label="Source tags"
+          placeholder="Tags — space-separated, e.g. energy q3"
+          className="flex-1"
+          value={tags}
+          onChange={(event) => setTags(event.target.value)}
+        />
+        <Input
+          name="source-note"
+          aria-label="Source note"
+          placeholder="Your note — why this source matters"
+          className="flex-[2]"
+          value={note}
+          onChange={(event) => setNote(event.target.value)}
+        />
+      </div>
       <Textarea
         aria-label="Source text"
         className="min-h-0 flex-1 resize-none font-mono text-caption leading-relaxed"
