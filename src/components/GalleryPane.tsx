@@ -20,6 +20,7 @@ import {
 import { cn, isWebUrl, relativeTime, urlHost } from "@/lib/utils";
 import { Favicon, sourceHoverData } from "./SourcesPanel";
 import { sourceIcon } from "@/lib/sourceIcon";
+import { GraphView } from "./GraphView";
 import {
   ArrowLeft,
   ExternalLink,
@@ -104,6 +105,9 @@ export function GalleryPane() {
   const [sweeping, setSweeping] = useState(false);
   const [folderId, setFolderId] = useState<string | null>(null);
   const [filter, setFilter] = useState<TypeGroup>("all");
+  /** Cards or link graph. Not persisted — the grid is the right thing to
+   *  land on, and the graph is somewhere you go on purpose. */
+  const [shape, setShape] = useState<"grid" | "graph">("grid");
   /** Tag chip filter (RFC-source-tags): null = all. Chips show only tags
    *  present at this level, so the row disappears in untagged notebooks. */
   const [tagFilter, setTagFilter] = useState<string | null>(null);
@@ -395,7 +399,32 @@ export function GalleryPane() {
             Fetching page images…
           </span>
         )}
+        {/* Grid vs graph: two ways to browse the same notebook, so the
+            switch lives here rather than as a fourth top-level pane. */}
         <div className="ml-auto flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5">
+          {(["grid", "graph"] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => setShape(mode)}
+              aria-pressed={shape === mode}
+              title={
+                mode === "grid"
+                  ? "Cards"
+                  : "How these sources and notes link to each other"
+              }
+              className={cn(
+                "rounded-md px-2 py-0.5 text-micro font-medium capitalize transition-colors",
+                shape === mode
+                  ? "bg-surface-2 text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {mode}
+            </button>
+          ))}
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5">
           {(["recent", "title"] as const).map((mode) => (
             <button
               key={mode}
@@ -474,7 +503,12 @@ export function GalleryPane() {
           )}
         </div>
       )}
-      {cards.length === 0 ? (
+      {shape === "graph" ? (
+        // The graph is notebook-wide by design: filters and folder drill-in
+        // narrow the cards, but a graph of a subset hides exactly the links
+        // that make it worth looking at.
+        <GraphView />
+      ) : cards.length === 0 ? (
         <div className="flex flex-1 items-center justify-center">
           <EmptyState
             icon={<LayoutGrid className="h-5 w-5" />}

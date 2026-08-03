@@ -9,6 +9,7 @@ mod examples;
 mod filesearch;
 mod gist;
 mod git;
+mod graph;
 mod grepsearch;
 mod inference;
 mod ingest;
@@ -258,6 +259,7 @@ pub fn run() {
             commands::print_webview,
             commands::set_window_glass,
             commands::source_backlinks,
+            commands::notebook_graph,
             commands::related_passages,
             commands::live_view_open,
             commands::live_view_bounds,

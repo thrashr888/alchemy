@@ -25,6 +25,7 @@ import type {
   Note,
   NoteKind,
   Notebook,
+  NotebookGraph,
   NotebookSuggestion,
   ReportSchedule,
   SearchHit,
@@ -207,6 +208,10 @@ export const api = {
       "source_backlinks",
       { sourceId },
     )),
+  /** The whole notebook as a link graph — one pass, unlike per-source
+   *  backlinks. Backs the gallery's graph view. */
+  notebookGraph: (notebookId: string) =>
+    run(query<NotebookGraph>("notebook_graph", { notebookId })),
   reembedAll: () => run(ai<number>("reembed_all")),
   deleteSource: (sourceId: string) =>
     run(cmd<void>("delete_source", { sourceId })),

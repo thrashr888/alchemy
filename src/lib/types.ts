@@ -18,6 +18,22 @@ export interface Notebook {
   sourceCount: number;
 }
 
+/** One document in the notebook link graph. */
+export interface GraphNode {
+  id: string;
+  kind: "source" | "note";
+  title: string;
+  sourceType: string;
+  /** Inbound + outbound edges, used to size the node. */
+  degree: number;
+}
+
+/** The notebook as a link graph (RFC-document-surface phase 5). */
+export interface NotebookGraph {
+  nodes: GraphNode[];
+  edges: { from: string; to: string }[];
+}
+
 /** Where an unfiled source should go — the auto-notebooking answer. */
 export interface NotebookSuggestion {
   /** Empty when proposing a new notebook; `title` is then the proposal. */

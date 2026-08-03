@@ -6901,6 +6901,41 @@ pub struct Backlink {
     pub title: String,
 }
 
+/// The whole notebook as a link graph — every source and note as a node,
+/// every reference between them as an edge (docs/RFC-document-surface.md
+/// phase 5). One pass over the notebook's content, unlike `source_backlinks`
+/// which answers for a single document and would be quadratic run per node.
+#[tauri::command]
+pub async fn notebook_graph(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<crate::graph::NotebookGraph, String> {
+    let mut docs: Vec<crate::graph::GraphDoc> = Vec::new();
+    for s in e(state.db.list_sources(&notebook_id).await)? {
+        // list_sources strips content; the graph is built from the text.
+        let content = e(state.db.source_content(&s.id).await)?;
+        docs.push(crate::graph::GraphDoc {
+            id: s.id,
+            kind: "source".into(),
+            title: s.title,
+            source_type: s.source_type,
+            url: s.url,
+            content,
+        });
+    }
+    for n in e(state.db.list_notes(&notebook_id).await)? {
+        docs.push(crate::graph::GraphDoc {
+            id: n.id,
+            kind: "note".into(),
+            title: n.title,
+            source_type: "note".into(),
+            url: String::new(),
+            content: n.content,
+        });
+    }
+    Ok(crate::graph::build(&docs))
+}
+
 /// Glass chrome (experimental): apply or clear window vibrancy so the
 /// translucent sidebar chrome shows the desktop blurring through, like
 /// native macOS sidebars. The webview windows are configured opaque, so
