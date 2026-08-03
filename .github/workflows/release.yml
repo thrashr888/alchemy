@@ -24,18 +24,18 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install protoc (required by lance build scripts)
         run: command -v protoc >/dev/null 2>&1 || brew install protobuf
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 11
 
       - name: Setup node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: lts/*
           cache: 'pnpm'
@@ -113,7 +113,7 @@ jobs:
             security set-keychain-settings build.keychain
           fi
 
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Real Developer ID when the secret is set; otherwise ad-hoc sign ("-")
