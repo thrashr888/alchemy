@@ -233,6 +233,18 @@ chore worth paying for a notebook view and not for this one. The Staff and
 Brief sidebars are untouched; this replaces the notebook grid in place, and
 the ask box stays across both.
 
+Both sections carry a **grid/table toggle and an inline title filter**
+(`HomeViewControls`, shared). Cards are recognisable — you find the thing by
+its shape; rows are scannable — you find it by reading down a column. Which
+one is "easier to find things in" depends on the collection, so both exist
+and the choice is remembered. The filter is title-only and on ⌘F, matching
+the gallery and the reader: the same key means "find within what I'm looking
+at" everywhere, while ⌘K stays the way to search *content*.
+
+The Home section and the open card persist in `lastView` beside the
+notebook's center mode — the Registry is a place you were, not a mode you
+toggled, so a reload returns you to it.
+
 Clicking a card opens the **card detail** in the same column, with a back
 control: the fact grid (`DocProperties` + `MetaEditable`, editable in place),
 the document thread, and this card's proposal queue. Project cards order
@@ -260,7 +272,23 @@ screen. The confirm queue on Home is the sweep-up, not the primary surface.
 Boundary microcopy, per RFC-v12-steward's UI rule: "Attaching only files this
 document under the card. It changes nothing in the document."
 
-### 6. Reach: MCP, the Brief, OKF
+### 6. Findability: the palette, and the document's own metadata
+
+Two more places a card has to appear, because the Registry is worthless if
+you have to be *in* it to benefit:
+
+- **⌘K** finds cards and ledger rows, not just sources and notes
+  (`search_everything`). A card match opens it on Home — cards belong to no
+  notebook — while a ledger match opens its notebook's Ledger tab, where a
+  row can actually be acted on. Dismissed suggestions are refusal memory,
+  not results, and never match.
+- **The reader's document-properties grid** gains a *Filed under* row beside
+  Type/Added/Tags, linking to each card. The right rail (§5) is the working
+  surface where proposals get confirmed; this is the plain fact of what the
+  document belongs to, where a reader already looks for a document's
+  identity.
+
+### 7. Reach: MCP, the Brief, OKF
 
 - **MCP** — `src-tauri/src/mcp/registry.rs`, the three mechanical steps
   (`mod` in the alphabetized block, `#[tool_router(router = registry_router)]`,
@@ -282,7 +310,7 @@ document under the card. It changes nothing in the document."
   travels partially, and the export says so rather than pretending the bundle
   is the whole card.
 
-### 7. Reprise, staged
+### 8. Reprise, staged
 
 Reprise — opening a notebook kin to dormant ones triggers a carry-forward
 brief of what still holds and what went stale — is in the same pillar but not
@@ -364,5 +392,13 @@ kind with a notebook-open trigger, not new storage.
 - Suggester: a notebook with gists offers a short Suggested strip; **Keep**
   moves a card into the grid and it gains its documents; dismissing removes
   it and it is not re-suggested on the next launch.
+- ⌘K on a card's name opens it on Home; on a ledger row's text, opens that
+  notebook's Ledger.
+- A source filed under a card shows *Filed under* in the reader's properties
+  grid, and clicking through opens the card.
+- Reload while looking at a card: the Registry and that card come back.
+- Example cast: a fresh profile seeds provider and project cards whose
+  documents are filed by the ordinary matcher, so the receipts read
+  "name matched" rather than being wired up by hand.
 - Gates: `cargo fmt -- --check && cargo clippy -- -D warnings && cargo test`,
   plus the frontend typecheck (`pnpm build`).

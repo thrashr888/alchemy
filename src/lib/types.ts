@@ -16,6 +16,10 @@ export interface Notebook {
   /** "" (active) | "archived" — archived notebooks leave the main grid. */
   status: "" | "archived";
   sourceCount: number;
+  /** Deliberate notes, excluding reports. */
+  noteCount: number;
+  /** Report-kind notes (scheduled runs, briefs). */
+  reportCount: number;
 }
 
 /** Where an unfiled source should go — the auto-notebooking answer. */

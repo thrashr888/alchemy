@@ -191,9 +191,11 @@ export function RegistrySection() {
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[960px] px-6 pb-10">
           <SuggestionStrip cards={suggested} onChanged={load} />
-          {mine.length > 0 && (
-            <HomeViewControls placeholder="Filter cards by name or identifier…" />
-          )}
+          {/* Unconditional, like the notebook shelf's: gating this on
+              "are there confirmed cards" made the whole row — filter AND
+              view toggle — vanish whenever the cast was empty or held only
+              suggestions, which reads as the control disappearing. */}
+          <HomeViewControls placeholder="Filter cards by name or identifier…" />
           {/* Kind groups and notebook chips sit inside the content column,
               under the controls — full-bleed they drew a band across the
               pane with dead clickable space beside them. */}
@@ -970,11 +972,18 @@ function CardDetail({
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto w-full max-w-[760px] px-6 pb-10 pt-4">
-        <Button variant="secondary" size="sm" className="mb-4" onClick={onBack}>
-          <ArrowLeft className="h-3.5 w-3.5" />
-          All cards
-        </Button>
+      {/* 960px to match the grid and the page header — at 760 the detail
+          jumped left of everything else on Home. */}
+      <div className="mx-auto w-full max-w-[960px] px-6 pb-10">
+        {/* Sticky: flush against the scroller's top edge the button was
+            clipped by the header above it, and scrolling a long document
+            list used to carry the only way out off-screen. */}
+        <div className="sticky top-0 z-10 -mx-6 mb-3 bg-background/95 px-6 pb-3 pt-4 backdrop-blur">
+          <Button variant="secondary" size="sm" onClick={onBack}>
+            <ArrowLeft className="h-3.5 w-3.5" />
+            All cards
+          </Button>
+        </div>
 
         <div className="flex items-start gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-muted-foreground">

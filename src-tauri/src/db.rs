@@ -328,6 +328,8 @@ impl Db {
                     color: NOTEBOOK_PALETTE[idx % NOTEBOOK_PALETTE.len()].to_string(),
                     status: String::new(),
                     source_count: 0,
+                    note_count: 0,
+                    report_count: 0,
                 });
                 idx += 1;
             }
@@ -684,6 +686,8 @@ impl Db {
                     color: color.map(|c| c.value(i).to_string()).unwrap_or_default(),
                     status: status.map(|s| s.value(i).to_string()).unwrap_or_default(),
                     source_count: 0,
+                    note_count: 0,
+                    report_count: 0,
                 });
             }
         }
@@ -696,8 +700,30 @@ impl Db {
                 *counts.entry(nb.value(i).to_string()).or_insert(0) += 1;
             }
         }
+        // Notes and reports, same one-pass shape. Reports are a note kind, so
+        // they're counted out of the note total rather than added to it —
+        // "12 notes, 3 reports" reading as 15 documents would be a lie.
+        let mut note_counts: HashMap<String, i64> = HashMap::new();
+        let mut report_counts: HashMap<String, i64> = HashMap::new();
+        if self.table_exists(T_NOTES).await? {
+            for b in &self.collect(T_NOTES, None).await? {
+                let nb = str_col(b, "notebook_id")?;
+                let kind = opt_str_col(b, "kind");
+                for i in 0..b.num_rows() {
+                    let is_report = kind.as_ref().map(|k| k.value(i)) == Some("report");
+                    let map = if is_report {
+                        &mut report_counts
+                    } else {
+                        &mut note_counts
+                    };
+                    *map.entry(nb.value(i).to_string()).or_insert(0) += 1;
+                }
+            }
+        }
         for n in &mut notebooks {
             n.source_count = counts.get(&n.id).copied().unwrap_or(0);
+            n.note_count = note_counts.get(&n.id).copied().unwrap_or(0);
+            n.report_count = report_counts.get(&n.id).copied().unwrap_or(0);
         }
         notebooks.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
         Ok(notebooks)

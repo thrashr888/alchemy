@@ -99,6 +99,8 @@ impl AlchemyMcp {
             color: NOTEBOOK_PALETTE[0].to_string(),
             status: String::new(),
             source_count: 0,
+            note_count: 0,
+            report_count: 0,
         };
         self.state()
             .db

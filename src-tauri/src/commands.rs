@@ -562,6 +562,8 @@ pub async fn create_notebook(
         color: color.to_string(),
         status: String::new(),
         source_count: 0,
+        note_count: 0,
+        report_count: 0,
     };
     e(state.db.create_notebook(&nb).await)?;
     Ok(nb)
@@ -7826,6 +7828,8 @@ async fn import_bundle(
                 color: NOTEBOOK_PALETTE[count.len() % NOTEBOOK_PALETTE.len()].to_string(),
                 status: String::new(),
                 source_count: 0,
+                note_count: 0,
+                report_count: 0,
             };
             e(state.db.create_notebook(&nb).await)?;
             nb

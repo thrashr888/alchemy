@@ -19,6 +19,12 @@ pub struct Notebook {
     /// Populated on list queries; not stored on the row.
     #[serde(default)]
     pub source_count: i64,
+    /// Deliberate notes, excluding reports — see `report_count`.
+    #[serde(default)]
+    pub note_count: i64,
+    /// Report-kind notes (scheduled runs, briefs).
+    #[serde(default)]
+    pub report_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
