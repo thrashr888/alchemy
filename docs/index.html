@@ -87,7 +87,7 @@
   a { color: inherit; }
   a, button { touch-action: manipulation; }
   a:focus-visible, button:focus-visible {
-    outline: 2px solid var(--ring);
+    outline: 2px solid var(--foreground);
     outline-offset: 2px;
     border-radius: 4px;
   }
@@ -165,9 +165,9 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
-    height: 32px;
-    margin-block: -7px;
+    width: 44px;
+    height: 44px;
+    margin-block: -13px;
   }
   .github-link svg { width: 18px; height: 18px; }
 
@@ -183,6 +183,34 @@
   .sigil {
     color: var(--subtle);
     margin-bottom: 34px;
+  }
+  .hero-sigil-cycle {
+    position: relative;
+    width: 76px;
+    height: 76px;
+    margin: 0 auto 34px;
+    color: var(--subtle);
+  }
+  .hero-sigil-cycle .hero-sigil {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    transform-origin: center;
+    transition: opacity 1.8s ease-in-out;
+  }
+  .hero-sigil-cycle .hero-sigil[data-active] { opacity: 1; }
+  @media (prefers-reduced-motion: no-preference) {
+    .hero-sigil-cycle[data-in-view] .hero-sigil {
+      animation: hero-sigil-spin 90s linear infinite;
+    }
+    @keyframes hero-sigil-spin {
+      to { transform: rotate(360deg); }
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hero-sigil-cycle .hero-sigil { transition: none; }
   }
   .hero h1 {
     font-size: clamp(34px, 6.5vw, 54px);
@@ -211,7 +239,7 @@
   .btn {
     display: inline-flex;
     align-items: center;
-    height: 42px;
+    height: 44px;
     padding: 0 19px;
     border-radius: 8px;
     font-size: 14.5px;
@@ -492,42 +520,58 @@
   /* ---------- also in the box ---------- */
 
   .etc {
-    padding-block: 80px;
+    width: min(100%, 1680px);
+    margin-inline: auto;
+    padding: 80px clamp(20px, 3.5vw, 56px);
   }
   .utility-grid {
     display: grid;
     grid-template-columns: repeat(12, minmax(0, 1fr));
-    grid-auto-rows: minmax(176px, auto);
+    grid-auto-rows: 184px;
+    grid-auto-flow: row;
     gap: 16px;
   }
   .utility-card {
     position: relative;
+    display: flex;
     min-width: 0;
+    min-height: 0;
+    flex-direction: column;
     overflow: hidden;
+    padding: 16px;
     border: 1px solid var(--border);
     border-radius: 10px;
     background: var(--surface);
   }
-  .utility-card.large {
-    display: flex;
-    grid-column: span 7;
-    grid-row: span 2;
-    flex-direction: column;
-    padding: 12px;
-  }
-  .utility-card.compact {
-    display: flex;
+  .utility-card--native { grid-column: span 5; grid-row: span 2; padding: 0; }
+  .utility-card--command { grid-column: span 3; }
+  .utility-card--reader { grid-column: span 4; }
+  .utility-card--share { grid-column: span 4; }
+  .utility-card--theme { grid-column: span 3; }
+  .utility-card--capture { grid-column: span 7; grid-row: span 2; padding: 20px; isolation: isolate; }
+  .utility-card--ledger { grid-column: span 5; grid-row: span 2; padding: 20px; isolation: isolate; }
+  .utility-card--staff { grid-column: span 4; grid-row: span 2; padding: 20px; }
+  .utility-card--brief { grid-column: span 3; grid-row: span 2; padding: 20px; isolation: isolate; }
+  .utility-card--reports {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(140px, 0.8fr);
+    grid-template-areas: "copy chart";
     grid-column: span 5;
-    flex-direction: column;
-    justify-content: space-between;
-    min-height: 176px;
+    grid-row: span 2;
+    gap: 20px;
+    align-items: stretch;
     padding: 20px;
+    isolation: isolate;
   }
+  .utility-card--compact { justify-content: space-between; }
+  .utility-card--panel { grid-row: span 2; }
   .utility-visual {
-    min-height: 192px;
+    min-height: 0;
+    flex: 1 1 auto;
     border-color: var(--border);
   }
   .utility-copy { padding: 20px 16px; }
+  .utility-card--panel .utility-copy { padding: 16px 20px 18px; }
   .utility-kicker {
     margin-bottom: 8px;
     color: var(--subtle);
@@ -564,6 +608,15 @@
     border-radius: 10px;
     background: var(--shader-label);
   }
+  .utility-card--native .utility-visual {
+    flex: 0 0 204px;
+    min-height: 204px;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    background: var(--shader-bg);
+  }
+  .utility-card--native .utility-visual .shader-canvas { opacity: 0.74; }
   .native-titlebar {
     display: flex;
     align-items: center;
@@ -613,7 +666,7 @@
   .command-demo, .reader-demo, .file-demo, .theme-demo {
     position: relative;
     z-index: 1;
-    margin-bottom: 16px;
+    margin-bottom: 0;
   }
   .command-demo {
     display: flex;
@@ -673,7 +726,7 @@
   }
   .theme-demo {
     display: grid;
-    gap: 12px;
+    gap: 8px;
     border: 0;
   }
   .theme-demo-head {
@@ -691,8 +744,9 @@
   }
   .theme-swatches {
     display: grid;
-    grid-template-columns: repeat(8, 28px);
-    gap: 8px;
+    grid-template-columns: repeat(8, 24px);
+    justify-content: space-between;
+    gap: 4px 0;
   }
   .theme-choice {
     position: absolute;
@@ -707,8 +761,10 @@
     position: relative;
     display: grid;
     place-items: center;
-    width: 28px;
-    height: 28px;
+    width: 100%;
+    height: auto;
+    min-height: 24px;
+    aspect-ratio: 1;
     padding: 0;
     border: 1px solid var(--border-strong);
     border-radius: 6px;
@@ -728,7 +784,7 @@
   }
   .theme-swatch:hover { border-color: var(--foreground); }
   .theme-choice:focus-visible + .theme-swatch {
-    outline: 2px solid var(--ring);
+    outline: 2px solid var(--foreground);
     outline-offset: 2px;
   }
   .theme-choice:checked + .theme-swatch {
@@ -744,6 +800,247 @@
     font-size: 14px;
     line-height: 1;
   }
+  .theme-card { isolation: isolate; }
+  .theme-card .theme-motif {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0.52;
+    pointer-events: none;
+  }
+  .theme-card > :not(.theme-motif) { position: relative; z-index: 1; }
+  .theme-card-footer h3 { margin: 0; font-size: 16px; }
+
+  .capture-canvas { opacity: 0.76; }
+  .capture-network {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+  }
+  .capture-network .visual-pill,
+  .capture-network .visual-core {
+    background: color-mix(in srgb, var(--shader-label) 88%, transparent);
+  }
+  .capture-network .visual-pill.top-left { top: 28px; left: 56%; }
+  .capture-network .visual-pill.top-right { top: 54px; right: 30px; }
+  .capture-network .visual-pill.bottom-left { bottom: 30px; left: 51%; }
+  .capture-network .visual-pill.bottom-right { right: 30px; bottom: 28px; }
+  .capture-network .visual-core { top: 49%; left: 70%; }
+  .capture-copy {
+    position: relative;
+    z-index: 2;
+    max-width: min(50%, 44ch);
+    margin-top: auto;
+  }
+
+  .ledger-index {
+    position: absolute;
+    top: -14px;
+    right: 10px;
+    z-index: 0;
+    color: color-mix(in srgb, var(--foreground) 6%, transparent);
+    font-size: clamp(116px, 13vw, 176px);
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+    line-height: 0.9;
+    pointer-events: none;
+  }
+  .ledger-layout {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    height: 100%;
+    grid-template-rows: auto 1fr auto;
+    gap: 16px;
+  }
+  .ledger-head,
+  .staff-head,
+  .staff-foot,
+  .brief-head,
+  .brief-stats,
+  .reports-stats {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--subtle);
+    font-size: 11px;
+  }
+  .ledger-head span:last-child,
+  .staff-head span:last-child,
+  .brief-head time { color: var(--accent-text); }
+  .ledger-datum {
+    display: grid;
+    align-content: center;
+    gap: 2px;
+    max-width: 17ch;
+  }
+  .ledger-datum strong {
+    color: var(--foreground);
+    font-size: clamp(64px, 8vw, 108px);
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+    line-height: 0.85;
+  }
+  .ledger-datum span { color: var(--muted); font-size: 13px; }
+  .ledger-middle {
+    display: grid;
+    align-content: center;
+    gap: 16px;
+  }
+  .ledger-record {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+    padding: 11px 0;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .ledger-record strong { min-width: 0; color: var(--foreground); font-size: 12px; font-weight: 500; }
+  .ledger-record span:last-child {
+    color: var(--accent-text);
+    font-variant-numeric: tabular-nums;
+  }
+  .ledger-record-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--primary);
+  }
+  .ledger-copy h3,
+  .staff-copy h3,
+  .reports-copy h3 { margin: 0 0 8px; }
+
+  .staff-layout {
+    display: grid;
+    height: 100%;
+    grid-template-rows: auto 1fr auto;
+    gap: 16px;
+  }
+  .staff-copy p,
+  .reports-copy p { max-width: 38ch; }
+  .activity-track {
+    position: relative;
+    display: grid;
+    align-content: center;
+    gap: 10px;
+    padding-left: 18px;
+  }
+  .activity-track::before {
+    content: "";
+    position: absolute;
+    top: 8px;
+    bottom: 8px;
+    left: 5px;
+    width: 1px;
+    background: var(--border-strong);
+  }
+  .activity-event {
+    position: relative;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .activity-event::before {
+    content: "";
+    position: absolute;
+    top: 0.42em;
+    left: -16px;
+    width: 7px;
+    height: 7px;
+    border: 1px solid var(--surface);
+    border-radius: 50%;
+    background: var(--subtle);
+  }
+  .activity-event.is-current { color: var(--foreground); }
+  .activity-event.is-current::before { background: var(--primary); }
+  .activity-event time,
+  .staff-foot { font-variant-numeric: tabular-nums; }
+
+  .brief-mark {
+    position: absolute;
+    top: -50px;
+    right: 14px;
+    z-index: 0;
+    color: color-mix(in srgb, var(--foreground) 7%, transparent);
+    font-family: ui-serif, Georgia, serif;
+    font-size: 220px;
+    line-height: 1;
+    pointer-events: none;
+  }
+  .brief-layout {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    height: 100%;
+    grid-template-rows: auto 1fr auto;
+    gap: 16px;
+    margin: 0;
+  }
+  .brief-layout blockquote {
+    align-self: center;
+    max-width: 10ch;
+    margin: 0;
+    color: var(--foreground);
+    font-size: clamp(26px, 3vw, 42px);
+    font-weight: 600;
+    line-height: 1.04;
+    text-wrap: balance;
+  }
+  .brief-tail {
+    display: grid;
+    gap: 6px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+  .brief-tail h3 { margin: 0; font-size: 15px; }
+  .brief-tail p { font-size: 12px; line-height: 1.5; }
+
+  .reports-copy {
+    grid-area: copy;
+    position: relative;
+    z-index: 2;
+    display: flex;
+    min-width: 0;
+    max-width: none;
+    flex-direction: column;
+  }
+  .reports-stats {
+    margin-top: auto;
+    padding-top: 16px;
+    color: var(--accent-text);
+    font-variant-numeric: tabular-nums;
+  }
+  .report-bars {
+    position: relative;
+    grid-area: chart;
+    z-index: 1;
+    display: flex;
+    align-items: end;
+    gap: 6px;
+    min-width: 0;
+    min-height: 0;
+    padding-top: 24px;
+    border-bottom: 1px solid var(--border);
+    pointer-events: none;
+  }
+  .report-bar {
+    min-height: 14px;
+    flex: 1 1 0;
+    border-radius: 4px 4px 0 0;
+    background: var(--primary);
+  }
+  .report-bar.quiet { background: var(--border-strong); }
+  .report-bar.soft { background: var(--accent-text); }
 
   /* ---------- closing ---------- */
 
@@ -819,24 +1116,121 @@
     .feature-card, .feature-card.wide, .feature-card.narrow { grid-column: auto; }
     .feature-visual { min-height: 190px; }
     .feature-copy { padding: 18px 12px 16px; }
+    .etc { padding: 64px 20px; }
     .utility-grid { grid-template-columns: 1fr; grid-auto-rows: auto; }
-    .utility-card.large, .utility-card.compact { grid-column: auto; grid-row: auto; }
-    .utility-card.compact { min-height: 174px; }
+    .utility-card--native,
+    .utility-card--command,
+    .utility-card--reader,
+    .utility-card--share,
+    .utility-card--theme,
+    .utility-card--capture,
+    .utility-card--ledger,
+    .utility-card--staff,
+    .utility-card--brief,
+    .utility-card--reports { grid-column: 1 / -1; grid-row: auto; }
+    .utility-card--compact { min-height: 184px; }
+    .utility-card--native { min-height: 356px; }
+    .utility-card--capture { min-height: 340px; }
+    .utility-card--ledger { min-height: 318px; }
+    .utility-card--staff { min-height: 334px; }
+    .utility-card--brief { min-height: 322px; }
+    .utility-card--reports { min-height: 310px; }
+    .utility-card--native .utility-visual { flex-basis: 190px; min-height: 190px; }
     .utility-visual { min-height: 190px; }
-    .native-window { inset: 18px; }
+    .native-window { inset: 16px; }
+    .capture-copy, .reports-copy { max-width: 100%; }
+    .capture-network { opacity: 0.52; }
+    .capture-network .visual-pill.top-left { left: 40%; }
+    .capture-network .visual-core { left: 68%; }
+    .utility-card--reports {
+      grid-template-columns: minmax(0, 1fr) minmax(120px, 0.8fr);
+      gap: 12px;
+    }
+    .report-bars { gap: 4px; opacity: 0.44; }
     .get { padding-block: 68px; }
-  }
-
-  @media (max-width: 700px) {
-    .theme-swatches { grid-template-columns: repeat(auto-fit, minmax(28px, 1fr)); }
-    .theme-swatch { width: 100%; height: auto; min-height: 28px; aspect-ratio: 1; }
   }
 
   @media (min-width: 641px) and (max-width: 860px) {
     .bento-grid { grid-template-columns: 1fr 1fr; }
     .feature-card, .feature-card.wide, .feature-card.narrow { grid-column: span 1; }
-    .utility-grid { grid-template-columns: 1fr 1fr; grid-auto-rows: auto; }
-    .utility-card.large, .utility-card.compact { grid-column: span 1; grid-row: auto; }
+    .utility-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); grid-auto-rows: 216px; }
+    .utility-card--native,
+    .utility-card--capture { grid-column: span 3; grid-row: span 2; }
+    .utility-card--command,
+    .utility-card--reader,
+    .utility-card--share,
+    .utility-card--theme { grid-column: span 3; grid-row: auto; }
+    .utility-card--ledger,
+    .utility-card--staff { grid-column: span 3; grid-row: span 2; }
+    .utility-card--brief,
+    .utility-card--reports { grid-column: span 3; grid-row: auto; padding: 16px; }
+    .capture-copy { max-width: 100%; }
+    .capture-network { opacity: 0.45; }
+    .utility-card--brief .brief-mark { top: -34px; right: 8px; font-size: 132px; }
+    .utility-card--brief .brief-layout { gap: 8px; }
+    .utility-card--brief .brief-layout blockquote {
+      max-width: 12ch;
+      font-size: clamp(24px, 3vw, 32px);
+      line-height: 1.02;
+    }
+    .utility-card--brief .brief-tail { gap: 4px; padding-top: 8px; }
+    .utility-card--brief .brief-tail p { font-size: 11px; line-height: 1.35; }
+    .utility-card--reports {
+      grid-template-columns: minmax(0, 1fr) minmax(92px, 0.72fr);
+      gap: 10px;
+    }
+    .utility-card--reports .utility-kicker { display: none; }
+    .utility-card--reports h3 { max-width: 12ch; font-size: 17px; line-height: 1.16; }
+    .utility-card--reports p { font-size: 11px; line-height: 1.35; }
+    .utility-card--reports .reports-stats {
+      display: grid;
+      justify-content: start;
+      gap: 4px;
+      padding-top: 8px;
+    }
+    .utility-card--reports .report-bars { gap: 4px; padding-top: 16px; }
+    .utility-card--reader .reader-demo { gap: 4px; padding: 4px 10px; font-size: 10px; }
+    .utility-card--reader .reader-actions span { padding: 2px 6px; }
+    .utility-card--reader p { line-height: 1.5; }
+  }
+
+  @media (min-width: 861px) and (max-width: 1279px) {
+    .utility-grid { grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-rows: 196px; }
+    .utility-card--native { grid-column: span 7; grid-row: span 2; }
+    .utility-card--command,
+    .utility-card--reader { grid-column: span 5; }
+    .utility-card--share { grid-column: span 7; }
+    .utility-card--theme { grid-column: span 5; }
+    .utility-card--capture { grid-column: span 7; grid-row: span 2; }
+    .utility-card--ledger { grid-column: span 5; grid-row: span 2; }
+    .utility-card--staff { grid-column: span 5; grid-row: span 2; }
+    .utility-card--brief,
+    .utility-card--reports { grid-column: span 7; grid-row: auto; padding: 16px; }
+    .utility-card--brief .brief-mark { top: -42px; right: 10px; font-size: 152px; }
+    .utility-card--brief .brief-layout { gap: 8px; }
+    .utility-card--brief .brief-layout blockquote {
+      max-width: 17ch;
+      font-size: clamp(24px, 3vw, 34px);
+      line-height: 1.02;
+    }
+    .utility-card--brief .brief-tail {
+      grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+      grid-template-areas: "stats title" "stats copy";
+      gap: 2px 16px;
+      padding-top: 8px;
+    }
+    .utility-card--brief .brief-stats { grid-area: stats; align-self: center; display: grid; justify-content: start; gap: 2px; }
+    .utility-card--brief .brief-tail h3 { grid-area: title; }
+    .utility-card--brief .brief-tail p { grid-area: copy; font-size: 11px; line-height: 1.35; }
+    .utility-card--reports {
+      grid-template-columns: minmax(0, 1.25fr) minmax(136px, 0.75fr);
+      gap: 16px;
+    }
+    .utility-card--reports .utility-kicker { margin-bottom: 4px; }
+    .utility-card--reports h3 { font-size: 18px; line-height: 1.18; }
+    .utility-card--reports p { font-size: 12px; line-height: 1.4; }
+    .utility-card--reports .reports-stats { padding-top: 8px; }
+    .utility-card--reports .report-bars { gap: 5px; padding-top: 16px; }
   }
 </style>
 </head>
@@ -925,6 +1319,71 @@
     document.querySelectorAll("use[data-site-sigil]").forEach((use) => {
       use.setAttribute("href", `#sigil-${theme.sigil}`);
     });
+  }
+
+  function shuffled(values) {
+    const copy = values.slice();
+    for (let index = copy.length - 1; index > 0; index -= 1) {
+      const swap = Math.floor(Math.random() * (index + 1));
+      [copy[index], copy[swap]] = [copy[swap], copy[index]];
+    }
+    return copy;
+  }
+
+  // Mirrors AlchemySymbol: a shuffled set of transmutation circles slowly
+  // rotates, cross-fades every nine seconds, and opens on a themed favorite.
+  function initHeroSigil() {
+    const cycle = document.querySelector("[data-hero-sigil-cycle]");
+    if (!cycle) return;
+    const sigils = [...cycle.querySelectorAll("[data-hero-sigil]")];
+    const order = shuffled([0, 1, 2, 3, 4]);
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let step = 0;
+    let timer = 0;
+
+    function showActive() {
+      const active = order[step];
+      sigils.forEach((sigil) => {
+        sigil.toggleAttribute("data-active", Number(sigil.dataset.heroSigil) === active);
+      });
+    }
+
+    function usePreferred(theme) {
+      const preferred = theme && Number.isInteger(theme.sigil) ? theme.sigil : null;
+      if (preferred !== null) {
+        const index = order.indexOf(preferred);
+        if (index >= 0) step = index;
+      }
+      showActive();
+    }
+
+    function stop() {
+      if (timer) window.clearInterval(timer);
+      timer = 0;
+    }
+
+    function start() {
+      stop();
+      if (reducedMotion.matches || document.hidden || !cycle.hasAttribute("data-in-view")) return;
+      timer = window.setInterval(() => {
+        step = (step + 1) % order.length;
+        showActive();
+      }, 9000);
+    }
+
+    usePreferred(themes[resolveChoice(root.dataset.siteThemeChoice || "system")]);
+    const visibilityObserver = new IntersectionObserver(([entry]) => {
+      cycle.toggleAttribute("data-in-view", entry.isIntersecting);
+      start();
+    }, { threshold: 0.01 });
+    visibilityObserver.observe(cycle);
+    window.addEventListener("alchemy-theme-change", (event) => {
+      usePreferred(event.detail?.theme);
+      start();
+    });
+    document.addEventListener("visibilitychange", start);
+    reducedMotion.addEventListener("change", start);
+    start();
   }
 
   function applyTheme(choice, persist = false) {
@@ -1044,10 +1503,14 @@
   window.alchemySiteThemes = themes;
   window.applyAlchemySiteTheme = applyTheme;
   applyTheme(storedChoice());
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initPicker, { once: true });
-  } else {
+  function initializeSiteControls() {
     initPicker();
+    initHeroSigil();
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initializeSiteControls, { once: true });
+  } else {
+    initializeSiteControls();
   }
   systemAppearance.addEventListener("change", () => {
     if (root.dataset.siteThemeChoice === "system") applyTheme("system");
@@ -1140,7 +1603,13 @@
 
   <section class="hero wrap">
     <div class="hero-copy">
-      <svg class="sigil" width="76" height="76" aria-hidden="true"><use href="#sigil-default" data-site-sigil/></svg>
+      <div class="hero-sigil-cycle" data-hero-sigil-cycle data-in-view aria-hidden="true">
+        <svg class="hero-sigil" data-hero-sigil="0" data-active viewBox="0 0 100 100"><use href="#sigil-0"/></svg>
+        <svg class="hero-sigil" data-hero-sigil="1" viewBox="0 0 100 100"><use href="#sigil-1"/></svg>
+        <svg class="hero-sigil" data-hero-sigil="2" viewBox="0 0 100 100"><use href="#sigil-2"/></svg>
+        <svg class="hero-sigil" data-hero-sigil="3" viewBox="0 0 100 100"><use href="#sigil-3"/></svg>
+        <svg class="hero-sigil" data-hero-sigil="4" viewBox="0 0 100 100"><use href="#sigil-4"/></svg>
+      </div>
       <h1>Your sources, your machine, your models.</h1>
       <p class="lede">
         Alchemy is a <strong>local-first research notebook</strong> for macOS.
@@ -1295,12 +1764,12 @@
     </div>
   </section>
 
-  <section class="etc wrap" aria-labelledby="more-title">
+  <section class="etc" aria-labelledby="more-title">
     <div class="etc-head">
       <h2 id="more-title">Also in the box:</h2>
     </div>
     <div class="utility-grid">
-      <article class="utility-card large">
+      <article class="utility-card utility-card--native utility-card--panel">
         <div class="utility-visual shader-roundrect">
           <canvas class="shader-canvas" data-shader="native" aria-hidden="true"></canvas>
           <div class="native-window" aria-hidden="true">
@@ -1322,7 +1791,7 @@
         </div>
       </article>
 
-      <article class="utility-card compact">
+      <article class="utility-card utility-card--command utility-card--compact">
         <div class="command-demo" aria-hidden="true"><kbd>&#8984; K</kbd><span>Search or run a command</span></div>
         <div>
           <h3>Command anywhere.</h3>
@@ -1330,7 +1799,7 @@
         </div>
       </article>
 
-      <article class="utility-card compact">
+      <article class="utility-card utility-card--reader utility-card--compact">
         <div class="reader-demo" aria-hidden="true">
           <span>Find the exact passage, then</span>
           <mark>select text in the source</mark>
@@ -1338,29 +1807,11 @@
         </div>
         <div>
           <h3>Read in context.</h3>
-          <p>Move back and forward, find text in a source, then ask Alchemy to explain or compare any selected passage.</p>
+          <p>Explain or compare a passage in place.</p>
         </div>
       </article>
 
-      <article class="utility-card large">
-        <div class="utility-visual shader-roundrect">
-          <canvas class="shader-canvas" data-shader="capture" aria-hidden="true"></canvas>
-          <div aria-hidden="true">
-            <span class="visual-pill top-left">Web page</span>
-            <span class="visual-pill top-right">Folder</span>
-            <span class="visual-core">Synced source</span>
-            <span class="visual-pill bottom-left">Local OCR</span>
-            <span class="visual-pill bottom-right">Scheduled refresh</span>
-          </div>
-        </div>
-        <div class="utility-copy">
-          <div class="utility-kicker">Capture and sync</div>
-          <h3>Bring in the source. Keep it current.</h3>
-          <p>The <a href="https://chromewebstore.google.com/detail/alchemy-web-clipper/bdiidbpifneigmcknjbgolbclbbgjheh">web clipper</a> reads signed-in pages from your own tab. Folder sources keep syncing, a local vision model reads scans, and scheduled reports refresh URLs to show what changed.</p>
-        </div>
-      </article>
-
-      <article class="utility-card compact">
+      <article class="utility-card utility-card--share utility-card--compact">
         <div class="file-demo" aria-hidden="true"><span class="file-badge">OKF</span><span>sources/<br>notes/</span></div>
         <div>
           <h3>Share notebooks as files.</h3>
@@ -1368,7 +1819,8 @@
         </div>
       </article>
 
-      <article class="utility-card compact theme-card">
+      <article class="utility-card utility-card--theme utility-card--compact theme-card">
+        <canvas class="shader-canvas theme-motif" data-shader="theme" aria-hidden="true"></canvas>
         <fieldset class="theme-demo">
           <legend class="sr-only">Choose a website color theme</legend>
           <div class="theme-demo-head">
@@ -1376,9 +1828,86 @@
           </div>
           <div class="theme-swatches" id="theme-swatches"></div>
         </fieldset>
-        <div>
+        <div class="theme-card-footer">
           <h3>Try every Alchemy theme.</h3>
-          <p>Switch this page between all 23 app palettes. System follows your Mac; your choice stays in this browser.</p>
+        </div>
+      </article>
+
+      <article class="utility-card utility-card--capture">
+        <canvas class="shader-canvas capture-canvas" data-shader="capture" aria-hidden="true"></canvas>
+        <div class="capture-network" aria-hidden="true">
+          <span class="visual-pill top-left">Web page</span>
+          <span class="visual-pill top-right">Folder</span>
+          <span class="visual-core">Synced source</span>
+          <span class="visual-pill bottom-left">Local OCR</span>
+          <span class="visual-pill bottom-right">Scheduled refresh</span>
+        </div>
+        <div class="capture-copy">
+          <div class="utility-kicker">Capture and sync</div>
+          <h3>Bring in the source. Keep it current.</h3>
+          <p>Clip signed-in pages from your own tab, watch folders, read scans locally, and refresh URLs on a schedule.</p>
+        </div>
+      </article>
+
+      <article class="utility-card utility-card--ledger">
+        <span class="ledger-index" aria-hidden="true">05</span>
+        <div class="ledger-layout">
+          <div class="ledger-head"><span>Ledger</span><span>Live</span></div>
+          <div class="ledger-middle">
+            <div class="ledger-datum"><strong>5</strong><span>records linked to evidence</span></div>
+            <div class="ledger-record"><span class="ledger-record-dot" aria-hidden="true"></span><strong>Decision held for review</strong><span>5 anchors</span></div>
+          </div>
+          <div class="ledger-copy">
+            <h3>Keep decisions tied to evidence.</h3>
+            <p>Assertions, facts, and open questions stay connected to the passages behind them.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="utility-card utility-card--staff">
+        <div class="staff-layout">
+          <div class="staff-copy">
+            <div class="staff-head"><span>Night Shift</span><span>On</span></div>
+            <h3>Let Night Shift run the routine work.</h3>
+            <p>Keep scheduled refreshes moving from the menu bar.</p>
+          </div>
+          <div class="activity-track">
+            <div class="activity-event"><span>Sources refreshed</span><time>02:18</time></div>
+            <div class="activity-event is-current"><span>Reports ready</span><time>Now</time></div>
+            <div class="activity-event"><span>Next check</span><time>07:00</time></div>
+          </div>
+          <div class="staff-foot"><span>Review it, pause it, or run it now.</span><span>Local</span></div>
+        </div>
+      </article>
+
+      <article class="utility-card utility-card--brief">
+        <span class="brief-mark" aria-hidden="true">“</span>
+        <div class="brief-layout">
+          <div class="brief-head"><span>Morning Brief</span><time datetime="07:00">07:00</time></div>
+          <blockquote>“Three decisions need you.”</blockquote>
+          <div class="brief-tail">
+            <div class="brief-stats"><span>4 changes</span><span>2 records</span></div>
+            <h3>See what needs you first.</h3>
+            <p>A text-first daily review of changes across your notebooks.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="utility-card utility-card--reports">
+        <div class="report-bars" aria-hidden="true">
+          <span class="report-bar quiet" style="height: 31%"></span>
+          <span class="report-bar soft" style="height: 54%"></span>
+          <span class="report-bar" style="height: 77%"></span>
+          <span class="report-bar soft" style="height: 46%"></span>
+          <span class="report-bar" style="height: 64%"></span>
+          <span class="report-bar quiet" style="height: 39%"></span>
+          <span class="report-bar" style="height: 88%"></span>
+        </div>
+        <div class="reports-copy">
+          <div class="utility-kicker">Reports</div>
+          <h3>Make useful checks recur.</h3>
+          <p>Run on a timer or when a source changes. Each result lands as a note.</p>
+          <div class="reports-stats"><span>7 runs</span><span>1 source change</span></div>
         </div>
       </article>
     </div>
@@ -1425,6 +1954,7 @@
     privacy: 6,
     native: 7,
     capture: 8,
+    theme: 9,
   };
 
   const vertexSource = `
@@ -1640,6 +2170,13 @@
       return f;
     }
 
+    float themeScene(vec2 p) {
+      float f = 0.12 * ring(p, vec2(-0.34, 0.0), 0.56, 0.005);
+      f += 0.08 * ring(p, vec2(0.56, 0.12), 0.32, 0.004);
+      f += 0.10 * line(p, vec2(-0.90, -0.36), vec2(0.90, -0.36), 0.004);
+      return f;
+    }
+
     float themeMotif(vec2 p) {
       if (u_theme < 0.5) return 0.0;
 
@@ -1701,11 +2238,13 @@
       else if (u_scene < 5.5) field = agentsScene(p);
       else if (u_scene < 6.5) field = privacyScene(p);
       else if (u_scene < 7.5) field = nativeScene(p);
-      else field = captureScene(p);
+      else if (u_scene < 8.5) field = captureScene(p);
+      else field = themeScene(p);
 
       float atmosphere = noise(p * 3.1 + vec2(u_time * 0.025, -u_time * 0.018));
       atmosphere *= smoothstep(1.35, 0.05, length(p)) * 0.12;
-      field = clamp(max(max(field, atmosphere), themeMotif(p)), 0.0, 1.0);
+      float motif = u_scene > 8.5 ? themeMotif(p) : 0.0;
+      field = clamp(max(max(field, atmosphere), motif), 0.0, 1.0);
 
       float threshold = bayer4(gl_FragCoord.xy) - 0.5;
       float quantized = floor(field * 5.0 + threshold + 0.5) / 5.0;
