@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { FileDown } from "lucide-react";
 import { Markdown } from "./Markdown";
 import { PrintPortal, usePrintExport } from "./printExport";
@@ -13,10 +14,31 @@ import { PrintPortal, usePrintExport } from "./printExport";
  * broken.
  *
  * The poster is a single centered scrolling column styled entirely by the
- * app's semantic tokens, so it follows every theme. Per DESIGN.md, blocks
- * are hairline-bordered cards (no tonal fills) and the one accent color
- * appears only where it means something: the bar fills.
+ * app's semantic tokens, so it follows every theme. Unlike app chrome, a
+ * poster is allowed to lean into color: it cycles the five theme-managed
+ * data hues (primary + the artifact-family tokens) through tinted washes,
+ * ring gauges, and bar fills — no hex anywhere, no border-accents, and the
+ * whole thing re-tints with the theme.
  */
+
+/** The poster palette: theme-managed hues, cycled per tile / bar / section. */
+const HUES = [
+  "var(--primary)",
+  "var(--artifact-generate)",
+  "var(--artifact-learning)",
+  "var(--artifact-documents)",
+  "var(--artifact-template)",
+];
+const hue = (i: number) => HUES[i % HUES.length];
+/** A tinted wash of a palette hue (tonal fill, stays legible in any theme). */
+const wash = (color: string, pct = 9) =>
+  `color-mix(in srgb, ${color} ${pct}%, transparent)`;
+
+/** "42%" | "87.5 %" → 0-100 for the ring gauge; NaN when not a percent. */
+function percentOf(value: string): number {
+  const m = /^-?(\d+(?:\.\d+)?)\s*%$/.exec(value.trim());
+  return m ? Math.min(parseFloat(m[1]), 100) : NaN;
+}
 
 export type InfographicBlock =
   | { type: "stats"; items: { value: string; label: string }[] }
@@ -194,79 +216,153 @@ function Inline({ text }: { text: string }) {
   return <>{parts}</>;
 }
 
-function BlockView({ block }: { block: InfographicBlock }) {
+/** Ring gauge for a percentage stat: conic fill over a washed track. */
+function Ring({ pct, color }: { pct: number; color: string }) {
+  return (
+    <div
+      aria-hidden
+      className="grid h-[72px] w-[72px] place-items-center rounded-full"
+      style={{
+        background: `conic-gradient(${color} ${pct * 3.6}deg, ${wash(color, 16)} 0)`,
+      }}
+    >
+      <div className="grid h-[54px] w-[54px] place-items-center rounded-full bg-surface" />
+    </div>
+  );
+}
+
+function BlockView({
+  block,
+  grown,
+}: {
+  block: InfographicBlock;
+  /** Bars/rings animate from zero on mount; the print sheet renders static. */
+  grown: boolean;
+}) {
   switch (block.type) {
     case "stats":
       return (
         <div
-          className="grid gap-2"
+          className="grid gap-2.5"
           style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}
         >
-          {block.items.map((item, i) => (
-            <div key={i} className="rounded-lg border border-border px-4 py-3.5">
-              <div className="text-[1.75rem] font-semibold leading-none tracking-tight tabular-nums">
-                <Inline text={item.value} />
+          {block.items.map((item, i) => {
+            const color = hue(i);
+            const pct = percentOf(item.value);
+            return (
+              <div
+                key={i}
+                className="relative flex flex-col justify-between gap-2 overflow-hidden rounded-xl px-4 py-4"
+                style={{ background: wash(color) }}
+              >
+                {Number.isFinite(pct) ? (
+                  <div className="relative">
+                    <Ring pct={grown ? pct : 0} color={color} />
+                    <div
+                      className="absolute inset-0 grid h-[72px] w-[72px] place-items-center text-[0.9375rem] font-bold tabular-nums"
+                      style={{ color }}
+                    >
+                      <Inline text={item.value} />
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    className="text-[2.125rem] font-bold leading-none tracking-tight tabular-nums"
+                    style={{ color }}
+                  >
+                    <Inline text={item.value} />
+                  </div>
+                )}
+                <div className="text-caption font-medium leading-snug text-foreground/80">
+                  <Inline text={item.label} />
+                </div>
               </div>
-              <div className="mt-2 text-caption leading-snug text-muted-foreground">
-                <Inline text={item.label} />
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       );
     case "bars": {
       const max = Math.max(...block.rows.map((row) => row.value), 0);
       return (
-        <div className="flex flex-col gap-2">
-          {block.rows.map((row, i) => (
-            <div
-              key={i}
-              className="grid items-center gap-3"
-              style={{ gridTemplateColumns: "minmax(0, 9rem) 1fr auto" }}
-            >
-              <div
-                className="truncate text-caption text-muted-foreground"
-                title={row.label}
-              >
-                <Inline text={row.label} />
-              </div>
-              <div className="relative h-4" aria-hidden>
+        <div className="flex flex-col gap-3">
+          {block.rows.map((row, i) => {
+            const color = hue(i);
+            const width = max > 0 ? Math.max((row.value / max) * 100, 2) : 0;
+            return (
+              <div key={i}>
+                <div className="mb-1 flex items-baseline justify-between gap-3">
+                  <div className="truncate text-caption font-medium" title={row.label}>
+                    <Inline text={row.label} />
+                  </div>
+                  <div
+                    className="shrink-0 text-caption font-bold tabular-nums"
+                    style={{ color }}
+                  >
+                    {row.display}
+                  </div>
+                </div>
                 <div
-                  className="absolute inset-y-0 left-0 rounded-[3px] bg-primary/30"
-                  style={{
-                    width: `${max > 0 ? Math.max((row.value / max) * 100, 1.5) : 0}%`,
-                  }}
-                />
+                  className="h-3.5 overflow-hidden rounded-full"
+                  style={{ background: wash(color, 12) }}
+                  aria-hidden
+                >
+                  <div
+                    className="h-full rounded-full transition-[width] duration-700 ease-out"
+                    style={{
+                      width: `${grown ? width : 0}%`,
+                      background: `linear-gradient(90deg, color-mix(in srgb, ${color} 70%, transparent), ${color})`,
+                    }}
+                  />
+                </div>
               </div>
-              <div className="text-caption tabular-nums text-foreground">
-                {row.display}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       );
     }
     case "facts":
       return (
         <ul className="flex flex-col gap-2">
-          {block.items.map((item, i) => (
-            <li
-              key={i}
-              className="rounded-lg border border-border px-3.5 py-2.5 text-body leading-relaxed"
-            >
-              <Inline text={item} />
-            </li>
-          ))}
+          {block.items.map((item, i) => {
+            const color = hue(i);
+            return (
+              <li
+                key={i}
+                className="flex items-start gap-3 rounded-xl px-3.5 py-3 text-body leading-relaxed"
+                style={{ background: wash(color, 6) }}
+              >
+                <span
+                  className="mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full text-micro font-bold"
+                  style={{ background: wash(color, 18), color }}
+                >
+                  {i + 1}
+                </span>
+                <span>
+                  <Inline text={item} />
+                </span>
+              </li>
+            );
+          })}
         </ul>
       );
     case "quote":
       return (
-        <figure className="rounded-lg border border-border px-6 py-5 text-center">
-          <blockquote className="text-[1.0625rem] font-medium leading-relaxed">
+        <figure
+          className="rounded-xl px-7 py-6 text-center"
+          style={{ background: wash(HUES[0], 7) }}
+        >
+          <div
+            aria-hidden
+            className="mx-auto mb-1 font-serif text-[2.5rem] leading-none"
+            style={{ color: HUES[0] }}
+          >
+            &ldquo;
+          </div>
+          <blockquote className="text-[1.125rem] font-medium leading-relaxed">
             <Inline text={block.text} />
           </blockquote>
           {block.attribution && (
-            <figcaption className="mt-2 text-caption text-muted-foreground">
+            <figcaption className="mt-2.5 text-caption text-muted-foreground">
               — <Inline text={block.attribution} />
             </figcaption>
           )}
@@ -285,10 +381,22 @@ export function Infographic({ content, title }: { content: string; title?: strin
 
 function Poster({ doc, exportName }: { doc: InfographicDoc; exportName: string }) {
   const { printing, exportPdf } = usePrintExport({ suggestedName: exportName });
+  // Flip after first paint so bars sweep from zero to their widths.
+  const [grown, setGrown] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setGrown(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
   return (
     <div className="mx-auto w-full max-w-[680px]">
+      {/* Poster ribbon: the five data hues announce "infographic" up top. */}
+      <div
+        aria-hidden
+        className="mb-5 h-1 rounded-full"
+        style={{ background: `linear-gradient(90deg, ${HUES.join(", ")})` }}
+      />
       <div className="flex items-start justify-between gap-3">
-        <h1 className="text-[1.625rem] font-semibold leading-tight tracking-tight">
+        <h1 className="text-[2rem] font-bold leading-[1.15] tracking-tight">
           {doc.title}
         </h1>
         <button
@@ -304,25 +412,37 @@ function Poster({ doc, exportName }: { doc: InfographicDoc; exportName: string }
         </button>
       </div>
       {doc.hook.length > 0 && (
-        <div className="mt-2 text-[0.9375rem] leading-relaxed text-muted-foreground">
+        <div className="mt-3 text-[1.0625rem] leading-relaxed text-muted-foreground">
           {doc.hook.map((block, i) => (
-            <BlockView key={i} block={block} />
+            <BlockView key={i} block={block} grown={grown} />
           ))}
         </div>
       )}
-      <div className="mt-3 flex flex-col divide-y divide-border border-t border-border">
-        {doc.sections.map((section, i) => (
-          <section key={i} className="py-5">
-            <h2 className="mb-3 text-micro font-medium uppercase tracking-wide text-muted-foreground">
-              {section.heading}
-            </h2>
-            <div className="flex flex-col gap-3">
-              {section.blocks.map((block, j) => (
-                <BlockView key={j} block={block} />
-              ))}
-            </div>
-          </section>
-        ))}
+      <div className="mt-6 flex flex-col gap-8">
+        {doc.sections.map((section, i) => {
+          const color = hue(i);
+          return (
+            <section key={i}>
+              <h2 className="mb-3.5 flex items-center gap-2.5">
+                <span
+                  aria-hidden
+                  className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-caption font-bold tabular-nums"
+                  style={{ background: wash(color, 16), color }}
+                >
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+                <span className="text-[0.9375rem] font-semibold tracking-tight">
+                  {section.heading}
+                </span>
+              </h2>
+              <div className="flex flex-col gap-3">
+                {section.blocks.map((block, j) => (
+                  <BlockView key={j} block={block} grown={grown} />
+                ))}
+              </div>
+            </section>
+          );
+        })}
       </div>
       {printing && <PrintInfographic doc={doc} />}
     </div>
