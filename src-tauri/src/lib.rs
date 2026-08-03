@@ -239,6 +239,7 @@ pub fn run() {
             commands::list_recent_reports,
             commands::corpus_stats,
             commands::source_thumbnail,
+            commands::source_snippets,
             commands::backfill_source_images,
             commands::export_notebook_okf,
             commands::fix_traffic_lights,

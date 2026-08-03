@@ -11,18 +11,31 @@ import { AlchemySymbol } from "../AlchemyHero";
 import { Input, Textarea } from "../ui";
 import {
   AlignLeft,
+  Feather,
+  FlaskConical,
   Globe,
   GraduationCap,
+  Landmark,
   PenLine,
   Scissors,
   ScrollText,
   Sparkles,
+  Wrench,
+  Zap,
   type LucideIcon,
 } from "lucide-react";
 
+// The writing-standard presets mirror rag::CHAT_STYLES in the backend —
+// real style guides (ASD-STE100, GOV.UK, US Federal Plain Language, the
+// i-have-adhd rules) compressed to prompt size.
 const CHAT_STYLES = [
   { id: "default", label: "Default", icon: Sparkles, hint: "Balanced, grounded answers for research and brainstorming." },
   { id: "learning", label: "Learning Guide", icon: GraduationCap, hint: "Explains step by step, defines terms, builds intuition." },
+  { id: "scientific", label: "Scientific", icon: FlaskConical, hint: "Precise and hedged to the evidence; quantified, summary first." },
+  { id: "adhd", label: "ADHD-friendly", icon: Zap, hint: "Answer first, numbered steps, short lists, no preamble or closers." },
+  { id: "ste100", label: "Simplified Technical", icon: Wrench, hint: "ASD-STE100: short sentences, one instruction each, one word per meaning." },
+  { id: "govuk", label: "GOV.UK", icon: Landmark, hint: "Plain English, front-loaded, everyday words, no metaphors." },
+  { id: "plain", label: "Plain Language", icon: Feather, hint: "US Federal guidelines: main point first, active voice, no hidden verbs." },
   { id: "custom", label: "Custom", icon: PenLine, hint: "Give your own goal, style, or role." },
 ] as const;
 

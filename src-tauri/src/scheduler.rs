@@ -145,10 +145,16 @@ async fn run_pass(app: &AppHandle) {
                 .unwrap_or_default(),
             None => Vec::new(),
         };
+        // Archived notebooks' reports stay quiet — nothing is mutated, so
+        // unarchiving resumes the schedule where it left off.
+        let archived = state.db.archived_notebook_ids().await.unwrap_or_default();
         let due: Vec<_> = schedules
             .into_iter()
             .filter(|s| {
-                if !s.enabled || now_ms() - s.last_run_at < s.interval_secs * 1000 {
+                if !s.enabled
+                    || archived.contains(&s.notebook_id)
+                    || now_ms() - s.last_run_at < s.interval_secs * 1000
+                {
                     return false;
                 }
                 match s.trigger.as_str() {

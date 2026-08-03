@@ -126,6 +126,14 @@ export const api = {
   /** Base64 PNG for gallery cards (PDF first page / image file); "" = none. */
   sourceThumbnail: (sourceId: string) =>
     run(query<string>("source_thumbnail", { sourceId })),
+  /** Batched opening-lines snippets for gallery cards. */
+  sourceSnippets: (sourceIds: string[], maxChars?: number) =>
+    run(
+      query<Record<string, string>>("source_snippets", {
+        sourceIds,
+        maxChars,
+      }),
+    ),
   /** Stamp lead images onto pre-gallery URL sources; returns how many gained one. */
   backfillSourceImages: (notebookId: string) =>
     run(slow<number>("backfill_source_images", { notebookId })),

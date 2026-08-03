@@ -21,6 +21,76 @@ fn cap_excerpt(body: &str, compact: bool) -> Cow<'_, str> {
     Cow::Owned(format!("{head}…"))
 }
 
+/// Selectable answer-voice presets (Settings → Chat, per notebook): (id,
+/// label, hint, instructions). Real writing standards compressed to
+/// system-prompt size, applied through the per-notebook `ChatConfig` style
+/// alongside the existing default/learning/custom options.
+pub const CHAT_STYLES: &[(&str, &str, &str, &str)] = &[
+    (
+        "scientific",
+        "Scientific",
+        "Precise, hedged, quantified",
+        "Write in a scientific register: precise, neutral, and hedged to the strength of \
+         the evidence (\"the excerpts indicate…\", \"consistent with…\"). Separate \
+         observation from interpretation. Define terms on first use and quantify with \
+         units wherever the sources give numbers. Lead with a brief abstract-style \
+         summary, then the detail.",
+    ),
+    (
+        "adhd",
+        "ADHD-friendly",
+        "Answer first, short, scannable",
+        "ADHD-friendly answers: lead with the answer or next action in the first line. \
+         Number multi-step tasks and cap lists at 5 items. One idea per sentence; short \
+         paragraphs. Bold only the few load-bearing words. No preamble, no recap, no \
+         closers — when action is implied, end with exactly one concrete next step. Use \
+         specific quantities (minutes, counts), never \"a bit\". Matter-of-fact about \
+         errors; suppress tangents.",
+    ),
+    (
+        "ste100",
+        "Simplified Technical English",
+        "ASD-STE100 controlled language",
+        "Follow ASD-STE100 Simplified Technical English: sentences of at most 20 words \
+         (25 in descriptive text). One instruction per sentence. Active voice; present \
+         tense where possible. Use one word for one meaning and do not vary terms for \
+         style. Prefer simple approved words (\"use\" not \"utilize\", \"start\" not \
+         \"initiate\"). Keep articles (\"the\", \"a\"). Write procedures as numbered \
+         steps. Avoid noun clusters longer than three words.",
+    ),
+    (
+        "govuk",
+        "GOV.UK",
+        "Plain English, front-loaded",
+        "Follow GOV.UK style: plain English with the answer front-loaded (conclusion, \
+         then detail, then background). Sentences under 20 words, one idea each; short \
+         single-topic paragraphs. Address the user as \"you\". Everyday words (\"use\" \
+         not \"utilise\", \"help\" not \"facilitate\"); no metaphors like drive, unlock, \
+         robust, key. Spell out \"for example\" and \"that is\". Sentence case headings; \
+         no bold/italic emphasis, no exclamation marks. Positive contractions are fine; \
+         avoid negative ones (\"cannot\", not \"can't\").",
+    ),
+    (
+        "plain",
+        "Plain language",
+        "US Federal Plain Language",
+        "Follow the Federal Plain Language Guidelines: write for the reader with \"you\" \
+         and active voice. Put the main point before exceptions and conditions. Short \
+         sentences (about 20 words) and short single-topic paragraphs. Simplest word \
+         that works; cut every word that does nothing. Use lists to simplify complex \
+         material. Avoid hidden verbs (\"apply\", not \"make an application\"), double \
+         negatives, and undefined abbreviations.",
+    ),
+];
+
+/// The instruction text for a style id; None for "" / unknown ids.
+pub fn style_instructions(id: &str) -> Option<&'static str> {
+    CHAT_STYLES
+        .iter()
+        .find(|(sid, ..)| *sid == id)
+        .map(|(_, _, _, text)| *text)
+}
+
 /// Format the user's profile into a system-prompt block; empty when unset.
 pub fn persona_block(profile: &UserProfile) -> String {
     let mut parts = Vec::new();

@@ -409,7 +409,16 @@ export interface UserProfile {
 }
 
 export interface ChatConfig {
-  style: "default" | "learning" | "custom";
+  /** Writing-standard ids mirror rag::CHAT_STYLES in the backend. */
+  style:
+    | "default"
+    | "learning"
+    | "scientific"
+    | "adhd"
+    | "ste100"
+    | "govuk"
+    | "plain"
+    | "custom";
   customPrompt: string;
   length: "default" | "longer" | "shorter";
 }

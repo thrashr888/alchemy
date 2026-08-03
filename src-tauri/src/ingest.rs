@@ -1992,6 +1992,28 @@ fn extract_title(html: &str) -> Option<String> {
     }
 }
 
+/// Download an image (og:image cache fill): one GET, 8 MB cap, best-effort.
+pub async fn fetch_image_bytes(url: &str) -> Option<Vec<u8>> {
+    const MAX_BYTES: usize = 8 * 1024 * 1024;
+    let client = reqwest::Client::builder()
+        .user_agent(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+        )
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .ok()?;
+    let resp = client.get(url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let bytes = resp.bytes().await.ok()?;
+    if bytes.is_empty() || bytes.len() > MAX_BYTES {
+        return None;
+    }
+    Some(bytes.to_vec())
+}
+
 /// Fetch a page and return just its lead image — the gallery backfill path
 /// for URL sources ingested before `image_url` existed. Lightweight on
 /// purpose: one GET, meta-tag parse, no readability, no embedding.

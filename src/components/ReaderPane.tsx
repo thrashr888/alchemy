@@ -561,6 +561,14 @@ export function ReaderPane() {
     source.sourceType !== "mac" &&
     !["folder", "git", "notion", "obsidian"].includes(source.sourceType) &&
     source.status !== "placeholder";
+  // The gallery's "Edit text" action opens the doc with edit intent set —
+  // consume it once the matching source is in front.
+  const editIntent = useStore((st) => st.readerEditIntent);
+  useEffect(() => {
+    if (!editIntent || !source || source.id !== editIntent) return;
+    useStore.setState({ readerEditIntent: null });
+    if (sourceEditable) setEditing(true);
+  }, [editIntent, source, sourceEditable]);
   const originAction = source?.url
     ? isWebUrl(source.url)
       ? {

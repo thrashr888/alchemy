@@ -162,7 +162,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   }, []);
 
   const {
-    schedules: allReports,
+    schedules: allSchedules,
     recentNotes,
     stats,
     reports,
@@ -170,6 +170,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     error: activityError,
     refresh: refreshActivity,
   } = useHomeActivity(notebooks);
+  // Archived notebooks' schedules are paused by the backend — showing them
+  // as "scheduled" in Staff would be a lie.
+  const archivedIds = new Set(archivedNotebooks.map((n) => n.id));
+  const allReports = allSchedules.filter((s) => !archivedIds.has(s.notebookId));
   const notebookTitle = new Map(notebooks.map((n) => [n.id, n.title]));
   const notebookColor = new Map(notebooks.map((n) => [n.id, n.color]));
 
@@ -343,7 +347,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               />
             </aside>
           ) : (
-            <div className="side-card absolute left-4 top-1 z-20 hidden w-12 flex-col items-center py-2 lg:flex">
+            <div className="side-card mx-2 mt-1 hidden w-12 shrink-0 flex-col items-center self-start py-2 lg:flex">
               <SidebarRail icon="staff" title="Show Staff" onClick={toggleStaff} />
             </div>
           )}
@@ -720,7 +724,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           {/* Right column: the Brief card above the reports feed — the
             morning-read surface, arrival point first. */}
           {!briefOpen && !reportsOpen ? (
-            <div className="side-card absolute right-4 top-1 z-20 hidden w-12 flex-col items-center gap-1 py-2 lg:flex">
+            <div className="side-card mx-2 mt-1 hidden w-12 shrink-0 flex-col items-center gap-1 self-start py-2 lg:flex">
               <SidebarRail
                 icon="brief"
                 title="Show the brief"

@@ -241,6 +241,7 @@ export const useStore = create<AppState>((set, get) => {
     // the pane watches so agent writes appear live (mcp://changed).
     ledgerOpen: false,
     galleryOpen: false,
+    readerEditIntent: null,
     ledgerBump: 0,
     pendingNewNote: false,
     artifactStreamText: "",

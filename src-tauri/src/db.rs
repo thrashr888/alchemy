@@ -693,6 +693,26 @@ impl Db {
         Ok(())
     }
 
+    /// Ids of archived notebooks — the background gate: scheduled reports
+    /// and source resyncs skip these until unarchive (nothing is mutated,
+    /// so unarchiving resumes them automatically).
+    pub async fn archived_notebook_ids(&self) -> Result<std::collections::HashSet<String>> {
+        let batches = self.collect(T_NOTEBOOKS, None).await?;
+        let mut out = std::collections::HashSet::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let Some(status) = opt_str_col(b, "status") else {
+                continue;
+            };
+            for i in 0..b.num_rows() {
+                if status.value(i) == "archived" {
+                    out.insert(id.value(i).to_string());
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Set the notebook's lifecycle status: "" (active) or "archived".
     pub async fn set_notebook_status(&self, id: &str, status: &str) -> Result<()> {
         let tbl = self.conn.open_table(T_NOTEBOOKS).execute().await?;

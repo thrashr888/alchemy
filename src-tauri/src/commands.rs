@@ -1455,10 +1455,13 @@ pub(crate) async fn reingest(
         .db
         .replace_source(&updated, &chunk_tuples, &embeddings)
         .await?;
-    // A refreshed PDF may have a new first page — drop the stale thumbnail
-    // so the gallery re-renders it on next view.
+    // A refreshed PDF may have a new first page, a refreshed page a new
+    // hero image — drop the stale caches so the gallery re-renders them.
     if existing.source_type == "pdf" {
         let _ = std::fs::remove_file(thumb_path(state, &existing.id));
+    }
+    if existing.source_type == "url" && updated.image_url != existing.image_url {
+        let _ = std::fs::remove_file(og_cache_path(state, &existing.id));
     }
     state
         .db
@@ -1743,6 +1746,7 @@ pub async fn delete_source(state: State<'_, AppState>, source_id: String) -> Res
                     let _ = std::fs::remove_dir_all(&nc);
                 }
                 let _ = std::fs::remove_file(thumb_path(&state, id));
+                let _ = std::fs::remove_file(og_cache_path(&state, id));
             }
             e(state.db.delete_source_tree(&source_id, &child_ids).await)?;
             return Ok(());
@@ -1756,6 +1760,7 @@ pub async fn delete_source(state: State<'_, AppState>, source_id: String) -> Res
         let _ = std::fs::remove_dir_all(&notion_cache);
     }
     let _ = std::fs::remove_file(thumb_path(&state, &source_id));
+    let _ = std::fs::remove_file(og_cache_path(&state, &source_id));
     Ok(())
 }
 
@@ -1764,6 +1769,25 @@ fn thumb_path(state: &AppState, source_id: &str) -> std::path::PathBuf {
     app_data_dir(state)
         .join("thumbs")
         .join(format!("{source_id}.png"))
+}
+
+/// On-disk cache for a URL source's downloaded og:image bytes.
+fn og_cache_path(state: &AppState, source_id: &str) -> std::path::PathBuf {
+    app_data_dir(state)
+        .join("thumbs")
+        .join(format!("{source_id}.img"))
+}
+
+/// Image mime from magic bytes — og caches store raw downloads, so the
+/// extension carries no type.
+fn sniff_image_mime(bytes: &[u8]) -> &'static str {
+    match bytes {
+        b if b.starts_with(b"\x89PNG") => "image/png",
+        b if b.starts_with(b"\xff\xd8") => "image/jpeg",
+        b if b.starts_with(b"GIF8") => "image/gif",
+        b if b.len() > 11 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" => "image/webp",
+        _ => "image/png",
+    }
 }
 
 /// Data-URI thumbnail for a source's gallery card: PDFs render their first
@@ -1803,6 +1827,34 @@ pub async fn source_thumbnail(
             let _ = std::fs::write(&cache, &png);
             Ok(format!("data:image/png;base64,{}", b64(&png)))
         }
+        // URL sources: download the og:image once and serve it from disk —
+        // reopening the gallery must not re-fetch a page's hero image.
+        "url" => {
+            let img = &src.image_url;
+            if img.is_empty() || img == "-" || !is_web_url(img) {
+                return Ok(String::new());
+            }
+            let cache = og_cache_path(&state, &source_id);
+            if let Ok(bytes) = std::fs::read(&cache) {
+                return Ok(format!(
+                    "data:{};base64,{}",
+                    sniff_image_mime(&bytes),
+                    b64(&bytes)
+                ));
+            }
+            let Some(bytes) = ingest::fetch_image_bytes(img).await else {
+                return Ok(String::new());
+            };
+            if let Some(dir) = cache.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(&cache, &bytes);
+            Ok(format!(
+                "data:{};base64,{}",
+                sniff_image_mime(&bytes),
+                b64(&bytes)
+            ))
+        }
         "image" => {
             // 12 MB cap: the webview scales, but a RAW-sized file as base64
             // would balloon the IPC message.
@@ -1838,6 +1890,59 @@ pub async fn source_thumbnail(
         }
         _ => Ok(String::new()),
     }
+}
+
+/// Opening lines of a source's text for a gallery card: provenance
+/// blockquotes, images, and blank lines dropped, capped by chars.
+fn snippet_of(content: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for line in content.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with("> ") || t.starts_with("![") {
+            continue;
+        }
+        // Headings read fine as plain lines; just drop the marker.
+        let t = t.trim_start_matches('#').trim_start();
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(t);
+        if out.chars().count() >= max_chars {
+            break;
+        }
+    }
+    if out.chars().count() > max_chars {
+        let cut = out
+            .char_indices()
+            .nth(max_chars)
+            .map(|(i, _)| i)
+            .unwrap_or(out.len());
+        out.truncate(cut);
+        out.push('…');
+    }
+    out
+}
+
+/// Batched card snippets for the gallery: one IPC per level instead of one
+/// per card. Unknown or empty sources are simply absent from the map.
+#[tauri::command]
+pub async fn source_snippets(
+    state: State<'_, AppState>,
+    source_ids: Vec<String>,
+    max_chars: Option<usize>,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let cap = max_chars.unwrap_or(280).min(1000);
+    let mut out = std::collections::HashMap::new();
+    for id in source_ids.into_iter().take(400) {
+        let Ok(content) = state.db.source_content(&id).await else {
+            continue;
+        };
+        let snip = snippet_of(&content, cap);
+        if !snip.is_empty() {
+            out.insert(id, snip);
+        }
+    }
+    Ok(out)
 }
 
 /// Backfill `image_url` for a notebook's pre-gallery URL sources: fetch just
@@ -3433,10 +3538,16 @@ pub(crate) async fn resync_sources_inner(
     };
     let mut total = FolderScan::default();
     let mut per_notebook: HashMap<String, FolderScan> = HashMap::new();
+    // Archived notebooks sit out background refreshes entirely (their
+    // sources stay frozen); unarchiving resumes them on the next tick.
+    let archived = state.db.archived_notebook_ids().await.unwrap_or_default();
     // The auto-sync cadence setting: minutes between remote probes, 0 = off
     // (manual Refresh still syncs).
     let sync_minutes = { state.ai.read().await.config().git_sync_minutes };
     for folder in e(state.db.all_folder_sources().await)? {
+        if archived.contains(&folder.notebook_id) {
+            continue;
+        }
         // Remote repos: one cheap ls-remote per cadence tick; a moved branch
         // refetches the cache so the ordinary rescan below sees fresh
         // mtimes. Never runs against user repos — only our own clones.
@@ -3501,6 +3612,9 @@ pub(crate) async fn resync_sources_inner(
     // files aren't read (that would force a download).
     let data_dir = app_data_dir(state);
     for src in e(state.db.all_loose_sources().await)? {
+        if archived.contains(&src.notebook_id) {
+            continue;
+        }
         // Git-backed singles (README/blob) sync hourly from their cache
         // clone. The cache dir is the definitive marker — plain page
         // captures of github.com URLs parse git-shaped too, but have none.
@@ -3783,7 +3897,13 @@ fn chat_style_instruction(cfg: &ChatConfig) -> String {
             "Act as a patient learning guide: explain step by step, define key terms, and build intuition.".into(),
         ),
         "custom" if !cfg.custom_prompt.trim().is_empty() => parts.push(cfg.custom_prompt.trim().into()),
-        _ => {}
+        // Writing standards (rag::CHAT_STYLES): scientific, adhd, ste100,
+        // govuk, plain — real style guides compressed to prompt size.
+        id => {
+            if let Some(text) = rag::style_instructions(id) {
+                parts.push(text.into());
+            }
+        }
     }
     match cfg.length.as_str() {
         "longer" => parts.push("Give thorough, detailed answers with examples.".into()),

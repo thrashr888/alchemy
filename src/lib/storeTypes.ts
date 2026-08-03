@@ -106,6 +106,9 @@ export interface AppState {
   ledgerOpen: boolean;
   /** Center-column source Gallery mode; wins above Ledger. */
   galleryOpen: boolean;
+  /** Source id the Reader should open straight into edit mode (gallery's
+   *  "Edit text" action); the Reader consumes and clears it. */
+  readerEditIntent: string | null;
   /** Bumped when an agent writes the ledger (mcp://changed scope "ledger"). */
   ledgerBump: number;
   pendingNewNote: boolean;

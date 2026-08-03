@@ -71,6 +71,32 @@ function saveFoldersCollapsed(state: Record<string, boolean>) {
 }
 
 /** Source-domain favicon with a Globe fallback (kept local — no third party). */
+/** The hover card: type, size, freshness, status — rows and gallery cards
+ *  stay quiet, the beat-delayed card carries the metadata. */
+export function sourceHoverData(s: Source) {
+  const meta: { label: string; value?: string }[] = [
+    {
+      label: s.parentId ? `${s.sourceType} · folder item` : s.sourceType,
+    },
+    {
+      label: "Size",
+      value: `${compactNumber(s.charCount)} chars · ${s.chunkCount} chunks`,
+    },
+    { label: "Added", value: relativeTime(s.createdAt) },
+  ];
+  // File mtimes are real clocks; mac/git stamps are content hashes — only
+  // show a time that is one.
+  if (s.mtime > 946_684_800_000 && s.mtime < Date.now() + 86_400_000) {
+    meta.push({ label: "File updated", value: relativeTime(s.mtime) });
+  }
+  if (s.status === "error") meta.push({ label: s.error || "Import failed" });
+  if (s.status === "placeholder")
+    meta.push({ label: "Cloud placeholder — not downloaded yet" });
+  if (s.author) meta.push({ label: "Author", value: s.author });
+  if (s.url) meta.push({ label: s.url });
+  return { title: s.title, meta };
+}
+
 export function Favicon({ url }: { url: string }) {
   const [failed, setFailed] = useState(false);
   let origin = "";
@@ -179,31 +205,7 @@ export function SourcesPanel() {
   }
 
   const { show: showCard, hide: hideCard, card: hoverCard } = useHoverCard("right");
-  // The hover card: type, size, freshness, status — the row itself stays
-  // quiet (name + status), ChatGPT-desktop style.
-  const sourceCard = (s: Source) => {
-    const meta: { label: string; value?: string }[] = [
-      {
-        label: s.parentId ? `${s.sourceType} · folder item` : s.sourceType,
-      },
-      {
-        label: "Size",
-        value: `${compactNumber(s.charCount)} chars · ${s.chunkCount} chunks`,
-      },
-      { label: "Added", value: relativeTime(s.createdAt) },
-    ];
-    // File mtimes are real clocks; mac/git stamps are content hashes — only
-    // show a time that is one.
-    if (s.mtime > 946_684_800_000 && s.mtime < Date.now() + 86_400_000) {
-      meta.push({ label: "File updated", value: relativeTime(s.mtime) });
-    }
-    if (s.status === "error") meta.push({ label: s.error || "Import failed" });
-    if (s.status === "placeholder")
-      meta.push({ label: "Cloud placeholder — not downloaded yet" });
-    if (s.author) meta.push({ label: "Author", value: s.author });
-    if (s.url) meta.push({ label: s.url });
-    return { title: s.title, meta };
-  };
+  const sourceCard = sourceHoverData;
 
   const totalChars = sources.reduce((sum, s) => sum + s.charCount, 0);
   const pct = Math.min(100, (totalChars / SCALE_TARGET_CHARS) * 100);
