@@ -1,0 +1,7 @@
+Example data: figures summarized from public FY2024–FY2025 reporting; verify before relying on them.
+
+Novo Nordisk A/S (NVO; CPH: NOVO-B), headquartered in Bagsværd, Denmark, is the diabetes and obesity pharmaceutical leader behind semaglutide — sold as Ozempic (type 2 diabetes), Wegovy (obesity), and Rybelsus (oral). In fiscal 2024, Novo reported revenue of roughly DKK 290 billion (about $42 billion), up around a quarter, and net income of roughly DKK 100 billion (about $15 billion). For a stretch it was Europe's most valuable company.
+
+Then the narrative cracked. The CagriSema obesity trial read out below expectations in late 2024; U.S. Wegovy growth slowed under compounded copycats and fierce competition from Eli Lilly's tirzepatide, which outperformed in head-to-head weight-loss data; guidance was cut repeatedly through 2025; the CEO was replaced mid-2025 and thousands of job cuts announced; and the controlling Novo Nordisk Foundation asserted itself in governance. Strategic responses: an oral semaglutide obesity pill filed and priced aggressively, direct-to-consumer channels (NovoCare) at reduced cash prices, legal and regulatory pressure on compounders, large manufacturing investments (including the Catalent site acquisition via its parent foundation), and pipeline bets such as amycretin. The underlying market remains enormous — GLP-1 demand still far exceeds historical precedent — but the period turned a runaway winner into a turnaround story.
+
+Latest reports: investor relations at https://www.novonordisk.com/investors.html.

@@ -5,6 +5,7 @@ mod clip;
 mod commands;
 mod connectors;
 mod db;
+mod examples;
 mod filesearch;
 mod gist;
 mod git;

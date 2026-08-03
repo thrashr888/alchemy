@@ -1,0 +1,7 @@
+Example data: figures summarized from public FY2024–FY2025 reporting; verify before relying on them.
+
+LVMH Moët Hennessy Louis Vuitton SE (EPA: MC), headquartered in Paris and controlled by the Arnault family, is the world's largest luxury group: 75 maisons spanning fashion and leather goods (Louis Vuitton, Dior, Celine, Loewe), wines and spirits (Moët, Hennessy), watches and jewelry (Tiffany, Bulgari, TAG Heuer), perfumes and cosmetics, and selective retail (Sephora, DFS). In fiscal 2024, LVMH reported revenue of about €85 billion and net income of roughly €12.5 billion, down modestly from the post-pandemic luxury peak.
+
+Strategic themes: the luxury downcycle of 2024–2025, driven above all by weak Chinese consumer demand and the exhaustion of the aspirational customer in the West after years of price increases; fashion and leather goods — the group's profit engine, led by Vuitton and Dior — posting organic declines for several quarters before stabilizing late in the period; a prolonged slump in wines and spirits, with cognac hit by both Chinese anti-dumping measures and softer U.S. demand; Sephora as the standout performer globally; creative-director reshuffles across maisons and a leadership question as Bernard Arnault, into his mid-seventies, positions his children across the empire; U.S. tariff exposure prompting talk of expanded American production; and confidence that the long-term luxury thesis — pricing power, scarcity, brand heritage — survives the cycle.
+
+Latest reports: investor relations at https://www.lvmh.com/en/investors.

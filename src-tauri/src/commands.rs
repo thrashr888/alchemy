@@ -1029,7 +1029,7 @@ pub(crate) async fn ingest_url(
 
 /// App data dir (`config_path`'s parent) — capture memory, git host memory,
 /// and git cache checkouts live here.
-fn app_data_dir(state: &AppState) -> std::path::PathBuf {
+pub(crate) fn app_data_dir(state: &AppState) -> std::path::PathBuf {
     state
         .config_path
         .parent()
