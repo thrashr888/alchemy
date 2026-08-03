@@ -234,9 +234,11 @@ export interface GrepHit {
 
 /** One global-search result (command menu). */
 export interface SearchHit {
-  kind: "source" | "note" | "content";
+  kind: "source" | "note" | "content" | "card" | "ledger";
   notebookId: string;
-  /** Source id for source/content hits; note id for note hits. */
+  /** Source id for source/content hits, note id for notes, card id for
+   *  registry cards (which carry no notebookId — they're corpus-scoped),
+   *  entry id for ledger rows. */
   id: string;
   title: string;
   snippet: string;

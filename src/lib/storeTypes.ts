@@ -127,6 +127,13 @@ export interface AppState {
   registryBump: number;
   /** Home's center column: the notebook grid, or the Registry's cast. */
   homeSection: "notebooks" | "registry";
+  /** How that column lays out. Cards are recognisable, rows are scannable
+   *  and sortable — which one is "easier to find things in" depends on the
+   *  collection, so it's a per-user choice, remembered. */
+  homeView: "grid" | "table";
+  /** Inline title filter over whichever section is showing. Not persisted:
+   *  a filter you forgot you set is a collection that looks half-empty. */
+  homeQuery: string;
   /** Card the Registry section has open; null shows the grid. */
   openCardId: string | null;
   pendingNewNote: boolean;

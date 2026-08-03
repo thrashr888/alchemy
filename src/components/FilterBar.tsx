@@ -68,6 +68,7 @@ export function FilterBar({
   onChip,
   chipAllLabel = "All tags",
   chipPrefix = "#",
+  bare = false,
 }: {
   /** Primary axis. Renders only when there's a real choice (>2 options,
    *  i.e. "All" plus at least two kinds). */
@@ -80,12 +81,21 @@ export function FilterBar({
   onChip?: (value: string | null) => void;
   chipAllLabel?: string;
   chipPrefix?: string;
+  /** Embedded in a content column rather than spanning the pane: drops the
+   *  full-bleed hairline and the pane padding, which otherwise draw a band
+   *  across the width and leave dead clickable space beside the chips. */
+  bare?: boolean;
 }) {
   const showGroups = groups.length > 2;
   const showChips = (chips?.length ?? 0) > 0 && !!onChip;
   if (!showGroups && !showChips) return null;
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-4 py-1.5">
+    <div
+      className={cn(
+        "flex shrink-0 flex-wrap items-center gap-1",
+        bare ? "mb-3" : "border-b border-border px-4 py-1.5",
+      )}
+    >
       {showGroups &&
         groups.map((g) => (
           <FilterButton

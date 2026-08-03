@@ -29,6 +29,11 @@ import {
   useConfirm,
 } from "./ui";
 import { FilterBar, rankByCount } from "./FilterBar";
+import {
+  HomeTable,
+  HomeViewControls,
+  matchesHomeQuery,
+} from "./HomeViewControls";
 import { cn, relativeTime } from "@/lib/utils";
 import {
   ArrowLeft,
@@ -96,6 +101,8 @@ function receipt(a: CardAttachment) {
 export function RegistrySection() {
   const registryBump = useStore((s) => s.registryBump);
   const openCardId = useStore((s) => s.openCardId);
+  const view = useStore((s) => s.homeView);
+  const query = useStore((s) => s.homeQuery);
   const [cards, setCards] = useState<RegistryCard[]>([]);
   const [kind, setKind] = useState<string>("all");
   const [notebook, setNotebook] = useState<string | null>(null);
@@ -155,6 +162,7 @@ export function RegistrySection() {
   const shown = useMemo(
     () =>
       mine.filter((c) => {
+        if (!matchesHomeQuery(query, c.name, c.identifiers)) return false;
         if (kind !== "all" && c.kind !== kind) return false;
         if (notebook !== null) {
           const inNb = c.attachments.some(
@@ -164,7 +172,7 @@ export function RegistrySection() {
         }
         return true;
       }),
-    [mine, kind, notebook, nbTitle],
+    [mine, kind, notebook, nbTitle, query],
   );
 
   const open = cards.find((c) => c.id === openCardId) ?? null;
@@ -180,19 +188,28 @@ export function RegistrySection() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <FilterBar
-        groups={kinds}
-        group={kinds.some((k) => k.value === kind) ? kind : "all"}
-        onGroup={setKind}
-        chips={nbChips}
-        chip={notebook !== null && nbChips.includes(notebook) ? notebook : null}
-        onChip={setNotebook}
-        chipAllLabel="All notebooks"
-        chipPrefix=""
-      />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-[960px] px-6 pb-10 pt-4">
+        <div className="mx-auto w-full max-w-[960px] px-6 pb-10">
           <SuggestionStrip cards={suggested} onChanged={load} />
+          {mine.length > 0 && (
+            <HomeViewControls placeholder="Filter cards by name or identifier…" />
+          )}
+          {/* Kind groups and notebook chips sit inside the content column,
+              under the controls — full-bleed they drew a band across the
+              pane with dead clickable space beside them. */}
+          <FilterBar
+            bare
+            groups={kinds}
+            group={kinds.some((k) => k.value === kind) ? kind : "all"}
+            onGroup={setKind}
+            chips={nbChips}
+            chip={
+              notebook !== null && nbChips.includes(notebook) ? notebook : null
+            }
+            onChip={setNotebook}
+            chipAllLabel="All notebooks"
+            chipPrefix=""
+          />
           {loaded && mine.length === 0 ? (
             <EmptyState
               icon={<Package className="h-5 w-5" />}
@@ -208,6 +225,12 @@ export function RegistrySection() {
                 New card
               </Button>
             </EmptyState>
+          ) : view === "table" ? (
+            <CardTable
+              cards={shown}
+              nbTitle={nbTitle}
+              onNew={() => setCreating(true)}
+            />
           ) : (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
               <button
@@ -227,6 +250,13 @@ export function RegistrySection() {
               ))}
             </div>
           )}
+          {shown.length === 0 && mine.length > 0 && (
+            <EmptyState
+              compact
+              title={`No card matches \u201c${query.trim()}\u201d`}
+              hint="The filter looks at names and identifiers."
+            />
+          )}
         </div>
       </div>
       <NewCardModal
@@ -238,6 +268,59 @@ export function RegistrySection() {
         }}
       />
     </div>
+  );
+}
+
+/** The "Filed under" row in the reader's document-properties grid.
+ *  The rail (CardRail) is the working surface; this is the *fact* — what
+ *  this document belongs to, sitting with Type/Added/Tags where a reader
+ *  looks for a document's identity. Renders nothing when the document is
+ *  filed nowhere, like every other optional row in that grid. */
+export function CardMetaRow({ sourceId }: { sourceId: string }) {
+  const registryBump = useStore((s) => s.registryBump);
+  const [cards, setCards] = useState<RegistryCard[]>([]);
+
+  useEffect(() => {
+    if (!sourceId) return;
+    let alive = true;
+    void api.cardsForSource(sourceId).then((c) => alive && setCards(c));
+    return () => {
+      alive = false;
+    };
+  }, [sourceId, registryBump]);
+
+  if (cards.length === 0) return null;
+  return (
+    <>
+      <span className="text-subtle-foreground">Filed under</span>
+      <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        {cards.map((c) => {
+          const a = c.attachments.find((x) => x.sourceId === sourceId)!;
+          return (
+            <button
+              key={c.id}
+              onClick={() => {
+                useStore.getState().closeNotebook();
+                useStore.setState({
+                  homeSection: "registry",
+                  openCardId: c.id,
+                });
+              }}
+              title={`${kindLabel(c.kind)} \u00b7 ${receipt(a)}`}
+              className="inline-flex items-center gap-1 text-foreground transition-colors hover:text-primary"
+            >
+              <span className="text-muted-foreground">{kindIcon(c.kind)}</span>
+              {c.name}
+              {a.status === "proposed" && (
+                <span className="rounded border border-border px-1 text-micro text-muted-foreground">
+                  proposed
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </span>
+    </>
   );
 }
 
@@ -448,6 +531,82 @@ export function AttachToCardModal({
         </div>
       </div>
     </Modal>
+  );
+}
+
+/** The scannable form of the cast: one row per card, columns you can read
+    down. Same data, same click target — only the shape differs. */
+function CardTable({
+  cards,
+  nbTitle,
+  onNew,
+}: {
+  cards: RegistryCard[];
+  nbTitle: (id: string) => string;
+  onNew: () => void;
+}) {
+  return (
+    <>
+      <HomeTable
+        columns={[
+          { key: "name", label: "Name" },
+          { key: "kind", label: "Kind" },
+          { key: "docs", label: "Documents", className: "text-right" },
+          { key: "nb", label: "Notebooks" },
+          { key: "id", label: "Identifiers" },
+        ]}
+      >
+        {cards.map((c) => {
+          const notebooks = [
+            ...new Set(
+              c.attachments
+                .filter((a) => a.status !== "rejected")
+                .map((a) => nbTitle(a.notebookId))
+                .filter(Boolean),
+            ),
+          ];
+          const pending = proposed(c).length;
+          return (
+            <tr
+              key={c.id}
+              onClick={() => useStore.setState({ openCardId: c.id })}
+              className="cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2"
+            >
+              <td className="px-3 py-2">
+                <span className="flex items-center gap-2">
+                  <span className="text-muted-foreground">
+                    {kindIcon(c.kind)}
+                  </span>
+                  <span className="truncate font-medium">{c.name}</span>
+                  {pending > 0 && (
+                    <span
+                      className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+                      title={`${pending} waiting`}
+                    />
+                  )}
+                </span>
+              </td>
+              <td className="px-3 py-2 text-caption text-muted-foreground">
+                {kindLabel(c.kind)}
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+                {confirmed(c).length}
+              </td>
+              <td className="px-3 py-2 text-caption text-muted-foreground">
+                {notebooks.join(", ")}
+              </td>
+              <td className="px-3 py-2 text-caption text-subtle-foreground">
+                {c.identifiers}
+              </td>
+            </tr>
+          );
+        })}
+      </HomeTable>
+      <Button variant="secondary" className="mt-3" onClick={onNew}>
+        <Plus className="h-4 w-4" />
+        New card
+      </Button>
+    </>
   );
 }
 
@@ -703,6 +862,18 @@ function CardDetail({
   const { confirm, dialog } = useConfirm();
   const [titles, setTitles] = useState<Map<string, Source>>(new Map());
 
+  // Escape backs out, the way it leaves the reader — a detail view you can
+  // only exit by finding the right button is a dead end.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !document.querySelector('[role="dialog"]')) {
+        onBack();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onBack]);
+
   // Resolve attached documents across every notebook they live in — a card
   // spans notebooks, so the open notebook's source list isn't enough.
   useEffect(() => {
@@ -800,13 +971,10 @@ function CardDetail({
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-[760px] px-6 pb-10 pt-4">
-        <button
-          onClick={onBack}
-          className="mb-4 flex items-center gap-1.5 text-caption text-muted-foreground transition-colors hover:text-foreground"
-        >
+        <Button variant="secondary" size="sm" className="mb-4" onClick={onBack}>
           <ArrowLeft className="h-3.5 w-3.5" />
-          Registry
-        </button>
+          All cards
+        </Button>
 
         <div className="flex items-start gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-muted-foreground">

@@ -12,7 +12,7 @@ import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import type { Citation, Note, Source, Template } from "@/lib/types";
 import { AmbientRail } from "./AmbientRail";
-import { CardRail } from "./RegistrySection";
+import { CardMetaRow, CardRail } from "./RegistrySection";
 import { activeParagraph } from "@/lib/utils";
 import { AudioPlayer, DialogueScript } from "./AudioNote";
 import { Flashcards } from "./Flashcards";
@@ -1601,6 +1601,7 @@ function DocProperties({
             click to edit in place, so the empty state teaches the feature. */}
         {source && (
           <>
+            <CardMetaRow sourceId={source.id} />
             <MetaEditable
               label="Tags"
               raw={source.tags}

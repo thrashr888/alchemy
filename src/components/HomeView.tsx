@@ -23,7 +23,7 @@ import {
   relativeTime,
   shortcutBlocked,
 } from "@/lib/utils";
-import type { Note, SourceEvent } from "@/lib/types";
+import type { Note, Notebook, SourceEvent } from "@/lib/types";
 import {
   Archive,
   ArchiveRestore,
@@ -43,6 +43,11 @@ import {
 } from "lucide-react";
 import { BriefSidebar, SidebarRail, StaffSidebar } from "./HomeSections";
 import { RegistrySection } from "./RegistrySection";
+import {
+  HomeTable,
+  HomeViewControls,
+  matchesHomeQuery,
+} from "./HomeViewControls";
 
 // Keep this list in sync with Rust in `src-tauri/src/db.rs` (`NOTEBOOK_PALETTE`)
 // and the `set_notebook_color` validator in `src-tauri/src/commands.rs`.
@@ -56,6 +61,67 @@ const NOTEBOOK_PALETTE = [
   "#4fc1c9",
   "#98a562",
 ];
+
+/** The scannable form of the notebook shelf. Same rows the grid shows, read
+ *  down columns instead of across cards. */
+function NotebookTable({
+  notebooks,
+  onOpen,
+  onNew,
+  unreadByNb,
+}: {
+  notebooks: Notebook[];
+  onOpen: (id: string) => void;
+  onNew: () => void;
+  unreadByNb: Map<string, number>;
+}) {
+  return (
+    <>
+      <HomeTable
+        columns={[
+          { key: "title", label: "Title" },
+          { key: "sources", label: "Sources", className: "text-right" },
+          { key: "updated", label: "Updated" },
+        ]}
+      >
+        {notebooks.map((nb) => (
+          <tr
+            key={nb.id}
+            onClick={() => onOpen(nb.id)}
+            className="cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2"
+          >
+            <td className="px-3 py-2">
+              <span className="flex items-center gap-2">
+                <span
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{ backgroundColor: nb.color || NOTEBOOK_PALETTE[0] }}
+                  aria-hidden
+                />
+                <span className="truncate font-medium">{nb.title}</span>
+                {(unreadByNb.get(nb.id) ?? 0) > 0 && (
+                  <span
+                    className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+                    title={`${unreadByNb.get(nb.id)} unread`}
+                  />
+                )}
+              </span>
+            </td>
+            <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+              {nb.sourceCount}
+            </td>
+            <td className="px-3 py-2 text-caption text-muted-foreground">
+              {relativeTime(nb.updatedAt)}
+            </td>
+          </tr>
+        ))}
+      </HomeTable>
+      <Button variant="secondary" className="mt-3" onClick={onNew}>
+        <Plus className="h-4 w-4" />
+        New notebook
+      </Button>
+    </>
+  );
+}
 
 /** Home's center switch, the exact sibling of the notebook's
  *  Chat|Reader|Gallery|Ledger tabs (CenterModeTabs, ReaderPane.tsx): one
@@ -109,6 +175,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const setStatus = useStore((s) => s.setNotebookStatus);
   const theme = useStore((s) => s.theme);
   const homeSection = useStore((s) => s.homeSection);
+  const homeView = useStore((s) => s.homeView);
+  const homeQuery = useStore((s) => s.homeQuery);
   // Shader must not mount under glass (rAF keeps running when display:none).
   const glassOn = useStore((s) => s.reading.glass);
 
@@ -122,6 +190,11 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [archivedOpen, setArchivedOpen] = useState(false);
   const activeNotebooks = notebooks.filter((n) => n.status !== "archived");
   const archivedNotebooks = notebooks.filter((n) => n.status === "archived");
+  // The inline filter narrows both views; the archived shelf is untouched
+  // (it's already a deliberate drill-in).
+  const shownNotebooks = activeNotebooks.filter((n) =>
+    matchesHomeQuery(homeQuery, n.title),
+  );
   // The Steward's sidebars (RFC-v12-steward UI §2, as sidebars): Staff on
   // the left, Brief above Latest Reports on the right. Each collapses on
   // its own, persisted. Registry joins when its pillar exists.
@@ -558,6 +631,18 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             ) : (
             <div className="relative min-h-0 flex-1 overflow-y-auto">
               <div className="mx-auto w-full max-w-[960px] px-6 pb-10">
+              <HomeViewControls placeholder="Filter notebooks by title…" />
+              {homeView === "table" ? (
+                <NotebookTable
+                  notebooks={shownNotebooks}
+                  onOpen={open}
+                  onNew={() => {
+                    setNewTitle("");
+                    setCreating(true);
+                  }}
+                  unreadByNb={unreadByNb}
+                />
+              ) : (
               <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
                 {/* New-notebook tile */}
                 <button
@@ -571,7 +656,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   <span className="text-body font-medium">New notebook</span>
                 </button>
 
-                {activeNotebooks.map((nb) => (
+                {shownNotebooks.map((nb) => (
                   <div
                     key={nb.id}
                     // Card content is pointer-events-none, so the hover
@@ -702,6 +787,12 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   </div>
                 ))}
               </div>
+              )}
+              {shownNotebooks.length === 0 && activeNotebooks.length > 0 && (
+                <p className="py-8 text-center text-body text-muted-foreground">
+                  No notebook matches &ldquo;{homeQuery.trim()}&rdquo;.
+                </p>
+              )}
 
               {/* Archived notebooks: collapsed row list, data intact. */}
               {archivedNotebooks.length > 0 && (

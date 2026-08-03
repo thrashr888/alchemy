@@ -8477,6 +8477,66 @@ pub async fn search_everything(
         }
     }
 
+    // Registry cards: corpus-scoped, so they carry no notebook — the palette
+    // opens them on Home rather than switching notebooks. Dismissed
+    // suggestions are refusal memory, not results.
+    for c in e(state.db.list_registry().await)?.iter().filter(|c| {
+        c.origin != "dismissed"
+            && (c.name.to_lowercase().contains(&q) || c.identifiers.contains(&q))
+    }) {
+        if hits.iter().filter(|h| h.kind == "card").count() >= 4 {
+            break;
+        }
+        hits.push(SearchHit {
+            kind: "card".into(),
+            notebook_id: String::new(),
+            id: c.id.clone(),
+            title: c.name.clone(),
+            snippet: format!(
+                "{} \u{00b7} {} document{}",
+                c.kind,
+                c.attachments
+                    .iter()
+                    .filter(|a| a.status == "confirmed")
+                    .count(),
+                if c.attachments
+                    .iter()
+                    .filter(|a| a.status == "confirmed")
+                    .count()
+                    == 1
+                {
+                    ""
+                } else {
+                    "s"
+                }
+            ),
+        });
+    }
+
+    // Ledger rows, across every notebook. The palette opens the notebook's
+    // Ledger tab, which is where a row can actually be acted on.
+    let mut ledger_hits = 0;
+    for nb in e(state.db.list_notebooks().await)? {
+        if ledger_hits >= 4 {
+            break;
+        }
+        for entry in e(state.db.list_ledger(&nb.id).await)? {
+            if ledger_hits >= 4 {
+                break;
+            }
+            if entry.text.to_lowercase().contains(&q) || entry.why.to_lowercase().contains(&q) {
+                ledger_hits += 1;
+                hits.push(SearchHit {
+                    kind: "ledger".into(),
+                    notebook_id: nb.id.clone(),
+                    id: entry.id.clone(),
+                    title: entry.text.clone(),
+                    snippet: format!("{} \u{00b7} {}", entry.kind, entry.status),
+                });
+            }
+        }
+    }
+
     let notes = e(state.db.recent_notes(usize::MAX).await)?;
     let mut note_hits = 0;
     for n in &notes {

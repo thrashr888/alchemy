@@ -32,6 +32,8 @@ import {
   Search,
   Settings,
   Sparkles,
+  Logs,
+  Package,
   SquarePen,
   Upload,
   Wand2,
@@ -444,11 +446,20 @@ export function CommandPalette() {
     const close = () => state().setPaletteOpen(false);
     return hits.map((h) => ({
       id: `hit-${h.kind}-${h.id}`,
-      group: "Search sources & notes",
+      group:
+        h.kind === "card"
+          ? "Registry"
+          : h.kind === "ledger"
+            ? "Ledger"
+            : "Search sources & notes",
       label: h.title || h.snippet.slice(0, 60) || "Untitled",
       keywords: h.snippet,
       icon:
-        h.kind === "note" ? (
+        h.kind === "card" ? (
+          <Package className="h-3.5 w-3.5" />
+        ) : h.kind === "ledger" ? (
+          <Logs className="h-3.5 w-3.5" />
+        ) : h.kind === "note" ? (
           <SquarePen className="h-3.5 w-3.5" />
         ) : (
           <FileText className="h-3.5 w-3.5" />
@@ -457,7 +468,19 @@ export function CommandPalette() {
         close();
         void (async () => {
           const s = state();
-          if (h.kind === "note") {
+          if (h.kind === "card") {
+            // Cards are corpus-scoped: leave the notebook and open the card
+            // on Home rather than switching notebooks.
+            s.closeNotebook();
+            useStore.setState({
+              homeSection: "registry",
+              openCardId: h.id,
+            });
+          } else if (h.kind === "ledger") {
+            // Open the notebook's Ledger tab — where the row can be acted on.
+            await s.selectNotebook(h.notebookId);
+            useStore.setState({ ledgerOpen: true, galleryOpen: false });
+          } else if (h.kind === "note") {
             // StudioPanel auto-opens this id once the notebook's notes load.
             useStore.setState({ justCreatedNoteId: h.id });
             if (!s.studioOpen) s.toggleStudio();
