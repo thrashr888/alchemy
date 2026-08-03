@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { NoteKind } from "@/lib/types";
 import {
   AudioLines,
+  BarChart3,
   ClipboardList,
   Clock,
   FileCode2,
@@ -87,6 +88,11 @@ const LEARNING = inFamily("learning", [
 ]);
 
 const DOCUMENTS = inFamily("documents", [
+  {
+    kind: "infographic",
+    label: "Infographic",
+    icon: <BarChart3 className="h-3.5 w-3.5" />,
+  },
   { kind: "prd", label: "PRD", icon: <ClipboardList className="h-3.5 w-3.5" /> },
   { kind: "prfaq", label: "PR/FAQ", icon: <Megaphone className="h-3.5 w-3.5" /> },
   { kind: "rfc", label: "RFC", icon: <FileCode2 className="h-3.5 w-3.5" /> },

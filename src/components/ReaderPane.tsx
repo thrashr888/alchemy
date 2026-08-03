@@ -8,6 +8,7 @@ import { AmbientRail } from "./AmbientRail";
 import { activeParagraph } from "@/lib/utils";
 import { AudioPlayer, DialogueScript } from "./AudioNote";
 import { Flashcards } from "./Flashcards";
+import { Infographic } from "./Infographic";
 import { Markdown } from "./Markdown";
 import { MindMap } from "./MindMap";
 import { QuizView } from "./QuizView";
@@ -793,6 +794,7 @@ export function ReaderPane() {
             !editing &&
             [
               "slide_deck",
+              "infographic",
               "mind_map",
               "quiz",
               "flashcards",
@@ -1304,6 +1306,68 @@ function TemplateEditor({ template }: { template: Template }) {
   );
 }
 
+/** A properties row the user can edit in place: click the value, type,
+ *  Enter or blur saves, Escape cancels. Lives inside DocProperties' grid. */
+function MetaEditable({
+  label,
+  raw,
+  display,
+  placeholder,
+  onSave,
+}: {
+  label: string;
+  raw: string;
+  display: string;
+  placeholder: string;
+  onSave: (value: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(raw);
+  useEffect(() => setValue(raw), [raw]);
+  const commit = () => {
+    setEditing(false);
+    if (value !== raw) onSave(value);
+  };
+  return (
+    <>
+      <span className="pt-px text-subtle-foreground">{label}</span>
+      {editing ? (
+        <input
+          autoFocus
+          aria-label={label}
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              commit();
+            } else if (event.key === "Escape") {
+              setValue(raw);
+              setEditing(false);
+            }
+          }}
+          className="min-w-0 rounded-sm border border-input bg-transparent px-1 text-caption text-foreground outline-none focus:border-ring"
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          title={display || placeholder}
+          className={cn(
+            "min-w-0 truncate text-left",
+            display
+              ? "text-muted-foreground hover:text-foreground"
+              : "italic text-subtle-foreground hover:text-muted-foreground",
+          )}
+        >
+          {display || placeholder}
+        </button>
+      )}
+    </>
+  );
+}
+
 function DocProperties({
   source,
   note,
@@ -1353,7 +1417,7 @@ function DocProperties({
     if (fmtDay(note.updatedAt) !== fmtDay(note.createdAt))
       rows.push({ label: "Updated", value: fmtDay(note.updatedAt) });
   }
-  if (rows.length === 0) return null;
+  if (rows.length === 0 && !source) return null;
   return (
     // data-doc-meta: excluded from find-in-source and citation anchoring —
     // matching "example.com" against the Site row would be noise.
@@ -1367,6 +1431,30 @@ function DocProperties({
             </span>
           </Fragment>
         ))}
+        {/* User metadata (RFC-source-tags): always present for sources —
+            click to edit in place, so the empty state teaches the feature. */}
+        {source && (
+          <>
+            <MetaEditable
+              label="Tags"
+              raw={source.tags}
+              display={source.tags
+                .split(" ")
+                .filter(Boolean)
+                .map((t) => `#${t}`)
+                .join(" ")}
+              placeholder="Add tags…"
+              onSave={(v) => void useStore.getState().setSourceTags(source.id, v)}
+            />
+            <MetaEditable
+              label="Note"
+              raw={source.note}
+              display={source.note}
+              placeholder="Add a note…"
+              onSave={(v) => void useStore.getState().setSourceNote(source.id, v)}
+            />
+          </>
+        )}
       </div>
     </div>
   );
@@ -2101,7 +2189,11 @@ function SourceEditor({
   onDone: (saved: boolean) => void;
 }) {
   const editSourceText = useStore((s) => s.editSourceText);
+  const setSourceTags = useStore((s) => s.setSourceTags);
+  const setSourceNote = useStore((s) => s.setSourceNote);
   const [title, setTitle] = useState(source.title);
+  const [tags, setTags] = useState(source.tags);
+  const [note, setNote] = useState(source.note);
   const [text, setText] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -2135,7 +2227,13 @@ function SourceEditor({
         event.preventDefault();
         if (saving) return;
         setSaving(true);
-        void editSourceText(source.id, title, text)
+        // Tags/note ride the same Save: cheap column updates first (they
+        // don't re-index the body), then the text edit which re-embeds.
+        const meta: Promise<unknown>[] = [];
+        if (tags !== source.tags) meta.push(setSourceTags(source.id, tags));
+        if (note !== source.note) meta.push(setSourceNote(source.id, note));
+        void Promise.all(meta)
+          .then(() => editSourceText(source.id, title, text))
           .then(() => onDone(true))
           .finally(() => setSaving(false));
       }}
@@ -2146,6 +2244,24 @@ function SourceEditor({
         value={title}
         onChange={(event) => setTitle(event.target.value)}
       />
+      <div className="flex gap-3">
+        <Input
+          name="source-tags"
+          aria-label="Source tags"
+          placeholder="Tags — space-separated, e.g. energy q3"
+          className="flex-1"
+          value={tags}
+          onChange={(event) => setTags(event.target.value)}
+        />
+        <Input
+          name="source-note"
+          aria-label="Source note"
+          placeholder="Your note — why this source matters"
+          className="flex-[2]"
+          value={note}
+          onChange={(event) => setNote(event.target.value)}
+        />
+      </div>
       <Textarea
         aria-label="Source text"
         className="min-h-0 flex-1 resize-none font-mono text-caption leading-relaxed"
@@ -2197,6 +2313,7 @@ function NoteReader({
   const fillsPane = note.kind === "slide_deck" || note.kind === "mind_map";
   const artifact =
     note.kind === "slide_deck" ||
+    note.kind === "infographic" ||
     note.kind === "mind_map" ||
     note.kind === "quiz" ||
     note.kind === "flashcards" ||
@@ -2262,6 +2379,8 @@ function NoteReader({
             <QuizView content={note.content} />
           ) : note.kind === "slide_deck" ? (
             <SlideDeck content={note.content} note={note} />
+          ) : note.kind === "infographic" ? (
+            <Infographic content={note.content} title={note.title} />
           ) : note.kind === "audio_overview" ? (
             <div className="flex flex-col gap-4">
               <AudioPlayer key={note.updatedAt} noteId={note.id} title={note.title} />

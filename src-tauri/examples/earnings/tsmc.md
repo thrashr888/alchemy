@@ -1,0 +1,7 @@
+Example data: figures summarized from public FY2024–FY2025 reporting; verify before relying on them.
+
+Taiwan Semiconductor Manufacturing Company (TSM), headquartered in Hsinchu, is the world's dominant contract chipmaker, fabricating the most advanced processors for Apple, NVIDIA, AMD, Qualcomm, and nearly every other leading-edge designer. In fiscal 2024, TSMC reported revenue of roughly $88–90 billion (about NT$2.9 trillion) and net income of roughly $36 billion, with growth accelerating through 2025 on AI accelerator demand; high-performance computing overtook smartphones as its largest platform.
+
+Strategic themes: effective monopoly at the leading edge — the 3-nanometer family ramped through the period and 2-nanometer entered production in 2025 — with pricing power to match; severe demand for CoWoS advanced packaging, the binding constraint on AI GPU supply, driving repeated capacity expansions; geographic diversification under geopolitical pressure, including multi-fab buildouts in Arizona (with expanded U.S. investment commitments announced in 2025), Japan (Kumamoto), and Germany, even though overseas fabs carry higher costs; the standing risk of China–Taiwan tension that hangs over the entire semiconductor supply chain; and capital expenditure in the $30–40+ billion a year range. TSMC's quarterly results and monthly revenue reports are watched as a leading indicator for the whole electronics and AI industry.
+
+Latest reports: investor relations at https://investor.tsmc.com.

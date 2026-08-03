@@ -263,15 +263,16 @@ pub struct Excerpts<'a> {
 
 /// Build the chat message list from the retrieved excerpts and the question.
 /// The citation list becomes excerpts [1..n] in order. `sources` is
-/// the full (title, url) list for the notebook — url empty for local files —
-/// so the model can answer corpus-level questions ("what documents do we
+/// the full (title, url, tags) list for the notebook — url empty for local
+/// files, tags the user's normalized tag string ("" for untagged) — so the
+/// model can answer corpus-level questions ("what documents do we
 /// have?") even when top-k retrieval only surfaced chunks from a few of them,
 /// and can propose new addable URLs derived from existing ones.
 pub fn build_chat_messages(
     history: &[ChatTurn],
     question: &str,
     excerpts: Excerpts<'_>,
-    sources: &[(String, String)],
+    sources: &[(String, String, String)],
     extra_system: &str,
     persona: &str,
     profile: &crate::inference::ContextProfile,
@@ -284,7 +285,11 @@ pub fn build_chat_messages(
         for (i, c) in citations.iter().enumerate() {
             // Notes are prior conclusions, not source documents — say so, so
             // the model never presents its own earlier synthesis as evidence.
-            let tier = if c.note_id.is_empty() {
+            // The user's own per-source annotation (RFC-source-tags) is
+            // labeled as their judgment, not corpus evidence.
+            let tier = if c.snote {
+                "your note on"
+            } else if c.note_id.is_empty() {
                 "from"
             } else {
                 "from note"
@@ -349,12 +354,16 @@ pub fn build_chat_messages(
     } else {
         let mut out = String::new();
         let mut shown = 0usize;
-        for (title, url) in sources {
-            let line = if url.is_empty() {
-                format!("- {title}")
-            } else {
-                format!("- {title} — {url}")
-            };
+        for (title, url, tags) in sources {
+            // `- {title} · {tags} — {url}` — the tag arm only when the user
+            // tagged the source (RFC-source-tags §Prompt surfaces).
+            let mut line = format!("- {title}");
+            if !tags.is_empty() {
+                line.push_str(&format!(" · {tags}"));
+            }
+            if !url.is_empty() {
+                line.push_str(&format!(" — {url}"));
+            }
             if !out.is_empty() && out.len() + line.len() + 1 > profile.manifest_chars {
                 break;
             }
@@ -530,6 +539,7 @@ pub const ARTIFACT_KINDS: &[&str] = &[
     "data_table",
     "audio_overview",
     "slide_deck",
+    "infographic",
     "mind_map",
     "problems",
     "evidence",
@@ -698,6 +708,59 @@ pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
              Takeaways` slide of 3-5 bullets that pays off the title slide's promise and says \
              what to do next. Output ONLY the deck markdown: no code fences around it, no \
              speaker notes, no prose outside the slides.",
+        )),
+        "infographic" => Some((
+            "Infographic",
+            "Distill the sources below into a one-page infographic, working like an information \
+             designer: lead with the sharpest numbers, keep every label short, and let the data \
+             carry the story. Output strict Markdown in exactly the shape below — a native \
+             renderer draws the visuals from it, and ONLY these shapes render.\n\
+             Line 1: `# <title>` — punchy, under 8 words. Then ONE optional hook: a single short \
+             paragraph (or a `> quote`) stating the big takeaway.\n\
+             Then 4-7 `## <section>` blocks, section titles 2-5 words. Each section body is \
+             exactly ONE of these shapes — never mix shapes inside a section:\n\
+             - Stat tiles: 2-4 consecutive lines, each exactly `**<value>** — <label>`, where \
+               <value> is a short figure (`**73%**`, `**4.2M**`, `**$18B**`) and <label> is \
+               under 10 words.\n\
+             - Bar chart: a 2-column GFM table — first column the item name, second column a \
+               plain number in one consistent unit (a suffix like `%` or `ms` is fine); 3-8 \
+               rows. The renderer draws proportional bars from the numbers.\n\
+             - Fact cards: 3-5 `- ` bullets, each a self-contained fact under 20 words.\n\
+             - Timeline: 3-6 `- ` bullets, EVERY one starting with a date then a dash \
+               (`- 2019 — first pilot`, `- Q3 2025 — 1M users`), in chronological order. \
+               Use only when the sources give real dates.\n\
+             - Funnel: a 2-column GFM table whose first header cell is exactly `Stage`, \
+               stages in order with decreasing numbers (pipelines, conversions, drop-offs). \
+               Any other numeric table renders as a bar chart, so the `Stage` header is what \
+               makes it a funnel.\n\
+             - Comparison: exactly two `### <name>` subheadings, each followed by 2-4 `- ` \
+               bullets — for a head-to-head contrast of two options, eras, or rivals.\n\
+             - Callout: one `> ` blockquote with a genuinely quotable line from the sources, \
+               then an attribution line starting with `—` if the speaker is known.\n\
+             - Narrative: one short paragraph of 2-3 sentences — at most once in the piece.\n\
+             A worked example of the shape (structure only — your content comes from the \
+             sources):\n\
+             # The State of the Fleet\n\
+             Electric buses went from pilot to plurality in five years.\n\
+             ## Adoption\n\
+             **61%** — of the fleet is electric today\n\
+             **5 yrs** — from first pilot to majority\n\
+             **$0** — spent on diesel since March\n\
+             ## Cost per mile\n\
+             | Mode | Cents |\n\
+             | --- | --- |\n\
+             | Diesel | 92 |\n\
+             | Hybrid | 71 |\n\
+             | Electric | 38 |\n\
+             ## The road here\n\
+             - 2019 — three-bus pilot approved\n\
+             - 2021 — first depot fully converted\n\
+             - 2024 — electric passes 50% of fleet\n\
+             Every number and claim must come from the sources — never invent, estimate, or \
+             round beyond what they state; if the corpus lacks concrete numbers for tiles or \
+             bars, use fact cards instead of manufacturing data. Cover the whole corpus, \
+             sharpest facts first. Output ONLY the infographic markdown: no code fences, no \
+             HTML, no prose outside the structure.",
         )),
         "mind_map" => Some((
             "Mind Map",
@@ -912,10 +975,53 @@ mod tests {
             source_path: String::new(),
             note_id: String::new(),
             gist: false,
+            snote: false,
             ordinal: 0,
             snippet: snippet.into(),
             distance: 0.0,
         }
+    }
+
+    /// RFC-source-tags: manifest lines carry the user's tags between title
+    /// and url (`- {title} · {tags} — {url}`), untagged sources keep the old
+    /// shape, and an snote hit is labeled as the user's own judgment.
+    #[test]
+    fn manifest_carries_tags_and_snote_hits_are_labeled() {
+        let snote_hit = Citation {
+            snote: true,
+            ..cite("c1", "saved this for the benchmarks chapter")
+        };
+        let sources = vec![
+            (
+                "Tagged Doc".to_string(),
+                "https://x.dev".to_string(),
+                "rust lance".to_string(),
+            ),
+            ("Plain Doc".to_string(), String::new(), String::new()),
+        ];
+        let messages = build_chat_messages(
+            &[],
+            "q",
+            Excerpts {
+                citations: &[snote_hit],
+                expanded: &HashMap::new(),
+            },
+            &sources,
+            "",
+            "",
+            &crate::inference::ContextProfile::default(),
+        );
+        let prompt = messages
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(prompt.contains("- Tagged Doc · rust lance — https://x.dev"));
+        assert!(prompt.contains("- Plain Doc\n"), "untagged line unchanged");
+        assert!(
+            prompt.contains("(your note on \"Doc\")"),
+            "snote excerpts read as the user's judgment: {prompt}"
+        );
     }
 
     /// The clarify instruction is gated on retrieval thinness: a healthy

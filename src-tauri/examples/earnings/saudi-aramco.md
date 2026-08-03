@@ -1,0 +1,7 @@
+Example data: figures summarized from public FY2024–FY2025 reporting; verify before relying on them.
+
+Saudi Arabian Oil Company (Saudi Aramco, Tadawul: 2222) is the world's largest integrated oil and gas company, majority-owned by the Saudi state and listed in Riyadh. It produces on the order of nine to ten million barrels of crude per day at the industry's lowest extraction costs, and operates large downstream refining and chemicals businesses. In fiscal 2024, Aramco reported revenue of roughly $480 billion and net income of about $106 billion — down from the windfall years of 2022–2023 as oil prices moderated and OPEC+ production curbs held Saudi output below capacity.
+
+Strategic themes: the tension between Aramco's enormous dividend — well over $80 billion a year, including special payouts that were trimmed in 2025 as prices softened — and the Saudi government's budget needs under Vision 2030; sustained capital spending on maintaining maximum sustainable capacity, expanding natural gas (the Jafurah shale project), and growing petrochemicals via downstream integration; long-term crude placement agreements with Asian refiners, its dominant market; and measured investments in lower-carbon technologies (blue hydrogen, carbon capture) alongside a public stance that oil demand will remain robust for decades. Aramco remains among the world's most valuable companies, and its results are effectively a proxy for the oil market itself.
+
+Latest reports: investor relations at https://www.aramco.com/en/investors.

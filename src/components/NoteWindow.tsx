@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useStore } from "@/lib/store";
 import { Flashcards } from "./Flashcards";
+import { Infographic } from "./Infographic";
 import { Markdown } from "./Markdown";
 import { MindMap } from "./MindMap";
 import { QuizView } from "./QuizView";
@@ -75,6 +76,8 @@ export function NoteWindow({ noteId }: { noteId: string }) {
             <QuizView content={note.content} />
           ) : note.kind === "slide_deck" ? (
             <SlideDeck content={note.content} note={note} />
+          ) : note.kind === "infographic" ? (
+            <Infographic content={note.content} title={note.title} />
           ) : note.kind === "audio_overview" ? (
             <div className="flex flex-col gap-4">
               <AudioPlayer noteId={note.id} title={note.title} key={note.updatedAt} />

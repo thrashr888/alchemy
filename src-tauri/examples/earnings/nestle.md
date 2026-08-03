@@ -1,0 +1,7 @@
+Example data: figures summarized from public FY2024–FY2025 reporting; verify before relying on them.
+
+Nestlé S.A. (SWX: NESN), headquartered in Vevey, Switzerland, is the world's largest food and beverage company: coffee (Nescafé, Nespresso), petcare (Purina), infant nutrition, water, confectionery (KitKat), frozen and culinary brands, and health science. In fiscal 2024, Nestlé reported sales of about CHF 91 billion and net income of roughly CHF 11 billion. Organic growth slowed to around 2 percent — well below the inflation-era peaks — as volumes recovered only gradually and pricing normalized.
+
+The period was defined by upheaval at the top: CEO Mark Schneider was abruptly replaced in mid-2024 by company veteran Laurent Freixe, who was himself dismissed in 2025 over an undisclosed relationship, with Philipp Navratil taking over — three chief executives in scarcely more than a year, followed by the long-time chairman's early exit and an announced cut of some 16,000 jobs. Strategic themes beneath the drama: a back-to-basics push on advertising investment and volume-led growth in coffee and petcare, the two structural winners; fixing underperformers (frozen food in the U.S., water, and the health science unit after its vitamin stumble); portfolio reviews of laggard brands; input-cost swings in coffee and cocoa testing pricing power; and GLP-1-era questions about packaged-food demand, which Nestlé answers with protein, portion, and "food for longevity" positioning.
+
+Latest reports: investor relations at https://www.nestle.com/investors.

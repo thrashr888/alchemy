@@ -1231,6 +1231,8 @@ async fn eval_enrichment_reembed() {
         error: String::new(),
         parent_id: String::new(),
         mtime: 0,
+        tags: String::new(),
+        note: String::new(),
     };
     db.insert_source(&source, &tuples, &embeddings)
         .await
@@ -1892,6 +1894,8 @@ async fn run_scale(ai: &crate::ai::Ai, target_chars: usize) -> (f64, f64, usize)
             error: String::new(),
             parent_id: String::new(),
             mtime: 0,
+            tags: String::new(),
+            note: String::new(),
         };
         total_chars += source.char_count;
         db.insert_source(&source, &tuples, &vecs)

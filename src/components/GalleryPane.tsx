@@ -96,6 +96,9 @@ export function GalleryPane() {
   const [sweeping, setSweeping] = useState(false);
   const [folderId, setFolderId] = useState<string | null>(null);
   const [filter, setFilter] = useState<TypeGroup>("all");
+  /** Tag chip filter (RFC-source-tags): null = all. Chips show only tags
+   *  present at this level, so the row disappears in untagged notebooks. */
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [sort, setSort] = useState<SortMode>(
     () => (localStorage.getItem("gallerySort") as SortMode) || "recent",
   );
@@ -127,6 +130,7 @@ export function GalleryPane() {
   useEffect(() => {
     setFolderId(null);
     setFilter("all");
+    setTagFilter(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentId]);
   const folder = folderId
@@ -149,9 +153,23 @@ export function GalleryPane() {
     ).filter((g) => present.has(g)),
   ];
   const effectiveFilter = groups.includes(filter) ? filter : "all";
+  // Every tag present at this level for the chip row — biggest first
+  // (most-used tags are the likeliest filters), alphabetical on ties.
+  const tagCounts = new Map<string, number>();
+  for (const s of level)
+    for (const t of s.tags ? s.tags.split(" ") : [])
+      tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1);
+  const levelTags = [...tagCounts.keys()].sort(
+    (a, b) => tagCounts.get(b)! - tagCounts.get(a)! || a.localeCompare(b),
+  );
+  const effectiveTag =
+    tagFilter && levelTags.includes(tagFilter) ? tagFilter : null;
   const cards = level
     .filter(
       (s) => effectiveFilter === "all" || GROUP_OF[s.sourceType] === effectiveFilter,
+    )
+    .filter(
+      (s) => !effectiveTag || (s.tags ? s.tags.split(" ") : []).includes(effectiveTag),
     )
     .sort((a, b) =>
       sort === "title"
@@ -365,24 +383,63 @@ export function GalleryPane() {
           ))}
         </div>
       </div>
-      {groups.length > 2 && (
-        <div className="flex shrink-0 items-center gap-1 border-b border-border px-4 py-1.5">
-          {groups.map((g) => (
-            <button
-              key={g}
-              type="button"
-              onClick={() => setFilter(g)}
-              aria-pressed={effectiveFilter === g}
-              className={cn(
-                "rounded-md px-2 py-1 text-caption transition-colors",
-                effectiveFilter === g
-                  ? "bg-surface-2 font-medium text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {g === "all" ? "All" : GROUP_LABEL[g]}
-            </button>
-          ))}
+      {/* One filter bar: type groups, then tag chips — independent axes
+          (a source matches both filters), separated by a hairline dot. */}
+      {(groups.length > 2 || levelTags.length > 0) && (
+        <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-4 py-1.5">
+          {groups.length > 2 &&
+            groups.map((g) => (
+              <button
+                key={g}
+                type="button"
+                onClick={() => setFilter(g)}
+                aria-pressed={effectiveFilter === g}
+                className={cn(
+                  "rounded-md px-2 py-1 text-caption transition-colors",
+                  effectiveFilter === g
+                    ? "bg-surface-2 font-medium text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {g === "all" ? "All" : GROUP_LABEL[g]}
+              </button>
+            ))}
+          {groups.length > 2 && levelTags.length > 0 && (
+            <span aria-hidden className="mx-1.5 h-3.5 w-px bg-border-strong" />
+          )}
+          {levelTags.length > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={() => setTagFilter(null)}
+                aria-pressed={effectiveTag === null}
+                className={cn(
+                  "rounded-md px-2 py-1 text-caption transition-colors",
+                  effectiveTag === null
+                    ? "bg-surface-2 font-medium text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                All tags
+              </button>
+              {levelTags.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setTagFilter((cur) => (cur === t ? null : t))}
+                  aria-pressed={effectiveTag === t}
+                  className={cn(
+                    "rounded-md px-2 py-1 text-caption transition-colors",
+                    effectiveTag === t
+                      ? "bg-surface-2 font-medium text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  #{t}
+                </button>
+              ))}
+            </>
+          )}
         </div>
       )}
       {cards.length === 0 ? (
@@ -390,12 +447,14 @@ export function GalleryPane() {
           <EmptyState
             icon={<LayoutGrid className="h-5 w-5" />}
             title={
-              effectiveFilter === "all"
-                ? "Nothing to explore yet"
-                : "Nothing of this type here"
+              effectiveTag !== null
+                ? "Nothing with this tag here"
+                : effectiveFilter === "all"
+                  ? "Nothing to explore yet"
+                  : "Nothing of this type here"
             }
             hint={
-              effectiveFilter === "all"
+              effectiveFilter === "all" && effectiveTag === null
                 ? "Add sources and they'll appear here as cards."
                 : undefined
             }
@@ -455,13 +514,15 @@ export function GalleryPane() {
 function CardMenu({
   label,
   items,
+  onOpen,
 }: {
   label: string;
   items: React.ComponentProps<typeof RowMenu>["items"];
+  onOpen?: () => void;
 }) {
   return (
     <div className="absolute right-1.5 top-1.5 z-20 rounded-md bg-surface/80 opacity-0 backdrop-blur-sm transition group-hover:opacity-100 group-focus-within:opacity-100">
-      <RowMenu label={label} items={items} />
+      <RowMenu label={label} items={items} onOpen={onOpen} />
     </div>
   );
 }
@@ -494,7 +555,7 @@ function FolderCard({
         onClick={onOpen}
         className="z-10 cursor-pointer"
       />
-      <CardMenu label={`Options for ${s.title}`} items={menuItems} />
+      <CardMenu label={`Options for ${s.title}`} items={menuItems} onOpen={onLeave} />
       <div className="p-3">
         <div className="flex items-center gap-1.5">
           {sourceIcon(s.sourceType, s.url)}
@@ -596,7 +657,7 @@ function GalleryCard({
         onClick={() => openSourceViewer(s.id, s.title)}
         className="z-10 cursor-pointer"
       />
-      <CardMenu label={`Options for ${s.title}`} items={menuItems} />
+      <CardMenu label={`Options for ${s.title}`} items={menuItems} onOpen={onLeave} />
       {visual && (
         <img
           src={visual}

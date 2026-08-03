@@ -111,7 +111,22 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
     let search = MenuItemBuilder::with_id("menu-search", "Search & Commands…")
         .accelerator("CmdOrCtrl+K")
         .build(app)?;
+    // ⌘←/⌘→ are safe as menu accelerators here: a focused WKWebView gets
+    // performKeyEquivalent first, so inside text fields the editable consumes
+    // the key (line start/end) and the menu never fires; outside inputs the
+    // frontend's own keydown handler navigates and preventDefaults. The menu
+    // path only actually fires when the webview isn't first responder — the
+    // same double-binding ⌘K and ⌘, already use.
+    let back = MenuItemBuilder::with_id("menu-back", "Back")
+        .accelerator("CmdOrCtrl+Left")
+        .build(app)?;
+    let forward = MenuItemBuilder::with_id("menu-forward", "Forward")
+        .accelerator("CmdOrCtrl+Right")
+        .build(app)?;
     let view_menu = SubmenuBuilder::new(app, "View")
+        .item(&back)
+        .item(&forward)
+        .separator()
         .item(&search)
         .separator()
         .fullscreen()
