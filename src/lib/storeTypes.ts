@@ -154,7 +154,8 @@ export interface AppState {
   closeNotebook: () => void;
   navBack: () => void;
   navForward: () => void;
-  createNotebook: (title: string) => Promise<void>;
+  /** Resolves to the new notebook's id. */
+  createNotebook: (title: string) => Promise<string>;
   renameNotebook: (id: string, title: string) => Promise<void>;
   setNotebookColor: (id: string, color: string) => Promise<void>;
   deleteNotebook: (id: string) => Promise<void>;

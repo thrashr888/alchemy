@@ -25,6 +25,19 @@ struct ArchiveNotebookReq {
     archived: bool,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct SuggestNotebookReq {
+    /// Title of the incoming source, if known.
+    #[serde(default)]
+    title: String,
+    /// The source's text. Leave empty when passing a `url` instead.
+    #[serde(default)]
+    text: String,
+    /// A URL to file. Fetched and extracted when `text` is empty.
+    #[serde(default)]
+    url: String,
+}
+
 #[tool_router(router = notebooks_router, vis = "pub(super)")]
 impl AlchemyMcp {
     // -- Notebooks --
@@ -35,6 +48,36 @@ impl AlchemyMcp {
     async fn list_notebooks(&self) -> Result<CallToolResult, McpError> {
         let nbs: Vec<Notebook> = self.state().db.list_notebooks().await.map_err(internal)?;
         json_result(&nbs)
+    }
+
+    #[tool(
+        description = "Ask where an unfiled source belongs before adding it. Returns {notebookId, title, isNew}: an existing notebook to file into, or isNew=true with a proposed title when nothing fits (create it, then add). Pass the text, or just a url and it will be fetched."
+    )]
+    async fn suggest_notebook(
+        &self,
+        Parameters(SuggestNotebookReq { title, text, url }): Parameters<SuggestNotebookReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let (title, text) = if text.trim().is_empty() && !url.trim().is_empty() {
+            match crate::ingest::extract_url(&url).await {
+                Ok(ex) => (
+                    if title.trim().is_empty() {
+                        ex.title
+                    } else {
+                        title
+                    },
+                    ex.text,
+                ),
+                Err(_) => (if title.is_empty() { url.clone() } else { title }, url),
+            }
+        } else {
+            (title, text)
+        };
+        // Snapshot the Ai under a momentary read guard, never across an await.
+        let ai = self.state().ai.read().await.clone();
+        let suggestion = crate::router::suggest_notebook(&self.state().db, &ai, &title, &text)
+            .await
+            .map_err(internal)?;
+        json_result(&suggestion)
     }
 
     #[tool(description = "Create a new notebook and return it (including its id).")]

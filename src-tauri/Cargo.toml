@@ -33,7 +33,6 @@ uuid = { version = "1.23.4", features = ["v4"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 arrow-array = "58"
 arrow-schema = "58"
-pdf-extract = "0.12.0"
 calamine = "0.26"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 base64 = "0.22"
@@ -86,6 +85,7 @@ tauri-plugin-liquid-glass = "0.1.6"
 ast-grep-language = { version = "0.44.1", default-features = false, features = ["tree-sitter-rust", "tree-sitter-typescript", "tree-sitter-javascript", "tree-sitter-python", "tree-sitter-go", "tree-sitter-ruby", "tree-sitter-java", "tree-sitter-swift", "tree-sitter-c", "tree-sitter-cpp", "tree-sitter-php", "tree-sitter-html", "tree-sitter-bash", "tree-sitter-hcl"] }
 ast-grep-core = "0.44.1"
 exif = { version = "0.6.1", package = "kamadak-exif" }
+pdf-inspector = "0.1.7"
 
 # Already in the tree via tauri/wry — traffic-light insets, the Services
 # provider (services.rs), and Spotlight indexing (spotlight.rs).

@@ -1,4 +1,11 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
@@ -502,6 +509,10 @@ export function ReaderPane() {
   const [editing, setEditing] = useState(false);
   const [liveMode, setLiveMode] = useState(false);
   const [imageMode, setImageMode] = useState(true);
+  // PDFs open as text, not pages: the reader is where citations land, and
+  // find/highlight/select-to-ask all live on the text view. Pages are one
+  // click away for anyone who wants the original layout.
+  const [pageMode, setPageMode] = useState(false);
   useEffect(() => {
     setFindOpen(false);
     setEditing(false);
@@ -754,6 +765,31 @@ export function ReaderPane() {
               ))}
             </div>
           )}
+          {source && isPdfFile(source) && (
+            <div className="mr-1 flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5">
+              {(["text", "pages"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setPageMode(mode === "pages")}
+                  aria-pressed={pageMode === (mode === "pages")}
+                  title={
+                    mode === "pages"
+                      ? "The original pages, as laid out"
+                      : "The extracted text (searchable, citable)"
+                  }
+                  className={cn(
+                    "rounded-md px-2 py-0.5 text-micro font-medium capitalize transition-colors",
+                    pageMode === (mode === "pages")
+                      ? "bg-surface-2 text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {mode}
+                </button>
+              ))}
+            </div>
+          )}
           {source && isWebUrl(source.url) && (
             <div className="mr-1 flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5">
               {(["cached", "live"] as const).map((mode) => (
@@ -877,6 +913,7 @@ export function ReaderPane() {
             refreshTick={refreshTick}
             live={liveMode}
             imageView={imageMode}
+            pageView={pageMode}
           />
         )
       ) : note ? (
@@ -967,7 +1004,10 @@ function TocList({
               target?.scrollIntoView({ block: "start", behavior: "smooth" });
             }}
             className={cn(
-              "truncate rounded px-1.5 py-0.5 text-left text-micro leading-relaxed transition-colors",
+              // shrink-0: without it the flex column compresses entries into
+              // each other once the list outgrows the rail, and a long TOC
+              // renders as overlapping text.
+              "shrink-0 truncate rounded px-1.5 py-0.5 text-left text-micro leading-relaxed transition-colors",
               h.level === 2 && "pl-4",
               h.level === 3 && "pl-6",
               i === active
@@ -1170,6 +1210,129 @@ function ImageView({ url, title }: { url: string; title: string }) {
       ) : (
         <Spinner className="h-4 w-4" />
       )}
+    </div>
+  );
+}
+
+/** Can this source be shown as rendered pages? Only a PDF still backed by a
+ *  file on disk — a PDF harvested from the web keeps its http URL and has no
+ *  local bytes for PDFium to rasterize. */
+function isPdfFile(source: Source): boolean {
+  return (
+    source.sourceType === "pdf" && !!source.url && !isWebUrl(source.url)
+  );
+}
+
+/** The PDF as pages, rendered by PDFium (RFC-document-surface phase 5).
+ *  Pages rasterize on demand as they scroll into view — a 300-page document
+ *  costs only the pages actually looked at — and each one holds its slot with
+ *  a US-Letter-ratio placeholder so the scrollbar doesn't jump while they
+ *  arrive. This view is deliberately not searchable; the text toggle is where
+ *  find, citations, and select-to-ask live. */
+function PdfPageView({ path, title }: { path: string; title: string }) {
+  const [count, setCount] = useState(0);
+  const [failed, setFailed] = useState(false);
+  const [pages, setPages] = useState<Record<number, string>>({});
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  // One width for every page, measured once per resize: pages in a PDF share
+  // a page size almost always, and re-rendering each on its own measurement
+  // would thrash PDFium for no visible gain.
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    let stale = false;
+    setCount(0);
+    setFailed(false);
+    setPages({});
+    api
+      .pdfPageCount(path)
+      .then((n) => {
+        if (stale) return;
+        setCount(n);
+        if (n === 0) setFailed(true);
+      })
+      .catch(() => !stale && setFailed(true));
+    return () => {
+      stale = true;
+    };
+  }, [path]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const measure = () =>
+      setWidth(Math.round(Math.min(el.clientWidth - 48, 1100)));
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [count]);
+
+  // Fetch a page's bitmap the first time its placeholder intersects the
+  // viewport. Rendered pages are keyed by page number and never evicted —
+  // scrolling back up is instant, and a PNG per page is small next to the
+  // document already in memory.
+  const observe = useCallback(
+    (node: HTMLDivElement | null, page: number) => {
+      if (!node || !width || pages[page]) return;
+      const io = new IntersectionObserver(
+        (entries) => {
+          if (!entries.some((e) => e.isIntersecting)) return;
+          io.disconnect();
+          api
+            .pdfPageImage(path, page, width)
+            .then((url) => setPages((prev) => ({ ...prev, [page]: url })))
+            .catch(() => {
+              /* one unreadable page shouldn't blank the whole document */
+            });
+        },
+        { rootMargin: "600px" },
+      );
+      io.observe(node);
+    },
+    [path, width, pages],
+  );
+
+  if (failed) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+        <span className="text-body text-muted-foreground">
+          The pages could not be rendered — the file may have moved.
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-6">
+      <div className="mx-auto flex flex-col items-center gap-6">
+        {Array.from({ length: count }, (_, i) => i + 1).map((page) => (
+          <div
+            key={page}
+            ref={(node) => observe(node, page)}
+            className="w-full"
+            style={{ maxWidth: width || undefined }}
+          >
+            {pages[page] ? (
+              <img
+                src={pages[page]}
+                alt={`${title} — page ${page}`}
+                className="w-full rounded-md border border-border shadow-sm"
+              />
+            ) : (
+              <div
+                className="flex w-full items-center justify-center rounded-md border border-border bg-surface-2/40"
+                style={{ aspectRatio: "8.5 / 11" }}
+              >
+                <Spinner className="h-4 w-4" />
+              </div>
+            )}
+            <div className="pt-1.5 text-center text-micro text-subtle-foreground">
+              {page} / {count}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1469,6 +1632,7 @@ function SourceReader({
   refreshTick,
   live,
   imageView = false,
+  pageView = false,
 }: {
   source: Source;
   highlight?: string;
@@ -1478,6 +1642,7 @@ function SourceReader({
   refreshTick: number;
   live: boolean;
   imageView?: boolean;
+  pageView?: boolean;
 }) {
   const sendMessage = useStore((s) => s.sendMessage);
   const sending = useStore((s) => s.sending);
@@ -1656,7 +1821,12 @@ function SourceReader({
   // dropping to the plain view only when the passage can't be located there.
   const markdownShaped =
     source.sourceType === "markdown" ||
-    ((source.sourceType === "text" || source.sourceType === "url") &&
+    ((source.sourceType === "text" ||
+      source.sourceType === "url" ||
+      // PDFs extract to Markdown now (pdf-inspector reconstructs headings,
+      // lists and tables) — but older sources were ingested as flat text, so
+      // this still asks the content rather than trusting the type.
+      source.sourceType === "pdf") &&
       !!content &&
       looksLikeMarkdown(content));
   const richMode = markdownShaped && !(highlight && anchorFailed);
@@ -1864,6 +2034,10 @@ function SourceReader({
 
   if (source.sourceType === "image" && source.url && imageView) {
     return <ImageView url={source.url} title={source.title} />;
+  }
+
+  if (isPdfFile(source) && pageView) {
+    return <PdfPageView path={source.url} title={source.title} />;
   }
 
   if (live) {
