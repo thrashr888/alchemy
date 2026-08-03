@@ -34,6 +34,15 @@ export interface ReaderDoc {
   highlight?: string;
 }
 
+/** One app-level history entry — a place the user was: dashboard or a
+ *  notebook, plus the center-column mode (and the reader's doc, sans
+ *  highlight — a citation jump is an event, not a place). */
+export interface NavEntry {
+  nb: string | null;
+  mode: "chat" | "reader" | "ledger" | "gallery";
+  doc?: { type: ReaderDoc["type"]; id: string };
+}
+
 export interface ExternalAdd {
   files: string[];
   url: string | null;
@@ -126,6 +135,10 @@ export interface AppState {
     history: ReaderDoc[];
     index: number;
   };
+  /** Browser-style app-level history (Cmd+←/→, View ▸ Back/Forward).
+   *  Spans home ↔ notebooks and center-column modes; the reader keeps its
+   *  own doc-level history on top of this. */
+  nav: { stack: NavEntry[]; index: number };
   folderScan: { done: number; total: number; title: string } | null;
   /** Temp ids of folders inserted optimistically while their children embed —
    *  the Sources panel shows these rows with a loading affordance until
@@ -139,6 +152,8 @@ export interface AppState {
   refreshNotebooks: () => Promise<void>;
   selectNotebook: (id: string) => Promise<void>;
   closeNotebook: () => void;
+  navBack: () => void;
+  navForward: () => void;
   createNotebook: (title: string) => Promise<void>;
   renameNotebook: (id: string, title: string) => Promise<void>;
   setNotebookColor: (id: string, color: string) => Promise<void>;

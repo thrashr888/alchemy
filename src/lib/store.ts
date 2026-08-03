@@ -14,6 +14,7 @@ import { DEFAULT_CHAT_CONFIG, DEFAULT_READING_PREFS } from "./types";
 import type {
   AppState,
   Migration,
+  NavEntry,
   QueueItem,
   ReaderDoc,
 } from "./storeTypes";
@@ -111,6 +112,9 @@ function loadNoteReadsBaseline(): number {
 // Global Tauri event listeners bind once per page — React StrictMode runs
 // init() twice in dev, and a doubled menu listener spawns doubled windows.
 let listenersBound = false;
+// True while navBack/navForward replays a history entry, so the location
+// subscriber doesn't record the replay as a fresh navigation.
+let navApplying = false;
 // Monotonic toast ids (avoids Date.now collisions on rapid toasts).
 let toastSeq = 0;
 
@@ -251,6 +255,9 @@ export const useStore = create<AppState>((set, get) => {
     kokoroStatus: null,
     kokoroBusy: false,
     reader: { open: false, history: [], index: -1 },
+    // Home is always the floor of the app-level history; restores and
+    // navigations stack on top of it via the location subscriber below.
+    nav: { stack: [{ nb: null, mode: "chat" }], index: 0 },
     folderScan: null,
     importingFolders: [],
     noteReads: loadNoteReads(),
@@ -490,6 +497,8 @@ export const useStore = create<AppState>((set, get) => {
         else if (e.payload.id === "menu-export-okf") void s.exportNotebookOkf();
         else if (e.payload.id === "menu-import-okf")
           set({ importOkfOpen: true });
+        else if (e.payload.id === "menu-back") s.navBack();
+        else if (e.payload.id === "menu-forward") s.navForward();
       });
       void listen<{ target: string; id: string }>(
         "menu://open-notebook",
@@ -678,6 +687,9 @@ export const useStore = create<AppState>((set, get) => {
         reader: { open: false, history: [], index: -1 },
       });
     },
+
+    navBack: () => void applyNav(-1),
+    navForward: () => void applyNav(1),
 
     setTheme: (theme) => {
       localStorage.setItem("theme", theme);
@@ -1567,6 +1579,85 @@ export const useStore = create<AppState>((set, get) => {
       set({ noteReads });
     },
   };
+});
+
+/** Replay a history entry: move the pointer, then drive the store to that
+ *  place. Entries for since-deleted notebooks are pruned and skipped. */
+async function applyNav(delta: 1 | -1): Promise<void> {
+  // Note-reader windows render one fixed note — nothing to navigate.
+  if (window.__ALCHEMY_NOTE__) return;
+  const s = useStore.getState();
+  const { stack, index } = s.nav;
+  const at = index + delta;
+  const target = stack[at];
+  if (!target) return;
+  if (target.nb && !s.notebooks.some((n) => n.id === target.nb)) {
+    const pruned = stack.filter((_, i) => i !== at);
+    useStore.setState({
+      nav: { stack: pruned, index: delta === -1 ? index - 1 : index },
+    });
+    return applyNav(delta);
+  }
+  navApplying = true;
+  try {
+    useStore.setState({ nav: { stack, index: at } });
+    if (target.nb !== s.currentId) {
+      if (target.nb) await s.selectNotebook(target.nb);
+      else s.closeNotebook();
+    }
+    const st = useStore.getState();
+    if (target.mode === "reader" && target.doc) {
+      st.openInReader(target.doc);
+    } else {
+      useStore.setState({
+        galleryOpen: target.mode === "gallery",
+        ledgerOpen: target.mode === "ledger",
+      });
+      if (st.reader.open) st.closeReader();
+    }
+  } finally {
+    navApplying = false;
+  }
+}
+
+// Record every location change into the app-level history. All windows:
+// each window owns its own store instance and hence its own back stack.
+useStore.subscribe((s, prev) => {
+  if (
+    s.currentId === prev.currentId &&
+    s.ledgerOpen === prev.ledgerOpen &&
+    s.galleryOpen === prev.galleryOpen &&
+    s.reader === prev.reader
+  )
+    return;
+  if (navApplying) return;
+  const mode = s.galleryOpen
+    ? ("gallery" as const)
+    : s.ledgerOpen
+      ? ("ledger" as const)
+      : s.reader.open
+        ? ("reader" as const)
+        : ("chat" as const);
+  const rdoc = s.reader.open ? s.reader.history[s.reader.index] : undefined;
+  // Highlight is a one-time citation jump, not a place — drop it.
+  const doc = rdoc && { type: rdoc.type, id: rdoc.id };
+  const { stack, index } = s.nav;
+  const cur = stack[index];
+  if (
+    cur &&
+    cur.nb === s.currentId &&
+    cur.mode === mode &&
+    cur.doc?.type === doc?.type &&
+    cur.doc?.id === doc?.id
+  )
+    return;
+  // A fresh navigation discards forward entries, browser-style.
+  const next: NavEntry[] = [
+    ...stack.slice(0, index + 1),
+    { nb: s.currentId, mode, doc },
+  ];
+  if (next.length > 100) next.splice(0, next.length - 100);
+  useStore.setState({ nav: { stack: next, index: next.length - 1 } });
 });
 
 // Every failure cues once, wherever it surfaces — the global error banner or
