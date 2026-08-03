@@ -605,13 +605,26 @@ pub fn spawn_sweep(db: std::sync::Arc<Db>, ai: Ai) {
                 // Gists converged; spend the batch on chunk enrichment (RFC §2
                 // "gists first, chunks only when idle"). Enrichment ends the
                 // sweep only when it, too, has nothing left to do.
-                Ok((0, 0)) => match ensure_enrichment(&db, &ai).await {
-                    Ok(0) => break,
-                    Ok(_) => {
+                // Gists converged. Tag whatever is still untagged, then spend
+                // what's left on chunk enrichment. Tags come first: they are
+                // one cheap call per source and they show up in the UI, where
+                // enrichment only ever shows up in retrieval quality.
+                Ok((0, 0)) => match ensure_tags(&db, &ai).await {
+                    Ok(n) if n > 0 => {
                         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                     }
+                    Ok(_) => match ensure_enrichment(&db, &ai).await {
+                        Ok(0) => break,
+                        Ok(_) => {
+                            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                        }
+                        Err(err) => {
+                            eprintln!("enrichment sweep failed: {err:#}");
+                            break;
+                        }
+                    },
                     Err(err) => {
-                        eprintln!("enrichment sweep failed: {err:#}");
+                        eprintln!("tag sweep failed: {err:#}");
                         break;
                     }
                 },
@@ -629,9 +642,134 @@ pub fn spawn_sweep(db: std::sync::Arc<Db>, ai: Ai) {
     });
 }
 
+/// Tags proposed per source. Few enough to stay a glance, not a cloud.
+const MAX_AUTO_TAGS: usize = 4;
+/// How much of the source the tagger reads.
+const TAG_PROMPT_HEAD_CHARS: usize = 2000;
+/// Sources tagged per sweep batch, matching the gist budget's restraint.
+const TAG_BUDGET: usize = 8;
+
+/// Suggest tags for sources that have none (docs/RFC-source-tags.md deferred
+/// this to v2; this is it).
+///
+/// Only ever *adds* tags to an untagged source. A source the user has tagged
+/// is theirs — we never append to it, never reorder it, never re-tag it when
+/// the content changes. That is the whole confirmation story: the cost of a
+/// wrong tag is one click to fix, and it can only ever be wrong on a source
+/// nobody has curated yet.
+///
+/// Returns how many sources were tagged.
+pub async fn ensure_tags(db: &Db, ai: &Ai) -> Result<usize> {
+    let mut tagged = 0usize;
+    for nb in db.list_notebooks().await? {
+        for source in db.list_sources(&nb.id).await? {
+            if tagged >= TAG_BUDGET {
+                return Ok(tagged);
+            }
+            if !source.tags.trim().is_empty() {
+                continue;
+            }
+            // list_sources strips content; fetch the row that has it.
+            let Some(full) = db.get_source(&source.id).await? else {
+                continue;
+            };
+            if full.content.trim().is_empty() {
+                continue;
+            }
+            let messages = build_tag_messages(&full.title, &full.content);
+            let reply = match ai.chat_role(Role::Small, &messages).await {
+                Ok(out) => out.text,
+                Err(err) => {
+                    eprintln!("tags: generation failed for \"{}\": {err:#}", full.title);
+                    return Ok(tagged);
+                }
+            };
+            let haystack = format!("{}\n{}", full.title, full.content);
+            let tags = gate_tags(&reply, &haystack);
+            if tags.is_empty() {
+                continue;
+            }
+            db.set_source_tags(&full.id, &tags).await?;
+            tagged += 1;
+        }
+    }
+    Ok(tagged)
+}
+
+fn build_tag_messages(title: &str, text: &str) -> Vec<ChatTurn> {
+    let head: String = text.chars().take(TAG_PROMPT_HEAD_CHARS).collect();
+    vec![
+        ChatTurn::system(
+            "You tag documents for a personal research library. Reply with ONLY the \
+             tags: lowercase, single words, separated by spaces. No #, no commas, \
+             no explanation.",
+        ),
+        ChatTurn::user(format!(
+            "Give two to four single-word tags for this document titled \"{title}\". \
+             Use words that appear in the document. Prefer the subject matter over \
+             the format.\n\nDocument:\n---\n{head}"
+        )),
+    ]
+}
+
+/// Keep only tags the document can vouch for — the same bargain `gate` makes
+/// for gists. A Small model asked for keywords will happily invent a plausible
+/// one, and an invented tag is worse than no tag: it is a filter that lies.
+fn gate_tags(reply: &str, haystack: &str) -> String {
+    let hay = haystack.to_lowercase();
+    let mut out: Vec<String> = Vec::new();
+    for raw in reply.split(|c: char| c.is_whitespace() || c == ',') {
+        let tag = raw
+            .trim()
+            .trim_start_matches('#')
+            .trim_matches(|c: char| !c.is_alphanumeric() && c != '-')
+            .to_lowercase();
+        // Single words only; "machine-learning" is fine, a sentence is not.
+        if tag.len() < 3 || tag.chars().count() > 24 {
+            continue;
+        }
+        if !tag.chars().all(|c| c.is_alphanumeric() || c == '-') {
+            continue;
+        }
+        if !hay.contains(&tag) {
+            continue;
+        }
+        if !out.contains(&tag) {
+            out.push(tag);
+        }
+        if out.len() >= MAX_AUTO_TAGS {
+            break;
+        }
+    }
+    out.join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The gate is the whole safety story: a tag the document cannot vouch
+    /// for is a filter that lies, so it never lands.
+    #[test]
+    fn gate_tags_keeps_only_grounded_single_words() {
+        let hay = "Retrieval-augmented generation pairs a parametric model with \
+                   a dense vector index over a corpus.";
+        assert_eq!(
+            super::gate_tags("retrieval vector corpus", hay),
+            "retrieval vector corpus"
+        );
+        // Invented terms are dropped, grounded ones survive alongside.
+        assert_eq!(super::gate_tags("retrieval kubernetes", hay), "retrieval");
+        // Decoration and separators are tolerated on the way in.
+        assert_eq!(super::gate_tags("#vector, #corpus", hay), "vector corpus");
+        // Junk shapes: too short, too long, not a word.
+        assert_eq!(super::gate_tags("a ---- the", hay), "");
+        // Capped, and deduped.
+        assert_eq!(
+            super::gate_tags("retrieval retrieval vector corpus dense model", hay),
+            "retrieval vector corpus dense"
+        );
+    }
 
     #[test]
     fn content_hash_is_stable_and_positive() {

@@ -11,6 +11,183 @@ use anyhow::Result;
 
 use crate::ai::Ai;
 use crate::db::{Db, Route};
+use crate::inference::{ChatTurn, Role};
+
+/// How many notebooks the picker sees. Small-role models lose the thread on
+/// long option lists, and the router's tail is noise by this depth anyway.
+const SUGGEST_CANDIDATES: usize = 5;
+/// How much of the incoming document the picker reads. Enough to tell an
+/// invoice from a paper; short enough for a 3B model's context.
+const SUGGEST_EXCERPT_CHARS: usize = 700;
+/// Source titles listed per candidate notebook, as its description.
+const SUGGEST_TITLES_PER_NOTEBOOK: usize = 6;
+
+/// Where an unfiled source should go: an existing notebook, or a new one.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotebookSuggestion {
+    /// Empty when proposing a new notebook — `title` is then the proposal.
+    pub notebook_id: String,
+    pub title: String,
+    /// True when nothing on hand fits and `title` is a proposed new name.
+    pub is_new: bool,
+}
+
+/// Suggest the notebook an incoming source belongs in (the "drop a link and
+/// it files itself" path).
+///
+/// Two stages, because neither alone is good enough: the router narrows the
+/// corpus to its nearest few notebooks by embedding — cheap, and it scales
+/// past what any prompt could list — then the Small model picks among them,
+/// which is what catches "this is a recipe, and none of these five are about
+/// food". A raw distance threshold would have to guess at the embedding
+/// metric; asking the model sidesteps that and yields a name for the new
+/// notebook for free.
+///
+/// Never errors into the caller's face: any failure (no embedder, no model,
+/// empty corpus) falls back to the most recently updated notebook, which is
+/// exactly the default the picker used before this existed.
+pub async fn suggest_notebook(
+    db: &Db,
+    ai: &Ai,
+    title: &str,
+    body: &str,
+) -> Result<NotebookSuggestion> {
+    let notebooks = db.list_notebooks().await?;
+    let active: Vec<_> = notebooks
+        .into_iter()
+        .filter(|n| n.status != "archived")
+        .collect();
+    let Some(fallback) = active.first().cloned() else {
+        // No notebook to file into: propose one named after the document.
+        return Ok(NotebookSuggestion {
+            notebook_id: String::new(),
+            title: proposed_title(ai, title, body).await,
+            is_new: true,
+        });
+    };
+    let fallback = NotebookSuggestion {
+        notebook_id: fallback.id,
+        title: fallback.title,
+        is_new: false,
+    };
+
+    let excerpt: String = body.chars().take(SUGGEST_EXCERPT_CHARS).collect();
+    let query = format!("{title}\n{excerpt}");
+
+    // Route to candidates. An empty or unbuilt index just means "consider
+    // everything" — with a handful of notebooks that is the same answer.
+    let mut candidates: Vec<_> = match ai.embed(std::slice::from_ref(&query)).await {
+        Ok(vecs) if !vecs.is_empty() => {
+            let ranked = route_notebooks(db, vecs[0].clone(), SUGGEST_CANDIDATES).await?;
+            ranked
+                .iter()
+                .filter_map(|id| active.iter().find(|n| &n.id == id).cloned())
+                .collect()
+        }
+        _ => vec![],
+    };
+    if candidates.is_empty() {
+        candidates = active.iter().take(SUGGEST_CANDIDATES).cloned().collect();
+    }
+
+    // Describe each candidate by what is actually in it — a title alone
+    // ("Research") tells the model nothing.
+    let mut listing = String::new();
+    for (i, nb) in candidates.iter().enumerate() {
+        let titles: Vec<String> = db
+            .list_sources(&nb.id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .take(SUGGEST_TITLES_PER_NOTEBOOK)
+            .map(|s| s.title)
+            .collect();
+        listing.push_str(&format!("{}. {}", i + 1, nb.title));
+        if !titles.is_empty() {
+            listing.push_str(&format!(" — contains: {}", titles.join("; ")));
+        }
+        listing.push('\n');
+    }
+
+    // Plain-text reply, one token's worth: Small-role models (3-8B, Apple FM)
+    // do not parse JSON reliably (same finding as gist.rs).
+    let messages = vec![
+        ChatTurn::system(
+            "You file incoming documents into the right notebook. Reply with ONLY a \
+             single number from the list, or the word NEW. No explanation.",
+        ),
+        ChatTurn::user(format!(
+            "Incoming document:\nTitle: {title}\nExcerpt: {excerpt}\n\n\
+             Notebooks:\n{listing}\n\
+             Which notebook does this document belong in? Reply with its number. \
+             If none of them is a good fit, reply NEW."
+        )),
+    ];
+    let reply = match ai.chat_role(Role::Small, &messages).await {
+        Ok(out) => out.text,
+        // No Small model configured, or the engine is down — the recency
+        // default is still a reasonable answer.
+        Err(_) => return Ok(fallback),
+    };
+
+    let answer = reply.trim().to_uppercase();
+    if answer.starts_with("NEW") {
+        return Ok(NotebookSuggestion {
+            notebook_id: String::new(),
+            title: proposed_title(ai, title, body).await,
+            is_new: true,
+        });
+    }
+    // First integer anywhere in the reply: small models like to say
+    // "2." or "Notebook 2" however firmly the prompt asks for a bare number.
+    let picked = answer
+        .split(|c: char| !c.is_ascii_digit())
+        .find(|s| !s.is_empty())
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|n| *n >= 1 && *n <= candidates.len())
+        .map(|n| &candidates[n - 1]);
+    Ok(match picked {
+        Some(nb) => NotebookSuggestion {
+            notebook_id: nb.id.clone(),
+            title: nb.title.clone(),
+            is_new: false,
+        },
+        None => fallback,
+    })
+}
+
+/// A short notebook name for a document that fits nowhere. Falls back to the
+/// document's own title, which is never wrong, only unambitious.
+async fn proposed_title(ai: &Ai, title: &str, body: &str) -> String {
+    let excerpt: String = body.chars().take(SUGGEST_EXCERPT_CHARS).collect();
+    let messages = vec![
+        ChatTurn::system(
+            "You name notebooks. Reply with ONLY the name — two to four words, \
+             no quotes, no punctuation, no explanation.",
+        ),
+        ChatTurn::user(format!(
+            "Name a notebook that would collect documents like this one.\n\
+             Title: {title}\nExcerpt: {excerpt}"
+        )),
+    ];
+    let clean = |s: &str| -> Option<String> {
+        let t = s
+            .lines()
+            .find(|l| !l.trim().is_empty())?
+            .trim()
+            .trim_matches(['"', '\'', '*', '#', '.'])
+            .trim()
+            .to_string();
+        // A model that ignored the instruction and wrote a sentence is worse
+        // than the document's own title.
+        (!t.is_empty() && t.chars().count() <= 40).then_some(t)
+    };
+    match ai.chat_role(Role::Small, &messages).await {
+        Ok(out) => clean(&out.text).unwrap_or_else(|| title.to_string()),
+        Err(_) => title.to_string(),
+    }
+}
 
 /// Notebooks at or below this count skip routing entirely: filtering to the
 /// top-N of N notebooks is the flat search with extra steps.

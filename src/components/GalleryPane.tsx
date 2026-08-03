@@ -1,4 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
@@ -47,7 +53,7 @@ const thumbMemory = new Map<string, string>();
 type SortMode = "recent" | "title";
 type TypeGroup =
   | "all"
-  | "pages"
+  | "urls"
   | "docs"
   | "images"
   | "text"
@@ -56,7 +62,7 @@ type TypeGroup =
   | "folders";
 
 const GROUP_OF: Record<Source["sourceType"], Exclude<TypeGroup, "all">> = {
-  url: "pages",
+  url: "urls",
   html: "text",
   pdf: "docs",
   image: "images",
@@ -71,7 +77,9 @@ const GROUP_OF: Record<Source["sourceType"], Exclude<TypeGroup, "all">> = {
 };
 
 const GROUP_LABEL: Record<Exclude<TypeGroup, "all">, string> = {
-  pages: "Pages",
+  // "URLs", not "Pages": this group is exactly the web-link sources, and
+  // "Pages" read ambiguously next to the PDF group (paper pages? text?).
+  urls: "URLs",
   docs: "PDFs",
   images: "Images",
   text: "Text",
@@ -149,7 +157,7 @@ export function GalleryPane() {
   const groups: TypeGroup[] = [
     "all",
     ...(
-      ["pages", "docs", "images", "text", "code", "mac", "folders"] as const
+      ["urls", "docs", "images", "text", "code", "mac", "folders"] as const
     ).filter((g) => present.has(g)),
   ];
   const effectiveFilter = groups.includes(filter) ? filter : "all";
@@ -201,8 +209,7 @@ export function GalleryPane() {
 
   // Masonry as JS-bucketed flex columns, not CSS multicol — WKWebView
   // reliably hit-tests but does NOT reliably paint later multicol columns
-  // (cards were clickable yet invisible). Round-robin keeps sort order
-  // roughly row-wise.
+  // (cards were clickable yet invisible).
   //
   // The scroller mounts LATE when the gallery is the landing view (sources
   // arrive async, the empty state renders first) — so width measurement
@@ -224,8 +231,33 @@ export function GalleryPane() {
     return () => ro.disconnect();
   }, [scrollerEl]);
   const colCount = Math.min(4, Math.max(1, Math.floor((width + 12) / 232)));
+  // Shortest-column-first, not round-robin: cards range from a two-line title
+  // to a 256px image plus a four-line snippet, so dealing them out in order
+  // leaves one column running hundreds of pixels past the others. Packing by
+  // estimated height keeps the bottom edge close to level. Sort order still
+  // reads left-to-right, top-to-bottom — ties go to the leftmost column, so
+  // equal-height cards deal out exactly as they did before.
+  const childCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const s of sources) {
+      if (s.parentId)
+        counts.set(s.parentId, (counts.get(s.parentId) ?? 0) + 1);
+    }
+    return counts;
+  }, [sources]);
+  const childCount = (s: Source) => childCounts.get(s.id) ?? 0;
   const columns: Source[][] = Array.from({ length: colCount }, () => []);
-  cards.forEach((s, i) => columns[i % colCount].push(s));
+  const colWidth = (width - 48 - 12 * (colCount - 1)) / colCount;
+  const heights = new Array<number>(colCount).fill(0);
+  cards.forEach((s) => {
+    let shortest = 0;
+    for (let i = 1; i < colCount; i++) {
+      if (heights[i] < heights[shortest] - 0.5) shortest = i;
+    }
+    columns[shortest].push(s);
+    heights[shortest] +=
+      estimateCardHeight(s, snippets[s.id], colWidth, childCount(s)) + 12;
+  });
 
   // Sticky scroll per notebook+level: restore once the scroller exists,
   // save as it moves.
@@ -507,6 +539,49 @@ export function GalleryPane() {
       {hoverCard}
     </div>
   );
+}
+
+/** Roughly how tall a card will render, in px, so the masonry can pack
+ *  columns by height instead of dealing round-robin. Deliberately an
+ *  estimate: the real heights only exist after paint, and measuring them
+ *  would mean a re-layout pass that fights React on every snippet arrival.
+ *  It only has to RANK columns, so being a line off costs nothing visible.
+ *  Mirrors the markup in `GalleryCard` / `FolderCard` — keep them in step. */
+function estimateCardHeight(
+  s: Source,
+  snippet: string | undefined,
+  colWidth: number,
+  children: number,
+): number {
+  const inner = Math.max(80, colWidth - 24); // p-3 either side
+  // ~6.6px per char at text-body, ~6px at text-caption.
+  const lines = (text: string, clamp: number, charW: number) =>
+    Math.min(clamp, Math.max(1, Math.ceil((text.length * charW) / inner)));
+  const PADDING = 24; // p-3 top + bottom
+  const CAPTION = 24; // icon + provenance row, incl. its mt-1.5
+
+  if (GROUP_OF[s.sourceType] === "folders") {
+    const peekRows = Math.ceil(Math.min(children, 4) / 2); // grid-cols-2
+    return PADDING + 20 + (peekRows ? 8 + peekRows * 26 : 0) + 24;
+  }
+
+  const leadImage =
+    s.sourceType === "url" && s.imageUrl !== "" && s.imageUrl !== "-";
+  const hasVisual =
+    s.sourceType === "pdf" || s.sourceType === "image" || leadImage;
+  // PDFs crop to 4:3; everything else keeps its ratio capped at max-h-64.
+  // Unmeasured images assume a middling landscape shape.
+  const visual = hasVisual
+    ? s.sourceType === "pdf"
+      ? (colWidth * 3) / 4
+      : Math.min(256, colWidth * 0.62)
+    : 0;
+  const title = lines(s.title, hasVisual ? 2 : 3, 6.6) * 19;
+  // The snippet only renders when there is no visual to carry the card.
+  const body =
+    !hasVisual && snippet ? 6 + lines(snippet, 4, 6) * 18 : 0;
+  const error = s.status === "error" ? 22 : 0;
+  return visual + PADDING + title + body + CAPTION + error;
 }
 
 /** Shared card chrome: the hover-revealed ⋯ menu (also the right-click

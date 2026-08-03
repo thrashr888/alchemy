@@ -156,6 +156,19 @@ async function runQueued(
  *  toasts. Module scope, so it survives the StrictMode remount. */
 let initStarted = false;
 
+/** Resolves once init's first `listNotebooks` has landed. OS entry points
+ *  (deep links from the browser extension, Services, the tray) can fire
+ *  before that — the backend buffers them and replays on listener bind, which
+ *  happens a few lines ahead of the load — so anything that reasons about
+ *  which notebooks EXIST has to wait here first. */
+let markNotebooksLoaded: () => void = () => {};
+const notebooksLoaded = new Promise<void>((resolve) => {
+  markNotebooksLoaded = resolve;
+  // If boot fails before the load lands, the capture should still get its
+  // (worse) answer rather than hanging on a promise that never settles.
+  setTimeout(resolve, 10_000);
+});
+
 export const useStore = create<AppState>((set, get) => {
   /** Run an async action, surfacing any failure as the global error instead of
    *  swallowing it (unhandled rejection = the UI silently does nothing). */
@@ -311,6 +324,8 @@ export const useStore = create<AppState>((set, get) => {
         api.listTemplates().catch(() => []),
       ]);
       set({ notebooks, aiConfig, ollamaOk, templates });
+      // Releases any OS entry point that arrived before the corpus was known.
+      markNotebooksLoaded();
       // showNotifications lives in config now (the Night Shift's resident
       // scheduler reads it backend-side). Honor a pre-migration localStorage
       // opt-out once, then mirror config down for notify()'s sync check.
@@ -592,6 +607,12 @@ export const useStore = create<AppState>((set, get) => {
             title: p.get("title"),
           };
           if (!payload.files.length && !payload.url && !payload.text) return;
+          // Cold start: the browser extension (or any deep link) launches the
+          // app, and the backend replays the buffered URL as soon as the
+          // listeners bind — which is BEFORE init's first `listNotebooks`
+          // resolves. Without this wait an extension capture on a not-running
+          // app reported "Create a notebook first" to someone with dozens.
+          await notebooksLoaded;
           if (get().notebooks.length === 0) {
             get().pushToast(
               "error",
@@ -775,6 +796,9 @@ export const useStore = create<AppState>((set, get) => {
       set({ notebooks: [nb, ...get().notebooks] });
       void api.rebuildAppMenu();
       await get().selectNotebook(nb.id);
+      // Returned so callers that create-then-act (the external add picker's
+      // "new notebook" suggestion) don't have to re-find it by title.
+      return nb.id;
     },
 
     renameNotebook: (id, title) =>

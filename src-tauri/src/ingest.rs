@@ -114,8 +114,8 @@ pub fn file_title(path: &str) -> String {
 /// Extract text from a local file, inferring type from the extension.
 ///
 /// Panic-contained at this boundary: extractor crates can panic (not error)
-/// on malformed files — pdf-extract's "unexpected encoding NULL" was caught
-/// live, mid folder-import, where the unwound worker hung the whole import.
+/// on malformed files — the PDF reader of the day panicked on "unexpected
+/// encoding NULL" mid folder-import, and the unwound worker hung the import.
 /// One guard here turns any extractor panic, for every current and future
 /// format, into an ordinary failed source instead of a stuck app.
 pub fn extract_file(path: &str) -> Result<Extracted> {
@@ -181,15 +181,17 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
         }
         "pdf" => {
             // Panic containment for a malformed PDF lives on `extract_file`.
-            let text = pdf_extract::extract_text(path)
-                .with_context(|| format!("failed to extract text from PDF {path}"))?;
-            if normalize(&text).trim().is_empty() {
+            // pdf-inspector lays the content stream out in reading order as
+            // Markdown, so headings and tables reach the chunker intact.
+            let extracted = crate::pdf::extract_text(path)?;
+            if extracted.is_scanned() {
+                // Not an error the user can act on — the caller catches this
+                // and rasterizes the pages through the vision model instead.
                 return Err(anyhow!(
-                    "no selectable text in {path} — it looks like a scanned/image PDF. \
-                     Export its pages as images to OCR them."
+                    "no selectable text in {path} — it looks like a scanned/image PDF."
                 ));
             }
-            ("pdf".to_string(), text)
+            ("pdf".to_string(), extracted.markdown())
         }
         "md" | "markdown" => (
             "markdown".to_string(),
@@ -924,8 +926,75 @@ pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
     // 404 (soft-deleted pages with full layouts). Fetch the body regardless
     // and let readability decide; only give up when there's nothing to read.
     let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
 
+    // Not every URL serves HTML. A link straight to a PDF (arxiv.org/pdf/...
+    // is the everyday case) used to be decoded as lossy UTF-8 and fed to
+    // readability, which produced an enormous source of binary garbage and
+    // then hung the app chunking and embedding it. Sniff the type and hand
+    // PDFs to the real reader.
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_lowercase();
+    if content_type.contains("application/pdf") || looks_like_pdf_url(&url) {
+        let bytes = resp
+            .bytes()
+            .await
+            .with_context(|| format!("could not download {url}"))?;
+        if crate::pdf::looks_like_pdf(&bytes) {
+            let extracted = crate::pdf::extract_text_mem(&bytes)?;
+            if extracted.is_scanned() {
+                return Err(anyhow!(
+                    "no selectable text in {url} — it looks like a scanned PDF."
+                ));
+            }
+            return Ok(Extracted {
+                author: String::new(),
+                // Anything beats the URL's last path segment, which on arXiv
+                // is a bare id ("2307.03172"): the /Title tag first, then the
+                // biggest heading on page one.
+                title: crate::pdf::pdf_title_mem(&bytes)
+                    .or_else(|| extracted.guessed_title())
+                    .unwrap_or_else(|| url_file_title(&url)),
+                source_type: "pdf".to_string(),
+                url,
+                image_url: String::new(),
+                text: normalize(&extracted.markdown()),
+            });
+        }
+        // Advertised as a PDF but isn't one — fall through and read it as a
+        // page, which is what the server actually sent.
+        let body = String::from_utf8_lossy(&bytes).into_owned();
+        return readable_page(body, status, url);
+    }
+
+    let body = resp.text().await.unwrap_or_default();
+    readable_page(body, status, url)
+}
+
+/// Does this URL point at a PDF by its path? A backstop for servers that
+/// mislabel the content type (`application/octet-stream` is common) — the
+/// bytes are still checked for the magic number before anything is parsed.
+fn looks_like_pdf_url(url: &str) -> bool {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    path.to_lowercase().ends_with(".pdf")
+}
+
+/// A readable title for a file served straight off a URL: the last path
+/// segment without its extension, falling back to the URL itself.
+fn url_file_title(url: &str) -> String {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    path.rsplit('/')
+        .find(|seg| !seg.is_empty())
+        .map(|seg| seg.trim_end_matches(".pdf").to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| url.to_string())
+}
+
+/// The HTML arm of `extract_url`: readability over a fetched page body.
+fn readable_page(body: String, status: reqwest::StatusCode, url: String) -> Result<Extracted> {
     let (article_title, text) = readable_text(&body, &url);
     if text.trim().is_empty() {
         if !status.is_success() {
@@ -1528,7 +1597,10 @@ pub fn chunk_source(extracted: &Extracted, code_ctx: Option<&str>) -> Vec<Chunk>
     if extracted.source_type == "code" {
         return chunk_code(code_ctx.unwrap_or(&extracted.title), &extracted.text);
     }
-    if extracted.source_type == "markdown" {
+    // PDFs arrive as Markdown too (pdf-inspector reconstructs headings, lists
+    // and tables), so they take the same structure-aware path. Frontmatter
+    // splitting is a no-op on them — a PDF does not open with `---`.
+    if extracted.source_type == "markdown" || extracted.source_type == "pdf" {
         let (tags, body) = split_frontmatter(&extracted.text);
         let ctx = match tags.is_empty() {
             true => extracted.title.clone(),
@@ -1994,7 +2066,12 @@ fn extract_title(html: &str) -> Option<String> {
 
 /// Download an image (og:image cache fill): one GET, 8 MB cap, best-effort.
 pub async fn fetch_image_bytes(url: &str) -> Option<Vec<u8>> {
-    const MAX_BYTES: usize = 8 * 1024 * 1024;
+    fetch_bytes(url, 8 * 1024 * 1024).await
+}
+
+/// One GET, capped. Shared by the image and PDF thumbnail backfills — a PDF
+/// wants a far larger ceiling than an og:image, so the cap is the caller's.
+pub async fn fetch_bytes(url: &str, max_bytes: usize) -> Option<Vec<u8>> {
     let client = reqwest::Client::builder()
         .user_agent(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
@@ -2008,7 +2085,7 @@ pub async fn fetch_image_bytes(url: &str) -> Option<Vec<u8>> {
         return None;
     }
     let bytes = resp.bytes().await.ok()?;
-    if bytes.is_empty() || bytes.len() > MAX_BYTES {
+    if bytes.is_empty() || bytes.len() > max_bytes {
         return None;
     }
     Some(bytes.to_vec())
@@ -2826,7 +2903,7 @@ mod tests {
 
     /// The panic boundary on `extract_file`: a malformed file of any type
     /// must come back as Err — never a panic that unwinds the worker (which
-    /// hung a live folder import when pdf-extract hit "unexpected encoding
+    /// hung a live folder import when the PDF reader hit "unexpected encoding
     /// NULL"). Garbage bytes with a .pdf extension exercise the whole path.
     #[test]
     fn extract_file_errors_instead_of_panicking_on_garbage() {

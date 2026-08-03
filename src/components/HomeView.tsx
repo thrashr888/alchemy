@@ -395,6 +395,26 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 <div className="flex items-center gap-2">
                   <Button
                     variant="secondary"
+                    onClick={() =>
+                      useStore.setState({
+                        // Empty payload = capture first, then file. Home has
+                        // no current notebook, so this is the one add path
+                        // that has to pick one — and it suggests which.
+                        pendingExternalAdd: {
+                          files: [],
+                          url: null,
+                          text: null,
+                          title: null,
+                        },
+                      })
+                    }
+                    title="Save a link or note — Alchemy suggests the notebook"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add source…
+                  </Button>
+                  <Button
+                    variant="secondary"
                     onClick={() => useStore.setState({ importOkfOpen: true })}
                     title="Import a shared .okf.zip or bundle folder"
                   >

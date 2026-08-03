@@ -25,6 +25,7 @@ import type {
   Note,
   NoteKind,
   Notebook,
+  NotebookSuggestion,
   ReportSchedule,
   SearchHit,
   Source,
@@ -267,6 +268,21 @@ export const api = {
     ),
   openInTerminal: (command: string) =>
     run(cmd<void>("open_in_terminal", { command })),
+  /** Which notebook an incoming source belongs in. A bare `url` is fetched
+   *  and extracted first, so this can take a second. */
+  suggestNotebook: (input: { title?: string; text?: string; url?: string }) =>
+    run(
+      cmd<NotebookSuggestion>("suggest_notebook", {
+        title: input.title ?? "",
+        text: input.text ?? "",
+        url: input.url ?? "",
+      }),
+    ),
+  /** Page count of a PDF on disk; 0 when it can't be read. */
+  pdfPageCount: (path: string) => run(cmd<number>("pdf_page_count", { path })),
+  /** One rendered PDF page (1-indexed) as a `data:` PNG URL. */
+  pdfPageImage: (path: string, page: number, width: number) =>
+    run(cmd<string>("pdf_page_image", { path, page, width })),
   /** Validate a Notion integration token; resolves to the workspace label. */
   notionCheck: (token: string) => run(cmd<string>("notion_check", { token })),
   deleteMessage: (messageId: string) =>

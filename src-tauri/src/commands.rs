@@ -342,6 +342,62 @@ pub async fn delete_message(state: State<'_, AppState>, message_id: String) -> R
     e(state.db.delete_message(&message_id).await)
 }
 
+/// Which notebook should an incoming source be filed in? Backs the
+/// "Add to which notebook?" picker's suggestion and the MCP tool of the same
+/// name. Pass whatever is on hand — pasted text, a file path, or just a URL.
+///
+/// A bare URL is fetched and extracted first: the domain alone is thin signal
+/// ("substack.com" says nothing), and the picker is worth the second or two.
+/// A fetch failure is not fatal — the URL string still routes, just worse.
+#[tauri::command]
+pub async fn suggest_notebook(
+    state: State<'_, AppState>,
+    title: String,
+    text: String,
+    url: String,
+) -> Result<crate::router::NotebookSuggestion, String> {
+    let (title, text) = if text.trim().is_empty() && !url.trim().is_empty() {
+        match ingest::extract_url(&url).await {
+            Ok(ex) => (
+                if title.trim().is_empty() {
+                    ex.title
+                } else {
+                    title
+                },
+                ex.text,
+            ),
+            Err(_) => (if title.is_empty() { url.clone() } else { title }, url),
+        }
+    } else {
+        (title, text)
+    };
+    // Snapshot the Ai under a momentary read guard — never held across the
+    // awaits below.
+    let ai = state.ai.read().await.clone();
+    e(crate::router::suggest_notebook(&state.db, &ai, &title, &text).await)
+}
+
+/// How many pages a PDF has, for the reader's page view. Zero when the file
+/// is unreadable — the view falls back to text rather than erroring.
+#[tauri::command]
+pub fn pdf_page_count(path: String) -> usize {
+    crate::pdf::page_count(&path)
+}
+
+/// One rendered PDF page as a `data:` URL, 1-indexed. The reader asks for
+/// pages as they scroll into view, so a long document costs only the pages
+/// actually looked at.
+#[tauri::command]
+pub fn pdf_page_image(path: String, page: usize, width: u32) -> Result<String, String> {
+    use base64::Engine;
+    // Clamped: `width` arrives from the frontend's element measurement, and a
+    // rogue value would ask PDFium for a multi-gigabyte bitmap.
+    let width = width.clamp(200, 3000) as i32;
+    let png = e(crate::pdf::render_page(&path, page, width))?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+    Ok(format!("data:image/png;base64,{b64}"))
+}
+
 /// Launch Terminal.app running one of the known agent sign-in commands (the
 /// "Fix:" hints on error rows). Strictly allowlisted: the command string
 /// travels through model-adjacent error text, so nothing outside this fixed
@@ -1984,14 +2040,30 @@ pub async fn source_thumbnail(
             if let Ok(bytes) = std::fs::read(&cache) {
                 return Ok(format!("data:image/png;base64,{}", b64(&bytes)));
             }
-            if src.url.is_empty() || !std::path::Path::new(&src.url).exists() {
+            if src.url.is_empty() {
                 return Ok(String::new());
             }
-            let pages = match crate::pdf::render_pdf_pages(&src.url, 1, 480) {
-                Ok(p) => p,
-                Err(_) => return Ok(String::new()), // never fail the gallery
-            };
-            let Some(png) = pages.into_iter().next() else {
+            // A PDF reaches us two ways: a file on disk, or a link straight to
+            // one (arxiv.org/pdf/...). The second has no local bytes, so fetch
+            // them — once; the render is disk-cached above either way.
+            let png = if std::path::Path::new(&src.url).exists() {
+                match crate::pdf::render_pdf_pages(&src.url, 1, 480) {
+                    Ok(pages) => match pages.into_iter().next() {
+                        Some(png) => png,
+                        None => return Ok(String::new()),
+                    },
+                    Err(_) => return Ok(String::new()), // never fail the gallery
+                }
+            } else if is_web_url(&src.url) {
+                const MAX_PDF_BYTES: usize = 64 * 1024 * 1024;
+                let Some(bytes) = ingest::fetch_bytes(&src.url, MAX_PDF_BYTES).await else {
+                    return Ok(String::new());
+                };
+                match crate::pdf::render_first_page_mem(&bytes, 480) {
+                    Ok(png) => png,
+                    Err(_) => return Ok(String::new()),
+                }
+            } else {
                 return Ok(String::new());
             };
             if let Some(dir) = cache.parent() {

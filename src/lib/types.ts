@@ -18,6 +18,14 @@ export interface Notebook {
   sourceCount: number;
 }
 
+/** Where an unfiled source should go — the auto-notebooking answer. */
+export interface NotebookSuggestion {
+  /** Empty when proposing a new notebook; `title` is then the proposal. */
+  notebookId: string;
+  title: string;
+  isNew: boolean;
+}
+
 export interface Source {
   id: string;
   notebookId: string;

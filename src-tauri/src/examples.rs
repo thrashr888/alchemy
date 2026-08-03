@@ -21,6 +21,7 @@ use crate::models::{Notebook, Source};
 
 pub(crate) const INTRO_TITLE: &str = "Introduction to Alchemy";
 pub(crate) const EARNINGS_TITLE: &str = "Earnings Reports for Top 50 Corporations";
+pub(crate) const AI_RESEARCH_TITLE: &str = "AI Research: Landmark Papers";
 
 /// (title, url, body) — url is "" for the intro's pasted-text tour and the
 /// company's top-level investor-relations page for earnings sources.
@@ -312,6 +313,84 @@ const EARNINGS_SOURCES: &[ExampleSource] = &[
     ),
 ];
 
+/// Landmark AI papers, oldest ideas first where the lineage matters
+/// (attention before the models built on it, scaling laws before the
+/// alignment work that assumed them). Each body is a summary written for
+/// this notebook; `url` is the paper's arXiv abstract page, which is stable
+/// in a way that PDF links and conference URLs are not.
+const AI_RESEARCH_SOURCES: &[ExampleSource] = &[
+    (
+        "Attention Is All You Need",
+        "https://arxiv.org/abs/1706.03762",
+        include_str!("../examples/ai-research/attention-is-all-you-need.md"),
+    ),
+    (
+        "BERT: Pre-training of Deep Bidirectional Transformers",
+        "https://arxiv.org/abs/1810.04805",
+        include_str!("../examples/ai-research/bert.md"),
+    ),
+    (
+        "Language Models are Few-Shot Learners (GPT-3)",
+        "https://arxiv.org/abs/2005.14165",
+        include_str!("../examples/ai-research/gpt-3-few-shot.md"),
+    ),
+    (
+        "Deep Residual Learning for Image Recognition (ResNet)",
+        "https://arxiv.org/abs/1512.03385",
+        include_str!("../examples/ai-research/resnet.md"),
+    ),
+    (
+        "Adam: A Method for Stochastic Optimization",
+        "https://arxiv.org/abs/1412.6980",
+        include_str!("../examples/ai-research/adam.md"),
+    ),
+    (
+        "Generative Adversarial Networks",
+        "https://arxiv.org/abs/1406.2661",
+        include_str!("../examples/ai-research/gan.md"),
+    ),
+    (
+        "Denoising Diffusion Probabilistic Models",
+        "https://arxiv.org/abs/2006.11239",
+        include_str!("../examples/ai-research/ddpm.md"),
+    ),
+    (
+        "An Image is Worth 16x16 Words (Vision Transformer)",
+        "https://arxiv.org/abs/2010.11929",
+        include_str!("../examples/ai-research/vit.md"),
+    ),
+    (
+        "Chain-of-Thought Prompting Elicits Reasoning",
+        "https://arxiv.org/abs/2201.11903",
+        include_str!("../examples/ai-research/chain-of-thought.md"),
+    ),
+    (
+        "LoRA: Low-Rank Adaptation of Large Language Models",
+        "https://arxiv.org/abs/2106.09685",
+        include_str!("../examples/ai-research/lora.md"),
+    ),
+    (
+        "Retrieval-Augmented Generation for Knowledge-Intensive NLP",
+        "https://arxiv.org/abs/2005.11401",
+        include_str!("../examples/ai-research/rag.md"),
+    ),
+    (
+        "Scaling Laws for Neural Language Models",
+        "https://arxiv.org/abs/2001.08361",
+        include_str!("../examples/ai-research/scaling-laws.md"),
+    ),
+    (
+        "Training Language Models to Follow Instructions (InstructGPT)",
+        "https://arxiv.org/abs/2203.02155",
+        include_str!("../examples/ai-research/instructgpt.md"),
+    ),
+    (
+        "Lost in the Middle: How Language Models Use Long Contexts",
+        "https://arxiv.org/abs/2307.03172",
+        include_str!("../examples/ai-research/lost-in-the-middle.md"),
+    ),
+];
+
 /// Seed the example notebooks once, ever. Returns true when anything new
 /// landed (so the caller can nudge open windows to refresh). Failures leave
 /// the marker unwritten and retry on the next launch; a user deleting the
@@ -330,6 +409,7 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
     for (title, sources) in [
         (INTRO_TITLE, INTRO_SOURCES),
         (EARNINGS_TITLE, EARNINGS_SOURCES),
+        (AI_RESEARCH_TITLE, AI_RESEARCH_SOURCES),
     ] {
         match seed_notebook(&state.db, &ai, title, sources).await {
             Ok(created) => seeded |= created,
