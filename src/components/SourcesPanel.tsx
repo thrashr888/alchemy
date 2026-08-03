@@ -410,14 +410,26 @@ export function SourcesPanel() {
                   </div>
                 </div>
                 {q.status === "error" && (
-                  <button
-                    className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-                    onClick={() => clearQueueItem(q.id)}
-                    title="Dismiss"
-                    aria-label={`Dismiss failed import "${q.name}"`}
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
+                  <>
+                    {q.retry && (
+                      <button
+                        className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                        onClick={q.retry}
+                        title="Retry"
+                        aria-label={`Retry failed import "${q.name}"`}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    <button
+                      className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                      onClick={() => clearQueueItem(q.id)}
+                      title="Dismiss"
+                      aria-label={`Dismiss failed import "${q.name}"`}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </>
                 )}
               </div>
             ))}

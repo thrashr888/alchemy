@@ -404,7 +404,43 @@ pub(crate) fn new_id() -> String {
 
 /// Map any error into a string so it crosses the IPC boundary cleanly.
 fn e<T>(r: anyhow::Result<T>) -> Result<T, String> {
-    r.map_err(|err| format!("{err:#}"))
+    r.map_err(|err| friendly_error(&format!("{err:#}")))
+}
+
+/// Errors cross IPC as strings the user actually reads — translate known
+/// machine noise into something actionable and strip code locations.
+pub(crate) fn friendly_error(raw: &str) -> String {
+    // Schema skew on the shared store: a newer Alchemy (usually the dev
+    // build) migrated a table this binary doesn't know yet. The raw Lance
+    // dump ("Append with different schema … location: …/schema.rs:186")
+    // is pure noise; say what to do instead.
+    if raw.contains("Append with different schema") {
+        return "Couldn't save: the notebook database was upgraded by a newer version \
+                of Alchemy than this one. Update Alchemy to its latest version (or add \
+                from the newer copy) and try again."
+            .into();
+    }
+    // Drop `, location: /path/to/file.rs:12:3` fragments and collapse the
+    // duplicate sentence Lance nests inside its own context chain.
+    let mut out = String::with_capacity(raw.len());
+    for (i, piece) in raw.split(", location: ").enumerate() {
+        if i == 0 {
+            out.push_str(piece);
+            continue;
+        }
+        // Skip the leading path token; keep anything after it.
+        if let Some(rest) = piece.split_once(' ') {
+            out.push(' ');
+            out.push_str(rest.1);
+        }
+    }
+    let out = out.trim().trim_end_matches(':').to_string();
+    if let Some((head, tail)) = out.split_once(": ") {
+        if tail.starts_with(head) {
+            return tail.to_string();
+        }
+    }
+    out
 }
 
 // Keep this palette in sync with the Rust DB schema helper constant in

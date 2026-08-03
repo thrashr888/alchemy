@@ -124,28 +124,41 @@ export function useHoverCard(side: "left" | "right") {
     data: HoverCardData;
   } | null>(null);
   const timer = React.useRef<number | undefined>(undefined);
+  // Warm-tooltip behavior (native macOS): only the FIRST reveal waits a
+  // beat; while a card is up, moving to the next row switches instantly.
+  // `hide` grace keeps it warm across the row gap.
+  const warm = React.useRef(false);
 
   const show = (e: React.MouseEvent<HTMLElement>, data: HoverCardData) => {
     const el = e.currentTarget;
     window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => {
+    const reveal = () => {
       const r = el.getBoundingClientRect();
+      warm.current = true;
       setState({
         top: r.top,
         left: side === "right" ? r.right + 10 : r.left - 10,
         data,
       });
-    }, 450);
+    };
+    if (warm.current) reveal();
+    else timer.current = window.setTimeout(reveal, 450);
   };
   const hide = () => {
     window.clearTimeout(timer.current);
-    setState(null);
+    timer.current = window.setTimeout(() => {
+      warm.current = false;
+      setState(null);
+    }, 120);
   };
   // Scrolling the list under the cursor won't fire mouseleave — drop the
   // card on any scroll instead of letting it drift from its row.
   React.useEffect(() => {
     if (!state) return;
-    const drop = () => setState(null);
+    const drop = () => {
+      warm.current = false;
+      setState(null);
+    };
     window.addEventListener("scroll", drop, true);
     return () => window.removeEventListener("scroll", drop, true);
   }, [state]);

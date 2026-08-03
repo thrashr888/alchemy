@@ -21,6 +21,8 @@ export interface QueueItem {
   name: string;
   status: "pending" | "processing" | "done" | "error";
   error?: string;
+  /** Re-runs the failed import in place (set when status is "error"). */
+  retry?: () => void;
 }
 
 /** One document open (or remembered) in the center-column reader.

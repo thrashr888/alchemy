@@ -130,7 +130,7 @@ async function runQueued(
         q.id === item.id ? { ...q, ...p } : q,
       ),
     });
-  patch({ status: "processing" });
+  patch({ status: "processing", error: undefined, retry: undefined });
   try {
     await fn();
     patch({ status: "done" });
@@ -139,6 +139,8 @@ async function runQueued(
     patch({
       status: "error",
       error: e instanceof Error ? e.message : String(e),
+      // A failed import keeps its work attached — Retry re-runs it in place.
+      retry: () => void runQueued(get, set, item, fn),
     });
     playError();
   }

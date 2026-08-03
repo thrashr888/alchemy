@@ -9,17 +9,28 @@ import { FileText, Globe, ClipboardPaste } from "lucide-react";
  * sorted by recently updated and defaults to the most recent notebook, so the
  * common case is a single Return keypress.
  */
+/** Active notebooks with the OPEN one first — it's the likeliest target,
+ *  so it leads the list and is the default selection. The rest keep their
+ *  recency order. */
+function pickerNotebooks() {
+  const s = useStore.getState();
+  const active = s.notebooks.filter((n) => n.status !== "archived");
+  const current = active.find((n) => n.id === s.currentId);
+  return current
+    ? [current, ...active.filter((n) => n.id !== current.id)]
+    : active;
+}
+
 export function ExternalAddModal() {
   const pending = useStore((s) => s.pendingExternalAdd);
-  const notebooks = useStore((s) => s.notebooks).filter(
-    (n) => n.status !== "archived",
-  );
+  useStore((s) => s.notebooks); // re-render on notebook changes
+  useStore((s) => s.currentId);
   const confirm = useStore((s) => s.confirmExternalAdd);
-  // Keyed remount per payload resets the selection to the freshest notebook.
+  // Keyed remount per payload resets the selection to the likeliest notebook.
   if (!pending) return null;
   return (
     <ExternalAddForm
-      key={notebooks[0]?.id ?? "none"}
+      key={pickerNotebooks()[0]?.id ?? "none"}
       onConfirm={(nb) => void confirm(nb)}
       onCancel={() => useStore.setState({ pendingExternalAdd: null })}
     />
@@ -34,9 +45,9 @@ function ExternalAddForm({
   onCancel: () => void;
 }) {
   const pending = useStore((s) => s.pendingExternalAdd);
-  const notebooks = useStore((s) => s.notebooks).filter(
-    (n) => n.status !== "archived",
-  );
+  useStore((s) => s.notebooks);
+  useStore((s) => s.currentId);
+  const notebooks = pickerNotebooks();
   const [notebookId, setNotebookId] = useState(notebooks[0]?.id ?? "");
 
   if (!pending) return null;
@@ -86,7 +97,9 @@ function ExternalAddForm({
         >
           {notebooks.map((nb) => (
             <option key={nb.id} value={nb.id}>
-              {nb.title}
+              {nb.id === useStore.getState().currentId
+                ? `${nb.title} — current notebook`
+                : nb.title}
             </option>
           ))}
         </select>

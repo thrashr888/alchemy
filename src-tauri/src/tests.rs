@@ -651,3 +651,32 @@ async fn ledger_round_trip() {
     assert_eq!(back.origin, "auto");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// The prod error dump from the shared-store schema skew must come out as
+/// one actionable sentence, and generic errors must lose their `location:`
+/// code-path noise.
+#[test]
+fn ipc_errors_read_like_sentences() {
+    use crate::commands::friendly_error;
+
+    let lance = "lance error: Append with different schema: fields did not match, \
+                 missing=[image_url], unexpected=[], location: /Users/x/.cargo/registry/src/\
+                 lance-core-7.0.0/src/datatypes/schema.rs:186:17: Append with different schema: \
+                 fields did not match, missing=[image_url], unexpected=[], location: \
+                 /Users/x/.cargo/registry/src/lance-core-7.0.0/src/datatypes/schema.rs:186:17";
+    let friendly = friendly_error(lance);
+    assert!(friendly.contains("newer version"), "actionable: {friendly}");
+    assert!(!friendly.contains("location:"), "no code paths: {friendly}");
+    assert!(!friendly.contains(".rs:"), "no code paths: {friendly}");
+
+    let generic = "could not reach https://x.test, location: /some/path/net.rs:10:2";
+    let cleaned = friendly_error(generic);
+    assert!(
+        cleaned.starts_with("could not reach https://x.test"),
+        "{cleaned}"
+    );
+    assert!(!cleaned.contains("location:"), "{cleaned}");
+
+    // Ordinary errors pass through untouched.
+    assert_eq!(friendly_error("Source not found"), "Source not found");
+}
