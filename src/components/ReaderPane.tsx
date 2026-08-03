@@ -8,6 +8,7 @@ import { AmbientRail } from "./AmbientRail";
 import { activeParagraph } from "@/lib/utils";
 import { AudioPlayer, DialogueScript } from "./AudioNote";
 import { Flashcards } from "./Flashcards";
+import { Infographic } from "./Infographic";
 import { Markdown } from "./Markdown";
 import { MindMap } from "./MindMap";
 import { QuizView } from "./QuizView";
@@ -793,6 +794,7 @@ export function ReaderPane() {
             !editing &&
             [
               "slide_deck",
+              "infographic",
               "mind_map",
               "quiz",
               "flashcards",
@@ -2197,6 +2199,7 @@ function NoteReader({
   const fillsPane = note.kind === "slide_deck" || note.kind === "mind_map";
   const artifact =
     note.kind === "slide_deck" ||
+    note.kind === "infographic" ||
     note.kind === "mind_map" ||
     note.kind === "quiz" ||
     note.kind === "flashcards" ||
@@ -2262,6 +2265,8 @@ function NoteReader({
             <QuizView content={note.content} />
           ) : note.kind === "slide_deck" ? (
             <SlideDeck content={note.content} note={note} />
+          ) : note.kind === "infographic" ? (
+            <Infographic content={note.content} title={note.title} />
           ) : note.kind === "audio_overview" ? (
             <div className="flex flex-col gap-4">
               <AudioPlayer key={note.updatedAt} noteId={note.id} title={note.title} />

@@ -530,6 +530,7 @@ pub const ARTIFACT_KINDS: &[&str] = &[
     "data_table",
     "audio_overview",
     "slide_deck",
+    "infographic",
     "mind_map",
     "problems",
     "evidence",
@@ -698,6 +699,46 @@ pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
              Takeaways` slide of 3-5 bullets that pays off the title slide's promise and says \
              what to do next. Output ONLY the deck markdown: no code fences around it, no \
              speaker notes, no prose outside the slides.",
+        )),
+        "infographic" => Some((
+            "Infographic",
+            "Distill the sources below into a one-page infographic, working like an information \
+             designer: lead with the sharpest numbers, keep every label short, and let the data \
+             carry the story. Output strict Markdown in exactly the shape below — a native \
+             renderer draws the visuals from it, and ONLY these shapes render.\n\
+             Line 1: `# <title>` — punchy, under 8 words. Then ONE optional hook: a single short \
+             paragraph (or a `> quote`) stating the big takeaway.\n\
+             Then 4-7 `## <section>` blocks, section titles 2-5 words. Each section body is \
+             exactly ONE of these shapes — never mix shapes inside a section:\n\
+             - Stat tiles: 2-4 consecutive lines, each exactly `**<value>** — <label>`, where \
+               <value> is a short figure (`**73%**`, `**4.2M**`, `**$18B**`) and <label> is \
+               under 10 words.\n\
+             - Bar chart: a 2-column GFM table — first column the item name, second column a \
+               plain number in one consistent unit (a suffix like `%` or `ms` is fine); 3-8 \
+               rows. The renderer draws proportional bars from the numbers.\n\
+             - Fact cards: 3-5 `- ` bullets, each a self-contained fact under 20 words.\n\
+             - Callout: one `> ` blockquote with a genuinely quotable line from the sources, \
+               then an attribution line starting with `—` if the speaker is known.\n\
+             - Narrative: one short paragraph of 2-3 sentences — at most once in the piece.\n\
+             A worked example of the shape (structure only — your content comes from the \
+             sources):\n\
+             # The State of the Fleet\n\
+             Electric buses went from pilot to plurality in five years.\n\
+             ## Adoption\n\
+             **61%** — of the fleet is electric today\n\
+             **5 yrs** — from first pilot to majority\n\
+             **$0** — spent on diesel since March\n\
+             ## Cost per mile\n\
+             | Mode | Cents |\n\
+             | --- | --- |\n\
+             | Diesel | 92 |\n\
+             | Hybrid | 71 |\n\
+             | Electric | 38 |\n\
+             Every number and claim must come from the sources — never invent, estimate, or \
+             round beyond what they state; if the corpus lacks concrete numbers for tiles or \
+             bars, use fact cards instead of manufacturing data. Cover the whole corpus, \
+             sharpest facts first. Output ONLY the infographic markdown: no code fences, no \
+             HTML, no prose outside the structure.",
         )),
         "mind_map" => Some((
             "Mind Map",

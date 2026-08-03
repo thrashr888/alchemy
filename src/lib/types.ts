@@ -145,6 +145,7 @@ export type NoteKind =
   | "audio_overview"
   | "mind_map"
   | "slide_deck"
+  | "infographic"
   | "data_table"
   | "round_table"
   | "problems"

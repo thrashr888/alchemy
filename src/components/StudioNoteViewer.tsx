@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import type { Note } from "@/lib/types";
 import { AudioPlayer, DialogueScript } from "./AudioNote";
 import { Flashcards } from "./Flashcards";
+import { Infographic } from "./Infographic";
 import { Markdown } from "./Markdown";
 import { MindMap } from "./MindMap";
 import { QuizView } from "./QuizView";
@@ -137,6 +138,8 @@ export function StudioNoteViewer({
                 <QuizView content={live.content} />
               ) : live.kind === "slide_deck" ? (
                 <SlideDeck content={live.content} note={live} />
+              ) : live.kind === "infographic" ? (
+                <Infographic content={live.content} title={live.title} />
               ) : live.kind === "audio_overview" ? (
                 <div className="flex flex-col gap-4">
                   <AudioPlayer
