@@ -5,6 +5,7 @@ import { Workspace } from "@/components/Workspace";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ImportOkfModal } from "@/components/ImportOkfModal";
+import { ExternalAddModal } from "@/components/ExternalAddModal";
 import { FileDrop } from "@/components/FileDrop";
 import { MigrationOverlay } from "@/components/MigrationOverlay";
 import { NoteWindow } from "@/components/NoteWindow";
@@ -102,6 +103,10 @@ function App() {
       />
       <CommandPalette />
       <ImportOkfModal />
+      {/* App-level, not inside Workspace: Home's "Add source…", the tray, and
+          Services all raise this with no notebook open, and mounted under
+          Workspace it simply never rendered there. */}
+      <ExternalAddModal />
       {/* Always mounted: OKF-bundle drops import from the homepage too. */}
       <FileDrop />
       <MigrationOverlay />

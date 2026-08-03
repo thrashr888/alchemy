@@ -37,10 +37,12 @@ import {
   Pencil,
   FileText,
   Newspaper,
+  Package,
   Sparkles,
   FolderInput,
 } from "lucide-react";
 import { BriefSidebar, SidebarRail, StaffSidebar } from "./HomeSections";
+import { RegistrySection } from "./RegistrySection";
 
 // Keep this list in sync with Rust in `src-tauri/src/db.rs` (`NOTEBOOK_PALETTE`)
 // and the `set_notebook_color` validator in `src-tauri/src/commands.rs`.
@@ -55,6 +57,48 @@ const NOTEBOOK_PALETTE = [
   "#98a562",
 ];
 
+/** Home's center switch, the exact sibling of the notebook's
+ *  Chat|Reader|Gallery|Ledger tabs (CenterModeTabs, ReaderPane.tsx): one
+ *  control, in the title bar, choosing what the center column shows about a
+ *  constant subject. There the subject is one notebook; here it's the whole
+ *  corpus — its notebooks, or the cast of things they're about. Same kind of
+ *  switch, so it lives in the same place and wears the same chrome. */
+function HomeSectionTabs() {
+  const section = useStore((s) => s.homeSection);
+  const tabs = [
+    { id: "notebooks", label: "Notebooks", icon: BookOpen },
+    { id: "registry", label: "Registry", icon: Package },
+  ] as const;
+  return (
+    <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5">
+      {tabs.map(({ id, label, icon: Icon }) => (
+        <button
+          key={id}
+          type="button"
+          onClick={() =>
+            useStore.setState({ homeSection: id, openCardId: null })
+          }
+          aria-pressed={section === id}
+          title={
+            id === "registry"
+              ? "The things your documents are about"
+              : "Your notebooks"
+          }
+          className={cn(
+            "flex items-center gap-1.5 rounded-md px-2 py-1 text-caption transition-colors",
+            section === id
+              ? "bg-surface-2 font-medium text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <Icon className="h-3.5 w-3.5" />
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const notebooks = useStore((s) => s.notebooks);
   const open = useStore((s) => s.selectNotebook);
@@ -64,6 +108,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const remove = useStore((s) => s.deleteNotebook);
   const setStatus = useStore((s) => s.setNotebookStatus);
   const theme = useStore((s) => s.theme);
+  const homeSection = useStore((s) => s.homeSection);
   // Shader must not mount under glass (rAF keeps running when display:none).
   const glassOn = useStore((s) => s.reading.glass);
 
@@ -270,6 +315,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         <span className="text-section font-semibold tracking-tight">
           Alchemy
         </span>
+        <div className="mx-2">
+          <HomeSectionTabs />
+        </div>
         <div className="ml-auto flex items-center gap-3">
           <DevBadge />
           <Button
@@ -366,11 +414,23 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             )}
             {/* Heading + ask box stay put; only the shelves below scroll. */}
             <div className="relative z-10 mx-auto w-full max-w-[960px] shrink-0 px-6 pt-10">
-              <div className="mb-5 flex items-end justify-between">
-                <div>
+              {/* Wraps rather than squeezes: with both sidebars open this
+                  column is far narrower than its 960px cap, so the action
+                  cluster drops to its own line instead of crushing the
+                  heading. */}
+              <div className="mb-5 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+                <div className="min-w-[260px] flex-1">
                   <h1 className="text-page font-semibold tracking-tight">
-                    Your notebooks
+                    {homeSection === "registry"
+                      ? "Your registry"
+                      : "Your notebooks"}
                   </h1>
+                  {homeSection === "registry" ? (
+                    <p className="mt-1 text-body text-muted-foreground">
+                      The things your documents are about — assets, people,
+                      policies, providers, projects, dependencies.
+                    </p>
+                  ) : (
                   <p className="mt-1 text-body text-muted-foreground">
                     {stats
                       ? [
@@ -386,13 +446,16 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                           .join(" · ")
                       : "Most recently used first."}
                   </p>
-                  <AwayDigest
-                    prevVisit={prevVisit}
-                    notebooks={notebooks}
-                    reports={reports}
-                  />
+                  )}
+                  {homeSection === "notebooks" && (
+                    <AwayDigest
+                      prevVisit={prevVisit}
+                      notebooks={notebooks}
+                      reports={reports}
+                    />
+                  )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex shrink-0 items-center gap-2">
                   <Button
                     variant="secondary"
                     onClick={() =>
@@ -490,6 +553,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               </div>
             </div>
 
+            {homeSection === "registry" ? (
+              <RegistrySection />
+            ) : (
             <div className="relative min-h-0 flex-1 overflow-y-auto">
               <div className="mx-auto w-full max-w-[960px] px-6 pb-10">
               <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
@@ -712,6 +778,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   column is just the notebook shelves. */}
               </div>
             </div>
+            )}
           </div>
 
           {/* Right column: the Brief card above the reports feed — the

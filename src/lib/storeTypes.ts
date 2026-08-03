@@ -122,6 +122,13 @@ export interface AppState {
   readerEditIntent: string | null;
   /** Bumped when an agent writes the ledger (mcp://changed scope "ledger"). */
   ledgerBump: number;
+  /** Bumped when the registry changes (agents, or the arrival sweep filing
+   *  a document). Corpus-scoped, so it fires with no notebook open. */
+  registryBump: number;
+  /** Home's center column: the notebook grid, or the Registry's cast. */
+  homeSection: "notebooks" | "registry";
+  /** Card the Registry section has open; null shows the grid. */
+  openCardId: string | null;
   pendingNewNote: boolean;
   artifactStreamText: string;
   audioProgress: { done: number; total: number } | null;

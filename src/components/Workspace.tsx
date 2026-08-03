@@ -7,7 +7,6 @@ import { LedgerPane } from "./LedgerPane";
 import { GalleryPane } from "./GalleryPane";
 import { StudioPanel } from "./StudioPanel";
 import { AddSourceModal } from "./AddSourceModal";
-import { ExternalAddModal } from "./ExternalAddModal";
 import { SourcesRail, StudioRail } from "./SidebarRails";
 import { HealthBanner } from "./HealthBanner";
 import { Button } from "./ui";
@@ -141,7 +140,6 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
 
       {/* Global: adding sources works even while the panel is collapsed. */}
       <AddSourceModal />
-      <ExternalAddModal />
     </div>
   );
 }

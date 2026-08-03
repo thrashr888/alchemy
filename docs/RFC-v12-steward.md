@@ -116,7 +116,7 @@ AST + grep against your own repos — a triage note, never a patch).
   `gist.rs`; `AmbientRail.tsx`; `fuse_grep_hits` + the `outline.rs` AST leg;
   `collapse_report_notes` prior-run threading.
 
-### 4. The Registry
+### 4. The Registry *(see [RFC-registry.md](RFC-registry.md))*
 A closed, user-confirmed cast of entities and threads — assets, people,
 policies, providers, projects, dependencies — each a living card aggregating
 its documents, key facts, and dates. Documents attach on ingest: automatic
@@ -142,10 +142,15 @@ notes you forgot you wrote.
   connectors, credentials, and account scraping; Alchemy stays documents-in.
   An Argos export can land in Alchemy as sources; the Registry never logs in
   anywhere.
-- **Seam:** cards as `note:` species + Convert to source; reader backlinks as
-  the card's document list; curator matching for doc→entity attach;
-  `router.rs` per-notebook summary vectors as Reprise's kinship signal;
-  `global_meta_route` (commands.rs:7373) scoped to kin notebooks.
+- **Seam:** one corpus-scoped `registry` table on the `T_LEDGER` pattern,
+  attachments as a JSON blob like `LedgerAnchor` (this RFC guessed `note:`
+  species and reader backlinks; RFC-registry §1 corrects both — notes are
+  notebook-scoped and `source_backlinks` is a per-notebook URL scan); the
+  shipped gallery's card grid and filter bar as the surface; `gate_tags`
+  grounding as the auto-attach precision bar; curator matching for
+  doc→entity *proposals*; `router.rs` per-notebook summary vectors as
+  Reprise's kinship signal; `global_meta_route` (commands.rs:8177) scoped to
+  kin notebooks.
 
 ### 5. The Clerk
 Capture-to-durable in one motion, across every format: watched scan folders,
@@ -301,8 +306,11 @@ call, pay, appeal, or submit anything." The propose-never-act rule lives as
 copy at the point of action, not a settings page.
 
 ### 2. Home becomes a dashboard with title-bar sections
-The notebook's center switch (§1, now three modes) is the precedent; Home
-gets the same control in its title bar, four sections:
+The notebook's center switch (§1, now four modes — Chat | Reader | Gallery |
+Ledger) is the precedent; Home gets the same control, four sections. What
+shipped diverged and stands: **Brief** and **Staff** became collapsible
+sidebars rather than switched sections, so the switch that remains is over
+the center column — Notebooks | Registry.
 
 - **Notebooks** — today's home (grid, ask box, gauge, epigraph), unchanged,
   still the default.
@@ -310,11 +318,13 @@ gets the same control in its title bar, four sections:
   temperament-ranked) with its audio edition playable inline, the archive of
   past briefs, and **AwayDigest folded in** (it is the brief's degenerate form
   today).
-- **Registry** — the cast: cards in a grid echoing the notebook grid's visual
-  language (title dot, frosted right-click menus), grouped by kind — assets,
-  people, policies, projects, dependencies. A card opens via the Reader
-  pattern (cards are `note:` species, so reader, backlinks, and ⌘F work for
-  free). The propose-and-confirm attach queue lives here.
+- **Registry** — the cast: cards in a grid, grouped by kind — assets,
+  people, policies, projects, dependencies. Since this section was written
+  the source gallery shipped, so the grid is *that* grid re-aimed (kind
+  groups and notebook chips in place of type groups and tag chips), and a
+  card opens as a detail view in the same column rather than in the Reader.
+  See [RFC-registry.md](RFC-registry.md) §3; the propose-and-confirm queue
+  resolves in the reader's right rail, with Home as the sweep-up.
 - **Staff** — the Night Shift's own ledger: last night's runs and what they
   produced, the upcoming schedule, watchers with their last diff, the Meter
   (spend per night / schedule / notebook, caps), seal status per notebook, and
@@ -495,5 +505,9 @@ stops.
    sync activity, source health) into one ranked arrival point with an audio
    edition; temperament ranking deepens as the Ledger and the Weave land.
 
-The Ledger → Weave → Second Look chain follows; the Clerk's Whisper rung and
-the Registry are independent tracks.
+Both shipped, and the Ledger → Weave → Second Look chain behind them —
+the Ledger as its own table (`T_LEDGER`), the Weave as an arrival-triggered
+sweep, neither needing an RFC of its own. The Registry is the move in
+progress: **[RFC-registry.md](RFC-registry.md)**, an independent track that
+rides the shipped source gallery for its surface. The Clerk's Whisper rung is
+the other independent track.

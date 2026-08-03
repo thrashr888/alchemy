@@ -1,0 +1,1025 @@
+/* The Registry (docs/RFC-registry.md): Home's other center column — the
+   confirmed cast of things, and the documents filed under them.
+
+   Cards are corpus-scoped, so this lives on Home rather than in a notebook's
+   center-mode switch. The grid is the source gallery's grid re-aimed: kind
+   groups where the gallery has type groups, notebook chips where it has tag
+   chips, one shared FilterBar. Every attachment shows its receipt — the
+   identifier that matched, "name", or "manual" — because a machine that
+   files without showing its reason is one you stop trusting on the first
+   mistake. */
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { api } from "@/lib/api";
+import { useStore } from "@/lib/store";
+import type {
+  CardAttachment,
+  CardFact,
+  CardKind,
+  RegistryCard,
+  Source,
+} from "@/lib/types";
+import {
+  Badge,
+  Button,
+  CardAction,
+  EmptyState,
+  Input,
+  Modal,
+  RowMenu,
+  useConfirm,
+} from "./ui";
+import { FilterBar, rankByCount } from "./FilterBar";
+import { cn, relativeTime } from "@/lib/utils";
+import {
+  ArrowLeft,
+  Boxes,
+  Building2,
+  Check,
+  FileText,
+  FolderKanban,
+  Package,
+  Plus,
+  ScrollText,
+  Trash2,
+  User,
+  X,
+} from "lucide-react";
+
+const KINDS: { id: CardKind; label: string; icon: React.ReactNode }[] = [
+  { id: "asset", label: "Assets", icon: <Package className="h-4 w-4" /> },
+  { id: "person", label: "People", icon: <User className="h-4 w-4" /> },
+  {
+    id: "policy",
+    label: "Policies",
+    icon: <ScrollText className="h-4 w-4" />,
+  },
+  {
+    id: "provider",
+    label: "Providers",
+    icon: <Building2 className="h-4 w-4" />,
+  },
+  {
+    id: "project",
+    label: "Projects",
+    icon: <FolderKanban className="h-4 w-4" />,
+  },
+  {
+    id: "dependency",
+    label: "Dependencies",
+    icon: <Boxes className="h-4 w-4" />,
+  },
+];
+
+export function kindIcon(kind: string) {
+  return KINDS.find((k) => k.id === kind)?.icon ?? <Package className="h-4 w-4" />;
+}
+
+/** Singular label for one card ("Asset"), vs the plural filter groups. */
+function kindLabel(kind: string) {
+  const l = KINDS.find((k) => k.id === kind)?.label ?? kind;
+  return l.endsWith("ies") ? l.slice(0, -3) + "y" : l.replace(/s$/, "");
+}
+
+const confirmed = (c: RegistryCard) =>
+  c.attachments.filter((a) => a.status === "confirmed");
+const proposed = (c: RegistryCard) =>
+  c.attachments.filter((a) => a.status === "proposed");
+
+/** How an attachment got here, in the user's words. The identifier case
+    quotes the actual string — that's the whole point of the receipt. */
+function receipt(a: CardAttachment) {
+  if (a.matched === "manual") return "filed by hand";
+  if (a.matched === "name") return "name matched";
+  return `matched ${a.matched}`;
+}
+
+export function RegistrySection() {
+  const registryBump = useStore((s) => s.registryBump);
+  const openCardId = useStore((s) => s.openCardId);
+  const [cards, setCards] = useState<RegistryCard[]>([]);
+  const [kind, setKind] = useState<string>("all");
+  const [notebook, setNotebook] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      setCards(await api.listRegistry());
+    } finally {
+      setLoaded(true);
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load, registryBump]);
+
+  const notebooks = useStore((s) => s.notebooks);
+  const nbTitle = useCallback(
+    (id: string) => notebooks.find((n) => n.id === id)?.title ?? "",
+    [notebooks],
+  );
+
+  // Suggested cards are proposals, not cast members: they get their own
+  // group above the grid, and dismissed ones never render at all (the row
+  // survives only as the suggester's refusal memory).
+  const suggested = useMemo(
+    () => cards.filter((c) => c.origin === "auto"),
+    [cards],
+  );
+  const mine = useMemo(() => cards.filter((c) => !c.origin), [cards]);
+
+  // Both axes are computed from what's actually present, so an empty option
+  // never renders (the gallery's rule).
+  const kinds = useMemo(() => {
+    const present = new Set(mine.map((c) => c.kind));
+    return [
+      { value: "all", label: "All" },
+      ...KINDS.filter((k) => present.has(k.id)).map((k) => ({
+        value: k.id as string,
+        label: k.label,
+      })),
+    ];
+  }, [mine]);
+
+  const nbChips = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const c of mine)
+      for (const a of c.attachments) {
+        if (a.status === "rejected" || !a.notebookId) continue;
+        const t = nbTitle(a.notebookId);
+        if (t) counts.set(t, (counts.get(t) ?? 0) + 1);
+      }
+    return rankByCount(counts);
+  }, [mine, nbTitle]);
+
+  const shown = useMemo(
+    () =>
+      mine.filter((c) => {
+        if (kind !== "all" && c.kind !== kind) return false;
+        if (notebook !== null) {
+          const inNb = c.attachments.some(
+            (a) => a.status !== "rejected" && nbTitle(a.notebookId) === notebook,
+          );
+          if (!inNb) return false;
+        }
+        return true;
+      }),
+    [mine, kind, notebook, nbTitle],
+  );
+
+  const open = cards.find((c) => c.id === openCardId) ?? null;
+  if (openCardId && open) {
+    return (
+      <CardDetail
+        card={open}
+        onBack={() => useStore.setState({ openCardId: null })}
+        onChanged={load}
+      />
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <FilterBar
+        groups={kinds}
+        group={kinds.some((k) => k.value === kind) ? kind : "all"}
+        onGroup={setKind}
+        chips={nbChips}
+        chip={notebook !== null && nbChips.includes(notebook) ? notebook : null}
+        onChip={setNotebook}
+        chipAllLabel="All notebooks"
+        chipPrefix=""
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-[960px] px-6 pb-10 pt-4">
+          <SuggestionStrip cards={suggested} onChanged={load} />
+          {loaded && mine.length === 0 ? (
+            <EmptyState
+              icon={<Package className="h-5 w-5" />}
+              title="No cards yet"
+              hint="A card is a thing your documents are about — a vehicle, a policy, a project. Give it an identifier like a VIN or policy number and matching documents file themselves."
+            >
+              <Button
+                variant="primary"
+                className="mt-3"
+                onClick={() => setCreating(true)}
+              >
+                <Plus className="h-4 w-4" />
+                New card
+              </Button>
+            </EmptyState>
+          ) : (
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
+              <button
+                onClick={() => setCreating(true)}
+                className="flex min-h-[132px] flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border-strong bg-surface/40 text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
+              >
+                <Plus className="h-6 w-6" />
+                <span className="text-body font-medium">New card</span>
+              </button>
+              {shown.map((c) => (
+                <CardTile
+                  key={c.id}
+                  card={c}
+                  onOpen={() => useStore.setState({ openCardId: c.id })}
+                  onChanged={load}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <NewCardModal
+        open={creating}
+        onClose={() => setCreating(false)}
+        onCreated={(c) => {
+          void load();
+          useStore.setState({ openCardId: c.id });
+        }}
+      />
+    </div>
+  );
+}
+
+/** The reader's right-rail Registry panel (RFC-registry §4): what this
+    document is filed under, and any proposal waiting on a verdict.
+
+    Proposals resolve here rather than only on Home because this is where
+    the evidence is on screen — the document itself is the argument. Rides
+    the Related rail's existing docked/popover fit logic; it is a sibling in
+    that column, not a third rail with its own toggle. */
+export function CardRail({ sourceId }: { sourceId: string }) {
+  const registryBump = useStore((s) => s.registryBump);
+  const [cards, setCards] = useState<RegistryCard[]>([]);
+
+  const load = useCallback(() => {
+    if (!sourceId) return;
+    void api.cardsForSource(sourceId).then(setCards);
+  }, [sourceId]);
+  useEffect(load, [load, registryBump]);
+
+  if (cards.length === 0) return null;
+
+  const setStatus = async (cardId: string, status: string) => {
+    await api.setAttachmentStatus(cardId, sourceId, status);
+    load();
+  };
+
+  return (
+    <div className="mb-4 shrink-0">
+      <div className="mb-1.5 flex items-center gap-1.5 text-badge font-medium uppercase tracking-wider text-subtle-foreground">
+        <Package className="h-3 w-3" />
+        Filed under
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {cards.map((c) => {
+          const a = c.attachments.find((x) => x.sourceId === sourceId)!;
+          const pending = a.status === "proposed";
+          return (
+            <div
+              key={c.id}
+              className="rounded-md border border-border p-2 transition-colors hover:border-border-strong"
+            >
+              <button
+                className="flex w-full items-center gap-1.5 text-left"
+                onClick={() => {
+                  // closeNotebook, not a raw currentId:null — it also clears
+                  // sources/messages/reader and resets the window title.
+                  useStore.getState().closeNotebook();
+                  useStore.setState({
+                    homeSection: "registry",
+                    openCardId: c.id,
+                  });
+                }}
+              >
+                <span className="text-muted-foreground">{kindIcon(c.kind)}</span>
+                <span className="min-w-0 flex-1 truncate text-caption font-medium">
+                  {c.name}
+                </span>
+              </button>
+              {c.facts.slice(0, 3).map((f, i) => (
+                <div
+                  key={i}
+                  className="mt-1 flex gap-2 text-micro text-muted-foreground"
+                >
+                  <span className="text-subtle-foreground">{f.label}</span>
+                  <span className="min-w-0 flex-1 truncate">{f.value}</span>
+                </div>
+              ))}
+              <div className="mt-1.5 text-micro text-subtle-foreground">
+                {receipt(a)}
+              </div>
+              {pending && (
+                <>
+                  <div className="mt-1.5 text-micro text-muted-foreground">
+                    Filing it here changes nothing in the document.
+                  </div>
+                  <div className="mt-1.5 flex items-center gap-1">
+                    <Button
+                      size="sm"
+                      onClick={() => void setStatus(c.id, "confirmed")}
+                    >
+                      <Check className="h-3 w-3" />
+                      Confirm
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => void setStatus(c.id, "rejected")}
+                      title="Turn this down — it won't be proposed again"
+                    >
+                      Not this
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** File one document under a card from wherever the document is — the
+    gallery, the sources list, the reader. This is the fastest path and the
+    one that seeds the cast, so it can also mint the card it files into. */
+export function AttachToCardModal({
+  sourceId,
+  sourceTitle,
+  onClose,
+}: {
+  sourceId: string | null;
+  sourceTitle: string;
+  onClose: () => void;
+}) {
+  const [cards, setCards] = useState<RegistryCard[]>([]);
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!sourceId) return;
+    setQ("");
+    void api.listRegistry().then(setCards);
+  }, [sourceId]);
+
+  const attach = async (cardId: string) => {
+    if (!sourceId || busy) return;
+    setBusy(true);
+    try {
+      const card = await api.attachSourceToCard(cardId, sourceId);
+      useStore.getState().pushToast("info", `Filed under “${card.name}”`);
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const create = async () => {
+    if (!sourceId || !q.trim() || busy) return;
+    setBusy(true);
+    try {
+      const card = await api.addRegistryCard("asset", q.trim());
+      await api.attachSourceToCard(card.id, sourceId);
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const shown = cards.filter((c) =>
+    c.name.toLowerCase().includes(q.trim().toLowerCase()),
+  );
+
+  return (
+    <Modal
+      open={!!sourceId}
+      onClose={onClose}
+      title="File under a card"
+      footer={
+        <Button variant="secondary" onClick={onClose}>
+          Cancel
+        </Button>
+      }
+    >
+      <div className="flex flex-col gap-3">
+        <p className="text-caption text-muted-foreground">
+          Filing &ldquo;{sourceTitle}&rdquo; under a card only groups it there.
+          It changes nothing in the document.
+        </p>
+        <Input
+          autoFocus
+          placeholder="Find or name a card…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <div className="max-h-64 overflow-y-auto">
+          {shown.map((c) => (
+            <button
+              key={c.id}
+              onClick={() => void attach(c.id)}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-surface-2"
+            >
+              <span className="text-muted-foreground">{kindIcon(c.kind)}</span>
+              <span className="min-w-0 flex-1 truncate text-body">{c.name}</span>
+              <span className="shrink-0 text-micro text-subtle-foreground">
+                {kindLabel(c.kind)}
+              </span>
+            </button>
+          ))}
+          {shown.length === 0 && q.trim() && (
+            <button
+              onClick={() => void create()}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-surface-2"
+            >
+              <Plus className="h-4 w-4 text-muted-foreground" />
+              <span className="text-body">
+                New asset card &ldquo;{q.trim()}&rdquo;
+              </span>
+            </button>
+          )}
+          {shown.length === 0 && !q.trim() && (
+            <EmptyState
+              compact
+              title="No cards yet"
+              hint="Type a name above to create one."
+            />
+          )}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** What the suggester proposed, awaiting your verdict.
+    Above the grid rather than in it: these are guesses, and mixing guesses
+    into the cast is exactly how a registry stops being trustworthy.
+    Confirming makes a card yours; dismissing is remembered, so the same
+    guess never comes back. */
+function SuggestionStrip({
+  cards,
+  onChanged,
+}: {
+  cards: RegistryCard[];
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  if (cards.length === 0) return null;
+
+  const rule = async (id: string, origin: string) => {
+    setBusy(id);
+    try {
+      await api.setCardOrigin(id, origin);
+      onChanged();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="mb-6">
+      <h2 className="text-badge font-medium uppercase tracking-wider text-subtle-foreground">
+        Suggested
+      </h2>
+      <p className="mt-1 text-caption text-muted-foreground">
+        Things that recur across your documents. Keeping one adds it to your
+        registry and files its documents under it — it changes nothing in the
+        documents themselves.
+      </p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {cards.map((c) => (
+          <div
+            key={c.id}
+            className="flex items-center gap-2 rounded-lg border border-dashed border-border-strong bg-surface/40 px-2.5 py-1.5"
+          >
+            <span className="text-muted-foreground">{kindIcon(c.kind)}</span>
+            <span className="text-body">{c.name}</span>
+            <span className="text-micro text-subtle-foreground">
+              {kindLabel(c.kind)}
+            </span>
+            <Button
+              size="sm"
+              onClick={() => void rule(c.id, "")}
+              loading={busy === c.id}
+            >
+              <Check className="h-3.5 w-3.5" />
+              Keep
+            </Button>
+            <button
+              className="rounded p-1 text-muted-foreground transition hover:text-destructive"
+              title="Not a thing I track — won't be suggested again"
+              onClick={() => void rule(c.id, "dismissed")}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function CardTile({
+  card,
+  onOpen,
+  onChanged,
+}: {
+  card: RegistryCard;
+  onOpen: () => void;
+  onChanged: () => void;
+}) {
+  const { confirm, dialog } = useConfirm();
+  const docs = confirmed(card).length;
+  const pending = proposed(card).length;
+  return (
+    <div
+      title={card.name}
+      className={cn(
+        "group relative flex min-h-[132px] cursor-pointer flex-col rounded-lg border border-border bg-surface p-4 transition-colors hover:border-border-strong hover:bg-surface-2",
+        "has-[[aria-expanded=true]]:z-30",
+      )}
+    >
+      <CardAction label={`Open card ${card.name}`} onClick={onOpen} />
+      <div className="pointer-events-none relative z-10 mb-auto flex h-8 w-8 items-center justify-center rounded-lg bg-surface-2 text-muted-foreground">
+        {kindIcon(card.kind)}
+      </div>
+      <div className="pointer-events-none relative z-10 mt-3 flex items-center gap-1.5">
+        <span className="truncate text-card font-medium">{card.name}</span>
+        {pending > 0 && (
+          // Same dot the notebook cards use for unread reports: something
+          // here is waiting on you.
+          <span
+            className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+            title={`${pending} document${pending === 1 ? "" : "s"} waiting`}
+            aria-label={`${pending} waiting to be confirmed`}
+          />
+        )}
+      </div>
+      <div className="pointer-events-none relative z-10 mt-1 flex items-center gap-1.5 text-micro text-subtle-foreground">
+        <Badge className="gap-1">
+          <FileText className="h-2.5 w-2.5" />
+          {docs}
+        </Badge>
+        <span>·</span>
+        <span className="truncate">{kindLabel(card.kind)}</span>
+      </div>
+      <div className="absolute right-2 top-2 z-20 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+        <RowMenu
+          items={[
+            { label: "Open", onClick: onOpen },
+            {
+              label: "Delete card…",
+              danger: true,
+              onClick: () => void (async () => {
+                const ok = await confirm({
+                  title: `Delete “${card.name}”?`,
+                  message:
+                    "The documents filed under it are untouched — only the card and its filing go away.",
+                  confirmLabel: "Delete",
+                  danger: true,
+                });
+                if (!ok) return;
+                await api.deleteRegistryCard(card.id);
+                onChanged();
+              })(),
+            },
+          ]}
+        />
+      </div>
+      {dialog}
+    </div>
+  );
+}
+
+function NewCardModal({
+  open,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: (c: RegistryCard) => void;
+}) {
+  const [kind, setKind] = useState<CardKind>("asset");
+  const [name, setName] = useState("");
+  const [identifiers, setIdentifiers] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setKind("asset");
+      setName("");
+      setIdentifiers("");
+    }
+  }, [open]);
+
+  const submit = async () => {
+    if (!name.trim() || busy) return;
+    setBusy(true);
+    try {
+      onCreated(await api.addRegistryCard(kind, name.trim(), identifiers));
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="New card"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => void submit()}
+            loading={busy}
+            disabled={!name.trim()}
+          >
+            Create
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap gap-1">
+          {KINDS.map((k) => (
+            <button
+              key={k.id}
+              type="button"
+              onClick={() => setKind(k.id)}
+              aria-pressed={kind === k.id}
+              className={cn(
+                "flex items-center gap-1.5 rounded-md px-2 py-1 text-caption transition-colors",
+                kind === k.id
+                  ? "bg-surface-2 font-medium text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {k.icon}
+              {kindLabel(k.id)}
+            </button>
+          ))}
+        </div>
+        <Input
+          autoFocus
+          placeholder="What is it called?"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && void submit()}
+        />
+        <div>
+          <Input
+            placeholder="Identifiers — VIN, policy no., serial (optional)"
+            value={identifiers}
+            onChange={(e) => setIdentifiers(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && void submit()}
+          />
+          <p className="mt-1.5 text-caption text-muted-foreground">
+            Documents containing one of these are filed here automatically. Only
+            put strings that could not belong to anything else — 6+ characters
+            with a digit. Everything else is proposed for you to confirm.
+          </p>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function CardDetail({
+  card,
+  onBack,
+  onChanged,
+}: {
+  card: RegistryCard;
+  onBack: () => void;
+  onChanged: () => void;
+}) {
+  const notebooks = useStore((s) => s.notebooks);
+  const { confirm, dialog } = useConfirm();
+  const [titles, setTitles] = useState<Map<string, Source>>(new Map());
+
+  // Resolve attached documents across every notebook they live in — a card
+  // spans notebooks, so the open notebook's source list isn't enough.
+  useEffect(() => {
+    let alive = true;
+    const nbs = [
+      ...new Set(card.attachments.map((a) => a.notebookId).filter(Boolean)),
+    ];
+    void Promise.all(nbs.map((id) => api.listSources(id))).then((lists) => {
+      if (!alive) return;
+      const m = new Map<string, Source>();
+      for (const list of lists) for (const s of list) m.set(s.id, s);
+      setTitles(m);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [card.attachments]);
+
+  const pending = proposed(card);
+  const docs = confirmed(card);
+
+  const setStatus = async (sourceId: string, status: string) => {
+    await api.setAttachmentStatus(card.id, sourceId, status);
+    onChanged();
+  };
+
+  const openDoc = (a: CardAttachment) => {
+    const s = titles.get(a.sourceId);
+    // A card spans notebooks, so opening its document means switching to
+    // the notebook that holds it first.
+    void useStore
+      .getState()
+      .selectNotebook(a.notebookId)
+      .then(() =>
+        useStore.getState().openSourceViewer(a.sourceId, s?.title ?? ""),
+      );
+  };
+
+  const row = (a: CardAttachment, isPending: boolean) => {
+    const s = titles.get(a.sourceId);
+    return (
+      <div
+        key={a.sourceId}
+        className="flex items-center gap-2 border-b border-border py-2 last:border-b-0"
+      >
+        <FileText className="h-3.5 w-3.5 shrink-0 text-subtle-foreground" />
+        <button
+          className="min-w-0 flex-1 truncate text-left text-body hover:text-primary"
+          onClick={() => openDoc(a)}
+          title={s?.title}
+        >
+          {s?.title ?? "Untitled document"}
+        </button>
+        <span className="shrink-0 text-micro text-subtle-foreground">
+          {notebooks.find((n) => n.id === a.notebookId)?.title}
+        </span>
+        <span
+          className="shrink-0 rounded border border-border px-1.5 py-0.5 text-micro text-muted-foreground"
+          title="Why this document is filed here"
+        >
+          {receipt(a)}
+        </span>
+        <span className="shrink-0 text-micro text-subtle-foreground">
+          {relativeTime(a.at)}
+        </span>
+        {isPending ? (
+          <span className="flex shrink-0 items-center gap-1">
+            <Button size="sm" onClick={() => void setStatus(a.sourceId, "confirmed")}>
+              <Check className="h-3.5 w-3.5" />
+              Confirm
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => void setStatus(a.sourceId, "rejected")}
+              title="Turn this down — it won't be proposed again"
+            >
+              <X className="h-3.5 w-3.5" />
+              Not this
+            </Button>
+          </span>
+        ) : (
+          <button
+            className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition hover:bg-elevated group-hover:opacity-100"
+            title="Unfile this document"
+            onClick={() => void setStatus(a.sourceId, "remove")}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto w-full max-w-[760px] px-6 pb-10 pt-4">
+        <button
+          onClick={onBack}
+          className="mb-4 flex items-center gap-1.5 text-caption text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+          Registry
+        </button>
+
+        <div className="flex items-start gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-muted-foreground">
+            {kindIcon(card.kind)}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-title font-semibold">{card.name}</h1>
+            <div className="mt-0.5 text-caption text-muted-foreground">
+              {kindLabel(card.kind)} · {docs.length} document
+              {docs.length === 1 ? "" : "s"}
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={async () => {
+              const ok = await confirm({
+                title: `Delete “${card.name}”?`,
+                message:
+                  "The documents filed under it are untouched — only the card and its filing go away.",
+                confirmLabel: "Delete",
+                danger: true,
+              });
+              if (!ok) return;
+              await api.deleteRegistryCard(card.id);
+              onBack();
+              onChanged();
+            }}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+
+        <CardFacts card={card} onChanged={onChanged} />
+
+        {pending.length > 0 && (
+          <section className="mt-6">
+            <h2 className="text-badge font-medium uppercase tracking-wider text-subtle-foreground">
+              Waiting for you
+            </h2>
+            <p className="mt-1 text-caption text-muted-foreground">
+              These matched this card&rsquo;s name, which is a guess, not proof.
+              Confirming only files the document here — it changes nothing in
+              the document.
+            </p>
+            <div className="mt-2">{pending.map((a) => row(a, true))}</div>
+          </section>
+        )}
+
+        <section className="mt-6">
+          <h2 className="text-badge font-medium uppercase tracking-wider text-subtle-foreground">
+            Documents
+          </h2>
+          {docs.length === 0 ? (
+            <EmptyState
+              compact
+              title="Nothing filed here yet"
+              hint="Attach a source from its ⋯ menu in the gallery or sources list."
+            />
+          ) : (
+            <div className="mt-2">{docs.map((a) => row(a, false))}</div>
+          )}
+        </section>
+      </div>
+      {dialog}
+    </div>
+  );
+}
+
+/** Key facts + identifiers, edited in place — the reader's doc-properties
+    grid shape, with the same click-to-edit contract. */
+function CardFacts({
+  card,
+  onChanged,
+}: {
+  card: RegistryCard;
+  onChanged: () => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [label, setLabel] = useState("");
+  const [value, setValue] = useState("");
+
+  const save = async (facts: CardFact[]) => {
+    await api.updateRegistryCard(card.id, { facts });
+    onChanged();
+  };
+
+  return (
+    <div className="mt-5 border-t border-border pt-4">
+      <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-caption">
+        <span className="text-subtle-foreground">Identifiers</span>
+        <IdentifierField card={card} onChanged={onChanged} />
+        {card.facts.map((f, i) => (
+          <FactRow
+            key={`${f.label}-${i}`}
+            fact={f}
+            onRemove={() => void save(card.facts.filter((_, j) => j !== i))}
+          />
+        ))}
+      </div>
+      {adding ? (
+        <div className="mt-2 flex items-center gap-2">
+          <Input
+            autoFocus
+            className="w-40"
+            placeholder="Label"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+          />
+          <Input
+            className="flex-1"
+            placeholder="Value"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" || !label.trim()) return;
+              void save([...card.facts, { label: label.trim(), value }]);
+              setLabel("");
+              setValue("");
+              setAdding(false);
+            }}
+          />
+          <Button variant="ghost" size="sm" onClick={() => setAdding(false)}>
+            Cancel
+          </Button>
+        </div>
+      ) : (
+        <button
+          className="mt-2 text-caption text-muted-foreground transition-colors hover:text-foreground"
+          onClick={() => setAdding(true)}
+        >
+          + Add a fact
+        </button>
+      )}
+    </div>
+  );
+}
+
+function FactRow({
+  fact,
+  onRemove,
+}: {
+  fact: CardFact;
+  onRemove: () => void;
+}) {
+  return (
+    <>
+      <span className="text-subtle-foreground">{fact.label}</span>
+      <span className="group flex items-center gap-2 text-foreground">
+        <span className="min-w-0 flex-1">{fact.value}</span>
+        <button
+          className="shrink-0 text-subtle-foreground opacity-0 transition hover:text-destructive group-hover:opacity-100"
+          onClick={onRemove}
+          title="Remove this fact"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </span>
+    </>
+  );
+}
+
+/** Identifiers are the auto-attach key, so editing them is the one field
+    here with real consequences — the hint says so at the point of editing. */
+function IdentifierField({
+  card,
+  onChanged,
+}: {
+  card: RegistryCard;
+  onChanged: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(card.identifiers);
+  const currentId = useStore((s) => s.currentId);
+
+  const commit = async () => {
+    setEditing(false);
+    if (draft.trim() === card.identifiers) return;
+    await api.updateRegistryCard(card.id, { identifiers: draft.trim() });
+    // Re-file the open notebook against the new identifiers: adding a VIN to
+    // a card that already had documents should pick them up now, not on the
+    // next import.
+    if (currentId) await api.rematchRegistry(currentId);
+    onChanged();
+  };
+
+  if (!editing) {
+    return (
+      <button
+        className="text-left text-foreground hover:text-primary"
+        onClick={() => {
+          setDraft(card.identifiers);
+          setEditing(true);
+        }}
+      >
+        {card.identifiers || (
+          <span className="text-subtle-foreground">
+            Add a VIN, policy no., or serial…
+          </span>
+        )}
+      </button>
+    );
+  }
+  return (
+    <Input
+      autoFocus
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => void commit()}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") void commit();
+        if (e.key === "Escape") setEditing(false);
+      }}
+    />
+  );
+}

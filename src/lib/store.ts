@@ -262,6 +262,9 @@ export const useStore = create<AppState>((set, get) => {
     galleryOpen: false,
     readerEditIntent: null,
     ledgerBump: 0,
+    registryBump: 0,
+    homeSection: "notebooks",
+    openCardId: null,
     pendingNewNote: false,
     artifactStreamText: "",
     audioProgress: null,
@@ -450,6 +453,10 @@ export const useStore = create<AppState>((set, get) => {
           void get().refreshNotebooks();
           // Templates are app-global — refresh before the notebook gate.
           if (scope === "templates") void get().refreshTemplates();
+          // So is the Registry (it has no notebook), and its surface is Home
+          // — where currentId is null, so it must bump before that gate too.
+          if (scope === "registry")
+            set((state) => ({ registryBump: state.registryBump + 1 }));
           const current = get().currentId;
           if (!current || (notebookId && notebookId !== current)) return;
           if (scope === "sources")

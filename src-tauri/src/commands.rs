@@ -11,11 +11,13 @@ use uuid::Uuid;
 
 mod brief;
 mod ledger;
+mod registry;
 mod reports;
 mod second_look;
 mod weave;
 pub(crate) use brief::ensure_default_brief;
 pub use ledger::*;
+pub use registry::*;
 pub use reports::*;
 pub use second_look::*;
 
@@ -54,6 +56,28 @@ pub struct AppState {
     /// Last successfully applied glass state per window label
     /// (enabled, dark, pinned) — evicted on window destroy in lib.rs.
     pub glass_applied: Mutex<HashMap<String, (bool, bool, bool)>>,
+}
+
+/// Background sweeps outlive any one command and hold no Tauri handle (the
+/// `gist::spawn_sweep` shape lets reingest spawn them), so the handle they
+/// need to announce their work lives here — the `services.rs`/`spotlight.rs`
+/// OnceLock idiom, once more for the staff.
+static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
+pub(crate) fn set_app_handle(app: tauri::AppHandle) {
+    let _ = APP.set(app);
+}
+
+/// Announce a background write on the same event the MCP mutations use, so
+/// an open window refreshes live instead of waiting to be navigated away
+/// from and back. Silent no-op before setup, and by design after a failure:
+/// a missed refresh must never be worth more than the write it followed.
+pub(crate) fn notify_changed(scope: &str, notebook_id: Option<&str>) {
+    let Some(app) = APP.get() else { return };
+    let _ = app.emit(
+        "mcp://changed",
+        serde_json::json!({ "scope": scope, "notebookId": notebook_id }),
+    );
 }
 
 impl AppState {
@@ -764,6 +788,19 @@ async fn store_new_source(
             notebook_id.to_string(),
             source.title.clone(),
             source.content.chars().take(4_000).collect(),
+        );
+    }
+
+    // File the arrival under any card that claims it (commands/registry.rs).
+    // Unlike the Weave this DOES run for folder children: a folder of
+    // scanned documents is exactly where auto-filing earns its keep, and
+    // matching is literal string work with no model call to budget.
+    if !source.content.is_empty() {
+        registry::spawn_registry_match(
+            state.db.clone(),
+            notebook_id.to_string(),
+            source.id.clone(),
+            source.content.clone(),
         );
     }
 
@@ -1598,6 +1635,17 @@ pub(crate) async fn reingest(
             existing.notebook_id.clone(),
             updated.title.clone(),
             diff.clone(),
+        );
+    }
+    // Re-file on change against the WHOLE updated document, not the diff: a
+    // card minted after this source landed should still pick it up, and
+    // already-attached pairs skip, so re-running costs nothing.
+    if !updated.content.is_empty() {
+        registry::spawn_registry_match(
+            state.db.clone(),
+            existing.notebook_id.clone(),
+            existing.id.clone(),
+            updated.content.clone(),
         );
     }
     let _ = state
