@@ -153,10 +153,15 @@ export function GalleryPane() {
     ).filter((g) => present.has(g)),
   ];
   const effectiveFilter = groups.includes(filter) ? filter : "all";
-  // Every tag present at this level, alphabetical, for the chip row.
-  const levelTags = [
-    ...new Set(level.flatMap((s) => (s.tags ? s.tags.split(" ") : []))),
-  ].sort((a, b) => a.localeCompare(b));
+  // Every tag present at this level for the chip row — biggest first
+  // (most-used tags are the likeliest filters), alphabetical on ties.
+  const tagCounts = new Map<string, number>();
+  for (const s of level)
+    for (const t of s.tags ? s.tags.split(" ") : [])
+      tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1);
+  const levelTags = [...tagCounts.keys()].sort(
+    (a, b) => tagCounts.get(b)! - tagCounts.get(a)! || a.localeCompare(b),
+  );
   const effectiveTag =
     tagFilter && levelTags.includes(tagFilter) ? tagFilter : null;
   const cards = level
