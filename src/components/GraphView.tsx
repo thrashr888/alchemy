@@ -40,9 +40,28 @@ const viewMemory = new Map<string, { x: number; y: number; k: number }>();
  *  enough to read a label in the middle of a dense cluster. */
 const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 4;
-/** Past this zoom the nodes have separated enough that every label fits, so
- *  the collision cull stops hiding them. */
-const ALL_LABELS_ZOOM = 1.6;
+/** Wheel sensitivity. Trackpads send small deltas per event, and the gentler
+ *  value this started at meant a long scrub to get anywhere useful. */
+const ZOOM_SPEED = 0.004;
+/** Label size in screen pixels, held roughly constant across zoom. */
+const LABEL_PX = 10;
+
+/**
+ * How much to shrink glyphs as the view grows.
+ *
+ * Nodes and labels live inside the zoom transform, so by default they scale
+ * with it — zoom into a clump and you get a bigger clump, with the labels
+ * overlapping exactly as much as before. Counter-scaling by 1/k holds them
+ * at a constant SCREEN size while the positions spread apart, which is what
+ * makes zooming actually resolve a cluster.
+ *
+ * Clamped at both ends: unbounded, zooming out would inflate every dot until
+ * the picture is nothing but dots, and zooming far in would shrink them to
+ * specks. Inside the clamp it is exactly constant screen size.
+ */
+function glyphScale(k: number) {
+  return Math.min(1.3, Math.max(0.3, 1 / k));
+}
 
 export function GraphView() {
   const currentId = useStore((s) => s.currentId);
@@ -193,7 +212,10 @@ export function GraphView() {
     [graph],
   );
 
-  const radiusOf = (degree: number) => 5 + Math.min(9, Math.sqrt(degree) * 2.6);
+  const glyph = glyphScale(view.k);
+  /** Node radius in graph units — screen-constant via the counter-scale. */
+  const radiusOf = (degree: number) =>
+    (5 + Math.min(9, Math.sqrt(degree) * 2.6)) * glyph;
 
   /** Which labels can be drawn without colliding. Recomputed only when the
    *  layout changes; zoom just relaxes the rule. */
@@ -203,12 +225,17 @@ export function GraphView() {
         positions.map((p) => ({
           id: p.id,
           x: p.x,
-          y: p.y + radiusOf(p.degree) + 12,
+          y: p.y + radiusOf(p.degree) + 12 * glyph,
           text: labelOf(meta.get(p.id)?.title ?? ""),
           weight: p.degree,
         })),
+        glyph,
       ),
-    [positions, meta],
+    // `glyph` is a dependency on purpose: zooming in shrinks the boxes in
+    // graph space, so collisions resolve and more labels earn their place —
+    // no threshold needed, the geometry decides.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [positions, meta, glyph],
   );
 
   /** What the hover card shows for a node. Sources reuse the sidebar's own
@@ -270,7 +297,7 @@ export function GraphView() {
       const v = viewRef.current;
       const k = Math.max(
         MIN_ZOOM,
-        Math.min(MAX_ZOOM, v.k * Math.exp(-e.deltaY * 0.0015)),
+        Math.min(MAX_ZOOM, v.k * Math.exp(-e.deltaY * ZOOM_SPEED)),
       );
       if (k === v.k) return;
       // Keep the graph-space point under the cursor fixed across the change.
@@ -318,7 +345,6 @@ export function GraphView() {
     commitView({ k, x: cx - (cx - v.x) * scale, y: cy - (cy - v.y) * scale });
   };
 
-  const showAllLabels = view.k >= ALL_LABELS_ZOOM;
 
   return (
     <div ref={boxRef} className="relative min-h-0 flex-1 overflow-hidden">
@@ -400,7 +426,7 @@ export function GraphView() {
                   x2={b.x - (dx / d) * gap}
                   y2={b.y - (dy / d) * gap}
                   stroke="currentColor"
-                  strokeWidth={1}
+                  strokeWidth={1 * glyph}
                   opacity={lit ? 0.45 : 0.08}
                   markerEnd={lit ? "url(#graph-arrow)" : undefined}
                 />
@@ -415,7 +441,7 @@ export function GraphView() {
               const lit = !neighbors || neighbors.has(p.id);
               const isNote = node.kind === "note";
               const labelled =
-                lit && (showAllLabels || visibleLabels.has(p.id) || hovered === p.id);
+                lit && (visibleLabels.has(p.id) || hovered === p.id);
               return (
                 <g
                   key={p.id}
@@ -442,13 +468,14 @@ export function GraphView() {
                     r={r}
                     className={isNote ? "fill-background" : "fill-primary"}
                     stroke="currentColor"
-                    strokeWidth={1.5}
+                    strokeWidth={1.5 * glyph}
                   />
                   {labelled && (
                     <text
-                      y={r + 12}
+                      y={r + 12 * glyph}
                       textAnchor="middle"
-                      className="pointer-events-none fill-current text-micro"
+                      fontSize={LABEL_PX * glyph}
+                      className="pointer-events-none fill-current"
                       opacity={hovered === p.id ? 1 : 0.75}
                     >
                       {labelOf(node.title)}

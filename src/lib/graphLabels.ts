@@ -29,8 +29,13 @@ const LINE_HEIGHT = 11;
 /** Breathing room so two labels never quite touch. */
 const PADDING = 3;
 
-/** Ids whose labels are safe to draw. */
-export function placeLabels(labels: LabelBox[]): Set<string> {
+/** Ids whose labels are safe to draw.
+ *
+ *  `scale` is the glyph counter-scale the view is drawing at: labels hold a
+ *  constant screen size, so in graph coordinates their boxes shrink as you
+ *  zoom in. Feeding it here is what makes a clump resolve itself — the same
+ *  labels stop colliding once there is room, with no zoom threshold to pick. */
+export function placeLabels(labels: LabelBox[], scale = 1): Set<string> {
   // Most connected first, ties broken by id so the result is stable across
   // renders — a label that flickers on every repaint is worse than one that
   // is consistently hidden.
@@ -43,12 +48,13 @@ export function placeLabels(labels: LabelBox[]): Set<string> {
 
   for (const label of ordered) {
     if (!label.text) continue;
-    const halfWidth = (label.text.length * CHAR_WIDTH) / 2 + PADDING;
+    const halfWidth = ((label.text.length * CHAR_WIDTH) / 2 + PADDING) * scale;
+    const halfHeight = (LINE_HEIGHT / 2 + PADDING) * scale;
     const box = {
       x1: label.x - halfWidth,
-      y1: label.y - LINE_HEIGHT / 2 - PADDING,
+      y1: label.y - halfHeight,
       x2: label.x + halfWidth,
-      y2: label.y + LINE_HEIGHT / 2 + PADDING,
+      y2: label.y + halfHeight,
     };
     const collides = placed.some(
       (p) => box.x1 < p.x2 && box.x2 > p.x1 && box.y1 < p.y2 && box.y2 > p.y1,
