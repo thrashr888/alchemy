@@ -192,6 +192,12 @@ only in a **Suggested** strip above the cast, with **Keep** and a dismiss.
   background, so a card you accept immediately acquires its documents rather
   than waiting for the next import.
 
+The pass is also available on demand (`suggest_cards_now`, the Registry's
+"Suggest cards" action): waiting for a background sweep is a poor way to
+find out whether the suggester works, for a user as much as for a developer.
+An explicit ask ignores the once-per-run marker and falls back to source
+titles and heads when gists haven't landed yet.
+
 App-run scope for the once-per-notebook marker is deliberate (the gallery's
 image backfill uses the same): the pass converges immediately so the gist
 sweep's loop can terminate, and a new launch reconsiders a corpus that has
@@ -288,7 +294,23 @@ you have to be *in* it to benefit:
   document belongs to, where a reader already looks for a document's
   identity.
 
-### 7. Reach: MCP, the Brief, OKF
+### 7. What the staff shows
+
+Only the *did* half of the Registry belongs in Home's Staff sidebar: a
+**Filed · 24h** group of documents the matcher filed on its own, each
+carrying its receipt. It happens while you're away, you never asked for it,
+and it is exactly the kind of thing you want to glance at and confirm was
+reasonable. Manual filings are excluded — reporting your own action back to
+you is noise.
+
+Proposals and suggested cards deliberately stay out. They are needs-you
+items, and this app already has one place for those: the Brief, which exists
+to *absorb* interruptions. A second inbox competing for the same decision
+would undo that. They surface where they can be acted on — the reader's
+rail, the card's own queue, the Suggested strip — and are counted in the
+Brief.
+
+### 8. Reach: MCP, the Brief, OKF
 
 - **MCP** — `src-tauri/src/mcp/registry.rs`, the three mechanical steps
   (`mod` in the alphabetized block, `#[tool_router(router = registry_router)]`,
@@ -310,7 +332,7 @@ you have to be *in* it to benefit:
   travels partially, and the export says so rather than pretending the bundle
   is the whole card.
 
-### 8. Reprise, staged
+### 9. Reprise, staged
 
 Reprise — opening a notebook kin to dormant ones triggers a carry-forward
 brief of what still holds and what went stale — is in the same pillar but not

@@ -308,6 +308,7 @@ pub fn run() {
             commands::attach_source_to_card,
             commands::set_attachment_status,
             commands::cards_for_source,
+            commands::suggest_cards_now,
             commands::set_card_origin,
             commands::rematch_registry,
             commands::run_second_look,

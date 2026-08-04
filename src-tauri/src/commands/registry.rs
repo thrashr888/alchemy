@@ -207,8 +207,6 @@ const MIN_GISTS_TO_SUGGEST: usize = 3;
 /// vocabulary, and anything already in the cast (in any origin, including
 /// dismissed) is skipped. Returns how many cards were proposed.
 pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Result<usize> {
-    use crate::inference::Role;
-
     let gists = db.list_gists().await?;
     if gists.is_empty() {
         return Ok(0);
@@ -224,7 +222,32 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
                 continue;
             }
         }
-        let sources = db.list_sources(&nb.id).await.unwrap_or_default();
+        proposed += suggest_for_notebook(db, ai, &nb.id, &gists, &existing, None)
+            .await
+            .unwrap_or_default()
+            .len();
+    }
+    if proposed > 0 {
+        super::notify_changed("registry", None);
+    }
+    Ok(proposed)
+}
+
+/// Propose cards for one notebook. Split out of the sweep so it can also be
+/// asked for directly — waiting for a background pass is a poor way to find
+/// out whether the suggester works, for a user as much as for a developer.
+async fn suggest_for_notebook(
+    db: &crate::db::Db,
+    ai: &crate::ai::Ai,
+    notebook_id: &str,
+    gists: &[crate::db::GistRow],
+    existing: &[RegistryCard],
+    mut echo: Option<&mut String>,
+) -> anyhow::Result<Vec<String>> {
+    use crate::inference::Role;
+    let mut made: Vec<String> = Vec::new();
+    {
+        let sources = db.list_sources(notebook_id).await.unwrap_or_default();
         let ids: std::collections::HashSet<&str> = sources.iter().map(|s| s.id.as_str()).collect();
         let mut material = String::new();
         let mut rows = 0usize;
@@ -241,21 +264,43 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
             material.push_str(&format!("- {title}: {excerpt}\n"));
             rows += 1;
         }
+        // Below this there isn't enough of a notebook to say what it's
+        // about. Fall back to titles and heads when gists haven't landed —
+        // an explicit ask shouldn't be blocked on the distillation sweep.
         if rows < MIN_GISTS_TO_SUGGEST {
-            continue;
+            material.clear();
+            for s in sources.iter().take(MAX_GIST_ROWS) {
+                let Ok(full) = db.source_content(&s.id).await else {
+                    continue;
+                };
+                let head: String = full.chars().take(GIST_EXCERPT_CHARS).collect();
+                material.push_str(&format!("- {}: {head}\n", s.title));
+            }
+            if material.trim().is_empty() {
+                return Ok(made);
+            }
         }
-        let reply = match ai
+        let reply = ai
             .chat_role(Role::Small, &build_suggest_messages(&material))
             .await
-        {
-            Ok(out) => out.text,
-            Err(err) => {
-                eprintln!("registry: suggestion failed for \"{}\": {err:#}", nb.title);
-                return Ok(proposed);
-            }
-        };
+            .map_err(|e| anyhow::anyhow!("{e:#}"))?
+            .text;
+        if let Some(out) = &mut echo {
+            out.push_str(&reply);
+        }
         let haystack = material.to_lowercase();
-        for (kind, name) in gate_suggestions(&reply, &haystack) {
+        let gated = gate_suggestions(&reply, &haystack);
+        if gated.is_empty() {
+            eprintln!(
+                "registry: nothing survived the gate; model said: {}",
+                reply
+                    .replace('\n', " / ")
+                    .chars()
+                    .take(400)
+                    .collect::<String>()
+            );
+        }
+        for (kind, name) in gated {
             // Anything already in the cast — yours, pending, or turned down
             // — is settled. Never re-propose it.
             if existing.iter().any(|c| c.name.eq_ignore_ascii_case(&name)) {
@@ -265,7 +310,7 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
             let card = RegistryCard {
                 id: new_id(),
                 kind,
-                name,
+                name: name.clone(),
                 origin: "auto".into(),
                 identifiers: String::new(),
                 note: String::new(),
@@ -275,14 +320,53 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
                 updated_at: ts,
             };
             if db.add_registry_card(&card).await.is_ok() {
-                proposed += 1;
+                made.push(name);
             }
         }
     }
-    if proposed > 0 {
+    Ok(made)
+}
+
+/// Ask for suggestions on one notebook, now — the Registry's "Suggest cards"
+/// action. Ignores the once-per-run marker: an explicit ask is not the
+/// background pass, and a user who clicks twice means it.
+#[tauri::command]
+pub async fn suggest_cards_now(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<SuggestOutcome, String> {
+    let gists = e(state.db.list_gists().await)?;
+    let existing = e(state.db.list_registry().await)?;
+    let ai = state.ai.read().await.clone();
+    let mut reply = String::new();
+    let made = suggest_for_notebook(
+        &state.db,
+        &ai,
+        &notebook_id,
+        &gists,
+        &existing,
+        Some(&mut reply),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    if !made.is_empty() {
         super::notify_changed("registry", None);
     }
-    Ok(proposed)
+    Ok(SuggestOutcome {
+        created: made,
+        reply,
+    })
+}
+
+/// What an explicit ask produced. `reply` carries the model's raw answer so
+/// "it suggested nothing" can be told apart from "it said something I
+/// couldn't parse" — by a user reading an error, and by whoever is
+/// debugging the prompt.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestOutcome {
+    pub created: Vec<String>,
+    pub reply: String,
 }
 
 fn build_suggest_messages(material: &str) -> Vec<crate::ai::ChatTurn> {
@@ -292,8 +376,11 @@ fn build_suggest_messages(material: &str) -> Vec<crate::ai::ChatTurn> {
             content: format!(
                 "You name the recurring THINGS a person's documents are about, so they can be \
                  tracked over time. Reply with at most {MAX_SUGGESTIONS} lines and nothing else. \
-                 Each line: kind|name\n\
-                 kind is one of: {}\n\
+                 Each line is a kind, a pipe, then the name — exactly two \
+                 fields, like:\n\
+                 asset|Ducati Monster\n\
+                 provider|Corley Automotive\n\n\
+                 The kind must be one of: {}\n\
                  - asset: a physical thing owned (a vehicle, appliance, instrument, property)\n\
                  - person: a named individual\n\
                  - policy: an insurance policy, warranty, or service contract\n\
@@ -325,15 +412,37 @@ fn gate_suggestions(reply: &str, haystack: &str) -> Vec<(String, String)> {
         if out.len() >= MAX_SUGGESTIONS {
             break;
         }
-        let line = line.trim().trim_start_matches(['-', '*', ' ']);
-        let Some((kind, name)) = line.split_once('|') else {
-            continue;
+        // Forgiving by design. A model handed "kind|name" as a template can
+        // emit the literal word "kind" as a third field, wrap the line in
+        // bullets or bold, or number it — none of which means it got the
+        // task wrong. So: strip the decoration, find the field that IS a
+        // kind, and treat what follows as the name.
+        let line = line
+            .trim()
+            .trim_start_matches(['-', '*', '#', ' '])
+            .trim_matches('*')
+            .trim_matches('`')
+            .trim();
+        let line = match line.split_once(". ") {
+            Some((n, rest)) if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) => rest,
+            _ => line,
         };
-        let kind = kind.trim().to_lowercase();
-        let name = name.trim().trim_matches('"').trim();
-        if !REGISTRY_KINDS.contains(&kind.as_str()) {
+        let parts: Vec<&str> = line.split('|').map(str::trim).collect();
+        if parts.len() < 2 {
             continue;
         }
+        let Some(at) = parts
+            .iter()
+            .position(|p| REGISTRY_KINDS.contains(&p.to_lowercase().as_str()))
+        else {
+            continue;
+        };
+        if at + 1 >= parts.len() {
+            continue;
+        }
+        let kind = parts[at].to_lowercase();
+        let joined = parts[at + 1..].join(" ");
+        let name = joined.trim().trim_matches('"').trim();
         let len = name.chars().count();
         if !(MIN_NAME_LEN..=60).contains(&len) {
             continue;
