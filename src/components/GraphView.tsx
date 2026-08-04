@@ -3,11 +3,12 @@ import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { createLayout, layout } from "@/lib/forceLayout";
 import { placeLabels } from "@/lib/graphLabels";
+import { neighborhood } from "@/lib/neighborhood";
 import type { NotebookGraph } from "@/lib/types";
 import { EmptyState, useHoverCard } from "./ui";
 import { sourceHoverData } from "./SourcesPanel";
-import { relativeTime } from "@/lib/utils";
-import { Crosshair, Minus, Plus, Share2 } from "lucide-react";
+import { cn, relativeTime } from "@/lib/utils";
+import { Crosshair, Minus, Plus, Share2, X } from "lucide-react";
 
 /**
  * The notebook as a link graph (docs/RFC-document-surface.md phase 5):
@@ -80,6 +81,11 @@ export function GraphView() {
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [view, setView] = useState({ x: 0, y: 0, k: 1 });
   const [progress, setProgress] = useState(0);
+  /** Focused document, or null for the whole notebook. Clicking a node
+   *  focuses it — exploring structure is what the graph is for; the chip
+   *  that appears carries the button that opens the document itself. */
+  const [focus, setFocus] = useState<string | null>(null);
+  const [hops, setHops] = useState(2);
   const viewRef = useRef(view);
   viewRef.current = view;
   const commitViewRef = useRef<(v: { x: number; y: number; k: number }) => void>(
@@ -90,7 +96,7 @@ export function GraphView() {
    *  there is no path that moves the camera without recording where. */
   const commitView = (next: { x: number; y: number; k: number }) => {
     setView(next);
-    if (currentId) viewMemory.set(currentId, next);
+    viewMemory.set(viewKey, next);
   };
   commitViewRef.current = commitView;
   const boxRef = useRef<HTMLDivElement | null>(null);
@@ -137,11 +143,13 @@ export function GraphView() {
     };
   }, [currentId, cacheKey]);
 
-  // Come back to where this notebook was last left, not to the origin.
+  // Come back to where this view was last left, not to the origin. Keyed
+  // by focus too: the whole-notebook camera and a neighbourhood's camera are
+  // different places, and inheriting one for the other is disorienting.
+  const viewKey = `${currentId}:${focus ?? ""}:${hops}`;
   useEffect(() => {
-    if (!currentId) return;
-    setView(viewMemory.get(currentId) ?? { x: 0, y: 0, k: 1 });
-  }, [currentId]);
+    setView(viewMemory.get(viewKey) ?? { x: 0, y: 0, k: 1 });
+  }, [viewKey]);
 
   useEffect(() => {
     const el = boxRef.current;
@@ -162,18 +170,31 @@ export function GraphView() {
   // the same commit means the "Laying out…" line never paints — the pane
   // just freezes, which is exactly what it looks like when nothing is
   // happening at all.
+  /** The graph actually drawn: everything, or one document's neighbourhood.
+   *  Narrowed before layout on purpose — filtering afterwards would leave
+   *  the survivors sitting in the positions the hairball gave them. */
+  const shown = useMemo(() => {
+    if (!graph) return null;
+    if (!focus || !graph.nodes.some((n) => n.id === focus)) return graph;
+    const keep = neighborhood(focus, graph.edges, hops);
+    return {
+      nodes: graph.nodes.filter((n) => keep.has(n.id)),
+      edges: graph.edges.filter((e) => keep.has(e.from) && keep.has(e.to)),
+    };
+  }, [graph, focus, hops]);
+
   const [positions, setPositions] = useState<ReturnType<typeof layout>>([]);
 
   /** Shown for every layout pass, not just a slow one — watching the graph
    *  settle is honest feedback about what the pane is doing, and the bar is
    *  a real fraction rather than a spinner pretending. */
-  const loading = !graph || (graph.nodes.length > 0 && positions.length === 0);
+  const loading = !shown || (shown.nodes.length > 0 && positions.length === 0);
   useEffect(() => {
-    if (!graph || !size.width || !size.height) {
+    if (!shown || !size.width || !size.height) {
       setPositions([]);
       return;
     }
-    const key = `${cacheKey}:${size.width}x${size.height}`;
+    const key = `${cacheKey}:${focus ?? ""}:${hops}:${size.width}x${size.height}`;
     const hit = layoutCache.get(key);
     if (hit) {
       setPositions(hit);
@@ -183,7 +204,7 @@ export function GraphView() {
     // is real, and the window keeps answering the pointer while it settles.
     let stale = false;
     let frame = 0;
-    const run = createLayout(graph.nodes, graph.edges, size.width, size.height);
+    const run = createLayout(shown.nodes, shown.edges, size.width, size.height);
     setProgress(0);
     const pump = () => {
       if (stale) return;
@@ -191,7 +212,7 @@ export function GraphView() {
       // stable for a given graph, and a wall-clock budget would make the
       // layout itself depend on how busy the machine happened to be, which
       // costs determinism for nothing.
-      const ticksPerFrame = Math.max(1, Math.round(4000 / graph.nodes.length));
+      const ticksPerFrame = Math.max(1, Math.round(4000 / shown.nodes.length));
       const done = run.step(ticksPerFrame);
       setProgress(run.progress());
       if (done) {
@@ -207,15 +228,15 @@ export function GraphView() {
       stale = true;
       cancelAnimationFrame(frame);
     };
-  }, [graph, size.width, size.height, cacheKey]);
+  }, [shown, size.width, size.height, cacheKey, focus, hops]);
 
   const nodeById = useMemo(
     () => new Map(positions.map((p) => [p.id, p])),
     [positions],
   );
   const meta = useMemo(
-    () => new Map((graph?.nodes ?? []).map((n) => [n.id, n])),
-    [graph],
+    () => new Map((shown?.nodes ?? []).map((n) => [n.id, n])),
+    [shown],
   );
 
   const glyph = glyphScale(view.k);
@@ -276,14 +297,14 @@ export function GraphView() {
 
   /** Nodes one hop from the hovered one — everything else dims. */
   const neighbors = useMemo(() => {
-    if (!hovered || !graph) return null;
+    if (!hovered || !shown) return null;
     const set = new Set<string>([hovered]);
-    for (const e of graph.edges) {
+    for (const e of shown.edges) {
       if (e.from === hovered) set.add(e.to);
       if (e.to === hovered) set.add(e.from);
     }
     return set;
-  }, [hovered, graph]);
+  }, [hovered, shown]);
 
   // Wheel zooms about the pointer, so the thing under the cursor stays under
   // the cursor — the behaviour every map has trained people to expect.
@@ -359,7 +380,7 @@ export function GraphView() {
           <span className="text-caption text-muted-foreground">
             {!graph
               ? "Reading the notebook…"
-              : `Laying out ${graph.nodes.length} documents…`}
+              : `Laying out ${shown?.nodes.length ?? 0} documents…`}
           </span>
           <div className="h-1 w-48 overflow-hidden rounded-full bg-surface-2">
             <div
@@ -367,7 +388,7 @@ export function GraphView() {
               // Reading the notebook has no measurable fraction, so it shows
               // a fixed sliver rather than a fake crawl; the layout half is
               // the real number.
-              style={{ width: `${graph ? Math.round(progress * 100) : 8}%` }}
+              style={{ width: `${shown ? Math.round(progress * 100) : 8}%` }}
             />
           </div>
         </div>
@@ -378,6 +399,58 @@ export function GraphView() {
           title="Nothing to graph yet"
           hint="Links between sources and notes show up here — a URL, a filename, or a [[wikilink]]."
         />
+      )}
+      {focus && meta.get(focus) && (
+        <div className="absolute left-3 top-3 flex items-center gap-1 rounded-lg border border-border bg-surface-2/90 p-1 pl-2.5 backdrop-blur">
+          <span className="max-w-56 truncate text-caption text-foreground">
+            {meta.get(focus)!.title}
+          </span>
+          <span className="text-caption text-subtle-foreground">
+            {shown ? `${shown.nodes.length - 1} linked` : ""}
+          </span>
+          {/* How far out to walk. One hop is what cites this; two is the
+              conversation around it; past three you are back in the soup. */}
+          <div className="ml-1 flex items-center gap-0.5 rounded-md border border-border p-0.5">
+            {[1, 2, 3].map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => setHops(n)}
+                aria-pressed={hops === n}
+                title={`${n} hop${n > 1 ? "s" : ""} out`}
+                className={cn(
+                  "rounded px-1.5 text-micro font-medium tabular-nums transition-colors",
+                  hops === n
+                    ? "bg-surface text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() =>
+              openInReader({
+                type: meta.get(focus)!.kind === "note" ? "note" : "source",
+                id: focus,
+              })
+            }
+            className="rounded-md px-2 py-1 text-micro font-medium text-muted-foreground transition-colors hover:bg-surface hover:text-foreground"
+          >
+            Open
+          </button>
+          <button
+            type="button"
+            onClick={() => setFocus(null)}
+            title="Show the whole notebook"
+            aria-label="Clear focus"
+            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-surface hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       )}
       {positions.length > 0 && (
         <svg
@@ -412,7 +485,7 @@ export function GraphView() {
             </marker>
           </defs>
           <g transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
-            {graph?.edges.map((e, i) => {
+            {shown?.edges.map((e, i) => {
               const a = nodeById.get(e.from);
               const b = nodeById.get(e.to);
               if (!a || !b) return null;
@@ -423,7 +496,11 @@ export function GraphView() {
               const dx = b.x - a.x;
               const dy = b.y - a.y;
               const d = Math.hypot(dx, dy) || 1;
-              const gap = radiusOf(b.degree) + 5;
+              // Clearance must counter-scale with everything else. A flat
+              // graph-unit gap looked right at 100% and opened into a chasm
+              // between arrowhead and node by 700%. The marker is sized in
+              // stroke widths, so this tracks it.
+              const gap = radiusOf(b.degree) + 1.5 * glyph;
               return (
                 <line
                   key={i}
@@ -464,9 +541,7 @@ export function GraphView() {
                     setHovered(null);
                     hideCard();
                   }}
-                  onClick={() =>
-                    openInReader({ type: isNote ? "note" : "source", id: p.id })
-                  }
+                  onClick={() => setFocus(p.id === focus ? null : p.id)}
                 >
                   {/* Notes are hollow, sources solid — the same distinction
                       the sidebar makes, carried by shape not a legend. */}
@@ -492,6 +567,11 @@ export function GraphView() {
             })}
           </g>
         </svg>
+      )}
+      {!focus && positions.length > 0 && (
+        <div className="pointer-events-none absolute left-3 top-3 text-caption text-subtle-foreground">
+          Click a document to see just its neighbourhood
+        </div>
       )}
       {positions.length > 0 && (
         <div className="absolute bottom-3 right-3 flex items-center gap-0.5 rounded-lg border border-border bg-surface-2/90 p-0.5 backdrop-blur">
