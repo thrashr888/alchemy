@@ -97,6 +97,9 @@ pub fn run() {
             _ => {}
         })
         .setup(|app| {
+            // Hand background sweeps their announce channel before anything
+            // can spawn one (commands::notify_changed).
+            commands::set_app_handle(app.handle().clone());
             let data_dir = app
                 .path()
                 .app_data_dir()
@@ -299,6 +302,17 @@ pub fn run() {
             commands::add_ledger_entry,
             commands::update_ledger_entry,
             commands::delete_ledger_entry,
+            commands::list_registry,
+            commands::get_registry_card,
+            commands::add_registry_card,
+            commands::update_registry_card,
+            commands::delete_registry_card,
+            commands::attach_source_to_card,
+            commands::set_attachment_status,
+            commands::cards_for_source,
+            commands::suggest_cards_now,
+            commands::set_card_origin,
+            commands::rematch_registry,
             commands::run_second_look,
             commands::create_report_schedule,
             commands::update_report_schedule,

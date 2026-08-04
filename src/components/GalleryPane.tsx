@@ -13,11 +13,14 @@ import {
   Button,
   CardAction,
   EmptyState,
+  Input,
   RowMenu,
   useConfirm,
   useHoverCard,
 } from "./ui";
 import { cn, isWebUrl, relativeTime, urlHost } from "@/lib/utils";
+import { FilterBar } from "./FilterBar";
+import { AttachToCardModal } from "./RegistrySection";
 import { Favicon, sourceHoverData } from "./SourcesPanel";
 import { sourceIcon } from "@/lib/sourceIcon";
 import { GraphView } from "./GraphView";
@@ -27,8 +30,10 @@ import {
   FolderOpen,
   LayoutGrid,
   Link2,
+  Package,
   Pencil,
   RefreshCw,
+  Search,
   Trash2,
 } from "lucide-react";
 
@@ -97,10 +102,68 @@ function wantsSnippet(s: Source): boolean {
   return s.sourceType === "url" && (s.imageUrl === "" || s.imageUrl === "-");
 }
 
+/** The header's compact segmented switch. Two of these sit side by side —
+ *  grid/graph and the sort order — and they must read as one control family,
+ *  which a second hand-rolled copy would drift away from within a release.
+ *
+ *  Deliberately not FilterBar's FilterButton: that one is a filter-row
+ *  control (py-1, text-caption) and this is the tighter header variant. Same
+ *  idea, different size class; merging them would resize one surface or the
+ *  other. */
+function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+  hint,
+  className,
+}: {
+  options: readonly T[];
+  value: T;
+  onChange: (value: T) => void;
+  /** Tooltip per option — these switches are one word wide, so the tooltip
+   *  is where the meaning actually lives. */
+  hint: (option: T) => string;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5",
+        className,
+      )}
+    >
+      {options.map((option) => (
+        <button
+          key={option}
+          type="button"
+          onClick={() => onChange(option)}
+          aria-pressed={value === option}
+          title={hint(option)}
+          className={cn(
+            "rounded-md px-2 py-0.5 text-micro font-medium capitalize transition-colors",
+            value === option
+              ? "bg-surface-2 text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {option}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function GalleryPane() {
   const currentId = useStore((s) => s.currentId);
   const sources = useStore((s) => s.sources);
   const { confirm, dialog: confirmDialog } = useConfirm();
+  const [attaching, setAttaching] = useState<Source | null>(null);
+  /** Find-in-gallery (Cmd/Ctrl+F). A grid's analogue of find-in-source is
+   *  filtering, not stepping through ranges — same bar, same Escape/Done,
+   *  but the result is which cards remain. */
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const findRef = useRef<HTMLInputElement>(null);
   const { show: showCard, hide: hideCard, card: hoverCard } = useHoverCard("right");
   const [sweeping, setSweeping] = useState(false);
   const [folderId, setFolderId] = useState<string | null>(null);
@@ -138,11 +201,35 @@ export function GalleryPane() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentId]);
 
+  // Cmd/Ctrl+F opens the find bar and focuses it — the same affordance the
+  // reader has. The gallery and the reader never mount together (the center
+  // column is a ternary), so neither listener can shadow the other.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+        e.preventDefault();
+        setFindOpen(true);
+        requestAnimationFrame(() => {
+          findRef.current?.focus();
+          findRef.current?.select();
+        });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Closing clears the query, so the grid is never left silently filtered.
+  useEffect(() => {
+    if (!findOpen) setFindQuery("");
+  }, [findOpen]);
+
   // Notebook switch resets the drill-in; a deleted folder falls back to root.
   useEffect(() => {
     setFolderId(null);
     setFilter("all");
     setTagFilter(null);
+    setFindOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentId]);
   const folder = folderId
@@ -176,6 +263,21 @@ export function GalleryPane() {
   );
   const effectiveTag =
     tagFilter && levelTags.includes(tagFilter) ? tagFilter : null;
+  // Find matches every field the card can actually show — title, opening
+  // lines, tags, author, url, host — so searching for what you remember
+  // seeing works whichever part you remember. Snippets only exist for the
+  // kinds that render them, which is why a PDF matches on title alone.
+  const needle = findQuery.trim().toLowerCase();
+  const matchesFind = (s: Source) =>
+    !needle ||
+    [
+      s.title,
+      snippets[s.id] ?? "",
+      s.tags,
+      s.author,
+      s.url,
+      urlHost(s.url) ?? "",
+    ].some((f) => f?.toLowerCase().includes(needle));
   const cards = level
     .filter(
       (s) => effectiveFilter === "all" || GROUP_OF[s.sourceType] === effectiveFilter,
@@ -183,6 +285,7 @@ export function GalleryPane() {
     .filter(
       (s) => !effectiveTag || (s.tags ? s.tags.split(" ") : []).includes(effectiveTag),
     )
+    .filter(matchesFind)
     .sort((a, b) =>
       sort === "title"
         ? a.title.localeCompare(b.title, undefined, { sensitivity: "base" })
@@ -340,6 +443,11 @@ export function GalleryPane() {
           ]
         : []),
       {
+        label: "File under a card…",
+        icon: <Package className="h-3.5 w-3.5" />,
+        onClick: () => setAttaching(s),
+      },
+      {
         label: "Remove…",
         icon: <Trash2 className="h-3.5 w-3.5" />,
         danger: true,
@@ -401,128 +509,95 @@ export function GalleryPane() {
         )}
         {/* Grid vs graph: two ways to browse the same notebook, so the
             switch lives here rather than as a fourth top-level pane. */}
-        <div className="ml-auto flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5">
-          {(["grid", "graph"] as const).map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              onClick={() => setShape(mode)}
-              aria-pressed={shape === mode}
-              title={
-                mode === "grid"
-                  ? "Cards"
-                  : "How these sources and notes link to each other"
-              }
-              className={cn(
-                "rounded-md px-2 py-0.5 text-micro font-medium capitalize transition-colors",
-                shape === mode
-                  ? "bg-surface-2 text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {mode}
-            </button>
-          ))}
-        </div>
-        <div className="flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5">
-          {(["recent", "title"] as const).map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              onClick={() => setSortMode(mode)}
-              aria-pressed={sort === mode}
-              title={mode === "recent" ? "Newest first" : "A to Z"}
-              className={cn(
-                "rounded-md px-2 py-0.5 text-micro font-medium capitalize transition-colors",
-                sort === mode
-                  ? "bg-surface-2 text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {mode}
-            </button>
-          ))}
-        </div>
+        <Segmented
+          className="ml-auto"
+          options={["grid", "graph"] as const}
+          value={shape}
+          onChange={setShape}
+          hint={(mode) =>
+            mode === "grid"
+              ? "Cards"
+              : "How these sources and notes link to each other"
+          }
+        />
+        <Segmented
+          options={["recent", "title"] as const}
+          value={sort}
+          onChange={setSortMode}
+          hint={(mode) => (mode === "recent" ? "Newest first" : "A to Z")}
+        />
       </div>
-      {/* One filter bar: type groups, then tag chips — independent axes
-          (a source matches both filters), separated by a hairline dot. */}
-      {(groups.length > 2 || levelTags.length > 0) && (
-        <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-4 py-1.5">
-          {groups.length > 2 &&
-            groups.map((g) => (
-              <button
-                key={g}
-                type="button"
-                onClick={() => setFilter(g)}
-                aria-pressed={effectiveFilter === g}
-                className={cn(
-                  "rounded-md px-2 py-1 text-caption transition-colors",
-                  effectiveFilter === g
-                    ? "bg-surface-2 font-medium text-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {g === "all" ? "All" : GROUP_LABEL[g]}
-              </button>
-            ))}
-          {groups.length > 2 && levelTags.length > 0 && (
-            <span aria-hidden className="mx-1.5 h-3.5 w-px bg-border-strong" />
-          )}
-          {levelTags.length > 0 && (
-            <>
-              <button
-                type="button"
-                onClick={() => setTagFilter(null)}
-                aria-pressed={effectiveTag === null}
-                className={cn(
-                  "rounded-md px-2 py-1 text-caption transition-colors",
-                  effectiveTag === null
-                    ? "bg-surface-2 font-medium text-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                All tags
-              </button>
-              {levelTags.map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => setTagFilter((cur) => (cur === t ? null : t))}
-                  aria-pressed={effectiveTag === t}
-                  className={cn(
-                    "rounded-md px-2 py-1 text-caption transition-colors",
-                    effectiveTag === t
-                      ? "bg-surface-2 font-medium text-foreground"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  #{t}
-                </button>
-              ))}
-            </>
-          )}
+      {findOpen && (
+        <div className="flex shrink-0 items-center justify-end gap-1.5 border-b border-border px-4 py-1.5">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-subtle-foreground" />
+            <Input
+              ref={findRef}
+              value={findQuery}
+              onChange={(e) => setFindQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  setFindOpen(false);
+                }
+              }}
+              placeholder="Find in gallery…"
+              className="h-7 w-56 pl-7 text-caption"
+            />
+          </div>
+          <span className="min-w-8 text-right text-micro tabular-nums text-subtle-foreground">
+            {findQuery.trim()
+              ? `${cards.length} ${cards.length === 1 ? "card" : "cards"}`
+              : ""}
+          </span>
+          <Button variant="ghost" size="sm" onClick={() => setFindOpen(false)}>
+            Done
+          </Button>
         </div>
       )}
+      {/* One filter bar: type groups, then tag chips — independent axes
+          (a source matches both filters). Shared with the Registry's grid
+          since RFC-registry §3; see FilterBar.tsx.
+
+          Hidden in graph mode: the graph is notebook-wide on purpose, so the
+          bar would sit there looking operable and do nothing. */}
+      {shape === "grid" && (
+        <FilterBar
+          groups={groups.map((g) => ({
+            value: g,
+            label: g === "all" ? "All" : GROUP_LABEL[g],
+          }))}
+          group={effectiveFilter}
+          onGroup={(v) => setFilter(v as TypeGroup)}
+          chips={levelTags}
+          chip={effectiveTag}
+          onChip={setTagFilter}
+        />
+      )}
       {shape === "graph" ? (
-        // The graph is notebook-wide by design: filters and folder drill-in
-        // narrow the cards, but a graph of a subset hides exactly the links
-        // that make it worth looking at.
+        // Notebook-wide by design: filters and folder drill-in narrow the
+        // cards, but a graph of a subset hides exactly the links that make
+        // it worth looking at.
         <GraphView />
       ) : cards.length === 0 ? (
         <div className="flex flex-1 items-center justify-center">
           <EmptyState
             icon={<LayoutGrid className="h-5 w-5" />}
             title={
-              effectiveTag !== null
-                ? "Nothing with this tag here"
-                : effectiveFilter === "all"
-                  ? "Nothing to explore yet"
-                  : "Nothing of this type here"
+              needle
+                ? `No match for “${findQuery.trim()}”`
+                : effectiveTag !== null
+                  ? "Nothing with this tag here"
+                  : effectiveFilter === "all"
+                    ? "Nothing to explore yet"
+                    : "Nothing of this type here"
             }
             hint={
-              effectiveFilter === "all" && effectiveTag === null
-                ? "Add sources and they'll appear here as cards."
-                : undefined
+              needle
+                ? "Find looks at titles, opening lines, tags, author, and site."
+                : effectiveFilter === "all" && effectiveTag === null
+                  ? "Add sources and they'll appear here as cards."
+                  : undefined
             }
           />
         </div>
@@ -569,6 +644,11 @@ export function GalleryPane() {
           )}
         </div>
       )}
+      <AttachToCardModal
+        sourceId={attaching?.id ?? null}
+        sourceTitle={attaching?.title ?? ""}
+        onClose={() => setAttaching(null)}
+      />
       {confirmDialog}
       {hoverCard}
     </div>

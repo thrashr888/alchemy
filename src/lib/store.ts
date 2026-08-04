@@ -262,6 +262,12 @@ export const useStore = create<AppState>((set, get) => {
     galleryOpen: false,
     readerEditIntent: null,
     ledgerBump: 0,
+    registryBump: 0,
+    homeSection: "notebooks",
+    homeView:
+      (localStorage.getItem("homeView") as "grid" | "table") || "grid",
+    homeQuery: "",
+    openCardId: null,
     pendingNewNote: false,
     artifactStreamText: "",
     audioProgress: null,
@@ -361,12 +367,19 @@ export const useStore = create<AppState>((set, get) => {
           nb: string | null;
           mode: "chat" | "reader" | "ledger" | "gallery";
           doc?: ReaderDoc;
+          section?: "notebooks" | "registry";
+          card?: string | null;
         } | null = null;
         try {
           view = JSON.parse(localStorage.getItem("lastView") ?? "null");
         } catch {
           /* ignore */
         }
+        // Home's section survives the reload whether or not a notebook does
+        // — coming back to the dashboard should come back to the Registry if
+        // that's where you were, with the same card open.
+        if (view?.section)
+          set({ homeSection: view.section, openCardId: view.card ?? null });
         const last =
           view === null ? localStorage.getItem("lastNotebookId") : view.nb;
         if (last && notebooks.some((n) => n.id === last)) {
@@ -450,6 +463,10 @@ export const useStore = create<AppState>((set, get) => {
           void get().refreshNotebooks();
           // Templates are app-global — refresh before the notebook gate.
           if (scope === "templates") void get().refreshTemplates();
+          // So is the Registry (it has no notebook), and its surface is Home
+          // — where currentId is null, so it must bump before that gate too.
+          if (scope === "registry")
+            set((state) => ({ registryBump: state.registryBump + 1 }));
           const current = get().currentId;
           if (!current || (notebookId && notebookId !== current)) return;
           if (scope === "sources")
@@ -1729,7 +1746,9 @@ if (getCurrentWebview().label === "main") {
       s.currentId === prev.currentId &&
       s.ledgerOpen === prev.ledgerOpen &&
       s.galleryOpen === prev.galleryOpen &&
-      s.reader === prev.reader
+      s.reader === prev.reader &&
+      s.homeSection === prev.homeSection &&
+      s.openCardId === prev.openCardId
     )
       return;
     const doc = s.reader.open ? s.reader.history[s.reader.index] : undefined;
@@ -1746,6 +1765,10 @@ if (getCurrentWebview().label === "main") {
               : "chat",
         // Highlight is a one-time citation jump, not a place — drop it.
         doc: doc && { type: doc.type, id: doc.id },
+        // Home is a place too: the Registry and the card you had open are
+        // as much "where you were" as a notebook's center mode.
+        section: s.homeSection,
+        card: s.openCardId,
       }),
     );
   });

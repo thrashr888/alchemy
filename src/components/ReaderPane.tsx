@@ -12,6 +12,7 @@ import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import type { Citation, Note, Source, Template } from "@/lib/types";
 import { AmbientRail } from "./AmbientRail";
+import { CardMetaRow, CardRail } from "./RegistrySection";
 import { activeParagraph } from "@/lib/utils";
 import { AudioPlayer, DialogueScript } from "./AudioNote";
 import { Flashcards } from "./Flashcards";
@@ -1146,6 +1147,7 @@ function DocRails({
           className="absolute bottom-10 top-14 z-10 flex w-56 flex-col overflow-y-auto"
           style={{ left: "calc(50% + 380px + 20px)" }}
         >
+          {excludeSourceId && <CardRail sourceId={excludeSourceId} />}
           <AmbientRail
             text={relatedText}
             excludeNoteId={excludeNoteId}
@@ -1156,6 +1158,7 @@ function DocRails({
       )}
       {relPop && !(showRelated && relatedFits) && (
         <div className="menu-glass absolute right-3 top-12 z-20 flex max-h-[70%] w-64 flex-col overflow-y-auto rounded-lg border border-border/60 p-2.5 shadow-lg">
+          {excludeSourceId && <CardRail sourceId={excludeSourceId} />}
           <AmbientRail
             emptyState
             text={relatedText}
@@ -1598,6 +1601,7 @@ function DocProperties({
             click to edit in place, so the empty state teaches the feature. */}
         {source && (
           <>
+            <CardMetaRow sourceId={source.id} />
             <MetaEditable
               label="Tags"
               raw={source.tags}

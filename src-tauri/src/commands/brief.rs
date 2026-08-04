@@ -28,6 +28,8 @@ async fn ensure_briefs_notebook(state: &AppState) -> Result<Notebook, String> {
         color: color.to_string(),
         status: String::new(),
         source_count: 0,
+        note_count: 0,
+        report_count: 0,
     };
     e(state.db.create_notebook(&nb).await)?;
     Ok(nb)
@@ -180,6 +182,50 @@ async fn collect(state: &AppState, briefs_notebook_id: &str, since: i64) -> Coll
         }
     }
 
+    // The Registry is corpus-scoped, so it is collected once rather than per
+    // notebook. A pending proposal is the one thing here that is actually
+    // waiting on a human — it ranks with the errors.
+    let cards = state.db.list_registry().await.unwrap_or_default();
+    for card in &cards {
+        let n = card
+            .attachments
+            .iter()
+            .filter(|a| a.status == "proposed")
+            .count();
+        if n > 0 {
+            attention.push_str(&format!(
+                "- registry card \u{201c}{}\u{201d} ({}) has {n} document{} waiting to be confirmed or turned down\n",
+                card.name,
+                card.kind,
+                if n == 1 { "" } else { "s" }
+            ));
+            items += 1;
+        }
+    }
+    let filed: Vec<&crate::models::RegistryCard> = cards
+        .iter()
+        .filter(|c| {
+            c.attachments
+                .iter()
+                .any(|a| a.status == "confirmed" && a.at > since)
+        })
+        .collect();
+    if !filed.is_empty() {
+        changed.push_str("- [Registry]\n");
+        for card in filed {
+            let n = card
+                .attachments
+                .iter()
+                .filter(|a| a.status == "confirmed" && a.at > since)
+                .count();
+            changed.push_str(&format!(
+                "  - {n} new document{} filed under \u{201c}{}\u{201d}\n",
+                if n == 1 { "" } else { "s" },
+                card.name
+            ));
+            items += 1;
+        }
+    }
     let mut context = String::new();
     if !attention.is_empty() {
         context.push_str(&format!("## Needs attention (rank first)\n{attention}\n"));

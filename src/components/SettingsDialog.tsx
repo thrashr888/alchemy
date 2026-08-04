@@ -69,7 +69,6 @@ export function SettingsDialog({
 
   const [tab, setTab] = useState(initialTab);
   const [draft, setDraft] = useState<AiConfig | null>(null);
-  const [models, setModels] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [confirmReembed, setConfirmReembed] = useState(false);
 
@@ -80,20 +79,10 @@ export function SettingsDialog({
   useEffect(() => {
     if (open && aiConfig) {
       setDraft({ ...aiConfig });
-      void refreshModels();
       void refreshModelHealth();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, aiConfig]);
-
-  async function refreshModels() {
-    try {
-      const list = await api.listModels();
-      setModels([...list].sort((a, b) => a.localeCompare(b)));
-    } catch {
-      setModels([]);
-    }
-  }
 
   const embedChanged =
     !!draft &&
@@ -235,7 +224,6 @@ export function SettingsDialog({
                 setDraft(c);
                 void save(c);
               }}
-              models={models}
             />
           )}
           {tab === "models" && <PodcastVoicesSection />}

@@ -19,6 +19,12 @@ pub struct Notebook {
     /// Populated on list queries; not stored on the row.
     #[serde(default)]
     pub source_count: i64,
+    /// Deliberate notes, excluding reports — see `report_count`.
+    #[serde(default)]
+    pub note_count: i64,
+    /// Report-kind notes (scheduled runs, briefs).
+    #[serde(default)]
+    pub report_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,6 +179,73 @@ pub struct LedgerEntry {
     pub origin: String,
     #[serde(default)]
     pub anchors: Vec<LedgerAnchor>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// One key fact on a registry card — an ordered label/value pair, the same
+/// shape the reader's document-properties grid already renders.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardFact {
+    pub label: String,
+    #[serde(default)]
+    pub value: String,
+}
+
+/// One document filed under a registry card.
+///
+/// `matched` is the receipt and it is never empty: the identifier string
+/// that matched, "name", or "manual". A machine that attaches without
+/// showing its reason is a machine you stop trusting on the first mistake.
+/// `rejected` rows are kept, not deleted — they are the refusal memory that
+/// stops the sweep re-proposing the same pair forever (the `gist.rs` idiom).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardAttachment {
+    pub source_id: String,
+    /// Denormalized so the grid can group by notebook without loading every
+    /// source in the corpus.
+    #[serde(default)]
+    pub notebook_id: String,
+    /// "confirmed" | "proposed" | "rejected"
+    pub status: String,
+    pub matched: String,
+    pub at: i64,
+}
+
+/// One registry card (docs/RFC-registry.md): a confirmed cast member —
+/// asset, person, policy, provider, project, or dependency — aggregating
+/// the documents that follow it.
+///
+/// Deliberately has no `notebook_id`: cards are the first corpus-scoped
+/// entity besides notebooks themselves. A card's "home" notebook is derived
+/// from where its documents live, never stored. Cards have no lifecycle;
+/// their attachments do.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistryCard {
+    pub id: String,
+    /// "asset" | "person" | "policy" | "provider" | "project" | "dependency"
+    pub kind: String,
+    pub name: String,
+    /// "" for cards you made or confirmed, "auto" for one the suggester
+    /// proposed and you haven't ruled on, "dismissed" for one you turned
+    /// down — kept, because the row IS the refusal memory that stops the
+    /// suggester proposing it again (the `gist.rs` idiom).
+    #[serde(default)]
+    pub origin: String,
+    /// Space-separated normalized tokens (the `normalize_tags` form): VIN,
+    /// policy number, serial, model number. The auto-attach key, and the
+    /// only thing that ever attaches a document without asking.
+    #[serde(default)]
+    pub identifiers: String,
+    #[serde(default)]
+    pub note: String,
+    #[serde(default)]
+    pub facts: Vec<CardFact>,
+    #[serde(default)]
+    pub attachments: Vec<CardAttachment>,
     pub created_at: i64,
     pub updated_at: i64,
 }

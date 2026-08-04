@@ -11,11 +11,13 @@ use uuid::Uuid;
 
 mod brief;
 mod ledger;
+mod registry;
 mod reports;
 mod second_look;
 mod weave;
 pub(crate) use brief::ensure_default_brief;
 pub use ledger::*;
+pub use registry::*;
 pub use reports::*;
 pub use second_look::*;
 
@@ -54,6 +56,28 @@ pub struct AppState {
     /// Last successfully applied glass state per window label
     /// (enabled, dark, pinned) — evicted on window destroy in lib.rs.
     pub glass_applied: Mutex<HashMap<String, (bool, bool, bool)>>,
+}
+
+/// Background sweeps outlive any one command and hold no Tauri handle (the
+/// `gist::spawn_sweep` shape lets reingest spawn them), so the handle they
+/// need to announce their work lives here — the `services.rs`/`spotlight.rs`
+/// OnceLock idiom, once more for the staff.
+static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
+pub(crate) fn set_app_handle(app: tauri::AppHandle) {
+    let _ = APP.set(app);
+}
+
+/// Announce a background write on the same event the MCP mutations use, so
+/// an open window refreshes live instead of waiting to be navigated away
+/// from and back. Silent no-op before setup, and by design after a failure:
+/// a missed refresh must never be worth more than the write it followed.
+pub(crate) fn notify_changed(scope: &str, notebook_id: Option<&str>) {
+    let Some(app) = APP.get() else { return };
+    let _ = app.emit(
+        "mcp://changed",
+        serde_json::json!({ "scope": scope, "notebookId": notebook_id }),
+    );
 }
 
 impl AppState {
@@ -538,6 +562,8 @@ pub async fn create_notebook(
         color: color.to_string(),
         status: String::new(),
         source_count: 0,
+        note_count: 0,
+        report_count: 0,
     };
     e(state.db.create_notebook(&nb).await)?;
     Ok(nb)
@@ -764,6 +790,19 @@ async fn store_new_source(
             notebook_id.to_string(),
             source.title.clone(),
             source.content.chars().take(4_000).collect(),
+        );
+    }
+
+    // File the arrival under any card that claims it (commands/registry.rs).
+    // Unlike the Weave this DOES run for folder children: a folder of
+    // scanned documents is exactly where auto-filing earns its keep, and
+    // matching is literal string work with no model call to budget.
+    if !source.content.is_empty() {
+        registry::spawn_registry_match(
+            state.db.clone(),
+            notebook_id.to_string(),
+            source.id.clone(),
+            source.content.clone(),
         );
     }
 
@@ -1598,6 +1637,17 @@ pub(crate) async fn reingest(
             existing.notebook_id.clone(),
             updated.title.clone(),
             diff.clone(),
+        );
+    }
+    // Re-file on change against the WHOLE updated document, not the diff: a
+    // card minted after this source landed should still pick it up, and
+    // already-attached pairs skip, so re-running costs nothing.
+    if !updated.content.is_empty() {
+        registry::spawn_registry_match(
+            state.db.clone(),
+            existing.notebook_id.clone(),
+            existing.id.clone(),
+            updated.content.clone(),
         );
     }
     let _ = state
@@ -7813,6 +7863,8 @@ async fn import_bundle(
                 color: NOTEBOOK_PALETTE[count.len() % NOTEBOOK_PALETTE.len()].to_string(),
                 status: String::new(),
                 source_count: 0,
+                note_count: 0,
+                report_count: 0,
             };
             e(state.db.create_notebook(&nb).await)?;
             nb
@@ -8461,6 +8513,66 @@ pub async fn search_everything(
         }
         if hits.len() >= 4 {
             break;
+        }
+    }
+
+    // Registry cards: corpus-scoped, so they carry no notebook — the palette
+    // opens them on Home rather than switching notebooks. Dismissed
+    // suggestions are refusal memory, not results.
+    for c in e(state.db.list_registry().await)?.iter().filter(|c| {
+        c.origin != "dismissed"
+            && (c.name.to_lowercase().contains(&q) || c.identifiers.contains(&q))
+    }) {
+        if hits.iter().filter(|h| h.kind == "card").count() >= 4 {
+            break;
+        }
+        hits.push(SearchHit {
+            kind: "card".into(),
+            notebook_id: String::new(),
+            id: c.id.clone(),
+            title: c.name.clone(),
+            snippet: format!(
+                "{} \u{00b7} {} document{}",
+                c.kind,
+                c.attachments
+                    .iter()
+                    .filter(|a| a.status == "confirmed")
+                    .count(),
+                if c.attachments
+                    .iter()
+                    .filter(|a| a.status == "confirmed")
+                    .count()
+                    == 1
+                {
+                    ""
+                } else {
+                    "s"
+                }
+            ),
+        });
+    }
+
+    // Ledger rows, across every notebook. The palette opens the notebook's
+    // Ledger tab, which is where a row can actually be acted on.
+    let mut ledger_hits = 0;
+    for nb in e(state.db.list_notebooks().await)? {
+        if ledger_hits >= 4 {
+            break;
+        }
+        for entry in e(state.db.list_ledger(&nb.id).await)? {
+            if ledger_hits >= 4 {
+                break;
+            }
+            if entry.text.to_lowercase().contains(&q) || entry.why.to_lowercase().contains(&q) {
+                ledger_hits += 1;
+                hits.push(SearchHit {
+                    kind: "ledger".into(),
+                    notebook_id: nb.id.clone(),
+                    id: entry.id.clone(),
+                    title: entry.text.clone(),
+                    snippet: format!("{} \u{00b7} {}", entry.kind, entry.status),
+                });
+            }
         }
     }
 

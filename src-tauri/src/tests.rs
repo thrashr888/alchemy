@@ -40,6 +40,8 @@ async fn rag_round_trip() {
         color: "#eb5757".into(),
         status: String::new(),
         source_count: 0,
+        note_count: 0,
+        report_count: 0,
     };
     db.create_notebook(&nb).await.expect("create notebook");
     assert_eq!(

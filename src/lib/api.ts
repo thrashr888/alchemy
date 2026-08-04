@@ -19,8 +19,10 @@ import type {
   MetaAnswer,
   ModelHealth,
   ModelStat,
+  CardFact,
   LedgerAnchor,
   LedgerEntry,
+  RegistryCard,
   NightShiftStatus,
   Note,
   NoteKind,
@@ -418,6 +420,54 @@ export const api = {
   ) => run(cmd<LedgerEntry>("update_ledger_entry", { id, ...patch })),
   deleteLedgerEntry: (id: string) =>
     run(cmd<void>("delete_ledger_entry", { id })),
+
+  // The Registry — corpus-scoped, so no notebookId anywhere here.
+  listRegistry: () => run(query<RegistryCard[]>("list_registry", {})),
+  getRegistryCard: (id: string) =>
+    run(query<RegistryCard | null>("get_registry_card", { id })),
+  addRegistryCard: (
+    kind: string,
+    name: string,
+    identifiers?: string,
+    note?: string,
+    facts?: CardFact[],
+  ) =>
+    run(
+      cmd<RegistryCard>("add_registry_card", {
+        kind,
+        name,
+        identifiers,
+        note,
+        facts,
+      }),
+    ),
+  updateRegistryCard: (
+    id: string,
+    patch: {
+      name?: string;
+      identifiers?: string;
+      note?: string;
+      facts?: CardFact[];
+    },
+  ) => run(cmd<RegistryCard>("update_registry_card", { id, ...patch })),
+  deleteRegistryCard: (id: string) =>
+    run(cmd<void>("delete_registry_card", { id })),
+  attachSourceToCard: (cardId: string, sourceId: string, status?: string) =>
+    run(
+      cmd<RegistryCard>("attach_source_to_card", { cardId, sourceId, status }),
+    ),
+  /** status: "confirmed" | "rejected" | "remove". */
+  setAttachmentStatus: (cardId: string, sourceId: string, status: string) =>
+    run(
+      cmd<RegistryCard>("set_attachment_status", { cardId, sourceId, status }),
+    ),
+  /** origin: "" confirms a suggestion, "dismissed" turns it down. */
+  setCardOrigin: (id: string, origin: string) =>
+    run(cmd<RegistryCard>("set_card_origin", { id, origin })),
+  cardsForSource: (sourceId: string) =>
+    run(query<RegistryCard[]>("cards_for_source", { sourceId })),
+  rematchRegistry: (notebookId: string) =>
+    run(cmd<number>("rematch_registry", { notebookId })),
 
   // Night Shift (the Home Staff section)
   listSourceEvents: (hours = 24) =>
