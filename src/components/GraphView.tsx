@@ -29,6 +29,13 @@ import { Crosshair, Minus, Plus, Share2 } from "lucide-react";
 const graphCache = new Map<string, NotebookGraph>();
 const layoutCache = new Map<string, ReturnType<typeof layout>>();
 
+/** Pan and zoom per notebook, so stepping out to a document and coming back
+ *  returns you to where you were looking rather than to the top of the world.
+ *  Same app-run lifetime and the same reasoning as the gallery's
+ *  scrollMemory. Re-center is always one click away if a remembered view
+ *  turns out to be somewhere you no longer want to be. */
+const viewMemory = new Map<string, { x: number; y: number; k: number }>();
+
 /** Zoom limits. Out far enough to see a 400-node notebook whole, in far
  *  enough to read a label in the middle of a dense cluster. */
 const MIN_ZOOM = 0.35;
@@ -48,6 +55,19 @@ export function GraphView() {
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [view, setView] = useState({ x: 0, y: 0, k: 1 });
   const [progress, setProgress] = useState(0);
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const commitViewRef = useRef<(v: { x: number; y: number; k: number }) => void>(
+    () => {},
+  );
+
+  /** Set the view AND remember it. Every pan and zoom goes through here so
+   *  there is no path that moves the camera without recording where. */
+  const commitView = (next: { x: number; y: number; k: number }) => {
+    setView(next);
+    if (currentId) viewMemory.set(currentId, next);
+  };
+  commitViewRef.current = commitView;
   const boxRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   /** Set while dragging; null otherwise. Held in a ref so the move handler
@@ -92,8 +112,11 @@ export function GraphView() {
     };
   }, [currentId, cacheKey]);
 
-  // A new notebook is a new picture — don't inherit the last one's pan.
-  useEffect(() => setView({ x: 0, y: 0, k: 1 }), [currentId]);
+  // Come back to where this notebook was last left, not to the origin.
+  useEffect(() => {
+    if (!currentId) return;
+    setView(viewMemory.get(currentId) ?? { x: 0, y: 0, k: 1 });
+  }, [currentId]);
 
   useEffect(() => {
     const el = boxRef.current;
@@ -244,15 +267,18 @@ export function GraphView() {
       const rect = el.getBoundingClientRect();
       const px = e.clientX - rect.left;
       const py = e.clientY - rect.top;
-      setView((v) => {
-        const k = Math.max(
-          MIN_ZOOM,
-          Math.min(MAX_ZOOM, v.k * Math.exp(-e.deltaY * 0.0015)),
-        );
-        if (k === v.k) return v;
-        // Keep the graph-space point under the cursor fixed across the change.
-        const scale = k / v.k;
-        return { k, x: px - (px - v.x) * scale, y: py - (py - v.y) * scale };
+      const v = viewRef.current;
+      const k = Math.max(
+        MIN_ZOOM,
+        Math.min(MAX_ZOOM, v.k * Math.exp(-e.deltaY * 0.0015)),
+      );
+      if (k === v.k) return;
+      // Keep the graph-space point under the cursor fixed across the change.
+      const scale = k / v.k;
+      commitViewRef.current({
+        k,
+        x: px - (px - v.x) * scale,
+        y: py - (py - v.y) * scale,
       });
     };
     el.addEventListener("wheel", onWheel, { passive: false });
@@ -269,7 +295,11 @@ export function GraphView() {
   const onPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
     const p = panning.current;
     if (!p) return;
-    setView((v) => ({ ...v, x: p.vx + (e.clientX - p.x), y: p.vy + (e.clientY - p.y) }));
+    commitView({
+      ...viewRef.current,
+      x: p.vx + (e.clientX - p.x),
+      y: p.vy + (e.clientY - p.y),
+    });
   };
   const endPan = (e: React.PointerEvent<SVGSVGElement>) => {
     panning.current = null;
@@ -278,15 +308,15 @@ export function GraphView() {
 
   /** Buttons zoom about the middle of the pane, the way the wheel zooms
    *  about the pointer — otherwise the view lurches sideways on every tap. */
-  const zoomBy = (factor: number) =>
-    setView((v) => {
-      const k = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, v.k * factor));
-      if (k === v.k) return v;
-      const cx = size.width / 2;
-      const cy = size.height / 2;
-      const scale = k / v.k;
-      return { k, x: cx - (cx - v.x) * scale, y: cy - (cy - v.y) * scale };
-    });
+  const zoomBy = (factor: number) => {
+    const v = viewRef.current;
+    const k = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, v.k * factor));
+    if (k === v.k) return;
+    const cx = size.width / 2;
+    const cy = size.height / 2;
+    const scale = k / v.k;
+    commitView({ k, x: cx - (cx - v.x) * scale, y: cy - (cy - v.y) * scale });
+  };
 
   const showAllLabels = view.k >= ALL_LABELS_ZOOM;
 
@@ -455,7 +485,7 @@ export function GraphView() {
               steer back by — this is the way home. */}
           <ZoomButton
             label="Re-center"
-            onClick={() => setView({ x: 0, y: 0, k: 1 })}
+            onClick={() => commitView({ x: 0, y: 0, k: 1 })}
             icon={<Crosshair className="h-3.5 w-3.5" />}
           />
         </div>
