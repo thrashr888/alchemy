@@ -234,6 +234,24 @@ impl ChatEngine {
         }
     }
 
+    /// Streaming with progress: only agent CLIs have anything to narrate
+    /// (tool calls, planning) — every other engine ignores `on_step`.
+    pub async fn chat_stream_steps<F, S>(
+        &self,
+        messages: &[ChatTurn],
+        on_token: F,
+        on_step: S,
+    ) -> Result<ChatOutcome>
+    where
+        F: FnMut(&str),
+        S: FnMut(&str),
+    {
+        match self {
+            ChatEngine::Agent(a) => a.chat_stream_steps(messages, on_token, on_step).await,
+            _ => self.chat_stream(messages, on_token).await,
+        }
+    }
+
     pub async fn chat(&self, messages: &[ChatTurn]) -> Result<ChatOutcome> {
         match self {
             ChatEngine::Ollama(o) => o.chat(messages).await,

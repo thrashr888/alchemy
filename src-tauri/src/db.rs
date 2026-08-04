@@ -326,6 +326,7 @@ impl Db {
                     created_at: created.value(i),
                     updated_at: updated.value(i),
                     color: NOTEBOOK_PALETTE[idx % NOTEBOOK_PALETTE.len()].to_string(),
+                    icon: String::new(),
                     status: String::new(),
                     source_count: 0,
                     note_count: 0,
@@ -345,12 +346,14 @@ impl Db {
         Ok(())
     }
 
-    /// Add the `status` column ("") to pre-existing notebook tables.
+    /// Add the `status` ("") and `icon` ("") columns to pre-existing
+    /// notebook tables.
     async fn migrate_notebook_status(&self) -> Result<()> {
         if !self.table_exists(T_NOTEBOOKS).await? {
             return Ok(());
         }
-        self.add_string_column(T_NOTEBOOKS, "status", "").await
+        self.add_string_column(T_NOTEBOOKS, "status", "").await?;
+        self.add_string_column(T_NOTEBOOKS, "icon", "").await
     }
 
     /// Backfill the `kind` column ("chat") on pre-existing `messages` tables.
@@ -676,6 +679,7 @@ impl Db {
             let created = i64_col(b, "created_at")?;
             let updated = i64_col(b, "updated_at")?;
             let color = opt_str_col(b, "color");
+            let icon = opt_str_col(b, "icon");
             let status = opt_str_col(b, "status");
             for i in 0..b.num_rows() {
                 notebooks.push(Notebook {
@@ -684,6 +688,7 @@ impl Db {
                     created_at: created.value(i),
                     updated_at: updated.value(i),
                     color: color.map(|c| c.value(i).to_string()).unwrap_or_default(),
+                    icon: icon.map(|c| c.value(i).to_string()).unwrap_or_default(),
                     status: status.map(|s| s.value(i).to_string()).unwrap_or_default(),
                     source_count: 0,
                     note_count: 0,
@@ -761,6 +766,16 @@ impl Db {
         tbl.update()
             .only_if(format!("id = '{}'", esc(id)))
             .column("color", format!("'{}'", esc(color)))
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_notebook_icon(&self, id: &str, icon: &str) -> Result<()> {
+        let tbl = self.conn.open_table(T_NOTEBOOKS).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(id)))
+            .column("icon", format!("'{}'", esc(icon)))
             .execute()
             .await?;
         Ok(())
@@ -2699,6 +2714,7 @@ fn notebook_batch(schema: &SchemaRef, notebooks: &[Notebook]) -> Result<RecordBa
             i(|x| x.created_at),
             i(|x| x.updated_at),
             s(|x| x.color.clone()),
+            s(|x| x.icon.clone()),
             s(|x| x.status.clone()),
         ],
     )?)
@@ -2828,6 +2844,7 @@ fn notebooks_schema() -> SchemaRef {
         Field::new("created_at", DataType::Int64, false),
         Field::new("updated_at", DataType::Int64, false),
         Field::new("color", DataType::Utf8, false),
+        Field::new("icon", DataType::Utf8, false),
         Field::new("status", DataType::Utf8, false),
     ]))
 }

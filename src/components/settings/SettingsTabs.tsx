@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { checkForUpdates } from "@/lib/updates";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { SYSTEM_THEME, THEME_LIST } from "@/lib/themes";
@@ -335,9 +336,19 @@ export function ShortcutsTab() {
 export function AboutTab() {
   const [version, setVersion] = useState("");
   const [build, setBuild] = useState<BuildInfo | null>(null);
+  // Fresh look at the release feed every time About opens — "am I current?"
+  // is the question this page exists to answer.
+  const [latest, setLatest] = useState<"checking" | "current" | "offline" | string>("checking");
+  const openSettings = useStore((s) => s.openSettings);
   useEffect(() => {
     getVersion().then(setVersion).catch(() => setVersion(""));
     api.buildInfo().then(setBuild).catch(() => setBuild(null));
+    void checkForUpdates().then((flow) => {
+      if (flow.status === "available") {
+        useStore.setState({ updateAvailable: flow.version });
+        setLatest(flow.version);
+      } else setLatest(flow.status === "none" ? "current" : "offline");
+    });
   }, []);
   return (
     <div className="flex flex-col items-center gap-1 py-6 text-center">
@@ -350,6 +361,17 @@ export function AboutTab() {
           {build && <>{" · "}<span className="font-mono">{build.commit}</span>{build.profile === "dev" && <span className="ml-1.5 rounded bg-primary/15 px-1.5 py-0.5 font-medium text-citation">dev</span>}</>}
         </div>
       )}
+      {latest === "current" ? (
+        <div className="mt-1 text-caption text-subtle-foreground">You&rsquo;re on the latest version.</div>
+      ) : latest !== "checking" && latest !== "offline" ? (
+        <button
+          type="button"
+          className="mt-1 text-caption text-citation hover:underline"
+          onClick={() => openSettings("general")}
+        >
+          Version {latest} is available — install from Settings → General
+        </button>
+      ) : null}
       <button type="button" className="mt-4 inline-flex items-center gap-1.5 text-caption text-citation hover:underline" onClick={() => void openUrl("https://github.com/thrashr888/alchemy")}>
         <Globe className="h-3.5 w-3.5" />
         github.com/thrashr888/alchemy

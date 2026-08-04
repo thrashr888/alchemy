@@ -43,6 +43,39 @@ import {
 /** Composer autosize ceiling — past this the textarea scrolls instead. */
 const COMPOSER_MAX_H = 180;
 
+/** Fuzzy match for the @ picker: every query character (spaces ignored) must
+ *  appear in order in the title. Substring hits outrank scattered ones, and
+ *  word-start hits outrank mid-word — so "q3 rep" finds "Q3 Sales Report"
+ *  but garbage trailing text stops matching and closes the picker. Returns
+ *  null for no match; higher is better. */
+function fuzzyScore(query: string, title: string): number | null {
+  const t = title.toLowerCase();
+  if (query === "") return 0;
+  // Whole-query substring: strongest signal, earlier is better.
+  const sub = t.indexOf(query);
+  if (sub >= 0) return 1000 - sub;
+  // Subsequence walk over non-space chars, rewarding word starts and runs.
+  let ti = 0;
+  let score = 0;
+  let run = 0;
+  for (const ch of query) {
+    if (ch === " ") continue;
+    let found = -1;
+    for (let i = ti; i < t.length; i++) {
+      if (t[i] === ch) {
+        found = i;
+        break;
+      }
+    }
+    if (found < 0) return null;
+    const wordStart = found === 0 || t[found - 1] === " ";
+    run = found === ti ? run + 1 : 1;
+    score += (wordStart ? 10 : 1) + run;
+    ti = found + 1;
+  }
+  return score;
+}
+
 export function ChatPanel() {
   const currentId = useStore((s) => s.currentId);
   const messages = useStore((s) => s.messages);
@@ -67,7 +100,16 @@ export function ChatPanel() {
   const summaryLoading = useStore((s) => s.summaryLoading);
   const refreshSummary = useStore((s) => s.refreshSummary);
 
-  const [draft, setDraft] = useState("");
+  // In-progress text survives refreshes and restarts: mirrored to
+  // localStorage per notebook. Restored lazily at first render (an effect
+  // restore breaks under StrictMode — the replayed effects run the empty
+  // save before the second restore, wiping the key), with `draftNb`
+  // stamping which notebook the current draft state belongs to so the
+  // mirror never writes one notebook's text under another's key.
+  const [draft, setDraft] = useState(() =>
+    currentId ? (localStorage.getItem(`chatDraft:${currentId}`) ?? "") : "",
+  );
+  const draftNb = useRef<string | null>(currentId);
   // Slash-command picker (see the composer below): index of the highlighted
   // row, and whether Esc/blur has dismissed the menu for the current draft.
   const [slashSel, setSlashSel] = useState(0);
@@ -86,6 +128,26 @@ export function ChatPanel() {
   const { confirm, dialog: confirmDialog } = useConfirm();
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Restore the saved draft for this notebook (refresh/restart survival),
+  // then keep the mirror current. Restore runs first and stamps `draftNb`;
+  // the save effect below refuses to write until the stamp matches, so a
+  // notebook switch can't leak the previous notebook's text.
+  // Notebook switch while mounted: swap in the new notebook's saved draft.
+  // Skip when the stamp already matches (initial render restored it, and
+  // StrictMode replays this effect with the stamp intact).
+  useEffect(() => {
+    if (draftNb.current === currentId) return;
+    draftNb.current = currentId;
+    setDraft(
+      currentId ? (localStorage.getItem(`chatDraft:${currentId}`) ?? "") : "",
+    );
+  }, [currentId]);
+  useEffect(() => {
+    if (!currentId || draftNb.current !== currentId) return;
+    if (draft) localStorage.setItem(`chatDraft:${currentId}`, draft);
+    else localStorage.removeItem(`chatDraft:${currentId}`);
+  }, [draft, currentId]);
 
   // A failed send hands its text back — restore it into the composer so the
   // user can retry without retyping.
@@ -246,23 +308,54 @@ export function ChatPanel() {
 
   // The active "@query" token: at the end of the draft (the same type-at-the-
   // caret simplicity as the slash picker) and never mid-word — "user@host"
-  // must not open a picker.
-  const mentionQuery = /(^|\s)@([^\s@]{0,60})$/.exec(draft)?.[2] ?? null;
+  // must not open a picker. Spaces are allowed inside the query ("@Q3 sales
+  // report"), so the token runs from the last standalone "@" to the caret;
+  // fuzzy matching plus the no-results guard is what closes the picker once
+  // the trailing text stops looking like a title.
+  const mentionMatch = /(^|\s)@([^\s@\n][^@\n]{0,59})?$/.exec(draft);
+  const mentionQuery = mentionMatch ? (mentionMatch[2] ?? "") : null;
   const mentionResults = useMemo(() => {
     if (mentionQuery === null) return [];
-    const q = mentionQuery.toLowerCase();
+    const q = mentionQuery.toLowerCase().trim();
+    // A title already committed to the draft is done — offering it again
+    // would hold the picker open forever after a pick (the "@Title " text
+    // itself matches its own title).
+    const picked = new Set(
+      mentions
+        .filter((m) => draft.includes(`@${m.title}`))
+        .map((m) => `${m.kind}:${m.id}`),
+    );
     // Sources first (folders included — a folder expands to its ready
     // children at send), then notes; capped so a big repo can't flood it.
-    const srcs = sources
-      .filter((s) => s.status === "ready" && s.title.toLowerCase().includes(q))
-      .slice(0, 6)
-      .map((s) => ({ id: s.id, kind: "source" as const, title: s.title }));
-    const nts = notes
-      .filter((n) => n.title.toLowerCase().includes(q))
-      .slice(0, 4)
-      .map((n) => ({ id: n.id, kind: "note" as const, title: n.title }));
+    const rank = <T,>(
+      items: T[],
+      title: (x: T) => string,
+      keep: (x: T) => boolean,
+      cap: number,
+    ) =>
+      items
+        .flatMap((x) => {
+          if (!keep(x)) return [];
+          const score = fuzzyScore(q, title(x));
+          return score === null ? [] : [{ x, score }];
+        })
+        .sort((a, b) => b.score - a.score)
+        .slice(0, cap)
+        .map(({ x }) => x);
+    const srcs = rank(
+      sources,
+      (s) => s.title,
+      (s) => s.status === "ready" && !picked.has(`source:${s.id}`),
+      6,
+    ).map((s) => ({ id: s.id, kind: "source" as const, title: s.title }));
+    const nts = rank(
+      notes,
+      (n) => n.title,
+      (n) => !picked.has(`note:${n.id}`),
+      4,
+    ).map((n) => ({ id: n.id, kind: "note" as const, title: n.title }));
     return [...srcs, ...nts];
-  }, [mentionQuery, sources, notes]);
+  }, [mentionQuery, sources, notes, mentions, draft]);
   const mentionOpen =
     mentionQuery !== null && !mentionDismissed && mentionResults.length > 0;
   useEffect(() => {
@@ -272,7 +365,7 @@ export function ChatPanel() {
   function pickMention(m: { id: string; kind: "source" | "note"; title: string }) {
     // Replace the trailing "@query" with the canonical "@Title " token; the
     // recorded id — not the text — is what narrows retrieval.
-    const next = draft.replace(/@[^\s@]{0,60}$/, `@${m.title} `);
+    const next = draft.replace(/@(?:[^\s@\n][^@\n]{0,59})?$/, `@${m.title} `);
     setDraft(next);
     setMentions((cur) => (cur.some((x) => x.id === m.id) ? cur : [...cur, m]));
     setMentionSel(0);
@@ -527,7 +620,16 @@ export function ChatPanel() {
             <SummaryBanner
               summary={summary}
               loading={summaryLoading}
-              onRefresh={refreshSummary}
+              // Show the summary from the top — immediately on click (the
+              // loading banner already grows the top of the transcript, and
+              // scroll anchoring would pin the bottom and cut it off) and
+              // again when the text lands and the banner grows tall.
+              onRefresh={() => {
+                scrollRef.current?.scrollTo({ top: 0 });
+                void refreshSummary().then(() => {
+                  scrollRef.current?.scrollTo({ top: 0 });
+                });
+              }}
               centered={isBlank}
             />
           )}

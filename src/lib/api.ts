@@ -120,6 +120,8 @@ export const api = {
     run(cmd<void>("rename_notebook", { id, title })),
   setNotebookColor: (id: string, color: string) =>
     run(cmd<void>("set_notebook_color", { id, color })),
+  setNotebookIcon: (id: string, icon: string) =>
+    run(cmd<void>("set_notebook_icon", { id, icon })),
   deleteNotebook: (id: string) => run(cmd<void>("delete_notebook", { id })),
   setNotebookStatus: (id: string, status: "" | "archived") =>
     run(cmd<void>("set_notebook_status", { id, status })),

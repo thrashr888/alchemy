@@ -5,6 +5,9 @@ export interface Toast {
   id: string;
   kind: ToastKind;
   message: string;
+  /** Present → the toast body is clickable (e.g. "update available" opens
+   *  Settings). Clicking dismisses the toast too. */
+  onClick?: () => void;
 }
 
 export interface Notebook {
@@ -13,8 +16,12 @@ export interface Notebook {
   createdAt: number;
   updatedAt: number;
   color: string;
-  /** "" (active) | "archived" — archived notebooks leave the main grid. */
-  status: "" | "archived";
+  /** Lucide icon slug, "" → default book. See lib/notebookIcons.ts. */
+  icon: string;
+  /** "" (active) | "archived" | "system". Archived notebooks leave the main
+   *  grid; system notebooks (Briefs) never appear on the shelf at all but
+   *  work like any other notebook when opened. */
+  status: "" | "archived" | "system";
   sourceCount: number;
   /** Deliberate notes, excluding reports. */
   noteCount: number;

@@ -91,12 +91,14 @@ impl AlchemyMcp {
         } else {
             title.trim().to_string()
         };
+        let icon = commands::auto_notebook_icon(&title);
         let nb = Notebook {
             id: commands::new_id(),
             title,
             created_at: ts,
             updated_at: ts,
             color: NOTEBOOK_PALETTE[0].to_string(),
+            icon,
             status: String::new(),
             source_count: 0,
             note_count: 0,

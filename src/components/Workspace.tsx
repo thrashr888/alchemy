@@ -11,7 +11,8 @@ import { SourcesRail, StudioRail } from "./SidebarRails";
 import { HealthBanner } from "./HealthBanner";
 import { Button } from "./ui";
 import { shortcutBlocked } from "@/lib/utils";
-import { ChevronLeft, Search, Settings, BookOpen } from "lucide-react";
+import { ChevronLeft, Search, Settings } from "lucide-react";
+import { notebookIcon } from "@/lib/notebookIcons";
 import { DevBadge } from "./DevBadge";
 
 export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
@@ -77,7 +78,10 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
         </Button>
         <div className="mx-1 h-4 w-px bg-border" />
         <div className="flex items-center gap-1.5 min-w-0">
-          <BookOpen className="h-3.5 w-3.5 shrink-0 text-primary" />
+          {(() => {
+            const Icon = notebookIcon(notebook?.icon);
+            return <Icon className="h-3.5 w-3.5 shrink-0 text-primary" />;
+          })()}
           <span
             className="inline-flex h-2.5 w-2.5 shrink-0 rounded-full border border-background"
             style={{ backgroundColor: notebook?.color }}

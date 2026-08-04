@@ -335,17 +335,25 @@ function GeneralTab() {
   const [update, setUpdate] = useState<UpdateFlow | null>(null);
   const [installing, setInstalling] = useState(false);
 
-  // "Check for Updates…" from the app menu lands here with the flag set.
+  // "Check for Updates…" from the app menu lands here with the flag set;
+  // the quiet startup check leaves `updateAvailable` behind — either way,
+  // this tab should be showing the Install button without another click,
+  // including when the quiet check completes while the tab is already open
+  // (hence `updateAvailable` in the deps).
   const pendingUpdateCheck = useStore((s) => s.pendingUpdateCheck);
+  const updateAvailable = useStore((s) => s.updateAvailable);
   useEffect(() => {
-    // Read the live value: StrictMode replays mount effects with the same
-    // captured snapshot, so checking the prop would double-run the check.
-    if (useStore.getState().pendingUpdateCheck) {
+    // Read live values: StrictMode replays mount effects with the same
+    // captured snapshot, so checking the props would double-run the check.
+    const s = useStore.getState();
+    // An explicit menu check always re-runs; a known-available version only
+    // triggers the interactive check once (`update` holds its outcome).
+    if (s.pendingUpdateCheck || (s.updateAvailable && !update)) {
       useStore.setState({ pendingUpdateCheck: false });
       void onCheck();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingUpdateCheck]);
+  }, [pendingUpdateCheck, updateAvailable]);
 
   async function onCheck() {
     setChecking(true);

@@ -8,13 +8,11 @@ export function autoUpdateEnabled(): boolean {
   return localStorage.getItem("autoUpdateCheck") !== "false";
 }
 
-/** Quiet startup check: surface availability as a toast, never interrupt. */
-export async function checkForUpdatesQuietly(onFound: (message: string) => void) {
+/** Quiet startup check: surface availability, never interrupt. */
+export async function checkForUpdatesQuietly(onFound: (version: string) => void) {
   try {
     const update = await check();
-    if (update) {
-      onFound(`Alchemy ${update.version} is available — install from Settings → General.`);
-    }
+    if (update) onFound(update.version);
   } catch {
     /* offline or endpoint unavailable — try again next launch */
   }

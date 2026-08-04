@@ -101,6 +101,9 @@ export interface AppState {
   pendingAddUrl: boolean;
   pendingAddText: boolean;
   pendingUpdateCheck: boolean;
+  /** Version string the quiet startup check found, null until then —
+   *  General/About read it to show the update without re-checking. */
+  updateAvailable: string | null;
   embedderDownload: {
     label: string;
     done: number;
@@ -172,6 +175,7 @@ export interface AppState {
   createNotebook: (title: string) => Promise<string>;
   renameNotebook: (id: string, title: string) => Promise<void>;
   setNotebookColor: (id: string, color: string) => Promise<void>;
+  setNotebookIcon: (id: string, icon: string) => Promise<void>;
   deleteNotebook: (id: string) => Promise<void>;
   setNotebookStatus: (id: string, status: "" | "archived") => Promise<void>;
   setTheme: (theme: string) => void;
@@ -267,7 +271,7 @@ export interface AppState {
   setupKokoro: () => Promise<void>;
   removeKokoro: () => Promise<void>;
   setError: (error: string | null) => void;
-  pushToast: (kind: ToastKind, message: string) => void;
+  pushToast: (kind: ToastKind, message: string, onClick?: () => void) => void;
   dismissToast: (id: string) => void;
   markNotesRead: (ids: string[]) => void;
 }

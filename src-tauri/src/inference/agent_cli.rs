@@ -246,6 +246,32 @@ fn auth_fix_hint(kind: AgentKind, error_text: &str) -> Option<String> {
     Some(format!("Fix: open Terminal, {fix}, then retry here."))
 }
 
+/// A vendor gateway rejecting the CLI's saved default model ("The requested
+/// model is not supported" / `model_not_supported`) means the CLI is pinned
+/// to a retired model — seen live with GitHub Copilot. The fix is the CLI's,
+/// not ours: update it, or re-pick a model in its own UI.
+fn model_fix_hint(kind: AgentKind, error_text: &str) -> Option<String> {
+    let t = error_text.to_lowercase();
+    if !(t.contains("model_not_supported") || t.contains("model is not supported")) {
+        return None;
+    }
+    let bin = kind.binary_name();
+    Some(format!(
+        "Fix: the {} CLI's saved model has been retired — update the CLI \
+         (`{}`), or run `{bin}` and choose a current model (usually the \
+         /model command), then retry here.",
+        kind.label(),
+        kind.install_hint()
+    ))
+}
+
+/// "mcp__alchemy__search_notebook" → "Using search notebook": the last
+/// path segment of a namespaced tool id, de-snaked, as a progress line.
+fn tool_step_label(name: &str) -> String {
+    let last = name.rsplit("__").next().unwrap_or(name);
+    format!("Using {}", last.replace('_', " "))
+}
+
 fn fold_system(system: &str, prompt: &str) -> String {
     if system.is_empty() {
         prompt.to_string()
@@ -304,6 +330,22 @@ impl AgentCli {
     pub async fn chat_stream<F>(&self, messages: &[ChatTurn], on_token: F) -> Result<ChatOutcome>
     where
         F: FnMut(&str),
+    {
+        self.chat_stream_steps(messages, on_token, |_| {}).await
+    }
+
+    /// `chat_stream` plus progress: agent CLIs sit silent for long stretches
+    /// while they plan and run tools, so their structured events double as
+    /// in-progress status lines (`on_step`) instead of a mute spinner.
+    pub async fn chat_stream_steps<F, S>(
+        &self,
+        messages: &[ChatTurn],
+        on_token: F,
+        on_step: S,
+    ) -> Result<ChatOutcome>
+    where
+        F: FnMut(&str),
+        S: FnMut(&str),
     {
         let bin = self.binary.as_ref().ok_or_else(|| {
             anyhow!(
@@ -510,6 +552,18 @@ impl AgentCli {
         let run = async move {
             let mut lines = BufReader::new(stdout).lines();
             let mut on_token = on_token;
+            let mut on_step = on_step;
+            // Consecutive-duplicate guard: event streams repeat themselves
+            // (several deltas per tool call), and the step trail shouldn't.
+            let mut last_step = String::new();
+            let mut emit_step = move |label: String| {
+                if label != last_step {
+                    on_step(&label);
+                    last_step = label;
+                }
+            };
+            // Immediate first line — the CLI takes seconds just to boot.
+            emit_step(format!("Asking {}", kind.label()));
             let mut text = String::new();
             let mut errored: Option<String> = None;
             let mut cost_usd: Option<f64> = None;
@@ -532,7 +586,13 @@ impl AgentCli {
                         // that is process, not reply.
                         let kept = if kind == AgentKind::Bob {
                             let t = line.trim();
-                            if t.starts_with("[using tool ") || t == "---output---" {
+                            if let Some(tool) = t.strip_prefix("[using tool ") {
+                                // Scaffolding, not reply — but it IS status.
+                                let name = tool.trim_end_matches(']').trim();
+                                emit_step(format!("Using {name}"));
+                                continue;
+                            }
+                            if t == "---output---" {
                                 continue;
                             }
                             match strip_thinking(&line, &mut in_thinking) {
@@ -553,12 +613,21 @@ impl AgentCli {
                 };
                 match kind {
                     AgentKind::Opencode => {
-                        // Verified live: text parts stream the reply.
-                        if v["type"].as_str() == Some("text") {
-                            if let Some(t) = v["part"]["text"].as_str() {
-                                text.push_str(t);
-                                on_token(t);
+                        // Verified live: text parts stream the reply; step
+                        // and tool events narrate the in-between.
+                        match v["type"].as_str() {
+                            Some("text") => {
+                                if let Some(t) = v["part"]["text"].as_str() {
+                                    text.push_str(t);
+                                    on_token(t);
+                                }
                             }
+                            Some("step_start") => emit_step("Thinking".into()),
+                            Some("tool") => {
+                                let name = v["part"]["tool"].as_str().unwrap_or("a tool");
+                                emit_step(tool_step_label(name));
+                            }
+                            _ => {}
                         }
                     }
                     AgentKind::Gemini | AgentKind::Bob | AgentKind::Copilot | AgentKind::Hermes => {
@@ -569,20 +638,34 @@ impl AgentCli {
                         on_token(&t);
                     }
                     AgentKind::Claude | AgentKind::Cursor => match v["type"].as_str() {
-                        // Per-token deltas from --include-partial-messages.
+                        // Per-token deltas from --include-partial-messages;
+                        // tool-use block starts double as progress lines.
                         Some("stream_event") => {
                             if let Some(delta) = v["event"]["delta"]["text"].as_str() {
                                 text.push_str(delta);
                                 on_token(delta);
+                            } else if v["event"]["content_block"]["type"].as_str()
+                                == Some("tool_use")
+                            {
+                                let name = v["event"]["content_block"]["name"]
+                                    .as_str()
+                                    .unwrap_or("a tool");
+                                emit_step(tool_step_label(name));
                             }
                         }
                         // Full assistant turns; authoritative when partial
                         // events were absent (older CLI versions).
                         Some("assistant") => {
-                            if text.is_empty() {
-                                if let Some(blocks) = v["message"]["content"].as_array() {
-                                    for b in blocks {
-                                        if let Some(t) = b["text"].as_str() {
+                            // Text is authoritative only when no partial
+                            // events streamed it already (older CLIs).
+                            let streamed_already = !text.is_empty();
+                            if let Some(blocks) = v["message"]["content"].as_array() {
+                                for b in blocks {
+                                    if b["type"].as_str() == Some("tool_use") {
+                                        let name = b["name"].as_str().unwrap_or("a tool");
+                                        emit_step(tool_step_label(name));
+                                    } else if let Some(t) = b["text"].as_str() {
+                                        if !streamed_already {
                                             text.push_str(t);
                                             on_token(t);
                                         }
@@ -606,7 +689,8 @@ impl AgentCli {
                     },
                     AgentKind::Codex => {
                         // codex exec --json: items complete whole; the
-                        // agent_message item carries the reply text.
+                        // agent_message item carries the reply text, and
+                        // item.started events narrate the work in between.
                         if v["type"].as_str() == Some("item.completed")
                             && v["item"]["type"].as_str() == Some("agent_message")
                         {
@@ -614,6 +698,18 @@ impl AgentCli {
                                 text.push_str(t);
                                 on_token(t);
                             }
+                        } else if v["type"].as_str() == Some("item.started") {
+                            let label = match v["item"]["type"].as_str() {
+                                Some("reasoning") => "Thinking".to_string(),
+                                Some("command_execution") => "Running a command".to_string(),
+                                Some("web_search") => "Searching the web".to_string(),
+                                Some("mcp_tool_call") => {
+                                    tool_step_label(v["item"]["tool"].as_str().unwrap_or("a tool"))
+                                }
+                                Some(other) => format!("Working: {}", other.replace('_', " ")),
+                                None => "Working".to_string(),
+                            };
+                            emit_step(label);
                         } else if v["type"].as_str() == Some("error") {
                             errored =
                                 Some(v["message"].as_str().unwrap_or("codex error").to_string());
@@ -649,7 +745,7 @@ impl AgentCli {
                 } else {
                     format!("{e:#}: {tail}")
                 };
-                match auth_fix_hint(self.kind, &base) {
+                match auth_fix_hint(self.kind, &base).or_else(|| model_fix_hint(self.kind, &base)) {
                     Some(hint) => Err(anyhow!("{base} — {hint}")),
                     None => Err(anyhow!("{base}")),
                 }

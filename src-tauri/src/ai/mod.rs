@@ -562,6 +562,24 @@ impl Ai {
             .await
     }
 
+    /// `chat_stream` plus progress lines — agent CLI engines narrate their
+    /// tool use through `on_step`; other engines never call it.
+    pub async fn chat_stream_steps<F, S>(
+        &self,
+        messages: &[ChatTurn],
+        on_token: F,
+        on_step: S,
+    ) -> Result<ChatOutcome>
+    where
+        F: FnMut(&str),
+        S: FnMut(&str),
+    {
+        self.router
+            .chat_engine(Role::Chat)
+            .chat_stream_steps(messages, on_token, on_step)
+            .await
+    }
+
     /// Streaming, role-routed (studio generation → the Generate provider).
     pub async fn chat_role_stream<F>(
         &self,
