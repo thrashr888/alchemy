@@ -304,7 +304,7 @@ async fn suggest_for_notebook(
         for (kind, name) in gated {
             // Anything already in the cast — yours, pending, or turned down
             // — is settled. Never re-propose it.
-            if existing.iter().any(|c| c.name.eq_ignore_ascii_case(&name)) {
+            if existing.iter().any(|c| same_thing(&c.name, &name)) {
                 continue;
             }
             let ts = now();
@@ -397,6 +397,9 @@ fn build_suggest_messages(material: &str) -> Vec<crate::ai::ChatTurn> {
                  documents name it\n\
                  - every company or practitioner they pay, hire, moor at, or buy from\n\
                  - every substantial thing they own\n\n\
+                 Name it the way a person would say it out loud, not as a bare reference \
+                 number: \"Ashfield Mutual studio rider\", not \"AM-88214\". A number may \
+                 follow the name, never replace it.\n\n\
                  Leave out anything that is not theirs to track: a company named only as \
                  context or comparison, a person merely quoted, a place merely passed \
                  through. If there is genuinely nothing, reply with nothing at all.",
@@ -408,6 +411,34 @@ fn build_suggest_messages(material: &str) -> Vec<crate::ai::ChatTurn> {
             content: material.to_string(),
         },
     ]
+}
+
+/// Whether a proposed name restates a card that already exists.
+///
+/// Exact match isn't enough: across runs the same model names one object
+/// two ways — "Rheem Performance Platinum" and "Rheem Performance Platinum
+/// water heater" — and two cards for one water heater is precisely the mess
+/// the Registry exists to prevent. Prefix containment catches the
+/// restatement while leaving genuinely different things alone ("Apple" does
+/// not swallow "Pineapple Studios"), and it only ever suppresses a
+/// suggestion, never a card someone made.
+fn same_thing(existing: &str, proposed: &str) -> bool {
+    let a = existing.trim().to_lowercase();
+    let b = proposed.trim().to_lowercase();
+    if a == b {
+        return true;
+    }
+    let (short, long) = if a.len() <= b.len() {
+        (&a, &b)
+    } else {
+        (&b, &a)
+    };
+    // Word-boundary prefix only, so "Sea Otter" never absorbs "Sea Otter II"
+    // by accident of length alone — it has to read as the same name with
+    // more said after it.
+    short.chars().count() >= MIN_NAME_LEN
+        && long.starts_with(short.as_str())
+        && long[short.len()..].starts_with(' ')
 }
 
 /// Keep only proposals that are grounded and well-formed.
@@ -454,6 +485,15 @@ fn gate_suggestions(reply: &str, haystack: &str) -> Vec<(String, String)> {
         let name = joined.trim().trim_matches('"').trim();
         let len = name.chars().count();
         if !(MIN_NAME_LEN..=60).contains(&len) {
+            continue;
+        }
+        // A reference number is not a name. "AM-88214" tells you nothing at
+        // a glance and sorts nowhere useful, so require at least one real
+        // word — a run of three or more letters.
+        if !name
+            .split(|c: char| !c.is_alphabetic())
+            .any(|w| w.chars().count() >= 3)
+        {
             continue;
         }
         if !haystack.contains(&name.to_lowercase()) {
@@ -764,6 +804,37 @@ mod tests {
     fn short_names_do_not_propose() {
         let c = card("Cat", "");
         assert!(match_card(&c, "the cat sat on the mat").is_none());
+    }
+
+    #[test]
+    fn a_reference_number_is_not_a_name() {
+        // Observed live: the model answered "policy|AM-88214" for a rider it
+        // could have named. A card called that helps nobody.
+        let hay = "ashfield mutual studio equipment rider am-88214 covers the kiln";
+        assert!(gate_suggestions("policy|AM-88214", hay).is_empty());
+        assert_eq!(
+            gate_suggestions("policy|Ashfield Mutual studio rider", hay).len(),
+            0,
+            "ungrounded names are still rejected"
+        );
+        let hay2 = "ashfield mutual studio rider covers the kiln";
+        assert_eq!(
+            gate_suggestions("policy|Ashfield Mutual studio rider", hay2).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_longer_restatement_is_the_same_thing() {
+        // Two cards for one water heater is the mess the Registry prevents.
+        assert!(same_thing(
+            "Rheem Performance Platinum",
+            "Rheem Performance Platinum water heater"
+        ));
+        assert!(same_thing("Sea Otter", "sea otter"));
+        // Different things that merely share a start stay different.
+        assert!(!same_thing("Apple", "Pineapple Studios"));
+        assert!(!same_thing("Corran Marine Works", "Corran Marina"));
     }
 
     #[test]
