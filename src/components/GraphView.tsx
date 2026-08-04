@@ -39,10 +39,13 @@ const viewMemory = new Map<string, { x: number; y: number; k: number }>();
 /** Zoom limits. Out far enough to see a 400-node notebook whole, in far
  *  enough to read a label in the middle of a dense cluster. */
 const MIN_ZOOM = 0.35;
-const MAX_ZOOM = 4;
-/** Wheel sensitivity. Trackpads send small deltas per event, and the gentler
- *  value this started at meant a long scrub to get anywhere useful. */
-const ZOOM_SPEED = 0.004;
+/** 12x. A 330-document notebook is still shoulder-to-shoulder at 4x — the
+ *  ceiling has to clear the densest core, not the average case. */
+const MAX_ZOOM = 12;
+/** Wheel sensitivity. Trackpads send small deltas per event, so this needs
+ *  to be far higher than a mouse wheel would want: a normal two-finger swipe
+ *  should cross most of the range, not inch across it. */
+const ZOOM_SPEED = 0.01;
 /** Label size in screen pixels, held roughly constant across zoom. */
 const LABEL_PX = 10;
 
@@ -55,12 +58,15 @@ const LABEL_PX = 10;
  * at a constant SCREEN size while the positions spread apart, which is what
  * makes zooming actually resolve a cluster.
  *
- * Clamped at both ends: unbounded, zooming out would inflate every dot until
- * the picture is nothing but dots, and zooming far in would shrink them to
- * specks. Inside the clamp it is exactly constant screen size.
+ * The lower clamp is 1/MAX_ZOOM rather than a round number on purpose: any
+ * floor above it means counter-scaling quits partway up the range and the
+ * glyphs start growing on screen again, which is the exact problem this
+ * function exists to prevent. Tie it to the ceiling and the whole range is
+ * honest constant-size. The upper clamp stops a zoomed-out graph inflating
+ * into nothing but dots.
  */
 function glyphScale(k: number) {
-  return Math.min(1.3, Math.max(0.3, 1 / k));
+  return Math.min(1.3, Math.max(1 / MAX_ZOOM, 1 / k));
 }
 
 export function GraphView() {
