@@ -1,14 +1,9 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import type { Source } from "@/lib/types";
+import { GROUP_LABEL, GROUP_OF, type TypeGroup } from "@/lib/sourceGroups";
 import {
   Button,
   CardAction,
@@ -57,42 +52,6 @@ const scrollMemory = new Map<string, number>();
 const thumbMemory = new Map<string, string>();
 
 type SortMode = "recent" | "title";
-type TypeGroup =
-  | "all"
-  | "urls"
-  | "docs"
-  | "images"
-  | "text"
-  | "code"
-  | "mac"
-  | "folders";
-
-const GROUP_OF: Record<Source["sourceType"], Exclude<TypeGroup, "all">> = {
-  url: "urls",
-  html: "text",
-  pdf: "docs",
-  image: "images",
-  text: "text",
-  markdown: "text",
-  code: "code",
-  mac: "mac",
-  folder: "folders",
-  git: "folders",
-  notion: "folders",
-  obsidian: "folders",
-};
-
-const GROUP_LABEL: Record<Exclude<TypeGroup, "all">, string> = {
-  // "URLs", not "Pages": this group is exactly the web-link sources, and
-  // "Pages" read ambiguously next to the PDF group (paper pages? text?).
-  urls: "URLs",
-  docs: "PDFs",
-  images: "Images",
-  text: "Text",
-  code: "Code",
-  mac: "Mac",
-  folders: "Folders",
-};
 
 /** Kinds whose card leads with opening lines of the text. URL sources join
  *  when their page yielded no lead image. */
@@ -164,7 +123,11 @@ export function GalleryPane() {
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
   const findRef = useRef<HTMLInputElement>(null);
-  const { show: showCard, hide: hideCard, card: hoverCard } = useHoverCard("right");
+  const {
+    show: showCard,
+    hide: hideCard,
+    card: hoverCard,
+  } = useHoverCard("right");
   const [sweeping, setSweeping] = useState(false);
   const [folderId, setFolderId] = useState<string | null>(null);
   const [filter, setFilter] = useState<TypeGroup>("all");
@@ -287,10 +250,13 @@ export function GalleryPane() {
     ].some((f) => f?.toLowerCase().includes(needle));
   const cards = level
     .filter(
-      (s) => effectiveFilter === "all" || GROUP_OF[s.sourceType] === effectiveFilter,
+      (s) =>
+        effectiveFilter === "all" || GROUP_OF[s.sourceType] === effectiveFilter,
     )
     .filter(
-      (s) => !effectiveTag || (s.tags ? s.tags.split(" ") : []).includes(effectiveTag),
+      (s) =>
+        !effectiveTag ||
+        (s.tags ? s.tags.split(" ") : []).includes(effectiveTag),
     )
     .filter(matchesFind)
     .sort((a, b) =>
@@ -354,8 +320,7 @@ export function GalleryPane() {
   const childCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const s of sources) {
-      if (s.parentId)
-        counts.set(s.parentId, (counts.get(s.parentId) ?? 0) + 1);
+      if (s.parentId) counts.set(s.parentId, (counts.get(s.parentId) ?? 0) + 1);
     }
     return counts;
   }, [sources]);
@@ -527,12 +492,17 @@ export function GalleryPane() {
               : "How these sources and notes link to each other"
           }
         />
-        <Segmented
-          options={["recent", "title"] as const}
-          value={sort}
-          onChange={setSortMode}
-          hint={(mode) => (mode === "recent" ? "Newest first" : "A to Z")}
-        />
+        {/* Sort orders cards. A force layout places by connectedness, so
+            there is no order for this to change — in graph mode the control
+            was simply inert. */}
+        {shape === "grid" && (
+          <Segmented
+            options={["recent", "title"] as const}
+            value={sort}
+            onChange={setSortMode}
+            hint={(mode) => (mode === "recent" ? "Newest first" : "A to Z")}
+          />
+        )}
       </div>
       {findOpen && (
         <div className="flex shrink-0 items-center justify-end gap-1.5 border-b border-border px-4 py-1.5">
@@ -566,8 +536,9 @@ export function GalleryPane() {
           (a source matches both filters). Shared with the Registry's grid
           since RFC-registry §3; see FilterBar.tsx.
 
-          Hidden in graph mode: the graph is notebook-wide on purpose, so the
-          bar would sit there looking operable and do nothing. */}
+          Grid only: the graph filters the whole notebook rather than a
+          level of the gallery, and by node kind as well as source type, so
+          it renders its own bar with its own options. */}
       {shape === "grid" && (
         <FilterBar
           groups={groups.map((g) => ({
@@ -582,9 +553,9 @@ export function GalleryPane() {
         />
       )}
       {shape === "graph" ? (
-        // Notebook-wide by design: filters and folder drill-in narrow the
-        // cards, but a graph of a subset hides exactly the links that make
-        // it worth looking at.
+        // Notebook-wide, and unaffected by the folder drill-in: a graph of
+        // one folder's level hides exactly the links that make it worth
+        // looking at. Type filtering lives inside the graph's own bar.
         <GraphView />
       ) : cards.length === 0 ? (
         <div className="flex flex-1 items-center justify-center">
@@ -618,36 +589,36 @@ export function GalleryPane() {
         >
           {/* Skip the one-column flash while the first measure lands. */}
           {width > 0 && (
-          <div className="flex items-start gap-3">
-            {columns.map((col, i) => (
-              <div key={i} className="flex min-w-0 flex-1 flex-col gap-3">
-                {col.map((s) =>
-                  GROUP_OF[s.sourceType] === "folders" ? (
-                    <FolderCard
-                      key={s.id}
-                      source={s}
-                      childrenSources={sources.filter(
-                        (c) => c.parentId === s.id,
-                      )}
-                      onOpen={() => setFolderId(s.id)}
-                      menuItems={cardMenuItems(s)}
-                      onHover={(e) => showCard(e, sourceHoverData(s))}
-                      onLeave={hideCard}
-                    />
-                  ) : (
-                    <GalleryCard
-                      key={s.id}
-                      source={s}
-                      snippet={snippets[s.id]}
-                      menuItems={cardMenuItems(s)}
-                      onHover={(e) => showCard(e, sourceHoverData(s))}
-                      onLeave={hideCard}
-                    />
-                  ),
-                )}
-              </div>
-            ))}
-          </div>
+            <div className="flex items-start gap-3">
+              {columns.map((col, i) => (
+                <div key={i} className="flex min-w-0 flex-1 flex-col gap-3">
+                  {col.map((s) =>
+                    GROUP_OF[s.sourceType] === "folders" ? (
+                      <FolderCard
+                        key={s.id}
+                        source={s}
+                        childrenSources={sources.filter(
+                          (c) => c.parentId === s.id,
+                        )}
+                        onOpen={() => setFolderId(s.id)}
+                        menuItems={cardMenuItems(s)}
+                        onHover={(e) => showCard(e, sourceHoverData(s))}
+                        onLeave={hideCard}
+                      />
+                    ) : (
+                      <GalleryCard
+                        key={s.id}
+                        source={s}
+                        snippet={snippets[s.id]}
+                        menuItems={cardMenuItems(s)}
+                        onHover={(e) => showCard(e, sourceHoverData(s))}
+                        onLeave={hideCard}
+                      />
+                    ),
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}
@@ -699,8 +670,7 @@ function estimateCardHeight(
     : 0;
   const title = lines(s.title, hasVisual ? 2 : 3, 6.6) * 19;
   // The snippet only renders when there is no visual to carry the card.
-  const body =
-    !hasVisual && snippet ? 6 + lines(snippet, 4, 6) * 18 : 0;
+  const body = !hasVisual && snippet ? 6 + lines(snippet, 4, 6) * 18 : 0;
   const error = s.status === "error" ? 22 : 0;
   return visual + PADDING + title + body + CAPTION + error;
 }
@@ -751,7 +721,11 @@ function FolderCard({
         onClick={onOpen}
         className="z-10 cursor-pointer"
       />
-      <CardMenu label={`Options for ${s.title}`} items={menuItems} onOpen={onLeave} />
+      <CardMenu
+        label={`Options for ${s.title}`}
+        items={menuItems}
+        onOpen={onLeave}
+      />
       <div className="p-3">
         <div className="flex items-center gap-1.5">
           {sourceIcon(s.sourceType, s.url)}
@@ -766,7 +740,9 @@ function FolderCard({
                 key={c.id}
                 className="flex min-w-0 items-center gap-1 rounded border border-border bg-background/40 px-1.5 py-1"
               >
-                <span className="shrink-0">{sourceIcon(c.sourceType, c.url)}</span>
+                <span className="shrink-0">
+                  {sourceIcon(c.sourceType, c.url)}
+                </span>
                 <span className="truncate text-micro text-muted-foreground">
                   {c.title}
                 </span>
@@ -831,7 +807,7 @@ function GalleryCard({
 
   // While the cache fills (or when the download failed), fall back to the
   // remote og URL so first paint isn't gated on the round-trip.
-  const visual = !imgFailed ? (thumb || leadImage || null) : null;
+  const visual = !imgFailed ? thumb || leadImage || null : null;
   const host = web ? urlHost(s.url) : null;
   // The icon already says what it is — the caption carries provenance
   // (domain or author) and freshness, never a redundant type label.
@@ -853,7 +829,11 @@ function GalleryCard({
         onClick={() => openSourceViewer(s.id, s.title)}
         className="z-10 cursor-pointer"
       />
-      <CardMenu label={`Options for ${s.title}`} items={menuItems} onOpen={onLeave} />
+      <CardMenu
+        label={`Options for ${s.title}`}
+        items={menuItems}
+        onOpen={onLeave}
+      />
       {visual && (
         <img
           src={visual}

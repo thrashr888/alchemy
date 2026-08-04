@@ -42,10 +42,15 @@ function FilterButton({
   active,
   onClick,
   children,
+  dot,
 }: {
   active: boolean;
   onClick: () => void;
   children: React.ReactNode;
+  /** Category colour, shown as a leading dot. Where a surface colours things
+   *  by group, this row is also the legend — a separate key would be one
+   *  more thing to keep in sync and one more thing to look at. */
+  dot?: string;
 }) {
   return (
     <button
@@ -53,12 +58,19 @@ function FilterButton({
       onClick={onClick}
       aria-pressed={active}
       className={cn(
-        "rounded-md px-2 py-1 text-caption transition-colors",
+        "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-caption transition-colors",
         active
           ? "bg-surface-2 font-medium text-foreground"
           : "text-muted-foreground hover:text-foreground",
       )}
     >
+      {dot && (
+        <span
+          aria-hidden
+          className="h-2 w-2 shrink-0 rounded-full"
+          style={{ backgroundColor: dot }}
+        />
+      )}
       {children}
     </button>
   );
@@ -71,6 +83,7 @@ export function FilterBar({
   chips,
   chip,
   onChip,
+  groupDot,
   chipAllLabel = "All tags",
   chipPrefix = "#",
   bare = false,
@@ -80,6 +93,9 @@ export function FilterBar({
   groups: FilterOption[];
   group: string;
   onGroup: (value: string) => void;
+  /** Optional category colour per group value, making this row the legend
+   *  for a surface that colours by group. */
+  groupDot?: (value: string) => string | undefined;
   /** Secondary axis. Null means "all". */
   chips?: string[];
   chip?: string | null;
@@ -120,6 +136,7 @@ export function FilterBar({
             key={g.value}
             active={group === g.value}
             onClick={() => onGroup(g.value)}
+            dot={groupDot?.(g.value)}
           >
             {g.label}
           </FilterButton>

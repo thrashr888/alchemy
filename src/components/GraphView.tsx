@@ -4,6 +4,13 @@ import { useStore } from "@/lib/store";
 import { createLayout, layout } from "@/lib/forceLayout";
 import { placeLabels } from "@/lib/graphLabels";
 import { neighborhood } from "@/lib/neighborhood";
+import {
+  GROUP_COLOR,
+  GROUP_LABEL,
+  groupOfNode,
+  type TypeGroup,
+} from "@/lib/sourceGroups";
+import { FilterBar, rankByCount } from "./FilterBar";
 import type { NotebookGraph } from "@/lib/types";
 import { EmptyState, useHoverCard } from "./ui";
 import { sourceHoverData } from "./SourcesPanel";
@@ -36,6 +43,21 @@ const layoutCache = new Map<string, ReturnType<typeof layout>>();
  *  scrollMemory. Re-center is always one click away if a remembered view
  *  turns out to be somewhere you no longer want to be. */
 const viewMemory = new Map<string, { x: number; y: number; k: number }>();
+
+/** Set when a document is opened BY CLICKING IT IN THE GRAPH, remembering
+ *  the graph state at that moment.
+ *
+ *  Arriving with a document open normally means "show me its neighbourhood",
+ *  which is the local-graph behaviour worth having. But if you got to that
+ *  document by clicking it here, you were already looking at the graph, and
+ *  changing what you come back to is just losing your place. So a return
+ *  trip through the graph restores exactly the view you left. */
+let openedFromGraph: {
+  notebook: string;
+  id: string;
+  focus: string | null;
+  hops: number;
+} | null = null;
 
 /** Zoom limits. Out far enough to see a 400-node notebook whole, in far
  *  enough to read a label in the middle of a dense cluster. */
@@ -90,6 +112,9 @@ export function GraphView() {
    *  that appears carries the button that opens the document itself. */
   const [focus, setFocus] = useState<string | null>(null);
   const [hops, setHops] = useState(2);
+  /** Type filter, the graph's own — the grid filters a level of the gallery,
+   *  the graph filters the whole notebook, so they do not share state. */
+  const [group, setGroup] = useState<TypeGroup>("all");
   /** Consumed once per arrival. The pane unmounts whenever the centre column
    *  shows something else, so "mounted" IS "arrived" — and opening a
    *  document from the graph and coming back re-focuses on that document,
@@ -156,15 +181,24 @@ export function GraphView() {
   useEffect(() => {
     if (!pendingArrival.current || !graph) return;
     pendingArrival.current = false;
-    if (readerDoc && graph.nodes.some((n) => n.id === readerDoc.id)) {
+    const returning =
+      openedFromGraph &&
+      openedFromGraph.notebook === currentId &&
+      openedFromGraph.id === readerDoc?.id;
+    if (returning) {
+      // Came back from a document opened here — restore, do not re-decide.
+      setFocus(openedFromGraph!.focus);
+      setHops(openedFromGraph!.hops);
+    } else if (readerDoc && graph.nodes.some((n) => n.id === readerDoc.id)) {
       setFocus(readerDoc.id);
     }
-  }, [graph, readerDoc]);
+    openedFromGraph = null;
+  }, [graph, readerDoc, currentId]);
 
   // Come back to where this view was last left, not to the origin. Keyed
   // by focus too: the whole-notebook camera and a neighbourhood's camera are
   // different places, and inheriting one for the other is disorienting.
-  const viewKey = `${currentId}:${focus ?? ""}:${hops}`;
+  const viewKey = `${currentId}:${group}:${focus ?? ""}:${hops}`;
   useEffect(() => {
     setView(viewMemory.get(viewKey) ?? { x: 0, y: 0, k: 1 });
   }, [viewKey]);
@@ -193,13 +227,41 @@ export function GraphView() {
    *  the survivors sitting in the positions the hairball gave them. */
   const shown = useMemo(() => {
     if (!graph) return null;
-    if (!focus || !graph.nodes.some((n) => n.id === focus)) return graph;
-    const keep = neighborhood(focus, graph.edges, hops);
-    return {
-      nodes: graph.nodes.filter((n) => keep.has(n.id)),
-      edges: graph.edges.filter((e) => keep.has(e.from) && keep.has(e.to)),
-    };
-  }, [graph, focus, hops]);
+    let nodes = graph.nodes;
+    let edges = graph.edges;
+    if (group !== "all") {
+      const keep = new Set(
+        nodes
+          .filter((n) => groupOfNode(n.kind, n.sourceType) === group)
+          .map((n) => n.id),
+      );
+      nodes = nodes.filter((n) => keep.has(n.id));
+      edges = edges.filter((e) => keep.has(e.from) && keep.has(e.to));
+    }
+    if (focus && nodes.some((n) => n.id === focus)) {
+      const keep = neighborhood(focus, edges, hops);
+      nodes = nodes.filter((n) => keep.has(n.id));
+      edges = edges.filter((e) => keep.has(e.from) && keep.has(e.to));
+    }
+    return { nodes, edges };
+  }, [graph, focus, hops, group]);
+
+  /** Groups actually present, biggest first — an option that would filter to
+   *  nothing never renders, same rule the gallery's bar follows. */
+  const groups = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const n of graph?.nodes ?? []) {
+      const g = groupOfNode(n.kind, n.sourceType);
+      counts.set(g, (counts.get(g) ?? 0) + 1);
+    }
+    return [
+      { value: "all", label: "All" },
+      ...rankByCount(counts).map((g) => ({
+        value: g,
+        label: GROUP_LABEL[g as Exclude<TypeGroup, "all">] ?? g,
+      })),
+    ];
+  }, [graph]);
 
   const [positions, setPositions] = useState<ReturnType<typeof layout>>([]);
 
@@ -212,7 +274,7 @@ export function GraphView() {
       setPositions([]);
       return;
     }
-    const key = `${cacheKey}:${focus ?? ""}:${hops}:${size.width}x${size.height}`;
+    const key = `${cacheKey}:${group}:${focus ?? ""}:${hops}:${size.width}x${size.height}`;
     const hit = layoutCache.get(key);
     if (hit) {
       setPositions(hit);
@@ -246,7 +308,7 @@ export function GraphView() {
       stale = true;
       cancelAnimationFrame(frame);
     };
-  }, [shown, size.width, size.height, cacheKey, focus, hops]);
+  }, [shown, size.width, size.height, cacheKey, focus, hops, group]);
 
   const nodeById = useMemo(
     () => new Map(positions.map((p) => [p.id, p])),
@@ -392,7 +454,18 @@ export function GraphView() {
 
 
   return (
-    <div ref={boxRef} className="relative min-h-0 flex-1 overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <FilterBar
+        groups={groups}
+        group={group}
+        onGroup={(v) => setGroup(v as TypeGroup)}
+        groupDot={(v) =>
+          v === "all"
+            ? undefined
+            : GROUP_COLOR[v as Exclude<TypeGroup, "all">]
+        }
+      />
+      <div ref={boxRef} className="relative min-h-0 flex-1 overflow-hidden">
       {loading && (
         <div className="flex h-full flex-col items-center justify-center gap-2">
           <span className="text-caption text-muted-foreground">
@@ -449,12 +522,18 @@ export function GraphView() {
           </div>
           <button
             type="button"
-            onClick={() =>
+            onClick={() => {
+              openedFromGraph = {
+                notebook: currentId ?? "",
+                id: focus,
+                focus,
+                hops,
+              };
               openInReader({
                 type: meta.get(focus)!.kind === "note" ? "note" : "source",
                 id: focus,
-              })
-            }
+              });
+            }}
             className="rounded-md px-2 py-1 text-micro font-medium text-muted-foreground transition-colors hover:bg-surface hover:text-foreground"
           >
             Open
@@ -568,6 +647,12 @@ export function GraphView() {
                       setFocus(p.id === focus ? null : p.id);
                       return;
                     }
+                    openedFromGraph = {
+                      notebook: currentId ?? "",
+                      id: p.id,
+                      focus,
+                      hops,
+                    };
                     openInReader({
                       type: isNote ? "note" : "source",
                       id: p.id,
@@ -576,10 +661,25 @@ export function GraphView() {
                 >
                   {/* Notes are hollow, sources solid — the same distinction
                       the sidebar makes, carried by shape not a legend. */}
+                  {/* Colour is the type; hollow-vs-filled is still note
+                      -vs-source, so the two readings do not compete. */}
                   <circle
                     r={r}
-                    className={isNote ? "fill-background" : "fill-primary"}
-                    stroke="currentColor"
+                    fill={
+                      isNote
+                        ? "var(--background)"
+                        : GROUP_COLOR[
+                            groupOfNode(node.kind, node.sourceType) as Exclude<
+                              TypeGroup,
+                              "all"
+                            >
+                          ]
+                    }
+                    stroke={
+                      isNote
+                        ? GROUP_COLOR.notes
+                        : "color-mix(in srgb, var(--foreground) 45%, transparent)"
+                    }
                     strokeWidth={1.5 * glyph}
                   />
                   {labelled && (
@@ -634,7 +734,8 @@ export function GraphView() {
           />
         </div>
       )}
-      {hoverCard}
+        {hoverCard}
+      </div>
     </div>
   );
 }
