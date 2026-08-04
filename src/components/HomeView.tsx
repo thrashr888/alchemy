@@ -187,7 +187,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const homeSection = useStore((s) => s.homeSection);
   const homeView = useStore((s) => s.homeView);
   const homeQuery = useStore((s) => s.homeQuery);
-  const centerRef = useRef<HTMLDivElement>(null);
   // Shader must not mount under glass (rAF keeps running when display:none).
   const glassOn = useStore((s) => s.reading.glass);
 
@@ -230,21 +229,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [briefOpen, setBriefOpen] = useState(
     () => localStorage.getItem("homeBriefOpen") !== "0",
   );
-  // Collapsing a sidebar re-lays-out the center column, and WKWebView
-  // sometimes keeps the old paint for the region that just changed width —
-  // the grid/table toggle would be present, positioned, and hit-testable
-  // while simply not drawn. Nudging a compositing property forces the
-  // repaint. Cheap, and only on an actual layout change.
-  useEffect(() => {
-    const el = centerRef.current;
-    if (!el) return;
-    el.style.transform = "translateZ(0)";
-    const id = requestAnimationFrame(() => {
-      el.style.transform = "";
-    });
-    return () => cancelAnimationFrame(id);
-  }, [staffOpen, briefOpen, reportsOpen, homeSection, homeView]);
-
   const clampSplit = (pct: number) => Math.min(75, Math.max(15, pct));
   const clampStaffW = (w: number) => Math.min(440, Math.max(240, w));
   const [staffWidth, setStaffWidth] = useState(() =>
@@ -499,10 +483,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               <SidebarRail icon="staff" title="Show Staff" onClick={toggleStaff} />
             </div>
           )}
-          <div
-            ref={centerRef}
-            className="relative flex min-w-0 flex-1 flex-col overflow-hidden"
-          >
+          <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
             {/* The dither shader from the hero, as a banner behind the heading —
             it fades into the background before the notebook grid starts. */}
             {!glassOn && (

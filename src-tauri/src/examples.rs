@@ -463,10 +463,16 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
 /// Seed the example cast, then let the ordinary matcher file it.
 ///
 /// Cards whose name already exists are skipped, so this is idempotent across
-/// retries and never fights a card the user made themselves. After matching,
-/// the `name` proposals against these seeded cards are confirmed: we know
-/// they're right (the corpus was built to match), and an example that leaves
-/// a chore in the inbox isn't an example.
+/// retries and never fights a card the user made themselves.
+///
+/// What gets confirmed is the point. A name match is a guess, and blanket-
+/// confirming every one of them would hand a new user a lie: "Apple" is
+/// named in half the earnings corpus, so the Apple card would claim nine
+/// documents when one is Apple's report and eight are rivals mentioning it.
+/// So only the document whose TITLE carries the card's name is confirmed —
+/// that one really is about the thing — and the rest stay proposed. A fresh
+/// install therefore shows both halves of the mechanism: a card with its own
+/// documents, and a queue of guesses waiting on a human.
 async fn seed_registry_cards(db: &Db) -> anyhow::Result<()> {
     let existing = db.list_registry().await?;
     let mut seeded_ids: Vec<String> = Vec::new();
@@ -508,9 +514,17 @@ async fn seed_registry_cards(db: &Db) -> anyhow::Result<()> {
         let Some(mut card) = db.get_registry_card(&id).await? else {
             continue;
         };
+        let name = card.name.to_lowercase();
         let mut touched = false;
         for a in card.attachments.iter_mut() {
-            if a.status == "proposed" {
+            if a.status != "proposed" {
+                continue;
+            }
+            let titled_for_it = match db.get_source(&a.source_id).await {
+                Ok(Some(src)) => src.title.to_lowercase().contains(&name),
+                _ => false,
+            };
+            if titled_for_it {
                 a.status = "confirmed".into();
                 touched = true;
             }
@@ -520,6 +534,10 @@ async fn seed_registry_cards(db: &Db) -> anyhow::Result<()> {
             db.update_registry_card(&card).await?;
         }
     }
+    // Matching announced itself, but the confirm pass above runs after it —
+    // without this an already-open window keeps the pre-confirm snapshot and
+    // every seeded card reads "0 documents".
+    crate::commands::notify_changed("registry", None);
     Ok(())
 }
 

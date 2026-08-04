@@ -188,7 +188,15 @@ export function RegistrySection() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      {/* relative z-10, like the notebook shelf's scroller: Home paints a
+          256px-tall dither banner as an ABSOLUTE sibling behind the heading,
+          and without a stacking context of its own this column composites
+          under it. Only transparent controls lost that fight — the filter
+          input has an opaque background, the grid/table toggle is a hairline
+          border — which is why the toggle alone went invisible, and only
+          when a collapsed sidebar shortened the header enough to slide the
+          row up into the banner. */}
+      <div className="relative z-10 min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[960px] px-6 pb-10">
           <SuggestionStrip cards={suggested} onChanged={load} />
           {/* Unconditional, like the notebook shelf's: gating this on
@@ -971,7 +979,7 @@ function CardDetail({
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
+    <div className="relative z-10 min-h-0 flex-1 overflow-y-auto">
       {/* 960px to match the grid and the page header — at 760 the detail
           jumped left of everything else on Home. */}
       <div className="mx-auto w-full max-w-[960px] px-6 pb-10">
