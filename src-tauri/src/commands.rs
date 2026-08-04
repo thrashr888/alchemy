@@ -750,6 +750,21 @@ pub(crate) fn auto_notebook_icon(title: &str) -> String {
         ("map", &["map", "places", "city", "neighborhood"]),
         ("shopping-cart", &["shopping", "gift", "wishlist"]),
         ("users", &["family", "team", "people", "friends"]),
+        ("sailboat", &["boat", "sailing", "sail", "yacht", "marina"]),
+        ("bug", &["bug", "debug", "insect"]),
+        (
+            "drama",
+            &["theater", "theatre", "drama", "acting", "improv"],
+        ),
+        (
+            "shirt",
+            &["clothes", "clothing", "wardrobe", "fashion", "laundry"],
+        ),
+        ("command", &["mac", "macos", "apple"]),
+        ("monitor", &["computer", "pc", "desktop", "hardware"]),
+        ("flame", &["fire", "grill", "bbq", "barbecue", "smoker"]),
+        ("wand-sparkles", &["magic", "wizard", "fantasy", "spell"]),
+        ("clock", &["time", "clock", "hours", "timeline"]),
     ];
     let t = title.to_lowercase();
     // Whole-word matching, not substring — "autopick" must not hit "auto",
@@ -788,6 +803,10 @@ mod icon_tests {
         assert_eq!(pick("Household Budgeting"), "dollar-sign"); // budget-
         assert_eq!(pick("Rust projects"), "code");
         assert_eq!(pick("Real estate leads"), "home");
+        assert_eq!(pick("Boat 2027"), "sailboat");
+        assert_eq!(pick("Debugging the parser"), "bug"); // debug- prefix
+        assert_eq!(pick("Mac setup"), "command");
+        assert_eq!(pick("Fire pit ideas"), "flame");
         assert_eq!(pick("Untitled notebook"), "");
     }
 }
