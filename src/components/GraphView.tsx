@@ -75,6 +75,10 @@ export function GraphView() {
   const sources = useStore((s) => s.sources);
   const notes = useStore((s) => s.notes);
   const openInReader = useStore((s) => s.openInReader);
+  /** Whatever the reader last had open. Arriving at the graph from a
+   *  document should land on that document's neighbourhood, the way a local
+   *  graph does — the full picture is rarely the question you arrived with. */
+  const readerDoc = useStore((s) => s.reader.history[s.reader.index]);
   const { show: showCard, hide: hideCard, card: hoverCard } = useHoverCard("right");
   const [graph, setGraph] = useState<NotebookGraph | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
@@ -86,6 +90,12 @@ export function GraphView() {
    *  that appears carries the button that opens the document itself. */
   const [focus, setFocus] = useState<string | null>(null);
   const [hops, setHops] = useState(2);
+  /** Consumed once per arrival. The pane unmounts whenever the centre column
+   *  shows something else, so "mounted" IS "arrived" — and opening a
+   *  document from the graph and coming back re-focuses on that document,
+   *  which is the loop worth having. Cleared after firing so it never
+   *  overrides a focus the reader has since cleared by hand. */
+  const pendingArrival = useRef(true);
   const viewRef = useRef(view);
   viewRef.current = view;
   const commitViewRef = useRef<(v: { x: number; y: number; k: number }) => void>(
@@ -142,6 +152,14 @@ export function GraphView() {
       stale = true;
     };
   }, [currentId, cacheKey]);
+
+  useEffect(() => {
+    if (!pendingArrival.current || !graph) return;
+    pendingArrival.current = false;
+    if (readerDoc && graph.nodes.some((n) => n.id === readerDoc.id)) {
+      setFocus(readerDoc.id);
+    }
+  }, [graph, readerDoc]);
 
   // Come back to where this view was last left, not to the origin. Keyed
   // by focus too: the whole-notebook camera and a neighbourhood's camera are
@@ -541,7 +559,20 @@ export function GraphView() {
                     setHovered(null);
                     hideCard();
                   }}
-                  onClick={() => setFocus(p.id === focus ? null : p.id)}
+                  onClick={(e) => {
+                    // Plain click opens the document, the same as clicking it
+                    // anywhere else in the app; the graph does not get to
+                    // redefine what a click means. Cmd/Ctrl-click is the
+                    // graph-specific gesture.
+                    if (e.metaKey || e.ctrlKey) {
+                      setFocus(p.id === focus ? null : p.id);
+                      return;
+                    }
+                    openInReader({
+                      type: isNote ? "note" : "source",
+                      id: p.id,
+                    });
+                  }}
                 >
                   {/* Notes are hollow, sources solid — the same distinction
                       the sidebar makes, carried by shape not a legend. */}
@@ -570,7 +601,7 @@ export function GraphView() {
       )}
       {!focus && positions.length > 0 && (
         <div className="pointer-events-none absolute left-3 top-3 text-caption text-subtle-foreground">
-          Click a document to see just its neighbourhood
+          {NAV_HINT}
         </div>
       )}
       {positions.length > 0 && (
@@ -629,6 +660,13 @@ function ZoomButton({
     </button>
   );
 }
+
+/** Cmd on a Mac, Ctrl elsewhere — the app is macOS-first but the webview
+ *  runs both, and a hint naming the wrong key is worse than none. */
+const NAV_HINT =
+  typeof navigator !== "undefined" && /Mac/i.test(navigator.platform)
+    ? "Click to open · ⌘-click to see just its neighbourhood"
+    : "Click to open · Ctrl-click to see just its neighbourhood";
 
 /** Titles are long and the graph is not the place to read one in full. */
 function labelOf(title: string) {
