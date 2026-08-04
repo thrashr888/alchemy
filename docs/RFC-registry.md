@@ -192,6 +192,13 @@ only in a **Suggested** strip above the cast, with **Keep** and a dismiss.
   background, so a card you accept immediately acquires its documents rather
   than waiting for the next import.
 
+The Small role it runs on had no setting until now: it was Apple Foundation
+Models when the sidecar was present, else a fallthrough to the chat
+provider — so on a machine with a 65B chat model these short structured jobs
+were being answered by it. `AiConfig.small_model` (Settings → Models → Small
+model) points the role at a local Ollama model instead; `gemma4:12b-mlx`
+answers this prompt well and in seconds. Empty keeps the old behaviour.
+
 The pass is also available on demand (`suggest_cards_now`, the Registry's
 "Suggest cards" action): waiting for a background sweep is a poor way to
 find out whether the suggester works, for a user as much as for a developer.

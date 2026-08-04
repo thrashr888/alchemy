@@ -50,6 +50,14 @@ pub struct AiConfig {
     pub embedder: String,
     pub base_url: String,
     pub chat_model: String,
+    /// Ollama model answering the Small role — gists, tags, Weave verdicts,
+    /// registry suggestions. Empty keeps the previous behaviour: Apple
+    /// Foundation Models when the sidecar is available, otherwise the chat
+    /// provider. A local 8–12B here is usually the right call: the Small
+    /// role is high-volume and its jobs are short and structured, so paying
+    /// chat-model latency for them is waste.
+    #[serde(default)]
+    pub small_model: String,
     pub embed_model: String,
     /// Vision model used to OCR image sources (empty disables OCR).
     #[serde(default)]
@@ -302,6 +310,7 @@ impl Default for AiConfig {
             embedder: default_provider(),
             base_url: "http://localhost:11434".to_string(),
             chat_model: "gpt-oss:120b".to_string(),
+            small_model: String::new(),
             embed_model: "nomic-embed-text:latest".to_string(),
             // OCR is opt-in: pick a vision model in Settings to enable it.
             vision_model: String::new(),
@@ -431,15 +440,23 @@ impl Ai {
         } else {
             Embedder::Ollama(Ollama::new(ollama_config(&config)))
         };
-        // Small-role rung: the FM sidecar when the host found the binary.
-        // Availability (macOS version, Apple Intelligence state) is probed
-        // lazily on first use; unavailable probes make chat_role fall
-        // through, so constructing the engine here is always safe.
-        let small = runtime
-            .fm_sidecar
-            .as_ref()
-            .filter(|p| p.exists())
-            .map(|p| ChatEngine::FoundationModels(FmEngine::new(p.clone())));
+        // Small-role rung. An explicitly configured Ollama model wins: it is
+        // a deliberate choice, where the FM sidecar is a host capability we
+        // merely detected. Otherwise the sidecar when the host found the
+        // binary — availability (macOS version, Apple Intelligence state) is
+        // probed lazily on first use, and unavailable probes make chat_role
+        // fall through, so constructing the engine here is always safe.
+        let small = if !config.small_model.trim().is_empty() {
+            let mut oc = ollama_config(&config);
+            oc.chat_model = config.small_model.trim().to_string();
+            Some(ChatEngine::Ollama(Ollama::new(oc)))
+        } else {
+            runtime
+                .fm_sidecar
+                .as_ref()
+                .filter(|p| p.exists())
+                .map(|p| ChatEngine::FoundationModels(FmEngine::new(p.clone())))
+        };
         let router = Router::new(chat, embedder, small, generate);
         let ollama = Ollama::new(ollama_config(&config));
         Self {
@@ -517,13 +534,17 @@ impl Ai {
             return engine.chat(messages).await;
         }
         if self.router.has_small() && role == Role::Small {
-            if let ChatEngine::FoundationModels(fm) = engine {
-                if fm.available().await {
-                    match engine.chat(messages).await {
-                        Ok(out) => return Ok(out),
-                        Err(err) => {
-                            eprintln!("small-role engine failed, falling through: {err:#}");
-                        }
+            // FM is capability-gated (it may not be usable on this host);
+            // an explicitly configured model is simply tried.
+            let usable = match engine {
+                ChatEngine::FoundationModels(fm) => fm.available().await,
+                _ => true,
+            };
+            if usable {
+                match engine.chat(messages).await {
+                    Ok(out) => return Ok(out),
+                    Err(err) => {
+                        eprintln!("small-role engine failed, falling through: {err:#}");
                     }
                 }
             }

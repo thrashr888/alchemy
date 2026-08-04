@@ -669,6 +669,20 @@ export function ModelsTab({
                 )}
               </div>
             </Field>
+
+            <Field
+              label="Small model"
+              hint="Answers the quick background jobs — source gists, auto-tags, Weave verdicts, registry suggestions. These are short and constant, so a local 8–12B here is faster and cheaper than paying chat-model latency for them. Empty uses Apple Foundation Models when this Mac offers them, otherwise your chat provider."
+            >
+              <Input
+                aria-label="Small model"
+                value={draft.smallModel}
+                onChange={(e) =>
+                  setDraft({ ...draft, smallModel: e.target.value })
+                }
+                placeholder="gemma4:12b-mlx · leave empty for on-device"
+              />
+            </Field>
           </div>
         )}
       </div>

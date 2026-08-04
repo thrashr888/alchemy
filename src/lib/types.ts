@@ -399,6 +399,10 @@ export interface AiConfig {
   embedder: string;
   baseUrl: string;
   chatModel: string;
+  /** Ollama model for the Small role (gists, tags, Weave verdicts, registry
+   *  suggestions). Empty = Apple Foundation Models when available, else the
+   *  chat provider. */
+  smallModel: string;
   embedModel: string;
   visionModel: string;
   openaiBaseUrl: string;
