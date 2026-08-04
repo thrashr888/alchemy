@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { Button, Input, Modal, useConfirm } from "../ui";
 import { Field } from "./SettingsTabs";
+import { OllamaModelPicker } from "./OllamaModelPicker";
 import { cn } from "@/lib/utils";
 import type { AiConfig, ProviderEntry } from "@/lib/types";
 import {
@@ -134,15 +135,12 @@ export function ModelsTab({
   draft,
   setDraft,
   commit,
-  models,
 }: {
   draft: AiConfig;
   setDraft: (c: AiConfig) => void;
   /** Persist immediately (first-run doors, wizard adds) — decisive actions
    *  shouldn't depend on finding the Save button. */
   commit: (c: AiConfig) => void;
-  /** Ollama's local model list (for the local-server editor). */
-  models: string[];
 }) {
   const [probes, setProbes] = useState<Record<string, ProviderProbe>>(() => ({
     ...statusCache.probes,
@@ -360,7 +358,6 @@ export function ModelsTab({
             draft={draft}
             commit={commit}
             clis={clis}
-            models={models}
             editId={wizard.editId}
             onClose={() => setWizard(null)}
           />
@@ -611,13 +608,12 @@ export function ModelsTab({
                   <option value="ollama">Ollama model</option>
                 </select>
                 {draft.embedder === "ollama" && (
-                  <Input
-                    aria-label="Embedding model"
+                  <OllamaModelPicker
+                    label="Embedding model"
                     value={draft.embedModel}
-                    onChange={(e) =>
-                      setDraft({ ...draft, embedModel: e.target.value })
-                    }
+                    onChange={(v) => setDraft({ ...draft, embedModel: v })}
                     placeholder="nomic-embed-text"
+                    filter={(m) => /embed|bge|minilm|gte|e5/i.test(m)}
                   />
                 )}
                 <div className="flex items-center gap-2 pt-0.5">
@@ -655,13 +651,11 @@ export function ModelsTab({
                   <option value="gateway">Gateway model</option>
                 </select>
                 {draft.visionProvider === "ollama" && (
-                  <Input
-                    aria-label="Vision model"
+                  <OllamaModelPicker
+                    label="Vision model"
                     value={draft.visionModel}
-                    onChange={(e) =>
-                      setDraft({ ...draft, visionModel: e.target.value })
-                    }
-                    placeholder="glm-ocr · deepseek-ocr · gemma4:12b-mlx"
+                    onChange={(v) => setDraft({ ...draft, visionModel: v })}
+                    placeholder="deepseek-ocr"
                   />
                 )}
                 {draft.visionProvider === "gateway" && (
@@ -672,15 +666,14 @@ export function ModelsTab({
 
             <Field
               label="Small model"
-              hint="Answers the quick background jobs — source gists, auto-tags, Weave verdicts, registry suggestions. These are short and constant, so a local 8–12B here is faster and cheaper than paying chat-model latency for them. Empty uses Apple Foundation Models when this Mac offers them, otherwise your chat provider."
+              hint="Quick background jobs: gists, tags, suggestions. A local 8–12B beats paying chat-model latency."
             >
-              <Input
-                aria-label="Small model"
+              <OllamaModelPicker
+                label="Small model"
                 value={draft.smallModel}
-                onChange={(e) =>
-                  setDraft({ ...draft, smallModel: e.target.value })
-                }
-                placeholder="gemma4:12b-mlx · leave empty for on-device"
+                onChange={(v) => setDraft({ ...draft, smallModel: v })}
+                emptyLabel="On-device (Apple) or chat model"
+                placeholder="gemma4:12b-mlx"
               />
             </Field>
           </div>
@@ -692,7 +685,6 @@ export function ModelsTab({
           draft={draft}
           commit={commit}
           clis={clis}
-          models={models}
           editId={wizard.editId}
           onClose={() => setWizard(null)}
         />
@@ -799,14 +791,12 @@ function ProviderWizard({
   draft,
   commit,
   clis,
-  models,
   editId,
   onClose,
 }: {
   draft: AiConfig;
   commit: (c: AiConfig) => void;
   clis: CliStatus[];
-  models: string[];
   editId?: string;
   onClose: () => void;
 }) {
@@ -1112,21 +1102,15 @@ function ProviderWizard({
             />
           </Field>
           <Field label="Model">
-            {models.length > 0 ? (
-              <Select
-                ariaLabel="Local model"
-                value={localModel}
-                onChange={setLocalModel}
-                options={models}
-              />
-            ) : (
-              <Input
-                aria-label="Local model"
-                value={localModel}
-                onChange={(e) => setLocalModel(e.target.value)}
-                placeholder="gpt-oss:120b"
-              />
-            )}
+            {/* Shared picker so every Ollama field behaves alike — and so a
+                model pulled after this dialog opened is still reachable
+                through Custom…, which the bare dropdown had no room for. */}
+            <OllamaModelPicker
+              label="Local model"
+              value={localModel}
+              onChange={setLocalModel}
+              placeholder="gpt-oss:120b"
+            />
           </Field>
           <div className="flex items-center justify-between pt-1">
             <Button variant="ghost" onClick={() => (editing ? onClose() : setStep("door"))}>

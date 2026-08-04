@@ -190,8 +190,9 @@ static SUGGESTED: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
     std::sync::Mutex::new(None);
 
 /// Cards proposed per notebook. A first look at a notebook should read as a
-/// short list you can rule on, not an inbox.
-const MAX_SUGGESTIONS: usize = 6;
+/// short list you can rule on, not an inbox — but low enough that the model
+/// starts triaging for you is worse than a couple of extra rows to dismiss.
+const MAX_SUGGESTIONS: usize = 8;
 /// Gists concatenated into the one prompt — a wide view of the notebook for
 /// a single Small call, instead of one call per source.
 const MAX_GIST_ROWS: usize = 40;
@@ -387,10 +388,18 @@ fn build_suggest_messages(material: &str) -> Vec<crate::ai::ChatTurn> {
                  - provider: a company, practitioner, or service\n\
                  - project: a piece of work with a beginning and an end\n\
                  - dependency: a library, framework, or service relied on\n\n\
-                 Name it exactly as the documents name it, copied verbatim. Only name something \
-                 that appears in SEVERAL documents or is clearly the subject of one. Prefer \
-                 specific proper names over categories: \"Ducati Monster\" not \"motorcycle\". \
-                 If nothing recurs, reply with nothing at all.",
+                 Name it exactly as the documents name it, copied verbatim. Prefer specific \
+                 proper names over categories: \"Ducati Monster\" not \"motorcycle\".\n\n\
+                 The test is NOT how often it is mentioned. It is whether this is something \
+                 the person will keep accumulating paperwork about. Include it even when it \
+                 appears only once:\n\
+                 - every insurance policy, warranty, or service contract, named as the \
+                 documents name it\n\
+                 - every company or practitioner they pay, hire, moor at, or buy from\n\
+                 - every substantial thing they own\n\n\
+                 Leave out anything that is not theirs to track: a company named only as \
+                 context or comparison, a person merely quoted, a place merely passed \
+                 through. If there is genuinely nothing, reply with nothing at all.",
                 REGISTRY_KINDS.join(", ")
             ),
         },
