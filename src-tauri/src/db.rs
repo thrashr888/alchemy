@@ -865,6 +865,20 @@ impl Db {
         Ok(sources)
     }
 
+    /// Every source in a notebook WITH its text, in one scan.
+    ///
+    /// `source_content` filter-scans the whole sources table per call, which
+    /// is fine for opening one document and quietly disastrous for anything
+    /// that wants them all: the link graph called it once per source and
+    /// spent seconds doing hundreds of sequential scans of the same table.
+    /// One scan, all the rows.
+    pub async fn sources_with_content(&self, notebook_id: &str) -> Result<Vec<Source>> {
+        let filter = format!("notebook_id = '{}'", esc(notebook_id));
+        let mut sources = self.query_sources(Some(&filter), true).await?;
+        sources.sort_by_key(|s| s.created_at);
+        Ok(sources)
+    }
+
     /// Every folder source across all notebooks (cheap — folders carry no
     /// content). Drives the periodic auto-refresh rescan.
     pub async fn all_folder_sources(&self) -> Result<Vec<Source>> {

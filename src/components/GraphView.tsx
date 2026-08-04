@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
-import { layout } from "@/lib/forceLayout";
+import { createLayout, layout } from "@/lib/forceLayout";
 import { placeLabels } from "@/lib/graphLabels";
 import type { NotebookGraph } from "@/lib/types";
 import { EmptyState, useHoverCard } from "./ui";
 import { sourceHoverData } from "./SourcesPanel";
 import { relativeTime } from "@/lib/utils";
-import { Share2 } from "lucide-react";
+import { Crosshair, Minus, Plus, Share2 } from "lucide-react";
 
 /**
  * The notebook as a link graph (docs/RFC-document-surface.md phase 5):
@@ -19,6 +19,15 @@ import { Share2 } from "lucide-react";
  * Rendered as SVG rather than canvas: a few hundred nodes is nothing for the
  * DOM, and it gets hit-testing, focus, and the theme's own colors for free.
  */
+
+/** Built graphs and their settled layouts, per notebook, for this app run.
+ *  Re-entering the graph should be instant — the work was already done, and
+ *  redoing it from scratch on every visit is what made the pane feel like it
+ *  was thinking. Keyed by notebook + document set, so it survives navigation
+ *  but never serves a stale picture. Same lifetime and reasoning as the
+ *  gallery's thumbMemory. */
+const graphCache = new Map<string, NotebookGraph>();
+const layoutCache = new Map<string, ReturnType<typeof layout>>();
 
 /** Zoom limits. Out far enough to see a 400-node notebook whole, in far
  *  enough to read a label in the middle of a dense cluster. */
@@ -38,6 +47,7 @@ export function GraphView() {
   const [hovered, setHovered] = useState<string | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [view, setView] = useState({ x: 0, y: 0, k: 1 });
+  const [progress, setProgress] = useState(0);
   const boxRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   /** Set while dragging; null otherwise. Held in a ref so the move handler
@@ -60,17 +70,27 @@ export function GraphView() {
     [sources, notes],
   );
 
+  const cacheKey = `${currentId}:${docKey}`;
   useEffect(() => {
     if (!currentId) return;
+    const hit = graphCache.get(cacheKey);
+    if (hit) {
+      setGraph(hit);
+      return;
+    }
     let stale = false;
+    setGraph(null);
     void api
       .notebookGraph(currentId)
-      .then((g) => !stale && setGraph(g))
+      .then((g) => {
+        graphCache.set(cacheKey, g);
+        if (!stale) setGraph(g);
+      })
       .catch(() => !stale && setGraph({ nodes: [], edges: [] }));
     return () => {
       stale = true;
     };
-  }, [currentId, docKey]);
+  }, [currentId, cacheKey]);
 
   // A new notebook is a new picture — don't inherit the last one's pan.
   useEffect(() => setView({ x: 0, y: 0, k: 1 }), [currentId]);
@@ -95,21 +115,51 @@ export function GraphView() {
   // just freezes, which is exactly what it looks like when nothing is
   // happening at all.
   const [positions, setPositions] = useState<ReturnType<typeof layout>>([]);
+
+  /** Shown for every layout pass, not just a slow one — watching the graph
+   *  settle is honest feedback about what the pane is doing, and the bar is
+   *  a real fraction rather than a spinner pretending. */
+  const loading = !graph || (graph.nodes.length > 0 && positions.length === 0);
   useEffect(() => {
     if (!graph || !size.width || !size.height) {
       setPositions([]);
       return;
     }
+    const key = `${cacheKey}:${size.width}x${size.height}`;
+    const hit = layoutCache.get(key);
+    if (hit) {
+      setPositions(hit);
+      return;
+    }
+    // Driven a slice per frame rather than in one call: the fraction below
+    // is real, and the window keeps answering the pointer while it settles.
     let stale = false;
-    const id = requestAnimationFrame(() => {
-      const next = layout(graph.nodes, graph.edges, size.width, size.height);
-      if (!stale) setPositions(next);
-    });
+    let frame = 0;
+    const run = createLayout(graph.nodes, graph.edges, size.width, size.height);
+    setProgress(0);
+    const pump = () => {
+      if (stale) return;
+      // A tick budget rather than a time budget — the cost per tick is
+      // stable for a given graph, and a wall-clock budget would make the
+      // layout itself depend on how busy the machine happened to be, which
+      // costs determinism for nothing.
+      const ticksPerFrame = Math.max(1, Math.round(4000 / graph.nodes.length));
+      const done = run.step(ticksPerFrame);
+      setProgress(run.progress());
+      if (done) {
+        const next = run.result();
+        layoutCache.set(key, next);
+        setPositions(next);
+        return;
+      }
+      frame = requestAnimationFrame(pump);
+    };
+    frame = requestAnimationFrame(pump);
     return () => {
       stale = true;
-      cancelAnimationFrame(id);
+      cancelAnimationFrame(frame);
     };
-  }, [graph, size.width, size.height]);
+  }, [graph, size.width, size.height, cacheKey]);
 
   const nodeById = useMemo(
     () => new Map(positions.map((p) => [p.id, p])),
@@ -212,6 +262,7 @@ export function GraphView() {
   const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     // Left button only, and never start a pan on a node — that is a click.
     if (e.button !== 0 || (e.target as Element).closest("[data-node]")) return;
+    e.preventDefault();
     panning.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
     svgRef.current?.setPointerCapture(e.pointerId);
   };
@@ -225,17 +276,38 @@ export function GraphView() {
     svgRef.current?.releasePointerCapture?.(e.pointerId);
   };
 
+  /** Buttons zoom about the middle of the pane, the way the wheel zooms
+   *  about the pointer — otherwise the view lurches sideways on every tap. */
+  const zoomBy = (factor: number) =>
+    setView((v) => {
+      const k = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, v.k * factor));
+      if (k === v.k) return v;
+      const cx = size.width / 2;
+      const cy = size.height / 2;
+      const scale = k / v.k;
+      return { k, x: cx - (cx - v.x) * scale, y: cy - (cy - v.y) * scale };
+    });
+
   const showAllLabels = view.k >= ALL_LABELS_ZOOM;
 
   return (
     <div ref={boxRef} className="relative min-h-0 flex-1 overflow-hidden">
-      {(!graph || (graph.nodes.length > 0 && positions.length === 0)) && (
-        <div className="flex h-full items-center justify-center">
+      {loading && (
+        <div className="flex h-full flex-col items-center justify-center gap-2">
           <span className="text-caption text-muted-foreground">
             {!graph
               ? "Reading the notebook…"
               : `Laying out ${graph.nodes.length} documents…`}
           </span>
+          <div className="h-1 w-48 overflow-hidden rounded-full bg-surface-2">
+            <div
+              className="h-full rounded-full bg-primary transition-[width] duration-150"
+              // Reading the notebook has no measurable fraction, so it shows
+              // a fixed sliver rather than a fake crawl; the layout half is
+              // the real number.
+              style={{ width: `${graph ? Math.round(progress * 100) : 8}%` }}
+            />
+          </div>
         </div>
       )}
       {graph && graph.nodes.length === 0 && (
@@ -250,7 +322,10 @@ export function GraphView() {
           ref={svgRef}
           width={size.width}
           height={size.height}
-          className="touch-none text-muted-foreground"
+          // select-none: dragging to pan otherwise sweeps a text selection
+          // across every SVG <text> in the graph, painting the pane in the
+          // theme's selection colour with darker blocks over each label.
+          className="touch-none select-none text-muted-foreground"
           style={{ cursor: panning.current ? "grabbing" : "grab" }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
@@ -355,8 +430,60 @@ export function GraphView() {
           </g>
         </svg>
       )}
+      {positions.length > 0 && (
+        <div className="absolute bottom-3 right-3 flex items-center gap-0.5 rounded-lg border border-border bg-surface-2/90 p-0.5 backdrop-blur">
+          <ZoomButton
+            label="Zoom out"
+            onClick={() => zoomBy(1 / 1.3)}
+            icon={<Minus className="h-3.5 w-3.5" />}
+          />
+          <button
+            type="button"
+            onClick={() => zoomBy(1 / view.k)}
+            title="Zoom to 100%"
+            className="rounded-md px-2 py-1 text-micro font-medium tabular-nums text-muted-foreground transition-colors hover:text-foreground"
+          >
+            {Math.round(view.k * 100)}%
+          </button>
+          <ZoomButton
+            label="Zoom in"
+            onClick={() => zoomBy(1.3)}
+            icon={<Plus className="h-3.5 w-3.5" />}
+          />
+          <span aria-hidden className="mx-0.5 h-3.5 w-px bg-border-strong" />
+          {/* Pan far enough and the graph is off-screen with no landmark to
+              steer back by — this is the way home. */}
+          <ZoomButton
+            label="Re-center"
+            onClick={() => setView({ x: 0, y: 0, k: 1 })}
+            icon={<Crosshair className="h-3.5 w-3.5" />}
+          />
+        </div>
+      )}
       {hoverCard}
     </div>
+  );
+}
+
+function ZoomButton({
+  label,
+  onClick,
+  icon,
+}: {
+  label: string;
+  onClick: () => void;
+  icon: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-surface hover:text-foreground"
+    >
+      {icon}
+    </button>
   );
 }
 

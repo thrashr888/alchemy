@@ -7029,16 +7029,17 @@ pub async fn notebook_graph(
     notebook_id: String,
 ) -> Result<crate::graph::NotebookGraph, String> {
     let mut docs: Vec<crate::graph::GraphDoc> = Vec::new();
-    for s in e(state.db.list_sources(&notebook_id).await)? {
-        // list_sources strips content; the graph is built from the text.
-        let content = e(state.db.source_content(&s.id).await)?;
+    // One scan for every source AND its text. Fetching content per source
+    // meant one full table scan each — hundreds of them, sequentially, which
+    // is where the graph pane's multi-second open actually went.
+    for s in e(state.db.sources_with_content(&notebook_id).await)? {
         docs.push(crate::graph::GraphDoc {
             id: s.id,
             kind: "source".into(),
             title: s.title,
             source_type: s.source_type,
             url: s.url,
-            content,
+            content: s.content,
         });
     }
     for n in e(state.db.list_notes(&notebook_id).await)? {

@@ -51,9 +51,25 @@ const DAMPING = 0.82;
  *  nearly coincident would otherwise fling itself off the canvas. */
 const MAX_STEP = 24;
 
+/** A simulation you drive yourself, a slice at a time.
+ *
+ *  Running all the ticks in one call blocks the main thread for as long as
+ *  it takes, which on a few hundred nodes is long enough that no progress
+ *  can be drawn and the window looks hung. Stepping lets the caller spend a
+ *  few milliseconds per frame, paint a real fraction, and stay responsive.
+ */
+export interface LayoutRun {
+  /** Advance up to `ticks`. Returns true once the simulation is finished. */
+  step: (ticks: number) => boolean;
+  /** 0..1 — genuine, not an animation. */
+  progress: () => number;
+  /** Final positions, fitted to the box. Call after step returns true. */
+  result: () => LayoutNode[];
+}
+
 /**
- * Lay out a graph inside a `width` x `height` box.
- * Returns nodes with final positions, already fitted to the box.
+ * Lay out a graph inside a `width` x `height` box, all at once.
+ * Convenience wrapper over `createLayout` for callers that can block.
  */
 export function layout(
   nodes: { id: string; degree: number }[],
@@ -61,7 +77,21 @@ export function layout(
   width: number,
   height: number,
 ): LayoutNode[] {
-  if (nodes.length === 0) return [];
+  const run = createLayout(nodes, edges, width, height);
+  while (!run.step(Number.MAX_SAFE_INTEGER));
+  return run.result();
+}
+
+/** The same simulation, driven a slice at a time. */
+export function createLayout(
+  nodes: { id: string; degree: number }[],
+  edges: LayoutEdge[],
+  width: number,
+  height: number,
+): LayoutRun {
+  if (nodes.length === 0) {
+    return { step: () => true, progress: () => 1, result: () => [] };
+  }
   const cx = width / 2;
   const cy = height / 2;
 
@@ -77,7 +107,9 @@ export function layout(
       y: cy + Math.sin(angle) * radius,
     };
   });
-  if (nodes.length === 1) return placed;
+  if (nodes.length === 1) {
+    return { step: () => true, progress: () => 1, result: () => placed };
+  }
 
   const index = new Map(placed.map((n, i) => [n.id, i]));
   const vx = new Float64Array(placed.length);
@@ -90,67 +122,77 @@ export function layout(
     MIN_TICKS,
     Math.min(TICKS, Math.round(WORK_BUDGET / (placed.length * placed.length))),
   );
-  for (let tick = 0; tick < ticks; tick++) {
-    // Cooling: large rearrangements early, fine settling late.
-    const cool = 1 - tick / ticks;
+  let tick = 0;
 
-    for (let i = 0; i < placed.length; i++) {
-      let fx = 0;
-      let fy = 0;
+  const runTicks = (budget: number) => {
+    const end = Math.min(ticks, tick + budget);
+    for (; tick < end; tick++) {
+      // Cooling: large rearrangements early, fine settling late.
+      const cool = 1 - tick / ticks;
 
-      // Repulsion, every pair.
-      for (let j = 0; j < placed.length; j++) {
-        if (i === j) continue;
-        let dx = placed[i].x - placed[j].x;
-        let dy = placed[i].y - placed[j].y;
-        let d2 = dx * dx + dy * dy;
-        if (d2 < 0.01) {
-          // Coincident: nudge apart along a stable, index-derived direction
-          // rather than at random, to keep the layout reproducible.
-          dx = (i % 2 === 0 ? 1 : -1) * 0.1;
-          dy = (j % 2 === 0 ? 1 : -1) * 0.1;
-          d2 = dx * dx + dy * dy;
+      for (let i = 0; i < placed.length; i++) {
+        let fx = 0;
+        let fy = 0;
+
+        // Repulsion, every pair.
+        for (let j = 0; j < placed.length; j++) {
+          if (i === j) continue;
+          let dx = placed[i].x - placed[j].x;
+          let dy = placed[i].y - placed[j].y;
+          let d2 = dx * dx + dy * dy;
+          if (d2 < 0.01) {
+            // Coincident: nudge apart along a stable, index-derived direction
+            // rather than at random, to keep the layout reproducible.
+            dx = (i % 2 === 0 ? 1 : -1) * 0.1;
+            dy = (j % 2 === 0 ? 1 : -1) * 0.1;
+            d2 = dx * dx + dy * dy;
+          }
+          const force = REPULSION / d2;
+          const d = Math.sqrt(d2);
+          fx += (dx / d) * force;
+          fy += (dy / d) * force;
         }
-        const force = REPULSION / d2;
-        const d = Math.sqrt(d2);
-        fx += (dx / d) * force;
-        fy += (dy / d) * force;
+
+        // Centering.
+        fx += (cx - placed[i].x) * CENTERING;
+        fy += (cy - placed[i].y) * CENTERING;
+
+        vx[i] = (vx[i] + fx / mass[i]) * DAMPING;
+        vy[i] = (vy[i] + fy / mass[i]) * DAMPING;
       }
 
-      // Centering.
-      fx += (cx - placed[i].x) * CENTERING;
-      fy += (cy - placed[i].y) * CENTERING;
+      // Attraction along edges, applied to both ends.
+      for (const e of edges) {
+        const a = index.get(e.from);
+        const b = index.get(e.to);
+        if (a === undefined || b === undefined || a === b) continue;
+        const dx = placed[b].x - placed[a].x;
+        const dy = placed[b].y - placed[a].y;
+        const d = Math.sqrt(dx * dx + dy * dy) || 1;
+        const force = (d - IDEAL_EDGE) * ATTRACTION * d;
+        const ux = (dx / d) * force;
+        const uy = (dy / d) * force;
+        vx[a] += ux / mass[a];
+        vy[a] += uy / mass[a];
+        vx[b] -= ux / mass[b];
+        vy[b] -= uy / mass[b];
+      }
 
-      vx[i] = (vx[i] + fx / mass[i]) * DAMPING;
-      vy[i] = (vy[i] + fy / mass[i]) * DAMPING;
+      for (let i = 0; i < placed.length; i++) {
+        const step = Math.hypot(vx[i], vy[i]) * cool;
+        const scale = step > MAX_STEP ? MAX_STEP / step : 1;
+        placed[i].x += vx[i] * cool * scale;
+        placed[i].y += vy[i] * cool * scale;
+      }
     }
+    return tick >= ticks;
+  };
 
-    // Attraction along edges, applied to both ends.
-    for (const e of edges) {
-      const a = index.get(e.from);
-      const b = index.get(e.to);
-      if (a === undefined || b === undefined || a === b) continue;
-      const dx = placed[b].x - placed[a].x;
-      const dy = placed[b].y - placed[a].y;
-      const d = Math.sqrt(dx * dx + dy * dy) || 1;
-      const force = (d - IDEAL_EDGE) * ATTRACTION * d;
-      const ux = (dx / d) * force;
-      const uy = (dy / d) * force;
-      vx[a] += ux / mass[a];
-      vy[a] += uy / mass[a];
-      vx[b] -= ux / mass[b];
-      vy[b] -= uy / mass[b];
-    }
-
-    for (let i = 0; i < placed.length; i++) {
-      const step = Math.hypot(vx[i], vy[i]) * cool;
-      const scale = step > MAX_STEP ? MAX_STEP / step : 1;
-      placed[i].x += vx[i] * cool * scale;
-      placed[i].y += vy[i] * cool * scale;
-    }
-  }
-
-  return fit(placed, width, height);
+  return {
+    step: runTicks,
+    progress: () => tick / ticks,
+    result: () => fit(placed, width, height),
+  };
 }
 
 /** Scale and translate the settled layout to fill the box with a margin. */
