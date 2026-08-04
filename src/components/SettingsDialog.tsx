@@ -335,12 +335,15 @@ function GeneralTab() {
   const [update, setUpdate] = useState<UpdateFlow | null>(null);
   const [installing, setInstalling] = useState(false);
 
-  // "Check for Updates…" from the app menu lands here with the flag set.
+  // "Check for Updates…" from the app menu lands here with the flag set;
+  // the quiet startup check leaves `updateAvailable` behind — either way,
+  // this tab should already be showing the Install button on arrival.
   const pendingUpdateCheck = useStore((s) => s.pendingUpdateCheck);
   useEffect(() => {
     // Read the live value: StrictMode replays mount effects with the same
     // captured snapshot, so checking the prop would double-run the check.
-    if (useStore.getState().pendingUpdateCheck) {
+    const s = useStore.getState();
+    if (s.pendingUpdateCheck || s.updateAvailable) {
       useStore.setState({ pendingUpdateCheck: false });
       void onCheck();
     }

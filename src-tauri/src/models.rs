@@ -12,8 +12,13 @@ pub struct Notebook {
     pub updated_at: i64,
     #[serde(default)]
     pub color: String,
-    /// "" (active) | "archived". Archived notebooks are hidden from the
-    /// main grid but keep all their data and can be unarchived.
+    /// Lucide icon name ("" → the default book). Auto-picked from the title
+    /// at creation; user-set from the rename dialog thereafter.
+    #[serde(default)]
+    pub icon: String,
+    /// "" (active) | "archived" | "system". Archived notebooks are hidden
+    /// from the main grid but keep all their data and can be unarchived;
+    /// system notebooks (Briefs) never appear on the shelf at all.
     #[serde(default)]
     pub status: String,
     /// Populated on list queries; not stored on the row.

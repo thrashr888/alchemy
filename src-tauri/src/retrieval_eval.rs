@@ -777,6 +777,7 @@ async fn eval_router() {
             created_at: 0,
             updated_at: 0,
             color: String::new(),
+            icon: String::new(),
             status: String::new(),
             source_count: 0,
             note_count: 0,

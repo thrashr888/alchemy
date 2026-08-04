@@ -38,6 +38,7 @@ async fn rag_round_trip() {
         created_at: now(),
         updated_at: now(),
         color: "#eb5757".into(),
+        icon: String::new(),
         status: String::new(),
         source_count: 0,
         note_count: 0,

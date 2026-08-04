@@ -201,6 +201,7 @@ pub fn run() {
             commands::create_notebook,
             commands::rename_notebook,
             commands::set_notebook_color,
+            commands::set_notebook_icon,
             commands::set_notebook_status,
             commands::delete_notebook,
             commands::list_sources,

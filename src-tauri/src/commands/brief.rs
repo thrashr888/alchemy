@@ -26,7 +26,12 @@ async fn ensure_briefs_notebook(state: &AppState) -> Result<Notebook, String> {
         created_at: ts,
         updated_at: ts,
         color: color.to_string(),
-        status: String::new(),
+        icon: String::new(),
+        // "system": briefs land here behind the scenes — the notebook works
+        // like any other (Reader, search, OKF, MCP) but stays off the shelf,
+        // because a permanently source-less notebook in the grid reads as
+        // clutter, not a feature.
+        status: "system".into(),
         source_count: 0,
         note_count: 0,
         report_count: 0,
@@ -39,6 +44,19 @@ async fn ensure_briefs_notebook(state: &AppState) -> Result<Notebook, String> {
 /// the schedule is respected (the marker file means "offered already", so a
 /// deleted brief never resurrects).
 pub(crate) async fn ensure_default_brief(state: &AppState) {
+    // Self-healing upgrade, every pass (one cheap list): a Briefs notebook
+    // that is visible ("") or archived moves to "system". Visible was the
+    // old default and read as shelf clutter; archived is worse — the user
+    // hiding the clutter by archiving silently killed their brief, because
+    // the scheduler's background gate skips archived notebooks.
+    if let Ok(notebooks) = state.db.list_notebooks().await {
+        if let Some(nb) = notebooks
+            .iter()
+            .find(|n| n.title == BRIEFS_NOTEBOOK && n.status != "system")
+        {
+            let _ = state.db.set_notebook_status(&nb.id, "system").await;
+        }
+    }
     let marker = app_data_dir(state).join("brief-default-created");
     if marker.exists() {
         return;

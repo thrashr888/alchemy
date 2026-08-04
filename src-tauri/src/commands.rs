@@ -622,6 +622,7 @@ pub async fn create_notebook(
     };
     let nb = Notebook {
         id: new_id(),
+        icon: auto_notebook_icon(&title),
         title,
         created_at: ts,
         updated_at: ts,
@@ -633,6 +634,182 @@ pub async fn create_notebook(
     };
     e(state.db.create_notebook(&nb).await)?;
     Ok(nb)
+}
+
+/// Pick a relevant icon for a fresh notebook from its title — instant and
+/// deterministic (keyword table, no model call). "" means "no strong signal";
+/// the frontend renders its default book for that. Names are lucide icon ids
+/// and must exist in the frontend's `NOTEBOOK_ICONS` map.
+pub(crate) fn auto_notebook_icon(title: &str) -> String {
+    const TABLE: &[(&str, &[&str])] = &[
+        ("plane", &["travel", "trip", "flight", "vacation", "abroad"]),
+        (
+            "briefcase",
+            &["work", "job", "career", "interview", "hiring"],
+        ),
+        (
+            "dollar-sign",
+            &[
+                "finance", "money", "budget", "invest", "tax", "stock", "crypto",
+            ],
+        ),
+        (
+            "home",
+            &[
+                "house",
+                "home",
+                "apartment",
+                "mortgage",
+                "real estate",
+                "renovation",
+            ],
+        ),
+        (
+            "heart",
+            &["health", "medical", "doctor", "therapy", "wellness"],
+        ),
+        (
+            "dumbbell",
+            &["gym", "fitness", "workout", "training", "running"],
+        ),
+        (
+            "utensils",
+            &["food", "recipe", "cooking", "restaurant", "meal", "diet"],
+        ),
+        (
+            "music",
+            &["music", "song", "album", "band", "guitar", "piano"],
+        ),
+        ("film", &["movie", "film", "tv", "show", "cinema"]),
+        ("gamepad-2", &["game", "gaming"]),
+        (
+            "graduation-cap",
+            &[
+                "school", "course", "study", "class", "learning", "college", "exam",
+            ],
+        ),
+        (
+            "flask-conical",
+            &[
+                "science",
+                "research",
+                "experiment",
+                "lab",
+                "chemistry",
+                "physics",
+            ],
+        ),
+        (
+            "code",
+            &[
+                "code",
+                "coding",
+                "software",
+                "programming",
+                "rust",
+                "python",
+                "javascript",
+                "app",
+            ],
+        ),
+        ("car", &["car", "auto", "vehicle", "motorcycle"]),
+        (
+            "trees",
+            &[
+                "garden", "plant", "nature", "outdoor", "camping", "hike", "hiking",
+            ],
+        ),
+        ("baby", &["baby", "kids", "child", "parenting"]),
+        ("dog", &["dog", "puppy", "pet"]),
+        ("cat", &["cat", "kitten"]),
+        (
+            "wrench",
+            &["diy", "repair", "build", "maintenance", "tools"],
+        ),
+        ("scale", &["legal", "law", "contract", "court"]),
+        ("landmark", &["history", "politics", "government", "civic"]),
+        (
+            "globe",
+            &[
+                "world",
+                "geography",
+                "language",
+                "spanish",
+                "french",
+                "japanese",
+            ],
+        ),
+        ("palette", &["art", "design", "drawing", "painting"]),
+        ("newspaper", &["news", "press", "media"]),
+        ("rocket", &["startup", "launch", "space"]),
+        (
+            "calendar",
+            &["plan", "planning", "schedule", "event", "wedding"],
+        ),
+        ("book", &["reading", "book", "novel", "literature"]),
+        ("map", &["map", "places", "city", "neighborhood"]),
+        ("shopping-cart", &["shopping", "gift", "wishlist"]),
+        ("users", &["family", "team", "people", "friends"]),
+    ];
+    let t = title.to_lowercase();
+    // Whole-word matching, not substring — "autopick" must not hit "auto",
+    // "carpet" must not hit "car". Plurals and long-keyword extensions
+    // ("trips" → "trip", "camping trips" → "camping") still land.
+    let words: Vec<&str> = t
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let hit = |kw: &str| {
+        if kw.contains(' ') {
+            return t.contains(kw); // multi-word keywords match as phrases
+        }
+        words.iter().any(|w| {
+            *w == kw || w.strip_suffix('s') == Some(kw) || (kw.len() >= 5 && w.starts_with(kw))
+        })
+    };
+    for (icon, kws) in TABLE {
+        if kws.iter().any(|kw| hit(kw)) {
+            return (*icon).to_string();
+        }
+    }
+    String::new()
+}
+
+#[cfg(test)]
+mod icon_tests {
+    #[test]
+    fn auto_icon_matches_whole_words() {
+        use super::auto_notebook_icon as pick;
+        assert_eq!(pick("Camping Trips 2027"), "plane"); // "trips" → trip
+        assert_eq!(pick("Camping Gear"), "trees");
+        assert_eq!(pick("Icon autopick test"), ""); // "autopick" must NOT hit "auto"
+        assert_eq!(pick("Carpet samples"), ""); // "carpet" must NOT hit "car"
+        assert_eq!(pick("Car maintenance"), "car");
+        assert_eq!(pick("Household Budgeting"), "dollar-sign"); // budget-
+        assert_eq!(pick("Rust projects"), "code");
+        assert_eq!(pick("Real estate leads"), "home");
+        assert_eq!(pick("Untitled notebook"), "");
+    }
+}
+
+/// Set (or clear — "") the notebook's icon. Names are constrained to a slug
+/// shape rather than an allowlist so the frontend's curated set can grow
+/// without a lockstep backend change.
+#[tauri::command]
+pub async fn set_notebook_icon(
+    state: State<'_, AppState>,
+    id: String,
+    icon: String,
+) -> Result<(), String> {
+    let icon = icon.trim();
+    if icon.len() > 40
+        || !icon
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return Err("icon must be a lucide icon slug".into());
+    }
+    e(state.db.set_notebook_icon(&id, icon).await)
 }
 
 #[tauri::command]
@@ -5416,12 +5593,21 @@ pub async fn send_message(
     let (answer, kind, stats, cost_usd, model) = {
         let ai = state.ai.read().await.clone();
         let model = ai.active_chat_model();
+        // Agent-CLI engines narrate their work (booting, tool calls) through
+        // the same step trail the deep-research loop uses — a long silent
+        // spinner otherwise reads as a hang.
+        let app_for_steps = app.clone();
         let streamed = tokio::select! {
-            out = ai.chat_stream(&messages, |tok| {
+            out = ai.chat_stream_steps(&messages, |tok| {
                 partial_cb.lock().unwrap().push_str(tok);
                 let _ = app_for_cb.emit(
                     "chat://token",
                     TokenEvent { content: tok.to_string() },
+                );
+            }, |label| {
+                let _ = app_for_steps.emit(
+                    "chat://step",
+                    StepEvent { label: label.to_string() },
                 );
             }) => Some(out),
             _ = cancel.cancelled() => None,
@@ -7924,12 +8110,14 @@ async fn import_bundle(
         None => {
             let ts = now();
             let count = e(state.db.list_notebooks().await)?;
+            let icon = auto_notebook_icon(&title);
             let nb = Notebook {
                 id: new_id(),
                 title,
                 created_at: ts,
                 updated_at: ts,
                 color: NOTEBOOK_PALETTE[count.len() % NOTEBOOK_PALETTE.len()].to_string(),
+                icon,
                 status: String::new(),
                 source_count: 0,
                 note_count: 0,

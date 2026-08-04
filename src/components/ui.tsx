@@ -648,9 +648,22 @@ export function Toaster({
           )}
         >
           {icon[t.kind]}
-          <div className="text-caption text-foreground/90 selectable">
-            {t.message}
-          </div>
+          {t.onClick ? (
+            <button
+              type="button"
+              className="text-left text-caption text-foreground/90 underline-offset-2 hover:underline"
+              onClick={() => {
+                t.onClick?.();
+                onDismiss(t.id);
+              }}
+            >
+              {t.message}
+            </button>
+          ) : (
+            <div className="text-caption text-foreground/90 selectable">
+              {t.message}
+            </div>
+          )}
           <button
             className="ml-1 rounded p-0.5 text-muted-foreground hover:text-foreground"
             onClick={() => onDismiss(t.id)}

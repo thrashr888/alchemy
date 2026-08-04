@@ -42,6 +42,7 @@ import {
   FolderInput,
 } from "lucide-react";
 import { BriefSidebar, SidebarRail, StaffSidebar } from "./HomeSections";
+import { NOTEBOOK_ICONS, notebookIcon } from "@/lib/notebookIcons";
 import { RegistrySection } from "./RegistrySection";
 import {
   HomeTable,
@@ -94,11 +95,16 @@ function NotebookTable({
           >
             <td className="px-3 py-2">
               <span className="flex items-center gap-2">
-                <span
-                  className="h-2 w-2 shrink-0 rounded-full"
-                  style={{ backgroundColor: nb.color || NOTEBOOK_PALETTE[0] }}
-                  aria-hidden
-                />
+                {(() => {
+                  const Icon = notebookIcon(nb.icon);
+                  return (
+                    <Icon
+                      className="h-3.5 w-3.5 shrink-0"
+                      style={{ color: nb.color || NOTEBOOK_PALETTE[0] }}
+                      aria-hidden
+                    />
+                  );
+                })()}
                 <span className="truncate font-medium">{nb.title}</span>
                 {(unreadByNb.get(nb.id) ?? 0) > 0 && (
                   <span
@@ -195,10 +201,12 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [renaming, setRenaming] = useState<{
     id: string;
     title: string;
+    icon: string;
   } | null>(null);
   const [colorPickerFor, setColorPickerFor] = useState<string | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);
-  const activeNotebooks = notebooks.filter((n) => n.status !== "archived");
+  // "system" notebooks (Briefs) are working infrastructure, not shelf items.
+  const activeNotebooks = notebooks.filter((n) => !n.status);
   const archivedNotebooks = notebooks.filter((n) => n.status === "archived");
   // The inline filter narrows both views; the archived shelf is untouched
   // (it's already a deliberate drill-in).
@@ -688,7 +696,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                         color: nb.color || NOTEBOOK_PALETTE[0],
                       }}
                     >
-                      <BookOpen className="h-4 w-4" />
+                      {(() => {
+                        const Icon = notebookIcon(nb.icon);
+                        return <Icon className="h-4 w-4" />;
+                      })()}
                     </div>
                     <div className="pointer-events-none relative z-10 mt-3 flex items-center gap-1.5">
                       <span
@@ -742,7 +753,11 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                             label: "Rename",
                             icon: <Pencil className="h-3.5 w-3.5" />,
                             onClick: () =>
-                              setRenaming({ id: nb.id, title: nb.title }),
+                              setRenaming({
+                                id: nb.id,
+                                title: nb.title,
+                                icon: nb.icon,
+                              }),
                           },
                           {
                             label: "Archive",
@@ -1073,12 +1088,25 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       <Modal
         open={!!renaming}
         onClose={() => setRenaming(null)}
-        title="Rename notebook"
+        title="Edit notebook"
       >
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (renaming) rename(renaming.id, renaming.title);
+            if (renaming) {
+              const r = renaming;
+              const before = notebooks.find((n) => n.id === r.id);
+              // Icon first, sequenced: rename() ends with a full refresh,
+              // and firing both unordered let that refresh read the DB
+              // before the icon write landed — reverting the optimistic
+              // icon until some later refresh ("shows up two edits later").
+              void (async () => {
+                if (before && before.icon !== r.icon)
+                  await useStore.getState().setNotebookIcon(r.id, r.icon);
+                if (before && before.title !== r.title)
+                  await rename(r.id, r.title);
+              })();
+            }
             setRenaming(null);
           }}
           className={cn("flex flex-col gap-3")}
@@ -1092,6 +1120,36 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               setRenaming((r) => (r ? { ...r, title: e.target.value } : r))
             }
           />
+          {/* Icon picker: the auto-picked icon can always be overridden
+              here; the plain book is a first-class choice, not an absence. */}
+          <div className="grid grid-cols-8 gap-1">
+            {["", ...Object.keys(NOTEBOOK_ICONS).filter((k) => k !== "book-open")].map(
+              (name) => {
+                const Icon = notebookIcon(name);
+                const active = (renaming?.icon ?? "") === name;
+                return (
+                  <button
+                    key={name || "default"}
+                    type="button"
+                    aria-pressed={active}
+                    aria-label={name ? `Icon: ${name.replace(/-/g, " ")}` : "Default icon"}
+                    title={name ? name.replace(/-/g, " ") : "Default"}
+                    onClick={() =>
+                      setRenaming((r) => (r ? { ...r, icon: name } : r))
+                    }
+                    className={cn(
+                      "flex h-8 items-center justify-center rounded-md border transition-colors",
+                      active
+                        ? "border-primary/60 bg-primary/10 text-foreground"
+                        : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <Icon className="h-4 w-4" />
+                  </button>
+                );
+              },
+            )}
+          </div>
           <div className="flex justify-end gap-2">
             <Button
               type="button"

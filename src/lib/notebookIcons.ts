@@ -1,0 +1,77 @@
+// The curated notebook icon set. Keys are lucide slugs and are what the
+// backend stores (and auto-picks — see `auto_notebook_icon` in
+// src-tauri/src/commands.rs; new auto-pick names must be added here too).
+import {
+  Baby,
+  Book,
+  BookOpen,
+  Briefcase,
+  Calendar,
+  Car,
+  Cat,
+  Code,
+  DollarSign,
+  Dog,
+  Dumbbell,
+  Film,
+  FlaskConical,
+  Gamepad2,
+  Globe,
+  GraduationCap,
+  Heart,
+  Home,
+  Landmark,
+  Map,
+  Music,
+  Newspaper,
+  Palette,
+  Plane,
+  Rocket,
+  Scale,
+  ShoppingCart,
+  Trees,
+  Users,
+  Utensils,
+  Wrench,
+  type LucideIcon,
+} from "lucide-react";
+
+export const NOTEBOOK_ICONS: Record<string, LucideIcon> = {
+  "book-open": BookOpen,
+  briefcase: Briefcase,
+  plane: Plane,
+  "dollar-sign": DollarSign,
+  home: Home,
+  heart: Heart,
+  dumbbell: Dumbbell,
+  utensils: Utensils,
+  music: Music,
+  film: Film,
+  "gamepad-2": Gamepad2,
+  "graduation-cap": GraduationCap,
+  "flask-conical": FlaskConical,
+  code: Code,
+  car: Car,
+  trees: Trees,
+  baby: Baby,
+  dog: Dog,
+  cat: Cat,
+  wrench: Wrench,
+  scale: Scale,
+  landmark: Landmark,
+  globe: Globe,
+  palette: Palette,
+  newspaper: Newspaper,
+  rocket: Rocket,
+  calendar: Calendar,
+  book: Book,
+  map: Map,
+  "shopping-cart": ShoppingCart,
+  "users": Users,
+};
+
+/** The component for a stored icon name — unknown/empty falls back to the
+ *  default book, so stale names never break rendering. */
+export function notebookIcon(name: string | undefined): LucideIcon {
+  return (name && NOTEBOOK_ICONS[name]) || BookOpen;
+}

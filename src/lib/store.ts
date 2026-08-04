@@ -247,6 +247,7 @@ export const useStore = create<AppState>((set, get) => {
     pendingAddText: false,
     pendingExternalAdd: null,
     pendingUpdateCheck: false,
+    updateAvailable: null,
     embedderDownload: null,
     failedInput: null,
     pendingInput: null,
@@ -394,7 +395,20 @@ export const useStore = create<AppState>((set, get) => {
       // Quiet update check, once per launch, main window only.
       if (getCurrentWebview().label === "main" && autoUpdateEnabled()) {
         setTimeout(() => {
-          void checkForUpdatesQuietly((m) => get().pushToast("info", m));
+          // Clicking the notice lands on Settings → General with the check
+          // already run, so the Install button is right there. The version
+          // is also remembered so General/About show it on their own.
+          void checkForUpdatesQuietly((v) => {
+            set({ updateAvailable: v });
+            get().pushToast(
+              "info",
+              `Alchemy ${v} is available — click to review and install.`,
+              () => {
+                set({ pendingUpdateCheck: true });
+                get().openSettings("general");
+              },
+            );
+          });
         }, 4000);
       }
     },
@@ -559,7 +573,9 @@ export const useStore = create<AppState>((set, get) => {
           }
           // Capture from the menu bar shouldn't dead-end on the home
           // screen — hop into the most recent notebook and open there.
-          const recent = s.notebooks.find((n) => n.status !== "archived");
+          // Skip archived and system (Briefs) — a capture should land in a
+          // notebook the user actually works in.
+          const recent = s.notebooks.find((n) => !n.status);
           if (!recent) {
             s.pushToast("error", "Create a notebook first, then add sources");
             return;
@@ -839,6 +855,21 @@ export const useStore = create<AppState>((set, get) => {
         }
       }),
 
+    setNotebookIcon: (id, icon) =>
+      guard(async () => {
+        const prev = get().notebooks;
+        set({
+          notebooks: prev.map((n) => (n.id === id ? { ...n, icon } : n)),
+        });
+        try {
+          await api.setNotebookIcon(id, icon);
+        } catch (e) {
+          set({ notebooks: prev });
+          await get().refreshNotebooks();
+          throw e;
+        }
+      }),
+
     deleteNotebook: (id) =>
       guard(async () => {
         await api.deleteNotebook(id);
@@ -866,7 +897,7 @@ export const useStore = create<AppState>((set, get) => {
         // Leave an archived notebook if it was open.
         if (status === "archived" && get().currentId === id) {
           const active = get().notebooks.filter(
-            (n) => n.status !== "archived" && n.id !== id,
+            (n) => !n.status && n.id !== id,
           );
           if (active.length > 0) await get().selectNotebook(active[0].id);
           else set({ currentId: null, sources: [], messages: [], notes: [] });
@@ -1626,10 +1657,11 @@ export const useStore = create<AppState>((set, get) => {
 
     setError: (e) => set({ error: e }),
 
-    pushToast: (kind, message) => {
+    pushToast: (kind, message, onClick) => {
       const id = `toast-${++toastSeq}`;
-      set({ toasts: [...get().toasts, { id, kind, message }] });
-      const ttl = kind === "error" ? 7000 : 3500;
+      set({ toasts: [...get().toasts, { id, kind, message, onClick }] });
+      // Clickable toasts linger — the user needs time to notice and act.
+      const ttl = kind === "error" ? 7000 : onClick ? 8000 : 3500;
       setTimeout(() => get().dismissToast(id), ttl);
     },
 
