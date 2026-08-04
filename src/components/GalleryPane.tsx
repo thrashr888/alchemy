@@ -168,9 +168,16 @@ export function GalleryPane() {
   const [sweeping, setSweeping] = useState(false);
   const [folderId, setFolderId] = useState<string | null>(null);
   const [filter, setFilter] = useState<TypeGroup>("all");
-  /** Cards or link graph. Not persisted — the grid is the right thing to
-   *  land on, and the graph is somewhere you go on purpose. */
-  const [shape, setShape] = useState<"grid" | "graph">("grid");
+  /** Cards or link graph. Persisted like the sort order: whichever way you
+   *  browse is the way you browse, and being dropped back into the grid
+   *  every time you open the gallery is the annoying kind of opinionated. */
+  const [shape, setShapeState] = useState<"grid" | "graph">(
+    () => (localStorage.getItem("galleryShape") as "grid" | "graph") || "grid",
+  );
+  const setShape = (next: "grid" | "graph") => {
+    setShapeState(next);
+    localStorage.setItem("galleryShape", next);
+  };
   /** Tag chip filter (RFC-source-tags): null = all. Chips show only tags
    *  present at this level, so the row disappears in untagged notebooks. */
   const [tagFilter, setTagFilter] = useState<string | null>(null);

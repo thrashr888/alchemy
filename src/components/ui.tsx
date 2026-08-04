@@ -129,7 +129,9 @@ export function useHoverCard(side: "left" | "right") {
   // `hide` grace keeps it warm across the row gap.
   const warm = React.useRef(false);
 
-  const show = (e: React.MouseEvent<HTMLElement>, data: HoverCardData) => {
+  // `Element`, not `HTMLElement`: the graph's rows are SVG <g> nodes, and
+  // all this needs is getBoundingClientRect.
+  const show = (e: React.MouseEvent<Element>, data: HoverCardData) => {
     const el = e.currentTarget;
     window.clearTimeout(timer.current);
     const reveal = () => {

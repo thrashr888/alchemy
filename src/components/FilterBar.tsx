@@ -6,6 +6,7 @@
    independently. Groups and chips are always computed from what is actually
    present, so an empty option never renders, and a selection that no longer
    exists falls back rather than showing an empty grid — see useFilterAxis. */
+import { useState } from "react";
 import { cn } from "../lib/utils";
 
 /** One selectable option: the stored value plus how it reads. */
@@ -13,6 +14,10 @@ export interface FilterOption {
   value: string;
   label: string;
 }
+
+/** How many chips show before the rest fold behind "+N more". Five is what
+   fits on one line beside the group buttons at a normal window width. */
+const CHIP_LIMIT = 5;
 
 /** Count-desc, alphabetical on ties — the ordering the gallery's tag chips
    established: the ones you'd reach for first, stable across renders. */
@@ -86,9 +91,22 @@ export function FilterBar({
    *  across the width and leave dead clickable space beside the chips. */
   bare?: boolean;
 }) {
+  /** Chips past the first few are folded away. A well-tagged notebook has
+   *  eighty of them, and eight rows of chips pushes the actual content off
+   *  screen — the filter bar stops being a bar. Chips are ranked by count,
+   *  so the visible few are the ones worth reaching for. */
+  const [expanded, setExpanded] = useState(false);
   const showGroups = groups.length > 2;
   const showChips = (chips?.length ?? 0) > 0 && !!onChip;
   if (!showGroups && !showChips) return null;
+  const all = chips ?? [];
+  // A selected chip stays visible even when it ranks below the cut, or
+  // collapsing would hide the filter that is currently in force.
+  const visible =
+    expanded || all.length <= CHIP_LIMIT + 1
+      ? all
+      : [...new Set([...all.slice(0, CHIP_LIMIT), ...(chip ? [chip] : [])])];
+  const hiddenCount = all.length - visible.length;
   return (
     <div
       className={cn(
@@ -114,7 +132,7 @@ export function FilterBar({
           <FilterButton active={chip == null} onClick={() => onChip!(null)}>
             {chipAllLabel}
           </FilterButton>
-          {chips!.map((t) => (
+          {visible.map((t) => (
             <FilterButton
               key={t}
               active={chip === t}
@@ -124,6 +142,15 @@ export function FilterBar({
               {t}
             </FilterButton>
           ))}
+          {(hiddenCount > 0 || expanded) && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="rounded-md px-2 py-1 text-caption text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+            >
+              {expanded ? "Show less" : `+${hiddenCount} more`}
+            </button>
+          )}
         </>
       )}
     </div>

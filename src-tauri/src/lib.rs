@@ -242,6 +242,7 @@ pub fn run() {
             commands::suggest_notebook,
             commands::pdf_page_count,
             commands::pdf_page_image,
+            commands::pdf_local_path,
             commands::notion_check,
             commands::delete_message,
             commands::list_notes,

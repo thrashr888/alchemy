@@ -7,6 +7,13 @@
 //! of what each document could be referred to BY, then scan each document's
 //! text once against it.
 //!
+//! "Once" is load-bearing. The obvious version — for each document, for each
+//! needle, `content.contains(needle)` — is O(documents x needles) full-text
+//! scans, and a real notebook (330 documents, 660 needles, tens of KB each)
+//! spends seconds there and pins a core while the pane sits empty. An
+//! Aho-Corasick automaton finds every needle in one pass per document
+//! instead, which is the difference between a visible hang and a blink.
+//!
 //! Edges are found the three ways documents actually refer to each other:
 //! an absolute URL, a bare filename (how a relative link in a sibling
 //! document points at a file source), and an Obsidian `[[wikilink]]` naming a
@@ -15,6 +22,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use aho_corasick::AhoCorasick;
 use serde::Serialize;
 
 /// One document in the graph. `kind` is "source" or "note"; `sourceType`
@@ -94,6 +102,17 @@ pub fn build(docs: &[GraphDoc]) -> NotebookGraph {
     }
     by_needle.sort_by_key(|(needle, _)| std::cmp::Reverse(needle.len()));
 
+    // One automaton over every needle. Overlapping matches on purpose: a
+    // document's URL and its bare filename are both needles and one contains
+    // the other, and a leftmost-longest scan would report only the URL —
+    // fine here since both point at the same document, but not something to
+    // rely on when two different documents' needles overlap in the text.
+    let automaton = if by_needle.is_empty() {
+        None
+    } else {
+        AhoCorasick::new(by_needle.iter().map(|(needle, _)| needle.as_str())).ok()
+    };
+
     let mut edges: Vec<GraphEdge> = Vec::new();
     let mut seen: HashSet<(String, String)> = HashSet::new();
     let mut degree: HashMap<&str, usize> = HashMap::new();
@@ -108,12 +127,12 @@ pub fn build(docs: &[GraphDoc]) -> NotebookGraph {
             continue;
         }
         let mut targets: HashSet<&str> = HashSet::new();
-        for (needle, target_id) in &by_needle {
-            if *target_id == doc.id.as_str() {
-                continue;
-            }
-            if doc.content.contains(needle.as_str()) {
-                targets.insert(target_id);
+        if let Some(ac) = automaton.as_ref() {
+            for hit in ac.find_overlapping_iter(&doc.content) {
+                let target_id = by_needle[hit.pattern().as_usize()].1;
+                if target_id != doc.id.as_str() {
+                    targets.insert(target_id);
+                }
             }
         }
         for name in wikilink_targets(&doc.content) {
@@ -274,5 +293,49 @@ mod tests {
             wikilink_targets("[[Page|alias]] [[Other#Section]] [[ Spaced ]]"),
             vec!["page", "other", "spaced"]
         );
+    }
+}
+
+#[cfg(test)]
+mod perf {
+    use super::*;
+
+    /// A notebook the size of Alchemy Development: hundreds of documents,
+    /// each tens of KB, all cross-referencing. This is the shape that made
+    /// the graph pane hang, so it is the shape worth timing.
+    #[test]
+    #[ignore = "timing, not correctness — run with --ignored"]
+    fn large_notebook_builds_quickly() {
+        const N: usize = 330;
+        let filler = "lorem ipsum dolor sit amet consectetur ".repeat(500);
+        let docs: Vec<GraphDoc> = (0..N)
+            .map(|i| GraphDoc {
+                id: format!("id{i}"),
+                kind: "source".into(),
+                title: format!("Document Number {i}"),
+                source_type: "markdown".into(),
+                url: format!("/notes/document-number-{i}.md"),
+                content: format!(
+                    "{filler}\nsee document-number-{}.md and [[Document Number {}]]\n{filler}",
+                    (i + 1) % N,
+                    (i + 7) % N
+                ),
+            })
+            .collect();
+        let bytes: usize = docs.iter().map(|d| d.content.len()).sum();
+        let start = std::time::Instant::now();
+        let g = build(&docs);
+        let ms = start.elapsed().as_millis();
+        println!(
+            "{N} docs, {}KB total, {} edges in {ms}ms",
+            bytes / 1024,
+            g.edges.len()
+        );
+        assert!(
+            g.edges.len() >= N,
+            "expected the seeded links: {}",
+            g.edges.len()
+        );
+        assert!(ms < 2000, "graph build took {ms}ms — the pane will hang");
     }
 }

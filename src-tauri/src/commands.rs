@@ -411,6 +411,72 @@ pub fn pdf_page_count(path: String) -> usize {
 /// One rendered PDF page as a `data:` URL, 1-indexed. The reader asks for
 /// pages as they scroll into view, so a long document costs only the pages
 /// actually looked at.
+/// Where a PDF's bytes live on disk for the reader's page view.
+///
+/// A PDF added from a file is already local. A PDF added from a URL is not:
+/// ingest downloads it, extracts the text, and throws the bytes away — so
+/// page view, which needs to rasterize real pages, had nothing to open and
+/// was simply hidden for URL sources. That excluded exactly the case v0.32.0
+/// taught Alchemy to import properly (arxiv.org/pdf/...).
+///
+/// So: resolve to a local path, downloading into a per-source cache the first
+/// time. Cached rather than re-fetched per page because a 40-page paper would
+/// otherwise be 40 downloads, and because the point of a local-first app is
+/// that the second look works on a plane.
+#[tauri::command]
+pub async fn pdf_local_path(
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<String, String> {
+    let Some(source) = e(state.db.get_source(&source_id).await)? else {
+        return Err("source not found".into());
+    };
+    if source.url.is_empty() {
+        return Err("this PDF has no file behind it".into());
+    }
+    if !source.url.starts_with("http://") && !source.url.starts_with("https://") {
+        return Ok(source.url);
+    }
+
+    let cached = pdf_cache_path(&state, &source_id);
+    if cached.is_file() {
+        return Ok(cached.to_string_lossy().into_owned());
+    }
+
+    let client = reqwest::Client::builder()
+        .user_agent(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+        )
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|err| err.to_string())?;
+    let bytes = client
+        .get(&source.url)
+        .send()
+        .await
+        .map_err(|err| format!("could not fetch {}: {err}", source.url))?
+        .bytes()
+        .await
+        .map_err(|err| format!("could not read {}: {err}", source.url))?;
+    if !crate::pdf::looks_like_pdf(&bytes) {
+        return Err(format!("{} no longer serves a PDF", source.url));
+    }
+    if let Some(dir) = cached.parent() {
+        std::fs::create_dir_all(dir).map_err(|err| err.to_string())?;
+    }
+    std::fs::write(&cached, &bytes).map_err(|err| err.to_string())?;
+    Ok(cached.to_string_lossy().into_owned())
+}
+
+/// Downloaded PDF bytes for a URL-backed source, kept beside the og-image
+/// thumbs. Keyed by source id so deleting the source can drop it.
+fn pdf_cache_path(state: &AppState, source_id: &str) -> std::path::PathBuf {
+    app_data_dir(state)
+        .join("pdfs")
+        .join(format!("{source_id}.pdf"))
+}
+
 #[tauri::command]
 pub fn pdf_page_image(path: String, page: usize, width: u32) -> Result<String, String> {
     use base64::Engine;
@@ -1603,6 +1669,8 @@ pub(crate) async fn reingest(
     // hero image — drop the stale caches so the gallery re-renders them.
     if existing.source_type == "pdf" {
         let _ = std::fs::remove_file(thumb_path(state, &existing.id));
+        // A re-pointed PDF must not keep serving the old file's pages.
+        let _ = std::fs::remove_file(pdf_cache_path(state, &existing.id));
     }
     if existing.source_type == "url" && updated.image_url != existing.image_url {
         let _ = std::fs::remove_file(og_cache_path(state, &existing.id));

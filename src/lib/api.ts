@@ -290,6 +290,10 @@ export const api = {
   /** One rendered PDF page (1-indexed) as a `data:` PNG URL. */
   pdfPageImage: (path: string, page: number, width: number) =>
     run(cmd<string>("pdf_page_image", { path, page, width })),
+  /** Local path for a PDF's bytes — downloads and caches URL-backed PDFs the
+   *  first time, so page view works for them too. */
+  pdfLocalPath: (sourceId: string) =>
+    run(cmd<string>("pdf_local_path", { sourceId })),
   /** Validate a Notion integration token; resolves to the workspace label. */
   notionCheck: (token: string) => run(cmd<string>("notion_check", { token })),
   deleteMessage: (messageId: string) =>

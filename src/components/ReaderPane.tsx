@@ -1220,10 +1220,12 @@ function ImageView({ url, title }: { url: string; title: string }) {
 /** Can this source be shown as rendered pages? Only a PDF still backed by a
  *  file on disk — a PDF harvested from the web keeps its http URL and has no
  *  local bytes for PDFium to rasterize. */
+/** Can this source be shown as pages? Any PDF with something behind it —
+ *  a path, or a URL whose bytes the backend can fetch and cache. Web PDFs
+ *  used to be excluded here, which quietly withheld page view from exactly
+ *  the arxiv links v0.32.0 taught Alchemy to import. */
 function isPdfFile(source: Source): boolean {
-  return (
-    source.sourceType === "pdf" && !!source.url && !isWebUrl(source.url)
-  );
+  return source.sourceType === "pdf" && !!source.url;
 }
 
 /** The PDF as pages, rendered by PDFium (RFC-document-surface phase 5).
@@ -1232,7 +1234,16 @@ function isPdfFile(source: Source): boolean {
  *  a US-Letter-ratio placeholder so the scrollbar doesn't jump while they
  *  arrive. This view is deliberately not searchable; the text toggle is where
  *  find, citations, and select-to-ask live. */
-function PdfPageView({ path, title }: { path: string; title: string }) {
+function PdfPageView({
+  sourceId,
+  title,
+}: {
+  sourceId: string;
+  title: string;
+}) {
+  /** Resolved local path. A file source is already local; a URL source is
+   *  downloaded into the cache on first open (commands::pdf_local_path). */
+  const [path, setPath] = useState("");
   const [count, setCount] = useState(0);
   const [failed, setFailed] = useState(false);
   const [pages, setPages] = useState<Record<number, string>>({});
@@ -1244,9 +1255,22 @@ function PdfPageView({ path, title }: { path: string; title: string }) {
 
   useEffect(() => {
     let stale = false;
+    setPath("");
     setCount(0);
     setFailed(false);
     setPages({});
+    api
+      .pdfLocalPath(sourceId)
+      .then((p) => !stale && setPath(p))
+      .catch(() => !stale && setFailed(true));
+    return () => {
+      stale = true;
+    };
+  }, [sourceId]);
+
+  useEffect(() => {
+    if (!path) return;
+    let stale = false;
     api
       .pdfPageCount(path)
       .then((n) => {
@@ -2041,7 +2065,7 @@ function SourceReader({
   }
 
   if (isPdfFile(source) && pageView) {
-    return <PdfPageView path={source.url} title={source.title} />;
+    return <PdfPageView sourceId={source.id} title={source.title} />;
   }
 
   if (live) {

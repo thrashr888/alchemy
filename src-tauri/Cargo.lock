@@ -47,6 +47,7 @@ dependencies = [
 name = "alchemy"
 version = "0.32.0"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "arrow-array",
  "arrow-schema",
