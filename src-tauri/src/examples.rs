@@ -17,7 +17,7 @@ use crate::ai::Ai;
 use crate::commands::{app_data_dir, new_id, now, AppState};
 use crate::db::{Db, NOTEBOOK_PALETTE};
 use crate::ingest;
-use crate::models::{Notebook, Source};
+use crate::models::{Notebook, RegistryCard, Source};
 
 pub(crate) const INTRO_TITLE: &str = "Introduction to Alchemy";
 pub(crate) const EARNINGS_TITLE: &str = "Earnings Reports for Top 50 Corporations";
@@ -26,6 +26,33 @@ pub(crate) const AI_RESEARCH_TITLE: &str = "AI Research: Landmark Papers";
 /// (title, url, body) — url is "" for the intro's pasted-text tour and the
 /// company's top-level investor-relations page for earnings sources.
 type ExampleSource = (&'static str, &'static str, &'static str);
+
+/// (kind, name) — example registry cards (docs/RFC-registry.md), so a fresh
+/// install's Registry shows a real cast instead of a blank page.
+///
+/// Every name here appears verbatim in the seeded sources, because these are
+/// filed by the ordinary matcher rather than wired up by hand: seeding runs
+/// `match_source_to_cards` and then confirms the name matches it made. The
+/// receipts a new user sees ("name matched") are therefore true, and the
+/// mechanism demonstrates itself.
+///
+/// Note which notebook contributes what. The earnings corpus is full of
+/// *providers* — companies are exactly the thing documents accumulate about.
+/// The AI-research corpus offers *threads* rather than objects, so its cards
+/// are projects. The papers themselves are deliberately NOT cards: a
+/// document is not a thing a document is about.
+type ExampleCard = (&'static str, &'static str);
+
+const EXAMPLE_CARDS: &[ExampleCard] = &[
+    ("project", "Alchemy"),
+    ("provider", "Apple"),
+    ("provider", "Microsoft"),
+    ("provider", "NVIDIA"),
+    ("provider", "Alphabet"),
+    ("provider", "Amazon"),
+    ("project", "Retrieval-Augmented Generation"),
+    ("project", "Scaling Laws"),
+];
 
 const INTRO_SOURCES: &[ExampleSource] = &[
     (
@@ -421,10 +448,97 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
             }
         }
     }
+    if let Err(err) = seed_registry_cards(&state.db).await {
+        // Same contract as the notebooks: leave the marker unwritten so the
+        // next launch retries, rather than shipping a half-built cast.
+        eprintln!("examples: seeding registry cards failed ({err:#}); will retry next launch");
+        return seeded;
+    }
     if let Err(err) = std::fs::write(&marker, b"1") {
         eprintln!("examples: couldn't write marker: {err}");
     }
     seeded
+}
+
+/// Seed the example cast, then let the ordinary matcher file it.
+///
+/// Cards whose name already exists are skipped, so this is idempotent across
+/// retries and never fights a card the user made themselves.
+///
+/// What gets confirmed is the point. A name match is a guess, and blanket-
+/// confirming every one of them would hand a new user a lie: "Apple" is
+/// named in half the earnings corpus, so the Apple card would claim nine
+/// documents when one is Apple's report and eight are rivals mentioning it.
+/// So only the document whose TITLE carries the card's name is confirmed —
+/// that one really is about the thing — and the rest stay proposed. A fresh
+/// install therefore shows both halves of the mechanism: a card with its own
+/// documents, and a queue of guesses waiting on a human.
+async fn seed_registry_cards(db: &Db) -> anyhow::Result<()> {
+    let existing = db.list_registry().await?;
+    let mut seeded_ids: Vec<String> = Vec::new();
+    for (kind, name) in EXAMPLE_CARDS {
+        if existing.iter().any(|c| c.name.eq_ignore_ascii_case(name)) {
+            continue;
+        }
+        let ts = now();
+        let card = RegistryCard {
+            id: new_id(),
+            kind: (*kind).to_string(),
+            name: (*name).to_string(),
+            origin: String::new(),
+            identifiers: String::new(),
+            note: String::new(),
+            facts: Vec::new(),
+            attachments: Vec::new(),
+            created_at: ts,
+            updated_at: ts,
+        };
+        db.add_registry_card(&card).await?;
+        seeded_ids.push(card.id);
+    }
+    if seeded_ids.is_empty() {
+        return Ok(());
+    }
+    for nb in db.list_notebooks().await? {
+        if ![INTRO_TITLE, EARNINGS_TITLE, AI_RESEARCH_TITLE].contains(&nb.title.as_str()) {
+            continue;
+        }
+        for s in db.list_sources(&nb.id).await? {
+            let Ok(text) = db.source_content(&s.id).await else {
+                continue;
+            };
+            crate::commands::match_source_to_cards(db, &nb.id, &s.id, &text).await;
+        }
+    }
+    for id in seeded_ids {
+        let Some(mut card) = db.get_registry_card(&id).await? else {
+            continue;
+        };
+        let name = card.name.to_lowercase();
+        let mut touched = false;
+        for a in card.attachments.iter_mut() {
+            if a.status != "proposed" {
+                continue;
+            }
+            let titled_for_it = match db.get_source(&a.source_id).await {
+                Ok(Some(src)) => src.title.to_lowercase().contains(&name),
+                _ => false,
+            };
+            if titled_for_it {
+                a.status = "confirmed".into();
+                touched = true;
+            }
+        }
+        if touched {
+            card.updated_at = now();
+            db.update_registry_card(&card).await?;
+        }
+    }
+    // Matching announced itself, but the confirm pass above runs after it —
+    // without this an already-open window keeps the pre-confirm snapshot and
+    // every seeded card reads "0 documents".
+    crate::commands::notify_changed("registry", None);
+    Ok(())
 }
 
 /// Seed one example notebook through the real chunk → embed → store path.
@@ -480,6 +594,8 @@ async fn seed_notebook(
         color: color.to_string(),
         status: String::new(),
         source_count: 0,
+        note_count: 0,
+        report_count: 0,
     };
     db.create_notebook(&nb).await?;
     for p in prepared {
@@ -571,6 +687,8 @@ mod tests {
             color: NOTEBOOK_PALETTE[0].to_string(),
             status: String::new(),
             source_count: 0,
+            note_count: 0,
+            report_count: 0,
         };
         db.create_notebook(&nb).await.expect("create notebook");
 

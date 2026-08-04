@@ -16,6 +16,10 @@ export interface Notebook {
   /** "" (active) | "archived" — archived notebooks leave the main grid. */
   status: "" | "archived";
   sourceCount: number;
+  /** Deliberate notes, excluding reports. */
+  noteCount: number;
+  /** Report-kind notes (scheduled runs, briefs). */
+  reportCount: number;
 }
 
 /** Where an unfiled source should go — the auto-notebooking answer. */
@@ -234,9 +238,11 @@ export interface GrepHit {
 
 /** One global-search result (command menu). */
 export interface SearchHit {
-  kind: "source" | "note" | "content";
+  kind: "source" | "note" | "content" | "card" | "ledger";
   notebookId: string;
-  /** Source id for source/content hits; note id for note hits. */
+  /** Source id for source/content hits, note id for notes, card id for
+   *  registry cards (which carry no notebookId — they're corpus-scoped),
+   *  entry id for ledger rows. */
   id: string;
   title: string;
   snippet: string;
@@ -308,6 +314,52 @@ export interface LedgerEntry {
   updatedAt: number;
 }
 
+/** The Registry's kinds (RFC-registry). */
+export type CardKind =
+  | "asset"
+  | "person"
+  | "policy"
+  | "provider"
+  | "project"
+  | "dependency";
+
+/** One key fact on a card — the reader's doc-properties grid shape. */
+export interface CardFact {
+  label: string;
+  value: string;
+}
+
+/** One document filed under a card. `matched` is the receipt and is never
+ *  empty: the identifier string that matched, "name", or "manual". */
+export interface CardAttachment {
+  sourceId: string;
+  notebookId: string;
+  status: "confirmed" | "proposed" | "rejected";
+  matched: string;
+  at: number;
+}
+
+/** One registry card (RFC-registry): a confirmed cast member. Corpus-scoped
+ *  — deliberately has no notebookId; its home is derived from where its
+ *  documents live. Cards have no lifecycle; their attachments do. */
+export interface RegistryCard {
+  id: string;
+  kind: CardKind;
+  name: string;
+  /** "" = yours (made or confirmed), "auto" = suggested and awaiting your
+   *  verdict, "dismissed" = turned down and remembered so the suggester
+   *  never proposes it again. */
+  origin: "" | "auto" | "dismissed";
+  /** Space-separated normalized tokens — the only thing that ever attaches
+   *  a document without asking. */
+  identifiers: string;
+  note: string;
+  facts: CardFact[];
+  attachments: CardAttachment[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 /** One observed source change (watchers, RFC-night-shift): written by the
  *  refresh paths, read by the Brief, the Staff section, and agents. */
 export interface SourceEvent {
@@ -347,6 +399,10 @@ export interface AiConfig {
   embedder: string;
   baseUrl: string;
   chatModel: string;
+  /** Ollama model for the Small role (gists, tags, Weave verdicts, registry
+   *  suggestions). Empty = Apple Foundation Models when available, else the
+   *  chat provider. */
+  smallModel: string;
   embedModel: string;
   visionModel: string;
   openaiBaseUrl: string;

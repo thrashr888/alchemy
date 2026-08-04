@@ -19,7 +19,8 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::Connection;
 
 use crate::models::{
-    Citation, LedgerEntry, Message, Note, NoteUsage, Notebook, ReportSchedule, Source, SourceEvent,
+    Citation, LedgerEntry, Message, Note, NoteUsage, Notebook, RegistryCard, ReportSchedule,
+    Source, SourceEvent,
 };
 
 const T_NOTEBOOKS: &str = "notebooks";
@@ -32,6 +33,9 @@ const T_REPORTS: &str = "report_schedules";
 const T_ROUTES: &str = "routes";
 const T_SOURCE_EVENTS: &str = "source_events";
 const T_LEDGER: &str = "ledger";
+/// The Registry's cast (docs/RFC-registry.md). Corpus-scoped: no
+/// notebook_id column, unlike every other entity table here.
+const T_REGISTRY: &str = "registry";
 /// Source events prune past this window — a rolling record, not an archive.
 const SOURCE_EVENT_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 /// Note chunks share the chunks table with source chunks, stored under
@@ -241,6 +245,8 @@ impl Db {
         db.migrate_source_events().await?;
         db.ensure_table(T_LEDGER, ledger_schema()).await?;
         db.migrate_ledger().await?;
+        db.ensure_table(T_REGISTRY, registry_schema()).await?;
+        db.migrate_registry().await?;
         Ok(db)
     }
 
@@ -266,6 +272,11 @@ impl Db {
         .await
         .with_context(|| format!("failed to add {table}.{column}"))?;
         Ok(())
+    }
+
+    /// Add the `origin` column ("") to pre-existing registry tables.
+    async fn migrate_registry(&self) -> Result<()> {
+        self.add_string_column(T_REGISTRY, "origin", "").await
     }
 
     /// Add the `origin` column ("") to pre-existing ledger tables.
@@ -317,6 +328,8 @@ impl Db {
                     color: NOTEBOOK_PALETTE[idx % NOTEBOOK_PALETTE.len()].to_string(),
                     status: String::new(),
                     source_count: 0,
+                    note_count: 0,
+                    report_count: 0,
                 });
                 idx += 1;
             }
@@ -673,6 +686,8 @@ impl Db {
                     color: color.map(|c| c.value(i).to_string()).unwrap_or_default(),
                     status: status.map(|s| s.value(i).to_string()).unwrap_or_default(),
                     source_count: 0,
+                    note_count: 0,
+                    report_count: 0,
                 });
             }
         }
@@ -685,8 +700,30 @@ impl Db {
                 *counts.entry(nb.value(i).to_string()).or_insert(0) += 1;
             }
         }
+        // Notes and reports, same one-pass shape. Reports are a note kind, so
+        // they're counted out of the note total rather than added to it —
+        // "12 notes, 3 reports" reading as 15 documents would be a lie.
+        let mut note_counts: HashMap<String, i64> = HashMap::new();
+        let mut report_counts: HashMap<String, i64> = HashMap::new();
+        if self.table_exists(T_NOTES).await? {
+            for b in &self.collect(T_NOTES, None).await? {
+                let nb = str_col(b, "notebook_id")?;
+                let kind = opt_str_col(b, "kind");
+                for i in 0..b.num_rows() {
+                    let is_report = kind.as_ref().map(|k| k.value(i)) == Some("report");
+                    let map = if is_report {
+                        &mut report_counts
+                    } else {
+                        &mut note_counts
+                    };
+                    *map.entry(nb.value(i).to_string()).or_insert(0) += 1;
+                }
+            }
+        }
         for n in &mut notebooks {
             n.source_count = counts.get(&n.id).copied().unwrap_or(0);
+            n.note_count = note_counts.get(&n.id).copied().unwrap_or(0);
+            n.report_count = report_counts.get(&n.id).copied().unwrap_or(0);
         }
         notebooks.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
         Ok(notebooks)
@@ -2342,6 +2379,117 @@ impl Db {
             .await
     }
 
+    // ---- Registry (docs/RFC-registry.md) ----
+
+    pub async fn add_registry_card(&self, card: &RegistryCard) -> Result<()> {
+        let schema = registry_schema();
+        let batch = registry_batch(&schema, card)?;
+        self.add_batch(T_REGISTRY, schema, batch).await
+    }
+
+    /// The whole cast. Corpus-scoped by construction — there is no notebook
+    /// filter to pass, and callers that want one derive it from
+    /// `attachments`.
+    pub async fn list_registry(&self) -> Result<Vec<RegistryCard>> {
+        let batches = self.collect(T_REGISTRY, None).await?;
+        let mut out = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let kind = str_col(b, "kind")?;
+            let name = str_col(b, "name")?;
+            let origin = opt_str_col(b, "origin");
+            let identifiers = str_col(b, "identifiers")?;
+            let note = str_col(b, "note")?;
+            let facts = str_col(b, "facts")?;
+            let attachments = str_col(b, "attachments")?;
+            let created = i64_col(b, "created_at")?;
+            let updated = i64_col(b, "updated_at")?;
+            for i in 0..b.num_rows() {
+                out.push(RegistryCard {
+                    id: id.value(i).to_string(),
+                    kind: kind.value(i).to_string(),
+                    name: name.value(i).to_string(),
+                    origin: origin
+                        .as_ref()
+                        .map(|c| c.value(i).to_string())
+                        .unwrap_or_default(),
+                    identifiers: identifiers.value(i).to_string(),
+                    note: note.value(i).to_string(),
+                    facts: serde_json::from_str(facts.value(i)).unwrap_or_default(),
+                    attachments: serde_json::from_str(attachments.value(i)).unwrap_or_default(),
+                    created_at: created.value(i),
+                    updated_at: updated.value(i),
+                });
+            }
+        }
+        // Alphabetical — a cast is a list of names, not a feed.
+        out.sort_by_key(|c| c.name.to_lowercase());
+        Ok(out)
+    }
+
+    pub async fn get_registry_card(&self, id: &str) -> Result<Option<RegistryCard>> {
+        let batches = self
+            .collect(T_REGISTRY, Some(&format!("id = '{}'", esc(id))))
+            .await?;
+        for b in &batches {
+            if b.num_rows() > 0 {
+                return Ok(Some(RegistryCard {
+                    id: str_col(b, "id")?.value(0).to_string(),
+                    kind: str_col(b, "kind")?.value(0).to_string(),
+                    name: str_col(b, "name")?.value(0).to_string(),
+                    origin: opt_str_col(b, "origin")
+                        .as_ref()
+                        .map(|c| c.value(0).to_string())
+                        .unwrap_or_default(),
+                    identifiers: str_col(b, "identifiers")?.value(0).to_string(),
+                    note: str_col(b, "note")?.value(0).to_string(),
+                    facts: serde_json::from_str(str_col(b, "facts")?.value(0)).unwrap_or_default(),
+                    attachments: serde_json::from_str(str_col(b, "attachments")?.value(0))
+                        .unwrap_or_default(),
+                    created_at: i64_col(b, "created_at")?.value(0),
+                    updated_at: i64_col(b, "updated_at")?.value(0),
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Update everything mutable in place; facts and attachments travel
+    /// whole as JSON. `kind` is immutable by construction — a card that
+    /// changes kind is a different thing.
+    pub async fn update_registry_card(&self, card: &RegistryCard) -> Result<()> {
+        let tbl = self.conn.open_table(T_REGISTRY).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(&card.id)))
+            .column("name", format!("'{}'", esc(&card.name)))
+            .column("origin", format!("'{}'", esc(&card.origin)))
+            .column("identifiers", format!("'{}'", esc(&card.identifiers)))
+            .column("note", format!("'{}'", esc(&card.note)))
+            .column(
+                "facts",
+                format!(
+                    "'{}'",
+                    esc(&serde_json::to_string(&card.facts).unwrap_or_default())
+                ),
+            )
+            .column(
+                "attachments",
+                format!(
+                    "'{}'",
+                    esc(&serde_json::to_string(&card.attachments).unwrap_or_default())
+                ),
+            )
+            .column("updated_at", card.updated_at.to_string())
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn delete_registry_card(&self, id: &str) -> Result<()> {
+        self.delete_where(T_REGISTRY, &format!("id = '{}'", esc(id)))
+            .await
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn update_report_schedule(
         &self,
@@ -2837,6 +2985,44 @@ fn ledger_batch(schema: &SchemaRef, e: &LedgerEntry) -> Result<RecordBatch> {
             ])),
             Arc::new(Int64Array::from(vec![e.created_at])),
             Arc::new(Int64Array::from(vec![e.updated_at])),
+        ],
+    )?)
+}
+
+fn registry_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("kind", DataType::Utf8, false),
+        Field::new("name", DataType::Utf8, false),
+        Field::new("origin", DataType::Utf8, false),
+        Field::new("identifiers", DataType::Utf8, false),
+        Field::new("note", DataType::Utf8, false),
+        Field::new("facts", DataType::Utf8, false),
+        Field::new("attachments", DataType::Utf8, false),
+        Field::new("created_at", DataType::Int64, false),
+        Field::new("updated_at", DataType::Int64, false),
+    ]))
+}
+
+fn registry_batch(schema: &SchemaRef, c: &RegistryCard) -> Result<RecordBatch> {
+    Ok(RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from(vec![c.id.clone()])),
+            Arc::new(StringArray::from(vec![c.kind.clone()])),
+            Arc::new(StringArray::from(vec![c.name.clone()])),
+            Arc::new(StringArray::from(vec![c.origin.clone()])),
+            Arc::new(StringArray::from(vec![c.identifiers.clone()])),
+            Arc::new(StringArray::from(vec![c.note.clone()])),
+            Arc::new(StringArray::from(vec![
+                serde_json::to_string(&c.facts).unwrap_or_default()
+            ])),
+            Arc::new(StringArray::from(vec![serde_json::to_string(
+                &c.attachments,
+            )
+            .unwrap_or_default()])),
+            Arc::new(Int64Array::from(vec![c.created_at])),
+            Arc::new(Int64Array::from(vec![c.updated_at])),
         ],
     )?)
 }

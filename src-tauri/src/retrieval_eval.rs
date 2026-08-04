@@ -779,6 +779,8 @@ async fn eval_router() {
             color: String::new(),
             status: String::new(),
             source_count: 0,
+            note_count: 0,
+            report_count: 0,
         })
         .await
         .expect("create notebook");

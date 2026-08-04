@@ -23,7 +23,7 @@ import {
   relativeTime,
   shortcutBlocked,
 } from "@/lib/utils";
-import type { Note, SourceEvent } from "@/lib/types";
+import type { Note, Notebook, SourceEvent } from "@/lib/types";
 import {
   Archive,
   ArchiveRestore,
@@ -37,10 +37,17 @@ import {
   Pencil,
   FileText,
   Newspaper,
+  Package,
   Sparkles,
   FolderInput,
 } from "lucide-react";
 import { BriefSidebar, SidebarRail, StaffSidebar } from "./HomeSections";
+import { RegistrySection } from "./RegistrySection";
+import {
+  HomeTable,
+  HomeViewControls,
+  matchesHomeQuery,
+} from "./HomeViewControls";
 
 // Keep this list in sync with Rust in `src-tauri/src/db.rs` (`NOTEBOOK_PALETTE`)
 // and the `set_notebook_color` validator in `src-tauri/src/commands.rs`.
@@ -55,6 +62,119 @@ const NOTEBOOK_PALETTE = [
   "#98a562",
 ];
 
+/** The scannable form of the notebook shelf. Same rows the grid shows, read
+ *  down columns instead of across cards. */
+function NotebookTable({
+  notebooks,
+  onOpen,
+  onNew,
+  unreadByNb,
+}: {
+  notebooks: Notebook[];
+  onOpen: (id: string) => void;
+  onNew: () => void;
+  unreadByNb: Map<string, number>;
+}) {
+  return (
+    <>
+      <HomeTable
+        columns={[
+          { key: "title", label: "Title" },
+          { key: "sources", label: "Sources", className: "text-right" },
+          { key: "notes", label: "Notes", className: "text-right" },
+          { key: "reports", label: "Reports", className: "text-right" },
+          { key: "updated", label: "Updated" },
+        ]}
+      >
+        {notebooks.map((nb) => (
+          <tr
+            key={nb.id}
+            onClick={() => onOpen(nb.id)}
+            className="cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2"
+          >
+            <td className="px-3 py-2">
+              <span className="flex items-center gap-2">
+                <span
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{ backgroundColor: nb.color || NOTEBOOK_PALETTE[0] }}
+                  aria-hidden
+                />
+                <span className="truncate font-medium">{nb.title}</span>
+                {(unreadByNb.get(nb.id) ?? 0) > 0 && (
+                  <span
+                    className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+                    title={`${unreadByNb.get(nb.id)} unread`}
+                  />
+                )}
+              </span>
+            </td>
+            <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+              {nb.sourceCount}
+            </td>
+            {/* Zero reads as nothing: a column of 0s is noise, and the eye
+                should land on the notebooks that actually have material. */}
+            <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+              {nb.noteCount || ""}
+            </td>
+            <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+              {nb.reportCount || ""}
+            </td>
+            <td className="px-3 py-2 text-caption text-muted-foreground">
+              {relativeTime(nb.updatedAt)}
+            </td>
+          </tr>
+        ))}
+      </HomeTable>
+      <Button variant="secondary" className="mt-3" onClick={onNew}>
+        <Plus className="h-4 w-4" />
+        New notebook
+      </Button>
+    </>
+  );
+}
+
+/** Home's center switch, the exact sibling of the notebook's
+ *  Chat|Reader|Gallery|Ledger tabs (CenterModeTabs, ReaderPane.tsx): one
+ *  control, in the title bar, choosing what the center column shows about a
+ *  constant subject. There the subject is one notebook; here it's the whole
+ *  corpus — its notebooks, or the cast of things they're about. Same kind of
+ *  switch, so it lives in the same place and wears the same chrome. */
+function HomeSectionTabs() {
+  const section = useStore((s) => s.homeSection);
+  const tabs = [
+    { id: "notebooks", label: "Notebooks", icon: BookOpen },
+    { id: "registry", label: "Registry", icon: Package },
+  ] as const;
+  return (
+    <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5">
+      {tabs.map(({ id, label, icon: Icon }) => (
+        <button
+          key={id}
+          type="button"
+          onClick={() =>
+            useStore.setState({ homeSection: id, openCardId: null })
+          }
+          aria-pressed={section === id}
+          title={
+            id === "registry"
+              ? "The things your documents are about"
+              : "Your notebooks"
+          }
+          className={cn(
+            "flex items-center gap-1.5 rounded-md px-2 py-1 text-caption transition-colors",
+            section === id
+              ? "bg-surface-2 font-medium text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <Icon className="h-3.5 w-3.5" />
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const notebooks = useStore((s) => s.notebooks);
   const open = useStore((s) => s.selectNotebook);
@@ -64,6 +184,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const remove = useStore((s) => s.deleteNotebook);
   const setStatus = useStore((s) => s.setNotebookStatus);
   const theme = useStore((s) => s.theme);
+  const homeSection = useStore((s) => s.homeSection);
+  const homeView = useStore((s) => s.homeView);
+  const homeQuery = useStore((s) => s.homeQuery);
   // Shader must not mount under glass (rAF keeps running when display:none).
   const glassOn = useStore((s) => s.reading.glass);
 
@@ -77,6 +200,11 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [archivedOpen, setArchivedOpen] = useState(false);
   const activeNotebooks = notebooks.filter((n) => n.status !== "archived");
   const archivedNotebooks = notebooks.filter((n) => n.status === "archived");
+  // The inline filter narrows both views; the archived shelf is untouched
+  // (it's already a deliberate drill-in).
+  const shownNotebooks = activeNotebooks.filter((n) =>
+    matchesHomeQuery(homeQuery, n.title),
+  );
   // The Steward's sidebars (RFC-v12-steward UI §2, as sidebars): Staff on
   // the left, Brief above Latest Reports on the right. Each collapses on
   // its own, persisted. Registry joins when its pillar exists.
@@ -270,6 +398,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         <span className="text-section font-semibold tracking-tight">
           Alchemy
         </span>
+        <div className="mx-2">
+          <HomeSectionTabs />
+        </div>
         <div className="ml-auto flex items-center gap-3">
           <DevBadge />
           <Button
@@ -366,11 +497,23 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             )}
             {/* Heading + ask box stay put; only the shelves below scroll. */}
             <div className="relative z-10 mx-auto w-full max-w-[960px] shrink-0 px-6 pt-10">
-              <div className="mb-5 flex items-end justify-between">
-                <div>
+              {/* Wraps rather than squeezes: with both sidebars open this
+                  column is far narrower than its 960px cap, so the action
+                  cluster drops to its own line instead of crushing the
+                  heading. */}
+              <div className="mb-5 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+                <div className="min-w-[260px] flex-1">
                   <h1 className="text-page font-semibold tracking-tight">
-                    Your notebooks
+                    {homeSection === "registry"
+                      ? "Your registry"
+                      : "Your notebooks"}
                   </h1>
+                  {homeSection === "registry" ? (
+                    <p className="mt-1 text-body text-muted-foreground">
+                      The things your documents are about — assets, people,
+                      policies, providers, projects, dependencies.
+                    </p>
+                  ) : (
                   <p className="mt-1 text-body text-muted-foreground">
                     {stats
                       ? [
@@ -386,13 +529,16 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                           .join(" · ")
                       : "Most recently used first."}
                   </p>
-                  <AwayDigest
-                    prevVisit={prevVisit}
-                    notebooks={notebooks}
-                    reports={reports}
-                  />
+                  )}
+                  {homeSection === "notebooks" && (
+                    <AwayDigest
+                      prevVisit={prevVisit}
+                      notebooks={notebooks}
+                      reports={reports}
+                    />
+                  )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex shrink-0 items-center gap-2">
                   <Button
                     variant="secondary"
                     onClick={() =>
@@ -490,8 +636,23 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               </div>
             </div>
 
+            {homeSection === "registry" ? (
+              <RegistrySection />
+            ) : (
             <div className="relative min-h-0 flex-1 overflow-y-auto">
               <div className="mx-auto w-full max-w-[960px] px-6 pb-10">
+              <HomeViewControls placeholder="Filter notebooks by title…" />
+              {homeView === "table" ? (
+                <NotebookTable
+                  notebooks={shownNotebooks}
+                  onOpen={open}
+                  onNew={() => {
+                    setNewTitle("");
+                    setCreating(true);
+                  }}
+                  unreadByNb={unreadByNb}
+                />
+              ) : (
               <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
                 {/* New-notebook tile */}
                 <button
@@ -505,7 +666,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   <span className="text-body font-medium">New notebook</span>
                 </button>
 
-                {activeNotebooks.map((nb) => (
+                {shownNotebooks.map((nb) => (
                   <div
                     key={nb.id}
                     // Card content is pointer-events-none, so the hover
@@ -636,6 +797,12 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   </div>
                 ))}
               </div>
+              )}
+              {shownNotebooks.length === 0 && activeNotebooks.length > 0 && (
+                <p className="py-8 text-center text-body text-muted-foreground">
+                  No notebook matches &ldquo;{homeQuery.trim()}&rdquo;.
+                </p>
+              )}
 
               {/* Archived notebooks: collapsed row list, data intact. */}
               {archivedNotebooks.length > 0 && (
@@ -712,6 +879,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   column is just the notebook shelves. */}
               </div>
             </div>
+            )}
           </div>
 
           {/* Right column: the Brief card above the reports feed — the

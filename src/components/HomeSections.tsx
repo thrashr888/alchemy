@@ -18,6 +18,7 @@ import {
   FileText,
   Moon,
   Newspaper,
+  Package,
   PanelLeftClose,
   PanelRightClose,
   Pause,
@@ -461,6 +462,8 @@ export function StaffSidebar({
           )}
         </StaffGroup>
 
+        <FiledGroup />
+
         <StaffGroup title="Recent notes">
           {recentNotes.length === 0 ? (
             <StaffQuiet>Notes you write or generate land here.</StaffQuiet>
@@ -534,6 +537,88 @@ export function SidebarRail({
         <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-primary" />
       )}
     </button>
+  );
+}
+
+/** What the Registry filed on its own, lately.
+ *
+ *  Only the *did* half of the Registry belongs in Staff. Proposals and
+ *  suggested cards are needs-you items, and this app already has one place
+ *  for those — the Brief, which exists to absorb interruptions. Putting them
+ *  here too would make two inboxes competing for the same decision. What
+ *  does belong is the auto-filing: it happens while you're away, you never
+ *  asked for it, and it is exactly the kind of thing you want to be able to
+ *  glance at and see was reasonable — so each row carries its receipt. */
+function FiledGroup() {
+  const registryBump = useStore((s) => s.registryBump);
+  const notebooks = useStore((s) => s.notebooks);
+  const [rows, setRows] = useState<
+    { card: string; kind: string; matched: string; at: number; nb: string }[]
+  >([]);
+
+  useEffect(() => {
+    let alive = true;
+    const since = Date.now() - 24 * 60 * 60 * 1000;
+    void api
+      .listRegistry()
+      .then((cards) => {
+        if (!alive) return;
+        const out = cards
+          .filter((c) => c.origin !== "dismissed")
+          .flatMap((c) =>
+            c.attachments
+              .filter(
+                // Confirmed and machine-filed: "manual" is something you did,
+                // and it would be odd to report your own filing back to you.
+                (a) =>
+                  a.status === "confirmed" &&
+                  a.matched !== "manual" &&
+                  a.at > since,
+              )
+              .map((a) => ({
+                card: c.name,
+                kind: c.kind,
+                matched: a.matched,
+                at: a.at,
+                nb: a.notebookId,
+              })),
+          )
+          .sort((a, b) => b.at - a.at);
+        setRows(out);
+      })
+      .catch(() => setRows([]));
+    return () => {
+      alive = false;
+    };
+  }, [registryBump]);
+
+  // Nothing filed and no cast yet: stay out of the way rather than teach the
+  // Registry from a sidebar that isn't about it.
+  if (rows.length === 0) return null;
+
+  return (
+    <StaffGroup title="Filed · 24h">
+      {rows.slice(0, 6).map((r) => (
+        <button
+          key={`${r.card}-${r.at}`}
+          type="button"
+          onClick={() => {
+            useStore.getState().closeNotebook();
+            useStore.setState({ homeSection: "registry", openCardId: null });
+          }}
+          className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-surface-2"
+          title={`${r.matched === "name" ? "name matched" : `matched ${r.matched}`}${
+            r.nb ? ` · ${notebooks.find((n) => n.id === r.nb)?.title ?? ""}` : ""
+          }`}
+        >
+          <Package className="h-3 w-3 shrink-0 text-subtle-foreground" />
+          <span className="min-w-0 flex-1 truncate text-caption">{r.card}</span>
+          <span className="shrink-0 text-micro text-subtle-foreground">
+            {relativeTime(r.at)}
+          </span>
+        </button>
+      ))}
+    </StaffGroup>
   );
 }
 

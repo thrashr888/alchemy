@@ -23,6 +23,7 @@ import {
   visibleTitle,
 } from "@/lib/utils";
 import { sourceIcon } from "@/lib/sourceIcon";
+import { AttachToCardModal } from "./RegistrySection";
 import type { Source } from "@/lib/types";
 import {
   ChevronRight,
@@ -39,6 +40,7 @@ import {
   Pencil,
   RefreshCw,
   Cloud,
+  Package,
   StickyNote,
   Tag,
 } from "lucide-react";
@@ -213,6 +215,11 @@ export function SourcesPanel() {
     id: string;
     title: string;
     value: string;
+  } | null>(null);
+  /** Source being filed under a registry card (RFC-registry §2). */
+  const [attaching, setAttaching] = useState<{
+    id: string;
+    title: string;
   } | null>(null);
 
   async function startEdit(s: Source) {
@@ -691,6 +698,12 @@ export function SourcesPanel() {
                                   }),
                               },
                               {
+                                label: "File under a card…",
+                                icon: <Package className="h-3.5 w-3.5" />,
+                                onClick: () =>
+                                  setAttaching({ id: s.id, title: s.title }),
+                              },
+                              {
                                 label: "Remove",
                                 icon: <Trash2 className="h-3.5 w-3.5" />,
                                 danger: true,
@@ -875,6 +888,12 @@ export function SourcesPanel() {
           onCancel={() => setAddingReminder(null)}
         />
       </Modal>
+
+      <AttachToCardModal
+        sourceId={attaching?.id ?? null}
+        sourceTitle={attaching?.title ?? ""}
+        onClose={() => setAttaching(null)}
+      />
 
       <Modal
         open={!!tagEdit}

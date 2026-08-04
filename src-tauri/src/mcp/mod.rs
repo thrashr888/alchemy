@@ -24,6 +24,7 @@ mod ledger;
 mod mac;
 mod notebooks;
 mod notes;
+mod registry;
 mod search;
 mod sources;
 mod studio;
@@ -244,7 +245,8 @@ impl AlchemyMcp {
     + Self::search_router()
     + Self::notes_router()
     + Self::studio_router()
-    + Self::ledger_router()))]
+    + Self::ledger_router()
+    + Self::registry_router()))]
 impl ServerHandler for AlchemyMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
