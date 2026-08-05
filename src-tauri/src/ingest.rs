@@ -244,7 +244,7 @@ fn extract_spreadsheet(path: &str) -> Result<String> {
     Ok(sheets_to_text(&mut workbook))
 }
 
-/// Render every sheet of an open workbook as "cell | cell | cell" rows.
+/// Render every sheet of an open workbook as a heading plus a markdown table.
 fn sheets_to_text<RS>(workbook: &mut calamine::Sheets<RS>) -> String
 where
     RS: std::io::Read + std::io::Seek,
@@ -258,21 +258,67 @@ where
         if range.is_empty() {
             continue;
         }
-        out.push_str(&format!("# Sheet: {name}\n"));
-        for row in range.rows() {
-            let cells: Vec<String> = row
-                .iter()
-                .map(|c| match c {
-                    Data::Empty => String::new(),
-                    other => other.to_string(),
-                })
-                .collect();
-            if cells.iter().any(|c| !c.trim().is_empty()) {
-                out.push_str(&cells.join(" | "));
-                out.push('\n');
-            }
+        let rows: Vec<Vec<String>> = range
+            .rows()
+            .map(|row| {
+                row.iter()
+                    .map(|c| match c {
+                        Data::Empty => String::new(),
+                        other => other.to_string(),
+                    })
+                    .collect()
+            })
+            .filter(|cells: &Vec<String>| cells.iter().any(|c| !c.trim().is_empty()))
+            .collect();
+        if rows.is_empty() {
+            continue;
         }
+        out.push_str(&format!("# Sheet: {name}\n"));
+        out.push_str(&rows_to_markdown_table(&rows));
         out.push('\n');
+    }
+    out
+}
+
+/// A cell, made safe for a markdown table: pipes escaped, line breaks
+/// flattened — a cell that closes its row early shears the whole column
+/// grid sideways.
+fn md_cell(cell: &str) -> String {
+    cell.replace(['\r', '\n'], " ")
+        .replace('|', "\\|")
+        .trim()
+        .to_string()
+}
+
+fn push_md_row(out: &mut String, cells: &[String], width: usize) {
+    out.push('|');
+    for i in 0..width {
+        out.push(' ');
+        out.push_str(&md_cell(cells.get(i).map(String::as_str).unwrap_or("")));
+        out.push_str(" |");
+    }
+    out.push('\n');
+}
+
+/// Rows → a GitHub-flavored markdown table, first row as the header (the
+/// way spreadsheets mean it). Valid GFM — header plus separator — is what
+/// makes the reader paint a real table instead of pipe-riddled prose, and
+/// the same pipes still read fine as plain text for retrieval. Ragged rows
+/// are padded to the widest row so no column shears.
+fn rows_to_markdown_table(rows: &[Vec<String>]) -> String {
+    let Some(first) = rows.first() else {
+        return String::new();
+    };
+    let width = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+    let mut out = String::new();
+    push_md_row(&mut out, first, width);
+    out.push('|');
+    for _ in 0..width {
+        out.push_str(" --- |");
+    }
+    out.push('\n');
+    for row in &rows[1..] {
+        push_md_row(&mut out, row, width);
     }
     out
 }
@@ -285,7 +331,7 @@ fn read_text_lossy(path: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// Convert delimiter-separated text (CSV/TSV) into readable "a | b | c" rows.
+/// Convert delimiter-separated text (CSV/TSV) into a markdown table.
 /// The csv crate handles RFC 4180 quoting, CRLF, and ragged rows.
 fn delimited_to_rows(text: &str, delim: char) -> String {
     let mut rdr = csv::ReaderBuilder::new()
@@ -293,15 +339,13 @@ fn delimited_to_rows(text: &str, delim: char) -> String {
         .has_headers(false)
         .flexible(true)
         .from_reader(text.as_bytes());
-    let mut out = String::new();
-    for rec in rdr.records().flatten() {
-        let cells: Vec<&str> = rec.iter().collect();
-        if cells.iter().any(|c| !c.trim().is_empty()) {
-            out.push_str(&cells.join(" | "));
-            out.push('\n');
-        }
-    }
-    out
+    let rows: Vec<Vec<String>> = rdr
+        .records()
+        .flatten()
+        .map(|rec| rec.iter().map(str::to_string).collect())
+        .filter(|cells: &Vec<String>| cells.iter().any(|c| !c.trim().is_empty()))
+        .collect();
+    rows_to_markdown_table(&rows)
 }
 
 /// Read a single entry from a zip (Office files are zip archives).
@@ -2786,17 +2830,33 @@ mod tests {
     }
 
     #[test]
-    fn delimited_to_rows_handles_quoting() {
+    fn delimited_to_rows_makes_a_markdown_table() {
+        // The reader paints valid GFM as a real table — that's the point.
         let csv = "name,note\n\"Doe, Jane\",\"said \"\"hi\"\"\"\nplain,row\n";
         assert_eq!(
             delimited_to_rows(csv, ','),
-            "name | note\nDoe, Jane | said \"hi\"\nplain | row\n"
+            "| name | note |\n| --- | --- |\n| Doe, Jane | said \"hi\" |\n| plain | row |\n"
         );
         // Blank rows are dropped; TSV uses tabs.
         assert_eq!(
             delimited_to_rows("a\tb\n\n\nc\td\n", '\t'),
-            "a | b\nc | d\n"
+            "| a | b |\n| --- | --- |\n| c | d |\n"
         );
+    }
+
+    #[test]
+    fn markdown_table_cells_cannot_shear_the_grid() {
+        // A pipe or newline inside a cell must not open a new column or row.
+        let rows = vec![
+            vec!["ticker".into(), "note".into()],
+            vec!["A|B".into(), "line one\nline two".into()],
+            vec!["ragged".into()],
+        ];
+        assert_eq!(
+            rows_to_markdown_table(&rows),
+            "| ticker | note |\n| --- | --- |\n| A\\|B | line one line two |\n| ragged |  |\n"
+        );
+        assert_eq!(rows_to_markdown_table(&[]), "");
     }
 
     #[test]

@@ -21,6 +21,13 @@ pub static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// would let a foregrounded window go stale.
 static PAUSED_UNTIL: AtomicI64 = AtomicI64::new(0);
 
+/// Epoch ms of the last database maintenance pass. Seeded at start() because
+/// launch runs its own pass (lib.rs); the periodic one is for installs that
+/// stay resident for days, where Lance versions otherwise pile up between
+/// launches.
+static LAST_MAINTAIN: AtomicI64 = AtomicI64::new(0);
+const MAINTAIN_EVERY_MS: i64 = 6 * 60 * 60 * 1000;
+
 /// Quit for real: mark the exit as intentional, then exit.
 pub fn request_quit(app: &AppHandle) {
     QUIT_REQUESTED.store(true, Ordering::Relaxed);
@@ -87,6 +94,7 @@ pub fn first_close_notice(app: &AppHandle) {
 /// in setup(); the first tick fires immediately, matching the old frontend
 /// loop's leading `void tick()`.
 pub fn start(app: AppHandle) {
+    LAST_MAINTAIN.store(now_ms(), Ordering::Relaxed);
     tauri::async_runtime::spawn(async move {
         // Smart defaults: the daily Morning Brief exists unless the user
         // deleted it (docs/RFC-brief.md) — offered exactly once, ever.
@@ -120,6 +128,20 @@ pub fn start(app: AppHandle) {
 /// longer than the interval delays the next tick rather than stacking.
 async fn run_pass(app: &AppHandle) {
     let state = app.state::<AppState>();
+    // Database housekeeping every few hours, ahead of the background gate on
+    // purpose: pruning dead Lance versions is disk hygiene, not AI spend,
+    // and it must run even when background intelligence is switched off.
+    if now_ms() - LAST_MAINTAIN.load(Ordering::Relaxed) >= MAINTAIN_EVERY_MS {
+        LAST_MAINTAIN.store(now_ms(), Ordering::Relaxed);
+        match state.db.maintain().await {
+            Ok((bytes, versions)) if versions > 0 => eprintln!(
+                "db maintenance: pruned {versions} old versions, reclaimed {} MB",
+                bytes / (1024 * 1024)
+            ),
+            Ok(_) => {}
+            Err(err) => eprintln!("db maintenance failed: {err:#}"),
+        }
+    }
     let (background, notify) = {
         let ai = state.ai.read().await;
         let config = ai.config();

@@ -645,11 +645,48 @@ function SuggestionStrip({
     }
   };
 
+  const ruleAll = async (origin: string) => {
+    setBusy("all");
+    try {
+      await api.ruleAllSuggested(origin);
+      onChanged();
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <section className="mb-6">
-      <h2 className="text-badge font-medium uppercase tracking-wider text-subtle-foreground">
-        Suggested
-      </h2>
+      <div className="flex items-center gap-2">
+        <h2 className="text-badge font-medium uppercase tracking-wider text-subtle-foreground">
+          Suggested
+        </h2>
+        {/* A sweep verdict only earns its place once ruling one-by-one is a
+            chore; a single suggestion keeps the single pair of buttons. */}
+        {cards.length > 1 && (
+          <span className="ml-auto flex items-center gap-1">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => void ruleAll("")}
+              loading={busy === "all"}
+            >
+              <Check className="h-3.5 w-3.5" />
+              Keep all
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => void ruleAll("dismissed")}
+              disabled={busy === "all"}
+              title="Not things I track — none will be suggested again"
+            >
+              <X className="h-3.5 w-3.5" />
+              Dismiss all
+            </Button>
+          </span>
+        )}
+      </div>
       <p className="mt-1 text-caption text-muted-foreground">
         Things that recur across your documents. Keeping one adds it to your
         registry and files its documents under it — it changes nothing in the

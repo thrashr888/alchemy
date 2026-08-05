@@ -189,6 +189,25 @@ pub fn run() {
             // source resync + due report runs, window or no window.
             scheduler::start(app.handle().clone());
 
+            // Database housekeeping: compact fragments, prune dead versions.
+            // Lance never cleans up after itself, and an unpruned install
+            // grows to gigabytes of stale FTS indices. Delayed so launch
+            // stays snappy.
+            {
+                let db = app.state::<AppState>().db.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                    match db.maintain().await {
+                        Ok((bytes, versions)) if versions > 0 => eprintln!(
+                            "db maintenance: pruned {versions} old versions, reclaimed {} MB",
+                            bytes / (1024 * 1024)
+                        ),
+                        Ok(_) => {}
+                        Err(err) => eprintln!("db maintenance failed: {err:#}"),
+                    }
+                });
+            }
+
             // Seed the current accessibility text scale so the first window
             // focus doesn't spuriously broadcast; the frontend reads it at boot
             // via get_system_text_scale, and window-focus republishes changes.
@@ -314,6 +333,7 @@ pub fn run() {
             commands::cards_for_source,
             commands::suggest_cards_now,
             commands::set_card_origin,
+            commands::rule_all_suggested,
             commands::rematch_registry,
             commands::run_second_look,
             commands::create_report_schedule,

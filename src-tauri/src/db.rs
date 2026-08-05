@@ -943,6 +943,28 @@ impl Db {
         Ok(())
     }
 
+    /// Rename a source in place — the background retitle's write. Chunks
+    /// store `source_title` as the citation label, so they move in step;
+    /// a missing chunks table (created lazily, and un-embedded sources have
+    /// no rows) just means there is nothing to relabel.
+    pub async fn set_source_title(&self, source_id: &str, title: &str) -> Result<()> {
+        let tbl = self.conn.open_table(T_SOURCES).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(source_id)))
+            .column("title", format!("'{}'", esc(title)))
+            .execute()
+            .await?;
+        if let Ok(chunks) = self.conn.open_table(T_CHUNKS).execute().await {
+            chunks
+                .update()
+                .only_if(format!("source_id = '{}'", esc(source_id)))
+                .column("source_title", format!("'{}'", esc(title)))
+                .execute()
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Stamp a source's gallery lead image ("" unknown, "-" checked-none)
     /// without touching content or chunks.
     pub async fn set_source_image(&self, source_id: &str, image_url: &str) -> Result<()> {
@@ -1077,6 +1099,48 @@ impl Db {
             .store(on, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// Reclaim disk and scan speed: compact fragmented tables and prune old
+    /// dataset versions. Lance is additive — every write, and every FTS
+    /// rebuild, leaves the prior version (index and all) on disk forever
+    /// unless pruned, and nothing prunes by default. An install observed in
+    /// the wild held 69 MB of live chunk data inside a 9.8 GB table: 11,605
+    /// versions, 8.6 GB of dead FTS indices, and 4,085 fragments for every
+    /// scan to plan over. Best-effort per table; an hour of retained history
+    /// is generous when this process is the only writer. Returns (bytes
+    /// reclaimed, versions removed).
+    pub async fn maintain(&self) -> Result<(u64, u64)> {
+        use lancedb::table::OptimizeAction;
+        let mut bytes = 0u64;
+        let mut versions = 0u64;
+        for name in self.conn.table_names().execute().await? {
+            let Ok(tbl) = self.conn.open_table(&name).execute().await else {
+                continue;
+            };
+            // Compact first so the prune that follows can also drop the
+            // pre-compaction fragments it just superseded.
+            let _ = tbl
+                .optimize(OptimizeAction::Compact {
+                    options: Default::default(),
+                    remap_options: None,
+                })
+                .await;
+            if let Ok(stats) = tbl
+                .optimize(OptimizeAction::Prune {
+                    older_than: Some(lancedb::table::optimize::Duration::hours(1)),
+                    delete_unverified: None,
+                    error_if_tagged_old_versions: Some(false),
+                })
+                .await
+            {
+                if let Some(p) = stats.prune {
+                    bytes += p.bytes_removed;
+                    versions += p.old_versions;
+                }
+            }
+        }
+        Ok((bytes, versions))
+    }
+
     /// Rebuild the chunks FTS index if any deferred write dirtied it.
     pub async fn flush_fts(&self) -> Result<()> {
         if self
@@ -1105,7 +1169,19 @@ impl Db {
                 .execute()
                 .await
             {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    // Every rebuild leaves the entire previous index behind
+                    // as a dead version — prune promptly or a chatty sweep
+                    // session grows the table by gigabytes of stale Tantivy.
+                    let _ = tbl
+                        .optimize(lancedb::table::OptimizeAction::Prune {
+                            older_than: Some(lancedb::table::optimize::Duration::minutes(10)),
+                            delete_unverified: None,
+                            error_if_tagged_old_versions: Some(false),
+                        })
+                        .await;
+                    return Ok(());
+                }
                 Err(e) => {
                     let msg = e.to_string();
                     let retryable = msg.contains("Retryable")

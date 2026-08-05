@@ -470,6 +470,9 @@ export const api = {
   /** origin: "" confirms a suggestion, "dismissed" turns it down. */
   setCardOrigin: (id: string, origin: string) =>
     run(cmd<RegistryCard>("set_card_origin", { id, origin })),
+  /** Rule every suggestion at once; same origin contract as setCardOrigin. */
+  ruleAllSuggested: (origin: string) =>
+    run(cmd<number>("rule_all_suggested", { origin })),
   cardsForSource: (sourceId: string) =>
     run(query<RegistryCard[]>("cards_for_source", { sourceId })),
   rematchRegistry: (notebookId: string) =>

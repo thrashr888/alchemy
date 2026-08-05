@@ -209,10 +209,14 @@ impl AlchemyMcp {
             let mut extracted = commands::extract_any_file(&state, &path)
                 .await
                 .map_err(internal)?;
-            commands::friendly_title(&state, &mut extracted).await;
-            commands::store_extracted(&state, &notebook_id, extracted)
+            let settled = commands::friendly_title_fast(&mut extracted);
+            let src = commands::store_extracted(&state, &notebook_id, extracted)
                 .await
-                .map_err(internal)?
+                .map_err(internal)?;
+            if !settled {
+                commands::spawn_retitle(&state, &src).await;
+            }
+            src
         };
         self.changed("sources", Some(&notebook_id));
         json_result(&source)

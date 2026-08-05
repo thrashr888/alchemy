@@ -97,6 +97,14 @@ struct CardIdReq {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+struct RuleSuggestedReq {
+    /// "keep" confirms every suggested card — they become the user's and
+    /// their documents are re-matched in the background. "dismiss" turns
+    /// them all down, remembered so the same guesses never come back.
+    verdict: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 struct SourceIdReq {
     /// Source id.
     source_id: String,
@@ -304,6 +312,27 @@ impl AlchemyMcp {
             })
             .collect();
         json_result(&hits)
+    }
+
+    #[tool(
+        description = "Rule on every suggested card (origin \"auto\") at once: \"keep\" confirms them all into the user's registry, \"dismiss\" turns them all down (remembered, so the same guesses never return). Returns how many were ruled. Only do this when the user asked for a sweep — suggestions are normally theirs to judge one by one."
+    )]
+    async fn rule_all_suggested(
+        &self,
+        Parameters(RuleSuggestedReq { verdict }): Parameters<RuleSuggestedReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let origin = match verdict.as_str() {
+            "keep" => "",
+            "dismiss" => "dismissed",
+            _ => return Err(invalid("verdict must be \"keep\" or \"dismiss\"")),
+        };
+        let ruled = commands::rule_all_suggested_cards(&self.state().db, origin)
+            .await
+            .map_err(internal)?;
+        if ruled > 0 {
+            self.changed("registry", None);
+        }
+        json_result(&serde_json::json!({ "ruled": ruled }))
     }
 
     #[tool(

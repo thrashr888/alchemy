@@ -212,7 +212,6 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
     if gists.is_empty() {
         return Ok(0);
     }
-    let existing = db.list_registry().await.unwrap_or_default();
     let mut proposed = 0usize;
 
     for nb in db.list_notebooks().await? {
@@ -223,6 +222,10 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
                 continue;
             }
         }
+        // Fetched per notebook, not once for the sweep: a card proposed for
+        // the previous notebook must block the same name here, or every
+        // notebook that shares a dependency mints its own copy of it.
+        let existing = db.list_registry().await.unwrap_or_default();
         proposed += suggest_for_notebook(db, ai, &nb.id, &gists, &existing, None)
             .await
             .unwrap_or_default()
@@ -303,8 +306,11 @@ async fn suggest_for_notebook(
         }
         for (kind, name) in gated {
             // Anything already in the cast — yours, pending, or turned down
-            // — is settled. Never re-propose it.
-            if existing.iter().any(|c| same_thing(&c.name, &name)) {
+            // — is settled. Never re-propose it. `made` guards within this
+            // reply: a model can restate one thing twice in one answer.
+            if existing.iter().any(|c| same_thing(&c.name, &name))
+                || made.iter().any(|m| same_thing(m, &name))
+            {
                 continue;
             }
             let ts = now();
@@ -417,11 +423,12 @@ fn build_suggest_messages(material: &str) -> Vec<crate::ai::ChatTurn> {
 ///
 /// Exact match isn't enough: across runs the same model names one object
 /// two ways — "Rheem Performance Platinum" and "Rheem Performance Platinum
-/// water heater" — and two cards for one water heater is precisely the mess
-/// the Registry exists to prevent. Prefix containment catches the
-/// restatement while leaving genuinely different things alone ("Apple" does
-/// not swallow "Pineapple Studios"), and it only ever suppresses a
-/// suggestion, never a card someone made.
+/// water heater", "Paul Thrasher" and "Paul Scott Thrasher" — and two cards
+/// for one thing is precisely the mess the Registry exists to prevent. The
+/// shorter name's words, in order and whole, inside the longer one is a
+/// restatement; anything less leaves genuinely different things alone
+/// ("Apple" does not swallow "Pineapple Studios"), and this only ever
+/// suppresses a suggestion, never a card someone made.
 fn same_thing(existing: &str, proposed: &str) -> bool {
     let a = existing.trim().to_lowercase();
     let b = proposed.trim().to_lowercase();
@@ -433,12 +440,16 @@ fn same_thing(existing: &str, proposed: &str) -> bool {
     } else {
         (&b, &a)
     };
-    // Word-boundary prefix only, so "Sea Otter" never absorbs "Sea Otter II"
-    // by accident of length alone — it has to read as the same name with
-    // more said after it.
-    short.chars().count() >= MIN_NAME_LEN
-        && long.starts_with(short.as_str())
-        && long[short.len()..].starts_with(' ')
+    if short.chars().count() < MIN_NAME_LEN {
+        return false;
+    }
+    // Whole words, in order — "Sea Otter" reads inside "Sea Otter II" and a
+    // middle name never splits a person in two, but "Timberline 2.0" and
+    // "Timberline 3.0" stay two projects.
+    let mut long_words = long.split_whitespace();
+    short
+        .split_whitespace()
+        .all(|w| long_words.any(|lw| lw == w))
 }
 
 /// Keep only proposals that are grounded and well-formed.
@@ -542,27 +553,104 @@ pub async fn set_card_origin(
     Ok(card)
 }
 
+/// Rule on every suggested card at once — the strip's "Keep all" /
+/// "Dismiss all". Shared with the MCP tool. One rematch sweep at the end
+/// instead of one per card, so keeping a dozen suggestions doesn't read the
+/// corpus a dozen times over.
+pub(crate) async fn rule_all_suggested_cards(
+    db: &std::sync::Arc<crate::db::Db>,
+    origin: &str,
+) -> Result<usize, String> {
+    let cards = db.list_registry().await.map_err(|e| e.to_string())?;
+    let ts = now();
+    let mut ruled = 0usize;
+    for mut card in cards {
+        if card.origin != "auto" {
+            continue;
+        }
+        card.origin = origin.to_string();
+        card.updated_at = ts;
+        db.update_registry_card(&card)
+            .await
+            .map_err(|e| e.to_string())?;
+        ruled += 1;
+    }
+    if ruled > 0 && origin.is_empty() {
+        spawn_rematch_all(db.clone());
+    }
+    Ok(ruled)
+}
+
+/// The Tauri face of `rule_all_suggested_cards`: "" keeps every suggestion,
+/// "dismissed" turns them all down (remembered, like a one-by-one dismiss).
+#[tauri::command]
+pub async fn rule_all_suggested(
+    state: State<'_, AppState>,
+    origin: String,
+) -> Result<usize, String> {
+    if !["", "dismissed"].contains(&origin.as_str()) {
+        return Err(format!("Unknown card origin \u{201c}{origin}\u{201d}"));
+    }
+    let ruled = rule_all_suggested_cards(&state.db, &origin).await?;
+    if ruled > 0 {
+        super::notify_changed("registry", None);
+    }
+    Ok(ruled)
+}
+
+/// One corpus rematch at a time. A sweep reads every source's content — a
+/// Lance scan apiece, and DataFusion fans each scan across cores — so
+/// confirming five suggestions one-by-one used to stack five concurrent
+/// corpus sweeps and pin every performance core for minutes. Requests that
+/// arrive mid-sweep coalesce into one more pass.
+static REMATCH_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static REMATCH_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Re-run matching over the whole corpus, in the background.
 fn spawn_rematch_all(db: std::sync::Arc<crate::db::Db>) {
+    use std::sync::atomic::Ordering::SeqCst;
+    REMATCH_PENDING.store(true, SeqCst);
+    if REMATCH_RUNNING.swap(true, SeqCst) {
+        // The running sweep will see the pending flag and go around again.
+        return;
+    }
     tauri::async_runtime::spawn(async move {
-        let Ok(notebooks) = db.list_notebooks().await else {
-            return;
-        };
-        for nb in notebooks {
-            let Ok(sources) = db.list_sources(&nb.id).await else {
-                continue;
-            };
-            for s in sources {
-                if s.source_type == "folder" {
-                    continue;
-                }
-                let Ok(text) = db.source_content(&s.id).await else {
-                    continue;
-                };
-                match_source_to_cards(&db, &nb.id, &s.id, &text).await;
+        loop {
+            while REMATCH_PENDING.swap(false, SeqCst) {
+                rematch_all(&db).await;
             }
+            REMATCH_RUNNING.store(false, SeqCst);
+            // A request that landed between the pending check and the
+            // running drop would otherwise be lost — reclaim and go again.
+            if REMATCH_PENDING.load(SeqCst) && !REMATCH_RUNNING.swap(true, SeqCst) {
+                continue;
+            }
+            break;
         }
     });
+}
+
+async fn rematch_all(db: &crate::db::Db) {
+    let Ok(notebooks) = db.list_notebooks().await else {
+        return;
+    };
+    for nb in notebooks {
+        let Ok(sources) = db.list_sources(&nb.id).await else {
+            continue;
+        };
+        for s in sources {
+            if s.source_type == "folder" {
+                continue;
+            }
+            let Ok(text) = db.source_content(&s.id).await else {
+                continue;
+            };
+            match_source_to_cards(db, &nb.id, &s.id, &text).await;
+            // Breathe between scans so the sweep shares the machine with
+            // the person using it.
+            tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        }
+    }
 }
 
 #[tauri::command]
@@ -835,6 +923,17 @@ mod tests {
         // Different things that merely share a start stay different.
         assert!(!same_thing("Apple", "Pineapple Studios"));
         assert!(!same_thing("Corran Marine Works", "Corran Marina"));
+    }
+
+    #[test]
+    fn a_middle_name_does_not_split_a_person_in_two() {
+        // Observed live: "Paul Thrasher" and "Paul Scott Thrasher" as two
+        // person cards — prefix containment missed the insertion.
+        assert!(same_thing("Paul Thrasher", "Paul Scott Thrasher"));
+        assert!(same_thing("Ferrari 458 Spider", "2013 Ferrari 458 Spider"));
+        // Same words out of order, or different versions, are not the same.
+        assert!(!same_thing("Timberline 2.0", "Timberline 3.0"));
+        assert!(!same_thing("Chen Maya", "Maya Chen Portfolio"));
     }
 
     #[test]

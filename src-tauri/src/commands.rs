@@ -1194,19 +1194,22 @@ async fn extract_pdf_ocr(state: &AppState, path: &str) -> anyhow::Result<ingest:
     })
 }
 
-/// Filenames, slugs, and arXiv-style IDs make poor display titles. Markdown
-/// gets its first heading; everything else asks the chat model for a short
-/// title. Best-effort — any failure keeps the filename, titling must never
-/// break an import.
-pub(crate) async fn friendly_title(state: &AppState, extracted: &mut ingest::Extracted) {
+/// Filenames, slugs, and arXiv-style IDs make poor display titles. The cheap
+/// legs run inline: code files and human-looking names keep themselves,
+/// markdown takes its first heading. Returns true when the title is settled;
+/// false means only a model could do better — the caller queues
+/// `spawn_retitle` AFTER the source lands, because an import must never wait
+/// on a model (a cold Ollama used to turn "add a file" into a long spinner
+/// with nothing on screen).
+pub(crate) fn friendly_title_fast(extracted: &mut ingest::Extracted) -> bool {
     // Code files are their own best titles (db.rs IS the name) — and a repo
     // add would otherwise fire one model call per file.
     if extracted.source_type == "code" {
-        return;
+        return true;
     }
     // A title containing spaces is usually already human-written.
     if extracted.title.contains(char::is_whitespace) {
-        return;
+        return true;
     }
     if extracted.source_type == "markdown" {
         let heading = extracted
@@ -1218,25 +1221,50 @@ pub(crate) async fn friendly_title(state: &AppState, extracted: &mut ingest::Ext
             .map(|l| l.trim_start_matches('#').trim().to_string());
         if let Some(h) = heading.filter(|h| !h.is_empty()) {
             extracted.title = h.chars().take(80).collect();
-            return;
+            return true;
         }
     }
-    let excerpt: String = extracted.text.chars().take(1500).collect();
-    let messages = vec![
-        crate::ai::ChatTurn::system(
-            "You title documents. Reply with ONLY a short descriptive title (3-8 words) for the \
-             document excerpt — no quotes, no trailing punctuation, nothing else.",
-        ),
-        crate::ai::ChatTurn::user(format!(
-            "Filename: {}\n\nExcerpt:\n{excerpt}\n\nTitle:",
-            extracted.title
-        )),
-    ];
-    let out = {
-        let ai = state.ai.read().await.clone();
-        ai.chat_role(crate::inference::Role::Small, &messages).await
-    };
-    if let Ok(out) = out {
+    false
+}
+
+/// The model leg of titling, in the background: ask Small for a short title
+/// and rename the stored source when it answers. Best-effort — any failure
+/// keeps the filename, titling must never break an import. Bounded so a
+/// folder of fifty files trickles through the model instead of stampeding
+/// it, and the rename is skipped if the title moved meanwhile (a refresh
+/// raced us).
+pub(crate) async fn spawn_retitle(state: &AppState, source: &Source) {
+    static RETITLE_GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+    if source.status != "ready" {
+        return;
+    }
+    let db = state.db.clone();
+    // Momentary read guard, snapshot out — never hold the Ai lock across
+    // the call itself.
+    let ai = { state.ai.read().await.clone() };
+    let id = source.id.clone();
+    let placed_title = source.title.clone();
+    let notebook_id = source.notebook_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let Ok(_permit) = RETITLE_GATE.acquire().await else {
+            return;
+        };
+        let Ok(text) = db.source_content(&id).await else {
+            return;
+        };
+        let excerpt: String = text.chars().take(1500).collect();
+        let messages = vec![
+            crate::ai::ChatTurn::system(
+                "You title documents. Reply with ONLY a short descriptive title (3-8 words) for \
+                 the document excerpt — no quotes, no trailing punctuation, nothing else.",
+            ),
+            crate::ai::ChatTurn::user(format!(
+                "Filename: {placed_title}\n\nExcerpt:\n{excerpt}\n\nTitle:"
+            )),
+        ];
+        let Ok(out) = ai.chat_role(crate::inference::Role::Small, &messages).await else {
+            return;
+        };
         let t = out
             .text
             .lines()
@@ -1245,11 +1273,21 @@ pub(crate) async fn friendly_title(state: &AppState, extracted: &mut ingest::Ext
             .unwrap_or("")
             .trim()
             .trim_matches(['"', '“', '”', '*', '#'])
-            .trim();
-        if !t.is_empty() && t.chars().count() <= 100 {
-            extracted.title = t.to_string();
+            .trim()
+            .to_string();
+        if t.is_empty() || t.chars().count() > 100 || t == placed_title {
+            return;
         }
-    }
+        // A refresh may have replaced the row (or its title) while the model
+        // thought — the filename title is the claim check.
+        match db.get_source(&id).await {
+            Ok(Some(s)) if s.title == placed_title => {}
+            _ => return,
+        }
+        if db.set_source_title(&id, &t).await.is_ok() {
+            notify_changed("sources", Some(&notebook_id));
+        }
+    });
 }
 
 /// Extract a local file through the full pipeline (Google placeholder fetch,
@@ -1300,8 +1338,12 @@ pub async fn add_source_file(
         return add_source_folder(app, state, notebook_id, path).await;
     }
     let mut extracted = e(extract_any_file(&state, &path).await)?;
-    friendly_title(&state, &mut extracted).await;
-    e(store_extracted(&state, &notebook_id, extracted).await)
+    let settled = friendly_title_fast(&mut extracted);
+    let src = e(store_extracted(&state, &notebook_id, extracted).await)?;
+    if !settled {
+        spawn_retitle(&state, &src).await;
+    }
+    Ok(src)
 }
 
 /// Live Spotlight search over the user's Mac, backing the Add Source →
@@ -2242,10 +2284,11 @@ pub async fn refresh_source_url(
     }
     let mut extracted = e(extract_any_file(&state, &existing.url).await)?;
     let mut existing = existing;
+    let mut retitle = false;
     if existing.status == "placeholder" {
         // First real read of an evicted file (reading it just hydrated it) —
         // give it a real title like any fresh import.
-        friendly_title(&state, &mut extracted).await;
+        retitle = !friendly_title_fast(&mut extracted);
     } else {
         // Keep the existing title — the file's content changed, its name
         // didn't, and the stored title may be friendlier than the file stem.
@@ -2254,7 +2297,11 @@ pub async fn refresh_source_url(
     // Stamp the on-disk mtime, or the next folder rescan would see a mismatch
     // and re-embed this file a second time.
     existing.mtime = file_mtime(std::path::Path::new(&existing.url));
-    e(reingest(&state, &existing, extracted, None, true).await)
+    let src = e(reingest(&state, &existing, extracted, None, true).await)?;
+    if retitle {
+        spawn_retitle(&state, &src).await;
+    }
+    Ok(src)
 }
 
 #[tauri::command]
@@ -3350,9 +3397,9 @@ async fn rescan_one_folder_inner(
             // New file — full ingest as a child of this folder.
             None => match extract_any_file(state, path).await {
                 Ok(mut extracted) => {
-                    friendly_title(state, &mut extracted).await;
+                    let settled = friendly_title_fast(&mut extracted);
                     let ctx = code_context(&folder.title, root, path);
-                    store_new_source(
+                    let src = store_new_source(
                         state,
                         &folder.notebook_id,
                         extracted,
@@ -3362,6 +3409,9 @@ async fn rescan_one_folder_inner(
                         embed_file(path),
                     )
                     .await?;
+                    if !settled {
+                        spawn_retitle(state, &src).await;
+                    }
                     scan.added += 1;
                 }
                 Err(err) => {
@@ -3375,16 +3425,17 @@ async fn rescan_one_folder_inner(
                 Ok(mut extracted) => {
                     let mut existing = (*child).clone();
                     existing.mtime = mtime;
+                    let mut retitle = false;
                     if existing.status == "placeholder" {
                         // First real read of this file — give it a real title.
-                        friendly_title(state, &mut extracted).await;
+                        retitle = !friendly_title_fast(&mut extracted);
                     } else {
                         // Keep the stored title: the content changed, not the
                         // file. (A failed child keeps its filename title.)
                         extracted.title = existing.title.clone();
                     }
                     let ctx = code_context(&folder.title, root, path);
-                    reingest(
+                    let src = reingest(
                         state,
                         &existing,
                         extracted,
@@ -3392,6 +3443,9 @@ async fn rescan_one_folder_inner(
                         embed_file(path),
                     )
                     .await?;
+                    if retitle {
+                        spawn_retitle(state, &src).await;
+                    }
                     scan.updated += 1;
                 }
                 Err(err) if child.status == "placeholder" => {
