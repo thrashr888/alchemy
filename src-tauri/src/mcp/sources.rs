@@ -136,7 +136,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "List a notebook's sources (id, title, type, url, status, char/chunk counts, tags and note — the user's own labels and annotation — and image_url, the page's lead image for url sources; \"-\" means checked and none). status \"error\" means the import failed — see the error field."
+        description = "List a notebook's sources (id, title, type, url, status, char/chunk counts, tags and note — the user's own labels and annotation — and image_url, the page's lead image for url sources; \"-\" means checked and none). status \"error\" means the import failed — see the error field; \"processing\" means the content is stored and readable but still being indexed — search reaches it shortly, no action needed."
     )]
     async fn list_sources(
         &self,

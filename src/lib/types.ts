@@ -72,8 +72,10 @@ export interface Source {
     | "obsidian";
   url: string;
   content: string;
-  /** "placeholder" = cloud-sync file not downloaded yet; listed, not embedded. */
-  status: "ready" | "error" | "placeholder";
+  /** "placeholder" = cloud-sync file not downloaded yet; listed, not embedded.
+   *  "processing" = landed and readable; chunks/embeddings still indexing in
+   *  the background (RFC-import-pipeline §2) — flips to "ready" via events. */
+  status: "ready" | "error" | "placeholder" | "processing";
   error: string;
   charCount: number;
   chunkCount: number;

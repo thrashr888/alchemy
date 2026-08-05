@@ -189,6 +189,10 @@ pub fn run() {
             // source resync + due report runs, window or no window.
             scheduler::start(app.handle().clone());
 
+            // Imports stranded mid-embed by a quit or crash restart from
+            // their stored content (docs/RFC-import-pipeline.md §2).
+            commands::resume_stranded_imports(&app.handle().clone());
+
             // Database housekeeping: compact fragments, prune dead versions.
             // Lance never cleans up after itself, and an unpruned install
             // grows to gigabytes of stale FTS indices. Delayed so launch

@@ -94,6 +94,8 @@ export function sourceHoverData(s: Source) {
     meta.push({ label: "File updated", value: relativeTime(s.mtime) });
   }
   if (s.status === "error") meta.push({ label: s.error || "Import failed" });
+  if (s.status === "processing")
+    meta.push({ label: "Indexing — chat and search pick it up shortly" });
   if (s.status === "placeholder")
     meta.push({ label: "Cloud placeholder — not downloaded yet" });
   if (s.author) meta.push({ label: "Author", value: s.author });
@@ -514,10 +516,13 @@ export function SourcesPanel() {
                 const importing = isFolder && importingFolders.includes(s.id);
                 // Errored WEB sources still open in the reader: extraction
                 // failed, but the Live view can show the actual page. Folder
-                // and git parents open as the repo reader.
+                // and git parents open as the repo reader. A "processing"
+                // source reads fine — its text is stored; only retrieval is
+                // still catching up.
                 const readable =
                   !importing &&
                   (s.status === "ready" ||
+                    s.status === "processing" ||
                     (s.status === "error" && isWebUrl(s.url)));
                 const kids = isFolder
                   ? sources.filter((x) => x.parentId === s.id)
@@ -580,7 +585,7 @@ export function SourcesPanel() {
                       </button>
                     ) : (
                       <div className="pointer-events-none relative z-10 mt-0.5">
-                        {importing ? (
+                        {importing || s.status === "processing" ? (
                           <Spinner className="h-3.5 w-3.5 text-muted-foreground" />
                         ) : s.status === "error" ? (
                           <AlertCircle className="h-3.5 w-3.5 text-destructive" />

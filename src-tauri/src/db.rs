@@ -943,10 +943,12 @@ impl Db {
         Ok(())
     }
 
-    /// Rename a source in place — the background retitle's write. Chunks
-    /// store `source_title` as the citation label, so they move in step;
-    /// a missing chunks table (created lazily, and un-embedded sources have
-    /// no rows) just means there is nothing to relabel.
+    /// Rename a source in place — the background retitle's write. The row is
+    /// the whole rename: chunks carry no title, and citations join
+    /// `source_title` from this table at read time (`search_chunks_trace`).
+    /// (v0.34.0 also updated a `source_title` column on chunks that doesn't
+    /// exist, which errored the whole call and silently dropped every
+    /// retitle.)
     pub async fn set_source_title(&self, source_id: &str, title: &str) -> Result<()> {
         let tbl = self.conn.open_table(T_SOURCES).execute().await?;
         tbl.update()
@@ -954,14 +956,27 @@ impl Db {
             .column("title", format!("'{}'", esc(title)))
             .execute()
             .await?;
-        if let Ok(chunks) = self.conn.open_table(T_CHUNKS).execute().await {
-            chunks
-                .update()
-                .only_if(format!("source_id = '{}'", esc(source_id)))
-                .column("source_title", format!("'{}'", esc(title)))
-                .execute()
-                .await?;
-        }
+        Ok(())
+    }
+
+    /// Close out an import's background stage (RFC-import-pipeline §2):
+    /// stamp status, error, and the chunk count the stage produced, without
+    /// touching content or chunks.
+    pub async fn finish_processing(
+        &self,
+        source_id: &str,
+        chunk_count: i64,
+        status: &str,
+        error: &str,
+    ) -> Result<()> {
+        let tbl = self.conn.open_table(T_SOURCES).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(source_id)))
+            .column("status", format!("'{}'", esc(status)))
+            .column("error", format!("'{}'", esc(error)))
+            .column("chunk_count", chunk_count.to_string())
+            .execute()
+            .await?;
         Ok(())
     }
 

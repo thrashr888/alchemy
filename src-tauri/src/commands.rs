@@ -910,10 +910,13 @@ async fn find_duplicate(
 ) -> anyhow::Result<Option<String>> {
     let char_count = text.chars().count() as i64;
     for s in state.db.list_sources(notebook_id).await? {
-        // Only ready sources count — error and placeholder rows have empty
-        // content and would false-match each other.
+        // Only ready and still-indexing sources count — error and
+        // placeholder rows have empty content and would false-match each
+        // other. "processing" matters here: dropping the same file twice in
+        // quick succession must catch the second copy while the first is
+        // still in the embed queue.
         if s.char_count == char_count
-            && s.status == "ready"
+            && (s.status == "ready" || s.status == "processing")
             && state.db.source_content(&s.id).await? == text
         {
             return Ok(Some(s.title));
@@ -978,10 +981,12 @@ pub(crate) async fn store_extracted(
     store_new_source(state, notebook_id, extracted, "", mtime, None, true).await
 }
 
-/// Chunk, embed, classify, and persist a new source row. `parent_id` is set
-/// for folder children (which dedup by path, not content); `mtime` for any
-/// file-backed source; `code_ctx` is the "repo › path" retrieval context for
-/// code chunks when the caller knows it.
+/// Classify and persist a new source row IMMEDIATELY, then hand chunking and
+/// embedding to the background stage (docs/RFC-import-pipeline.md §2) — the
+/// row lands as `"processing"` and flips to `"ready"` when its chunks do.
+/// `parent_id` is set for folder children (which dedup by path, not
+/// content); `mtime` for any file-backed source; `code_ctx` is the
+/// "repo › path" retrieval context for code chunks when the caller knows it.
 async fn store_new_source(
     state: &AppState,
     notebook_id: &str,
@@ -991,75 +996,44 @@ async fn store_new_source(
     code_ctx: Option<&str>,
     embed: bool,
 ) -> anyhow::Result<Source> {
-    // Repository-tier code children store their content but skip embedding —
-    // the ripgrep leg reaches them at query time (RFC-git-sources §4).
-    let chunks = if embed {
-        ingest::chunk_source(&extracted, code_ctx)
-    } else {
-        Vec::new()
-    };
-    let embed_inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
-    let embeddings = {
-        let ai = state.ai.read().await.clone();
-        ai.embed(&embed_inputs).await?
-    };
-
-    let chunk_tuples: Vec<(String, i32, String)> = chunks
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (new_id(), i as i32, c.text.clone()))
-        .collect();
-
     let (status, error) = classify(&extracted.source_type, &extracted.url, &extracted.text);
+    // Repository-tier code children store their content but skip embedding —
+    // the ripgrep leg reaches them at query time (RFC-git-sources §4). They
+    // land "ready" with no chunks, exactly as before.
+    let processing = embed && status == "ready";
     let source = Source {
-        image_url: extracted.image_url,
-        author: extracted.author,
+        image_url: extracted.image_url.clone(),
+        author: extracted.author.clone(),
         id: new_id(),
         notebook_id: notebook_id.to_string(),
         title: presentable_title(&extracted.title, &extracted.url),
-        source_type: extracted.source_type,
-        url: extracted.url,
+        source_type: extracted.source_type.clone(),
+        url: extracted.url.clone(),
         content: extracted.text.clone(),
         char_count: extracted.text.chars().count() as i64,
-        chunk_count: chunk_tuples.len() as i64,
+        chunk_count: 0,
         created_at: now(),
-        status,
+        status: if processing {
+            "processing".to_string()
+        } else {
+            status
+        },
         error,
         parent_id: parent_id.to_string(),
         mtime,
         tags: String::new(),
         note: String::new(),
     };
-    state
-        .db
-        .insert_source(&source, &chunk_tuples, &embeddings)
-        .await?;
+    state.db.insert_source(&source, &[], &[]).await?;
     state.db.touch_notebook(notebook_id, now()).await?;
 
-    // Kick the gist sweep (RFC-infinite-context §1) — fire-and-forget, so
-    // the import returns before any distillation happens.
-    if embed {
-        crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
-    }
-
-    // Judgment on arrival for deliberate adds only — folder children skip
-    // (a bulk import judging hundreds of files against the ledger would be
-    // noise; their later CHANGES still weave via reingest).
-    if embed && parent_id.is_empty() {
-        weave::spawn_weave(
-            state.db.clone(),
-            state.ai.read().await.clone(),
-            notebook_id.to_string(),
-            source.title.clone(),
-            source.content.chars().take(4_000).collect(),
-        );
-    }
-
-    // File the arrival under any card that claims it (commands/registry.rs).
-    // Unlike the Weave this DOES run for folder children: a folder of
-    // scanned documents is exactly where auto-filing earns its keep, and
-    // matching is literal string work with no model call to budget.
-    if !source.content.is_empty() {
+    if processing {
+        spawn_embed_stage(state, &source, extracted, code_ctx.map(str::to_string)).await;
+    } else if !source.content.is_empty() {
+        // Non-embedding and errored arrivals still file under any registry
+        // card that claims them, as they always did — literal string work,
+        // no model call to budget. Embedded arrivals file after their
+        // chunks land, inside the stage.
         registry::spawn_registry_match(
             state.db.clone(),
             notebook_id.to_string(),
@@ -1073,6 +1047,138 @@ async fn store_new_source(
         content: String::new(),
         ..source
     })
+}
+
+/// Imports waiting on (or inside) the background embed stage. The last one
+/// out flushes the FTS rebuild that everyone deferred — a folder drop does
+/// one rebuild, not one per file.
+static EMBED_QUEUE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Stage two of an import (docs/RFC-import-pipeline.md §2): chunk, embed,
+/// and index in the background, then flip the row from "processing" to
+/// "ready" and kick the after-import intelligence. ONE worker on purpose —
+/// a folder drop queues through in arrival order, so neither the embedding
+/// model nor Lance ever sees a stampede. The row is already on screen;
+/// retrieval joins when the chunks land.
+pub(crate) async fn spawn_embed_stage(
+    state: &AppState,
+    source: &Source,
+    extracted: ingest::Extracted,
+    code_ctx: Option<String>,
+) {
+    static EMBED_GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+    let db = state.db.clone();
+    let ai = { state.ai.read().await.clone() };
+    let source = source.clone();
+    EMBED_QUEUE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    db.defer_fts(true);
+    tauri::async_runtime::spawn(async move {
+        let outcome: anyhow::Result<Option<usize>> = async {
+            let _permit = EMBED_GATE.acquire().await?;
+            let chunks = ingest::chunk_source(&extracted, code_ctx.as_deref());
+            let inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
+            let embeddings = ai.embed(&inputs).await?;
+            // The queue wait plus the embed can outlive the row: a delete
+            // drops it, a refresh replaces it (reingest embeds its own
+            // chunks). Either way this stage's work belongs to a row that no
+            // longer exists — writing it would orphan chunks or clobber the
+            // replacement, so re-check before the write.
+            match db.get_source(&source.id).await? {
+                Some(current) if current.status == "processing" => {}
+                _ => return Ok(None),
+            }
+            let tuples: Vec<(String, i32, String)> = chunks
+                .iter()
+                .enumerate()
+                .map(|(i, c)| (new_id(), i as i32, c.text.clone()))
+                .collect();
+            db.add_chunks(&source.notebook_id, &source.id, &tuples, &embeddings)
+                .await?;
+            Ok(Some(tuples.len()))
+        }
+        .await;
+        match &outcome {
+            Ok(Some(n)) => {
+                let _ = db
+                    .finish_processing(&source.id, *n as i64, "ready", "")
+                    .await;
+            }
+            // The row was deleted or replaced mid-stage — nothing to stamp.
+            Ok(None) => {}
+            Err(err) => {
+                // A failed stage is an errored row with the reason, retryable
+                // via Refresh — never a silent disappearance.
+                let _ = db
+                    .finish_processing(&source.id, 0, "error", &format!("indexing failed: {err:#}"))
+                    .await;
+            }
+        }
+        // Last one out rebuilds BM25 once for the whole batch.
+        if EMBED_QUEUE.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) == 1 {
+            db.defer_fts(false);
+            if let Err(err) = db.flush_fts().await {
+                eprintln!("embed stage: FTS flush failed: {err:#}");
+            }
+        }
+        notify_changed("sources", Some(&source.notebook_id));
+        if !matches!(outcome, Ok(Some(_))) {
+            return;
+        }
+
+        // The after-import intelligence, exactly what the synchronous path
+        // used to kick — now downstream of the chunks it reads. The gist
+        // sweep self-gates (SWEEPING), so per-source kicks don't stack.
+        crate::gist::spawn_sweep(db.clone(), ai.clone());
+        // Judgment on arrival for deliberate adds only — folder children
+        // skip (a bulk import judging hundreds of files against the ledger
+        // would be noise; their later CHANGES still weave via reingest).
+        if source.parent_id.is_empty() {
+            weave::spawn_weave(
+                db.clone(),
+                ai,
+                source.notebook_id.clone(),
+                source.title.clone(),
+                extracted.text.chars().take(4_000).collect(),
+            );
+        }
+        // File the arrival under any card that claims it — folder children
+        // included: a folder of scanned documents is exactly where
+        // auto-filing earns its keep.
+        registry::spawn_registry_match(
+            db,
+            source.notebook_id.clone(),
+            source.id.clone(),
+            extracted.text,
+        );
+    });
+}
+
+/// Re-arm the embed stage for sources stranded in "processing" by a quit or
+/// crash mid-import. Content is stored, so the stage restarts from the row
+/// itself; the one loss is a code child's "repo › path" chunk context,
+/// which only a crash-window import can hit.
+pub(crate) fn resume_stranded_imports(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let Ok(sources) = state.db.all_sources().await else {
+            return;
+        };
+        for s in sources {
+            if s.status != "processing" {
+                continue;
+            }
+            let extracted = ingest::Extracted {
+                image_url: s.image_url.clone(),
+                author: s.author.clone(),
+                title: s.title.clone(),
+                source_type: s.source_type.clone(),
+                url: s.url.clone(),
+                text: s.content.clone(),
+            };
+            spawn_embed_stage(&state, &s, extracted, None).await;
+        }
+    });
 }
 
 /// Persist a URL source that failed to import so it shows with an error badge
@@ -1235,7 +1341,10 @@ pub(crate) fn friendly_title_fast(extracted: &mut ingest::Extracted) -> bool {
 /// raced us).
 pub(crate) async fn spawn_retitle(state: &AppState, source: &Source) {
     static RETITLE_GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
-    if source.status != "ready" {
+    // "processing" rows count: imports now land before their embed stage
+    // (RFC-import-pipeline §2), and the retitle runs alongside it. Only rows
+    // with nothing worth titling — errors, placeholders — are skipped.
+    if !matches!(source.status.as_str(), "ready" | "processing") {
         return;
     }
     let db = state.db.clone();
