@@ -2571,12 +2571,47 @@ pub async fn source_thumbnail(
             ))
         }
         "image" => {
-            // 12 MB cap: the webview scales, but a RAW-sized file as base64
-            // would balloon the IPC message.
-            const MAX_IMAGE_BYTES: u64 = 12 * 1024 * 1024;
             if src.url.is_empty() {
                 return Ok(String::new());
             }
+            // A gallery card never needs the original bytes — a 12 MB scan
+            // used to cross IPC as ~16 MB of base64 per card. Downscale once
+            // through macOS's sips (the image_bytes_for_ocr precedent) into
+            // the same disk cache PDF thumbnails use, and serve that.
+            let cache = thumb_path(&state, &source_id);
+            if let Ok(bytes) = std::fs::read(&cache) {
+                return Ok(format!("data:image/png;base64,{}", b64(&bytes)));
+            }
+            if !std::path::Path::new(&src.url).exists() {
+                return Ok(String::new());
+            }
+            if let Some(dir) = cache.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let (input, out) = (src.url.clone(), cache.clone());
+            let made = tokio::task::spawn_blocking(move || {
+                std::process::Command::new("sips")
+                    .args(["-s", "format", "png", "-Z", "480"])
+                    .arg(&input)
+                    .arg("-o")
+                    .arg(&out)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+            })
+            .await
+            .unwrap_or(false);
+            if made {
+                if let Ok(bytes) = std::fs::read(&cache) {
+                    return Ok(format!("data:image/png;base64,{}", b64(&bytes)));
+                }
+            }
+            // sips couldn't read it — fall back to raw bytes under a cap:
+            // the webview scales, but a RAW-sized file as base64 would
+            // balloon the IPC message.
+            const MAX_IMAGE_BYTES: u64 = 12 * 1024 * 1024;
             let ok_size = std::fs::metadata(&src.url)
                 .map(|m| m.len() <= MAX_IMAGE_BYTES)
                 .unwrap_or(false);
@@ -2647,11 +2682,12 @@ pub async fn source_snippets(
     max_chars: Option<usize>,
 ) -> Result<std::collections::HashMap<String, String>, String> {
     let cap = max_chars.unwrap_or(280).min(1000);
+    let ids: Vec<String> = source_ids.into_iter().take(400).collect();
+    // One projected scan for the whole level — this was 400 sequential
+    // single-id scans of the sources table, the Graph N-scan bug reborn.
+    let contents = e(state.db.source_contents(&ids).await)?;
     let mut out = std::collections::HashMap::new();
-    for id in source_ids.into_iter().take(400) {
-        let Ok(content) = state.db.source_content(&id).await else {
-            continue;
-        };
+    for (id, content) in contents {
         let snip = snippet_of(&content, cap);
         if !snip.is_empty() {
             out.insert(id, snip);
@@ -4237,15 +4273,20 @@ async fn note_curator_tick(app: &AppHandle, state: &AppState) {
 pub async fn resync_sources(
     app: AppHandle,
     state: State<'_, AppState>,
+    notebook_id: Option<String>,
 ) -> Result<FolderScan, String> {
-    resync_sources_inner(&app, &state).await
+    resync_sources_inner(&app, &state, notebook_id.as_deref()).await
 }
 
 /// The command's body, callable from the resident scheduler (scheduler.rs)
-/// with no Tauri `State` wrapper in sight.
+/// with no Tauri `State` wrapper in sight. `only_notebook` scopes the sweep
+/// to one notebook's sources — the notebook-open catch-up used to rescan
+/// the entire corpus right as a notebook was loading, in a race the
+/// 60-second scheduler tick was about to run anyway.
 pub(crate) async fn resync_sources_inner(
     app: &AppHandle,
     state: &AppState,
+    only_notebook: Option<&str>,
 ) -> Result<FolderScan, String> {
     let app = app.clone();
     // The Spotlight index rides the same tick (internally ~10-min throttled).
@@ -4274,6 +4315,9 @@ pub(crate) async fn resync_sources_inner(
     let sync_minutes = { state.ai.read().await.config().git_sync_minutes };
     for folder in e(state.db.all_folder_sources().await)? {
         if archived.contains(&folder.notebook_id) {
+            continue;
+        }
+        if only_notebook.is_some_and(|nb| nb != folder.notebook_id) {
             continue;
         }
         // Remote repos: one cheap ls-remote per cadence tick; a moved branch
@@ -4341,6 +4385,9 @@ pub(crate) async fn resync_sources_inner(
     let data_dir = app_data_dir(state);
     for src in e(state.db.all_loose_sources().await)? {
         if archived.contains(&src.notebook_id) {
+            continue;
+        }
+        if only_notebook.is_some_and(|nb| nb != src.notebook_id) {
             continue;
         }
         // Git-backed singles (README/blob) sync hourly from their cache
@@ -7354,11 +7401,18 @@ pub async fn source_backlinks(
         return Ok(vec![]);
     }
     let mut out = Vec::new();
-    for s in e(state.db.list_sources(&target.notebook_id).await)? {
-        if s.id == target.id || matches!(s.source_type.as_str(), "folder" | "obsidian") {
+    // One projected scan for every sibling's content — this ran a scan per
+    // sibling, on every reader open.
+    let siblings: Vec<Source> = e(state.db.list_sources(&target.notebook_id).await)?
+        .into_iter()
+        .filter(|s| s.id != target.id && !matches!(s.source_type.as_str(), "folder" | "obsidian"))
+        .collect();
+    let ids: Vec<String> = siblings.iter().map(|s| s.id.clone()).collect();
+    let contents = e(state.db.source_contents(&ids).await)?;
+    for s in siblings {
+        let Some(content) = contents.get(&s.id) else {
             continue;
-        }
-        let content = e(state.db.source_content(&s.id).await)?;
+        };
         if needles.iter().any(|n| content.contains(n.as_str())) {
             out.push(Backlink {
                 kind: "source".into(),

@@ -660,6 +660,52 @@ impl Db {
         Ok(batches)
     }
 
+    /// `collect`, but reading only the named columns — the difference
+    /// between a count and dragging every source's full text through Arrow.
+    async fn collect_cols(
+        &self,
+        table: &str,
+        filter: Option<&str>,
+        cols: &[&str],
+    ) -> Result<Vec<RecordBatch>> {
+        if !self.table_exists(table).await? {
+            return Ok(vec![]);
+        }
+        let tbl = self.conn.open_table(table).execute().await?;
+        let mut q = tbl.query().select(lancedb::query::Select::columns(cols));
+        if let Some(f) = filter {
+            q = q.only_if(f);
+        }
+        Ok(q.execute().await?.try_collect::<Vec<_>>().await?)
+    }
+
+    /// Full extracted text for a batch of sources in ONE projected scan.
+    /// The gallery's snippet path used to make up to 400 single-id scans of
+    /// the same table for this.
+    pub async fn source_contents(&self, source_ids: &[String]) -> Result<HashMap<String, String>> {
+        if source_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let ids = source_ids
+            .iter()
+            .map(|id| format!("'{}'", esc(id)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let filter = format!("id IN ({ids})");
+        let batches = self
+            .collect_cols(T_SOURCES, Some(&filter), &["id", "content"])
+            .await?;
+        let mut out = HashMap::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let content = str_col(b, "content")?;
+            for i in 0..b.num_rows() {
+                out.insert(id.value(i).to_string(), content.value(i).to_string());
+            }
+        }
+        Ok(out)
+    }
+
     async fn delete_where(&self, table: &str, predicate: &str) -> Result<()> {
         if self.table_exists(table).await? {
             let tbl = self.conn.open_table(table).execute().await?;
@@ -697,9 +743,12 @@ impl Db {
             }
         }
 
-        // Count sources per notebook in one pass.
+        // Count sources per notebook in one pass — projected to the one
+        // column a count needs. This runs on every notebooks refresh (every
+        // mcp://changed), and unprojected it dragged the whole corpus's
+        // content through Arrow each time.
         let mut counts: HashMap<String, i64> = HashMap::new();
-        for b in &self.collect(T_SOURCES, None).await? {
+        for b in &self.collect_cols(T_SOURCES, None, &["notebook_id"]).await? {
             let nb = str_col(b, "notebook_id")?;
             for i in 0..b.num_rows() {
                 *counts.entry(nb.value(i).to_string()).or_insert(0) += 1;
@@ -711,7 +760,15 @@ impl Db {
         let mut note_counts: HashMap<String, i64> = HashMap::new();
         let mut report_counts: HashMap<String, i64> = HashMap::new();
         if self.table_exists(T_NOTES).await? {
-            for b in &self.collect(T_NOTES, None).await? {
+            let note_batches = match self
+                .collect_cols(T_NOTES, None, &["notebook_id", "kind"])
+                .await
+            {
+                Ok(b) => b,
+                // "kind" postdates the notes table — degrade on old stores.
+                Err(_) => self.collect(T_NOTES, None).await?,
+            };
+            for b in &note_batches {
                 let nb = str_col(b, "notebook_id")?;
                 let kind = opt_str_col(b, "kind");
                 for i in 0..b.num_rows() {
@@ -828,7 +885,38 @@ impl Db {
     /// Decode source rows matching `filter`. Content is the expensive column —
     /// callers that only list skip it with `with_content = false`.
     async fn query_sources(&self, filter: Option<&str>, with_content: bool) -> Result<Vec<Source>> {
-        let batches = self.collect(T_SOURCES, filter).await?;
+        // Metadata-only listings project content away at the query — the
+        // old shape read every source's full text and then discarded it,
+        // on every list_sources call in the app.
+        let meta_cols: &[&str] = &[
+            "id",
+            "notebook_id",
+            "title",
+            "source_type",
+            "url",
+            "char_count",
+            "chunk_count",
+            "created_at",
+            "status",
+            "error",
+            "parent_id",
+            "mtime",
+            "author",
+            "image_url",
+            "tags",
+            "note",
+        ];
+        let batches = if with_content {
+            self.collect(T_SOURCES, filter).await?
+        } else {
+            match self.collect_cols(T_SOURCES, filter, meta_cols).await {
+                Ok(b) => b,
+                // A store from an older version may predate one of these
+                // columns (that's what opt_str_col is for) — degrade to the
+                // full read rather than failing the list.
+                Err(_) => self.collect(T_SOURCES, filter).await?,
+            }
+        };
         let mut sources = Vec::new();
         for b in &batches {
             let id = str_col(b, "id")?;
@@ -1569,7 +1657,13 @@ impl Db {
     /// (id, notebook_id, title, created_at) for every source — lightweight
     /// lookups without dragging full content across.
     pub async fn all_source_meta(&self) -> Result<Vec<(String, String, String, i64)>> {
-        let batches = self.collect(T_SOURCES, None).await?;
+        let batches = self
+            .collect_cols(
+                T_SOURCES,
+                None,
+                &["id", "notebook_id", "title", "created_at"],
+            )
+            .await?;
         let mut out = Vec::new();
         for b in &batches {
             let id = str_col(b, "id")?;
@@ -1591,7 +1685,7 @@ impl Db {
     /// Aggregate (source count, total chars, note count, ledger count)
     /// across every notebook.
     pub async fn corpus_stats(&self) -> Result<(i64, i64, i64, i64)> {
-        let batches = self.collect(T_SOURCES, None).await?;
+        let batches = self.collect_cols(T_SOURCES, None, &["char_count"]).await?;
         let (mut count, mut chars) = (0i64, 0i64);
         for b in &batches {
             let cc = i64_col(b, "char_count")?;
@@ -1600,11 +1694,11 @@ impl Db {
                 chars += cc.value(i);
             }
         }
-        let notes: i64 = match self.collect(T_NOTES, None).await {
+        let notes: i64 = match self.collect_cols(T_NOTES, None, &["id"]).await {
             Ok(bs) => bs.iter().map(|b| b.num_rows() as i64).sum(),
             Err(_) => 0, // table may not exist yet
         };
-        let ledger: i64 = match self.collect(T_LEDGER, None).await {
+        let ledger: i64 = match self.collect_cols(T_LEDGER, None, &["id"]).await {
             Ok(bs) => bs.iter().map(|b| b.num_rows() as i64).sum(),
             Err(_) => 0,
         };

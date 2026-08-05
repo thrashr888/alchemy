@@ -60,12 +60,16 @@ export function useHomeActivity(notebooks: Notebook[]) {
     setLoading(false);
   }, []);
 
+  // Keyed on a content fingerprint, not array identity: refreshNotebooks
+  // rebuilds the array on every mcp://changed, and each rebuild used to
+  // refire all four corpus queries even when nothing had actually moved.
+  const fingerprint = notebooks.map((n) => `${n.id}:${n.updatedAt}`).join("|");
   useEffect(() => {
     void refresh();
     return () => {
       requestId.current += 1;
     };
-  }, [notebooks, refresh]);
+  }, [fingerprint, refresh]);
 
   return { ...data, loading, error, refresh };
 }

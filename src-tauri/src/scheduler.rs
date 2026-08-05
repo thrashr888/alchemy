@@ -152,7 +152,7 @@ async fn run_pass(app: &AppHandle) {
         return;
     }
 
-    let _ = commands::resync_sources_inner(app, &state).await;
+    let _ = commands::resync_sources_inner(app, &state, None).await;
 
     let mut ran = 0u32;
     if !is_paused() {

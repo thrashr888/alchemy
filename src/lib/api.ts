@@ -155,7 +155,9 @@ export const api = {
     run(
       probe<MacFileHit[]>("search_mac_files", { query: q, limit: limit ?? null }),
     ),
-  resyncSources: () => run(slow<FolderScan>("resync_sources")),
+  /** No id = whole corpus (the scheduler's tick); an id scopes the sweep. */
+  resyncSources: (notebookId?: string) =>
+    run(slow<FolderScan>("resync_sources", { notebookId })),
   providerReadiness: () =>
     run(
       ai<{ id: string; ready: boolean; detail: string }[]>(

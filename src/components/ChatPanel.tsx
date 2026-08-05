@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
@@ -950,7 +950,14 @@ function SummaryBanner({
   );
 }
 
-function ChatMessage({ message }: { message: Message }) {
+// Memoized: message objects are stable across renders, and without this
+// every streamed token re-rendered (and re-parsed the markdown of) the
+// entire transcript, not just the growing tail.
+const ChatMessage = memo(function ChatMessage({
+  message,
+}: {
+  message: Message;
+}) {
   // Retry only makes sense on the latest exchange — resending an older
   // question would teleport it to the bottom of the transcript.
   const isLast = useStore(
@@ -1068,7 +1075,7 @@ function ChatMessage({ message }: { message: Message }) {
       <MessageActions content={message.content} />
     </div>
   );
-}
+});
 
 function noteTitleFrom(content: string): string {
   const line = content.split("\n").map((l) => l.trim()).find(Boolean) ?? "";

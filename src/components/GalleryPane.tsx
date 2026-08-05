@@ -51,6 +51,28 @@ const scrollMemory = new Map<string, number>();
  *  "" = checked, none. The backend also disk-caches og downloads. */
 const thumbMemory = new Map<string, string>();
 
+/** At most this many thumbnail IPC calls in flight. Every mounted card used
+ *  to fire its own immediately — a large gallery meant hundreds of parallel
+ *  requests, each potentially file I/O, a PDF render, or a download. */
+const THUMB_CONCURRENCY = 4;
+const thumbQueue: (() => void)[] = [];
+let thumbInFlight = 0;
+function pumpThumbs() {
+  while (thumbInFlight < THUMB_CONCURRENCY && thumbQueue.length > 0) {
+    thumbInFlight++;
+    thumbQueue.shift()!();
+  }
+}
+function enqueueThumb(job: () => Promise<void>) {
+  thumbQueue.push(() => {
+    void job().finally(() => {
+      thumbInFlight--;
+      pumpThumbs();
+    });
+  });
+  pumpThumbs();
+}
+
 type SortMode = "recent" | "title";
 
 /** Kinds whose card leads with opening lines of the text. URL sources join
@@ -788,22 +810,45 @@ function GalleryCard({
     () => thumbMemory.get(s.id) ?? null,
   );
   const [imgFailed, setImgFailed] = useState(false);
+  // Fetch only once the card is near the viewport, and only a few at a time
+  // (enqueueThumb) — scrolling a big gallery streams thumbnails in instead
+  // of stampeding the backend on mount.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [nearViewport, setNearViewport] = useState(false);
   useEffect(() => {
-    if (!wantsThumb || thumbMemory.has(s.id)) return;
+    if (!wantsThumb || thumbMemory.has(s.id) || nearViewport) return;
+    const el = rootRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setNearViewport(true);
+          obs.disconnect();
+        }
+      },
+      { rootMargin: "300px" },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [s.id, wantsThumb, nearViewport]);
+  useEffect(() => {
+    if (!wantsThumb || !nearViewport || thumbMemory.has(s.id)) return;
     let stale = false;
-    void api
-      .sourceThumbnail(s.id)
-      .then((uri) => {
-        thumbMemory.set(s.id, uri);
-        if (!stale) setThumb(uri);
-      })
-      .catch(() => {
-        if (!stale) setThumb("");
-      });
+    enqueueThumb(() =>
+      api
+        .sourceThumbnail(s.id)
+        .then((uri) => {
+          thumbMemory.set(s.id, uri);
+          if (!stale) setThumb(uri);
+        })
+        .catch(() => {
+          if (!stale) setThumb("");
+        }),
+    );
     return () => {
       stale = true;
     };
-  }, [s.id, wantsThumb]);
+  }, [s.id, wantsThumb, nearViewport]);
 
   // While the cache fills (or when the download failed), fall back to the
   // remote og URL so first paint isn't gated on the round-trip.
@@ -817,6 +862,7 @@ function GalleryCard({
 
   return (
     <div
+      ref={rootRef}
       onMouseEnter={onHover}
       onMouseLeave={onLeave}
       className={cn(

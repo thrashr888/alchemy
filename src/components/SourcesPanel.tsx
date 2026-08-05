@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import {
@@ -259,12 +259,25 @@ export function SourcesPanel() {
       saveFoldersCollapsed(next);
       return next;
     });
+  // Children indexed once per source list — the tree build and every row's
+  // count/size lookups used to re-filter the whole array per parent, which
+  // is quadratic on big folder notebooks.
+  const childrenOf = useMemo(() => {
+    const m = new Map<string, Source[]>();
+    for (const s of sources) {
+      if (!s.parentId) continue;
+      const list = m.get(s.parentId);
+      if (list) list.push(s);
+      else m.set(s.parentId, [s]);
+    }
+    return m;
+  }, [sources]);
   const rows: { s: Source; indent: boolean }[] = [];
   for (const s of sources) {
     if (s.parentId) continue;
     rows.push({ s, indent: false });
     if (["folder", "git", "notion", "obsidian"].includes(s.sourceType)) {
-      const kids = sources.filter((x) => x.parentId === s.id);
+      const kids = childrenOf.get(s.id) ?? [];
       if (!isCollapsed(s.id, kids.length)) {
         for (const c of kids) {
           rows.push({ s: c, indent: true });
@@ -273,13 +286,11 @@ export function SourcesPanel() {
     }
   }
   const childCount = (folderId: string) =>
-    sources.filter((x) => x.parentId === folderId).length;
+    (childrenOf.get(folderId) ?? []).length;
   // A folder/repo parent carries no chars of its own (char_count 0 in the DB);
   // its children are the real carriers, so its "contribution" is their sum.
   const folderChars = (folderId: string) =>
-    sources
-      .filter((x) => x.parentId === folderId)
-      .reduce((sum, x) => sum + x.charCount, 0);
+    (childrenOf.get(folderId) ?? []).reduce((sum, x) => sum + x.charCount, 0);
 
   // Selection: null means everything is on; the map holds only deselected ids.
   const isSelected = (id: string) =>
@@ -524,9 +535,7 @@ export function SourcesPanel() {
                   (s.status === "ready" ||
                     s.status === "processing" ||
                     (s.status === "error" && isWebUrl(s.url)));
-                const kids = isFolder
-                  ? sources.filter((x) => x.parentId === s.id)
-                  : [];
+                const kids = isFolder ? (childrenOf.get(s.id) ?? []) : [];
                 const kidsOn = kids.filter((k) => isSelected(k.id)).length;
                 return (
                   <div

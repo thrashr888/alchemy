@@ -112,6 +112,9 @@ function loadNoteReadsBaseline(): number {
 // Global Tauri event listeners bind once per page — React StrictMode runs
 // init() twice in dev, and a doubled menu listener spawns doubled windows.
 let listenersBound = false;
+// appendToken's per-frame buffer — plumbing, not state (see appendToken).
+let tokenBuffer = "";
+let tokenFlushHandle = 0;
 // True while navBack/navForward replays a history entry, so the location
 // subscriber doesn't record the replay as a fresh navigation.
 let navApplying = false;
@@ -722,9 +725,12 @@ export const useStore = create<AppState>((set, get) => {
       ]);
       if (get().currentId === id)
         set({ sources, messages, notes, reportSchedules });
-      // Catch up folder and file sources right away rather than waiting for the
-      // next minute tick. Changes come back via sources://changed.
-      void api.resyncSources().catch(() => {});
+      // Catch up THIS notebook's folder and file sources right away rather
+      // than waiting for the next minute tick — scoped, because the corpus-
+      // wide sweep this used to fire competed with the notebook's own loads
+      // and duplicated the scheduler tick already due within the minute.
+      // Changes come back via sources://changed.
+      void api.resyncSources(id).catch(() => {});
     },
 
     closeNotebook: () => {
@@ -1287,7 +1293,22 @@ export const useStore = create<AppState>((set, get) => {
       get().openInReader(target);
     },
 
-    appendToken: (t) => set({ streamingText: get().streamingText + t }),
+    appendToken: (t) => {
+      // Tokens arrive far faster than frames, and committing each one
+      // re-rendered the transcript and re-parsed the streamed markdown per
+      // token. Buffer and commit once per animation frame; the tail left in
+      // the buffer when a stream ends is dropped on purpose — the finished
+      // message arrives whole from the backend.
+      tokenBuffer += t;
+      if (tokenFlushHandle !== 0) return;
+      tokenFlushHandle = requestAnimationFrame(() => {
+        tokenFlushHandle = 0;
+        const chunk = tokenBuffer;
+        tokenBuffer = "";
+        if (!get().sending || !chunk) return;
+        set({ streamingText: get().streamingText + chunk });
+      });
+    },
 
     appendStep: (label) => set({ steps: [...get().steps, label] }),
 
