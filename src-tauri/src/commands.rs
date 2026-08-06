@@ -2913,10 +2913,10 @@ pub(crate) async fn resync_mac_source(
 /// and unknown-but-textual files are admitted separately below.
 /// `pub(crate)` so `filesearch` can score Spotlight hits against the same list.
 pub(crate) const RICH_EXTENSIONS: &[&str] = &[
-    "pdf", "txt", "text", "md", "markdown", "html", "htm", "xhtml", "docx", "pptx", "epub",
-    "boxnote", "xlsx", "xls", "xlsm", "ods", "csv", "tsv", "gdoc", "gsheet", "gslides", "png",
-    "jpg", "jpeg", "jpe", "webp", "gif", "bmp", "tif", "tiff", "heic", "heif", "avif", "ico",
-    "jp2",
+    "pdf", "txt", "text", "md", "markdown", "html", "htm", "xhtml", "docx", "docm", "doc", "rtf",
+    "odt", "pptx", "pptm", "ppt", "odp", "epub", "boxnote", "xlsx", "xls", "xlsm", "xlsb", "ods",
+    "csv", "tsv", "gdoc", "gsheet", "gslides", "png", "jpg", "jpeg", "jpe", "webp", "gif", "bmp",
+    "tif", "tiff", "heic", "heif", "avif", "ico", "jp2",
 ];
 
 /// How deep a folder scan descends. Repos nest deeper than research folders;

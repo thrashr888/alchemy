@@ -149,11 +149,17 @@ offline surface for a rounding-error saving.
 
 ## Order of work
 
-1. §2 processing status + background embed (one worker), behind the existing
-   status machinery. Verify with a folder drop: rows land instantly, ready
-   states trickle in, search finds them when ready.
-2. §1 anydoc behind `extract_any_file` with fallback + trace line per
-   fallback fired. Re-import fixtures; the CSV/XLSX table tests must pass
-   unchanged.
-3. Remove bespoke extractors once the fallback trace stays quiet for a
-   release.
+1. **Done (v0.35.0)** — §2 processing status + background embed (one
+   worker). Verified live: add_source returns in ~92 ms as "processing",
+   ready states trickle in, stranded imports resume at launch.
+2. **Done** — §1 anydoc (`anydoc` crate 0.1.7) attempted first in
+   `ingest::extract_file` for its whole format family, with the bespoke
+   extractors as fallback and an `anydoc fallback:` trace line per firing.
+   New formats admitted everywhere the extension lists gate: doc, docm,
+   rtf, odt, odp, ppt, pptm, xlsb. CSV/XLSX table tests pass unchanged and
+   an RTF import was verified end-to-end. PDFs deliberately keep the
+   pdf-inspector + OCR path (anydoc refuses scanned PDFs; our vision
+   fallback is the whole point of keeping it).
+3. Remove bespoke extractors (extract_docx/pptx/epub/spreadsheet,
+   delimited_to_rows' csv leg) once the fallback trace stays quiet for a
+   release. TSV stays ours — it isn't an anydoc format.

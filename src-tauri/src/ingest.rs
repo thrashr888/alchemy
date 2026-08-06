@@ -162,6 +162,44 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
         });
     }
 
+    // RFC-import-pipeline §1: one extractor, markdown out. anydoc converts
+    // the whole office/document family — including formats we never had
+    // extractors for (doc, rtf, odt, odp, ppt) — to GFM, which is both the
+    // retrieval text and the faithful render. Our bespoke extractors below
+    // stay as the fallback for a release; the trace line here is how we
+    // learn whether they still fire. PDFs deliberately keep the
+    // pdf-inspector + OCR path (scanned PDFs need the vision fallback
+    // anydoc refuses), and markdown/html/plain text are already their own
+    // best extraction. TSVs aren't an anydoc format; they keep ours.
+    let anydoc_md = match anydoc::Format::from_path(std::path::Path::new(path)) {
+        None | Some(anydoc::Format::Pdf) => None,
+        Some(_) => match anydoc::to_markdown(path) {
+            Ok(md) if !md.trim().is_empty() => Some(md),
+            Ok(_) => {
+                eprintln!("anydoc fallback: empty output for {path}");
+                None
+            }
+            Err(err) => {
+                eprintln!("anydoc fallback: {path}: {err}");
+                None
+            }
+        },
+    };
+    if let Some(text) = anydoc_md {
+        let text = normalize(&text);
+        if text.trim().is_empty() {
+            return Err(anyhow!("no extractable text found in {path}"));
+        }
+        return Ok(Extracted {
+            image_url: String::new(),
+            author: file_author(path),
+            title,
+            source_type: "text".to_string(),
+            url: String::new(),
+            text,
+        });
+    }
+
     let (source_type, text) = match ext.as_str() {
         "html" | "htm" | "xhtml" => {
             // Saved pages run through the same readability extraction as
@@ -2827,6 +2865,41 @@ mod tests {
         assert!(placeholder_doc_url("document", "{}").is_none());
         assert!(placeholder_doc_url("document", "not json").is_none());
         assert!(google_placeholder_url("/tmp/notes.md").is_none());
+    }
+
+    #[test]
+    fn anydoc_extracts_the_office_family_as_markdown() {
+        let dir = std::env::temp_dir().join(format!("alchemy-anydoc-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // The §1 acceptance test: a CSV through the FULL extract path still
+        // lands as a GFM table, whichever extractor produced it.
+        let csv = dir.join("fleet.csv");
+        std::fs::write(&csv, "vessel,berth\nSea Otter,12\nSea Marten,4\n").unwrap();
+        let got = extract_file(csv.to_str().unwrap()).expect("csv extracts");
+        assert!(
+            got.text.lines().nth(1).is_some_and(|l| l.contains("---")),
+            "csv must extract as a GFM table, got:\n{}",
+            got.text
+        );
+        assert!(got.text.contains("Sea Otter"));
+
+        // RTF — a format the app never had an extractor for — now extracts
+        // through anydoc instead of erroring as unsupported.
+        let rtf = dir.join("note.rtf");
+        std::fs::write(
+            &rtf,
+            r"{\rtf1\ansi\deff0 {\fonttbl {\f0 Times;}} Hello from RTF land.}",
+        )
+        .unwrap();
+        let got = extract_file(rtf.to_str().unwrap()).expect("rtf extracts via anydoc");
+        assert!(
+            got.text.contains("Hello from RTF land"),
+            "rtf text missing, got:\n{}",
+            got.text
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

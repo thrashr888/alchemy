@@ -88,6 +88,7 @@ ast-grep-language = { version = "0.44.1", default-features = false, features = [
 ast-grep-core = "0.44.1"
 exif = { version = "0.6.1", package = "kamadak-exif" }
 pdf-inspector = "0.1.7"
+anydoc = "0.1.7"
 
 # Already in the tree via tauri/wry — traffic-light insets, the Services
 # provider (services.rs), and Spotlight indexing (spotlight.rs).
