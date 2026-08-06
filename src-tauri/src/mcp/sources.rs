@@ -61,7 +61,8 @@ struct AddSourceReq {
     /// Raw text/markdown content to store as a source.
     #[serde(default)]
     text: Option<String>,
-    /// Absolute path to a local file (pdf, md, txt, csv, xlsx, docx, images…).
+    /// Absolute path to a local file (pdf, md, txt, csv, doc/docx, ppt/pptx,
+    /// xls/xlsx, odt/ods/odp, rtf, epub, images…).
     #[serde(default)]
     file_path: Option<String>,
     /// Title for `text` sources and optional label for cider:// sources
@@ -155,7 +156,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Add a source to a notebook. Provide exactly one of: url (fetched + article-extracted), text (pasted content; give a title), or file_path (local pdf/md/txt/csv/xlsx/docx/image — images and scanned PDFs are OCR'd when a vision model is configured). url also accepts a cider:// origin to connect a Mac item as a living, auto-syncing source: cider://reminders/list/<list name>, cider://calendar/upcoming/<days>, cider://notes/note/<note id>, or cider://stocks/watchlist/<name>. Content is chunked and embedded automatically. Duplicate content or an already-added URL is rejected with an error naming the existing source — treat that as already done."
+        description = "Add a source to a notebook. Provide exactly one of: url (fetched + article-extracted), text (pasted content; give a title), or file_path (local pdf/md/txt/csv, the whole Office family incl. legacy doc/ppt/xls, OpenDocument, rtf, epub, or an image — images and scanned PDFs are OCR'd when a vision model is configured; office formats extract as markdown). url also accepts a cider:// origin to connect a Mac item as a living, auto-syncing source: cider://reminders/list/<list name>, cider://calendar/upcoming/<days>, cider://notes/note/<note id>, or cider://stocks/watchlist/<name>. Content is chunked and embedded automatically. Duplicate content or an already-added URL is rejected with an error naming the existing source — treat that as already done."
     )]
     async fn add_source(
         &self,

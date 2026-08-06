@@ -50,7 +50,9 @@ two-host podcast voiced on-device.*
 ## Features
 
 - **Notebooks** — a home screen of notebooks (most-recent first); opens to your last one.
-- **Sources** — import **PDF**, **Office** (`.docx` / `.pptx` / `.xlsx`),
+- **Sources** — import **PDF**, the whole **Office family** (`.doc` / `.docx` /
+  `.ppt` / `.pptx` / `.xls` / `.xlsx` / `.xlsb`), **OpenDocument**
+  (`.odt` / `.ods` / `.odp`), **RTF**, **EPUB**,
   **Box Notes** (`.boxnote`), **CSV/TSV**,
   **images**, **text**, **Markdown**, paste text, or fetch a **URL** — including
   link-shared **Google Docs, Sheets, and Slides** (paste the link, or drag the
@@ -219,7 +221,8 @@ two-host podcast voiced on-device.*
                                      │
 ┌───────────────────────────────── Rust backend ───────────────────────────────┐
 │  commands.rs   Tauri command surface + per-model stats                       │
-│  ingest.rs     extract (pdf/office/url/text) → normalize → structure-aware   │
+│  ingest.rs     extract (anydoc: office/odf/rtf/epub/csv → GFM; pdf/url/text) │
+│                → normalize → structure-aware                                 │
 │                chunking (paragraphs/headings, title+section context prefix)  │
 │  pdf.rs        PDFium page rasterization for scanned-PDF OCR                 │
 │  ai/ollama.rs  embeddings, streaming chat, OCR over Ollama HTTP              │
