@@ -250,12 +250,14 @@ async fn desired_routes(db: &Db) -> Result<Vec<Route>> {
                 summary,
             });
         }
-        for n in db.list_notes(&nb.id).await? {
+        // Titles only — the route summary never reads a note's body, and
+        // this runs on the ask-everything request path.
+        for (id, title, _) in db.list_note_meta(Some(&nb.id)).await? {
             desired.push(Route {
-                id: format!("note:{}", n.id),
+                id: format!("note:{id}"),
                 kind: "note".into(),
                 notebook_id: nb.id.clone(),
-                summary: n.title.clone(),
+                summary: title,
             });
         }
     }

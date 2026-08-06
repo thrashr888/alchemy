@@ -1847,6 +1847,17 @@ function SourceReader({
   // query still uses the plain-text segment view (exact ranges); a citation
   // highlight anchors into the RENDERED view via CSS Custom Highlights,
   // dropping to the plain view only when the passage can't be located there.
+  // Memoized on content: the regex sniff and the word count both walk the
+  // whole document, and this component re-renders per find keystroke and
+  // selection change.
+  const contentLooksMarkdown = useMemo(
+    () => !!content && looksLikeMarkdown(content),
+    [content],
+  );
+  const statsLine = useMemo(
+    () => (content ? countsLine(content) : ""),
+    [content],
+  );
   const markdownShaped =
     source.sourceType === "markdown" ||
     ((source.sourceType === "text" ||
@@ -1855,8 +1866,7 @@ function SourceReader({
       // lists and tables) — but older sources were ingested as flat text, so
       // this still asks the content rather than trusting the type.
       source.sourceType === "pdf") &&
-      !!content &&
-      looksLikeMarkdown(content));
+      contentLooksMarkdown);
   const richMode = markdownShaped && !(highlight && anchorFailed);
   // Code-file sources render with the same shiki view the repo reader uses
   // (CodeView). Shiki swaps the code block's DOM in asynchronously, which
@@ -2310,7 +2320,7 @@ function SourceReader({
       {content && (
         <div className="flex shrink-0 items-center gap-2 border-t border-border px-5 py-1 text-micro tabular-nums text-subtle-foreground">
           <span className="min-w-0 truncate whitespace-nowrap">
-            {source.chunkCount} chunks · {countsLine(content)}
+            {source.chunkCount} chunks · {statsLine}
           </span>
           {backlinks.length > 0 && (
             <span className="group ml-auto flex shrink-0 items-center">

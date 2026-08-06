@@ -313,7 +313,10 @@ function PrefToggle({
   hint: string;
   onEnable?: () => void;
 }) {
-  const [on, setOn] = useState(localStorage.getItem(storageKey) !== "false");
+  // Lazy initializer: the non-lazy form re-read localStorage every render.
+  const [on, setOn] = useState(
+    () => localStorage.getItem(storageKey) !== "false",
+  );
   return (
     <SettingRow
       label={label}

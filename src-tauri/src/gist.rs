@@ -223,7 +223,12 @@ pub async fn ensure_gists(db: &Db, ai: &Ai) -> Result<(usize, usize)> {
     }
     let mut desired: Vec<Want> = Vec::new();
     for nb in db.list_notebooks().await? {
-        for s in db.list_sources(&nb.id).await? {
+        // WITH content: `list_sources` strips it, which silently disabled
+        // the staleness fast-path below — every source, converged or not,
+        // then paid a full `get_source` scan per batch, and the scheduler
+        // ticks this sweep once a minute. One content scan per notebook
+        // here makes the hash real and a converged corpus cost nothing.
+        for s in db.sources_with_content(&nb.id).await? {
             if s.source_type == "code" || s.chunk_count == 0 || s.char_count < MIN_SOURCE_CHARS {
                 continue;
             }
@@ -561,15 +566,22 @@ pub async fn ensure_enrichment(db: &Db, ai: &Ai) -> Result<usize> {
         .map(|g: GistRow| (g.source_id, g.text))
         .collect();
 
+    // One projected batch read of the candidates' content — hashing used to
+    // full-scan per candidate, including every already-enriched one, on
+    // every pass of every sweep.
+    let contents = db.source_contents(&candidates).await?;
     for source_id in candidates {
+        let hash = match contents.get(&source_id) {
+            Some(c) => content_hash(c),
+            None => continue,
+        };
+        if state.get(&source_id) == Some(&hash) || enrich_refused(&source_id, hash) {
+            continue;
+        }
         let source = match db.get_source(&source_id).await? {
             Some(s) => s,
             None => continue,
         };
-        let hash = content_hash(&source.content);
-        if state.get(&source_id) == Some(&hash) || enrich_refused(&source_id, hash) {
-            continue;
-        }
         match enrich_source(db, ai, &source, gists.get(&source_id).map(String::as_str)).await? {
             EnrichOutcome::Enriched => {
                 state.insert(source_id, hash);
@@ -676,34 +688,45 @@ const TAG_BUDGET: usize = 8;
 pub async fn ensure_tags(db: &Db, ai: &Ai) -> Result<usize> {
     let mut tagged = 0usize;
     for nb in db.list_notebooks().await? {
-        for source in db.list_sources(&nb.id).await? {
+        // The untagged batch's content in one projected read — a converged
+        // notebook costs nothing, and an untagged one no longer pays a full
+        // table scan per source before its model call.
+        let untagged: Vec<crate::models::Source> = db
+            .list_sources(&nb.id)
+            .await?
+            .into_iter()
+            .filter(|s| s.tags.trim().is_empty())
+            .take(TAG_BUDGET.saturating_sub(tagged))
+            .collect();
+        if untagged.is_empty() {
+            continue;
+        }
+        let ids: Vec<String> = untagged.iter().map(|s| s.id.clone()).collect();
+        let contents = db.source_contents(&ids).await?;
+        for source in untagged {
             if tagged >= TAG_BUDGET {
                 return Ok(tagged);
             }
-            if !source.tags.trim().is_empty() {
-                continue;
-            }
-            // list_sources strips content; fetch the row that has it.
-            let Some(full) = db.get_source(&source.id).await? else {
+            let Some(content) = contents.get(&source.id) else {
                 continue;
             };
-            if full.content.trim().is_empty() {
+            if content.trim().is_empty() {
                 continue;
             }
-            let messages = build_tag_messages(&full.title, &full.content);
+            let messages = build_tag_messages(&source.title, content);
             let reply = match ai.chat_role(Role::Small, &messages).await {
                 Ok(out) => out.text,
                 Err(err) => {
-                    eprintln!("tags: generation failed for \"{}\": {err:#}", full.title);
+                    eprintln!("tags: generation failed for \"{}\": {err:#}", source.title);
                     return Ok(tagged);
                 }
             };
-            let haystack = format!("{}\n{}", full.title, full.content);
+            let haystack = format!("{}\n{content}", source.title);
             let tags = gate_tags(&reply, &haystack);
             if tags.is_empty() {
                 continue;
             }
-            db.set_source_tags(&full.id, &tags).await?;
+            db.set_source_tags(&source.id, &tags).await?;
             tagged += 1;
         }
     }

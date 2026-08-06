@@ -73,7 +73,10 @@ export function Reports() {
 
   const [editing, setEditing] = useState(false);
   // Section hidden/shown — persisted so a notes-heavy workflow keeps its room.
-  const [open, setOpen] = useState(localStorage.getItem("studioReportsOpen") !== "false");
+  // Lazy initializer: the non-lazy form re-read localStorage every render.
+  const [open, setOpen] = useState(
+    () => localStorage.getItem("studioReportsOpen") !== "false",
+  );
   const toggleOpen = () => {
     const v = !open;
     localStorage.setItem("studioReportsOpen", String(v));

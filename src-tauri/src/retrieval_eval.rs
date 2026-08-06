@@ -1072,6 +1072,8 @@ async fn seed_gist(ai: &crate::ai::Ai, db: &Db, notebook_id: &str, title: &str, 
     )
     .await
     .expect("write gist row");
+    // No debounced flusher in tests — rebuild the BM25 index by hand.
+    db.flush_fts().await.expect("flush gist fts");
 }
 
 /// Corpus-wide retrieval with stored gists (RFC-infinite-context §1):
@@ -1240,6 +1242,7 @@ async fn eval_enrichment_reembed() {
     db.insert_source(&source, &tuples, &embeddings)
         .await
         .expect("insert target");
+    db.flush_fts().await.expect("flush target fts");
 
     // A query in the situating sentence's vocabulary, absent from the passage.
     let q = "arctic cargo shipping schedule for the freight route";

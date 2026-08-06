@@ -154,6 +154,13 @@ async fn run_pass(app: &AppHandle) {
 
     let _ = commands::resync_sources_inner(app, &state, None).await;
 
+    // Distillation, tags, and card suggestions converge even when no fresh
+    // import kicks them — a restart mid-sweep used to strand untagged
+    // sources until the next import happened to arrive. Self-gating
+    // (SWEEPING) and budgeted, so a converged corpus makes this a cheap
+    // no-op pass.
+    crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
+
     let mut ran = 0u32;
     if !is_paused() {
         let schedules = match state.db.all_report_schedules().await {

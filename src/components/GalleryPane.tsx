@@ -339,14 +339,20 @@ export function GalleryPane() {
   // estimated height keeps the bottom edge close to level. Sort order still
   // reads left-to-right, top-to-bottom — ties go to the leftmost column, so
   // equal-height cards deal out exactly as they did before.
-  const childCounts = useMemo(() => {
-    const counts = new Map<string, number>();
+  // One children index serves counts AND the per-card children lists — the
+  // grid used to re-filter the whole sources array per folder card, per
+  // render (and hover state renders this component).
+  const childrenIndex = useMemo(() => {
+    const m = new Map<string, Source[]>();
     for (const s of sources) {
-      if (s.parentId) counts.set(s.parentId, (counts.get(s.parentId) ?? 0) + 1);
+      if (!s.parentId) continue;
+      const list = m.get(s.parentId);
+      if (list) list.push(s);
+      else m.set(s.parentId, [s]);
     }
-    return counts;
+    return m;
   }, [sources]);
-  const childCount = (s: Source) => childCounts.get(s.id) ?? 0;
+  const childCount = (s: Source) => (childrenIndex.get(s.id) ?? []).length;
   const columns: Source[][] = Array.from({ length: colCount }, () => []);
   const colWidth = (width - 48 - 12 * (colCount - 1)) / colCount;
   const heights = new Array<number>(colCount).fill(0);
@@ -619,9 +625,7 @@ export function GalleryPane() {
                       <FolderCard
                         key={s.id}
                         source={s}
-                        childrenSources={sources.filter(
-                          (c) => c.parentId === s.id,
-                        )}
+                        childrenSources={childrenIndex.get(s.id) ?? []}
                         onOpen={() => setFolderId(s.id)}
                         menuItems={cardMenuItems(s)}
                         onHover={(e) => showCard(e, sourceHoverData(s))}

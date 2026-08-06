@@ -922,7 +922,13 @@ function CardDetail({
   }, [onBack]);
 
   // Resolve attached documents across every notebook they live in — a card
-  // spans notebooks, so the open notebook's source list isn't enough.
+  // spans notebooks, so the open notebook's source list isn't enough. Keyed
+  // on the attachment identities, not the array — every registry bump
+  // returns fresh objects, and array identity refired one listSources per
+  // touched notebook even when nothing changed.
+  const attachmentsKey = card.attachments
+    .map((a) => `${a.sourceId}:${a.status}`)
+    .join("|");
   useEffect(() => {
     let alive = true;
     const nbs = [
@@ -937,7 +943,8 @@ function CardDetail({
     return () => {
       alive = false;
     };
-  }, [card.attachments]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attachmentsKey]);
 
   const pending = proposed(card);
   const docs = confirmed(card);

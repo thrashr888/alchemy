@@ -193,6 +193,23 @@ pub fn run() {
             // their stored content (docs/RFC-import-pipeline.md §2).
             commands::resume_stranded_imports(&app.handle().clone());
 
+            // Debounced BM25 rebuilds: chunk writers mark the FTS index
+            // dirty and nudge this task; one Tantivy rebuild lands ~2s
+            // after the last write of a burst, instead of one whole-corpus
+            // rebuild inline per write.
+            {
+                let db = app.state::<AppState>().db.clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        db.fts_write_notified().await;
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        if let Err(err) = db.flush_fts().await {
+                            eprintln!("fts flush: {err:#}");
+                        }
+                    }
+                });
+            }
+
             // Database housekeeping: compact fragments, prune dead versions.
             // Lance never cleans up after itself, and an unpruned install
             // grows to gigabytes of stale FTS indices. Delayed so launch

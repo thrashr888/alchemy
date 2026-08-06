@@ -1,3 +1,4 @@
+import { memo, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
@@ -157,9 +158,21 @@ function ScrollableTable({
   );
 }
 
+/** The static component map for non-interactive renders, hoisted so memo'd
+ *  consumers see a stable identity. */
+const PLAIN_COMPONENTS = {
+  table: ScrollableTable,
+  code: CodeBlock,
+  a: ExternalLink,
+};
+
 /** Chat citations carry `sourceTitle`; meta-chat citations carry `title` —
- *  the chip works with either, and `citationLabel` overrides the tooltip. */
-export function Markdown<C extends { snippet: string }>({
+ *  the chip works with either, and `citationLabel` overrides the tooltip.
+ *
+ *  Memoized (export below): this sits on every hot text path — the reader's
+ *  rich view, the chat transcript, streaming previews — and an unmemoized
+ *  render is a full remark+rehype parse of the whole string. */
+function MarkdownInner<C extends { snippet: string }>({
   children,
   citations,
   onCitation,
@@ -181,11 +194,14 @@ export function Markdown<C extends { snippet: string }>({
       const t = c as { sourceTitle?: string; title?: string };
       return t.sourceTitle ?? t.title ?? "";
     });
-  const remarkPlugins = [
-    remarkGfm,
-    ...(interactive ? [remarkCitations(citations.length)] : []),
-    ...(wikilinks ? [remarkWikilinks()] : []),
-  ];
+  const remarkPlugins = useMemo(
+    () => [
+      remarkGfm,
+      ...(interactive ? [remarkCitations(citations?.length ?? 0)] : []),
+      ...(wikilinks ? [remarkWikilinks()] : []),
+    ],
+    [interactive, citations?.length, wikilinks],
+  );
   return (
     <div className="prose">
       <ReactMarkdown
@@ -216,7 +232,7 @@ export function Markdown<C extends { snippet: string }>({
                   );
                 },
               }
-            : { table: ScrollableTable, code: CodeBlock, a: ExternalLink }
+            : PLAIN_COMPONENTS
         }
       >
         {children}
@@ -224,3 +240,7 @@ export function Markdown<C extends { snippet: string }>({
     </div>
   );
 }
+
+/** Memoized export; the cast keeps the generic citation typing that
+ *  `memo` would otherwise erase. */
+export const Markdown = memo(MarkdownInner) as typeof MarkdownInner;

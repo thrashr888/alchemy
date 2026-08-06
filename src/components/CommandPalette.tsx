@@ -103,13 +103,24 @@ export function CommandPalette() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paletteOpen]);
 
-  // Stream tokens into the answer while a question is in flight.
+  // Stream tokens into the answer while a question is in flight — batched
+  // per frame, or every token re-parses the accumulated markdown answer.
   useEffect(() => {
     if (!askLoading) return;
+    let buffer = "";
+    let flush = 0;
     const un = listen<{ content: string }>("meta://token", (e) => {
-      setAskText((t) => t + e.payload.content);
+      buffer += e.payload.content;
+      if (flush !== 0) return;
+      flush = requestAnimationFrame(() => {
+        flush = 0;
+        const chunk = buffer;
+        buffer = "";
+        if (chunk) setAskText((t) => t + chunk);
+      });
     });
     return () => {
+      if (flush !== 0) cancelAnimationFrame(flush);
       void un.then((f) => f());
     };
   }, [askLoading]);

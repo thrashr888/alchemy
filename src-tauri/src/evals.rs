@@ -235,6 +235,9 @@ pub(crate) async fn seed_docs(
             .await
             .expect("store fixture");
     }
+    // Chunk writes only mark the BM25 index dirty now (the app's debounced
+    // flusher rebuilds it); tests have no flusher, so seeding flushes.
+    db.flush_fts().await.expect("flush fixture fts");
 }
 
 /// Ingest the golden fixture corpus.

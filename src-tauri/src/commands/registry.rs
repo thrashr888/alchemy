@@ -635,21 +635,20 @@ async fn rematch_all(db: &crate::db::Db) {
         return;
     };
     for nb in notebooks {
-        let Ok(sources) = db.list_sources(&nb.id).await else {
+        // One content scan per notebook — this was one full table scan per
+        // source, corpus-wide, with a deliberate sleep between each.
+        let Ok(sources) = db.sources_with_content(&nb.id).await else {
             continue;
         };
         for s in sources {
             if s.source_type == "folder" {
                 continue;
             }
-            let Ok(text) = db.source_content(&s.id).await else {
-                continue;
-            };
-            match_source_to_cards(db, &nb.id, &s.id, &text).await;
-            // Breathe between scans so the sweep shares the machine with
-            // the person using it.
-            tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+            match_source_to_cards(db, &nb.id, &s.id, &s.content).await;
         }
+        // Breathe between notebooks so the sweep shares the machine with
+        // the person using it.
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
 }
 
@@ -832,16 +831,14 @@ pub async fn rematch_registry(
     state: State<'_, AppState>,
     notebook_id: String,
 ) -> Result<usize, String> {
-    let sources = e(state.db.list_sources(&notebook_id).await)?;
+    // One content scan for the notebook instead of one per source.
+    let sources = e(state.db.sources_with_content(&notebook_id).await)?;
     let mut filed = 0;
     for s in sources {
         if s.source_type == "folder" {
             continue;
         }
-        let Ok(text) = state.db.source_content(&s.id).await else {
-            continue;
-        };
-        filed += match_source_to_cards(&state.db, &notebook_id, &s.id, &text).await;
+        filed += match_source_to_cards(&state.db, &notebook_id, &s.id, &s.content).await;
     }
     Ok(filed)
 }

@@ -115,6 +115,18 @@ let listenersBound = false;
 // appendToken's per-frame buffer — plumbing, not state (see appendToken).
 let tokenBuffer = "";
 let tokenFlushHandle = 0;
+// The artifact stream's twin of the chat token buffer.
+let artifactBuffer = "";
+let artifactFlushHandle = 0;
+// folder://progress arrives once per ingested file; coalesce to one store
+// write per frame so a 5,000-file import doesn't mean 5,000 full re-renders
+// of the sources panel.
+let folderScanPending: { done: number; total: number; title: string } | null =
+  null;
+let folderScanFlushHandle = 0;
+// mcp://changed arrives once per agent tool call; one trailing notebooks
+// refresh (a full list + native menu rebuild) covers a burst of them.
+let notebooksRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 // True while navBack/navForward replays a history entry, so the location
 // subscriber doesn't record the replay as a fresh navigation.
 let navApplying = false;
@@ -428,12 +440,20 @@ export const useStore = create<AppState>((set, get) => {
           if (finished) setTimeout(() => set({ embedderDownload: null }), 1500);
         },
       );
-      // Studio generations stream their tokens; buffer them for the live preview.
+      // Studio generations stream their tokens; buffer them for the live
+      // preview, committing once per frame (the chat token path's shape) —
+      // per-token commits re-parsed the accumulated markdown every token.
       void listen<{ content: string }>("artifact://token", (e) => {
-        if (get().generatingKind)
-          set({
-            artifactStreamText: get().artifactStreamText + e.payload.content,
-          });
+        if (!get().generatingKind) return;
+        artifactBuffer += e.payload.content;
+        if (artifactFlushHandle !== 0) return;
+        artifactFlushHandle = requestAnimationFrame(() => {
+          artifactFlushHandle = 0;
+          const chunk = artifactBuffer;
+          artifactBuffer = "";
+          if (!get().generatingKind || !chunk) return;
+          set({ artifactStreamText: get().artifactStreamText + chunk });
+        });
       });
       // Audio Overview synthesis reports per-line progress after the script.
       void listen<{ done: number; total: number }>("audio://progress", (e) => {
@@ -445,7 +465,17 @@ export const useStore = create<AppState>((set, get) => {
         "folder://progress",
         (e) => {
           const p = e.payload;
-          set({ folderScan: p.done >= p.total ? null : p });
+          if (p.done >= p.total) {
+            folderScanPending = null;
+            set({ folderScan: null });
+            return;
+          }
+          folderScanPending = p;
+          if (folderScanFlushHandle !== 0) return;
+          folderScanFlushHandle = requestAnimationFrame(() => {
+            folderScanFlushHandle = 0;
+            if (folderScanPending) set({ folderScan: folderScanPending });
+          });
         },
       );
       // A background folder rescan changed a notebook's sources — reload the
@@ -477,7 +507,15 @@ export const useStore = create<AppState>((set, get) => {
         (e) => {
           const { scope, notebookId } = e.payload;
           playArrival();
-          void get().refreshNotebooks();
+          // Debounced: an agent looping tool calls fires one of these per
+          // call, and each refresh is a notebooks read plus a native menu
+          // rebuild. One trailing refresh covers the burst.
+          if (notebooksRefreshTimer === null) {
+            notebooksRefreshTimer = setTimeout(() => {
+              notebooksRefreshTimer = null;
+              void get().refreshNotebooks();
+            }, 250);
+          }
           // Templates are app-global — refresh before the notebook gate.
           if (scope === "templates") void get().refreshTemplates();
           // So is the Registry (it has no notebook), and its surface is Home

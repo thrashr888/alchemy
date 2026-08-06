@@ -1153,30 +1153,49 @@ pub(crate) async fn spawn_embed_stage(
     });
 }
 
-/// Re-arm the embed stage for sources stranded in "processing" by a quit or
-/// crash mid-import. Content is stored, so the stage restarts from the row
-/// itself; the one loss is a code child's "repo › path" chunk context,
-/// which only a crash-window import can hit.
+/// Re-arm background work stranded by a quit or crash: embed stages for
+/// "processing" rows (content is stored, so the stage restarts from the row
+/// itself; the one loss is a code child's "repo › path" chunk context), and
+/// retitles for file sources still wearing their filename — a restart
+/// mid-title used to leave them that way forever. The claim check inside
+/// `spawn_retitle` keeps the retitle leg idempotent and never touches a
+/// name anyone (or any model) already improved.
 pub(crate) fn resume_stranded_imports(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let state = app.state::<AppState>();
-        let Ok(sources) = state.db.all_sources().await else {
+        // Content only for the stranded few — this used to read the whole
+        // corpus with content at every launch.
+        if let Ok(processing) = state.db.processing_sources().await {
+            for s in processing {
+                let extracted = ingest::Extracted {
+                    image_url: s.image_url.clone(),
+                    author: s.author.clone(),
+                    title: s.title.clone(),
+                    source_type: s.source_type.clone(),
+                    url: s.url.clone(),
+                    text: s.content.clone(),
+                };
+                spawn_embed_stage(&state, &s, extracted, None).await;
+            }
+        }
+        let Ok(sources) = state.db.all_sources_lean().await else {
             return;
         };
         for s in sources {
-            if s.status != "processing" {
+            if !matches!(s.status.as_str(), "ready" | "processing")
+                || s.source_type == "code"
+                || s.url.is_empty()
+                || is_web_url(&s.url)
+                || crate::mac::is_mac_uri(&s.url)
+            {
                 continue;
             }
-            let extracted = ingest::Extracted {
-                image_url: s.image_url.clone(),
-                author: s.author.clone(),
-                title: s.title.clone(),
-                source_type: s.source_type.clone(),
-                url: s.url.clone(),
-                text: s.content.clone(),
-            };
-            spawn_embed_stage(&state, &s, extracted, None).await;
+            // Still titled exactly as the file is named, and not a name a
+            // person would have written — the model never got its turn.
+            if s.title == ingest::file_title(&s.url) && !title_reads_human(&s.title) {
+                spawn_retitle(&state, &s).await;
+            }
         }
     });
 }
@@ -1314,7 +1333,7 @@ pub(crate) fn friendly_title_fast(extracted: &mut ingest::Extracted) -> bool {
         return true;
     }
     // A title containing spaces is usually already human-written.
-    if extracted.title.contains(char::is_whitespace) {
+    if title_reads_human(&extracted.title) {
         return true;
     }
     if extracted.source_type == "markdown" {
@@ -1331,6 +1350,38 @@ pub(crate) fn friendly_title_fast(extracted: &mut ingest::Extracted) -> bool {
         }
     }
     false
+}
+
+/// Whether a filename-derived title already reads as human-written. A copy
+/// suffix — "PortfolioDownload (1)" — is the browser's, not the author's,
+/// so its space doesn't count as the human touch a space usually signals.
+fn title_reads_human(title: &str) -> bool {
+    let stem = title
+        .strip_suffix(')')
+        .and_then(|t| t.rsplit_once(" ("))
+        .filter(|(_, n)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        .map(|(stem, _)| stem)
+        .unwrap_or(title);
+    stem.contains(char::is_whitespace)
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::title_reads_human;
+
+    #[test]
+    fn a_copy_suffix_is_not_the_human_touch() {
+        // Observed live: "PortfolioDownload (1)" kept its filename forever
+        // because the copy suffix's space read as a human-written title.
+        assert!(!title_reads_human("PortfolioDownload"));
+        assert!(!title_reads_human("PortfolioDownload (1)"));
+        assert!(!title_reads_human("scan-2026-08 (12)"));
+        assert!(title_reads_human("Quarterly Report"));
+        assert!(title_reads_human("Quarterly Report (2)"));
+        // A bare "(3)" or non-numeric parenthetical stays as-is.
+        assert!(!title_reads_human("(3)"));
+        assert!(title_reads_human("Notes (draft)"));
+    }
 }
 
 /// The model leg of titling, in the background: ask Small for a short title
@@ -6687,9 +6738,13 @@ async fn generate_content(
     let is_gateway = { state.ai.read().await.config().is_gateway() };
     let budget: usize = if is_gateway { 150_000 } else { 24_000 };
 
+    // One projected batch read — this was one full table scan per source on
+    // every Generate click and every scheduled report run.
+    let ids: Vec<String> = sources.iter().map(|s| s.id.clone()).collect();
+    let mut full_by_id = state.db.source_contents(&ids).await?;
     let mut contents = Vec::with_capacity(sources.len());
     for s in &sources {
-        let full = state.db.source_content(&s.id).await?;
+        let full = full_by_id.remove(&s.id).unwrap_or_default();
         // URL sources get a "Source URL:" line under their heading so
         // generated notes can cite where each finding can be viewed. File
         // sources carry their on-disk path under a "Source file:" label.

@@ -196,6 +196,9 @@ pub struct Db {
     /// only marks the index dirty; `flush_fts` rebuilds once at the end.
     fts_deferred: std::sync::atomic::AtomicBool,
     fts_dirty: std::sync::atomic::AtomicBool,
+    /// Nudged on every non-deferred chunk write; the debounced flusher task
+    /// (lib.rs) listens and rebuilds once per burst.
+    fts_notify: tokio::sync::Notify,
 }
 
 /// One stored source-gist row (docs/RFC-infinite-context.md Phase 1).
@@ -225,6 +228,7 @@ impl Db {
             fts_lock: tokio::sync::Mutex::new(()),
             fts_deferred: std::sync::atomic::AtomicBool::new(false),
             fts_dirty: std::sync::atomic::AtomicBool::new(false),
+            fts_notify: tokio::sync::Notify::new(),
         };
         db.ensure_table(T_NOTEBOOKS, notebooks_schema()).await?;
         db.migrate_notebooks().await?;
@@ -1184,15 +1188,26 @@ impl Db {
         )?;
         self.add_batch(T_CHUNKS, schema, batch).await?;
 
-        // Keep the BM25 side of hybrid search current — unless a bulk write
-        // (folder import, eval seeding) deferred rebuilds; then just mark
-        // dirty and let `flush_fts` do one rebuild at the end.
-        if self.fts_deferred.load(std::sync::atomic::Ordering::SeqCst) {
-            self.fts_dirty
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            return Ok(());
+        // The BM25 side of hybrid search stays NEAR-current, never inline: a
+        // full Tantivy rebuild per write meant every note edit, Mac-item
+        // sync, and single-file refresh paid a whole-corpus index build.
+        // Mark dirty; bulk writers (folder import, eval seeding) defer and
+        // flush themselves, everyone else nudges the debounced flusher
+        // (lib.rs), which lands one rebuild ~2s after the burst. In the gap
+        // the vector leg still finds the new chunks — a stale index only
+        // costs BM25 rank, never the search (it degrades with a warning).
+        self.fts_dirty
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        if !self.fts_deferred.load(std::sync::atomic::Ordering::SeqCst) {
+            self.fts_notify.notify_one();
         }
-        self.rebuild_chunks_fts().await
+        Ok(())
+    }
+
+    /// Block until some writer nudges the FTS flusher — the debounce loop's
+    /// wait (lib.rs). A nudge that lands before the wait is stored, not lost.
+    pub async fn fts_write_notified(&self) {
+        self.fts_notify.notified().await;
     }
 
     /// Enter/leave bulk-write mode (see `fts_deferred`). Leaving does NOT
@@ -1307,6 +1322,19 @@ impl Db {
     /// All sources across every notebook, with full content (for re-embedding).
     pub async fn all_sources(&self) -> Result<Vec<Source>> {
         self.query_sources(None, true).await
+    }
+
+    /// All sources, metadata only — one projected scan, no content.
+    pub async fn all_sources_lean(&self) -> Result<Vec<Source>> {
+        self.query_sources(None, false).await
+    }
+
+    /// Sources still mid-embed — the startup resume's query. Content rides
+    /// along because the resumed stage chunks from it, and the filter keeps
+    /// that cost to the stranded few instead of the whole corpus.
+    pub async fn processing_sources(&self) -> Result<Vec<Source>> {
+        self.query_sources(Some("status = 'processing'"), true)
+            .await
     }
 
     /// Drop the entire chunk index. It is recreated (with the current embedding
@@ -1457,9 +1485,11 @@ impl Db {
             titles.insert(format!("{SNOTE_CHUNK_PREFIX}{}", s.id), s.title.clone());
             titles.insert(s.id, s.title);
         }
-        for n in self.list_notes(notebook_id).await? {
-            titles.insert(format!("{NOTE_CHUNK_PREFIX}{}", n.id), n.title);
-            recency.insert(format!("{NOTE_CHUNK_PREFIX}{}", n.id), n.created_at);
+        // Titles only — list_notes would drag every note body (reports run
+        // tens of KB) through this per-query join.
+        for (id, title, created_at) in self.list_note_meta(Some(notebook_id)).await? {
+            titles.insert(format!("{NOTE_CHUNK_PREFIX}{id}"), title);
+            recency.insert(format!("{NOTE_CHUNK_PREFIX}{id}"), created_at);
         }
 
         // Gist rows are corpus-wide evidence (meta-chat, MCP search); the
@@ -1652,6 +1682,37 @@ impl Db {
         notes.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
         notes.truncate(limit);
         Ok(notes)
+    }
+
+    /// (id, title, created_at) for notes WITHOUT their bodies — the search
+    /// path joins note titles on every query, and generated reports make
+    /// note bodies big. `None` = corpus-wide.
+    pub async fn list_note_meta(
+        &self,
+        notebook_id: Option<&str>,
+    ) -> Result<Vec<(String, String, i64)>> {
+        let filter = notebook_id.map(|nb| format!("notebook_id = '{}'", esc(nb)));
+        let batches = match self
+            .collect_cols(T_NOTES, filter.as_deref(), &["id", "title", "created_at"])
+            .await
+        {
+            Ok(b) => b,
+            Err(_) => self.collect(T_NOTES, filter.as_deref()).await?,
+        };
+        let mut out = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let title = str_col(b, "title")?;
+            let created = i64_col(b, "created_at")?;
+            for i in 0..b.num_rows() {
+                out.push((
+                    id.value(i).to_string(),
+                    title.value(i).to_string(),
+                    created.value(i),
+                ));
+            }
+        }
+        Ok(out)
     }
 
     /// (id, notebook_id, title, created_at) for every source — lightweight
@@ -1896,9 +1957,9 @@ impl Db {
             recency.insert(id.clone(), created_at);
             titles.insert(id, title);
         }
-        for n in self.recent_notes(usize::MAX).await? {
-            titles.insert(format!("{NOTE_CHUNK_PREFIX}{}", n.id), n.title);
-            recency.insert(format!("{NOTE_CHUNK_PREFIX}{}", n.id), n.created_at);
+        for (id, title, created_at) in self.list_note_meta(None).await? {
+            titles.insert(format!("{NOTE_CHUNK_PREFIX}{id}"), title);
+            recency.insert(format!("{NOTE_CHUNK_PREFIX}{id}"), created_at);
         }
         Ok((titles, recency))
     }
