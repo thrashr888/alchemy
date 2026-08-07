@@ -1706,36 +1706,69 @@ impl Db {
 
     // ---- Messages --------------------------------------------------------
 
+    /// The newest page of a notebook's transcript. The metadata pass keeps
+    /// large message bodies out of the scan used to choose the page; only the
+    /// selected rows are hydrated in the second query.
+    pub async fn message_page(
+        &self,
+        notebook_id: &str,
+        before_at: Option<i64>,
+        before_id: Option<&str>,
+        limit: usize,
+    ) -> Result<(Vec<Message>, bool)> {
+        let limit = limit.clamp(1, 200);
+        let mut filter = format!("notebook_id = '{}'", esc(notebook_id));
+        if let Some(ts) = before_at {
+            if let Some(id) = before_id {
+                filter.push_str(&format!(
+                    " AND (created_at < {ts} OR (created_at = {ts} AND id < '{}'))",
+                    esc(id)
+                ));
+            } else {
+                filter.push_str(&format!(" AND created_at < {ts}"));
+            }
+        }
+        let batches = self
+            .collect_cols(T_MESSAGES, Some(&filter), &["id", "created_at"])
+            .await?;
+        let mut ids = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let created = i64_col(b, "created_at")?;
+            for i in 0..b.num_rows() {
+                ids.push((id.value(i).to_string(), created.value(i)));
+            }
+        }
+        ids.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
+        let has_more = ids.len() > limit;
+        ids.truncate(limit);
+        if ids.is_empty() {
+            return Ok((Vec::new(), false));
+        }
+
+        let selected = ids
+            .iter()
+            .map(|(id, _)| format!("'{}'", esc(id)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let page_filter = format!(
+            "notebook_id = '{}' AND id IN ({selected})",
+            esc(notebook_id)
+        );
+        let batches = self.collect(T_MESSAGES, Some(&page_filter)).await?;
+        let mut messages = messages_from_batches(&batches)?;
+        messages.sort_by(|a, b| {
+            a.created_at
+                .cmp(&b.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        Ok((messages, has_more))
+    }
+
     pub async fn list_messages(&self, notebook_id: &str) -> Result<Vec<Message>> {
         let filter = format!("notebook_id = '{}'", esc(notebook_id));
         let batches = self.collect(T_MESSAGES, Some(&filter)).await?;
-        let mut messages = Vec::new();
-        for b in &batches {
-            let id = str_col(b, "id")?;
-            let nb = str_col(b, "notebook_id")?;
-            let role = str_col(b, "role")?;
-            let content = str_col(b, "content")?;
-            let citations = str_col(b, "citations")?;
-            let kind = str_col(b, "kind")?;
-            let model = b
-                .column_by_name("model")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>());
-            let created = i64_col(b, "created_at")?;
-            for i in 0..b.num_rows() {
-                let cites: Vec<Citation> =
-                    serde_json::from_str(citations.value(i)).unwrap_or_default();
-                messages.push(Message {
-                    id: id.value(i).to_string(),
-                    notebook_id: nb.value(i).to_string(),
-                    role: role.value(i).to_string(),
-                    content: content.value(i).to_string(),
-                    citations: cites,
-                    kind: kind.value(i).to_string(),
-                    model: model.map(|m| m.value(i).to_string()).unwrap_or_default(),
-                    created_at: created.value(i),
-                });
-            }
-        }
+        let mut messages = messages_from_batches(&batches)?;
         messages.sort_by_key(|m| m.created_at);
         Ok(messages)
     }
@@ -1873,6 +1906,50 @@ impl Db {
             Err(_) => 0,
         };
         Ok((count, chars, notes, ledger))
+    }
+
+    /// Home's activity snapshot in one pass per table. Previously Home read
+    /// the full notes table for recent notes, again for reports, and a third
+    /// time just to count it.
+    pub async fn home_activity(
+        &self,
+        recent_limit: usize,
+        report_limit: usize,
+    ) -> Result<(Vec<Note>, Vec<Note>, i64, i64, i64, i64)> {
+        let (source_batches, note_batches, ledger_batches) = tokio::try_join!(
+            self.collect_cols(T_SOURCES, None, &["char_count"]),
+            self.collect(T_NOTES, None),
+            self.collect_cols(T_LEDGER, None, &["id"]),
+        )?;
+
+        let (mut source_count, mut chars) = (0i64, 0i64);
+        for b in &source_batches {
+            let cc = i64_col(b, "char_count")?;
+            source_count += b.num_rows() as i64;
+            for i in 0..b.num_rows() {
+                chars += cc.value(i);
+            }
+        }
+
+        let mut notes = notes_from_batches(&note_batches)?;
+        let note_count = notes.len() as i64;
+        notes.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
+        let reports = notes
+            .iter()
+            .filter(|n| n.kind == "report")
+            .take(report_limit)
+            .cloned()
+            .collect();
+        notes.truncate(recent_limit);
+        let ledger_count = ledger_batches.iter().map(|b| b.num_rows() as i64).sum();
+        Ok((
+            notes,
+            reports,
+            source_count,
+            chars,
+            note_count,
+            ledger_count,
+        ))
     }
 
     /// BM25-only search across every notebook — no embedding round-trip, so
@@ -2918,6 +2995,36 @@ impl Db {
 
 // ---- Arrow column helpers ------------------------------------------------
 
+/// Decode message-table batches into transcript rows.
+fn messages_from_batches(batches: &[RecordBatch]) -> Result<Vec<Message>> {
+    let mut messages = Vec::new();
+    for b in batches {
+        let id = str_col(b, "id")?;
+        let nb = str_col(b, "notebook_id")?;
+        let role = str_col(b, "role")?;
+        let content = str_col(b, "content")?;
+        let citations = str_col(b, "citations")?;
+        let kind = str_col(b, "kind")?;
+        let model = b
+            .column_by_name("model")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+        let created = i64_col(b, "created_at")?;
+        for i in 0..b.num_rows() {
+            messages.push(Message {
+                id: id.value(i).to_string(),
+                notebook_id: nb.value(i).to_string(),
+                role: role.value(i).to_string(),
+                content: content.value(i).to_string(),
+                citations: serde_json::from_str(citations.value(i)).unwrap_or_default(),
+                kind: kind.value(i).to_string(),
+                model: model.map(|m| m.value(i).to_string()).unwrap_or_default(),
+                created_at: created.value(i),
+            });
+        }
+    }
+    Ok(messages)
+}
+
 /// Decode note-table batches into Note rows.
 fn notes_from_batches(batches: &[RecordBatch]) -> Result<Vec<Note>> {
     let mut notes = Vec::new();
@@ -3475,6 +3582,93 @@ fn note_batch(schema: &SchemaRef, notes: &[Note]) -> Result<RecordBatch> {
 mod tests {
     use super::*;
     use std::cmp::Ordering;
+
+    #[tokio::test]
+    async fn message_pages_are_bounded_newest_first_without_overlap() {
+        let dir = std::env::temp_dir().join(format!("nbl-message-page-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+        for i in 1..=5 {
+            db.add_message(&Message {
+                id: format!("m-{i}"),
+                notebook_id: "nb".into(),
+                role: if i % 2 == 0 { "assistant" } else { "user" }.into(),
+                content: format!("message {i}"),
+                citations: Vec::new(),
+                kind: "chat".into(),
+                model: String::new(),
+                created_at: i,
+            })
+            .await
+            .expect("add message");
+        }
+
+        let (latest, more) = db.message_page("nb", None, None, 2).await.expect("latest");
+        assert!(more);
+        assert_eq!(
+            latest.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["m-4", "m-5"]
+        );
+
+        let (older, more) = db
+            .message_page("nb", Some(latest[0].created_at), Some(&latest[0].id), 2)
+            .await
+            .expect("older");
+        assert!(more);
+        assert_eq!(
+            older.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["m-2", "m-3"]
+        );
+
+        let (oldest, more) = db
+            .message_page("nb", Some(older[0].created_at), Some(&older[0].id), 2)
+            .await
+            .expect("oldest");
+        assert!(!more);
+        assert_eq!(
+            oldest.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["m-1"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn message_page_cursor_breaks_timestamp_ties_by_id() {
+        let dir = std::env::temp_dir().join(format!("nbl-message-tie-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+        for id in ["a", "b", "c"] {
+            db.add_message(&Message {
+                id: id.into(),
+                notebook_id: "nb".into(),
+                role: "user".into(),
+                content: id.into(),
+                citations: Vec::new(),
+                kind: "chat".into(),
+                model: String::new(),
+                created_at: 42,
+            })
+            .await
+            .expect("add message");
+        }
+
+        let (latest, more) = db.message_page("nb", None, None, 1).await.expect("latest");
+        assert!(more);
+        assert_eq!(latest[0].id, "c");
+
+        let (middle, more) = db
+            .message_page("nb", Some(42), Some("c"), 1)
+            .await
+            .expect("middle");
+        assert!(more);
+        assert_eq!(middle[0].id, "b");
+
+        let (oldest, more) = db
+            .message_page("nb", Some(42), Some("b"), 1)
+            .await
+            .expect("oldest");
+        assert!(!more);
+        assert_eq!(oldest[0].id, "a");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// The prod-bricking bug: dev migrated the shared store (added
     /// `image_url`), and the installed binary's appends — batches built

@@ -11,11 +11,13 @@ import type {
   CorpusStats,
   FolderScan,
   GrepHit,
+  HomeActivity,
   KokoroStatus,
   MacCollection,
   MacFileHit,
   McpStatus,
   Message,
+  MessagePage,
   MetaAnswer,
   ModelHealth,
   ModelStat,
@@ -254,6 +256,19 @@ export const api = {
   // Chat
   listMessages: (notebookId: string) =>
     run(query<Message[]>("list_messages", { notebookId })),
+  listMessagesPage: (
+    notebookId: string,
+    before?: { createdAt: number; id: string },
+    limit = 80,
+  ) =>
+    run(
+      query<MessagePage>("list_messages_page", {
+        notebookId,
+        beforeAt: before?.createdAt ?? null,
+        beforeId: before?.id ?? null,
+        limit,
+      }),
+    ),
   sendMessage: (
     notebookId: string,
     content: string,
@@ -323,6 +338,7 @@ export const api = {
   listRecentReports: (limit = 10) =>
     run(query<Note[]>("list_recent_reports", { limit })),
   corpusStats: () => run(query<CorpusStats>("corpus_stats")),
+  homeActivity: () => run(query<HomeActivity>("home_activity")),
   newWindow: (notebookId?: string, noteId?: string) =>
     run(cmd<void>("new_window", { notebookId, noteId })),
   rebuildAppMenu: () => run(cmd<void>("rebuild_app_menu")),

@@ -180,6 +180,11 @@ export interface Message {
   createdAt: number;
 }
 
+export interface MessagePage {
+  messages: Message[];
+  hasMore: boolean;
+}
+
 export type NoteKind =
   | "note"
   | "summary"
@@ -314,6 +319,13 @@ export interface ReportSchedule {
   enabled: boolean;
   lastRunAt: number;
   createdAt: number;
+}
+
+export interface HomeActivity {
+  schedules: ReportSchedule[];
+  recentNotes: Note[];
+  reports: Note[];
+  stats: CorpusStats;
 }
 
 /** One anchor pinning a ledger entry to verbatim source text. */

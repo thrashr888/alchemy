@@ -62,6 +62,8 @@ export interface AppState {
   sources: Source[];
   selectedSourceIds: Record<string, boolean> | null;
   messages: Message[];
+  messagesHasMore: boolean;
+  messagesLoadingOlder: boolean;
   notes: Note[];
   reportSchedules: ReportSchedule[];
   templates: Template[];
@@ -235,6 +237,7 @@ export interface AppState {
    *  raw owner ids (source ids and "note:<id>"), replacing the checkbox
    *  selection for this send only. */
   sendMessage: (content: string, overrideSourceIds?: string[]) => Promise<void>;
+  loadOlderMessages: () => Promise<void>;
   cancelGeneration: (scope?: "chat" | "artifact") => void;
   openSourceViewer: (sourceId: string, title: string, highlight?: string) => void;
   closeSourceViewer: () => void;
