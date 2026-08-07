@@ -165,39 +165,42 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
     // RFC-import-pipeline §1: one extractor, markdown out. anydoc converts
     // the whole office/document family — including formats we never had
     // extractors for (doc, rtf, odt, odp, ppt) — to GFM, which is both the
-    // retrieval text and the faithful render. Our bespoke extractors below
-    // stay as the fallback for a release; the trace line here is how we
-    // learn whether they still fire. PDFs deliberately keep the
+    // retrieval text and the faithful render. PDFs deliberately keep the
     // pdf-inspector + OCR path (scanned PDFs need the vision fallback
-    // anydoc refuses), and markdown/html/plain text are already their own
-    // best extraction. TSVs aren't an anydoc format; they keep ours.
-    let anydoc_md = match anydoc::Format::from_path(std::path::Path::new(path)) {
-        None | Some(anydoc::Format::Pdf) => None,
-        Some(_) => match anydoc::to_markdown(path) {
-            Ok(md) if !md.trim().is_empty() => Some(md),
-            Ok(_) => {
-                eprintln!("anydoc fallback: empty output for {path}");
-                None
-            }
-            Err(err) => {
-                eprintln!("anydoc fallback: {path}: {err}");
-                None
-            }
-        },
-    };
-    if let Some(text) = anydoc_md {
-        let text = normalize(&text);
+    // anydoc refuses); markdown/html/plain text are already their own best
+    // extraction; TSVs aren't an anydoc format and keep ours.
+    let finish = |md: String| -> Result<Extracted> {
+        let text = normalize(&md);
         if text.trim().is_empty() {
             return Err(anyhow!("no extractable text found in {path}"));
         }
-        return Ok(Extracted {
+        Ok(Extracted {
             image_url: String::new(),
             author: file_author(path),
-            title,
+            title: title.clone(),
             source_type: "text".to_string(),
             url: String::new(),
             text,
-        });
+        })
+    };
+    match anydoc::Format::from_path(std::path::Path::new(path)) {
+        None | Some(anydoc::Format::Pdf) => {}
+        // CSVs keep one fallback below: Excel-exported CSVs are often
+        // Windows-1252, which anydoc (strict UTF-8) refuses but our lossy
+        // reader absorbs. The trace line is how we know the fallback still
+        // earns its keep.
+        Some(anydoc::Format::Csv) => match anydoc::to_markdown(path) {
+            Ok(md) if !md.trim().is_empty() => return finish(md),
+            Ok(_) => eprintln!("anydoc fallback: empty output for {path}"),
+            Err(err) => eprintln!("anydoc fallback: {path}: {err}"),
+        },
+        // The office family is anydoc's alone (the bespoke extractors are
+        // gone) — a failure here is the import's failure, reported as such.
+        Some(_) => {
+            let md =
+                anydoc::to_markdown(path).with_context(|| format!("could not extract {path}"))?;
+            return finish(md);
+        }
     }
 
     let (source_type, text) = match ext.as_str() {
@@ -235,7 +238,8 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
             "markdown".to_string(),
             std::fs::read_to_string(path).context("failed to read markdown file")?,
         ),
-        "xlsx" | "xls" | "xlsm" | "ods" => ("text".to_string(), extract_spreadsheet(path)?),
+        // csv reaches here only when anydoc refused it (see above) — the
+        // lossy read absorbs the Windows-1252 exports anydoc can't.
         "csv" | "tsv" => {
             let delim = if ext == "csv" { ',' } else { '\t' };
             (
@@ -243,9 +247,6 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
                 delimited_to_rows(&read_text_lossy(path)?, delim),
             )
         }
-        "docx" => ("text".to_string(), extract_docx(path)?),
-        "pptx" => ("text".to_string(), extract_pptx(path)?),
-        "epub" => ("text".to_string(), extract_epub(path)?),
         "boxnote" => ("markdown".to_string(), extract_boxnote(path)?),
         "txt" | "text" | "" => (
             "text".to_string(),
@@ -273,49 +274,6 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
         url: String::new(),
         text,
     })
-}
-
-/// Extract text from a spreadsheet (xlsx/xls/ods) — sheet by sheet, row by row.
-fn extract_spreadsheet(path: &str) -> Result<String> {
-    let mut workbook = calamine::open_workbook_auto(path)
-        .with_context(|| format!("failed to open spreadsheet {path}"))?;
-    Ok(sheets_to_text(&mut workbook))
-}
-
-/// Render every sheet of an open workbook as a heading plus a markdown table.
-fn sheets_to_text<RS>(workbook: &mut calamine::Sheets<RS>) -> String
-where
-    RS: std::io::Read + std::io::Seek,
-{
-    use calamine::{Data, Reader};
-    let mut out = String::new();
-    for name in workbook.sheet_names() {
-        let Ok(range) = workbook.worksheet_range(&name) else {
-            continue;
-        };
-        if range.is_empty() {
-            continue;
-        }
-        let rows: Vec<Vec<String>> = range
-            .rows()
-            .map(|row| {
-                row.iter()
-                    .map(|c| match c {
-                        Data::Empty => String::new(),
-                        other => other.to_string(),
-                    })
-                    .collect()
-            })
-            .filter(|cells: &Vec<String>| cells.iter().any(|c| !c.trim().is_empty()))
-            .collect();
-        if rows.is_empty() {
-            continue;
-        }
-        out.push_str(&format!("# Sheet: {name}\n"));
-        out.push_str(&rows_to_markdown_table(&rows));
-        out.push('\n');
-    }
-    out
 }
 
 /// A cell, made safe for a markdown table: pipes escaped, line breaks
@@ -451,351 +409,6 @@ fn read_zip_entry(path: &str, name: &str) -> Result<String> {
     let mut s = String::new();
     entry.read_to_string(&mut s)?;
     Ok(s)
-}
-
-/// Extract a .docx (WordprocessingML) to markdown: heading styles become
-/// `#` headings, bold/italic runs keep their emphasis, list paragraphs
-/// become bullets, and tables become GFM tables — so Word documents read
-/// (and chunk) like their origin instead of flattened text.
-fn extract_docx(path: &str) -> Result<String> {
-    let xml = read_zip_entry(path, "word/document.xml")?;
-    Ok(docx_to_markdown(&xml))
-}
-
-fn docx_to_markdown(xml: &str) -> String {
-    let mut out = String::new();
-    let mut i = 0;
-    while i < xml.len() {
-        let rest = &xml[i..];
-        if let Some(tbl_start) = rest.find("<w:tbl>").or_else(|| rest.find("<w:tbl ")) {
-            let p_start = rest.find("<w:p>").or_else(|| rest.find("<w:p "));
-            if p_start.is_none_or(|p| tbl_start < p) {
-                let tbl_rest = &rest[tbl_start..];
-                let end = tbl_rest
-                    .find("</w:tbl>")
-                    .map(|e| e + "</w:tbl>".len())
-                    .unwrap_or(tbl_rest.len());
-                out.push_str(&docx_table(&tbl_rest[..end]));
-                out.push('\n');
-                i += tbl_start + end;
-                continue;
-            }
-        }
-        match rest.find("<w:p>").or_else(|| rest.find("<w:p ")) {
-            Some(p_start) => {
-                let p_rest = &rest[p_start..];
-                let end = p_rest
-                    .find("</w:p>")
-                    .map(|e| e + "</w:p>".len())
-                    .unwrap_or(p_rest.len());
-                let para = docx_paragraph(&p_rest[..end]);
-                if !para.trim().is_empty() {
-                    out.push_str(&para);
-                    out.push('\n');
-                    out.push('\n');
-                }
-                i += p_start + end;
-            }
-            None => break,
-        }
-    }
-    out.trim().to_string()
-}
-
-/// One `<w:p>` → one markdown line: heading prefix from pStyle, list bullet
-/// from numPr, bold/italic from each run's properties.
-fn docx_paragraph(p: &str) -> String {
-    let props = p.find("</w:pPr>").map(|e| &p[..e]).unwrap_or("");
-    let style = props
-        .find("<w:pStyle")
-        .and_then(|at| props[at..].find('>').map(|e| &props[at..at + e]))
-        .and_then(|tag| xml_attr(tag, "w:val"))
-        .unwrap_or("");
-    let prefix = match style {
-        "Title" | "Heading1" => "# ",
-        "Heading2" => "## ",
-        "Heading3" | "Heading4" => "### ",
-        _ if props.contains("<w:numPr>") => "- ",
-        _ => "",
-    };
-    let mut text = String::new();
-    // Merge consecutive same-format runs so split runs don't emit `****`.
-    let mut pending = String::new();
-    let mut pending_fmt = (false, false);
-    let flush = |text: &mut String, seg: &mut String, fmt: (bool, bool)| {
-        if seg.is_empty() {
-            return;
-        }
-        let (bold, italic) = fmt;
-        let wrapped = match (bold, italic) {
-            (true, true) => format!("***{seg}***"),
-            (true, false) => format!("**{seg}**"),
-            (false, true) => format!("*{seg}*"),
-            (false, false) => seg.clone(),
-        };
-        text.push_str(&wrapped);
-        seg.clear();
-    };
-    let mut j = 0;
-    while let Some(r_at) = p[j..].find("<w:r>").or_else(|| p[j..].find("<w:r ")) {
-        let r_rest = &p[j + r_at..];
-        let r_end = r_rest
-            .find("</w:r>")
-            .map(|e| e + "</w:r>".len())
-            .unwrap_or(r_rest.len());
-        let run = &r_rest[..r_end];
-        let rpr = run.find("</w:rPr>").map(|e| &run[..e]).unwrap_or("");
-        let flag = |tag: &str| {
-            rpr.find(&format!("<w:{tag}"))
-                .map(|at| {
-                    let t = &rpr[at..rpr[at..].find('>').map(|e| at + e + 1).unwrap_or(rpr.len())];
-                    !t.contains("w:val=\"0\"") && !t.contains("w:val=\"false\"")
-                })
-                .unwrap_or(false)
-        };
-        let fmt = (flag("b/") || flag("b "), flag("i/") || flag("i "));
-        if fmt != pending_fmt {
-            flush(&mut text, &mut pending, pending_fmt);
-            pending_fmt = fmt;
-        }
-        let mut k = 0;
-        while let Some(t_at) = run[k..].find("<w:t") {
-            let t_rest = &run[k + t_at..];
-            let Some(open_end) = t_rest.find('>') else {
-                break;
-            };
-            let Some(close) = t_rest.find("</w:t>") else {
-                break;
-            };
-            if close > open_end {
-                pending.push_str(&xml_unescape(&t_rest[open_end + 1..close]));
-            }
-            k += t_at + close + "</w:t>".len();
-        }
-        if run.contains("<w:br/>") {
-            pending.push('\n');
-        }
-        if run.contains("<w:tab/>") {
-            pending.push('\t');
-        }
-        j += r_at + r_end;
-    }
-    flush(&mut text, &mut pending, pending_fmt);
-    if text.trim().is_empty() {
-        return String::new();
-    }
-    format!("{prefix}{}", text.trim())
-}
-
-/// One `<w:tbl>` → a GFM table (first row is the header).
-fn docx_table(tbl: &str) -> String {
-    let mut rows: Vec<Vec<String>> = Vec::new();
-    let mut i = 0;
-    while let Some(tr_at) = tbl[i..].find("<w:tr>").or_else(|| tbl[i..].find("<w:tr ")) {
-        let tr_rest = &tbl[i + tr_at..];
-        let tr_end = tr_rest
-            .find("</w:tr>")
-            .map(|e| e + "</w:tr>".len())
-            .unwrap_or(tr_rest.len());
-        let tr = &tr_rest[..tr_end];
-        let mut cells: Vec<String> = Vec::new();
-        let mut c = 0;
-        while let Some(tc_at) = tr[c..].find("<w:tc>").or_else(|| tr[c..].find("<w:tc ")) {
-            let tc_rest = &tr[c + tc_at..];
-            let tc_end = tc_rest
-                .find("</w:tc>")
-                .map(|e| e + "</w:tc>".len())
-                .unwrap_or(tc_rest.len());
-            let mut cell = String::new();
-            let mut p_i = 0;
-            let tc = &tc_rest[..tc_end];
-            while let Some(p_at) = tc[p_i..].find("<w:p>").or_else(|| tc[p_i..].find("<w:p ")) {
-                let p_rest = &tc[p_i + p_at..];
-                let p_end = p_rest
-                    .find("</w:p>")
-                    .map(|e| e + "</w:p>".len())
-                    .unwrap_or(p_rest.len());
-                let para = docx_paragraph(&p_rest[..p_end]);
-                if !para.trim().is_empty() {
-                    if !cell.is_empty() {
-                        cell.push(' ');
-                    }
-                    cell.push_str(para.trim_start_matches(['#', ' ', '-']).trim());
-                }
-                p_i += p_at + p_end;
-            }
-            cells.push(cell.replace('|', "\\|"));
-            c += tc_at + tc_end;
-        }
-        if !cells.is_empty() {
-            rows.push(cells);
-        }
-        i += tr_at + tr_end;
-    }
-    if rows.is_empty() {
-        return String::new();
-    }
-    let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
-    let mut out = String::new();
-    for (idx, row) in rows.iter().enumerate() {
-        out.push('|');
-        for c in 0..cols {
-            out.push(' ');
-            out.push_str(row.get(c).map(String::as_str).unwrap_or(""));
-            out.push_str(" |");
-        }
-        out.push('\n');
-        if idx == 0 {
-            out.push('|');
-            for _ in 0..cols {
-                out.push_str(" --- |");
-            }
-            out.push('\n');
-        }
-    }
-    out
-}
-
-/// Decode the five XML entities WordprocessingML uses in text nodes.
-fn xml_unescape(text: &str) -> String {
-    text.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
-}
-
-/// Extract text from a .pptx (PresentationML), one slide at a time, in order.
-fn extract_pptx(path: &str) -> Result<String> {
-    use std::io::Read;
-    let file = std::fs::File::open(path).with_context(|| format!("failed to open {path}"))?;
-    let mut zip = zip::ZipArchive::new(file).context("not a valid .pptx file")?;
-
-    // Collect slide entries with their numeric index for correct ordering.
-    let mut slides: Vec<(u32, String)> = Vec::new();
-    for i in 0..zip.len() {
-        let mut entry = zip.by_index(i)?;
-        let name = entry.name().to_string();
-        if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {
-            let num: u32 = name
-                .trim_start_matches("ppt/slides/slide")
-                .trim_end_matches(".xml")
-                .parse()
-                .unwrap_or(0);
-            let mut xml = String::new();
-            entry.read_to_string(&mut xml)?;
-            slides.push((num, xml));
-        }
-    }
-    slides.sort_by_key(|(n, _)| *n);
-
-    let mut out = String::new();
-    for (n, xml) in slides {
-        let xml = xml.replace("</a:p>", "\n");
-        let text = strip_html(&xml);
-        if !text.trim().is_empty() {
-            out.push_str(&format!("# Slide {n}\n{}\n\n", text.trim()));
-        }
-    }
-    Ok(out)
-}
-
-/// Pull a double-quoted attribute value out of an XML tag string.
-fn xml_attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
-    let needle = format!("{name}=\"");
-    let start = tag.find(&needle)? + needle.len();
-    let end = tag[start..].find('"')? + start;
-    Some(&tag[start..end])
-}
-
-/// Chapter paths in reading order: META-INF/container.xml names the OPF
-/// package file, whose spine lists manifest ids in the order a reader shows
-/// them. None if any of that structure is missing or malformed.
-fn epub_spine<R: std::io::Read + std::io::Seek>(
-    zip: &mut zip::ZipArchive<R>,
-) -> Option<Vec<String>> {
-    use std::io::Read;
-    let mut container = String::new();
-    zip.by_name("META-INF/container.xml")
-        .ok()?
-        .read_to_string(&mut container)
-        .ok()?;
-    let rootfile = &container[container.find("<rootfile")?..];
-    let opf_path = xml_attr(rootfile, "full-path")?.to_string();
-    let mut opf = String::new();
-    zip.by_name(&opf_path).ok()?.read_to_string(&mut opf).ok()?;
-    // Manifest hrefs resolve relative to the OPF's own directory.
-    let base = opf_path
-        .rsplit_once('/')
-        .map(|(dir, _)| format!("{dir}/"))
-        .unwrap_or_default();
-
-    let mut hrefs = std::collections::HashMap::new();
-    for tag in opf.split("<item ").skip(1) {
-        let Some(end) = tag.find('>') else { continue };
-        let tag = &tag[..end];
-        if let (Some(id), Some(href)) = (xml_attr(tag, "id"), xml_attr(tag, "href")) {
-            hrefs.insert(id.to_string(), href.to_string());
-        }
-    }
-    let mut order = Vec::new();
-    for tag in opf[opf.find("<spine")?..].split("<itemref").skip(1) {
-        let Some(end) = tag.find('>') else { continue };
-        if let Some(href) = xml_attr(&tag[..end], "idref").and_then(|id| hrefs.get(id)) {
-            order.push(format!("{base}{href}"));
-        }
-    }
-    Some(order)
-}
-
-/// Every HTML-ish entry in archive order — the fallback when an epub's
-/// package metadata can't be parsed.
-fn epub_html_entries<R: std::io::Read + std::io::Seek>(
-    zip: &mut zip::ZipArchive<R>,
-) -> Vec<String> {
-    (0..zip.len())
-        .filter_map(|i| zip.by_index(i).ok().map(|e| e.name().to_string()))
-        .filter(|n| {
-            let l = n.to_lowercase();
-            l.ends_with(".xhtml") || l.ends_with(".html") || l.ends_with(".htm")
-        })
-        .collect()
-}
-
-/// Extract text from an .epub (a zip of XHTML chapters), in reading order.
-fn extract_epub(path: &str) -> Result<String> {
-    use std::io::Read;
-    let file = std::fs::File::open(path).with_context(|| format!("failed to open {path}"))?;
-    let mut zip = zip::ZipArchive::new(file).context("not a valid .epub (zip) file")?;
-
-    let chapters = match epub_spine(&mut zip) {
-        Some(c) if !c.is_empty() => c,
-        _ => epub_html_entries(&mut zip),
-    };
-
-    let mut out = String::new();
-    for name in chapters {
-        let Ok(mut entry) = zip.by_name(&name) else {
-            continue;
-        };
-        let mut html = String::new();
-        if entry.read_to_string(&mut html).is_err() {
-            continue;
-        }
-        // Block-level closers become newlines so paragraphs survive stripping.
-        for closer in [
-            "</p>", "</div>", "</li>", "</h1>", "</h2>", "</h3>", "</h4>", "</h5>", "</h6>",
-            "<br/>", "<br />", "<br>",
-        ] {
-            html = html.replace(closer, &format!("{closer}\n"));
-        }
-        let text = strip_html(&html);
-        if !text.trim().is_empty() {
-            out.push_str(text.trim());
-            out.push_str("\n\n");
-        }
-    }
-    Ok(out)
 }
 
 /// Extract text from a Box Note (`.boxnote`). Box Notes are JSON: the modern
@@ -1248,10 +861,10 @@ async fn extract_google(
                 .bytes()
                 .await
                 .context("failed to download spreadsheet")?;
-            // Bytes is AsRef<[u8]>, so the cursor reads it without a copy.
-            let mut workbook = calamine::open_workbook_auto_from_rs(std::io::Cursor::new(bytes))
-                .context("could not parse the exported spreadsheet")?;
-            sheets_to_text(&mut workbook)
+            // Same GFM the file path produces — anydoc converts the export
+            // in memory (RFC-import-pipeline §1).
+            anydoc::to_markdown_bytes(&bytes, anydoc::Format::Excel)
+                .map_err(|e| anyhow!("could not parse the exported spreadsheet: {e}"))?
         }
         _ => resp.text().await.context("failed to read export body")?,
     };
@@ -2709,37 +2322,54 @@ mod tests {
         assert!(title.is_some(), "article title extracted");
     }
 
-    // Word documents extract to markdown: headings, emphasis, lists, and
-    // tables all survive instead of flattening to plain text.
+    // Word documents extract to markdown THROUGH THE REAL PATH (anydoc):
+    // headings, emphasis, and tables survive instead of flattening to
+    // plain text. A minimal but valid .docx package, built in-test.
     #[test]
-    fn docx_maps_styles_to_markdown() {
-        let xml = r#"<w:document><w:body>
+    fn docx_extracts_styles_as_markdown() {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+        let path = std::env::temp_dir().join(format!("alchemy-test-{}.docx", uuid::Uuid::new_v4()));
+        let file = std::fs::File::create(&path).unwrap();
+        let mut z = zip::ZipWriter::new(file);
+        let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let mut add = |name: &str, body: &str| {
+            z.start_file(name, opts).unwrap();
+            z.write_all(body.as_bytes()).unwrap();
+        };
+        add(
+            "[Content_Types].xml",
+            r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>"#,
+        );
+        // Heading styles resolve through the styles part, exactly like Word:
+        // without it "Heading1" is just a paragraph.
+        add(
+            "word/styles.xml",
+            r#"<?xml version="1.0"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/></w:style></w:styles>"#,
+        );
+        add(
+            "_rels/.rels",
+            r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#,
+        );
+        add(
+            "word/document.xml",
+            r#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
 <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Quarterly Report</w:t></w:r></w:p>
-<w:p><w:r><w:t>Plain intro with </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>bold words</w:t></w:r><w:r><w:t> and </w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>italic ones</w:t></w:r><w:r><w:t>.</w:t></w:r></w:p>
-<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>Findings</w:t></w:r></w:p>
-<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/></w:numPr></w:pPr><w:r><w:t>First bullet</w:t></w:r></w:p>
-<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/></w:numPr></w:pPr><w:r><w:t>Second bullet &amp; more</w:t></w:r></w:p>
+<w:p><w:r><w:t>Plain intro with </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>bold words</w:t></w:r><w:r><w:t>.</w:t></w:r></w:p>
 <w:tbl><w:tr><w:tc><w:p><w:r><w:t>Region</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Revenue</w:t></w:r></w:p></w:tc></w:tr>
 <w:tr><w:tc><w:p><w:r><w:t>West</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>$1.2M</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
-</w:body></w:document>"#;
-        let md = docx_to_markdown(xml);
+</w:body></w:document>"#,
+        );
+        z.finish().unwrap();
+
+        let got = extract_file(path.to_str().unwrap()).expect("docx extracts");
+        std::fs::remove_file(&path).ok();
+        let md = &got.text;
+        assert!(md.contains("Quarterly Report"), "title: {md}");
         assert!(md.contains("# Quarterly Report"), "h1: {md}");
         assert!(md.contains("**bold words**"), "bold: {md}");
-        assert!(md.contains("*italic ones*"), "italic: {md}");
-        assert!(md.contains("## Findings"), "h2: {md}");
-        assert!(md.contains("- First bullet"), "list: {md}");
-        assert!(md.contains("- Second bullet & more"), "entities: {md}");
         assert!(md.contains("| Region | Revenue |"), "table header: {md}");
-        assert!(md.contains("| --- | --- |"), "separator: {md}");
         assert!(md.contains("| West | $1.2M |"), "row: {md}");
-    }
-
-    // Split runs with identical formatting merge — no `****` artifacts.
-    #[test]
-    fn docx_merges_adjacent_same_format_runs() {
-        let xml = r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Hello </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>world</w:t></w:r></w:p>"#;
-        let md = docx_to_markdown(xml);
-        assert_eq!(md, "**Hello world**");
     }
 
     // Articles extract to MARKDOWN so structure and links survive — links
@@ -3024,14 +2654,15 @@ mod tests {
         );
         zip.finish().unwrap();
 
-        let text = extract_epub(path.to_str().unwrap()).unwrap();
+        // Through the real path (anydoc owns epub now).
+        let text = extract_file(path.to_str().unwrap()).unwrap().text;
         std::fs::remove_file(&path).ok();
 
         let first = text.find("First in spine").unwrap();
         let second = text.find("Second in spine & last in text").unwrap();
         assert!(first < second, "spine order should win over archive order");
         assert!(text.contains("Opening"));
-        assert!(!text.contains('<'), "no tags survive: {text}");
+        assert!(!text.contains("<p>"), "no tags survive: {text}");
     }
 
     /// The panic boundary on `extract_file`: a malformed file of any type

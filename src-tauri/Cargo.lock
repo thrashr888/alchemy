@@ -57,7 +57,6 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "block2",
- "calamine 0.26.1",
  "chrono",
  "csv",
  "dom_smoothie",
@@ -189,7 +188,7 @@ version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96db46b7211c9994a0be9f3c520936c2682af8cc8151c69c9f9416a8426de574"
 dependencies = [
- "calamine 0.36.1",
+ "calamine",
  "cfb 0.14.0",
  "csv",
  "encoding_rs",
@@ -1090,21 +1089,6 @@ dependencies = [
  "glib-sys",
  "libc",
  "system-deps",
-]
-
-[[package]]
-name = "calamine"
-version = "0.26.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "138646b9af2c5d7f1804ea4bf93afc597737d2bd4f7341d67c48b03316976eb1"
-dependencies = [
- "byteorder",
- "codepage",
- "encoding_rs",
- "log",
- "quick-xml 0.31.0",
- "serde",
- "zip 2.4.2",
 ]
 
 [[package]]
@@ -6999,16 +6983,6 @@ name = "pxfm"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0c5ccf5294c6ccd63a74f1565028353830a9c2f5eb0c682c355c471726a6e3f"
-
-[[package]]
-name = "quick-xml"
-version = "0.31.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1004a344b30a54e2ee58d66a71b32d2db2feb0a31f9a2d302bf0536f15de2a33"
-dependencies = [
- "encoding_rs",
- "memchr",
-]
 
 [[package]]
 name = "quick-xml"

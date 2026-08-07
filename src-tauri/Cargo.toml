@@ -33,7 +33,6 @@ uuid = { version = "1.23.4", features = ["v4"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 arrow-array = "58"
 arrow-schema = "58"
-calamine = "0.26"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 base64 = "0.22"
 # Single-pass multi-needle scan for the notebook link graph (graph.rs).

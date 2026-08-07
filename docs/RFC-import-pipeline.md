@@ -160,6 +160,12 @@ offline surface for a rounding-error saving.
    an RTF import was verified end-to-end. PDFs deliberately keep the
    pdf-inspector + OCR path (anydoc refuses scanned PDFs; our vision
    fallback is the whole point of keeping it).
-3. Remove bespoke extractors (extract_docx/pptx/epub/spreadsheet,
-   delimited_to_rows' csv leg) once the fallback trace stays quiet for a
-   release. TSV stays ours — it isn't an anydoc format.
+3. **Done** — bespoke extract_docx/pptx/epub/spreadsheet deleted (~350
+   lines + the calamine dependency); the office family's anydoc errors now
+   surface as import errors rather than falling back. The Google Sheets
+   export converts in memory via `to_markdown_bytes`. Two deliberate
+   keeps: the CSV fallback (Excel exports Windows-1252, which anydoc's
+   strict UTF-8 refuses — the `anydoc fallback:` trace line watches it),
+   and TSV, which isn't an anydoc format. The docx/epub fidelity tests
+   now run through `extract_file` against in-test-built packages, so they
+   guard the real path.
