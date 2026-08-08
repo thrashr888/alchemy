@@ -161,7 +161,9 @@ async fn run_pass(app: &AppHandle) {
     // no-op pass.
     crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
 
-    let mut ran = 0u32;
+    // Reports now run off-tick (below), so this pass never counts them —
+    // the spawned batch stamps the tray itself when it lands.
+    let ran = 0u32;
     if !is_paused() {
         let schedules = match state.db.all_report_schedules().await {
             Ok(schedules) => schedules,
@@ -206,27 +208,53 @@ async fn run_pass(app: &AppHandle) {
                 }
             })
             .collect();
-        for schedule in due {
-            match commands::run_report_inner(app, &state, &schedule.id).await {
-                Ok(_) => {
-                    ran += 1;
-                    if notify {
-                        let (title, body) = if schedule.kind == "brief" {
-                            (
-                                "Your brief is ready",
-                                format!("\u{201c}{}\u{201d} has the rundown.", schedule.name),
-                            )
-                        } else {
-                            (
-                                "Report ready",
-                                format!("\u{201c}{}\u{201d} was generated.", schedule.name),
-                            )
-                        };
-                        let _ = app.notification().builder().title(title).body(body).show();
+        // Off the tick: a slow report (an agent CLI can legitimately run
+        // many minutes, or hang to its deadline) used to stall the entire
+        // pass — resyncs and maintenance queued behind one wedged brief.
+        // One batch at a time; a tick that lands mid-batch just skips.
+        static REPORTS_RUNNING: AtomicBool = AtomicBool::new(false);
+        if !due.is_empty() && !REPORTS_RUNNING.swap(true, Ordering::SeqCst) {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let state = app.state::<AppState>();
+                let mut finished = 0u32;
+                for schedule in due {
+                    match commands::run_report_inner(&app, &state, &schedule.id).await {
+                        Ok(_) => {
+                            finished += 1;
+                            if notify {
+                                let (title, body) = if schedule.kind == "brief" {
+                                    (
+                                        "Your brief is ready",
+                                        format!(
+                                            "\u{201c}{}\u{201d} has the rundown.",
+                                            schedule.name
+                                        ),
+                                    )
+                                } else {
+                                    (
+                                        "Report ready",
+                                        format!("\u{201c}{}\u{201d} was generated.", schedule.name),
+                                    )
+                                };
+                                let _ = app.notification().builder().title(title).body(body).show();
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!("night shift: report {} failed: {err}", schedule.name)
+                        }
                     }
                 }
-                Err(err) => eprintln!("night shift: report {} failed: {err}", schedule.name),
-            }
+                REPORTS_RUNNING.store(false, Ordering::SeqCst);
+                if finished > 0 {
+                    let stamp = chrono::Local::now().format("%-I:%M %p").to_string();
+                    let plural = if finished == 1 { "" } else { "s" };
+                    crate::integrations::set_tray_status(
+                        &app,
+                        &format!("{finished} report{plural} ready \u{00b7} {stamp}"),
+                    );
+                }
+            });
         }
     }
 

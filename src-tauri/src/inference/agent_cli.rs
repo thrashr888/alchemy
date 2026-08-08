@@ -20,9 +20,21 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use super::{ChatOutcome, ChatTurn};
 
-/// Whole-response cap. Agent answers stream; a silent ten minutes is a hung
-/// CLI, not a slow model.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
+/// A CLI that has printed NOTHING for this long is wedged at startup — a
+/// healthy one banners within seconds (codex emits thread.started before
+/// its model runs). Observed live: the Morning Brief burned a whole
+/// 600-second budget on codex's MCP handshake into a CPU-pinned process,
+/// before any model call happened.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
+/// Mid-run silence cap: ten minutes of nothing after output began is a
+/// hang, not thinking.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
+/// Ceiling for an actively-streaming run — agentic briefs tool-loop and
+/// legitimately run long.
+const TOTAL_TIMEOUT: Duration = Duration::from_secs(1800);
+/// Backstop on the whole future, over and above the per-read deadlines —
+/// only a bug in the deadline logic could ever reach it.
+const RUN_BACKSTOP: Duration = Duration::from_secs(1860);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentKind {
@@ -568,7 +580,36 @@ impl AgentCli {
             let mut errored: Option<String> = None;
             let mut cost_usd: Option<f64> = None;
             let mut in_thinking = false;
-            while let Some(line) = lines.next_line().await? {
+            // Staged deadlines, not one flat cap: a silent START is a wedged
+            // handshake and fails fast; once streaming, the run gets real
+            // room, bounded by a mid-run silence cap and a total ceiling.
+            let started = std::time::Instant::now();
+            let mut saw_output = false;
+            while let Some(line) = {
+                let stage = if saw_output {
+                    IDLE_TIMEOUT
+                } else {
+                    STARTUP_TIMEOUT
+                };
+                let left = TOTAL_TIMEOUT
+                    .saturating_sub(started.elapsed())
+                    .min(stage)
+                    .max(Duration::from_millis(1));
+                match tokio::time::timeout(left, lines.next_line()).await {
+                    Ok(l) => l?,
+                    Err(_) => {
+                        let (what, secs) = if !saw_output {
+                            ("produced no output", STARTUP_TIMEOUT.as_secs())
+                        } else if started.elapsed() >= TOTAL_TIMEOUT {
+                            ("exceeded the run ceiling of", TOTAL_TIMEOUT.as_secs())
+                        } else {
+                            ("went silent mid-run for", IDLE_TIMEOUT.as_secs())
+                        };
+                        return Err(anyhow!("{} {what} {secs}s", kind.binary_name()));
+                    }
+                }
+            } {
+                saw_output = true;
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
                     // Plain-text CLIs (gemini, bob) and stream-json builds
                     // that print bare text: pass the line through verbatim.
@@ -730,13 +771,13 @@ impl AgentCli {
             }
         };
 
-        let outcome = tokio::time::timeout(REQUEST_TIMEOUT, run).await;
+        let outcome = tokio::time::timeout(RUN_BACKSTOP, run).await;
         let _ = child.start_kill();
         match outcome {
             Err(_) => Err(anyhow!(
                 "{} timed out after {}s",
                 self.kind.binary_name(),
-                REQUEST_TIMEOUT.as_secs()
+                RUN_BACKSTOP.as_secs()
             )),
             Ok(Err(e)) => {
                 let tail = err_tail.await.unwrap_or_default();

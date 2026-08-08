@@ -315,15 +315,24 @@ fn tidy_markdown_tables(text: &str) -> String {
                     .any(|r| r.get(col).is_some_and(|c| !c.is_empty() && !is_sep_cell(c)))
             })
             .collect();
-        for r in &rows {
+        for (ri, r) in rows.iter().enumerate() {
             let cells: Vec<&str> = (0..width)
                 .filter(|c| keep[*c])
                 .map(|c| r.get(c).copied().unwrap_or(""))
                 .collect();
             let is_sep_row = r.iter().any(|c| is_sep_cell(c));
+            // The header row is whatever sits directly above the separator —
+            // GFM grammar demands it, blank or not. Dropping a blank header
+            // left the separator first in line, which un-tables the whole
+            // block into paragraph soup (observed live on a CSV whose first
+            // line is a title, so anydoc emits an empty header).
+            let is_header = rows
+                .get(ri + 1)
+                .is_some_and(|next| next.iter().any(|c| is_sep_cell(c)));
             // Fully blank rows (spacer lines in exports) vanish with the
             // phantom columns.
-            if cells.is_empty() || (!is_sep_row && cells.iter().all(|c| c.is_empty())) {
+            if cells.is_empty() || (!is_sep_row && !is_header && cells.iter().all(|c| c.is_empty()))
+            {
                 continue;
             }
             out.push(format!("| {} |", cells.join(" | ")));
@@ -2625,6 +2634,18 @@ mod tests {
         // A fully-populated table and surrounding prose pass through intact.
         let clean = "# Sheet: One\n| a | b |\n| --- | --- |\n| 1 | 2 |\nafter\n";
         assert_eq!(tidy_markdown_tables(clean), clean);
+        // A BLANK header survives: anydoc emits one when a CSV's first line
+        // is a title rather than column names, and dropping it left the
+        // separator first — invalid GFM, so the whole table fell apart into
+        // flowed pipe-riddled text (observed live).
+        let blank_header = "|  |  |  |\n\
+                            | --- | --- | --- |\n\
+                            | Account Summary |  |  |\n\
+                            | IRA | 172085.41 |  |\n";
+        assert_eq!(
+            tidy_markdown_tables(blank_header),
+            "|  |  |\n| --- | --- |\n| Account Summary |  |\n| IRA | 172085.41 |\n"
+        );
         // Non-table text is untouched, even with stray pipes mid-line.
         let prose = "pipes | in prose | stay\n";
         assert_eq!(tidy_markdown_tables(prose), prose);
