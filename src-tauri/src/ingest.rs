@@ -170,7 +170,7 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
     // anydoc refuses); markdown/html/plain text are already their own best
     // extraction; TSVs aren't an anydoc format and keep ours.
     let finish = |md: String| -> Result<Extracted> {
-        let text = normalize(&md);
+        let text = normalize(&tidy_markdown_tables(&md));
         if text.trim().is_empty() {
             return Err(anyhow!("no extractable text found in {path}"));
         }
@@ -244,7 +244,7 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
             let delim = if ext == "csv" { ',' } else { '\t' };
             (
                 "text".to_string(),
-                delimited_to_rows(&read_text_lossy(path)?, delim),
+                tidy_markdown_tables(&delimited_to_rows(&read_text_lossy(path)?, delim)),
             )
         }
         "boxnote" => ("markdown".to_string(), extract_boxnote(path)?),
@@ -274,6 +274,66 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
         url: String::new(),
         text,
     })
+}
+
+/// Drop table columns and rows that hold nothing. Spreadsheet exports pad
+/// rows with trailing delimiters, and those phantom columns render as a
+/// strip of empty cells down the table's right edge (observed live: a
+/// brokerage CSV with four of them). Applied to EXTRACTED output only —
+/// a markdown file the user wrote renders exactly as written.
+fn tidy_markdown_tables(text: &str) -> String {
+    let is_row = |l: &str| {
+        let t = l.trim();
+        t.len() >= 2 && t.starts_with('|') && t.ends_with('|')
+    };
+    let is_sep_cell = |c: &str| !c.is_empty() && c.chars().all(|ch| matches!(ch, '-' | ':'));
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        if !is_row(lines[i]) {
+            out.push(lines[i].to_string());
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < lines.len() && is_row(lines[i]) {
+            i += 1;
+        }
+        let rows: Vec<Vec<&str>> = lines[start..i]
+            .iter()
+            .map(|l| {
+                let t = l.trim();
+                t[1..t.len() - 1].split('|').map(str::trim).collect()
+            })
+            .collect();
+        let width = rows.iter().map(Vec::len).max().unwrap_or(0);
+        // A column lives if any non-separator row has something in it.
+        let keep: Vec<bool> = (0..width)
+            .map(|col| {
+                rows.iter()
+                    .any(|r| r.get(col).is_some_and(|c| !c.is_empty() && !is_sep_cell(c)))
+            })
+            .collect();
+        for r in &rows {
+            let cells: Vec<&str> = (0..width)
+                .filter(|c| keep[*c])
+                .map(|c| r.get(c).copied().unwrap_or(""))
+                .collect();
+            let is_sep_row = r.iter().any(|c| is_sep_cell(c));
+            // Fully blank rows (spacer lines in exports) vanish with the
+            // phantom columns.
+            if cells.is_empty() || (!is_sep_row && cells.iter().all(|c| c.is_empty())) {
+                continue;
+            }
+            out.push(format!("| {} |", cells.join(" | ")));
+        }
+    }
+    let mut s = out.join("\n");
+    if text.ends_with('\n') {
+        s.push('\n');
+    }
+    s
 }
 
 /// A cell, made safe for a markdown table: pipes escaped, line breaks
@@ -862,9 +922,11 @@ async fn extract_google(
                 .await
                 .context("failed to download spreadsheet")?;
             // Same GFM the file path produces — anydoc converts the export
-            // in memory (RFC-import-pipeline §1).
-            anydoc::to_markdown_bytes(&bytes, anydoc::Format::Excel)
-                .map_err(|e| anyhow!("could not parse the exported spreadsheet: {e}"))?
+            // in memory (RFC-import-pipeline §1), phantom columns trimmed.
+            tidy_markdown_tables(
+                &anydoc::to_markdown_bytes(&bytes, anydoc::Format::Excel)
+                    .map_err(|e| anyhow!("could not parse the exported spreadsheet: {e}"))?,
+            )
         }
         _ => resp.text().await.context("failed to read export body")?,
     };
@@ -2545,6 +2607,27 @@ mod tests {
             delimited_to_rows("a\tb\n\n\nc\td\n", '\t'),
             "| a | b |\n| --- | --- |\n| c | d |\n"
         );
+    }
+
+    #[test]
+    fn tidy_drops_phantom_columns_and_blank_rows() {
+        // Observed live: a brokerage CSV with trailing commas rendered four
+        // empty columns down the table's right edge, plus spacer rows.
+        let messy = "| Account | Value |  |  |\n\
+                     | --- | --- | --- | --- |\n\
+                     | IRA | 1720.41 |  |  |\n\
+                     |  |  |  |  |\n\
+                     | Cash | 12.00 |  |  |\n";
+        assert_eq!(
+            tidy_markdown_tables(messy),
+            "| Account | Value |\n| --- | --- |\n| IRA | 1720.41 |\n| Cash | 12.00 |\n"
+        );
+        // A fully-populated table and surrounding prose pass through intact.
+        let clean = "# Sheet: One\n| a | b |\n| --- | --- |\n| 1 | 2 |\nafter\n";
+        assert_eq!(tidy_markdown_tables(clean), clean);
+        // Non-table text is untouched, even with stray pipes mid-line.
+        let prose = "pipes | in prose | stay\n";
+        assert_eq!(tidy_markdown_tables(prose), prose);
     }
 
     #[test]

@@ -313,12 +313,27 @@ button {
   border-collapse: collapse;
   margin: 0 0 0.7em;
   font-size: 0.92em;
+  /* Figures line up down a column; no effect on prose. */
+  font-variant-numeric: tabular-nums;
 }
 .prose th,
 .prose td {
   border: 1px solid var(--border);
-  padding: 0.35em 0.6em;
+  padding: 0.3em 0.7em;
   text-align: left;
+  vertical-align: top;
+  /* Cells wrap at word boundaries only — the pane-width guard above
+     (`overflow-wrap: anywhere`) was shattering words ("Tot al Gai n")
+     whenever a wide table squeezed. Wide tables scroll instead: Markdown
+     wraps every table in its own overflow-x container. */
+  overflow-wrap: normal;
+}
+.prose th {
+  /* Headers hold one line and read as labels, not data. */
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  border-bottom: 1px solid var(--border-strong);
 }
 /* Editing tables: visible cell selection + a minimum column width so empty
    cells stay clickable. */

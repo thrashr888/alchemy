@@ -1110,6 +1110,25 @@ impl Db {
         Ok(())
     }
 
+    /// Drop a source's chunk rows — the reingest stage's swap. Annotation
+    /// (`snote:`) and gist (`gist:`) rows carry prefixed owner ids, so the
+    /// plain-id predicate leaves them alone.
+    pub async fn delete_source_chunks(&self, source_id: &str) -> Result<()> {
+        self.delete_where(T_CHUNKS, &format!("source_id = '{}'", esc(source_id)))
+            .await
+    }
+
+    /// Swap a source's ROW without touching its chunks — the async reingest
+    /// writes the row first, so the old chunks keep serving retrieval until
+    /// the background stage replaces them.
+    pub async fn replace_source_row(&self, source: &Source) -> Result<()> {
+        self.delete_where(T_SOURCES, &format!("id = '{}'", esc(&source.id)))
+            .await?;
+        let schema = sources_schema();
+        let batch = source_batch(&schema, std::slice::from_ref(source))?;
+        self.add_batch(T_SOURCES, schema, batch).await
+    }
+
     /// Drop the indexed chunk rows for a source's annotation (owner
     /// `snote:<source_id>`), ahead of a re-index or when the note is cleared.
     pub async fn delete_snote_chunks(&self, source_id: &str) -> Result<()> {
@@ -1270,27 +1289,42 @@ impl Db {
         Ok(())
     }
 
-    /// Rebuild the chunks full-text index, serialized process-wide and retried
-    /// on Lance's retryable `CreateIndex` commit conflict. Two overlapping
-    /// full-index rebuilds — the background gist/enrichment sweep racing a
-    /// foreground import — otherwise preempt each other; the lock keeps them
-    /// one-at-a-time and the retry absorbs any conflict from outside this
-    /// process (e.g. a stray build kicked off before the lock was taken).
+    /// Bring the chunks full-text index up to date, serialized process-wide
+    /// and retried on Lance's retryable commit conflicts. INCREMENTAL when
+    /// the index exists: rows written since the last pass join as a delta
+    /// index and merge into the newest one (`OptimizeOptions` default), so
+    /// a burst of writes costs a delta, not a whole-corpus Tantivy rebuild.
+    /// The only full build is the first (fresh store, or after
+    /// `clear_all_chunks`). Rows deleted since (reingest, source deletion)
+    /// leave stale index entries that Lance filters at query time; the
+    /// merge keeps the delta count bounded.
     async fn rebuild_chunks_fts(&self) -> Result<()> {
         let _guard = self.fts_lock.lock().await;
         let mut attempt = 0u32;
         loop {
             let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
-            match tbl
-                .create_index(&["text"], Index::FTS(FtsIndexBuilder::default()))
-                .replace(true)
-                .execute()
+            let has_fts = tbl
+                .list_indices()
+                .await?
+                .iter()
+                .any(|i| i.columns == ["text"]);
+            let result = if has_fts {
+                tbl.optimize(lancedb::table::OptimizeAction::Index(
+                    lancedb::table::OptimizeOptions::default(),
+                ))
                 .await
-            {
+                .map(|_| ())
+            } else {
+                tbl.create_index(&["text"], Index::FTS(FtsIndexBuilder::default()))
+                    .replace(true)
+                    .execute()
+                    .await
+            };
+            match result {
                 Ok(()) => {
-                    // Every rebuild leaves the entire previous index behind
-                    // as a dead version — prune promptly or a chatty sweep
-                    // session grows the table by gigabytes of stale Tantivy.
+                    // Each pass leaves its predecessor behind as a dead
+                    // version — prune promptly. Deltas are small, but a
+                    // chatty session still accumulates.
                     let _ = tbl
                         .optimize(lancedb::table::OptimizeAction::Prune {
                             older_than: Some(lancedb::table::optimize::Duration::minutes(10)),
@@ -1313,7 +1347,7 @@ impl Db {
                         .await;
                         continue;
                     }
-                    return Err(e).context("failed to build full-text index on chunks");
+                    return Err(e).context("failed to update full-text index on chunks");
                 }
             }
         }

@@ -1028,7 +1028,14 @@ async fn store_new_source(
     state.db.touch_notebook(notebook_id, now()).await?;
 
     if processing {
-        spawn_embed_stage(state, &source, extracted, code_ctx.map(str::to_string)).await;
+        spawn_embed_stage(
+            state,
+            &source,
+            extracted,
+            code_ctx.map(str::to_string),
+            false,
+        )
+        .await;
     } else if !source.content.is_empty() {
         // Non-embedding and errored arrivals still file under any registry
         // card that claims them, as they always did — literal string work,
@@ -1054,17 +1061,20 @@ async fn store_new_source(
 /// one rebuild, not one per file.
 static EMBED_QUEUE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// Stage two of an import (docs/RFC-import-pipeline.md §2): chunk, embed,
-/// and index in the background, then flip the row from "processing" to
-/// "ready" and kick the after-import intelligence. ONE worker on purpose —
-/// a folder drop queues through in arrival order, so neither the embedding
-/// model nor Lance ever sees a stampede. The row is already on screen;
-/// retrieval joins when the chunks land.
+/// Stage two of an import OR a reingest (docs/RFC-import-pipeline.md §2):
+/// chunk, embed, and index in the background, then flip the row from
+/// "processing" to "ready" and kick the after-import intelligence. ONE
+/// worker on purpose — a folder drop queues through in arrival order, so
+/// neither the embedding model nor Lance ever sees a stampede. The row is
+/// already on screen; retrieval joins when the chunks land.
+/// `replace_chunks` is the reingest flavor: the source's previous chunks
+/// keep serving retrieval until this stage swaps them.
 pub(crate) async fn spawn_embed_stage(
     state: &AppState,
     source: &Source,
     extracted: ingest::Extracted,
     code_ctx: Option<String>,
+    replace_chunks: bool,
 ) {
     static EMBED_GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
     let db = state.db.clone();
@@ -1079,13 +1089,17 @@ pub(crate) async fn spawn_embed_stage(
             let inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
             let embeddings = ai.embed(&inputs).await?;
             // The queue wait plus the embed can outlive the row: a delete
-            // drops it, a refresh replaces it (reingest embeds its own
-            // chunks). Either way this stage's work belongs to a row that no
-            // longer exists — writing it would orphan chunks or clobber the
-            // replacement, so re-check before the write.
+            // drops it, another refresh replaces it. The claim is the
+            // CONTENT, not just the status — two refreshes in flight both
+            // see "processing", and only the stage whose text matches the
+            // row's current text may write, so the newest refresh wins.
             match db.get_source(&source.id).await? {
-                Some(current) if current.status == "processing" => {}
+                Some(current)
+                    if current.status == "processing" && current.content == extracted.text => {}
                 _ => return Ok(None),
+            }
+            if replace_chunks {
+                db.delete_source_chunks(&source.id).await?;
             }
             let tuples: Vec<(String, i32, String)> = chunks
                 .iter()
@@ -1176,7 +1190,10 @@ pub(crate) fn resume_stranded_imports(app: &AppHandle) {
                     url: s.url.clone(),
                     text: s.content.clone(),
                 };
-                spawn_embed_stage(&state, &s, extracted, None).await;
+                // Replace-flavored: a stranded REINGEST still has its old
+                // chunks in place (an import's delete simply matches
+                // nothing).
+                spawn_embed_stage(&state, &s, extracted, None, true).await;
             }
         }
         let Ok(sources) = state.db.all_sources_lean().await else {
@@ -1986,8 +2003,11 @@ fn diff_excerpt(old: &str, new: &str) -> (String, String) {
     (stats, excerpt.trim_end().to_string())
 }
 
-/// Re-chunk, re-embed, and replace a source's content in place (edit /
-/// refresh). `code_ctx` as in `store_new_source`.
+/// Replace a source's content in place (edit / refresh). The ROW lands
+/// immediately; chunking and embedding run in the shared background stage
+/// (docs/RFC-import-pipeline.md §2), with the old chunks serving retrieval
+/// until the new ones swap in — a refresh never opens a search gap and
+/// never blocks its caller on a model. `code_ctx` as in `store_new_source`.
 pub(crate) async fn reingest(
     state: &AppState,
     existing: &Source,
@@ -1995,34 +2015,19 @@ pub(crate) async fn reingest(
     code_ctx: Option<&str>,
     embed: bool,
 ) -> anyhow::Result<Source> {
-    // Repository-tier code children store their content but skip embedding —
-    // the ripgrep leg reaches them at query time (RFC-git-sources §4).
-    let chunks = if embed {
-        ingest::chunk_source(&extracted, code_ctx)
-    } else {
-        Vec::new()
-    };
-    let embed_inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
-    let embeddings = {
-        let ai = state.ai.read().await.clone();
-        ai.embed(&embed_inputs).await?
-    };
-    let chunk_tuples: Vec<(String, i32, String)> = chunks
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (new_id(), i as i32, c.text.clone()))
-        .collect();
-
     // Classify against the stored URL: text edits arrive via extract_pasted
     // with an empty extracted.url, which would drop the Google-doc exemption.
     let (status, error) = classify(&existing.source_type, &existing.url, &extracted.text);
+    // Repository-tier code children store their content but skip embedding —
+    // the ripgrep leg reaches them at query time (RFC-git-sources §4).
+    let processing = embed && status == "ready";
     // An empty extracted.url means the text came from an edit or paste, not a
     // re-fetch — keep the stored origin (URL or file path) so refresh keeps
     // working after edits.
     let url = if extracted.url.is_empty() {
         existing.url.clone()
     } else {
-        extracted.url
+        extracted.url.clone()
     };
     let updated = Source {
         // A refresh may carry a new lead image; edits/pastes carry none —
@@ -2033,11 +2038,12 @@ pub(crate) async fn reingest(
             extracted.image_url.clone()
         },
         // A paste/edit re-extract carries no file authorship — keep what the
-        // original ingest captured rather than blanking it.
+        // original ingest captured rather than blanking it. (Cloned:
+        // `extracted` travels whole into the embed stage below.)
         author: if extracted.author.is_empty() {
             existing.author.clone()
         } else {
-            extracted.author
+            extracted.author.clone()
         },
         id: existing.id.clone(),
         notebook_id: existing.notebook_id.clone(),
@@ -2046,9 +2052,15 @@ pub(crate) async fn reingest(
         url,
         content: extracted.text.clone(),
         char_count: extracted.text.chars().count() as i64,
-        chunk_count: chunk_tuples.len() as i64,
+        // The old chunks keep serving until the stage swaps them — their
+        // count stays honest in the meantime; the stage stamps the new one.
+        chunk_count: if processing { existing.chunk_count } else { 0 },
         created_at: existing.created_at,
-        status,
+        status: if processing {
+            "processing".to_string()
+        } else {
+            status
+        },
         error,
         // Folder membership and change-tracking travel with the row; a rescan
         // that re-ingests a changed file passes `existing` with a fresh mtime.
@@ -2059,10 +2071,24 @@ pub(crate) async fn reingest(
         tags: existing.tags.clone(),
         note: existing.note.clone(),
     };
-    state
-        .db
-        .replace_source(&updated, &chunk_tuples, &embeddings)
-        .await?;
+    if processing {
+        // Row first, chunks in the background — the stage's content claim
+        // (spawn_embed_stage) settles racing refreshes in the newest one's
+        // favor.
+        state.db.replace_source_row(&updated).await?;
+        spawn_embed_stage(
+            state,
+            &updated,
+            extracted,
+            code_ctx.map(str::to_string),
+            true,
+        )
+        .await;
+    } else {
+        // No embedding to wait for (code children, errored extractions):
+        // the full swap stays synchronous, old chunks dropped with it.
+        state.db.replace_source(&updated, &[], &[]).await?;
+    }
     // A refreshed PDF may have a new first page, a refreshed page a new
     // hero image — drop the stale caches so the gallery re-renders them.
     if existing.source_type == "pdf" {
