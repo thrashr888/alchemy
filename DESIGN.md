@@ -156,6 +156,15 @@ introduce a webfont; the system stack is deliberate.
   label/value rows (type, origin, dates, size) at the top of a document,
   12px, hairline-separated from content. Answers "what is this" before
   the prose.
+- **Data tables** (rendered markdown, everywhere `Markdown` runs): one
+  hairline frame around the whole table (rounded 8px, the horizontal
+  scroll container), horizontal hairlines between rows, NO vertical grid —
+  column gaps do that job. Headers are 12px medium muted labels on a
+  `border-strong` rule, one line, never wrapped. Bare figures right-align
+  with tabular numerals (`.cell-num`, stamped by the renderer). Spreadsheet
+  section rows (one label, then empties) render as muted subheads
+  (`.tr-section`); an all-blank header row renders as nothing. Cells wrap
+  at word boundaries only — wide tables scroll, words never shatter.
 
 ## 5. Layout Principles
 

@@ -1,4 +1,4 @@
-import { memo, useMemo } from "react";
+import React, { memo, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
@@ -145,16 +145,78 @@ function remarkWikilinks() {
   return () => (tree: Node) => visit(tree);
 }
 
-/** A wide table scrolls inside its own container instead of stretching the
- *  whole chat/note column sideways. */
+/** A wide table scrolls inside its own hairline frame instead of stretching
+ *  the whole chat/note column sideways (styling in index.css .table-wrap). */
 function ScrollableTable({
   node: _node,
   ...props
 }: React.TableHTMLAttributes<HTMLTableElement> & { node?: unknown }) {
   return (
-    <div className="overflow-x-auto">
+    <div className="table-wrap">
       <table {...props} />
     </div>
+  );
+}
+
+/** Every string inside a rendered element tree, concatenated — how the
+ *  table components below read a cell without touching the DOM. */
+function textOf(node: React.ReactNode): string {
+  if (node == null || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join("");
+  if (React.isValidElement<{ children?: React.ReactNode }>(node))
+    return textOf(node.props.children);
+  return "";
+}
+
+/** A cell that holds a bare figure — money, percent, count — sits flush
+ *  right with tabular numerals (index.css .cell-num), the way every decent
+ *  data table sets numbers. */
+const NUMERIC_CELL = /^[$€£+\-(]?[\d,]+(\.\d+)?\)?%?$/;
+function SmartTd({
+  node: _node,
+  children,
+  ...props
+}: React.TdHTMLAttributes<HTMLTableCellElement> & { node?: unknown }) {
+  const text = textOf(children).trim();
+  const numeric = text !== "" && NUMERIC_CELL.test(text);
+  return (
+    <td {...props} className={numeric ? "cell-num" : undefined}>
+      {children}
+    </td>
+  );
+}
+
+/** Spreadsheet exports open with a BLANK header row (their first line is a
+ *  title, not column names) — GFM needs the row, readers don't. Render
+ *  nothing when no header cell has text. */
+function SmartThead({
+  node: _node,
+  children,
+  ...props
+}: React.HTMLAttributes<HTMLTableSectionElement> & { node?: unknown }) {
+  if (textOf(children).trim() === "") return null;
+  return <thead {...props}>{children}</thead>;
+}
+
+/** Section-title rows — one label, then a run of empty cells, ubiquitous in
+ *  spreadsheet exports — read as the subheads they are (index.css
+ *  .tr-section) instead of data rows full of holes. */
+function SmartTr({
+  node: _node,
+  children,
+  ...props
+}: React.HTMLAttributes<HTMLTableRowElement> & { node?: unknown }) {
+  const cells = React.Children.toArray(children).filter(React.isValidElement);
+  const texts = cells.map((c) => textOf(c).trim());
+  const isSection =
+    texts.length >= 3 &&
+    texts[0] !== "" &&
+    texts.slice(1).every((t) => t === "");
+  return (
+    <tr {...props} className={isSection ? "tr-section" : undefined}>
+      {children}
+    </tr>
   );
 }
 
@@ -162,6 +224,9 @@ function ScrollableTable({
  *  consumers see a stable identity. */
 const PLAIN_COMPONENTS = {
   table: ScrollableTable,
+  thead: SmartThead,
+  tr: SmartTr,
+  td: SmartTd,
   code: CodeBlock,
   a: ExternalLink,
 };
@@ -211,6 +276,9 @@ function MarkdownInner<C extends { snippet: string }>({
           interactive
             ? {
                 table: ScrollableTable,
+                thead: SmartThead,
+                tr: SmartTr,
+                td: SmartTd,
                 code: CodeBlock,
                 a: ({ href, children: linkChildren, ...props }) => {
                   const n = href?.startsWith("#cite-") ? Number(href.slice(6)) : NaN;
