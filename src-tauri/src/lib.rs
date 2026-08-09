@@ -34,6 +34,8 @@ mod trace;
 mod tts;
 
 #[cfg(test)]
+mod beir_eval;
+#[cfg(test)]
 mod evals;
 #[cfg(test)]
 mod retrieval_eval;

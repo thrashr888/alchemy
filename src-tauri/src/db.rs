@@ -1229,6 +1229,59 @@ impl Db {
         self.fts_notify.notified().await;
     }
 
+    /// Bulk chunk append across MANY sources in one Lance commit — corpus
+    /// seeding's path (the BEIR eval's 5k documents would otherwise be 5k
+    /// commits). Rows are (source_id, chunk_id, ordinal, text); embeddings
+    /// align by index. Marks the FTS index dirty like every chunk write.
+    // Test-only today (the BEIR eval); the bulk-import path that should
+    // adopt it is RFC-import-pipeline follow-up work.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub async fn add_chunk_rows(
+        &self,
+        notebook_id: &str,
+        rows: &[(String, String, i32, String)],
+        embeddings: &[Vec<f32>],
+    ) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let dim = embeddings
+            .first()
+            .map(|v| v.len())
+            .ok_or_else(|| anyhow!("no embeddings for chunk rows"))? as i32;
+        self.ensure_table(T_CHUNKS, chunks_schema(dim)).await?;
+        let schema = chunks_schema(dim);
+        let ids: Vec<String> = rows.iter().map(|r| r.1.clone()).collect();
+        let nbs: Vec<String> = rows.iter().map(|_| notebook_id.to_string()).collect();
+        let sids: Vec<String> = rows.iter().map(|r| r.0.clone()).collect();
+        let ords: Vec<i32> = rows.iter().map(|r| r.2).collect();
+        let texts: Vec<String> = rows.iter().map(|r| r.3.clone()).collect();
+        let vectors = FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+            embeddings
+                .iter()
+                .map(|v| Some(v.iter().map(|f| Some(*f)).collect::<Vec<_>>())),
+            dim,
+        );
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(ids)),
+                Arc::new(StringArray::from(nbs)),
+                Arc::new(StringArray::from(sids)),
+                Arc::new(Int32Array::from(ords)),
+                Arc::new(StringArray::from(texts)),
+                Arc::new(vectors),
+            ],
+        )?;
+        self.add_batch(T_CHUNKS, schema, batch).await?;
+        self.fts_dirty
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        if !self.fts_deferred.load(std::sync::atomic::Ordering::SeqCst) {
+            self.fts_notify.notify_one();
+        }
+        Ok(())
+    }
+
     /// Enter/leave bulk-write mode (see `fts_deferred`). Leaving does NOT
     /// rebuild — call `flush_fts` after, so error paths can still flush.
     pub fn defer_fts(&self, on: bool) {
