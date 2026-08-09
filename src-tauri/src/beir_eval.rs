@@ -1,39 +1,51 @@
-//! BEIR SciFact against the real retrieval pipeline — a public yardstick
+//! BEIR datasets against the real retrieval pipeline — public yardsticks
 //! beside the synthetic evals in `retrieval_eval.rs`. Same chunker, same
 //! built-in embedder, same hybrid search (vector + BM25, RRF-fused) the app
-//! ships; the score is comparable to published BEIR numbers, so a chunking
-//! or fusion regression shows up as a number the IR community understands.
+//! ships; scores are comparable to published BEIR numbers, so a chunking or
+//! fusion regression shows up as a number the IR community understands.
 //!
-//! Run explicitly — it downloads the ~3 MB dataset once into
-//! `target/beir-cache` and seeds ~5k documents (built-in embedder, no
-//! Ollama):
+//! Three domains, three shapes: SciFact (scientific claims, lexical-
+//! friendly, BM25's home turf), NFCorpus (medical, graded relevance, many
+//! relevant docs per query), FiQA (financial Q&A, paraphrase-heavy — the
+//! dense leg's chance to earn its keep).
 //!
-//!   cargo test --lib beir_scifact -- --ignored --nocapture
+//! Run explicitly — each downloads its dataset once into `target/beir-cache`
+//! and seeds through the built-in embedder (no Ollama):
+//!
+//!   cargo test --lib beir_ -- --ignored --nocapture
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::db::Db;
 use crate::evals::builtin_ai;
 use crate::ingest;
 
-const SCIFACT_URL: &str =
-    "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip";
-/// Docs per embed+insert batch: ~25 embed calls and a handful of Lance
-/// commits for the whole corpus.
-const SEED_BATCH: usize = 512;
-const NOTEBOOK: &str = "beir-scifact";
+const BEIR_BASE: &str = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets";
+/// Docs per embed+insert flush — a handful of Lance commits per corpus.
+const SEED_BATCH: usize = 2_048;
 
 /// The cached dataset dir, downloading and unpacking on first use. Lives in
 /// target/ so `cargo clean` is the eviction policy.
-async fn scifact_dir() -> Option<std::path::PathBuf> {
+async fn dataset_dir(name: &str) -> Option<std::path::PathBuf> {
     let cache = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/beir-cache");
-    let dir = cache.join("scifact");
+    let dir = cache.join(name);
     if dir.join("corpus.jsonl").exists() {
         return Some(dir);
     }
     std::fs::create_dir_all(&cache).ok()?;
-    eprintln!("beir: downloading SciFact ({SCIFACT_URL})…");
-    let bytes = ingest::fetch_bytes(SCIFACT_URL, 50 * 1024 * 1024).await?;
+    let url = format!("{BEIR_BASE}/{name}.zip");
+    eprintln!("beir: downloading {name} ({url})…");
+    // Own client, generous timeout: ingest::fetch_bytes caps at 15s (right
+    // for page fetches, fatal for FiQA's 18 MB on a slow moment).
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .ok()?;
+    let resp = client.get(&url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let bytes = resp.bytes().await.ok()?.to_vec();
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).ok()?;
     zip.extract(&cache).ok()?;
     dir.join("corpus.jsonl").exists().then_some(dir)
@@ -47,17 +59,22 @@ fn jsonl(path: &std::path::Path) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Binary-gain nDCG@k over a ranked doc list.
-fn ndcg_at_k(ranked: &[String], relevant: &HashSet<String>, k: usize) -> f64 {
+/// nDCG@k with GRADED gains (gain = qrel score, the trec_eval convention
+/// BEIR reports) — SciFact's all-1 qrels make this identical to binary.
+fn ndcg_at_k(ranked: &[String], rels: &HashMap<String, i32>, k: usize) -> f64 {
     let dcg: f64 = ranked
         .iter()
         .take(k)
         .enumerate()
-        .filter(|(_, d)| relevant.contains(*d))
-        .map(|(i, _)| 1.0 / (i as f64 + 2.0).log2())
+        .filter_map(|(i, d)| rels.get(d).map(|s| *s as f64 / (i as f64 + 2.0).log2()))
         .sum();
-    let ideal: f64 = (0..relevant.len().min(k))
-        .map(|i| 1.0 / (i as f64 + 2.0).log2())
+    let mut ideal_gains: Vec<i32> = rels.values().copied().collect();
+    ideal_gains.sort_unstable_by(|a, b| b.cmp(a));
+    let ideal: f64 = ideal_gains
+        .iter()
+        .take(k)
+        .enumerate()
+        .map(|(i, s)| *s as f64 / (i as f64 + 2.0).log2())
         .sum();
     if ideal == 0.0 {
         0.0
@@ -66,22 +83,25 @@ fn ndcg_at_k(ranked: &[String], relevant: &HashSet<String>, k: usize) -> f64 {
     }
 }
 
-#[tokio::test]
-#[ignore = "downloads BEIR SciFact and seeds ~5k docs — run with --ignored --nocapture"]
-async fn beir_scifact_ndcg() {
-    let Some(ai) = builtin_ai().await else { return };
-    let Some(dir) = scifact_dir().await else {
-        eprintln!("SKIP: SciFact download failed (network?)");
-        return;
-    };
+struct BeirRun {
+    ndcg: f64,
+    recall: f64,
+    docs: usize,
+    queries: usize,
+}
+
+/// Seed a dataset's corpus through the real pipeline and score the shipping
+/// hybrid search over its test-split qrels. Returns None when the network
+/// (dataset or embedder download) isn't there — callers skip, not fail.
+async fn run_beir(name: &str) -> Option<BeirRun> {
+    let ai = builtin_ai().await?;
+    let dir = dataset_dir(name).await.or_else(|| {
+        eprintln!("SKIP: {name} download failed (network?)");
+        None
+    })?;
 
     // Corpus: {_id, title, text} per line, chunked exactly like an import.
     let corpus = jsonl(&dir.join("corpus.jsonl"));
-    assert!(
-        corpus.len() > 5_000,
-        "unexpected corpus size {}",
-        corpus.len()
-    );
     let tmp = std::env::temp_dir().join(format!("alchemy-beir-{}", uuid::Uuid::new_v4()));
     let db = Db::open(&tmp).await.expect("open db");
     db.defer_fts(true);
@@ -100,24 +120,24 @@ async fn beir_scifact_ndcg() {
             inputs.push(c.embed_text);
         }
         seeded_docs += 1;
-        if rows.len() >= SEED_BATCH * 4 {
+        if rows.len() >= SEED_BATCH {
             let embeddings = ai.embed(&inputs).await.expect("embed corpus batch");
-            db.add_chunk_rows(NOTEBOOK, &rows, &embeddings)
+            db.add_chunk_rows(name, &rows, &embeddings)
                 .await
                 .expect("seed chunk rows");
             rows.clear();
             inputs.clear();
-            eprintln!("beir: seeded {seeded_docs}/{} docs", corpus.len());
+            eprintln!("beir {name}: seeded {seeded_docs}/{} docs", corpus.len());
         }
     }
     if !rows.is_empty() {
         let embeddings = ai.embed(&inputs).await.expect("embed corpus tail");
-        db.add_chunk_rows(NOTEBOOK, &rows, &embeddings)
+        db.add_chunk_rows(name, &rows, &embeddings)
             .await
             .expect("seed chunk tail");
     }
     db.defer_fts(false);
-    db.flush_fts().await.expect("flush scifact fts");
+    db.flush_fts().await.expect("flush fts");
 
     // Queries and the test-split qrels: query-id \t corpus-id \t score.
     let queries: HashMap<String, String> = jsonl(&dir.join("queries.jsonl"))
@@ -129,7 +149,7 @@ async fn beir_scifact_ndcg() {
             ))
         })
         .collect();
-    let mut qrels: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut qrels: HashMap<String, HashMap<String, i32>> = HashMap::new();
     for line in std::fs::read_to_string(dir.join("qrels/test.tsv"))
         .expect("qrels")
         .lines()
@@ -139,22 +159,25 @@ async fn beir_scifact_ndcg() {
         let (Some(qid), Some(did), Some(score)) = (f.next(), f.next(), f.next()) else {
             continue;
         };
-        if score.trim().parse::<i32>().unwrap_or(0) > 0 {
-            qrels.entry(qid.to_string()).or_default().insert(did.into());
+        let score = score.trim().parse::<i32>().unwrap_or(0);
+        if score > 0 {
+            qrels
+                .entry(qid.to_string())
+                .or_default()
+                .insert(did.to_string(), score);
         }
     }
-    assert!(qrels.len() > 250, "unexpected qrels size {}", qrels.len());
 
     let (mut ndcg_sum, mut recall_sum, mut n) = (0.0f64, 0.0f64, 0usize);
-    for (qid, relevant) in &qrels {
+    for (qid, rels) in &qrels {
         let Some(qtext) = queries.get(qid) else {
             continue;
         };
         let qvec = ai.embed_one(qtext).await.expect("embed query");
         // Over-fetch chunks, then collapse to documents in rank order —
-        // several chunks of one paper may outrank the next paper.
+        // several chunks of one document may outrank the next document.
         let hits = db
-            .search_chunks(NOTEBOOK, qvec, qtext, 20, None)
+            .search_chunks(name, qvec, qtext, 20, None)
             .await
             .expect("search");
         let mut ranked: Vec<String> = Vec::new();
@@ -166,23 +189,70 @@ async fn beir_scifact_ndcg() {
                 break;
             }
         }
-        ndcg_sum += ndcg_at_k(&ranked, relevant, 10);
-        let found = ranked.iter().filter(|d| relevant.contains(*d)).count();
-        recall_sum += found as f64 / relevant.len().min(10) as f64;
+        ndcg_sum += ndcg_at_k(&ranked, rels, 10);
+        let found = ranked.iter().filter(|d| rels.contains_key(*d)).count();
+        recall_sum += found as f64 / rels.len().min(10) as f64;
         n += 1;
     }
-    let ndcg = ndcg_sum / n as f64;
-    let recall = recall_sum / n as f64;
-    eprintln!(
-        "\nBEIR SciFact over {} docs, {n} test queries (built-in embedder + BM25, RRF):\n  \
-         nDCG@10  {ndcg:.4}\n  recall@10 {recall:.4}\n",
-        seeded_docs
-    );
     let _ = std::fs::remove_dir_all(&tmp);
+    let run = BeirRun {
+        ndcg: ndcg_sum / n as f64,
+        recall: recall_sum / n as f64,
+        docs: seeded_docs,
+        queries: n,
+    };
+    eprintln!(
+        "\nBEIR {name} over {} docs, {} test queries (built-in embedder + BM25, RRF):\n  \
+         nDCG@10   {:.4}\n  recall@10 {:.4}\n",
+        run.docs, run.queries, run.ndcg, run.recall
+    );
+    Some(run)
+}
 
-    // Floors sit a couple of points under the measured run (nDCG@10 0.6314,
-    // recall@10 0.7861 on 2026-08-09; published BM25 ≈ 0.665) — they catch
-    // regressions in chunking, fusion, or indexing, not model drift.
-    assert!(ndcg > 0.60, "nDCG@10 regressed: {ndcg:.4}");
-    assert!(recall > 0.75, "recall@10 regressed: {recall:.4}");
+// Floors sit a couple of points under each measured baseline — they catch
+// regressions in chunking, fusion, or indexing, not model drift. Recalibrate
+// deliberately when the embedder or chunker changes on purpose.
+
+#[tokio::test]
+#[ignore = "downloads BEIR SciFact and seeds ~5k docs — run with --ignored --nocapture"]
+async fn beir_scifact_ndcg() {
+    // Measured 2026-08-09: nDCG@10 0.6314, recall@10 0.7861 (published
+    // BM25-only ≈ 0.665 — lexical-friendly claims are BM25's home turf).
+    let Some(run) = run_beir("scifact").await else {
+        return;
+    };
+    assert!(
+        run.docs > 5_000 && run.queries > 250,
+        "dataset shape changed"
+    );
+    assert!(run.ndcg > 0.60, "nDCG@10 regressed: {:.4}", run.ndcg);
+    assert!(run.recall > 0.75, "recall@10 regressed: {:.4}", run.recall);
+}
+
+#[tokio::test]
+#[ignore = "downloads BEIR NFCorpus and seeds ~3.6k docs — run with --ignored --nocapture"]
+async fn beir_nfcorpus_ndcg() {
+    let Some(run) = run_beir("nfcorpus").await else {
+        return;
+    };
+    assert!(
+        run.docs > 3_000 && run.queries > 300,
+        "dataset shape changed"
+    );
+    assert!(run.ndcg > 0.25, "nDCG@10 regressed: {:.4}", run.ndcg);
+    assert!(run.recall > 0.10, "recall@10 regressed: {:.4}", run.recall);
+}
+
+#[tokio::test]
+#[ignore = "downloads BEIR FiQA (~57k docs) — run with --ignored --nocapture"]
+async fn beir_fiqa_ndcg() {
+    let Some(run) = run_beir("fiqa").await else {
+        return;
+    };
+    assert!(
+        run.docs > 50_000 && run.queries > 600,
+        "dataset shape changed"
+    );
+    assert!(run.ndcg > 0.15, "nDCG@10 regressed: {:.4}", run.ndcg);
+    assert!(run.recall > 0.15, "recall@10 regressed: {:.4}", run.recall);
 }
