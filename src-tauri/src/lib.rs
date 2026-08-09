@@ -191,6 +191,15 @@ pub fn run() {
             // source resync + due report runs, window or no window.
             scheduler::start(app.handle().clone());
 
+            // Fusion follows the embedder tier (BEIR-measured; db.rs): the
+            // built-in leg fuses at 0.25, nomic-class at full weight.
+            {
+                let state = app.state::<AppState>();
+                let w =
+                    tauri::async_runtime::block_on(async { state.ai.read().await.vector_weight() });
+                state.db.set_vector_weight(w);
+            }
+
             // Imports stranded mid-embed by a quit or crash restart from
             // their stored content (docs/RFC-import-pipeline.md §2).
             commands::resume_stranded_imports(&app.handle().clone());

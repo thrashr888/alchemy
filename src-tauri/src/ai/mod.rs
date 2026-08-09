@@ -486,6 +486,11 @@ impl Ai {
         self.router.corpus_chars(role)
     }
 
+    /// The embedder tier's RRF vector weight (see Router::vector_weight).
+    pub fn vector_weight(&self) -> f32 {
+        self.router.vector_weight()
+    }
+
     /// Input-token budget for the engine that will answer `role`, but only when
     /// that engine is the on-device Foundation Models sidecar — its context
     /// window is a hard 8192 tokens (`inference::budget`). `None` for every

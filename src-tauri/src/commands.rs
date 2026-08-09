@@ -9431,6 +9431,8 @@ pub async fn set_ai_config(
             .map(|p| p.to_path_buf())
             .unwrap_or_default();
         *ai = Ai::new(config, ai_runtime(app.clone(), data_dir));
+        // Fusion follows the embedder tier (BEIR-measured; db.rs).
+        state.db.set_vector_weight(ai.vector_weight());
     }
     crate::mcp::apply_config(&app, mcp_enabled, mcp_port).await;
     crate::clip::apply_config(&app, clip_enabled, clip_port).await;

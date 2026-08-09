@@ -199,6 +199,11 @@ pub struct Db {
     /// Nudged on every non-deferred chunk write; the debounced flusher task
     /// (lib.rs) listens and rebuilds once per burst.
     fts_notify: tokio::sync::Notify,
+    /// The vector leg's RRF weight (f32 bits; BM25 is fixed at 1.0). Set by
+    /// whoever installs an Ai — BEIR sweeps showed the built-in embedder's
+    /// leg earns 0.25 while nomic-class embedders earn full weight
+    /// (beir_eval.rs, measured 2026-08-09 across three domains).
+    fusion_vector_weight: std::sync::atomic::AtomicU32,
 }
 
 /// One stored source-gist row (docs/RFC-infinite-context.md Phase 1).
@@ -229,6 +234,7 @@ impl Db {
             fts_deferred: std::sync::atomic::AtomicBool::new(false),
             fts_dirty: std::sync::atomic::AtomicBool::new(false),
             fts_notify: tokio::sync::Notify::new(),
+            fusion_vector_weight: std::sync::atomic::AtomicU32::new(1.0f32.to_bits()),
         };
         db.ensure_table(T_NOTEBOOKS, notebooks_schema()).await?;
         db.migrate_notebooks().await?;
@@ -1282,6 +1288,21 @@ impl Db {
         Ok(())
     }
 
+    /// The vector leg's current RRF weight (BM25 fixed at 1.0).
+    fn vector_weight(&self) -> f32 {
+        f32::from_bits(
+            self.fusion_vector_weight
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+
+    /// Stamp the vector leg's RRF weight — called when an Ai is installed,
+    /// so fusion always matches the embedder tier that filled the index.
+    pub fn set_vector_weight(&self, w: f32) {
+        self.fusion_vector_weight
+            .store(w.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Enter/leave bulk-write mode (see `fts_deferred`). Leaving does NOT
     /// rebuild — call `flush_fts` after, so error paths can still flush.
     pub fn defer_fts(&self, on: bool) {
@@ -1654,13 +1675,14 @@ impl Db {
         // Exact score ties are common (e.g. a vector-only and an FTS-only
         // hit at the same rank), and HashMap iteration order is randomized,
         // so break ties by chunk id to keep results stable across runs.
+        let w_vec = self.vector_weight();
         let mut fused: HashMap<String, (Citation, f32)> = HashMap::new();
-        for hits in [&vec_hits, &fts_hits] {
+        for (hits, w) in [(&vec_hits, w_vec), (&fts_hits, 1.0)] {
             for (rank, c) in hits.iter().enumerate() {
                 fused
                     .entry(c.chunk_id.clone())
                     .or_insert((c.clone(), 0.0))
-                    .1 += 1.0 / (60.0 + rank as f32);
+                    .1 += w / (60.0 + rank as f32);
             }
         }
         let mut merged: Vec<(Citation, f32)> = fused.into_values().collect();
@@ -1935,11 +1957,12 @@ impl Db {
 
         // Same tie-break-by-chunk-id as search_chunks: RRF score ties are
         // common and HashMap order is randomized.
+        let w_vec = self.vector_weight();
         let mut fused: HashMap<String, ((String, Citation), f32)> = HashMap::new();
-        for hits in [vec_hits, fts_hits] {
+        for (hits, w) in [(vec_hits, w_vec), (fts_hits, 1.0)] {
             for (rank, hit) in hits.into_iter().enumerate() {
                 fused.entry(hit.1.chunk_id.clone()).or_insert((hit, 0.0)).1 +=
-                    1.0 / (60.0 + rank as f32);
+                    w / (60.0 + rank as f32);
             }
         }
         let mut merged: Vec<((String, Citation), f32)> = fused.into_values().collect();

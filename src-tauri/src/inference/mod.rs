@@ -339,6 +339,17 @@ impl Router {
     /// caps at 4,096 on older macOS — observed live as
     /// exceededContextWindowSize on a Generate over a modest notebook.
     /// 10k chars ≈ 2.5k tokens leaves room for instructions and the answer.
+    /// The vector leg's RRF weight for hybrid fusion, by embedder tier.
+    /// BEIR-measured (beir_eval.rs, 2026-08-09): the built-in static
+    /// embedder's leg helps at a light 0.25 and hurts at full weight on
+    /// every tested domain; nomic-class embedders earn equal weight.
+    pub fn vector_weight(&self) -> f32 {
+        match self.embedder {
+            Embedder::Builtin(_) => 0.25,
+            Embedder::Ollama(_) => 1.0,
+        }
+    }
+
     pub fn corpus_chars(&self, role: Role) -> usize {
         match self.chat_engine(role) {
             ChatEngine::FoundationModels(_) => 10_000,
