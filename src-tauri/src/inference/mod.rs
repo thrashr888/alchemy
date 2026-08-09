@@ -333,6 +333,20 @@ impl Router {
         &self.embedder
     }
 
+    /// How much corpus text a generation may stuff into one prompt, by the
+    /// engine that will actually read it. The old gateway/local binary blew
+    /// up the on-device tier: 24k chars is ~6k tokens, and Apple's model
+    /// caps at 4,096 on older macOS — observed live as
+    /// exceededContextWindowSize on a Generate over a modest notebook.
+    /// 10k chars ≈ 2.5k tokens leaves room for instructions and the answer.
+    pub fn corpus_chars(&self, role: Role) -> usize {
+        match self.chat_engine(role) {
+            ChatEngine::FoundationModels(_) => 10_000,
+            ChatEngine::Gateway(_) => 150_000,
+            ChatEngine::Ollama(_) | ChatEngine::Agent(_) => 24_000,
+        }
+    }
+
     pub fn profile(&self, role: Role) -> ContextProfile {
         // The on-device model's small context wants fewer, tighter passages
         // (RFC §2: retrieval tunes to the resolved model).

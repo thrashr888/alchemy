@@ -6761,8 +6761,15 @@ async fn generate_content(
     // Budget the corpus fairly across sources (waterfill): every source is
     // represented, small ones donate unused budget to large ones. A blunt
     // head-truncation previously dropped later sources entirely.
-    let is_gateway = { state.ai.read().await.config().is_gateway() };
-    let budget: usize = if is_gateway { 150_000 } else { 24_000 };
+    // Sized to the engine that will read the prompt — the old gateway/local
+    // binary handed the on-device tier ~6k tokens against a 4,096 window.
+    let (is_gateway, budget) = {
+        let ai = state.ai.read().await;
+        (
+            ai.config().is_gateway(),
+            ai.corpus_chars(crate::inference::Role::Generate),
+        )
+    };
 
     // One projected batch read — this was one full table scan per source on
     // every Generate click and every scheduled report run.
@@ -6824,9 +6831,11 @@ async fn generate_content(
         ));
     }
     // The prior run rides outside the source budget with its own cap: it
-    // informs the "what changed" framing but must never crowd out sources.
+    // informs the "what changed" framing but must never crowd out sources —
+    // a third of the corpus budget, so a 4k-token window (on-device tier)
+    // isn't eaten by last week's report.
     if let Some(prior) = prior_report {
-        let cap = if is_gateway { 40_000 } else { 8_000 };
+        let cap = (budget / 3).min(if is_gateway { 40_000 } else { 8_000 });
         let clipped: String = prior.chars().take(cap).collect();
         corpus.push_str(&format!(
             "## Previous report run (for change tracking — not a source)\n\n{clipped}\n\n"

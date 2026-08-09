@@ -480,6 +480,12 @@ impl Ai {
         self.router.profile(role)
     }
 
+    /// Corpus budget for one generation prompt, sized to the engine that
+    /// will read it (see Router::corpus_chars).
+    pub fn corpus_chars(&self, role: Role) -> usize {
+        self.router.corpus_chars(role)
+    }
+
     /// Input-token budget for the engine that will answer `role`, but only when
     /// that engine is the on-device Foundation Models sidecar — its context
     /// window is a hard 8192 tokens (`inference::budget`). `None` for every
