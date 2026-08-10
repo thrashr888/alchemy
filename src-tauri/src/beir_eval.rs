@@ -289,9 +289,27 @@ async fn rerank_docs(
     }
 }
 
+/// Task prefixes for asymmetric embedders. nomic-embed is TRAINED on
+/// "search_document: " / "search_query: " and measurably underperforms on
+/// bare text — the app embeds bare today, so the eval measures the gap
+/// before any migration ships (changing document embeddings invalidates
+/// every stored vector; mixing spaces is worse than either alone).
+#[derive(Clone, Copy, Default)]
+struct EmbedStyle {
+    doc_prefix: &'static str,
+    query_prefix: &'static str,
+}
+
+const NOMIC_STYLE: EmbedStyle = EmbedStyle {
+    doc_prefix: "search_document: ",
+    query_prefix: "search_query: ",
+};
+
 struct BeirRun {
     ndcg: f64,
     recall: f64,
+    mrr: f64,
+    precision: f64,
     vec_ndcg: f64,
     fts_ndcg: f64,
     sweep: Vec<(f64, f64)>,
@@ -309,6 +327,7 @@ async fn run_beir(
     name: &str,
     ai: &Ai,
     rerank_with: Option<(&Ai, RerankStrategy)>,
+    style: EmbedStyle,
 ) -> Option<BeirRun> {
     let dir = dataset_dir(name).await.or_else(|| {
         eprintln!("SKIP: {name} download failed (network?)");
@@ -334,7 +353,7 @@ async fn run_beir(
         }
         for (j, c) in ingest::chunk_text(title, body).into_iter().enumerate() {
             rows.push((id.clone(), format!("{id}-c{j}"), j as i32, c.text));
-            inputs.push(c.embed_text);
+            inputs.push(format!("{}{}", style.doc_prefix, c.embed_text));
         }
         seeded_docs += 1;
         if rows.len() >= SEED_BATCH {
@@ -393,6 +412,7 @@ async fn run_beir(
 
     let (mut ndcg_sum, mut recall_sum, mut vec_sum, mut fts_sum, mut n) =
         (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0usize);
+    let (mut mrr_sum, mut precision_sum) = (0.0f64, 0.0f64);
     // Fused nDCG over exactly the reranked queries — the honest baseline
     // for the rerank delta; whole-set fused is a different denominator.
     let mut rr_base_sum = 0.0f64;
@@ -404,7 +424,10 @@ async fn run_beir(
         let Some(qtext) = queries.get(qid) else {
             continue;
         };
-        let qvec = ai.embed_one(qtext).await.expect("embed query");
+        let qvec = ai
+            .embed_one(&format!("{}{qtext}", style.query_prefix))
+            .await
+            .expect("embed query");
         let trace = db
             .search_chunks_trace(name, qvec, qtext, 20, None)
             .await
@@ -418,6 +441,14 @@ async fn run_beir(
         fts_sum += ndcg_at_k(&fts_docs, rels, 10);
         let found = fused.iter().filter(|d| rels.contains_key(*d)).count();
         recall_sum += found as f64 / rels.len().min(10) as f64;
+        // MRR@10: how fast the FIRST relevant doc appears — chat stuffs the
+        // top passages hardest, so early precision matters most there.
+        mrr_sum += fused
+            .iter()
+            .position(|d| rels.contains_key(d))
+            .map(|i| 1.0 / (i as f64 + 1.0))
+            .unwrap_or(0.0);
+        precision_sum += found as f64 / 10.0;
         // The model reranker, on a sample — one chat call per query.
         if let Some(rr) = rerank_with {
             let sample = std::env::var("BEIR_RERANK_SAMPLE")
@@ -468,6 +499,8 @@ async fn run_beir(
     let run = BeirRun {
         ndcg: ndcg_sum / n as f64,
         recall: recall_sum / n as f64,
+        mrr: mrr_sum / n as f64,
+        precision: precision_sum / n as f64,
         vec_ndcg: vec_sum / n as f64,
         fts_ndcg: fts_sum / n as f64,
         sweep,
@@ -483,11 +516,18 @@ async fn run_beir(
         .join("  ");
     eprintln!(
         "\nBEIR {name} — {} docs, {} queries\n  \
-         fused (shipping)  nDCG@10 {:.4}   recall@10 {:.4}\n  \
+         fused (shipping)  nDCG@10 {:.4}   recall@10 {:.4}   MRR@10 {:.4}   P@10 {:.4}\n  \
          bm25 leg alone    nDCG@10 {:.4}\n  \
          vector leg alone  nDCG@10 {:.4}\n  \
          sweep w_vec:      {sweep_line}",
-        run.docs, run.queries, run.ndcg, run.recall, run.fts_ndcg, run.vec_ndcg
+        run.docs,
+        run.queries,
+        run.ndcg,
+        run.recall,
+        run.mrr,
+        run.precision,
+        run.fts_ndcg,
+        run.vec_ndcg
     );
     match run.rerank {
         Some((m, s)) => {
@@ -517,7 +557,7 @@ async fn beir_scifact_ndcg() {
     // built-in leg): nDCG@10 0.6685, recall@10 0.8171 — above published
     // BM25-only (~0.665), up from 0.6314 at equal weights.
     let Some(ai) = builtin_ai().await else { return };
-    let Some(run) = run_beir("scifact", &ai, None).await else {
+    let Some(run) = run_beir("scifact", &ai, None, EmbedStyle::default()).await else {
         return;
     };
     assert!(
@@ -536,7 +576,7 @@ async fn beir_nfcorpus_ndcg() {
     // medical relevance, ~38 relevant docs per query keeps recall@10 low
     // by construction.
     let Some(ai) = builtin_ai().await else { return };
-    let Some(run) = run_beir("nfcorpus", &ai, None).await else {
+    let Some(run) = run_beir("nfcorpus", &ai, None, EmbedStyle::default()).await else {
         return;
     };
     assert!(
@@ -554,7 +594,7 @@ async fn beir_fiqa_ndcg() {
     // recall@10 0.3191 — above BM25-alone (0.2426) on the paraphrase-heavy
     // set; ~2 min run. The nomic tier scores 0.3466 here (beir_nomic_all).
     let Some(ai) = builtin_ai().await else { return };
-    let Some(run) = run_beir("fiqa", &ai, None).await else {
+    let Some(run) = run_beir("fiqa", &ai, None, EmbedStyle::default()).await else {
         return;
     };
     assert!(
@@ -570,7 +610,18 @@ async fn beir_fiqa_ndcg() {
 async fn beir_nomic_all() {
     let Some(ai) = nomic_ai().await else { return };
     for name in ["scifact", "nfcorpus", "fiqa"] {
-        run_beir(name, &ai, None).await;
+        run_beir(name, &ai, None, EmbedStyle::default()).await;
+    }
+}
+
+#[tokio::test]
+#[ignore = "live Ollama: nomic WITH task prefixes vs the bare-text app default"]
+async fn beir_nomic_prefixed() {
+    // nomic-embed is trained asymmetric; the app embeds bare text today.
+    // Unprefixed baselines (2026-08-09): scifact 0.727, fiqa 0.347.
+    let Some(ai) = nomic_ai().await else { return };
+    for name in ["scifact", "fiqa"] {
+        run_beir(name, &ai, None, NOMIC_STYLE).await;
     }
 }
 
@@ -580,7 +631,13 @@ async fn beir_rerank_all() {
     let Some(ai) = builtin_ai().await else { return };
     let Some(rr) = rerank_ai().await else { return };
     for name in ["scifact", "nfcorpus", "fiqa"] {
-        run_beir(name, &ai, Some((&rr, RerankStrategy::Listwise))).await;
+        run_beir(
+            name,
+            &ai,
+            Some((&rr, RerankStrategy::Listwise)),
+            EmbedStyle::default(),
+        )
+        .await;
     }
 }
 
@@ -632,7 +689,7 @@ async fn beir_rerank_engines_scifact() {
                 continue;
             }
             eprintln!("--- strategy: {} ---", s.label());
-            run_beir("scifact", &ai, Some((&rr, *s))).await;
+            run_beir("scifact", &ai, Some((&rr, *s)), EmbedStyle::default()).await;
         }
     }
 }
