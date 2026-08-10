@@ -173,6 +173,122 @@ fn codex_ai() -> Option<Ai> {
     Some(chat_tier("codex", AiRuntime::default()))
 }
 
+/// How the rerank leg prompts the model. The shipping listwise-JSON shape
+/// assumes a model that can hold 20 passages and emit clean JSON — measured
+/// destructive on small tiers, so the eval races friendlier shapes.
+#[derive(Clone, Copy, PartialEq)]
+enum RerankStrategy {
+    /// The shipping prompt: fused top-20, 300-char snippets, JSON reply.
+    Listwise,
+    /// Small-model shape: top-10 only, 150-char snippets, and the reply is
+    /// bare comma-separated numbers — no JSON for a 4k-window model to flub.
+    ListwiseLite,
+    /// One tiny call per passage: "rate 0–10, reply with only the number."
+    /// Ties keep fusion order, so a lazy uniform rating degrades to the
+    /// fused ranking instead of scrambling it.
+    Pointwise,
+}
+
+impl RerankStrategy {
+    fn label(self) -> &'static str {
+        match self {
+            RerankStrategy::Listwise => "listwise-json",
+            RerankStrategy::ListwiseLite => "listwise-lite",
+            RerankStrategy::Pointwise => "pointwise",
+        }
+    }
+}
+
+/// Rerank the fused hits into a doc order under one strategy. None = the
+/// model's reply was unusable (counted, so garbage output is visible).
+async fn rerank_docs(
+    rr: &Ai,
+    strategy: RerankStrategy,
+    qtext: &str,
+    hits: &[Citation],
+) -> Option<Vec<String>> {
+    match strategy {
+        RerankStrategy::Listwise => {
+            let snippets: Vec<(String, String)> = hits
+                .iter()
+                .map(|h| {
+                    let head: String = h.snippet.chars().take(300).collect();
+                    (h.source_title.clone(), head)
+                })
+                .collect();
+            let picked = crate::agent::rerank_indices(rr, qtext, &snippets, 10).await?;
+            let ordered: Vec<Citation> = picked.into_iter().map(|i| hits[i].clone()).collect();
+            Some(collapse_docs(&ordered, 10))
+        }
+        RerankStrategy::ListwiseLite => {
+            let top: Vec<&Citation> = hits.iter().take(10).collect();
+            let list = top
+                .iter()
+                .enumerate()
+                .map(|(i, h)| {
+                    let head: String = h.snippet.chars().take(150).collect();
+                    format!("{i}: {head}")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let messages = vec![
+                crate::ai::ChatTurn::system(
+                    "You rank search snippets by how well they answer a question. \
+                     Reply with ONLY the snippet numbers, best first, separated by \
+                     commas. Example reply: 3,0,7,1",
+                ),
+                crate::ai::ChatTurn::user(format!(
+                    "Question: {qtext}\n\nSnippets:\n{list}\n\nNumbers:"
+                )),
+            ];
+            let out = rr.chat(&messages).await.ok()?.text;
+            let mut seen = std::collections::HashSet::new();
+            let picked: Vec<usize> = out
+                .split(|c: char| !c.is_ascii_digit())
+                .filter(|s| !s.is_empty())
+                .filter_map(|s| s.parse::<usize>().ok())
+                .filter(|&i| i < top.len() && seen.insert(i))
+                .collect();
+            if picked.is_empty() {
+                return None;
+            }
+            let ordered: Vec<Citation> = picked.into_iter().map(|i| top[i].clone()).collect();
+            Some(collapse_docs(&ordered, 10))
+        }
+        RerankStrategy::Pointwise => {
+            let top: Vec<&Citation> = hits.iter().take(10).collect();
+            let mut scored: Vec<(usize, f64)> = Vec::new();
+            for (i, h) in top.iter().enumerate() {
+                let head: String = h.snippet.chars().take(200).collect();
+                let messages = vec![
+                    crate::ai::ChatTurn::system(
+                        "Rate how directly the snippet answers the question, 0 \
+                         (unrelated) to 10 (directly answers). Reply with ONLY \
+                         the number.",
+                    ),
+                    crate::ai::ChatTurn::user(format!(
+                        "Question: {qtext}\n\nSnippet: {head}\n\nRating:"
+                    )),
+                ];
+                let score = rr
+                    .chat(&messages)
+                    .await
+                    .ok()?
+                    .text
+                    .split(|c: char| !c.is_ascii_digit())
+                    .filter(|s| !s.is_empty())
+                    .filter_map(|s| s.parse::<u32>().ok())
+                    .next()?
+                    .min(10) as f64;
+                scored.push((i, score));
+            }
+            scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap().then(a.0.cmp(&b.0)));
+            let ordered: Vec<Citation> = scored.into_iter().map(|(i, _)| top[i].clone()).collect();
+            Some(collapse_docs(&ordered, 10))
+        }
+    }
+}
+
 struct BeirRun {
     ndcg: f64,
     recall: f64,
@@ -189,7 +305,11 @@ struct BeirRun {
 /// Seed a dataset's corpus through the real pipeline and score the shipping
 /// hybrid search over its test-split qrels — plus the per-leg diagnosis and
 /// the offline weight sweep. Returns None when the network isn't there.
-async fn run_beir(name: &str, ai: &Ai, rerank_with: Option<&Ai>) -> Option<BeirRun> {
+async fn run_beir(
+    name: &str,
+    ai: &Ai,
+    rerank_with: Option<(&Ai, RerankStrategy)>,
+) -> Option<BeirRun> {
     let dir = dataset_dir(name).await.or_else(|| {
         eprintln!("SKIP: {name} download failed (network?)");
         None
@@ -265,13 +385,22 @@ async fn run_beir(name: &str, ai: &Ai, rerank_with: Option<&Ai>) -> Option<BeirR
         }
     }
 
+    // Deterministic order: HashMap iteration randomizes per process, which
+    // silently made every run's rerank SAMPLE a different query subset —
+    // two runs of the same engine differed by ±0.18 nDCG before this sort.
+    let mut qrel_list: Vec<(&String, &HashMap<String, i32>)> = qrels.iter().collect();
+    qrel_list.sort_by(|a, b| a.0.cmp(b.0));
+
     let (mut ndcg_sum, mut recall_sum, mut vec_sum, mut fts_sum, mut n) =
         (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0usize);
+    // Fused nDCG over exactly the reranked queries — the honest baseline
+    // for the rerank delta; whole-set fused is a different denominator.
+    let mut rr_base_sum = 0.0f64;
     // Captured doc-rank lists per query, for the offline weight sweep.
     type Capture = (Vec<String>, Vec<String>, HashMap<String, i32>);
     let mut captures: Vec<Capture> = Vec::new();
     let (mut rr_sum, mut rr_n) = (0.0f64, 0usize);
-    for (qid, rels) in &qrels {
+    for (qid, rels) in qrel_list {
         let Some(qtext) = queries.get(qid) else {
             continue;
         };
@@ -296,20 +425,10 @@ async fn run_beir(name: &str, ai: &Ai, rerank_with: Option<&Ai>) -> Option<BeirR
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(RERANK_SAMPLE);
             if rr_n < sample {
-                let snippets: Vec<(String, String)> = trace
-                    .final_hits
-                    .iter()
-                    .map(|h| {
-                        let head: String = h.snippet.chars().take(300).collect();
-                        (h.source_title.clone(), head)
-                    })
-                    .collect();
-                if let Some(picked) = crate::agent::rerank_indices(rr, qtext, &snippets, 10).await {
-                    let reranked: Vec<Citation> = picked
-                        .into_iter()
-                        .map(|i| trace.final_hits[i].clone())
-                        .collect();
-                    rr_sum += ndcg_at_k(&collapse_docs(&reranked, 10), rels, 10);
+                let (rr, strategy) = rr;
+                if let Some(ranked) = rerank_docs(rr, strategy, qtext, &trace.final_hits).await {
+                    rr_sum += ndcg_at_k(&ranked, rels, 10);
+                    rr_base_sum += ndcg_at_k(&fused, rels, 10);
                     rr_n += 1;
                 }
             }
@@ -371,7 +490,14 @@ async fn run_beir(name: &str, ai: &Ai, rerank_with: Option<&Ai>) -> Option<BeirR
         run.docs, run.queries, run.ndcg, run.recall, run.fts_ndcg, run.vec_ndcg
     );
     match run.rerank {
-        Some((m, s)) => eprintln!("  rerank top20→10   nDCG@10 {s:.4} ({m}-query sample)\n"),
+        Some((m, s)) => {
+            let base = if m > 0 { rr_base_sum / m as f64 } else { 0.0 };
+            eprintln!(
+                "  rerank top20→10   nDCG@10 {s:.4} vs fused {base:.4} on the same \
+                 {m}-query sample (Δ{:+.4})\n",
+                s - base
+            )
+        }
         None if rerank_with.is_some() => {
             eprintln!("  rerank            SKIPPED (model unavailable)\n")
         }
@@ -454,7 +580,7 @@ async fn beir_rerank_all() {
     let Some(ai) = builtin_ai().await else { return };
     let Some(rr) = rerank_ai().await else { return };
     for name in ["scifact", "nfcorpus", "fiqa"] {
-        run_beir(name, &ai, Some(&rr)).await;
+        run_beir(name, &ai, Some((&rr, RerankStrategy::Listwise))).await;
     }
 }
 
@@ -488,6 +614,25 @@ async fn beir_rerank_engines_scifact() {
             eprintln!("SKIP: codex did not resolve");
             continue;
         }
-        run_beir("scifact", &ai, Some(&rr)).await;
+        // BEIR_RERANK_STRATEGY=listwise-json|listwise-lite|pointwise narrows;
+        // default races all three on local tiers. Codex runs listwise only —
+        // it already aces that shape, and per-passage CLI spawns are absurd.
+        let want = std::env::var("BEIR_RERANK_STRATEGY").unwrap_or_default();
+        let strategies: &[RerankStrategy] = if label == "codex" {
+            &[RerankStrategy::Listwise]
+        } else {
+            &[
+                RerankStrategy::Listwise,
+                RerankStrategy::ListwiseLite,
+                RerankStrategy::Pointwise,
+            ]
+        };
+        for s in strategies {
+            if !want.is_empty() && s.label() != want {
+                continue;
+            }
+            eprintln!("--- strategy: {} ---", s.label());
+            run_beir("scifact", &ai, Some((&rr, *s))).await;
+        }
     }
 }
