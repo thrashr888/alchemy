@@ -24,7 +24,7 @@ Sort providers not by vendor but by **how the credential travels**:
 | Family | Members | Credential |
 |---|---|---|
 | **Local engines** | builtin embedder (model2vec, shipped), **builtin chat via mlx-rs**, Ollama, Apple Foundation Models (macOS 27) | none — the machine |
-| **Agent CLIs** | claude (Max), codex (ChatGPT Pro), opencode, hermes, copilot, gemini-cli | the vendor's own CLI holds the subscription |
+| **Agent CLIs** | claude (Max), codex (ChatGPT Pro), opencode, hermes, copilot, gemini-cli, prime-agent | the vendor's own CLI holds the subscription |
 | **HTTP gateways** | any OpenAI-compatible URL+key (Gemini API, OpenRouter, …) | API key |
 
 Paul's nine daily providers all land in these three. The insight that
@@ -294,6 +294,10 @@ flow.
    wrappings), event normalization, allowlist containment, provider
    attribution in the message footer. opencode/hermes/copilot/gemini-cli
    follow as detection rows, cheap once the family exists.
+   prime-agent joined the roster 2026-08-09 (`--mode json` JSONL events:
+   `message_update` text deltas, `tool_execution_start` progress,
+   `message_end` authoritative fallback; prompt positional, system via
+   `--append-system-prompt`).
 4. **Foundation Models sidecar** — *(shipped for Small + On-this-Mac
    chat with the k=4 profile; eval_context_profiles gates the tight
    profile at ≥75% recall retention — 100% on current datasets. The PCC

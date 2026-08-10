@@ -105,6 +105,7 @@ const AGENT_LABELS: Record<string, string> = {
   copilot: "GitHub Copilot",
   hermes: "Hermes",
   "bob-shell": "Bob Shell",
+  "prime-agent": "Prime Agent",
 };
 
 type CliStatus = { id: string; installed: boolean; detail: string };
