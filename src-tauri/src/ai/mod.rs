@@ -486,6 +486,14 @@ impl Ai {
         self.router.corpus_chars(role)
     }
 
+    /// Stable id of the engine a role resolves to ("ollama", "gateway",
+    /// "foundation-models", or an agent kind) — evals verify they measured
+    /// the engine they meant to, since unavailable tiers fall through.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn chat_engine_id(&self, role: Role) -> &'static str {
+        self.router.chat_engine(role).id()
+    }
+
     /// The embedder tier's RRF vector weight (see Router::vector_weight).
     pub fn vector_weight(&self) -> f32 {
         self.router.vector_weight()

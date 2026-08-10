@@ -373,6 +373,37 @@
   }
   .feature-card.wide { grid-column: span 7; }
   .feature-card.narrow { grid-column: span 5; }
+  .feature-card.full {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 24px;
+    padding: 20px 24px;
+  }
+  .feature-card.full .feature-copy { flex: 1 1 340px; padding: 0; }
+  .bench-rows {
+    display: flex;
+    flex: 1 1 380px;
+    flex-wrap: wrap;
+    gap: 12px;
+    justify-content: flex-end;
+  }
+  .bench-cell {
+    min-width: 148px;
+    padding: 12px 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+  }
+  .bench-name { font-size: 12px; color: var(--muted); }
+  .bench-score {
+    margin-top: 2px;
+    font-size: 22px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .bench-note { margin-top: 2px; font-size: 11px; color: var(--muted); }
   .feature-visual {
     min-height: 216px;
     border-color: var(--border);
@@ -1761,6 +1792,32 @@
           <h3>Your library stays on your Mac.</h3>
           <p>Sources are extracted, embedded, and stored on your Mac. You choose what chat context reaches a provider; Ollama and Apple’s on-device model keep chat offline.</p>
           <div class="card-meta"><span>No account</span><span>Offline with local models</span></div>
+        </div>
+      </article>
+
+      <article class="feature-card full">
+        <div class="feature-copy">
+          <div class="feature-kicker">Benchmarks</div>
+          <h3>Retrieval you can measure.</h3>
+          <p>Public BEIR benchmarks run against the shipping pipeline as tests. Hybrid search beats the classic BM25 baseline on all three datasets with the built-in embedder—and reaches dense-retriever class with Ollama.</p>
+          <div class="card-meta"><span>nDCG@10, higher is better</span><span>Run them yourself: cargo test --lib beir_</span></div>
+        </div>
+        <div class="bench-rows" aria-label="BEIR benchmark results">
+          <div class="bench-cell">
+            <div class="bench-name">BEIR SciFact</div>
+            <div class="bench-score">0.669</div>
+            <div class="bench-note">0.727 with Ollama · BM25 0.665</div>
+          </div>
+          <div class="bench-cell">
+            <div class="bench-name">BEIR NFCorpus</div>
+            <div class="bench-score">0.325</div>
+            <div class="bench-note">0.357 with Ollama · BM25 0.325</div>
+          </div>
+          <div class="bench-cell">
+            <div class="bench-name">BEIR FiQA</div>
+            <div class="bench-score">0.246</div>
+            <div class="bench-note">0.347 with Ollama · BM25 0.236</div>
+          </div>
         </div>
       </article>
     </div>

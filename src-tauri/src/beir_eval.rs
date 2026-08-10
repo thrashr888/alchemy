@@ -129,6 +129,50 @@ async fn rerank_ai() -> Option<Ai> {
     Some(ai)
 }
 
+/// A chat tier by explicit provider entry — the flat `provider` field is
+/// legacy and does NOT route "fm" or agent kinds (the engine-id guard in
+/// the comparison test caught exactly that: both silently resolved to
+/// Ollama and would have been measured under the wrong label).
+fn chat_tier(kind: &str, runtime: AiRuntime) -> Ai {
+    let mut config = AiConfig {
+        embedder: "builtin".into(),
+        ..Default::default()
+    };
+    config.providers.push(crate::ai::ProviderEntry {
+        id: kind.to_string(),
+        kind: kind.to_string(),
+        label: kind.to_string(),
+        base_url: String::new(),
+        api_key: String::new(),
+        chat_model: String::new(),
+    });
+    config.chat_provider = kind.to_string();
+    Ai::new(config, runtime)
+}
+
+/// Apple's on-device model for the rerank leg, via the repo-built sidecar.
+fn fm_ai() -> Option<Ai> {
+    let sidecar = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../sidecar/alchemy-fm/.build/release/alchemy-fm");
+    if !sidecar.exists() {
+        eprintln!("SKIP: FM sidecar not built");
+        return None;
+    }
+    Some(chat_tier(
+        "fm",
+        AiRuntime {
+            fm_sidecar: Some(sidecar),
+            ..Default::default()
+        },
+    ))
+}
+
+/// The codex subscription CLI for the rerank leg — one `codex exec` per
+/// query, so callers sample rather than sweep.
+fn codex_ai() -> Option<Ai> {
+    Some(chat_tier("codex", AiRuntime::default()))
+}
+
 struct BeirRun {
     ndcg: f64,
     recall: f64,
@@ -247,7 +291,11 @@ async fn run_beir(name: &str, ai: &Ai, rerank_with: Option<&Ai>) -> Option<BeirR
         recall_sum += found as f64 / rels.len().min(10) as f64;
         // The model reranker, on a sample — one chat call per query.
         if let Some(rr) = rerank_with {
-            if rr_n < RERANK_SAMPLE {
+            let sample = std::env::var("BEIR_RERANK_SAMPLE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(RERANK_SAMPLE);
+            if rr_n < sample {
                 let snippets: Vec<(String, String)> = trace
                     .final_hits
                     .iter()
@@ -407,5 +455,39 @@ async fn beir_rerank_all() {
     let Some(rr) = rerank_ai().await else { return };
     for name in ["scifact", "nfcorpus", "fiqa"] {
         run_beir(name, &ai, Some(&rr)).await;
+    }
+}
+
+#[tokio::test]
+#[ignore = "live: rerank-engine comparison on SciFact — bonsai vs Apple FM vs codex"]
+async fn beir_rerank_engines_scifact() {
+    let Some(ai) = builtin_ai().await else { return };
+    // BEIR_RERANK_ENGINE=codex narrows to one engine;
+    // BEIR_RERANK_SAMPLE=50 shrinks the per-engine query sample — agent
+    // CLIs cost tens of seconds per call.
+    let only = std::env::var("BEIR_RERANK_ENGINE").unwrap_or_default();
+    let engines: Vec<(&str, Option<Ai>)> = vec![
+        ("bonsai-8b", rerank_ai().await),
+        ("apple-fm", fm_ai()),
+        ("codex", codex_ai()),
+    ];
+    for (label, rr) in engines {
+        if !only.is_empty() && label != only {
+            continue;
+        }
+        let Some(rr) = rr else { continue };
+        let resolved = rr.chat_engine_id(crate::inference::Role::Chat);
+        eprintln!("\n=== rerank engine: {label} (resolved: {resolved}) ===");
+        // Unavailable tiers fall through to another engine silently — that
+        // would measure the wrong model and label it wrong.
+        if label == "apple-fm" && resolved != "foundation-models" {
+            eprintln!("SKIP: FM did not resolve (Apple Intelligence unavailable?)");
+            continue;
+        }
+        if label == "codex" && resolved != "codex" {
+            eprintln!("SKIP: codex did not resolve");
+            continue;
+        }
+        run_beir("scifact", &ai, Some(&rr)).await;
     }
 }
