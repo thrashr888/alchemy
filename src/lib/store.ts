@@ -30,6 +30,7 @@ import type {
 // Side panels stay usable at any drag position: wide enough for content,
 // narrow enough to leave the chat column room at the 1040px minimum window.
 const PANEL_BOUNDS = { sources: [220, 400], studio: [260, 460] } as const;
+const CHAT_PAGE_SIZE = 80;
 
 function clampPanel(panel: "sources" | "studio", width: number): number {
   const [min, max] = PANEL_BOUNDS[panel];
@@ -217,6 +218,8 @@ export const useStore = create<AppState>((set, get) => {
     sources: [],
     selectedSourceIds: null,
     messages: [],
+    messagesHasMore: false,
+    messagesLoadingOlder: false,
     notes: [],
     reportSchedules: [],
     templates: [],
@@ -744,6 +747,8 @@ export const useStore = create<AppState>((set, get) => {
         sources: [],
         selectedSourceIds: loadSourceSel(id),
         messages: [],
+        messagesHasMore: false,
+        messagesLoadingOlder: false,
         notes: [],
         reportSchedules: [],
         streamingText: "",
@@ -755,14 +760,20 @@ export const useStore = create<AppState>((set, get) => {
       });
       const nb = get().notebooks.find((n) => n.id === id);
       if (nb) void getCurrentWebviewWindow().setTitle(`${nb.title} — Alchemy`);
-      const [sources, messages, notes, reportSchedules] = await Promise.all([
+      const [sources, messagePage, notes, reportSchedules] = await Promise.all([
         api.listSources(id),
-        api.listMessages(id),
+        api.listMessagesPage(id, undefined, CHAT_PAGE_SIZE),
         api.listNotes(id),
         api.listReportSchedules(id),
       ]);
       if (get().currentId === id)
-        set({ sources, messages, notes, reportSchedules });
+        set({
+          sources,
+          messages: messagePage.messages,
+          messagesHasMore: messagePage.hasMore,
+          notes,
+          reportSchedules,
+        });
       // Catch up THIS notebook's folder and file sources right away rather
       // than waiting for the next minute tick — scoped, because the corpus-
       // wide sweep this used to fire competed with the notebook's own loads
@@ -778,6 +789,8 @@ export const useStore = create<AppState>((set, get) => {
         sources: [],
         selectedSourceIds: null,
         messages: [],
+        messagesHasMore: false,
+        messagesLoadingOlder: false,
         notes: [],
         reportSchedules: [],
         ingestQueue: [],
@@ -921,7 +934,14 @@ export const useStore = create<AppState>((set, get) => {
         set({ notebooks: remaining });
         if (get().currentId === id) {
           if (remaining.length > 0) await get().selectNotebook(remaining[0].id);
-          else set({ currentId: null, sources: [], messages: [], notes: [] });
+          else
+            set({
+              currentId: null,
+              sources: [],
+              messages: [],
+              messagesHasMore: false,
+              notes: [],
+            });
         }
       }),
 
@@ -944,7 +964,14 @@ export const useStore = create<AppState>((set, get) => {
             (n) => !n.status && n.id !== id,
           );
           if (active.length > 0) await get().selectNotebook(active[0].id);
-          else set({ currentId: null, sources: [], messages: [], notes: [] });
+          else
+            set({
+              currentId: null,
+              sources: [],
+              messages: [],
+              messagesHasMore: false,
+              notes: [],
+            });
         }
       }),
 
@@ -1229,8 +1256,8 @@ export const useStore = create<AppState>((set, get) => {
         }
         // Reload in parallel; chat tools can touch sources, notes, report
         // schedules, and templates, so refresh them all with the transcript.
-        const [messages, sources, notes, reportSchedules, templates] = await Promise.all([
-          api.listMessages(id),
+        const [messagePage, sources, notes, reportSchedules, templates] = await Promise.all([
+          api.listMessagesPage(id, undefined, CHAT_PAGE_SIZE),
           api.listSources(id),
           api.listNotes(id),
           api.listReportSchedules(id),
@@ -1239,7 +1266,27 @@ export const useStore = create<AppState>((set, get) => {
         // The user may have switched notebooks while a slow tool ran — never
         // write another notebook's data over the current one.
         if (get().currentId === id) {
-          set({ messages, sources, notes, reportSchedules, templates, streamingText: "" });
+          // Keep any older pages the user deliberately loaded. The latest
+          // page replaces the optimistic row and contributes the new turn;
+          // merging by id avoids collapsing a long transcript after send.
+          const existing = get().messages.filter((m) => !m.id.startsWith("tmp-"));
+          const byId = new Map(existing.map((message) => [message.id, message]));
+          for (const message of messagePage.messages) byId.set(message.id, message);
+          const merged = [...byId.values()].sort(
+            (a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id),
+          );
+          set({
+            messages: merged,
+            messagesHasMore:
+              existing.length > CHAT_PAGE_SIZE
+                ? get().messagesHasMore
+                : messagePage.hasMore,
+            sources,
+            notes,
+            reportSchedules,
+            templates,
+            streamingText: "",
+          });
           playDone();
           void get().loadFollowups();
         }
@@ -1259,6 +1306,41 @@ export const useStore = create<AppState>((set, get) => {
         // the user switched notebooks while the request ran.
         set({ sending: false, streamingText: "", steps: [] });
         void get().refreshModelStats();
+      }
+    },
+
+    loadOlderMessages: async () => {
+      const { currentId, messages, messagesHasMore, messagesLoadingOlder } = get();
+      if (
+        !currentId ||
+        !messagesHasMore ||
+        messagesLoadingOlder ||
+        messages.length === 0
+      )
+        return;
+      const before = {
+        createdAt: messages[0].createdAt,
+        id: messages[0].id,
+      };
+      set({ messagesLoadingOlder: true });
+      try {
+        const page = await api.listMessagesPage(
+          currentId,
+          before,
+          CHAT_PAGE_SIZE,
+        );
+        if (get().currentId !== currentId) return;
+        const current = get().messages;
+        const known = new Set(current.map((m) => m.id));
+        const older = page.messages.filter((m) => !known.has(m.id));
+        set({
+          messages: [...older, ...current],
+          messagesHasMore: page.hasMore,
+        });
+      } catch (e) {
+        get().pushToast("error", e instanceof Error ? e.message : String(e));
+      } finally {
+        if (get().currentId === currentId) set({ messagesLoadingOlder: false });
       }
     },
 
@@ -1392,7 +1474,7 @@ export const useStore = create<AppState>((set, get) => {
       const id = get().currentId;
       if (!id) return;
       await api.clearChat(id);
-      set({ messages: [] });
+      set({ messages: [], messagesHasMore: false });
     },
 
     generateArtifact: async (kind, prompt) => {

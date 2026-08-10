@@ -1,13 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import type { CorpusStats, Note, Notebook, ReportSchedule } from "@/lib/types";
+import type { HomeActivity, Notebook } from "@/lib/types";
 
-export interface HomeActivityData {
-  schedules: ReportSchedule[];
-  recentNotes: Note[];
-  reports: Note[];
-  stats: CorpusStats | null;
-}
+type HomeActivityData = Omit<HomeActivity, "stats"> & {
+  stats: HomeActivity["stats"] | null;
+};
 
 const EMPTY_ACTIVITY: HomeActivityData = {
   schedules: [],
@@ -16,7 +13,8 @@ const EMPTY_ACTIVITY: HomeActivityData = {
   stats: null,
 };
 
-/** Load independent home activity in parallel while preserving successful data. */
+/** Load one backend snapshot so notes feed recent activity, reports, and stats
+ * without three overlapping corpus scans. */
 export function useHomeActivity(notebooks: Notebook[]) {
   const [data, setData] = useState<HomeActivityData>(EMPTY_ACTIVITY);
   const [loading, setLoading] = useState(true);
@@ -27,37 +25,18 @@ export function useHomeActivity(notebooks: Notebook[]) {
     const id = ++requestId.current;
     setLoading(true);
 
-    // Commit each slice as it settles so fast slices render without waiting
-    // for the slowest one; failures keep the previous data.
-    const load = <K extends keyof HomeActivityData>(
-      key: K,
-      promise: Promise<HomeActivityData[K]>,
-    ) =>
-      promise.then(
-        (value) => {
-          if (id === requestId.current) {
-            setData((current) => ({ ...current, [key]: value }));
-          }
-          return true;
-        },
-        () => false,
-      );
-
-    const settled = await Promise.all([
-      load("schedules", api.listAllReportSchedules()),
-      load("recentNotes", api.listRecentNotes(5)),
-      load("reports", api.listRecentReports(50)),
-      load("stats", api.corpusStats()),
-    ]);
-    if (id !== requestId.current) return;
-
-    const failed = settled.filter((ok) => !ok).length;
-    setError(
-      failed > 0
-        ? `Couldn’t refresh ${failed === 1 ? "part" : `${failed} parts`} of home activity.`
-        : null,
-    );
-    setLoading(false);
+    try {
+      const snapshot = await api.homeActivity();
+      if (id !== requestId.current) return;
+      setData(snapshot);
+      setError(null);
+    } catch {
+      if (id !== requestId.current) return;
+      // Keep the previous successful snapshot visible.
+      setError("Couldn’t refresh home activity.");
+    } finally {
+      if (id === requestId.current) setLoading(false);
+    }
   }, []);
 
   // Keyed on a content fingerprint, not array identity: refreshNotebooks

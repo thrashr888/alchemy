@@ -79,6 +79,9 @@ function fuzzyScore(query: string, title: string): number | null {
 export function ChatPanel() {
   const currentId = useStore((s) => s.currentId);
   const messages = useStore((s) => s.messages);
+  const messagesHasMore = useStore((s) => s.messagesHasMore);
+  const messagesLoadingOlder = useStore((s) => s.messagesLoadingOlder);
+  const loadOlderMessages = useStore((s) => s.loadOlderMessages);
   const sources = useStore((s) => s.sources);
   const sending = useStore((s) => s.sending);
   const streamingText = useStore((s) => s.streamingText);
@@ -249,6 +252,19 @@ export function ChatPanel() {
   const jumpToLatest = () => {
     const el = scrollRef.current;
     el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  };
+
+  const loadEarlier = async () => {
+    const el = scrollRef.current;
+    const height = el?.scrollHeight ?? 0;
+    const top = el?.scrollTop ?? 0;
+    await loadOlderMessages();
+    // Prepending history must not move the passage the user was reading.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (el) el.scrollTop = top + (el.scrollHeight - height);
+      });
+    });
   };
 
   const canChat = !!currentId && sources.length > 0;
@@ -643,6 +659,19 @@ export function ChatPanel() {
               hasSources={sources.length > 0}
               compact={canChat && !!summary}
             />
+          )}
+
+          {messagesHasMore && (
+            <div className="flex justify-center">
+              <Button
+                variant="ghost"
+                size="sm"
+                loading={messagesLoadingOlder}
+                onClick={() => void loadEarlier()}
+              >
+                Load earlier messages
+              </Button>
+            </div>
           )}
 
           {messages.map((m) => (

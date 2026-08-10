@@ -549,7 +549,7 @@ export function SourcesPanel() {
                     className={cn(
                       // content of the rows after it (they'd paint over the
                       // dropdown otherwise — later DOM order wins at equal z).
-                      "group relative flex items-start gap-2 rounded-md px-2 py-2 hover:bg-surface-2",
+                      "group relative flex items-start gap-2 rounded-md px-2 py-2 hover:bg-surface-2 [content-visibility:auto] [contain-intrinsic-size:auto_44px]",
                       s.status === "error" && "bg-destructive/5",
                       readable && "cursor-pointer",
                       indent && "ml-5",

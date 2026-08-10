@@ -4695,6 +4695,36 @@ pub async fn list_messages(
     e(state.db.list_messages(&notebook_id).await)
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessagePage {
+    pub messages: Vec<Message>,
+    pub has_more: bool,
+}
+
+/// A bounded transcript page for the webview. Backend generation paths still
+/// use the complete history; this command keeps notebook open and rendering
+/// proportional to what is on screen.
+#[tauri::command]
+pub async fn list_messages_page(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    before_at: Option<i64>,
+    before_id: Option<String>,
+    limit: Option<usize>,
+) -> Result<MessagePage, String> {
+    let (messages, has_more) = e(state
+        .db
+        .message_page(
+            &notebook_id,
+            before_at,
+            before_id.as_deref(),
+            limit.unwrap_or(80),
+        )
+        .await)?;
+    Ok(MessagePage { messages, has_more })
+}
+
 #[tauri::command]
 pub async fn clear_chat(state: State<'_, AppState>, notebook_id: String) -> Result<(), String> {
     e(state.db.clear_messages(&notebook_id).await)
@@ -7939,6 +7969,36 @@ pub struct CorpusStats {
     pub chars: i64,
     pub notes: i64,
     pub ledger: i64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeActivity {
+    pub schedules: Vec<ReportSchedule>,
+    pub recent_notes: Vec<Note>,
+    pub reports: Vec<Note>,
+    pub stats: CorpusStats,
+}
+
+/// One Home snapshot: one notes read supplies the recent list, report feed,
+/// and note count instead of three overlapping corpus scans.
+#[tauri::command]
+pub async fn home_activity(state: State<'_, AppState>) -> Result<HomeActivity, String> {
+    let db = state.db.clone();
+    let (schedules, activity) = tokio::join!(db.all_report_schedules(), db.home_activity(5, 50));
+    let schedules = e(schedules)?;
+    let (recent_notes, reports, sources, chars, notes, ledger) = e(activity)?;
+    Ok(HomeActivity {
+        schedules,
+        recent_notes,
+        reports,
+        stats: CorpusStats {
+            sources,
+            chars,
+            notes,
+            ledger,
+        },
+    })
 }
 
 #[tauri::command]
