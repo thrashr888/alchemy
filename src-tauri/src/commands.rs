@@ -494,7 +494,7 @@ pub fn pdf_page_image(path: String, page: usize, width: u32) -> Result<String, S
 /// set may ever reach a shell.
 #[tauri::command]
 pub fn open_in_terminal(command: String) -> Result<(), String> {
-    const ALLOWED: [&str; 9] = [
+    const ALLOWED: [&str; 10] = [
         "claude",
         "codex login",
         "gemini",
@@ -504,6 +504,7 @@ pub fn open_in_terminal(command: String) -> Result<(), String> {
         "hermes",
         "bob",
         "prime-agent",
+        "pi",
     ];
     if !ALLOWED.contains(&command.as_str()) {
         return Err("unsupported command".into());

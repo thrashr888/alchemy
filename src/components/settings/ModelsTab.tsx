@@ -106,6 +106,7 @@ const AGENT_LABELS: Record<string, string> = {
   hermes: "Hermes",
   "bob-shell": "Bob Shell",
   "prime-agent": "Prime Agent",
+  pi: "Pi",
 };
 
 type CliStatus = { id: string; installed: boolean; detail: string };

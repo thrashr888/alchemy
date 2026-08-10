@@ -51,13 +51,16 @@ pub enum AgentKind {
     /// before the answer, and v1 passes output through as-is.
     Bob,
     /// Prime Intellect's prime-agent. Flags per its docs (json.md/usage.md,
-    /// read 2026-08-09); unverifiable until installed — detection gates
-    /// selection, like Copilot.
+    /// read 2026-08-09); verified live same day against local Ollama.
     Prime,
+    /// Mario Zechner's pi (earendil-works/pi) — prime-agent's upstream.
+    /// Identical JSONL event protocol (--mode json), so the two share an
+    /// invocation and parse arm.
+    Pi,
 }
 
 impl AgentKind {
-    pub const ALL: [AgentKind; 9] = [
+    pub const ALL: [AgentKind; 10] = [
         AgentKind::Claude,
         AgentKind::Codex,
         AgentKind::Gemini,
@@ -67,6 +70,7 @@ impl AgentKind {
         AgentKind::Hermes,
         AgentKind::Bob,
         AgentKind::Prime,
+        AgentKind::Pi,
     ];
 
     pub fn binary_name(&self) -> &'static str {
@@ -80,6 +84,7 @@ impl AgentKind {
             AgentKind::Hermes => "hermes",
             AgentKind::Bob => "bob",
             AgentKind::Prime => "prime-agent",
+            AgentKind::Pi => "pi",
         }
     }
 
@@ -94,6 +99,7 @@ impl AgentKind {
             AgentKind::Hermes => "hermes",
             AgentKind::Bob => "bob-shell",
             AgentKind::Prime => "prime-agent",
+            AgentKind::Pi => "pi",
         }
     }
 
@@ -112,6 +118,7 @@ impl AgentKind {
             AgentKind::Hermes => "Hermes",
             AgentKind::Bob => "Bob Shell",
             AgentKind::Prime => "Prime Agent",
+            AgentKind::Pi => "Pi",
         }
     }
 
@@ -128,6 +135,7 @@ impl AgentKind {
             AgentKind::Prime => {
                 "curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh"
             }
+            AgentKind::Pi => "npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
         }
     }
 }
@@ -267,6 +275,7 @@ fn auth_fix_hint(kind: AgentKind, error_text: &str) -> Option<String> {
         AgentKind::Hermes => "run `hermes` and follow its sign-in",
         AgentKind::Bob => "run `bob` and follow its sign-in",
         AgentKind::Prime => "run `prime-agent` and sign in with its /login command",
+        AgentKind::Pi => "run `pi` and sign in with its /login command",
     };
     Some(format!("Fix: open Terminal, {fix}, then retry here."))
 }
@@ -473,13 +482,15 @@ impl AgentCli {
                 }
                 cmd.args(["-p", &full]);
             }
-            AgentKind::Prime => {
-                // prime-agent --mode json: structured JSONL events with
-                // per-token text deltas (docs/json.md). Prompt is positional
-                // (argv-guarded); --append-system-prompt is a real flag here.
+            AgentKind::Prime | AgentKind::Pi => {
+                // pi / prime-agent --mode json: the same structured JSONL
+                // protocol (prime forked pi; both docs/json.md agree).
+                // Prompt is positional (argv-guarded); --append-system-prompt
+                // is a real flag in both.
                 if system.len() + prompt.len() > 150_000 {
                     return Err(anyhow!(
-                        "context too large for prime-agent's argv-based prompt"
+                        "context too large for {}'s argv-based prompt",
+                        self.kind.binary_name()
                     ));
                 }
                 cmd.args(["--mode", "json"]);
@@ -497,7 +508,8 @@ impl AgentCli {
             | AgentKind::Opencode
             | AgentKind::Copilot
             | AgentKind::Hermes
-            | AgentKind::Prime => None,
+            | AgentKind::Prime
+            | AgentKind::Pi => None,
         };
         cmd.stdin(if stdin_payload.is_some() {
             Stdio::piped()
@@ -757,12 +769,13 @@ impl AgentCli {
                         }
                         _ => {}
                     },
-                    AgentKind::Prime => {
-                        // prime-agent --mode json (docs/json.md): message_update
-                        // streams text deltas, tool_execution_start narrates the
-                        // work, message_end is authoritative only when no deltas
-                        // arrived. Thinking never streams as text_delta, so it
-                        // stays out of the transcript by construction.
+                    AgentKind::Prime | AgentKind::Pi => {
+                        // pi / prime-agent --mode json (docs/json.md, same
+                        // protocol): message_update streams text deltas,
+                        // tool_execution_start narrates the work, message_end
+                        // is authoritative only when no deltas arrived.
+                        // Thinking never streams as text_delta, so it stays
+                        // out of the transcript by construction.
                         match v["type"].as_str() {
                             Some("message_update") => {
                                 let ev = &v["assistantMessageEvent"];
@@ -924,6 +937,18 @@ mod live_smokes {
             .chat(&[ChatTurn::user("What is 2+2? Reply with only the number.")])
             .await
             .expect("opencode chat failed");
+        assert!(out.text.contains('4'), "unexpected: {}", out.text);
+    }
+
+    /// cargo test agent_cli_pi_smoke -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn agent_cli_pi_smoke() {
+        let cli = AgentCli::new(AgentKind::Pi);
+        let out = cli
+            .chat(&[ChatTurn::user("What is 2+2? Reply with only the number.")])
+            .await
+            .expect("pi chat failed");
         assert!(out.text.contains('4'), "unexpected: {}", out.text);
     }
 

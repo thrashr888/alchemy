@@ -16,7 +16,7 @@ Chat with any model you already have (see
 - **Local servers** — [Ollama](https://ollama.com), LM Studio, vLLM, or any
   OpenAI-compatible localhost endpoint.
 - **Subscriptions you already pay for** — Claude Code, Codex, Gemini CLI,
-  Cursor, OpenCode, GitHub Copilot, Hermes, IBM Bob, and Prime Agent run
+  Cursor, OpenCode, GitHub Copilot, Hermes, IBM Bob, Prime Agent, and Pi run
   headless through their own CLIs; your existing sign-ins carry the bill and
   answers are captioned with the model (and metered cost when reported).
 - **API gateways** — 30+ presets (OpenAI, Anthropic, NVIDIA, OpenRouter,

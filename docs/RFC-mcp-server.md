@@ -158,6 +158,13 @@ double-register the server for connected users; OpenCode's docs route MCP
 through `opencode.json` (our current path) — plugins are lifecycle hooks with
 nothing to add here.
 
+pi (earendil-works/pi, prime-agent's upstream) has **no MCP client by
+design** — no `mcpServers` config anywhere. It ships as a chat engine only
+(RFC-inference-providers §5). The connector path there would be a TypeScript
+*extension* (`~/.pi/agent/extensions/alchemy.ts` bridging our streamable-HTTP
+tools into pi's tool API, npm deps allowed) — a real project, deferred until
+someone wants it.
+
 ### 6. The skill
 
 `skills/alchemy/SKILL.md` in-repo; **Connect** copies it into each client's
