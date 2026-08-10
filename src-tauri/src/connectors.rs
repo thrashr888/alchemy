@@ -11,6 +11,28 @@ use tauri::{AppHandle, Manager};
 
 const SKILL_MD: &str = include_str!("../../skills/alchemy/SKILL.md");
 
+/// The standard skill payload: one SKILL.md, the de-facto cross-client format.
+static STD_SKILL: &[(&str, &str)] = &[("SKILL.md", SKILL_MD)];
+
+/// Prime Agent's skill is a Python package (its MCP integrations are
+/// kernel-imported modules, not client-side tool lists — see prime-agent's
+/// docs/mcp-integrations.md). Same SKILL.md idea, plus the two files that
+/// make it installable into the kernel venv.
+static PRIME_SKILL: &[(&str, &str)] = &[
+    (
+        "SKILL.md",
+        include_str!("../../skills/alchemy-prime/SKILL.md"),
+    ),
+    (
+        "pyproject.toml",
+        include_str!("../../skills/alchemy-prime/pyproject.toml"),
+    ),
+    (
+        "src/alchemy/__init__.py",
+        include_str!("../../skills/alchemy-prime/__init__.py"),
+    ),
+];
+
 fn server_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}/mcp")
 }
@@ -47,6 +69,10 @@ struct Target {
     strategies: &'static [Strategy],
     /// Home-relative skills dirs that load `<dir>/alchemy/SKILL.md`.
     skills_dirs: &'static [&'static str],
+    /// Files written under `<skills_dir>/alchemy/` on connect (path relative
+    /// to that dir → content). `STD_SKILL` for everyone except Prime Agent,
+    /// whose skill is a Python package.
+    skill_files: &'static [(&'static str, &'static str)],
     /// Shown to the user: CLI one-liner or config snippet for manual setup.
     snippet: fn(u16) -> String,
 }
@@ -67,6 +93,7 @@ static TARGETS: &[Target] = &[
             entry: |port| serde_json::json!({ "type": "http", "url": server_url(port) }),
         }],
         skills_dirs: &[".claude/skills"],
+        skill_files: STD_SKILL,
         snippet: |port| {
             format!(
                 "claude mcp add --transport http --scope user alchemy {}",
@@ -83,6 +110,7 @@ static TARGETS: &[Target] = &[
             section: |port| format!("\n[mcp_servers.alchemy]\nurl = \"{}\"\n", server_url(port)),
         }],
         skills_dirs: &[".codex/skills"],
+        skill_files: STD_SKILL,
         snippet: |port| format!("codex mcp add alchemy --url {}", server_url(port)),
     },
     Target {
@@ -95,6 +123,7 @@ static TARGETS: &[Target] = &[
             entry: |port| serde_json::json!({ "type": "remote", "url": server_url(port), "enabled": true }),
         }],
         skills_dirs: &[".config/opencode/skills"],
+        skill_files: STD_SKILL,
         snippet: |port| {
             json_snippet(
                 "mcp",
@@ -112,6 +141,7 @@ static TARGETS: &[Target] = &[
             entry: |port| serde_json::json!({ "httpUrl": server_url(port) }),
         }],
         skills_dirs: &[".gemini/skills"],
+        skill_files: STD_SKILL,
         snippet: |port| {
             format!(
                 "gemini mcp add --transport http alchemy {}",
@@ -142,6 +172,7 @@ static TARGETS: &[Target] = &[
             },
         ],
         skills_dirs: &[".gemini/skills"],
+        skill_files: STD_SKILL,
         snippet: |port| {
             json_snippet(
                 "mcpServers",
@@ -160,6 +191,7 @@ static TARGETS: &[Target] = &[
             needle: "alchemy",
         }],
         skills_dirs: &[".hermes/skills/research"],
+        skill_files: STD_SKILL,
         snippet: |port| format!("hermes mcp add alchemy --url {}", server_url(port)),
     },
     Target {
@@ -174,6 +206,7 @@ static TARGETS: &[Target] = &[
             entry: |port| serde_json::json!({ "url": server_url(port), "disabled": false }),
         }],
         skills_dirs: &[".kiro/skills"],
+        skill_files: STD_SKILL,
         snippet: |port| {
             json_snippet(
                 "mcpServers",
@@ -201,6 +234,7 @@ static TARGETS: &[Target] = &[
             },
         ],
         skills_dirs: &[".bob/skills"],
+        skill_files: STD_SKILL,
         snippet: |port| {
             json_snippet(
                 "mcpServers",
@@ -218,6 +252,7 @@ static TARGETS: &[Target] = &[
             entry: |port| serde_json::json!({ "type": "http", "url": server_url(port), "disabled": false }),
         }],
         skills_dirs: &[".factory/skills"],
+        skill_files: STD_SKILL,
         snippet: |port| format!("droid mcp add alchemy {} --type http", server_url(port)),
     },
     Target {
@@ -232,6 +267,7 @@ static TARGETS: &[Target] = &[
             entry: |port| serde_json::json!({ "type": "http", "url": server_url(port), "tools": ["*"] }),
         }],
         skills_dirs: &[".copilot/skills"],
+        skill_files: STD_SKILL,
         snippet: |port| {
             format!(
                 "copilot mcp add --transport http alchemy {}",
@@ -254,10 +290,32 @@ static TARGETS: &[Target] = &[
             entry: |port| serde_json::json!({ "type": "http", "url": server_url(port) }),
         }],
         skills_dirs: &[".copilot/skills"],
+        skill_files: STD_SKILL,
         snippet: |port| {
             format!(
                 "code --add-mcp '{{\"name\":\"alchemy\",\"type\":\"http\",\"url\":\"{}\"}}'",
                 server_url(port)
+            )
+        },
+    },
+    Target {
+        id: "prime",
+        name: "Prime Agent",
+        detect: &[".prime/agent"],
+        // No `oauth`/`bearerTokenEnvVar`: the server is loopback-only and the
+        // skill's McpIntegration subclass supplies a placeholder token, so the
+        // integration is live without any /mcp login.
+        strategies: &[Strategy::JsonMerge {
+            path: ".prime/agent/settings.json",
+            pointer: &["mcpServers"],
+            entry: |port| serde_json::json!({ "type": "http", "url": server_url(port) }),
+        }],
+        skills_dirs: &[".prime/agent/skills"],
+        skill_files: PRIME_SKILL,
+        snippet: |port| {
+            json_snippet(
+                "mcpServers",
+                &serde_json::json!({ "type": "http", "url": server_url(port) }),
             )
         },
     },
@@ -397,8 +455,13 @@ fn skill_installed(home: &std::path::Path, target: &Target) -> bool {
 fn install_skill(home: &std::path::Path, target: &Target) -> anyhow::Result<()> {
     for d in target.skills_dirs {
         let dir = resolve(home, d).join("alchemy");
-        std::fs::create_dir_all(&dir)?;
-        std::fs::write(dir.join("SKILL.md"), SKILL_MD)?;
+        for (rel, content) in target.skill_files {
+            let file = dir.join(rel);
+            if let Some(parent) = file.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(file, content)?;
+        }
     }
     Ok(())
 }
@@ -601,6 +664,38 @@ mod tests {
             root["servers"]["alchemy"]["url"],
             "http://127.0.0.1:41414/mcp"
         );
+        assert!(status_of(&home, t, 41414).configured);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// Prime Agent gets the full Python skill package (SKILL.md +
+    /// pyproject.toml + module), and its settings.json merge preserves
+    /// existing keys like defaultModel.
+    #[test]
+    fn prime_installs_python_package_and_merges_settings() {
+        let home = tmp_home();
+        let cfg = home.join(".prime/agent/settings.json");
+        std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+        std::fs::write(&cfg, r#"{"defaultModel":"qwen3.6:35b-mlx"}"#).unwrap();
+
+        let t = target("prime");
+        for s in t.strategies {
+            strategy_apply(&home, s, 41414).unwrap();
+        }
+        install_skill(&home, t).unwrap();
+
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(root["defaultModel"], "qwen3.6:35b-mlx");
+        assert_eq!(
+            root["mcpServers"]["alchemy"]["url"],
+            "http://127.0.0.1:41414/mcp"
+        );
+        let skill = home.join(".prime/agent/skills/alchemy");
+        assert!(skill.join("SKILL.md").exists());
+        assert!(skill.join("pyproject.toml").exists());
+        assert!(skill.join("src/alchemy/__init__.py").exists());
+        assert!(skill_installed(&home, t));
         assert!(status_of(&home, t, 41414).configured);
         let _ = std::fs::remove_dir_all(home);
     }

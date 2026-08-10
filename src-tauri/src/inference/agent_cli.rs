@@ -50,10 +50,14 @@ pub enum AgentKind {
     /// stays out per policy). Known wart: `bob -p` prints its thinking
     /// before the answer, and v1 passes output through as-is.
     Bob,
+    /// Prime Intellect's prime-agent. Flags per its docs (json.md/usage.md,
+    /// read 2026-08-09); unverifiable until installed — detection gates
+    /// selection, like Copilot.
+    Prime,
 }
 
 impl AgentKind {
-    pub const ALL: [AgentKind; 8] = [
+    pub const ALL: [AgentKind; 9] = [
         AgentKind::Claude,
         AgentKind::Codex,
         AgentKind::Gemini,
@@ -62,6 +66,7 @@ impl AgentKind {
         AgentKind::Copilot,
         AgentKind::Hermes,
         AgentKind::Bob,
+        AgentKind::Prime,
     ];
 
     pub fn binary_name(&self) -> &'static str {
@@ -74,6 +79,7 @@ impl AgentKind {
             AgentKind::Copilot => "copilot",
             AgentKind::Hermes => "hermes",
             AgentKind::Bob => "bob",
+            AgentKind::Prime => "prime-agent",
         }
     }
 
@@ -87,6 +93,7 @@ impl AgentKind {
             AgentKind::Copilot => "copilot",
             AgentKind::Hermes => "hermes",
             AgentKind::Bob => "bob-shell",
+            AgentKind::Prime => "prime-agent",
         }
     }
 
@@ -104,6 +111,7 @@ impl AgentKind {
             AgentKind::Copilot => "GitHub Copilot",
             AgentKind::Hermes => "Hermes",
             AgentKind::Bob => "Bob Shell",
+            AgentKind::Prime => "Prime Agent",
         }
     }
 
@@ -117,6 +125,9 @@ impl AgentKind {
             AgentKind::Copilot => "npm install -g @github/copilot",
             AgentKind::Hermes => "pipx install hermes-agent",
             AgentKind::Bob => "curl -fsSL https://bob.ibm.com/download/bobshell.sh | sh",
+            AgentKind::Prime => {
+                "curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh"
+            }
         }
     }
 }
@@ -146,6 +157,7 @@ fn load_shell_env() -> HashMap<String, String> {
     env.remove("GOOGLE_API_KEY");
     env.remove("CURSOR_API_KEY");
     env.remove("BOBSHELL_API_KEY");
+    env.remove("PRIME_API_KEY");
     env
 }
 
@@ -254,6 +266,7 @@ fn auth_fix_hint(kind: AgentKind, error_text: &str) -> Option<String> {
         AgentKind::Copilot => "run `copilot` and follow its sign-in",
         AgentKind::Hermes => "run `hermes` and follow its sign-in",
         AgentKind::Bob => "run `bob` and follow its sign-in",
+        AgentKind::Prime => "run `prime-agent` and sign in with its /login command",
     };
     Some(format!("Fix: open Terminal, {fix}, then retry here."))
 }
@@ -460,6 +473,21 @@ impl AgentCli {
                 }
                 cmd.args(["-p", &full]);
             }
+            AgentKind::Prime => {
+                // prime-agent --mode json: structured JSONL events with
+                // per-token text deltas (docs/json.md). Prompt is positional
+                // (argv-guarded); --append-system-prompt is a real flag here.
+                if system.len() + prompt.len() > 150_000 {
+                    return Err(anyhow!(
+                        "context too large for prime-agent's argv-based prompt"
+                    ));
+                }
+                cmd.args(["--mode", "json"]);
+                if !system.is_empty() {
+                    cmd.args(["--append-system-prompt", &system]);
+                }
+                cmd.arg(&prompt);
+            }
         }
         let stdin_payload = match self.kind {
             AgentKind::Claude => Some(prompt.clone()),
@@ -468,7 +496,8 @@ impl AgentCli {
             | AgentKind::Bob
             | AgentKind::Opencode
             | AgentKind::Copilot
-            | AgentKind::Hermes => None,
+            | AgentKind::Hermes
+            | AgentKind::Prime => None,
         };
         cmd.stdin(if stdin_payload.is_some() {
             Stdio::piped()
@@ -728,6 +757,49 @@ impl AgentCli {
                         }
                         _ => {}
                     },
+                    AgentKind::Prime => {
+                        // prime-agent --mode json (docs/json.md): message_update
+                        // streams text deltas, tool_execution_start narrates the
+                        // work, message_end is authoritative only when no deltas
+                        // arrived. Thinking never streams as text_delta, so it
+                        // stays out of the transcript by construction.
+                        match v["type"].as_str() {
+                            Some("message_update") => {
+                                let ev = &v["assistantMessageEvent"];
+                                if ev["type"].as_str() == Some("text_delta") {
+                                    if let Some(d) = ev["delta"].as_str() {
+                                        text.push_str(d);
+                                        on_token(d);
+                                    }
+                                }
+                            }
+                            Some("message_end") if text.is_empty() => {
+                                if v["message"]["role"].as_str() == Some("assistant") {
+                                    if let Some(blocks) = v["message"]["content"].as_array() {
+                                        for b in blocks {
+                                            if b["type"].as_str() == Some("text") {
+                                                if let Some(t) = b["text"].as_str() {
+                                                    text.push_str(t);
+                                                    on_token(t);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Some("tool_execution_start") => {
+                                let name = v["toolName"].as_str().unwrap_or("a tool");
+                                emit_step(tool_step_label(name));
+                            }
+                            Some("auto_retry_start") => emit_step("Retrying".into()),
+                            Some("auto_retry_end") if v["success"].as_bool() == Some(false) => {
+                                if let Some(msg) = v["finalError"].as_str() {
+                                    errored = Some(msg.to_string());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                     AgentKind::Codex => {
                         // codex exec --json: items complete whole; the
                         // agent_message item carries the reply text, and
@@ -852,6 +924,18 @@ mod live_smokes {
             .chat(&[ChatTurn::user("What is 2+2? Reply with only the number.")])
             .await
             .expect("opencode chat failed");
+        assert!(out.text.contains('4'), "unexpected: {}", out.text);
+    }
+
+    /// cargo test agent_cli_prime_smoke -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn agent_cli_prime_smoke() {
+        let cli = AgentCli::new(AgentKind::Prime);
+        let out = cli
+            .chat(&[ChatTurn::user("What is 2+2? Reply with only the number.")])
+            .await
+            .expect("prime-agent chat failed");
         assert!(out.text.contains('4'), "unexpected: {}", out.text);
     }
 

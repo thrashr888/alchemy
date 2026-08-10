@@ -136,9 +136,27 @@ The dialects, as researched July 2026 (they genuinely all differ):
 | Factory Droid | `~/.factory/mcp.json` | `mcpServers.<n> = {type:"http", url}` | `~/.factory/skills` |
 | GitHub Copilot CLI | `~/.copilot/mcp-config.json` | `mcpServers.<n> = {type:"http", url, tools:["*"]}` | `~/.copilot/skills` |
 | VS Code | `~/Library/Application Support/Code/User/mcp.json` | **`servers`**`.<n> = {type:"http", url}` — not `mcpServers` | reads `~/.copilot/skills` + `~/.claude/skills` |
+| Prime Agent | `~/.prime/agent/settings.json` | `mcpServers.<n> = {type:"http", url}` | `~/.prime/agent/skills` — **Python package**, see below |
 
 Cursor and Windsurf are easy follow-ups (same registry shape) once their
 current formats are verified.
+
+Prime Agent (verified live 2026-08-09) is the odd one out on the skill side:
+its MCP integrations are kernel-imported Python modules, not client-side tool
+lists, so Connect installs a Python skill package (`SKILL.md` +
+`pyproject.toml` + `src/alchemy/__init__.py` subclassing `McpIntegration`,
+from `skills/alchemy-prime/`). The subclass overrides `_resolve_token` with a
+placeholder because our server is loopback-only and unauthenticated, while
+prime-agent's base class refuses tokenless connections. The host-resolved
+`mcpServers` URL wins over the module's hardcoded fallback, so non-default
+ports keep working.
+
+Also evaluated 2026-08-09 and deliberately not used: Gemini CLI *extensions*
+(`~/.gemini/extensions/`) and OpenCode *plugins*. Gemini extensions just
+bundle what our settings.json merge + skills dir already deliver, and would
+double-register the server for connected users; OpenCode's docs route MCP
+through `opencode.json` (our current path) — plugins are lifecycle hooks with
+nothing to add here.
 
 ### 6. The skill
 
