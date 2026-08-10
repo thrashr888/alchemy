@@ -16,7 +16,7 @@ Chat with any model you already have (see
 - **Local servers** — [Ollama](https://ollama.com), LM Studio, vLLM, or any
   OpenAI-compatible localhost endpoint.
 - **Subscriptions you already pay for** — Claude Code, Codex, Gemini CLI,
-  Cursor, OpenCode, GitHub Copilot, Hermes, IBM Bob, and Prime Agent run
+  Cursor, OpenCode, GitHub Copilot, Hermes, IBM Bob, Prime Agent, and Pi run
   headless through their own CLIs; your existing sign-ins carry the bill and
   answers are captioned with the model (and metered cost when reported).
 - **API gateways** — 30+ presets (OpenAI, Anthropic, NVIDIA, OpenRouter,
@@ -179,8 +179,8 @@ two-host podcast voiced on-device.*
   `cider://` origin (a Reminders list, Notes note, Calendar window, or Stocks
   watchlist) to `add_source` — with changes appearing live in the app. One-click connect (config + companion skill) for
   **Claude Code, OpenAI Codex, GitHub Copilot, VS Code, OpenCode, Gemini CLI,
-  Google Antigravity, Factory Droid, AWS Kiro, IBM Bob, Hermes, and Prime
-  Agent** in Settings → Agents (see `docs/RFC-mcp-server.md`). The companion skill is
+  Google Antigravity, Factory Droid, AWS Kiro, IBM Bob, Hermes, Prime Agent,
+  and Pi** in Settings → Agents (see `docs/RFC-mcp-server.md`). The companion skill is
   also on [skills.sh](https://skills.sh/thrashr888/alchemy/alchemy):
 
   ```bash
