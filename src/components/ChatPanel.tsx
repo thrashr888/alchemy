@@ -163,10 +163,12 @@ export function ChatPanel() {
 
   // Another surface (the source reader's "Ask about this") staged text for
   // the composer — load it and focus so the user can finish their question.
+  // The empty string is a focus-only request ("Ask about this source" scoped
+  // retrieval and wants the caret here, without touching the draft).
   const pendingInput = useStore((s) => s.pendingInput);
   useEffect(() => {
-    if (!pendingInput) return;
-    setDraft(pendingInput);
+    if (pendingInput === null) return;
+    if (pendingInput) setDraft(pendingInput);
     useStore.setState({ pendingInput: null });
     // Focus after the surface that staged the text (a modal) has closed.
     setTimeout(() => {

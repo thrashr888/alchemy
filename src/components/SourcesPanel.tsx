@@ -40,6 +40,7 @@ import {
   Pencil,
   RefreshCw,
   Cloud,
+  MessageSquare,
   Package,
   StickyNote,
   Tag,
@@ -193,6 +194,7 @@ export function SourcesPanel() {
   const selectedSourceIds = useStore((s) => s.selectedSourceIds);
   const toggleSourceSelected = useStore((s) => s.toggleSourceSelected);
   const setAllSourcesSelected = useStore((s) => s.setAllSourcesSelected);
+  const askAboutSource = useStore((s) => s.askAboutSource);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [editing, setEditing] = useState<{
@@ -633,6 +635,22 @@ export function SourcesPanel() {
                             onOpen={hideCard}
                             label={`Options for "${s.title}"`}
                             items={[
+                              // Chat scoped to this one source (a folder
+                              // scopes to its files); placeholders have no
+                              // chunks yet, so there's nothing to ask.
+                              ...(s.status === "ready" &&
+                              (!isFolder ||
+                                kids.some((k) => k.status === "ready"))
+                                ? [
+                                    {
+                                      label: "Ask about this source",
+                                      icon: (
+                                        <MessageSquare className="h-3.5 w-3.5" />
+                                      ),
+                                      onClick: () => askAboutSource(s.id),
+                                    },
+                                  ]
+                                : []),
                               // url holds the origin: a web URL, an on-disk path, or
                               // a folder — any of them can be refreshed.
                               ...(s.url

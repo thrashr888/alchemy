@@ -25,6 +25,7 @@ import {
   FolderOpen,
   LayoutGrid,
   Link2,
+  MessageSquare,
   Package,
   Pencil,
   RefreshCw,
@@ -388,6 +389,17 @@ export function GalleryPane() {
         s.sourceType,
       ) && s.status !== "placeholder";
     return [
+      // Chat scoped to this one source (a folder scopes to its files);
+      // placeholders have no chunks yet, so there's nothing to ask.
+      ...(s.status === "ready"
+        ? [
+            {
+              label: "Ask about this source",
+              icon: <MessageSquare className="h-3.5 w-3.5" />,
+              onClick: () => st.askAboutSource(s.id),
+            },
+          ]
+        : []),
       ...(editable
         ? [
             {

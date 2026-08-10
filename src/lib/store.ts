@@ -4,7 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
-import { SUPPORTED_EXTENSIONS } from "./utils";
+import { SUPPORTED_EXTENSIONS, visibleTitle } from "./utils";
 import { applyTheme, SYSTEM_THEME, themeIsDark } from "./themes";
 import { refreshEpigraph } from "./epigraph";
 import { notify } from "./notify";
@@ -1208,6 +1208,37 @@ export const useStore = create<AppState>((set, get) => {
       const sel = Object.keys(next).length === 0 ? null : next;
       saveSourceSel(get().currentId, sel);
       set({ selectedSourceIds: sel });
+    },
+
+    askAboutSource: (sourceId) => {
+      const { sources } = get();
+      const target = sources.find((s) => s.id === sourceId);
+      if (!target) return;
+      // Folder-like parents (folders, repos, vaults) carry no chunks
+      // themselves — asking about one means asking about its files.
+      const keep = new Set([sourceId]);
+      if (["folder", "git", "notion", "obsidian"].includes(target.sourceType))
+        for (const s of sources) if (s.parentId === sourceId) keep.add(s.id);
+      const sel: Record<string, boolean> = {};
+      for (const s of sources)
+        if (s.sourceType !== "folder" && !keep.has(s.id)) sel[s.id] = false;
+      // Nothing deselected (single-source notebook) collapses to null so
+      // future sources stay auto-included.
+      const next = Object.keys(sel).length === 0 ? null : sel;
+      saveSourceSel(get().currentId, next);
+      // Empty pendingInput carries no text — it just tells the chat composer
+      // to focus once it's in front (the reader occupies its column now).
+      set({
+        selectedSourceIds: next,
+        pendingInput: "",
+        galleryOpen: false,
+        ledgerOpen: false,
+      });
+      if (get().reader.open) get().closeReader();
+      get().pushToast(
+        "success",
+        `Chat scoped to "${visibleTitle(target.title) || "this source"}"`,
+      );
     },
 
     setAllSourcesSelected: (selected) => {

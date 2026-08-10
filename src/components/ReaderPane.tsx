@@ -582,6 +582,16 @@ export function ReaderPane() {
     useStore.setState({ readerEditIntent: null });
     if (sourceEditable) setEditing(true);
   }, [editIntent, source, sourceEditable]);
+  // "Ask about this source": scope the chat to this one document and land in
+  // the composer. Placeholders have no chunks yet — nothing to ask about.
+  const askAction =
+    source && source.status === "ready"
+      ? {
+          label: "Ask about this source",
+          icon: <MessageSquare className="h-3.5 w-3.5" />,
+          onClick: () => useStore.getState().askAboutSource(source.id),
+        }
+      : null;
   const originAction = source?.url
     ? isWebUrl(source.url)
       ? {
@@ -647,13 +657,13 @@ export function ReaderPane() {
   // rare actions behind the menu. Compact: secondaries fold into the menu.
   const inlineActions = compact
     ? []
-    : [originAction, refreshAction, popOutAction].filter(
+    : [askAction, originAction, refreshAction, popOutAction].filter(
         (a): a is NonNullable<typeof a> => a !== null,
       );
   const overflowItems = [
     ...(copyLinkAction ? [copyLinkAction] : []),
     ...(compact
-      ? [originAction, refreshAction].filter(
+      ? [askAction, originAction, refreshAction].filter(
           (a): a is NonNullable<typeof a> => a !== null,
         )
       : []),

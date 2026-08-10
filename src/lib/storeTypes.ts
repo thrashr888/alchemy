@@ -232,6 +232,9 @@ export interface AppState {
   deleteSource: (id: string) => Promise<void>;
   toggleSourceSelected: (id: string) => void;
   setAllSourcesSelected: (selected: boolean) => void;
+  /** "Ask about this source": scope the chat to one source (a folder scopes
+   *  to its files), land in the composer ready to type. */
+  askAboutSource: (id: string) => void;
 
   /** overrideSourceIds: per-message retrieval narrowing from @ mentions —
    *  raw owner ids (source ids and "note:<id>"), replacing the checkbox
