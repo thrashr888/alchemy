@@ -25,6 +25,9 @@ const BEIR_BASE: &str = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BE
 const SEED_BATCH: usize = 2_048;
 /// Vector weights swept offline against the captured legs (BM25 fixed at 1).
 const SWEEP: &[f64] = &[0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0];
+/// RRF k-constants swept alongside — the shipping fusion hardcodes 60.
+/// Smaller k sharpens rank-1 dominance; larger k flattens the blend.
+const SWEEP_K: &[f64] = &[20.0, 60.0, 120.0];
 /// Queries sampled for the rerank variant — one model call per query.
 const RERANK_SAMPLE: usize = 100;
 
@@ -432,7 +435,7 @@ async fn run_beir(
     let already_seeded = seeded_marker.exists();
     let db = Db::open(&db_dir).await.expect("open db");
     // Fusion follows the embedder tier, exactly as the app stamps it.
-    db.set_vector_weight(ai.vector_weight());
+    db.set_fusion(ai.fusion_params());
     db.defer_fts(true);
     let mut rows: Vec<(String, String, i32, String)> = Vec::new();
     let mut inputs: Vec<String> = Vec::new();
@@ -567,32 +570,77 @@ async fn run_beir(
         n += 1;
     }
 
-    // Offline RRF weight sweep over the captured legs: what WOULD fusion
-    // score at each vector weight, BM25 held at 1.0?
-    let sweep: Vec<(f64, f64)> = SWEEP
+    // Offline fusion sweep over the captured legs: vector weight × RRF k.
+    // The 1-D line at k=60 (the shipping constant) keeps continuity with
+    // earlier runs; the grid hunts a better operating point — and anything
+    // it finds must revalidate on the held-out Nano sweep before shipping,
+    // or this is overfitting three datasets, not hill climbing.
+    let fuse = |w: f64, k: f64, vec_docs: &[String], fts_docs: &[String]| -> Vec<String> {
+        let mut score: HashMap<&String, f64> = HashMap::new();
+        for (r, d) in vec_docs.iter().enumerate() {
+            *score.entry(d).or_default() += w / (k + r as f64);
+        }
+        for (r, d) in fts_docs.iter().enumerate() {
+            *score.entry(d).or_default() += 1.0 / (k + r as f64);
+        }
+        let mut ranked: Vec<(&String, f64)> = score.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(b.0)));
+        ranked
+            .into_iter()
+            .take(10)
+            .map(|(d, _)| d.clone())
+            .collect()
+    };
+    let grid: Vec<(f64, f64, f64)> = SWEEP_K
         .iter()
-        .map(|&w| {
-            let mut total = 0.0f64;
-            for (vec_docs, fts_docs, rels) in &captures {
-                let mut score: HashMap<&String, f64> = HashMap::new();
-                for (r, d) in vec_docs.iter().enumerate() {
-                    *score.entry(d).or_default() += w / (60.0 + r as f64);
-                }
-                for (r, d) in fts_docs.iter().enumerate() {
-                    *score.entry(d).or_default() += 1.0 / (60.0 + r as f64);
-                }
-                let mut ranked: Vec<(&String, f64)> = score.into_iter().collect();
-                ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(b.0)));
-                let docs: Vec<String> = ranked
-                    .into_iter()
-                    .take(10)
-                    .map(|(d, _)| d.clone())
-                    .collect();
-                total += ndcg_at_k(&docs, rels, 10);
-            }
-            (w, total / captures.len() as f64)
+        .flat_map(|&k| SWEEP.iter().map(move |&w| (w, k)))
+        .map(|(w, k)| {
+            let total: f64 = captures
+                .iter()
+                .map(|(v, f, rels)| ndcg_at_k(&fuse(w, k, v, f), rels, 10))
+                .sum();
+            (w, k, total / captures.len() as f64)
         })
         .collect();
+    let sweep: Vec<(f64, f64)> = grid
+        .iter()
+        .filter(|(_, k, _)| *k == 60.0)
+        .map(|(w, _, s)| (*w, *s))
+        .collect();
+    let best = grid
+        .iter()
+        .cloned()
+        .max_by(|a, b| a.2.total_cmp(&b.2))
+        .unwrap_or((0.0, 60.0, 0.0));
+
+    // Oracle ceiling: with the candidate pool FIXED (vec ∪ bm25 at depth
+    // 30), a perfect reranker scores this. The gap above fused is all any
+    // ranking improvement can ever recover; the shortfall from 1.0 is
+    // candidate generation's miss — different gaps, different investments.
+    let (mut oracle_sum, mut pool_recall_sum) = (0.0f64, 0.0f64);
+    for (v, f, rels) in &captures {
+        let mut pool: Vec<String> = v.clone();
+        for d in f {
+            if !pool.contains(d) {
+                pool.push(d.clone());
+            }
+        }
+        let mut in_pool: Vec<(&String, i32)> = pool
+            .iter()
+            .filter_map(|d| rels.get(d).map(|s| (d, *s)))
+            .collect();
+        in_pool.sort_by_key(|(_, s)| std::cmp::Reverse(*s));
+        let ranked: Vec<String> = in_pool
+            .into_iter()
+            .map(|(d, _)| d.clone())
+            .take(10)
+            .collect();
+        oracle_sum += ndcg_at_k(&ranked, rels, 10);
+        let found = pool.iter().filter(|d| rels.contains_key(*d)).count();
+        pool_recall_sum += found as f64 / rels.len() as f64;
+    }
+    let oracle = oracle_sum / captures.len() as f64;
+    let pool_recall = pool_recall_sum / captures.len() as f64;
 
     let run = BeirRun {
         ndcg: ndcg_sum / n as f64,
@@ -612,12 +660,21 @@ async fn run_beir(
         .map(|(w, s)| format!("{w:.2}→{s:.4}"))
         .collect::<Vec<_>>()
         .join("  ");
+    let k20_line = grid
+        .iter()
+        .filter(|(_, k, _)| *k == 20.0)
+        .map(|(w, _, s)| format!("{w:.2}→{s:.4}"))
+        .collect::<Vec<_>>()
+        .join("  ");
     eprintln!(
         "\nBEIR {name} — {} docs, {} queries\n  \
          fused (shipping)  nDCG@10 {:.4}   recall@10 {:.4}   MRR@10 {:.4}   P@10 {:.4}\n  \
          bm25 leg alone    nDCG@10 {:.4}\n  \
          vector leg alone  nDCG@10 {:.4}\n  \
-         sweep w_vec:      {sweep_line}",
+         sweep w_vec k60:  {sweep_line}\n  \
+         sweep w_vec k20:  {k20_line}\n  \
+         grid best         w={:.2} k={:.0} → nDCG@10 {:.4}\n  \
+         oracle (pool 30)  nDCG@10 {oracle:.4}   pool recall {pool_recall:.4}",
         run.docs,
         run.queries,
         run.ndcg,
@@ -625,7 +682,10 @@ async fn run_beir(
         run.mrr,
         run.precision,
         run.fts_ndcg,
-        run.vec_ndcg
+        run.vec_ndcg,
+        best.0,
+        best.1,
+        best.2
     );
     match run.rerank {
         Some((m, s)) => {

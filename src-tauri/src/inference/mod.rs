@@ -339,14 +339,18 @@ impl Router {
     /// caps at 4,096 on older macOS — observed live as
     /// exceededContextWindowSize on a Generate over a modest notebook.
     /// 10k chars ≈ 2.5k tokens leaves room for instructions and the answer.
-    /// The vector leg's RRF weight for hybrid fusion, by embedder tier.
-    /// BEIR-measured (beir_eval.rs, 2026-08-09): the built-in static
-    /// embedder's leg helps at a light 0.25 and hurts at full weight on
-    /// every tested domain; nomic-class embedders earn equal weight.
-    pub fn vector_weight(&self) -> f32 {
+    /// RRF fusion parameters (vector weight, k) for hybrid search, by
+    /// embedder tier; BM25's weight is fixed at 1.0. Grid-swept on BEIR
+    /// and held out on NanoBEIR (beir_eval.rs, 2026-08-10): the built-in
+    /// static embedder's leg helps at a light 0.25 under the classic
+    /// k=60 and hurts at anything heavier; strong Ollama embedders earn
+    /// a 1.5 leg and a sharper k=20 — +0.015 mean nDCG@10 across 11
+    /// held-out Nano domains (8 wins, worst loss −0.008), +0.046 on
+    /// full FiQA.
+    pub fn fusion_params(&self) -> (f32, f32) {
         match self.embedder {
-            Embedder::Builtin(_) => 0.25,
-            Embedder::Ollama(_) => 1.0,
+            Embedder::Builtin(_) => (0.25, 60.0),
+            Embedder::Ollama(_) => (1.5, 20.0),
         }
     }
 

@@ -498,9 +498,10 @@ impl Ai {
         self.router.chat_engine(role).id()
     }
 
-    /// The embedder tier's RRF vector weight (see Router::vector_weight).
-    pub fn vector_weight(&self) -> f32 {
-        self.router.vector_weight()
+    /// The embedder tier's RRF (vector weight, k) — see
+    /// Router::fusion_params.
+    pub fn fusion_params(&self) -> (f32, f32) {
+        self.router.fusion_params()
     }
 
     /// Input-token budget for the engine that will answer `role`, but only when

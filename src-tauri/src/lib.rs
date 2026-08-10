@@ -195,9 +195,9 @@ pub fn run() {
             // built-in leg fuses at 0.25, nomic-class at full weight.
             {
                 let state = app.state::<AppState>();
-                let w =
-                    tauri::async_runtime::block_on(async { state.ai.read().await.vector_weight() });
-                state.db.set_vector_weight(w);
+                let f =
+                    tauri::async_runtime::block_on(async { state.ai.read().await.fusion_params() });
+                state.db.set_fusion(f);
             }
 
             // Imports stranded mid-embed by a quit or crash restart from
