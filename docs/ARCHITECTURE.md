@@ -158,11 +158,13 @@ file is written to `<app-data>/mcp.json`. See `docs/RFC-mcp-server.md`.
 ### `connectors.rs` — agent client registry
 One-click registration of the MCP server (plus the bundled `skills/alchemy`
 SKILL.md) with installed agent clients — Claude Code, Codex, OpenCode, Gemini
-CLI, Antigravity, Kiro, IBM Bob, Hermes, Prime Agent. Each target declares
-detection paths, a config strategy (JSON merge / TOML append / manual
-snippet), and its skill files; Settings → Agents renders one row per target.
-Prime Agent's skill is a Python package (`skills/alchemy-prime/`) because its
-MCP integrations import into the IPython kernel rather than a tool list.
+CLI, Antigravity, Kiro, IBM Bob, Hermes, Prime Agent, Pi. Each target
+declares detection paths, a config strategy (JSON merge / TOML append /
+manual snippet / whole-file write), and its skill files; Settings → Agents
+renders one row per target. Prime Agent's skill is a Python package
+(`skills/alchemy-prime/`) because its MCP integrations import into the
+IPython kernel rather than a tool list; Pi has no MCP client at all, so its
+connector writes a TypeScript extension bridge (`skills/alchemy-pi/`).
 
 ## Frontend (`src`)
 

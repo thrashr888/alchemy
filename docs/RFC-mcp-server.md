@@ -137,6 +137,7 @@ The dialects, as researched July 2026 (they genuinely all differ):
 | GitHub Copilot CLI | `~/.copilot/mcp-config.json` | `mcpServers.<n> = {type:"http", url, tools:["*"]}` | `~/.copilot/skills` |
 | VS Code | `~/Library/Application Support/Code/User/mcp.json` | **`servers`**`.<n> = {type:"http", url}` — not `mcpServers` | reads `~/.copilot/skills` + `~/.claude/skills` |
 | Prime Agent | `~/.prime/agent/settings.json` | `mcpServers.<n> = {type:"http", url}` | `~/.prime/agent/skills` — **Python package**, see below |
+| Pi | `~/.pi/agent/extensions/alchemy.ts` — **whole-file write** (no MCP client; TS extension bridge, see below) | n/a | `~/.pi/agent/skills` |
 
 Cursor and Windsurf are easy follow-ups (same registry shape) once their
 current formats are verified.
@@ -159,11 +160,16 @@ through `opencode.json` (our current path) — plugins are lifecycle hooks with
 nothing to add here.
 
 pi (earendil-works/pi, prime-agent's upstream) has **no MCP client by
-design** — no `mcpServers` config anywhere. It ships as a chat engine only
-(RFC-inference-providers §5). The connector path there would be a TypeScript
-*extension* (`~/.pi/agent/extensions/alchemy.ts` bridging our streamable-HTTP
-tools into pi's tool API, npm deps allowed) — a real project, deferred until
-someone wants it.
+design** — no `mcpServers` config anywhere. Its connector (verified live
+2026-08-09) therefore writes a TypeScript *extension* instead:
+`~/.pi/agent/extensions/alchemy.ts` (from `skills/alchemy-pi/`, the
+`Strategy::WriteFile` variant substituting the live port). The extension is
+a minimal streamable-HTTP MCP client in plain fetch — zero npm deps, so
+Connect never runs npm — registering curated `alchemy_*` tools natively
+(list_notebooks, search, ask_everything, sources, create_note) plus
+`alchemy_list_tools` / `alchemy_call` as the escape hatch to the full
+catalog. Sessions re-initialize on 404 (the app restarting invalidates
+them). Re-connect overwrites the file; `/reload` in pi picks it up.
 
 ### 6. The skill
 

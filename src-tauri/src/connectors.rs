@@ -14,6 +14,16 @@ const SKILL_MD: &str = include_str!("../../skills/alchemy/SKILL.md");
 /// The standard skill payload: one SKILL.md, the de-facto cross-client format.
 static STD_SKILL: &[(&str, &str)] = &[("SKILL.md", SKILL_MD)];
 
+/// pi's skill: the alchemy_* tools come from the extension (below), so the
+/// SKILL.md teaches those names instead of raw MCP tools.
+static PI_SKILL: &[(&str, &str)] =
+    &[("SKILL.md", include_str!("../../skills/alchemy-pi/SKILL.md"))];
+
+/// pi has no MCP client by design — the bridge is a TypeScript extension
+/// speaking streamable HTTP to our server with plain fetch (zero npm deps),
+/// registering alchemy_* tools natively (RFC-mcp-server.md).
+const PI_EXTENSION_TS: &str = include_str!("../../skills/alchemy-pi/alchemy.ts");
+
 /// Prime Agent's skill is a Python package (its MCP integrations are
 /// kernel-imported modules, not client-side tool lists — see prime-agent's
 /// docs/mcp-integrations.md). Same SKILL.md idea, plus the two files that
@@ -57,6 +67,13 @@ enum Strategy {
     Manual {
         path: &'static str,
         needle: &'static str,
+    },
+    /// Write a whole file we own (pi's extension bridge — the client has no
+    /// MCP config to merge into). Re-connect overwrites it, which is how
+    /// port changes propagate. `configured` when the file exists.
+    WriteFile {
+        path: &'static str,
+        content: fn(u16) -> String,
     },
 }
 
@@ -319,6 +336,24 @@ static TARGETS: &[Target] = &[
             )
         },
     },
+    Target {
+        id: "pi",
+        name: "Pi",
+        detect: &[".pi"],
+        strategies: &[Strategy::WriteFile {
+            path: ".pi/agent/extensions/alchemy.ts",
+            content: |port| PI_EXTENSION_TS.replace("__ALCHEMY_MCP_URL__", &server_url(port)),
+        }],
+        skills_dirs: &[".pi/agent/skills"],
+        skill_files: PI_SKILL,
+        snippet: |port| {
+            format!(
+                "Connect writes ~/.pi/agent/extensions/alchemy.ts \
+                 (alchemy_* tools → {}); run /reload in pi to pick it up",
+                server_url(port)
+            )
+        },
+    },
 ];
 
 // ---- Status + operations -----------------------------------------------------
@@ -366,6 +401,7 @@ fn strategy_path(s: &Strategy) -> Option<&'static str> {
         Strategy::JsonMerge { path, .. } => Some(path),
         Strategy::TomlAppend { path, .. } => Some(path),
         Strategy::Manual { path, .. } => Some(path),
+        Strategy::WriteFile { path, .. } => Some(path),
     }
 }
 
@@ -393,6 +429,7 @@ fn strategy_configured(home: &std::path::Path, s: &Strategy) -> bool {
         Strategy::Manual { path, needle } => std::fs::read_to_string(resolve(home, path))
             .map(|t| t.contains(needle))
             .unwrap_or(false),
+        Strategy::WriteFile { path, .. } => resolve(home, path).exists(),
     }
 }
 
@@ -442,6 +479,14 @@ fn strategy_apply(home: &std::path::Path, s: &Strategy, port: u16) -> anyhow::Re
             Ok(())
         }
         Strategy::Manual { .. } => Ok(()),
+        Strategy::WriteFile { path, content } => {
+            let file = resolve(home, path);
+            if let Some(parent) = file.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&file, content(port))?;
+            Ok(())
+        }
     }
 }
 
@@ -697,6 +742,28 @@ mod tests {
         assert!(skill.join("src/alchemy/__init__.py").exists());
         assert!(skill_installed(&home, t));
         assert!(status_of(&home, t, 41414).configured);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// pi's connect writes the extension bridge with the live port
+    /// substituted, plus the skill; configured keys off the file existing.
+    #[test]
+    fn pi_writes_extension_bridge_with_port() {
+        let home = tmp_home();
+        let t = target("pi");
+        assert!(!status_of(&home, t, 5150).configured);
+        for s in t.strategies {
+            strategy_apply(&home, s, 5150).unwrap();
+        }
+        install_skill(&home, t).unwrap();
+
+        let ext = std::fs::read_to_string(home.join(".pi/agent/extensions/alchemy.ts")).unwrap();
+        assert!(ext.contains("http://127.0.0.1:5150/mcp"));
+        assert!(!ext.contains("__ALCHEMY_MCP_URL__"));
+        assert!(ext.contains("registerTool"));
+        assert!(home.join(".pi/agent/skills/alchemy/SKILL.md").exists());
+        assert!(status_of(&home, t, 5150).configured);
+        assert!(status_of(&home, t, 5150).can_auto);
         let _ = std::fs::remove_dir_all(home);
     }
 
