@@ -29,7 +29,10 @@ const SWEEP: &[f64] = &[0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0];
 const RERANK_SAMPLE: usize = 100;
 
 /// The cached dataset dir, downloading and unpacking on first use. Lives in
-/// target/ so `cargo clean` is the eviction policy.
+/// target/ so `cargo clean` is the eviction policy. Names beginning with
+/// "Nano" fetch the matching zeta-alpha-ai NanoBEIR dataset from the
+/// HuggingFace rows API and land in the same BEIR file layout, so the rest
+/// of the harness never knows the difference.
 async fn dataset_dir(name: &str) -> Option<std::path::PathBuf> {
     let cache = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/beir-cache");
     let dir = cache.join(name);
@@ -37,6 +40,9 @@ async fn dataset_dir(name: &str) -> Option<std::path::PathBuf> {
         return Some(dir);
     }
     std::fs::create_dir_all(&cache).ok()?;
+    if name.starts_with("Nano") {
+        return fetch_nano(name, &dir).await;
+    }
     let url = format!("{BEIR_BASE}/{name}.zip");
     eprintln!("beir: downloading {name} ({url})…");
     // Own client, generous timeout: ingest::fetch_bytes caps at 15s (right
@@ -53,6 +59,77 @@ async fn dataset_dir(name: &str) -> Option<std::path::PathBuf> {
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).ok()?;
     zip.extract(&cache).ok()?;
     dir.join("corpus.jsonl").exists().then_some(dir)
+}
+
+/// Pull one NanoBEIR dataset through the HF datasets-server rows API and
+/// write it in BEIR's file layout (corpus.jsonl / queries.jsonl /
+/// qrels/test.tsv). Nano qrels carry no score column — binary 1s.
+async fn fetch_nano(name: &str, dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    eprintln!("beir: fetching {name} from HuggingFace…");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .ok()?;
+    let fetch = |config: &'static str| {
+        let client = client.clone();
+        async move {
+            let mut rows: Vec<serde_json::Value> = Vec::new();
+            loop {
+                let url = format!(
+                    "https://datasets-server.huggingface.co/rows?dataset=zeta-alpha-ai%2F{name}\
+                     &config={config}&split=train&offset={}&length=100",
+                    rows.len()
+                );
+                // Anonymous datasets-server rate limits bite after ~30
+                // rapid pages — pace requests and back off on 429.
+                let mut attempt = 0u32;
+                let batch: serde_json::Value = loop {
+                    let resp = client.get(&url).send().await.ok()?;
+                    if resp.status().as_u16() == 429 && attempt < 6 {
+                        attempt += 1;
+                        tokio::time::sleep(std::time::Duration::from_secs(5 * u64::from(attempt)))
+                            .await;
+                        continue;
+                    }
+                    if !resp.status().is_success() {
+                        return None;
+                    }
+                    break resp.json().await.ok()?;
+                };
+                let page = batch["rows"].as_array()?.to_vec();
+                if page.is_empty() {
+                    break;
+                }
+                rows.extend(page.into_iter().map(|r| r["row"].clone()));
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            }
+            Some(rows)
+        }
+    };
+    let corpus = fetch("corpus").await?;
+    let queries = fetch("queries").await?;
+    let qrels = fetch("qrels").await?;
+    std::fs::create_dir_all(dir.join("qrels")).ok()?;
+    let dump = |rows: &[serde_json::Value]| {
+        rows.iter()
+            .map(|r| r.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    std::fs::write(dir.join("corpus.jsonl"), dump(&corpus)).ok()?;
+    std::fs::write(dir.join("queries.jsonl"), dump(&queries)).ok()?;
+    let tsv = std::iter::once("query-id\tcorpus-id\tscore".to_string())
+        .chain(qrels.iter().filter_map(|r| {
+            Some(format!(
+                "{}\t{}\t1",
+                r["query-id"].as_str()?,
+                r["corpus-id"].as_str()?
+            ))
+        }))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(dir.join("qrels/test.tsv"), tsv).ok()?;
+    Some(dir.to_path_buf())
 }
 
 fn jsonl(path: &std::path::Path) -> Vec<serde_json::Value> {
@@ -101,10 +178,17 @@ fn collapse_docs(hits: &[Citation], cap: usize) -> Vec<String> {
     out
 }
 
-/// The Ollama embedder tier (nomic-embed-text) — the default config IS that
-/// tier. None (skip, not fail) when Ollama isn't reachable.
+/// The nomic-embed Ollama tier, pinned explicitly — the config DEFAULT
+/// moved to mxbai-embed-large after the A/B, and these baselines predate
+/// that. None (skip, not fail) when Ollama isn't reachable.
 async fn nomic_ai() -> Option<Ai> {
-    let ai = Ai::new(AiConfig::default(), AiRuntime::default());
+    let ai = Ai::new(
+        AiConfig {
+            embed_model: "nomic-embed-text:latest".into(),
+            ..Default::default()
+        },
+        AiRuntime::default(),
+    );
     match ai.test_embed().await {
         Ok(_) => Some(ai),
         Err(_) => {
@@ -328,6 +412,10 @@ async fn run_beir(
     ai: &Ai,
     rerank_with: Option<(&Ai, RerankStrategy)>,
     style: EmbedStyle,
+    // Names the seeded-corpus cache alongside the dataset ("builtin",
+    // "nomic", "mxbai-prefixed", …): seeding FiQA through Ollama costs ~10
+    // minutes, and every A/B variant after the first should cost none.
+    slug: &str,
 ) -> Option<BeirRun> {
     let dir = dataset_dir(name).await.or_else(|| {
         eprintln!("SKIP: {name} download failed (network?)");
@@ -336,15 +424,20 @@ async fn run_beir(
 
     // Corpus: {_id, title, text} per line, chunked exactly like an import.
     let corpus = jsonl(&dir.join("corpus.jsonl"));
-    let tmp = std::env::temp_dir().join(format!("alchemy-beir-{}", uuid::Uuid::new_v4()));
-    let db = Db::open(&tmp).await.expect("open db");
+    let db_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target/beir-cache")
+        .join(format!("db-{name}-{slug}"));
+    // The marker guards against half-seeded caches from an aborted run.
+    let seeded_marker = db_dir.join("seeded.ok");
+    let already_seeded = seeded_marker.exists();
+    let db = Db::open(&db_dir).await.expect("open db");
     // Fusion follows the embedder tier, exactly as the app stamps it.
     db.set_vector_weight(ai.vector_weight());
     db.defer_fts(true);
     let mut rows: Vec<(String, String, i32, String)> = Vec::new();
     let mut inputs: Vec<String> = Vec::new();
     let mut seeded_docs = 0usize;
-    for doc in &corpus {
+    for doc in corpus.iter().take_while(|_| !already_seeded) {
         let id = doc["_id"].as_str().unwrap_or_default().to_string();
         let title = doc["title"].as_str().unwrap_or_default();
         let body = doc["text"].as_str().unwrap_or_default();
@@ -373,7 +466,13 @@ async fn run_beir(
             .expect("seed chunk tail");
     }
     db.defer_fts(false);
-    db.flush_fts().await.expect("flush fts");
+    if already_seeded {
+        eprintln!("beir {name}: corpus cache hit ({slug})");
+        seeded_docs = corpus.len();
+    } else {
+        db.flush_fts().await.expect("flush fts");
+        std::fs::write(&seeded_marker, b"1").ok();
+    }
 
     // Queries and the test-split qrels: query-id \t corpus-id \t score.
     let queries: HashMap<String, String> = jsonl(&dir.join("queries.jsonl"))
@@ -467,7 +566,6 @@ async fn run_beir(
         captures.push((vec_docs, fts_docs, rels.clone()));
         n += 1;
     }
-    let _ = std::fs::remove_dir_all(&tmp);
 
     // Offline RRF weight sweep over the captured legs: what WOULD fusion
     // score at each vector weight, BM25 held at 1.0?
@@ -557,7 +655,7 @@ async fn beir_scifact_ndcg() {
     // built-in leg): nDCG@10 0.6685, recall@10 0.8171 — above published
     // BM25-only (~0.665), up from 0.6314 at equal weights.
     let Some(ai) = builtin_ai().await else { return };
-    let Some(run) = run_beir("scifact", &ai, None, EmbedStyle::default()).await else {
+    let Some(run) = run_beir("scifact", &ai, None, EmbedStyle::default(), "builtin").await else {
         return;
     };
     assert!(
@@ -576,7 +674,7 @@ async fn beir_nfcorpus_ndcg() {
     // medical relevance, ~38 relevant docs per query keeps recall@10 low
     // by construction.
     let Some(ai) = builtin_ai().await else { return };
-    let Some(run) = run_beir("nfcorpus", &ai, None, EmbedStyle::default()).await else {
+    let Some(run) = run_beir("nfcorpus", &ai, None, EmbedStyle::default(), "builtin").await else {
         return;
     };
     assert!(
@@ -594,7 +692,7 @@ async fn beir_fiqa_ndcg() {
     // recall@10 0.3191 — above BM25-alone (0.2426) on the paraphrase-heavy
     // set; ~2 min run. The nomic tier scores 0.3466 here (beir_nomic_all).
     let Some(ai) = builtin_ai().await else { return };
-    let Some(run) = run_beir("fiqa", &ai, None, EmbedStyle::default()).await else {
+    let Some(run) = run_beir("fiqa", &ai, None, EmbedStyle::default(), "builtin").await else {
         return;
     };
     assert!(
@@ -610,7 +708,7 @@ async fn beir_fiqa_ndcg() {
 async fn beir_nomic_all() {
     let Some(ai) = nomic_ai().await else { return };
     for name in ["scifact", "nfcorpus", "fiqa"] {
-        run_beir(name, &ai, None, EmbedStyle::default()).await;
+        run_beir(name, &ai, None, EmbedStyle::default(), "nomic").await;
     }
 }
 
@@ -621,7 +719,7 @@ async fn beir_nomic_prefixed() {
     // Unprefixed baselines (2026-08-09): scifact 0.727, fiqa 0.347.
     let Some(ai) = nomic_ai().await else { return };
     for name in ["scifact", "fiqa"] {
-        run_beir(name, &ai, None, NOMIC_STYLE).await;
+        run_beir(name, &ai, None, NOMIC_STYLE, "nomic-prefixed").await;
     }
 }
 
@@ -636,8 +734,78 @@ async fn beir_rerank_all() {
             &ai,
             Some((&rr, RerankStrategy::Listwise)),
             EmbedStyle::default(),
+            "builtin",
         )
         .await;
+    }
+}
+
+/// The 13 NanoBEIR domains in one pass — 50 queries each, small corpora,
+/// broad coverage in minutes on the built-in embedder.
+#[tokio::test]
+#[ignore = "downloads 13 NanoBEIR datasets from HuggingFace — run with --ignored --nocapture"]
+async fn beir_nano_all() {
+    let Some(ai) = builtin_ai().await else { return };
+    let mut lines: Vec<String> = Vec::new();
+    for name in [
+        "NanoArguAna",
+        "NanoClimateFEVER",
+        "NanoDBPedia",
+        "NanoFEVER",
+        "NanoFiQA2018",
+        "NanoHotpotQA",
+        "NanoMSMARCO",
+        "NanoNFCorpus",
+        "NanoNQ",
+        "NanoQuoraRetrieval",
+        "NanoSCIDOCS",
+        "NanoSciFact",
+        "NanoTouche2020",
+    ] {
+        if let Some(run) = run_beir(name, &ai, None, EmbedStyle::default(), "builtin").await {
+            lines.push(format!(
+                "{name:<22} nDCG@10 {:.4}   recall@10 {:.4}   MRR@10 {:.4}",
+                run.ndcg, run.recall, run.mrr
+            ));
+        }
+    }
+    eprintln!("\n== NanoBEIR summary (built-in embedder) ==");
+    for l in &lines {
+        eprintln!("  {l}");
+    }
+    // HF's anonymous rate limits make a few fetch failures weather, not
+    // signal — fetched datasets cache forever, so re-runs converge on 13.
+    assert!(lines.len() >= 8, "most Nano datasets should have run");
+}
+
+/// Embedder A/B over the divergent pair (scifact lexical, fiqa paraphrase).
+/// BEIR_EMBED_MODELS overrides the candidate list.
+#[tokio::test]
+#[ignore = "live Ollama: embedder A/B on scifact + fiqa — pulls compare against nomic"]
+async fn beir_embedder_ab() {
+    let models = std::env::var("BEIR_EMBED_MODELS")
+        .unwrap_or_else(|_| "mxbai-embed-large,bge-m3,snowflake-arctic-embed2".into());
+    for model in models.split(',').map(str::trim).filter(|m| !m.is_empty()) {
+        let ai = Ai::new(
+            AiConfig {
+                embed_model: model.to_string(),
+                ..Default::default()
+            },
+            AiRuntime::default(),
+        );
+        if ai.test_embed().await.is_err() {
+            eprintln!("SKIP embedder {model} (not pulled?)");
+            continue;
+        }
+        let slug: String = model
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '-' })
+            .collect();
+        let datasets = std::env::var("BEIR_AB_DATASETS").unwrap_or_else(|_| "scifact,fiqa".into());
+        eprintln!("\n=== embedder: {model} ===");
+        for name in datasets.split(',').map(str::trim).filter(|d| !d.is_empty()) {
+            run_beir(name, &ai, None, EmbedStyle::default(), &slug).await;
+        }
     }
 }
 
@@ -689,7 +857,14 @@ async fn beir_rerank_engines_scifact() {
                 continue;
             }
             eprintln!("--- strategy: {} ---", s.label());
-            run_beir("scifact", &ai, Some((&rr, *s)), EmbedStyle::default()).await;
+            run_beir(
+                "scifact",
+                &ai,
+                Some((&rr, *s)),
+                EmbedStyle::default(),
+                "builtin",
+            )
+            .await;
         }
     }
 }

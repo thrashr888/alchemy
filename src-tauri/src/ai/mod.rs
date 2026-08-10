@@ -311,7 +311,11 @@ impl Default for AiConfig {
             base_url: "http://localhost:11434".to_string(),
             chat_model: "gpt-oss:120b".to_string(),
             small_model: String::new(),
-            embed_model: "nomic-embed-text:latest".to_string(),
+            // A/B'd on BEIR (2026-08-09): mxbai beat nomic-embed-text on
+            // every dataset pair tried (scifact 0.743 vs 0.727, fiqa 0.390
+            // vs 0.347 fused nDCG@10). Fresh configs only — persisted
+            // configs keep the model their stored vectors were built with.
+            embed_model: "mxbai-embed-large".to_string(),
             // OCR is opt-in: pick a vision model in Settings to enable it.
             vision_model: String::new(),
             openai_base_url: String::new(),
