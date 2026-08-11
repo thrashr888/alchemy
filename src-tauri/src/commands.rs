@@ -5822,22 +5822,28 @@ pub async fn send_message(
     // Retrieve relevant chunks. The selected sources are fetched first so
     // retrieval depth can scale with how much text is actually in play
     // (RFC-infinite-context §3) and the manifest reuses the same rows.
-    let (query_vec, profile) = {
-        let ai = state.ai.read().await.clone();
-        (
-            e(ai.embed_one(&content).await)?,
-            ai.profile(crate::inference::Role::Chat),
-        )
-    };
+    let ai = state.ai.read().await.clone();
+    let query_vec = e(ai.embed_one(&content).await)?;
+    let profile = ai.profile(crate::inference::Role::Chat);
     let selected_sources: Vec<Source> = e(state.db.list_sources(&notebook_id).await)?
         .into_iter()
         .filter(|s| source_ids.as_ref().is_none_or(|ids| ids.contains(&s.id)))
         .collect();
     let notebook_chars: i64 = selected_sources.iter().map(|s| s.char_count).sum();
     let k = profile.retrieve_k_for(notebook_chars);
+    // Cross-encoder tiers retrieve a 3x pool for the reranker to order —
+    // recall from hybrid search, precision from the cross-encoder
+    // (BEIR-measured in beir_eval.rs; tier choice in Router::xenc_model).
+    let fetch_k = if ai.has_xenc() { k * 3 } else { k };
     let search = e(state
         .db
-        .search_chunks_trace(&notebook_id, query_vec, &content, k, source_ids.as_deref())
+        .search_chunks_trace(
+            &notebook_id,
+            query_vec,
+            &content,
+            fetch_k,
+            source_ids.as_deref(),
+        )
         .await)?;
     // The ripgrep leg (RFC-git-sources §6): code-shaped queries also
     // exact-match over the notebook's repo-backed files, and the windows
@@ -5858,7 +5864,8 @@ pub async fn send_message(
             "citations": crate::trace::cite_summaries(&search.final_hits),
         }),
     );
-    let citations = fuse_grep_hits(search.final_hits, grep_hits, k);
+    let citations = fuse_grep_hits(search.final_hits, grep_hits, fetch_k);
+    let citations = ai.rerank_hits(&content, citations, k).await;
     bump_note_usage(&state.db, &citations, "retrieval_hits").await;
 
     // Widen prompt excerpts to ordinal neighbors where the model's window

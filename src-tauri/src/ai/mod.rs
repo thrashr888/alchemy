@@ -363,6 +363,9 @@ pub struct Ai {
     ollama: Ollama,
     /// Gateway client retained for vision + model listing when configured.
     openai: Option<OpenAiClient>,
+    /// Tier-matched local cross-encoder reranker; None when fusion order
+    /// is already the best available (strong embedder tiers).
+    xenc: Option<crate::inference::rerank::CrossEncoder>,
     /// Resolved app-data dir (same one the embedder writes under). The gist
     /// sweep's enrichment marker lives here (RFC-infinite-context §2), so the
     /// distillation family can find it without threading a path through every
@@ -463,12 +466,18 @@ impl Ai {
         };
         let router = Router::new(chat, embedder, small, generate);
         let ollama = Ollama::new(ollama_config(&config));
+        // Tier-matched local reranker (see Router::xenc_model). Lazy: the
+        // model downloads/loads on first rerank, not at config time.
+        let xenc = router
+            .xenc_model()
+            .map(|m| crate::inference::rerank::CrossEncoder::new(data_dir.clone(), m));
         Self {
             config,
             router,
             ollama,
             openai,
             data_dir,
+            xenc,
         }
     }
 
@@ -502,6 +511,37 @@ impl Ai {
     /// Router::fusion_params.
     pub fn fusion_params(&self) -> (f32, f32) {
         self.router.fusion_params()
+    }
+
+    /// Whether this tier reranks with a local cross-encoder — callers use
+    /// this to retrieve a wider pool worth reranking.
+    pub fn has_xenc(&self) -> bool {
+        self.xenc.is_some()
+    }
+
+    /// Rerank citations with the tier's cross-encoder and truncate to `k`.
+    /// No reranker, a small pool, or ANY failure returns fusion order
+    /// truncated to `k` — reranking can reorder-or-equal, never lose hits.
+    pub async fn rerank_hits(
+        &self,
+        query: &str,
+        mut hits: Vec<crate::models::Citation>,
+        k: usize,
+    ) -> Vec<crate::models::Citation> {
+        if let Some(xe) = self.xenc.as_ref().filter(|_| hits.len() > k) {
+            let snippets: Vec<String> = hits.iter().map(|c| c.snippet.clone()).collect();
+            match xe.rank(query, &snippets).await {
+                Ok(order) => {
+                    hits = order
+                        .into_iter()
+                        .filter_map(|i| hits.get(i).cloned())
+                        .collect()
+                }
+                Err(err) => eprintln!("xenc rerank skipped: {err:#}"),
+            }
+        }
+        hits.truncate(k);
+        hits
     }
 
     /// Input-token budget for the engine that will answer `role`, but only when

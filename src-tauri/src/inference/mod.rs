@@ -15,6 +15,10 @@ mod fm;
 mod gateway;
 mod local_embed;
 mod ollama;
+// Eval-only until the app search path adopts it (task: close the oracle
+// ranking gap) — beir_eval's BEIR_XENC hook is the sole consumer today.
+#[cfg_attr(not(test), allow(dead_code))]
+pub mod rerank;
 
 pub use agent_cli::{agent_status, AgentCli, AgentKind};
 pub use fm::FmEngine;
@@ -351,6 +355,21 @@ impl Router {
         match self.embedder {
             Embedder::Builtin(_) => (0.25, 60.0),
             Embedder::Ollama(_) => (1.5, 20.0),
+        }
+    }
+
+    /// The local cross-encoder reranker for this embedder tier, or None
+    /// when fusion order is already the best available. BEIR-measured
+    /// (beir_eval.rs, 2026-08-11): reranking the built-in tier's pools
+    /// with the 38M jina turbo model gains +0.03..+0.08 nDCG@10 on every
+    /// dataset — lifting the zero-setup tier to Ollama-class retrieval —
+    /// while the SAME model LOSES to a strong embedder's fusion order
+    /// (−0.01..−0.08 on mxbai pools). Rerank follows the tier, exactly
+    /// like the fusion weights above.
+    pub fn xenc_model(&self) -> Option<rerank::XencModel> {
+        match self.embedder {
+            Embedder::Builtin(_) => Some(rerank::XencModel::Small),
+            Embedder::Ollama(_) => None,
         }
     }
 

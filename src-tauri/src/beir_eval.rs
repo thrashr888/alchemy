@@ -512,6 +512,50 @@ async fn run_beir(
     let mut qrel_list: Vec<(&String, &HashMap<String, i32>)> = qrels.iter().collect();
     qrel_list.sort_by(|a, b| a.0.cmp(b.0));
 
+    // Cross-encoder rerank: BEIR_XENC=small|large scores the SAME vec ∪
+    // fts pool the oracle ranks perfectly, on the full query set — the
+    // measured answer to "how much of the oracle gap does a real
+    // cross-encoder recover?". Env-driven so every eval variant gains it
+    // without signature churn. Model caches beside the corpora.
+    let xenc = match std::env::var("BEIR_XENC").ok().as_deref() {
+        Some("small") => Some(crate::inference::rerank::XencModel::Small),
+        Some("large") => Some(crate::inference::rerank::XencModel::Large),
+        _ => None,
+    }
+    .map(|which| {
+        let cache = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/beir-cache");
+        (
+            crate::inference::rerank::CrossEncoder::new(cache, which),
+            which.label(),
+        )
+    });
+    let doc_texts: HashMap<&str, String> = if xenc.is_some() {
+        corpus
+            .iter()
+            .filter_map(|d| {
+                Some((
+                    d["_id"].as_str()?,
+                    format!(
+                        "{}\n{}",
+                        d["title"].as_str().unwrap_or_default(),
+                        d["text"].as_str()?
+                    ),
+                ))
+            })
+            .collect()
+    } else {
+        HashMap::new()
+    };
+    let (mut xe_sum, mut xe_ms, mut xe_n) = (0.0f64, 0.0f64, 0usize);
+    // BEIR_XENC_SAMPLE caps scored queries (first N in sorted-qid order —
+    // deterministic) for slow models; the delta is then reported against
+    // the SAME-sample fused baseline, never the whole-set number.
+    let mut xe_base_sum = 0.0f64;
+    let xe_sample: usize = std::env::var("BEIR_XENC_SAMPLE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(usize::MAX);
+
     let (mut ndcg_sum, mut recall_sum, mut vec_sum, mut fts_sum, mut n) =
         (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0usize);
     let (mut mrr_sum, mut precision_sum) = (0.0f64, 0.0f64);
@@ -565,6 +609,29 @@ async fn run_beir(
                     rr_n += 1;
                 }
             }
+        }
+        if let Some((xe, _)) = xenc.as_ref().filter(|_| xe_n < xe_sample) {
+            let mut pool: Vec<&String> = vec_docs.iter().collect();
+            for d in &fts_docs {
+                if !pool.contains(&d) {
+                    pool.push(d);
+                }
+            }
+            let texts: Vec<String> = pool
+                .iter()
+                .map(|d| doc_texts.get(d.as_str()).cloned().unwrap_or_default())
+                .collect();
+            let t0 = std::time::Instant::now();
+            let order = xe.rank(qtext, &texts).await.expect("cross-encoder rank");
+            xe_ms += t0.elapsed().as_secs_f64() * 1_000.0;
+            let ranked: Vec<String> = order
+                .into_iter()
+                .take(10)
+                .map(|i| pool[i].clone())
+                .collect();
+            xe_sum += ndcg_at_k(&ranked, rels, 10);
+            xe_base_sum += ndcg_at_k(&fused, rels, 10);
+            xe_n += 1;
         }
         captures.push((vec_docs, fts_docs, rels.clone()));
         n += 1;
@@ -687,6 +754,17 @@ async fn run_beir(
         best.1,
         best.2
     );
+    if xe_n > 0 {
+        let (xe, base) = (xe_sum / xe_n as f64, xe_base_sum / xe_n as f64);
+        eprintln!(
+            "  xenc {}  nDCG@10 {xe:.4} vs fused {base:.4} (Δ{:+.4}, {xe_n} q)   \
+             {:.0} ms/query   oracle gap recovered {:.0}%",
+            xenc.as_ref().map(|(_, l)| *l).unwrap_or_default(),
+            xe - base,
+            xe_ms / xe_n as f64,
+            ((xe - base) / (oracle - base).max(1e-9) * 100.0)
+        );
+    }
     match run.rerank {
         Some((m, s)) => {
             let base = if m > 0 { rr_base_sum / m as f64 } else { 0.0 };

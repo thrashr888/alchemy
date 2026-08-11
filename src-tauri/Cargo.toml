@@ -74,7 +74,7 @@ hound = "3"
 # links espeak-ng, which is GPL-3.0 — without it the tree is Apache/MIT only
 # (misaki's dictionary handles G2P). Model downloads on first use like the
 # built-in embedder.
-kokoro-en = { version = "0.1.4", default-features = false }
+kokoro-en = { version = "0.1.5", default-features = false }
 tauri-plugin-deep-link = "2.4.9"
 tauri-plugin-global-shortcut = "2.3.2"
 htmd = "0.5.4"
@@ -88,6 +88,7 @@ ast-grep-core = "0.44.1"
 exif = { version = "0.6.1", package = "kamadak-exif" }
 pdf-inspector = "0.1.7"
 anydoc = "0.1.7"
+fastembed = { version = "5.17.4", default-features = false, features = ["ort-download-binaries", "hf-hub-native-tls"] }
 
 # Already in the tree via tauri/wry — traffic-light insets, the Services
 # provider (services.rs), and Spotlight indexing (spotlight.rs).

@@ -187,15 +187,17 @@ impl AlchemyMcp {
         }
         let k = max_results.unwrap_or(6).clamp(1, 20) as usize;
         let state = self.state();
-        let query_vec = {
-            let ai = state.ai.read().await.clone();
-            ai.embed_one(&query).await.map_err(internal)?
-        };
-        let trace = state
+        let ai = state.ai.read().await.clone();
+        let query_vec = ai.embed_one(&query).await.map_err(internal)?;
+        // Cross-encoder tiers retrieve a 3x pool and rerank it down to k,
+        // same as chat (Router::xenc_model) — agents get the same quality.
+        let fetch_k = if ai.has_xenc() { k * 3 } else { k };
+        let mut trace = state
             .db
-            .search_chunks_trace(&notebook_id, query_vec, &query, k, None)
+            .search_chunks_trace(&notebook_id, query_vec, &query, fetch_k, None)
             .await
             .map_err(internal)?;
+        trace.final_hits = ai.rerank_hits(&query, trace.final_hits, k).await;
         let compact = |hits: &[crate::models::Citation]| -> Vec<serde_json::Value> {
             hits.iter()
                 .map(|c| {
