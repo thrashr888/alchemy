@@ -566,12 +566,34 @@ async fn run_beir(
     type Capture = (Vec<String>, Vec<String>, HashMap<String, i32>);
     let mut captures: Vec<Capture> = Vec::new();
     let (mut rr_sum, mut rr_n) = (0.0f64, 0usize);
+    // HyDE probe: BEIR_QREWRITE=hyde has a small model write a hypothetical
+    // answer passage per query and embeds THAT for the vector leg (BM25
+    // keeps the raw query). Tests whether query-shaped/document-shaped
+    // embedding mismatch is costing the weak tier.
+    let hyde_ai = match std::env::var("BEIR_QREWRITE").ok().as_deref() {
+        Some("hyde") => rerank_ai().await,
+        _ => None,
+    };
     for (qid, rels) in qrel_list {
         let Some(qtext) = queries.get(qid) else {
             continue;
         };
+        let embed_input = match &hyde_ai {
+            Some(h) => {
+                let prompt = format!(
+                    "Write one short factual paragraph (3-4 sentences) that would answer \
+                     this question, as if quoted from a reference document. No preamble.\n\
+                     Question: {qtext}"
+                );
+                match h.chat(&[crate::ai::ChatTurn::user(&prompt)]).await {
+                    Ok(r) => format!("{qtext}\n{}", r.text.trim()),
+                    Err(_) => qtext.clone(),
+                }
+            }
+            None => qtext.clone(),
+        };
         let qvec = ai
-            .embed_one(&format!("{}{qtext}", style.query_prefix))
+            .embed_one(&format!("{}{embed_input}", style.query_prefix))
             .await
             .expect("embed query");
         let trace = db
@@ -884,6 +906,10 @@ async fn beir_rerank_all() {
 #[ignore = "downloads 13 NanoBEIR datasets from HuggingFace — run with --ignored --nocapture"]
 async fn beir_nano_all() {
     let Some(ai) = builtin_ai().await else { return };
+    // BEIR_NANO_DATASETS narrows the run ("NanoNQ,NanoSciFact") — targeted
+    // probes over full sweeps; the 13-dataset default stays the held-out
+    // validation set.
+    let only = std::env::var("BEIR_NANO_DATASETS").unwrap_or_default();
     let mut lines: Vec<String> = Vec::new();
     for name in [
         "NanoArguAna",
@@ -900,6 +926,9 @@ async fn beir_nano_all() {
         "NanoSciFact",
         "NanoTouche2020",
     ] {
+        if !only.is_empty() && !only.split(',').any(|d| d.trim() == name) {
+            continue;
+        }
         if let Some(run) = run_beir(name, &ai, None, EmbedStyle::default(), "builtin").await {
             lines.push(format!(
                 "{name:<22} nDCG@10 {:.4}   recall@10 {:.4}   MRR@10 {:.4}",
@@ -913,7 +942,10 @@ async fn beir_nano_all() {
     }
     // HF's anonymous rate limits make a few fetch failures weather, not
     // signal — fetched datasets cache forever, so re-runs converge on 13.
-    assert!(lines.len() >= 8, "most Nano datasets should have run");
+    // A BEIR_NANO_DATASETS filter runs however many it names.
+    if only.is_empty() {
+        assert!(lines.len() >= 8, "most Nano datasets should have run");
+    }
 }
 
 /// Chunk-size probe on the corpora where size actually binds: most BEIR
