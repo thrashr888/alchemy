@@ -123,3 +123,45 @@ impl CrossEncoder {
         .context("reranker scoring task failed")?
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// In-app-shaped latency: ~24 chunk-sized passages (the k*3 chat pool),
+    /// not BEIR's 50 × 2000-char documents. Reuses the eval's downloaded
+    /// model; skips silently when it isn't on disk. Measured 2026-08-11 on
+    /// an idle M-series: 737 ms with the default options (batched all-core
+    /// beats capped threads; a 320-token cap changed nothing because chunk
+    /// passages already fit) — so the defaults ARE the tuned config.
+    #[tokio::test]
+    #[ignore = "needs the reranker model downloaded (any BEIR_XENC=small run)"]
+    async fn xenc_latency_smoke() {
+        let cache = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/beir-cache");
+        let xe = CrossEncoder::new(cache, XencModel::Small);
+        let passage = "Espresso dialing starts with a 1:2 ratio and a 25 to 30 second shot. \
+                       Grind finer when the shot runs fast and sour; coarser when it chokes \
+                       and turns bitter. Change one variable at a time and taste each pull. "
+            .repeat(4);
+        let pool: Vec<String> = (0..24).map(|i| format!("{i} {passage}")).collect();
+        // First call pays model load; the second is the steady state chat sees.
+        if xe
+            .rank("how do I dial in espresso grind size", &pool)
+            .await
+            .is_err()
+        {
+            eprintln!("SKIP: reranker model not downloaded");
+            return;
+        }
+        let t0 = std::time::Instant::now();
+        let order = xe
+            .rank("how do I dial in espresso grind size", &pool)
+            .await
+            .expect("rank");
+        eprintln!(
+            "xenc small: 24 chunk-sized passages in {:.0} ms",
+            t0.elapsed().as_secs_f64() * 1000.0
+        );
+        assert_eq!(order.len(), 24);
+    }
+}
