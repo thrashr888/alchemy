@@ -916,6 +916,35 @@ async fn beir_nano_all() {
     assert!(lines.len() >= 8, "most Nano datasets should have run");
 }
 
+/// Chunk-size probe on the corpora where size actually binds: most BEIR
+/// docs fit one 280-word chunk (10–15% exceed it on scifact/nfcorpus/
+/// fiqa), so the sweep runs where the knob has leverage — nfcorpus (15%
+/// over) and Touche (39% over). ALCHEMY_CHUNK_WORDS is read per call, so
+/// one process sweeps sizes; each size seeds its own cache slug.
+/// BEIR_CHUNK_SIZES / BEIR_CHUNK_DATASETS override the defaults.
+#[tokio::test]
+#[ignore = "seeds one corpus per chunk size — run with --ignored --nocapture"]
+async fn beir_chunk_sweep() {
+    let Some(ai) = builtin_ai().await else { return };
+    let sizes = std::env::var("BEIR_CHUNK_SIZES").unwrap_or_else(|_| "140,280,420".into());
+    let datasets =
+        std::env::var("BEIR_CHUNK_DATASETS").unwrap_or_else(|_| "nfcorpus,NanoTouche2020".into());
+    for name in datasets.split(',').map(str::trim).filter(|d| !d.is_empty()) {
+        for size in sizes.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            // 280 is the shipping default — reuse its existing cache slug.
+            let slug = if size == "280" {
+                "builtin".to_string()
+            } else {
+                format!("builtin-cw{size}")
+            };
+            std::env::set_var("ALCHEMY_CHUNK_WORDS", size);
+            eprintln!("\n--- chunk_words={size} ---");
+            run_beir(name, &ai, None, EmbedStyle::default(), &slug).await;
+        }
+    }
+    std::env::remove_var("ALCHEMY_CHUNK_WORDS");
+}
+
 /// Embedder A/B over the divergent pair (scifact lexical, fiqa paraphrase).
 /// BEIR_EMBED_MODELS overrides the candidate list.
 #[tokio::test]

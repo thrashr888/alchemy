@@ -6,8 +6,17 @@ use std::path::Path;
 
 /// Roughly target ~280 words per chunk with ~40 words of overlap. Word-based
 /// rather than token-based keeps it model-agnostic and good enough for RAG.
-const CHUNK_WORDS: usize = 280;
+/// ALCHEMY_CHUNK_WORDS overrides the target — an eval-only knob for the
+/// BEIR chunk-size sweep (read per call, not cached: the sweep sets it
+/// between runs in one process). The app never sets it.
 const OVERLAP_WORDS: usize = 40;
+
+fn chunk_words() -> usize {
+    std::env::var("ALCHEMY_CHUNK_WORDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(280)
+}
 
 pub struct Extracted {
     pub title: String,
@@ -1166,7 +1175,7 @@ fn word_count(s: &str) -> usize {
 }
 
 /// Split normalized text into structure-aware chunks: whole paragraphs are
-/// packed up to ~CHUNK_WORDS, markdown-style headings start a new chunk and
+/// packed up to ~chunk_words(), markdown-style headings start a new chunk and
 /// become section context, and oversized paragraphs fall back to sentence
 /// (then word-window) splitting.
 pub fn chunk_text(title: &str, text: &str) -> Vec<Chunk> {
@@ -1222,7 +1231,7 @@ pub fn chunk_text(title: &str, text: &str) -> Vec<Chunk> {
 
         // A single paragraph bigger than a whole chunk: flush what's pending
         // and split it by sentences (word windows as a last resort).
-        if words > CHUNK_WORDS {
+        if words > chunk_words() {
             if !cur.is_empty() {
                 chunks.push(make(&cur_heading, &cur));
                 cur.clear();
@@ -1235,7 +1244,7 @@ pub fn chunk_text(title: &str, text: &str) -> Vec<Chunk> {
             continue;
         }
 
-        if cur_words + words > CHUNK_WORDS && !cur.is_empty() {
+        if cur_words + words > chunk_words() && !cur.is_empty() {
             chunks.push(make(&cur_heading, &cur));
             cur.clear();
             cur_words = 0;
@@ -1255,7 +1264,7 @@ pub fn chunk_text(title: &str, text: &str) -> Vec<Chunk> {
 }
 
 /// Split an oversized paragraph at sentence-ish boundaries, packing sentences
-/// up to CHUNK_WORDS. A single run with no boundaries at all (minified text,
+/// up to chunk_words(). A single run with no boundaries at all (minified text,
 /// giant table row) falls back to overlapping word windows.
 fn split_oversized(p: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -1263,7 +1272,7 @@ fn split_oversized(p: &str) -> Vec<String> {
     let mut cur_words = 0usize;
     for seg in p.split_inclusive(['.', '!', '?', '\n']) {
         let words = word_count(seg);
-        if words > CHUNK_WORDS {
+        if words > chunk_words() {
             if !cur.trim().is_empty() {
                 out.push(cur.trim().to_string());
                 cur.clear();
@@ -1272,7 +1281,7 @@ fn split_oversized(p: &str) -> Vec<String> {
             out.extend(word_windows(seg));
             continue;
         }
-        if cur_words + words > CHUNK_WORDS && !cur.trim().is_empty() {
+        if cur_words + words > chunk_words() && !cur.trim().is_empty() {
             out.push(cur.trim().to_string());
             cur.clear();
             cur_words = 0;
@@ -1458,7 +1467,7 @@ fn debracket_wikilinks(text: &str) -> String {
 const CODE_OVERLAP_LINES: usize = 8;
 
 /// Split code into chunks on blank-line block boundaries, packing blocks up
-/// to ~CHUNK_WORDS. Text is verbatim — indentation intact, so citations show
+/// to ~chunk_words(). Text is verbatim — indentation intact, so citations show
 /// real code — and `embed_text` carries a `[context]` path header, the
 /// highest-leverage retrieval trick for code (exact file-name hits for BM25,
 /// orientation for the embedder). Oversized blocks fall back to line windows,
@@ -1504,7 +1513,7 @@ pub fn chunk_code(context: &str, text: &str) -> Vec<Chunk> {
     let mut pending_words = 0usize;
     for (block, words) in blocks {
         // A single block bigger than a whole chunk: flush and line-window it.
-        if words > CHUNK_WORDS {
+        if words > chunk_words() {
             if !pending.is_empty() {
                 chunks.push(make(&pending));
                 pending.clear();
@@ -1515,7 +1524,7 @@ pub fn chunk_code(context: &str, text: &str) -> Vec<Chunk> {
             }
             continue;
         }
-        if pending_words + words > CHUNK_WORDS && !pending.is_empty() {
+        if pending_words + words > chunk_words() && !pending.is_empty() {
             chunks.push(make(&pending));
             pending.clear();
             pending_words = 0;
@@ -1532,7 +1541,7 @@ pub fn chunk_code(context: &str, text: &str) -> Vec<Chunk> {
     chunks
 }
 
-/// Split one oversized code block into line runs of ~CHUNK_WORDS with a few
+/// Split one oversized code block into line runs of ~chunk_words() with a few
 /// lines of overlap for continuity.
 fn line_windows(block: &str) -> Vec<String> {
     let lines: Vec<&str> = block.lines().collect();
@@ -1545,7 +1554,7 @@ fn line_windows(block: &str) -> Vec<String> {
             let w = word_count(lines[end]);
             // Always take at least one line, however wide (minified guards
             // live upstream in the folder scan's size cap).
-            if end > start && words + w > CHUNK_WORDS {
+            if end > start && words + w > chunk_words() {
                 break;
             }
             words += w;
@@ -1566,14 +1575,14 @@ fn word_windows(text: &str) -> Vec<String> {
     if words.is_empty() {
         return vec![];
     }
-    if words.len() <= CHUNK_WORDS {
+    if words.len() <= chunk_words() {
         return vec![words.join(" ")];
     }
     let mut chunks = Vec::new();
-    let step = CHUNK_WORDS - OVERLAP_WORDS;
+    let step = chunk_words() - OVERLAP_WORDS;
     let mut start = 0;
     while start < words.len() {
-        let end = (start + CHUNK_WORDS).min(words.len());
+        let end = (start + chunk_words()).min(words.len());
         chunks.push(words[start..end].join(" "));
         if end == words.len() {
             break;
@@ -2301,7 +2310,7 @@ mod tests {
         let long: String = (0..600).map(|i| format!("word{i}. ")).collect();
         let chunks = chunk_text("Doc", &long);
         assert!(chunks.len() >= 2, "oversized paragraph splits");
-        assert!(chunks.iter().all(|c| word_count(&c.text) <= CHUNK_WORDS));
+        assert!(chunks.iter().all(|c| word_count(&c.text) <= chunk_words()));
 
         // Boundary-free text falls back to overlapping word windows.
         let words = (0..900)
