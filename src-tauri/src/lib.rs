@@ -32,6 +32,7 @@ mod templates;
 mod textsize;
 mod trace;
 mod tts;
+mod verify;
 
 #[cfg(test)]
 mod beir_eval;

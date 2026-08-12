@@ -1781,6 +1781,19 @@ impl Db {
         Ok(messages)
     }
 
+    /// Replace one message's content in place — the verify-and-repair pass
+    /// (RFC-judged-evals §5) swaps a repaired answer under the same id, so
+    /// citations, ordering, and history references all survive.
+    pub async fn update_message_content(&self, id: &str, content: &str) -> Result<()> {
+        let tbl = self.conn.open_table(T_MESSAGES).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(id)))
+            .column("content", format!("'{}'", esc(content)))
+            .execute()
+            .await?;
+        Ok(())
+    }
+
     pub async fn add_message(&self, msg: &Message) -> Result<()> {
         let schema = messages_schema();
         let citations = serde_json::to_string(&msg.citations).unwrap_or_else(|_| "[]".into());

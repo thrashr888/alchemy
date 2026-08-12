@@ -366,6 +366,11 @@ pub struct Ai {
     /// Tier-matched local cross-encoder reranker; None when fusion order
     /// is already the best available (strong embedder tiers).
     xenc: Option<crate::inference::rerank::CrossEncoder>,
+    /// Answer verifier (RFC-judged-evals §5) — the same Small model on
+    /// EVERY tier: reranking is a tier decision (a 38M model loses to
+    /// mxbai's fusion order) but claim-vs-cited-excerpt verification is
+    /// engine-independent. Lazy: nothing loads until the first check.
+    verifier: crate::inference::rerank::CrossEncoder,
     /// Resolved app-data dir (same one the embedder writes under). The gist
     /// sweep's enrichment marker lives here (RFC-infinite-context §2), so the
     /// distillation family can find it without threading a path through every
@@ -471,6 +476,10 @@ impl Ai {
         let xenc = router
             .xenc_model()
             .map(|m| crate::inference::rerank::CrossEncoder::new(data_dir.clone(), m));
+        let verifier = crate::inference::rerank::CrossEncoder::new(
+            data_dir.clone(),
+            crate::inference::rerank::XencModel::Small,
+        );
         Self {
             config,
             router,
@@ -478,7 +487,13 @@ impl Ai {
             openai,
             data_dir,
             xenc,
+            verifier,
         }
+    }
+
+    /// The answer verifier (see the `verifier` field).
+    pub fn verifier(&self) -> &crate::inference::rerank::CrossEncoder {
+        &self.verifier
     }
 
     /// The app-data dir this instance writes under — the gist sweep's

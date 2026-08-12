@@ -199,9 +199,25 @@ export function ChatPanel() {
     const unStep = listen<{ label: string }>("chat://step", (e) => {
       if (useStore.getState().sending) appendStep(e.payload.label);
     });
+    // Verify-and-repair swaps a revised answer under the same message id
+    // (backend spawn_answer_verify). Events reach every window — apply
+    // only when the message is in this window's transcript.
+    const unRevised = listen<{ id: string; content: string }>(
+      "chat://revised",
+      (e) => {
+        const { messages } = useStore.getState();
+        if (!messages.some((m) => m.id === e.payload.id)) return;
+        useStore.setState({
+          messages: messages.map((m) =>
+            m.id === e.payload.id ? { ...m, content: e.payload.content } : m,
+          ),
+        });
+      },
+    );
     return () => {
       unToken.then((fn) => fn());
       unStep.then((fn) => fn());
+      unRevised.then((fn) => fn());
     };
   }, [appendToken, appendStep]);
 

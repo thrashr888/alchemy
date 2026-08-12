@@ -145,51 +145,7 @@ struct Scored {
     sent_scores: Vec<(String, Vec<usize>, f32)>,
 }
 
-/// Extract `[n]` markers from one sentence and return the sentence with
-/// markers stripped. Hand-rolled — not worth a regex dependency.
-fn strip_markers(s: &str) -> (String, Vec<usize>) {
-    let (mut clean, mut markers) = (String::new(), Vec::new());
-    let mut rest = s;
-    while let Some(open) = rest.find('[') {
-        let (before, bracketed) = rest.split_at(open);
-        clean.push_str(before);
-        match bracketed[1..].find(']') {
-            Some(close) if bracketed[1..close + 1].chars().all(|c| c.is_ascii_digit()) => {
-                if let Ok(n) = bracketed[1..close + 1].parse::<usize>() {
-                    markers.push(n);
-                }
-                rest = &bracketed[close + 2..];
-            }
-            _ => {
-                clean.push('[');
-                rest = &bracketed[1..];
-            }
-        }
-    }
-    clean.push_str(rest);
-    (clean.trim().to_string(), markers)
-}
-
-/// Sentences with the 1-based excerpt markers each one carries.
-fn cited_sentences(answer: &str) -> Vec<(String, Vec<usize>)> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    for ch in answer.chars() {
-        cur.push(ch);
-        if matches!(ch, '.' | '!' | '?' | '\n') {
-            let s = cur.trim().to_string();
-            if !s.is_empty() {
-                out.push(s);
-            }
-            cur.clear();
-        }
-    }
-    let s = cur.trim().to_string();
-    if !s.is_empty() {
-        out.push(s);
-    }
-    out.into_iter().map(|s| strip_markers(&s)).collect()
-}
+use crate::verify::cited_sentences;
 
 /// Run one question through the real answer chain and score it.
 #[allow(clippy::too_many_arguments)]

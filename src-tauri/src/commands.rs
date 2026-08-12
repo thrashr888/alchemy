@@ -6116,6 +6116,17 @@ pub async fn send_message(
             &assistant_msg.content,
             &assistant_msg.citations,
         );
+        // Verify-and-repair closes behind the delivered answer
+        // (RFC-judged-evals §5) — cited answers only; an abstention has
+        // nothing to check.
+        if !assistant_msg.citations.is_empty() {
+            spawn_answer_verify(
+                &app,
+                assistant_msg.clone(),
+                messages.clone(),
+                state.trace_dir.clone(),
+            );
+        }
     }
     Ok(assistant_msg)
 }
@@ -6245,6 +6256,90 @@ pub async fn list_notes(
 /// as an `origin: "auto"` evidence note. Conservative by design — cheap
 /// gates first, the model must opt IN, malformed output means skip, and a
 /// failure is only ever a log line.
+/// Post-stream verify-and-repair (RFC-judged-evals §5): check the finished
+/// answer's citations and claim support with the on-device verifier; on a
+/// caught defect, ONE repair pass rewrites it and the message row is
+/// swapped in place (chat://revised tells windows to re-render). The
+/// repaired answer must strictly reduce defects or the original stands —
+/// repair can improve-or-hold, never churn. Runs off-thread: the user
+/// already has their answer; this is the safety net closing behind it.
+fn spawn_answer_verify(
+    app: &AppHandle,
+    message: Message,
+    prompt: Vec<crate::ai::ChatTurn>,
+    trace_dir: std::path::PathBuf,
+) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let ai = state.ai.read().await.clone();
+        let check = crate::verify::check_answer(
+            ai.verifier(),
+            &message.content,
+            &message.citations,
+            crate::verify::REPAIR_THRESHOLD,
+        )
+        .await;
+        if check.defects() == 0 {
+            crate::trace::log(
+                &trace_dir,
+                serde_json::json!({
+                    "ts": now(),
+                    "surface": "verify",
+                    "notebookId": message.notebook_id,
+                    "messageId": message.id,
+                    "defects": 0,
+                    "scored": check.scored,
+                }),
+            );
+            return;
+        }
+        let repair = crate::verify::build_repair_messages(&prompt, &message.content, &check);
+        let Ok(out) = ai.chat(&repair).await else {
+            return;
+        };
+        let revised = out.text.trim().to_string();
+        if revised.is_empty() {
+            return;
+        }
+        let recheck = crate::verify::check_answer(
+            ai.verifier(),
+            &revised,
+            &message.citations,
+            crate::verify::REPAIR_THRESHOLD,
+        )
+        .await;
+        crate::trace::log(
+            &trace_dir,
+            serde_json::json!({
+                "ts": now(),
+                "surface": "verify",
+                "notebookId": message.notebook_id,
+                "messageId": message.id,
+                "defects": check.defects(),
+                "scored": check.scored,
+                "unsupported": check.unsupported,
+                "invalidMarkers": check.invalid_markers,
+                "repairedDefects": recheck.defects(),
+                "applied": recheck.defects() < check.defects(),
+            }),
+        );
+        if recheck.defects() >= check.defects() {
+            return;
+        }
+        if state
+            .db
+            .update_message_content(&message.id, &revised)
+            .await
+            .is_ok()
+        {
+            let mut updated = message;
+            updated.content = revised;
+            let _ = app.emit("chat://revised", &updated);
+        }
+    });
+}
+
 fn spawn_auto_evidence(
     app: &AppHandle,
     notebook_id: &str,
