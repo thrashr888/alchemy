@@ -38,6 +38,8 @@ mod beir_eval;
 #[cfg(test)]
 mod evals;
 #[cfg(test)]
+mod judged_eval;
+#[cfg(test)]
 mod retrieval_eval;
 #[cfg(test)]
 mod tests;

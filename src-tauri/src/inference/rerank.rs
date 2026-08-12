@@ -90,9 +90,12 @@ impl CrossEncoder {
         Ok(out.clone())
     }
 
-    /// Score `passages` against `query`; returns indices into `passages`
-    /// in best-first order. Blocking inference runs off the async runtime.
-    pub async fn rank(&self, query: &str, passages: &[String]) -> Result<Vec<usize>> {
+    /// Raw relevance scores for `passages` against `query`, in passage
+    /// order — the primitive under both ranking (chat rerank) and
+    /// entailment-style verification (judged evals treat score-over-
+    /// threshold as "this excerpt supports this claim"). Positive logits
+    /// mean relevant; the judged harness calibrates the exact threshold.
+    pub async fn scores(&self, query: &str, passages: &[String]) -> Result<Vec<f32>> {
         if passages.is_empty() {
             return Ok(Vec::new());
         }
@@ -111,16 +114,26 @@ impl CrossEncoder {
             .collect();
         tokio::task::spawn_blocking(move || {
             let mut model = model.lock().expect("reranker mutex poisoned");
-            let mut results = model
+            let results = model
                 .rerank(query, &docs, false, None)
                 .context("cross-encoder scoring failed")?;
-            // fastembed returns best-first already, but sort defensively:
-            // downstream order IS the product.
-            results.sort_by(|a, b| b.score.total_cmp(&a.score));
-            Ok(results.into_iter().map(|r| r.index).collect())
+            let mut scores = vec![0.0f32; docs.len()];
+            for r in results {
+                scores[r.index] = r.score;
+            }
+            Ok(scores)
         })
         .await
         .context("reranker scoring task failed")?
+    }
+
+    /// Score `passages` against `query`; returns indices into `passages`
+    /// in best-first order. Blocking inference runs off the async runtime.
+    pub async fn rank(&self, query: &str, passages: &[String]) -> Result<Vec<usize>> {
+        let scores = self.scores(query, passages).await?;
+        let mut order: Vec<usize> = (0..scores.len()).collect();
+        order.sort_by(|&a, &b| scores[b].total_cmp(&scores[a]));
+        Ok(order)
     }
 }
 

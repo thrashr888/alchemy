@@ -202,7 +202,7 @@ async fn nomic_ai() -> Option<Ai> {
 }
 
 /// Built-in embedder + a small live chat model for the rerank leg.
-async fn rerank_ai() -> Option<Ai> {
+pub(crate) async fn rerank_ai() -> Option<Ai> {
     let ai = Ai::new(
         AiConfig {
             embedder: "builtin".into(),
@@ -238,7 +238,7 @@ fn chat_tier(kind: &str, runtime: AiRuntime) -> Ai {
 }
 
 /// Apple's on-device model for the rerank leg, via the repo-built sidecar.
-fn fm_ai() -> Option<Ai> {
+pub(crate) fn fm_ai() -> Option<Ai> {
     let sidecar = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../sidecar/alchemy-fm/.build/release/alchemy-fm");
     if !sidecar.exists() {
@@ -256,7 +256,7 @@ fn fm_ai() -> Option<Ai> {
 
 /// The codex subscription CLI for the rerank leg — one `codex exec` per
 /// query, so callers sample rather than sweep.
-fn codex_ai() -> Option<Ai> {
+pub(crate) fn codex_ai() -> Option<Ai> {
     Some(chat_tier("codex", AiRuntime::default()))
 }
 
@@ -382,7 +382,7 @@ async fn rerank_docs(
 /// before any migration ships (changing document embeddings invalidates
 /// every stored vector; mixing spaces is worse than either alone).
 #[derive(Clone, Copy, Default)]
-struct EmbedStyle {
+pub(crate) struct EmbedStyle {
     doc_prefix: &'static str,
     query_prefix: &'static str,
 }
@@ -407,19 +407,29 @@ struct BeirRun {
     queries: usize,
 }
 
-/// Seed a dataset's corpus through the real pipeline and score the shipping
-/// hybrid search over its test-split qrels — plus the per-leg diagnosis and
-/// the offline weight sweep. Returns None when the network isn't there.
-async fn run_beir(
+/// A dataset seeded through the real import pipeline, plus its queries
+/// and qrels — the shared front half of every eval in this family
+/// (`run_beir` scores retrieval over it; `judged_eval.rs` runs the full
+/// answer chain over it).
+pub(crate) struct SeededDataset {
+    pub(crate) db: Db,
+    pub(crate) corpus: Vec<serde_json::Value>,
+    pub(crate) queries: HashMap<String, String>,
+    pub(crate) qrels: HashMap<String, HashMap<String, i32>>,
+    pub(crate) docs: usize,
+}
+
+/// Seed (or cache-hit) a BEIR corpus and load its queries/qrels. Returns
+/// None when the network isn't there.
+pub(crate) async fn seeded_dataset(
     name: &str,
     ai: &Ai,
-    rerank_with: Option<(&Ai, RerankStrategy)>,
     style: EmbedStyle,
     // Names the seeded-corpus cache alongside the dataset ("builtin",
     // "nomic", "mxbai-prefixed", …): seeding FiQA through Ollama costs ~10
     // minutes, and every A/B variant after the first should cost none.
     slug: &str,
-) -> Option<BeirRun> {
+) -> Option<SeededDataset> {
     let dir = dataset_dir(name).await.or_else(|| {
         eprintln!("SKIP: {name} download failed (network?)");
         None
@@ -505,6 +515,32 @@ async fn run_beir(
                 .insert(did.to_string(), score);
         }
     }
+
+    Some(SeededDataset {
+        db,
+        corpus,
+        queries,
+        qrels,
+        docs: seeded_docs,
+    })
+}
+
+/// Score the shipping hybrid search over a dataset's test-split qrels —
+/// plus the per-leg diagnosis and the offline weight sweep.
+async fn run_beir(
+    name: &str,
+    ai: &Ai,
+    rerank_with: Option<(&Ai, RerankStrategy)>,
+    style: EmbedStyle,
+    slug: &str,
+) -> Option<BeirRun> {
+    let SeededDataset {
+        db,
+        corpus,
+        queries,
+        qrels,
+        docs: seeded_docs,
+    } = seeded_dataset(name, ai, style, slug).await?;
 
     // Deterministic order: HashMap iteration randomizes per process, which
     // silently made every run's rerank SAMPLE a different query subset —
