@@ -14,8 +14,12 @@ CI ([`.github/workflows/release.yml`](.github/workflows/release.yml)) stays as a
 ## Cutting a release (the normal path)
 
 ```bash
-scripts/release.sh 0.4.2
+RELEASE_APPROVED=yes scripts/release.sh 0.4.2
 ```
+
+`RELEASE_APPROVED=yes` is the human gate: the script refuses to run
+without it, and agents must never set it themselves — a person reviews
+what ships and exports it deliberately.
 
 That one command, from a clean `main`:
 

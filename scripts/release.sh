@@ -20,6 +20,15 @@ if [ -z "$VERSION" ]; then
   echo "usage: scripts/release.sh <version>   (e.g. scripts/release.sh 0.4.2)" >&2
   exit 1
 fi
+
+# Releases always require a human decision. Agents must never set this
+# variable themselves -- a person exports it after reviewing what ships:
+#   RELEASE_APPROVED=yes scripts/release.sh <version>
+if [ "${RELEASE_APPROVED:-}" != "yes" ]; then
+  echo "release: refusing to run without human approval." >&2
+  echo "Review the pending changes, then rerun with RELEASE_APPROVED=yes." >&2
+  exit 1
+fi
 TAG="v$VERSION"
 TARGET="aarch64-apple-darwin"
 NOTARY_PROFILE="${NOTARY_PROFILE:-alchemy-notary}"
