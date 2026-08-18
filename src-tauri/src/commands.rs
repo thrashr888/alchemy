@@ -6321,10 +6321,10 @@ fn spawn_answer_verify(
                 "unsupported": check.unsupported,
                 "invalidMarkers": check.invalid_markers,
                 "repairedDefects": recheck.defects(),
-                "applied": recheck.defects() < check.defects(),
+                "applied": check.accepts(&recheck),
             }),
         );
-        if recheck.defects() >= check.defects() {
+        if !check.accepts(&recheck) {
             return;
         }
         if state

@@ -30,9 +30,17 @@ use crate::inference::rerank::{CrossEncoder, XencModel};
 use crate::models::Citation;
 
 const DEFAULT_SAMPLE: usize = 25;
+
 /// Retrieval depth for the answer chain — the MCP search default, small
-/// enough that every excerpt plausibly matters.
-const K: usize = 6;
+/// enough that every excerpt plausibly matters. JUDGED_K overrides for
+/// pool-depth probes (gpt-oss's conservatism hypothesis: big models
+/// decline on thin pools that small models happily answer from).
+fn judged_k() -> usize {
+    std::env::var("JUDGED_K")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(6)
+}
 
 /// Questions the SciFact corpus provably cannot answer — non-biomedical
 /// topics verified absent. Right behavior: say so, cite nothing.
@@ -70,6 +78,9 @@ enum Variant {
     /// Iterative retrieval: one gap-query loop — the model names what's
     /// still missing, a second search fetches it, pools merge and rerank.
     Iterative,
+    /// The shipped chat chain INCLUDING verify-and-repair — scores the
+    /// answer users actually see after the repair pass (RFC §5 measured).
+    Repaired,
 }
 
 impl Variant {
@@ -78,6 +89,7 @@ impl Variant {
             Some("noxenc") => Variant::NoXenc,
             Some("fenced") => Variant::Fenced,
             Some("iterative") => Variant::Iterative,
+            Some("repaired") => Variant::Repaired,
             _ => Variant::Baseline,
         }
     }
@@ -88,6 +100,7 @@ impl Variant {
             Variant::NoXenc => "noxenc",
             Variant::Fenced => "fenced",
             Variant::Iterative => "iterative",
+            Variant::Repaired => "repaired",
         }
     }
 }
@@ -163,9 +176,9 @@ async fn score_question(
     let mut extra_tokens = 0u64;
     let qvec = retrieval.embed_one(&q.text).await.ok()?;
     let fetch_k = if retrieval.has_xenc() && variant != Variant::NoXenc {
-        K * 3
+        judged_k() * 3
     } else {
-        K
+        judged_k()
     };
     let trace = db
         .search_chunks_trace(corpus_name, qvec, &q.text, fetch_k, None)
@@ -180,7 +193,7 @@ async fn score_question(
     if variant == Variant::Iterative {
         let preview: String = pool
             .iter()
-            .take(K)
+            .take(judged_k())
             .map(|c| {
                 format!(
                     "- {}: {}\n",
@@ -221,10 +234,10 @@ async fn score_question(
     }
 
     let hits: Vec<Citation> = if variant == Variant::NoXenc {
-        pool.truncate(K);
+        pool.truncate(judged_k());
         pool
     } else {
-        retrieval.rerank_hits(&q.text, pool, K).await
+        retrieval.rerank_hits(&q.text, pool, judged_k()).await
     };
 
     let profile = generator.profile(crate::inference::Role::Chat);
@@ -245,10 +258,39 @@ async fn score_question(
         )
     };
     let out = generator.chat(&messages).await.ok()?;
-    let ms = t0.elapsed().as_secs_f64() * 1000.0;
-    let tokens = out.stats.as_ref().map(|s| s.eval_count).unwrap_or(0) + extra_tokens;
+    let mut answer = out.text.clone();
+    let mut tokens = out.stats.as_ref().map(|s| s.eval_count).unwrap_or(0) + extra_tokens;
 
-    let sentences = cited_sentences(&out.text);
+    // Repaired variant (RFC §5 measured end to end): run the SAME
+    // check→repair→recheck cycle the shipped chat path runs, then score
+    // the answer users would actually see. Repair cost counts.
+    if variant == Variant::Repaired {
+        let check =
+            crate::verify::check_answer(xenc, &answer, &hits, crate::verify::REPAIR_THRESHOLD)
+                .await;
+        if check.defects() > 0 {
+            let repair_msgs = crate::verify::build_repair_messages(&messages, &answer, &check);
+            if let Ok(rout) = generator.chat(&repair_msgs).await {
+                tokens += rout.stats.as_ref().map(|s| s.eval_count).unwrap_or(0);
+                let revised = rout.text.trim().to_string();
+                if !revised.is_empty() {
+                    let recheck = crate::verify::check_answer(
+                        xenc,
+                        &revised,
+                        &hits,
+                        crate::verify::REPAIR_THRESHOLD,
+                    )
+                    .await;
+                    if check.accepts(&recheck) {
+                        answer = revised;
+                    }
+                }
+            }
+        }
+    }
+    let ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+    let sentences = cited_sentences(&answer);
     let all_markers: Vec<usize> = sentences.iter().flat_map(|(_, m)| m.clone()).collect();
     let valid = all_markers
         .iter()
@@ -639,13 +681,33 @@ async fn judged_baseline() {
     let generator = match engine_name.as_str() {
         "fm" => crate::beir_eval::fm_ai(),
         "codex" => crate::beir_eval::codex_ai(),
-        _ => crate::beir_eval::rerank_ai().await,
+        "bonsai" => crate::beir_eval::rerank_ai().await,
+        // Any other value is an Ollama model tag — the generator A/B path
+        // ("ollama list" is the menu). Liveness-checked like rerank_ai.
+        model => {
+            let ai = Ai::new(
+                crate::ai::AiConfig {
+                    embedder: "builtin".into(),
+                    chat_model: model.to_string(),
+                    ..Default::default()
+                },
+                crate::ai::AiRuntime::default(),
+            );
+            ai.test_embed().await.ok().map(|_| ai)
+        }
     };
     let Some(generator) = generator else {
         eprintln!("SKIP: engine {engine_name} unavailable");
         return;
     };
-    let resolved = generator.chat_engine_id(crate::inference::Role::Chat);
+    // The engine id alone says "ollama" for every model — rows must name
+    // the model they measured, so the label is the env value itself.
+    let resolved = match engine_name.as_str() {
+        "fm" | "codex" => generator
+            .chat_engine_id(crate::inference::Role::Chat)
+            .to_string(),
+        other => other.to_string(),
+    };
     let sample: usize = std::env::var("JUDGED_SAMPLE")
         .ok()
         .and_then(|s| s.parse().ok())

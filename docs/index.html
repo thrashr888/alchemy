@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Alchemy — a local-first research notebook for macOS</title>
+<title>Alchemy â a local-first research notebook for macOS</title>
 <meta name="description" content="Alchemy is a local-first research notebook for macOS. Import sources, ask questions with citations, and generate documents or podcasts with subscriptions, gateways, or local models.">
 <meta name="color-scheme" content="dark light">
 <meta name="theme-color" content="#08090a" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta property="og:title" content="Alchemy — a local-first research notebook for macOS">
+<meta property="og:title" content="Alchemy â a local-first research notebook for macOS">
 <meta property="og:description" content="Your sources, your machine, your models. Grounded chat, git repos as living sources, on-device podcasts, and MCP agent access.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://thrashr888.github.io/alchemy/">
@@ -17,7 +17,7 @@
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="2400">
 <meta property="og:image:height" content="1260">
-<meta property="og:image:alt" content="Alchemy — your sources, your machine, your models. A local-first research notebook for macOS.">
+<meta property="og:image:alt" content="Alchemy â your sources, your machine, your models. A local-first research notebook for macOS.">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'%3E%3Cg fill='none' stroke='%235e6ad2' stroke-width='5'%3E%3Ccircle cx='48' cy='48' r='42'/%3E%3Cpath d='M48 12 82.6 72 13.4 72Z'/%3E%3Ccircle cx='48' cy='52' r='13'/%3E%3C/g%3E%3C/svg%3E">
 <style>
@@ -1307,7 +1307,7 @@
     ["claude","Claude",true,"#1f1e1b","#26241f","#302d27","#37332c","#f0eee6","#b0a99b","#a49e92","#d97757","#e08967","#cc8a63","rgba(217,119,87,0.30)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
     ["openai","OpenAI",true,"#0d0d0d","#141414","#1d1d1d","#242424","#ececec","#9b9b9b","#8c8c8c","#0d8265","#138265","#19c37d","rgba(16,163,127,0.28)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
     ["latte","Catppuccin Latte",false,"#eff1f5","#e6e9ef","#dce0e8","#ffffff","#4c4f69","#5e6174","#5a5f71","#8839ef","#7a2fe0","#0a53e4","rgba(136,57,239,0.18)","rgba(0,0,0,0.09)","rgba(0,0,0,0.16)"],
-    ["rose-pine-dawn","Rosé Pine Dawn",false,"#faf4ed","#fffaf3","#f2e9e1","#fffaf3","#575279","#67647f","#6a6478","#c44741","#bc524d","#745d8f","rgba(215,130,126,0.25)","rgba(0,0,0,0.09)","rgba(0,0,0,0.16)"],
+    ["rose-pine-dawn","RosÃ© Pine Dawn",false,"#faf4ed","#fffaf3","#f2e9e1","#fffaf3","#575279","#67647f","#6a6478","#c44741","#bc524d","#745d8f","rgba(215,130,126,0.25)","rgba(0,0,0,0.09)","rgba(0,0,0,0.16)"],
     ["carrera","Carrera",false,"#e4d8bf","#ddd0b4","#d3c5a5","#ede3ce","#241f18","#574d3e","#5b5142","#b30018","#9a0015","#61470d","rgba(179,0,24,0.22)","rgba(0,0,0,0.09)","rgba(0,0,0,0.16)"],
     ["italia","Italia",true,"#0b0708","#130c0d","#1b1113","#241719","#f6f1ef","#ab9d9c","#a29493","#ff2800","#ff4a2b","#f5d000","rgba(255,40,0,0.30)","rgba(255,86,64,0.11)","rgba(255,86,64,0.20)"],
     ["panigale","Panigale",true,"#1a1c1e","#202325","#282c2f","#31363a","#c6ced4","#a3abb1","#99a1a8","#da291c","#ea3a2c","#eef4f8","rgba(218,41,28,0.30)","rgba(255,255,255,0.07)","rgba(255,255,255,0.12)"],
@@ -1487,7 +1487,7 @@
 
     function currentLabel(choice, theme, prefix = "Theme") {
       return choice === "system"
-        ? `${prefix}: System · ${theme.label}`
+        ? `${prefix}: System Â· ${theme.label}`
         : `${prefix}: ${theme.label}`;
     }
 
@@ -1507,9 +1507,9 @@
       const label = document.createElement("label");
       label.className = choice === "system" ? "theme-swatch theme-swatch--system" : "theme-swatch";
       label.htmlFor = input.id;
-      label.title = choice === "system" ? "System — follows your Mac" : theme.label;
+      label.title = choice === "system" ? "System â follows your Mac" : theme.label;
       if (choice === "system") {
-        label.innerHTML = '<span class="theme-swatch-symbol" aria-hidden="true">◐</span>';
+        label.innerHTML = '<span class="theme-swatch-symbol" aria-hidden="true">â</span>';
       } else {
         label.style.setProperty("--swatch-background", theme.background);
         label.style.setProperty("--swatch-primary", theme.primary);
@@ -1711,7 +1711,7 @@
         <div class="feature-copy">
           <div class="feature-kicker">Models</div>
           <h3>Use existing subscriptions and local models.</h3>
-          <p>Bring your Claude Code, Codex, Gemini CLI, Copilot, or Cursor subscription. Route a thread through a gateway, Ollama, LM Studio, or Apple’s on-device model—and see which provider answered.</p>
+          <p>Bring your Claude Code, Codex, Gemini CLI, Copilot, or Cursor subscription. Route a thread through a gateway, Ollama, LM Studio, or Appleâs on-device modelâand see which provider answered.</p>
           <div class="card-meta"><span>Existing sign-ins</span><span>30+ gateway presets</span></div>
         </div>
       </article>
@@ -1745,7 +1745,7 @@
               <span class="chat-preview-head"><span>CHAT</span><span>1&nbsp;&nbsp;4&nbsp;&nbsp;5</span></span>
               <span class="chat-preview-lines"><i></i><i></i><i></i></span>
             </span>
-            <span class="visual-note">citation → highlighted passage</span>
+            <span class="visual-note">citation â highlighted passage</span>
           </div>
         </div>
         <div class="feature-copy">
@@ -1770,7 +1770,7 @@
         <div class="feature-copy">
           <div class="feature-kicker">Studio</div>
           <h3>Create documents, decks, quizzes, and podcasts.</h3>
-          <p>Turn current notebook sources into editable documents, 16:9 decks, quizzes, mind maps, tables, or a narrated Audio Overview—without exporting your context first.</p>
+          <p>Turn current notebook sources into editable documents, 16:9 decks, quizzes, mind maps, tables, or a narrated Audio Overviewâwithout exporting your context first.</p>
           <div class="card-meta"><span>Editable output</span><span>Native PDF export</span></div>
         </div>
       </article>
@@ -1789,7 +1789,7 @@
         <div class="feature-copy">
           <div class="feature-kicker">Agents</div>
           <h3>Give agents access to the same notebook.</h3>
-          <p>The localhost MCP server lets Codex, Claude Code, Gemini CLI, and other agents search, add, and write in the notebook you already use—no copy/paste handoff.</p>
+          <p>The localhost MCP server lets Codex, Claude Code, Gemini CLI, and other agents search, add, and write in the notebook you already useâno copy/paste handoff.</p>
           <code class="brew"><span class="prompt">$</span>npx skills add thrashr888/alchemy@alchemy</code>
           <div class="card-meta"><span>Localhost only</span><span>Skill on skills.sh</span></div>
         </div>
@@ -1802,13 +1802,13 @@
             <span class="visual-pill top-left">Embeddings</span>
             <span class="visual-pill top-right">Database</span>
             <span class="visual-core local">On your Mac</span>
-            <span class="visual-note">no account · no server</span>
+            <span class="visual-note">no account Â· no server</span>
           </div>
         </div>
         <div class="feature-copy">
           <div class="feature-kicker">Privacy</div>
           <h3>Your library stays on your Mac.</h3>
-          <p>Sources are extracted, embedded, and stored on your Mac. You choose what chat context reaches a provider; Ollama and Apple’s on-device model keep chat offline.</p>
+          <p>Sources are extracted, embedded, and stored on your Mac. You choose what chat context reaches a provider; Ollama and Appleâs on-device model keep chat offline.</p>
           <div class="card-meta"><span>No account</span><span>Offline with local models</span></div>
         </div>
       </article>
@@ -1817,24 +1817,24 @@
         <div class="feature-copy">
           <div class="feature-kicker">Benchmarks</div>
           <h3>Retrieval you can measure.</h3>
-          <p>Public BEIR benchmarks run against the shipping pipeline as tests. Hybrid search plus an on-device cross-encoder reranker beats the classic BM25 baseline (0.665 SciFact) and published dense retrievers like TAS-B (0.643) out of the box—ColBERT-class retrieval (0.671) with no cloud, no setup, on the built-in engine.</p>
+          <p>Public BEIR benchmarks run against the shipping pipeline as tests. Hybrid search plus an on-device cross-encoder reranker beats the classic BM25 baseline (0.665 SciFact) and published dense retrievers like TAS-B (0.643) out of the boxâColBERT-class retrieval (0.671) with no cloud, no setup, on the built-in engine.</p>
           <div class="card-meta"><span>nDCG@10, higher is better</span><span>Run them yourself: cargo test --lib beir_</span></div>
         </div>
         <div class="bench-rows" aria-label="BEIR benchmark results">
           <div class="bench-cell">
             <div class="bench-name">BEIR SciFact</div>
             <div class="bench-score">0.737</div>
-            <div class="bench-note">0.754 with Ollama · BM25 0.665</div>
+            <div class="bench-note">0.754 with Ollama Â· BM25 0.665</div>
           </div>
           <div class="bench-cell">
             <div class="bench-name">BEIR NFCorpus</div>
             <div class="bench-score">0.352</div>
-            <div class="bench-note">0.388 with Ollama · BM25 0.325</div>
+            <div class="bench-note">0.388 with Ollama Â· BM25 0.325</div>
           </div>
           <div class="bench-cell">
             <div class="bench-name">BEIR FiQA</div>
             <div class="bench-score">0.322</div>
-            <div class="bench-note">0.429 with Ollama · BM25 0.236</div>
+            <div class="bench-note">0.429 with Ollama Â· BM25 0.236</div>
           </div>
         </div>
       </article>
@@ -1844,7 +1844,7 @@
   <section class="models wrap" id="model-guide" aria-labelledby="models-title">
     <div class="models-intro">
       <h2 id="models-title">Which model should you run?</h2>
-      <p>We measure every model end to end on a judged harness—real retrieval, real prompts, real answers, scored on whether the gold evidence gets cited and whether each claim is actually supported by the excerpt it cites. The notables, so you can pick with data instead of vibes:</p>
+      <p>We measure every model end to end on a judged harnessâreal retrieval, real prompts, real answers, scored on whether the gold evidence gets cited and whether each claim is actually supported by the excerpt it cites. The notables, so you can pick with data instead of vibes:</p>
     </div>
     <div class="models-table-wrap">
       <table class="models-table" aria-label="Measured chat model results">
@@ -1877,13 +1877,13 @@
             <td>76%</td>
             <td>88%</td>
             <td>0.69 / 0.95</td>
-            <td class="m-note">Sharpest citation targeting and fast—but overstates what sources say. Alchemy&rsquo;s answer-verify pass earns its keep here.</td>
+            <td class="m-note">Sharpest citation targeting and fastâbut overstates what sources say. Alchemy&rsquo;s answer-verify pass earns its keep here.</td>
           </tr>
           <tr>
             <td class="m-name">bonsai-8b<span class="m-pick">speed pick</span></td>
-            <td>72%</td>
-            <td>48%</td>
-            <td>0.97 / 0.82</td>
+            <td>60%</td>
+            <td>26%</td>
+            <td>0.91 / 0.70</td>
             <td class="m-note">1.2&nbsp;GB and 4&ndash;20&times; faster than the rest; Alchemy&rsquo;s retrieval loop covers its multi-hop gap.</td>
           </tr>
           <tr>
@@ -1903,7 +1903,7 @@
         </tbody>
       </table>
     </div>
-    <p class="models-foot">SciFact claims and HotpotQA multi-hop, 25 questions each, run through the shipping pipeline on the built-in retrieval tier. Faithfulness is scored per cited sentence by an on-device cross-encoder calibrated against a frontier-model judge (shown SciFact&nbsp;/&nbsp;HotpotQA). Every number is reproducible: <code>cargo test --lib judged_</code>.</p>
+    <p class="models-foot">SciFact claims and HotpotQA multi-hop, 25–50 questions per model, run through the shipping pipeline on the built-in retrieval tier. Faithfulness is scored per cited sentence by an on-device cross-encoder calibrated against a frontier-model judge (shown SciFact&nbsp;/&nbsp;HotpotQA). Every number is reproducible: <code>cargo test --lib judged_</code>.</p>
   </section>
 
   <section class="etc" aria-labelledby="more-title">
@@ -2023,10 +2023,10 @@
       </article>
 
       <article class="utility-card utility-card--brief">
-        <span class="brief-mark" aria-hidden="true">“</span>
+        <span class="brief-mark" aria-hidden="true">â</span>
         <div class="brief-layout">
           <div class="brief-head"><span>Morning Brief</span><time datetime="07:00">07:00</time></div>
-          <blockquote>“Three decisions need you.”</blockquote>
+          <blockquote>âThree decisions need you.â</blockquote>
           <div class="brief-tail">
             <div class="brief-stats"><span>4 changes</span><span>2 records</span></div>
             <h3>See what needs you first.</h3>
@@ -2061,7 +2061,7 @@
     <p class="sub">
       Free and open source under MPL-2.0. Requires a Mac with Apple
       Silicon; builds are signed and notarized. Use an existing subscription
-      or API key. Ollama and Apple’s on-device model work offline.
+      or API key. Ollama and Appleâs on-device model work offline.
     </p>
     <div class="cta">
       <a class="btn btn-primary" href="https://github.com/thrashr888/alchemy/releases/latest">Download for macOS</a>

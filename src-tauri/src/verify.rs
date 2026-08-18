@@ -12,10 +12,14 @@
 use crate::inference::rerank::CrossEncoder;
 use crate::models::Citation;
 
-/// The unsupported-claim tripwire (see module docs). Below the L1
-/// agreement optimum (0.0) on purpose: repair wants high precision —
-/// rewriting a good answer is worse than missing a mediocre one.
-pub const REPAIR_THRESHOLD: f32 = 0.51;
+/// The unsupported-claim tripwire. MEASURED lesson (2026-08-18, the
+/// `repaired` harness variant): the F1-optimal 0.51 flagged so many good
+/// claims that repair REGRESSED weak generators (bonsai gold-cited
+/// 72%→56%) — half the flags were false positives and models dutifully
+/// weakened good answers. Repair wants PRECISION: flag only what the
+/// verifier is confident is ungrounded. -0.5 sits at the calibration's
+/// accuracy optimum, where flags are few and mostly real.
+pub const REPAIR_THRESHOLD: f32 = -0.5;
 
 /// Extract `[n]` markers from one sentence and return the sentence with
 /// markers stripped. Hand-rolled — not worth a regex dependency.
@@ -120,6 +124,17 @@ pub struct AnswerCheck {
 impl AnswerCheck {
     pub fn defects(&self) -> usize {
         self.invalid_markers + self.unsupported.len()
+    }
+
+    /// Whether `repaired` is an acceptable replacement for the answer
+    /// this check described. Fewer defects alone is NOT enough — an
+    /// answer that deletes its citations has zero checkable claims and
+    /// "wins" trivially (measured: bonsai's repairs stripped citations
+    /// and gold-evidence rates collapsed). The repaired answer may drop
+    /// the flagged sentences, but must keep the rest of its grounding.
+    pub fn accepts(&self, repaired: &AnswerCheck) -> bool {
+        repaired.defects() < self.defects()
+            && repaired.scored >= self.scored.saturating_sub(self.unsupported.len())
     }
 }
 
