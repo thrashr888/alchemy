@@ -404,6 +404,24 @@
     font-variant-numeric: tabular-nums;
   }
   .bench-note { margin-top: 2px; font-size: 11px; color: var(--muted); }
+  .models-intro { max-width: 640px; margin-bottom: 28px; }
+  .models-intro h2 { font-size: 28px; letter-spacing: -0.02em; }
+  .models-intro p { margin-top: 10px; color: var(--muted); font-size: 15px; line-height: 1.6; }
+  .models-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+  .models-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 640px; }
+  .models-table th {
+    text-align: left; font-weight: 500; color: var(--muted); font-size: 12px;
+    padding: 10px 16px; border-bottom: 1px solid var(--border-strong);
+  }
+  .models-table td {
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    font-variant-numeric: tabular-nums; vertical-align: top;
+  }
+  .models-table tr:last-child td { border-bottom: none; }
+  .models-table .m-name { font-weight: 500; white-space: nowrap; }
+  .models-table .m-note { color: var(--muted); font-size: 12px; }
+  .models-table .m-pick { color: var(--accent-text); font-size: 11px; font-weight: 500; margin-left: 6px; }
+  .models-foot { margin-top: 12px; font-size: 12px; color: var(--muted); line-height: 1.6; }
   .feature-visual {
     min-height: 216px;
     border-color: var(--border);
@@ -1799,7 +1817,7 @@
         <div class="feature-copy">
           <div class="feature-kicker">Benchmarks</div>
           <h3>Retrieval you can measure.</h3>
-          <p>Public BEIR benchmarks run against the shipping pipeline as tests. Hybrid search plus an on-device cross-encoder reranker beats the classic BM25 baseline on all three datasets out of the box—no Ollama, no cloud, dense-retriever-class retrieval on the built-in engine.</p>
+          <p>Public BEIR benchmarks run against the shipping pipeline as tests. Hybrid search plus an on-device cross-encoder reranker beats the classic BM25 baseline (0.665 SciFact) and published dense retrievers like TAS-B (0.643) out of the box—ColBERT-class retrieval (0.671) with no cloud, no setup, on the built-in engine.</p>
           <div class="card-meta"><span>nDCG@10, higher is better</span><span>Run them yourself: cargo test --lib beir_</span></div>
         </div>
         <div class="bench-rows" aria-label="BEIR benchmark results">
@@ -1821,6 +1839,71 @@
         </div>
       </article>
     </div>
+  </section>
+
+  <section class="models wrap" id="model-guide" aria-labelledby="models-title">
+    <div class="models-intro">
+      <h2 id="models-title">Which model should you run?</h2>
+      <p>We measure every model end to end on a judged harness—real retrieval, real prompts, real answers, scored on whether the gold evidence gets cited and whether each claim is actually supported by the excerpt it cites. The notables, so you can pick with data instead of vibes:</p>
+    </div>
+    <div class="models-table-wrap">
+      <table class="models-table" aria-label="Measured chat model results">
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Evidence cited</th>
+            <th>Multi&#8209;hop (both docs)</th>
+            <th>Faithfulness</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="m-name">muse-glimmer<span class="m-pick">multi-hop pick</span></td>
+            <td>68%</td>
+            <td>88%</td>
+            <td>0.89 / 0.94</td>
+            <td class="m-note">Best cross-document citer tested; the 30B variant adds cost, not accuracy.</td>
+          </tr>
+          <tr>
+            <td class="m-name">gemma4:31b-mlx<span class="m-pick">balanced pick</span></td>
+            <td>68%</td>
+            <td>80%</td>
+            <td>0.91 / 0.98</td>
+            <td class="m-note">Highest faithfulness of the big models, and the tersest answers.</td>
+          </tr>
+          <tr>
+            <td class="m-name">qwen3.8:27b-mlx</td>
+            <td>76%</td>
+            <td>88%</td>
+            <td>0.69 / 0.95</td>
+            <td class="m-note">Sharpest citation targeting and fast—but overstates what sources say. Alchemy&rsquo;s answer-verify pass earns its keep here.</td>
+          </tr>
+          <tr>
+            <td class="m-name">bonsai-8b<span class="m-pick">speed pick</span></td>
+            <td>72%</td>
+            <td>48%</td>
+            <td>0.97 / 0.82</td>
+            <td class="m-note">1.2&nbsp;GB and 4&ndash;20&times; faster than the rest; Alchemy&rsquo;s retrieval loop covers its multi-hop gap.</td>
+          </tr>
+          <tr>
+            <td class="m-name">gpt-oss:120b</td>
+            <td>24%</td>
+            <td>12%</td>
+            <td>1.00 / 0.83</td>
+            <td class="m-note">Extremely conservative: usually declines or answers without citations on hard corpora&mdash;but flawless on the claims it does cite.</td>
+          </tr>
+          <tr>
+            <td class="m-name">nemotron-3.5-lightning</td>
+            <td>68%</td>
+            <td>84%</td>
+            <td>0.62 / 0.96</td>
+            <td class="m-note">Answers everything confidently; a third of its cited claims aren&rsquo;t supported by the source. Not recommended for grounded work.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="models-foot">SciFact claims and HotpotQA multi-hop, 25 questions each, run through the shipping pipeline on the built-in retrieval tier. Faithfulness is scored per cited sentence by an on-device cross-encoder calibrated against a frontier-model judge (shown SciFact&nbsp;/&nbsp;HotpotQA). Every number is reproducible: <code>cargo test --lib judged_</code>.</p>
   </section>
 
   <section class="etc" aria-labelledby="more-title">
