@@ -1,0 +1,96 @@
+# WRITING.md
+
+Source of truth for all user-facing words: the website, release notes,
+in-app copy, README, and anything else a person who didn't build Alchemy
+will read. The companion to DESIGN.md — that file governs how the product
+looks; this one governs how it talks.
+
+## The voice
+
+Alchemy speaks like a careful engineer showing you something that works.
+Quiet, concrete, and specific. It never sells, never winks at the reader,
+and never claims more than it measured. When in doubt, say the plain thing
+and stop.
+
+## Register scales with the surface
+
+Different zoom levels get different registers. Pick by where the words
+live, not by mood:
+
+| Surface | Register | Model | Example |
+| --- | --- | --- | --- |
+| Headlines, card titles | Two beats, then stop | Apple | "Search, benchmarked." / "Evidence you can open." |
+| Body paragraphs | Plain declarative sentences, numbers inline | Google | "The built-in engine scores 0.737 on SciFact — higher than BM25 (0.665) — with everything running on your Mac." |
+| Methodology, claims, footnotes | Sober and precise, zero personality | HashiCorp | "Each model is evaluated against the full pipeline: retrieval, citation of the known-correct evidence, and per-claim support." |
+| Table cells, chips, micro-copy | Clipped fragments | Vercel | "Declines often. Perfect when it commits." |
+| Release notes | Bold-led benefit, then the evidence | house (RELEASE.md) | "**Answers check themselves.** …faithfulness 0.69 → 0.84, measured." |
+
+Fragments are a micro-surface tool. In a paragraph, write sentences.
+
+## Sentence mechanics
+
+- **Em dashes**: at most one per paragraph, and never as a dramatic pivot
+  ("—and see which provider answered"). If the dash is doing a reveal,
+  use a period.
+- **Parallel items get different shapes.** Six table rows must not share
+  one sentence template. Praise-pivot-caveat is fine once; repeated, it
+  reads generated.
+- **Tricolons**: allowed when the words are doing work ("Your sources,
+  your machine, your models."), banned when the rhythm is the point
+  ("real retrieval, real prompts, real answers").
+- **No stacked adjectives** ("fastest accurate citations") and no
+  dangling comparatives ("best two-source citations tested").
+- One idiom per document, maximum. If a phrase already lives in the
+  codebase comments, it does not also get to live on the website.
+
+## Vocabulary
+
+Internal names stay internal. Translate before publishing:
+
+| Internal | Public |
+| --- | --- |
+| judged harness | our answer-quality tests / a reproducible test suite |
+| gold evidence | the known-correct source |
+| frontier-model judge | a stronger cloud model |
+| multi-hop | two-source questions |
+| grounded / grounding | cited / backed by the source |
+| hard corpora | dense technical material |
+| retrieval tier, shipping pipeline | the built-in search engine, the same pipeline the app ships |
+| lands (as/in) | is saved / appears |
+
+Banned outright in public copy: "vibes", "honest/honestly" as framing,
+"seamless", "powerful", "supercharge", "leverage" (verb), "delve",
+"game-changing", exclamation points.
+
+## Claims
+
+- Every number is one we measured, stated with its baseline and where to
+  reproduce it (`cargo test --lib judged_`). No number, no claim.
+- Name the comparison ("higher than BM25 (0.665)"), never the vague class
+  ("state-of-the-art", "best-in-class").
+- Report failures as plainly as wins. "A third of its cited claims don't
+  hold up" is a sentence this product is proud to publish.
+- Round to the precision the sample size supports. 25-question runs don't
+  get decimal points of swagger.
+
+## The tell check
+
+Before publishing, scan for the patterns that read machine-written:
+
+1. Em-dash pivots and em-dash density above ~1 per paragraph
+2. Repeated-head-word triples ("real X, real Y, real Z")
+3. The same sentence architecture stamped across parallel items
+4. Winking at the reader ("data instead of vibes")
+5. Internal vocabulary on a public surface (see table above)
+6. Idioms recurring across documents ("earns its keep")
+7. Encoding artifacts: `â` or `Ã` anywhere means a byte-level edit
+   double-encoded the file — fix the encoding, not the strings
+
+If a sentence could open a LinkedIn post, rewrite it.
+
+## Precedents
+
+The reworked benchmark sections (2026-08-18) are the reference example:
+same numbers before and after, but the after reads like a person wrote
+it. When adding new copy, match the register table above, then read it
+aloud once. If you stumble, the reader will too.
