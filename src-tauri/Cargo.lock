@@ -1279,9 +1279,9 @@ dependencies = [
 
 [[package]]
 name = "cider-cli"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccb5f51e078a4794448f2da37f73544eb5bcc9ebf13a85b62d50b6af72dac7f7"
+checksum = "a35ed15e4c7c11cc4726a90c9a7ef89c7fc2ea1e8955ea18e37e644098db552b"
 dependencies = [
  "anyhow",
  "chrono",
