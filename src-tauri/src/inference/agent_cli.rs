@@ -695,6 +695,20 @@ impl AgentCli {
         self.kind
     }
 
+    /// Point this engine at an arbitrary executable instead of the discovered
+    /// CLI. Test-only: it lets a shell script stand in for a vendor CLI, so
+    /// the REAL spawn → stream-parse → classify → hint pipeline runs against
+    /// scripted stdout/stderr instead of a live subscription.
+    #[cfg(test)]
+    pub(crate) fn with_binary_for_test(kind: AgentKind, binary: PathBuf) -> Self {
+        Self {
+            kind,
+            model: None,
+            effort: None,
+            binary: Some(binary),
+        }
+    }
+
     /// v1 session stance (RFC §5): one process per message, context replayed
     /// in the prompt — the Argos lifecycle with streaming output.
     fn build_prompt(&self, messages: &[ChatTurn]) -> (String, String) {
@@ -1451,6 +1465,97 @@ mod tests {
             );
             assert_eq!(kind.list_models_args().is_some(), expected, "{kind:?}");
         }
+    }
+
+    /// Write an executable script that plays a vendor CLI: prints the given
+    /// stdout and stderr, exits with the given code. The fixture for every
+    /// exit-code-blind pipeline test below.
+    fn fake_cli(stdout: &str, stderr: &str, exit: i32) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("nbl-fakecli-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("mk fake cli dir");
+        let path = dir.join("cli.sh");
+        let script = format!(
+            "#!/bin/sh\ncat <<'NBL_OUT'\n{stdout}\nNBL_OUT\ncat <<'NBL_ERR' >&2\n{stderr}\nNBL_ERR\nexit {exit}\n"
+        );
+        std::fs::write(&path, script).expect("write fake cli");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path
+    }
+
+    /// The situation end to end, not just the classifier: an old copilot
+    /// EXITS SUCCESSFULLY while printing its whole failure to stdout (Paul's
+    /// live transcript, footer on stderr) — the app must report an error, and
+    /// that error must carry the fix hint, not the stderr footer.
+    #[tokio::test]
+    async fn a_cli_that_prints_errors_and_exits_zero_is_reported_as_an_error() {
+        let stdout = "\u{00d7} Model call failed: {\"message\":\"The requested model is not supported.\",\"code\":\"model_not_supported\",\"param\":\"model\",\"type\":\"invalid_request_error\"}\n\
+             \n\
+             \u{00d7} Execution failed: Failed to get response from the AI model; retried 5 times";
+        let bin = fake_cli(stdout, "Changes    +0 -0\nAI Credits 3.4 (4s)", 0);
+        let cli = AgentCli::with_binary_for_test(AgentKind::Copilot, bin);
+        let err = cli
+            .chat(&[ChatTurn::user("hi")])
+            .await
+            .err()
+            .expect("an all-error transcript must surface as a failure");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("model_not_supported"), "{msg}");
+        assert!(msg.contains("Fix:"), "no fix hint attached: {msg}");
+        assert!(msg.contains("outdated"), "{msg}");
+        assert!(
+            !msg.contains("AI Credits") && !msg.contains("Changes"),
+            "stderr footer quoted as a cause: {msg}"
+        );
+    }
+
+    /// The false-positive guard, through the same real pipeline: an answer
+    /// that QUOTES an error line among normal prose must come back as a
+    /// successful answer, verbatim, never reclassified.
+    #[tokio::test]
+    async fn an_answer_discussing_an_error_is_never_reclassified() {
+        let stdout = "The failure you pasted was:\n\
+             \u{00d7} Model call failed: model_not_supported\n\
+             It means the CLI asked for a retired model.";
+        let bin = fake_cli(stdout, "AI Credits 1.2 (2s)", 0);
+        let cli = AgentCli::with_binary_for_test(AgentKind::Copilot, bin);
+        let out = cli
+            .chat(&[ChatTurn::user("what was that error?")])
+            .await
+            .expect("a real answer must not be swallowed");
+        assert!(out
+            .text
+            .contains("It means the CLI asked for a retired model."));
+        assert!(
+            out.text.contains("\u{00d7} Model call failed"),
+            "quoted line survives"
+        );
+        assert!(
+            !out.text.contains("AI Credits"),
+            "footer stays out of the answer"
+        );
+    }
+
+    /// The modern-copilot shape: empty stdout, a clean stderr error, exit 1.
+    /// The error must quote the stderr cause and carry the hint — and the
+    /// stats footer around it must not be mistaken for the cause.
+    #[tokio::test]
+    async fn a_clean_stderr_failure_carries_cause_and_hint_not_footer() {
+        let bin = fake_cli(
+            "",
+            "Error: Model \"fake-model-9000\" from --model flag is not available.\nChanges    +0 -0\nAI Credits 0.1 (1s)",
+            1,
+        );
+        let cli = AgentCli::with_binary_for_test(AgentKind::Copilot, bin);
+        let err = cli
+            .chat(&[ChatTurn::user("hi")])
+            .await
+            .err()
+            .expect("empty stdout is a failure");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("not available"), "stderr cause missing: {msg}");
+        assert!(msg.contains("Fix:"), "{msg}");
+        assert!(!msg.contains("AI Credits"), "footer quoted as cause: {msg}");
     }
 
     /// Paul's second copilot report, verbatim: an OLD copilot printed its
