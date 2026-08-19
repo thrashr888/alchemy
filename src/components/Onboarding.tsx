@@ -356,7 +356,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
             title="Connect Mac apps"
             detail="Add Calendar, Reminders, and Apple Notes as auto-syncing sources. Connecting triggers the macOS permission prompts once, up front."
           >
-            <MacConnect showInstallHint />
+            <MacConnect />
           </Step>
         </div>
 

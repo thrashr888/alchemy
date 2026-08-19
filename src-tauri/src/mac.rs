@@ -1,19 +1,26 @@
-//! Mac items as sources, via the cider CLI (https://github.com/thrashr888/cider).
+//! Mac items as sources, via the cider crate (https://github.com/thrashr888/cider).
 //!
 //! A `cider://` origin in a source's `url` names a living Mac item — a
 //! Reminders list, a rolling Calendar window, or an Apple Notes folder. The
-//! content is fetched over cider's JSON stdout, rendered to markdown, and
-//! ingested through the normal chunk/embed path; the resync sweep re-fetches
-//! on a gentle cadence and re-embeds when the content hash changes (the hash
-//! rides in the source's `mtime` column). Sync is the only way data flows
-//! in; the narrow write paths (edit a note, add a reminder) go to the Mac
-//! app first and re-sync back — see docs/RFC-cider-tools.md.
+//! content is fetched, rendered to markdown, and ingested through the normal
+//! chunk/embed path; the resync sweep re-fetches on a gentle cadence and
+//! re-embeds when the content hash changes (the hash rides in the source's
+//! `mtime` column). Sync is the only way data flows in; the narrow write paths
+//! (edit a note, add a reminder, check one off) go to the Mac app first and
+//! re-sync back — see docs/RFC-cider-tools.md.
+//!
+//! cider is linked, not spawned (it grew a library target in 0.3.0). It used to
+//! be a `brew install cider` binary found on PATH, which meant these sources
+//! silently did not exist for anyone who had not installed it — and that a CLI
+//! too old for a flag we needed failed at runtime. Neither is possible now: the
+//! version is compiled in. cider still shells out to macOS's own `osascript`
+//! and `sqlite3`, so TCC still applies and still attributes to Alchemy.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
 
 use anyhow::{anyhow, Context};
+use cider::sources as cider_lib;
 use serde::Serialize;
 
 /// One pickable item in the add-source modal's provider step.
@@ -23,25 +30,6 @@ pub struct MacCollection {
     pub id: String,
     pub label: String,
     pub detail: String,
-}
-
-/// GUI-spawned apps get a minimal PATH without Homebrew, so check the known
-/// install locations before falling back to PATH.
-fn cider_path() -> Option<PathBuf> {
-    for p in ["/opt/homebrew/bin/cider", "/usr/local/bin/cider"] {
-        let pb = PathBuf::from(p);
-        if pb.exists() {
-            return Some(pb);
-        }
-    }
-    which_cider()
-}
-
-fn which_cider() -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|d| d.join("cider"))
-        .find(|c| c.exists())
 }
 
 /// Turn a raw cider failure into something a person can act on. TCC denials
@@ -59,15 +47,7 @@ fn friendly_cider_error(raw: &str) -> String {
                 then relaunch Alchemy."
             .to_string();
     }
-    // An installed-but-old cider rejects a flag we rely on. clap's own wording
-    // ("unexpected argument '--id' found") tells the user nothing about which
-    // side is behind, so name the fix instead.
-    if raw.contains("unexpected argument") {
-        return "This needs a newer cider. Run `brew upgrade cider` \
-                (Alchemy needs 0.2.0 or later), then try again."
-            .to_string();
-    }
-    // Keep the first line — subprocess tracebacks aren't toast material.
+    // Keep the first line — multi-line tool output isn't toast material.
     raw.lines()
         .next()
         .unwrap_or("cider call failed")
@@ -76,61 +56,20 @@ fn friendly_cider_error(raw: &str) -> String {
         .collect()
 }
 
-/// Pull the message out of cider's `{"ok": false, "error": …}` envelope, or
-/// fall back to the raw text.
-fn envelope_message(text: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(text.trim())
-        .ok()
-        .and_then(|v| {
-            v["error"]["message"]
-                .as_str()
-                .or_else(|| v["error"].as_str())
-                .map(String::from)
-        })
-        .unwrap_or_else(|| text.trim().to_string())
-}
-
-/// Run cider and unwrap its `{"ok": bool, "data"/"error": …}` envelope.
-/// cider has internal JXA/osascript timeouts (15–30s); this outer one only
-/// catches a wedged process.
-async fn cider(args: &[&str]) -> anyhow::Result<serde_json::Value> {
-    let bin = cider_path().ok_or_else(|| anyhow!("cider is not installed (brew install cider)"))?;
-    let out = tokio::time::timeout(
-        std::time::Duration::from_secs(60),
-        tokio::process::Command::new(bin).args(args).output(),
-    )
-    .await
-    .map_err(|_| anyhow!("cider timed out"))?
-    .context("failed to run cider")?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    if stdout.trim().is_empty() {
-        // cider puts data on stdout and errors (including its JSON error
-        // envelope) on stderr — parse the envelope rather than echoing it.
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        if stderr.trim().is_empty() {
-            anyhow::bail!("cider produced no output");
-        }
-        anyhow::bail!("{}", friendly_cider_error(&envelope_message(&stderr)));
-    }
-    let v: serde_json::Value = serde_json::from_str(stdout.trim()).with_context(|| {
-        format!(
-            "unexpected cider output: {}",
-            stdout.chars().take(200).collect::<String>()
-        )
-    })?;
-    // Success is BARE JSON (an array or object); only failures wear the
-    // {"ok": false, "error": …} envelope.
-    if v["ok"].as_bool() == Some(false) {
-        let msg = v["error"]["message"]
-            .as_str()
-            .or_else(|| v["error"].as_str())
-            .unwrap_or("cider call failed");
-        return Err(anyhow!("{}", friendly_cider_error(msg)));
-    }
-    if v["ok"].as_bool() == Some(true) {
-        return Ok(v["data"].clone());
-    }
-    Ok(v)
+/// Await a cider call and hand back the JSON shape its CLI used to print.
+///
+/// The renderers below index by field name, and cider's JSON *is*
+/// `serde_json::to_value` of these same structs — so linking the crate changed
+/// the transport and nothing else. Errors keep going through
+/// [`friendly_cider_error`], because a TCC denial reads the same whether it
+/// arrives from a subprocess or a function call.
+async fn cider<T: serde::Serialize>(
+    call: impl std::future::Future<Output = anyhow::Result<T>>,
+) -> anyhow::Result<serde_json::Value> {
+    let value = call
+        .await
+        .map_err(|e| anyhow!("{}", friendly_cider_error(&format!("{e:#}"))))?;
+    serde_json::to_value(value).context("could not read cider's reply")
 }
 
 /// Content hash packed into the source's i64 `mtime` column — the sweep's
@@ -143,7 +82,10 @@ pub fn content_stamp(text: &str) -> i64 {
 
 #[tauri::command]
 pub fn mac_available() -> bool {
-    cider_path().is_some()
+    // cider is linked into the app now, so the integration always exists; the
+    // real gate is macOS permission prompts, which fire on first use. The
+    // command survives so older frontends keep working.
+    true
 }
 
 /// Open System Settings straight to Privacy & Security → Full Disk Access —
@@ -162,10 +104,10 @@ pub fn open_privacy_settings() -> Result<(), String> {
 #[tauri::command]
 pub async fn mac_connect(provider: String) -> Result<(), String> {
     match provider.as_str() {
-        "reminders" => cider(&["reminders", "list", "--limit", "1"]).await,
-        "calendar" => cider(&["calendar", "list", "--days-back", "0", "--days-ahead", "1"]).await,
-        "notes" => cider(&["notes", "folders"]).await,
-        "stocks" => cider(&["stocks", "watchlists"]).await,
+        "reminders" => cider(cider_lib::reminders::list(None)).await,
+        "calendar" => cider(cider_lib::calendar::list(Some(0), Some(1), None)).await,
+        "notes" => cider(cider_lib::notes::folders()).await,
+        "stocks" => cider(cider_lib::stocks::watchlists()).await,
         other => return Err(format!("Unknown Mac provider: {other}")),
     }
     .map(|_| ())
@@ -186,7 +128,7 @@ pub async fn list_mac_collections(provider: String) -> Result<Vec<MacCollection>
             })
             .collect()),
         "reminders" => {
-            let data = cider(&["reminders", "list"])
+            let data = cider(cider_lib::reminders::list(None))
                 .await
                 .map_err(|e| format!("{e:#}"))?;
             let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
@@ -210,7 +152,7 @@ pub async fn list_mac_collections(provider: String) -> Result<Vec<MacCollection>
         // library fast; the picker searches and groups it by folder
         // client-side.
         "notes" => {
-            let data = cider(&["notes", "list", "--brief"])
+            let data = cider(cider_lib::notes::list_brief(None))
                 .await
                 .map_err(|e| format!("{e:#}"))?;
             Ok(data
@@ -229,7 +171,7 @@ pub async fn list_mac_collections(provider: String) -> Result<Vec<MacCollection>
         }
         // Stocks watchlists — one list becomes one auto-refreshing source.
         "stocks" => {
-            let data = cider(&["stocks", "watchlists"])
+            let data = cider(cider_lib::stocks::watchlists())
                 .await
                 .map_err(|e| format!("{e:#}"))?;
             Ok(data
@@ -266,7 +208,12 @@ pub fn mac_uri(provider: &str, collection: &str) -> String {
 /// Returns (default_title, markdown).
 pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
     if let Some(days) = uri.strip_prefix("cider://calendar/upcoming/") {
-        let data = cider(&["calendar", "list", "--days-back", "0", "--days-ahead", days]).await?;
+        let data = cider(cider_lib::calendar::list(
+            Some(0),
+            Some(days.parse().unwrap_or(7)),
+            None,
+        ))
+        .await?;
         let mut out = format!("# Calendar — next {days} days\n\n");
         let mut last_day = String::new();
         for e in data.as_array().unwrap_or(&vec![]) {
@@ -300,7 +247,7 @@ pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
         return Ok((format!("Calendar: next {days} days"), out));
     }
     if let Some(list) = uri.strip_prefix("cider://reminders/list/") {
-        let data = cider(&["reminders", "list", "--list", list]).await?;
+        let data = cider(cider_lib::reminders::list(Some(list))).await?;
         let mut out = format!("# Reminders — {list}\n\n");
         for r in data.as_array().unwrap_or(&vec![]) {
             out.push_str(&format!(
@@ -330,7 +277,7 @@ pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
         return Ok((format!("Reminders: {list}"), out));
     }
     if let Some(id) = uri.strip_prefix("cider://notes/note/") {
-        let n = cider(&["notes", "get", "--id", id]).await?;
+        let n = cider(cider_lib::notes::get(id)).await?;
         let title = n["title"].as_str().unwrap_or("Untitled").to_string();
         let mut out = format!("# {title}\n\n");
         if let Some(f) = n["folder"].as_str() {
@@ -352,7 +299,7 @@ pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
     if let Some(list) = uri.strip_prefix("cider://stocks/watchlist/") {
         // Two calls: the watchlist for membership/order, the quote cache for
         // prices. Quotes are as fresh as the Stocks app/widget keeps them.
-        let lists = cider(&["stocks", "watchlists"]).await?;
+        let lists = cider(cider_lib::stocks::watchlists()).await?;
         let symbols: Vec<String> = lists
             .as_array()
             .unwrap_or(&vec![])
@@ -366,7 +313,7 @@ pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
         if symbols.is_empty() {
             anyhow::bail!("Watchlist \"{list}\" not found in Apple Stocks (was it renamed?)");
         }
-        let quotes = cider(&["stocks", "list"]).await?;
+        let quotes = cider(cider_lib::stocks::fetch()).await?;
         let mut out = format!("# Stocks — {list}\n\n");
         let mut as_of = "";
         let empty = vec![];
@@ -409,7 +356,7 @@ pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
     }
     // Legacy folder-as-source origins keep syncing.
     if let Some(folder) = uri.strip_prefix("cider://notes/folder/") {
-        let data = cider(&["notes", "list", "--folder", folder]).await?;
+        let data = cider(cider_lib::notes::list(Some(folder), None)).await?;
         let mut out = format!("# Apple Notes — {folder}\n\n");
         for n in data.as_array().unwrap_or(&vec![]) {
             out.push_str(&format!(
@@ -441,7 +388,7 @@ pub fn is_mac_uri(url: &str) -> bool {
 /// `--list` filtering just yields no rows either way — so adds check the
 /// list's existence explicitly against `reminders lists`.
 pub async fn reminders_list_exists(name: &str) -> anyhow::Result<bool> {
-    let data = cider(&["reminders", "lists"]).await?;
+    let data = cider(cider_lib::reminders::lists()).await?;
     Ok(data
         .as_array()
         .unwrap_or(&vec![])
@@ -462,7 +409,7 @@ pub async fn note_body(uri: &str) -> anyhow::Result<String> {
     let id = uri
         .strip_prefix("cider://notes/note/")
         .ok_or_else(|| anyhow!("Not an Apple Notes source: {uri}"))?;
-    let n = cider(&["notes", "get", "--id", id]).await?;
+    let n = cider(cider_lib::notes::get(id)).await?;
     Ok(n["body"].as_str().unwrap_or_default().to_string())
 }
 
@@ -471,9 +418,7 @@ pub async fn update_note(uri: &str, body: &str) -> anyhow::Result<()> {
     let id = uri
         .strip_prefix("cider://notes/note/")
         .ok_or_else(|| anyhow!("Not an Apple Notes source: {uri}"))?;
-    cider(&["notes", "update", "--id", id, "--body", body])
-        .await
-        .map(|_| ())
+    cider(cider_lib::notes::update(id, body)).await.map(|_| ())
 }
 
 /// Add a reminder to the list this source mirrors.
@@ -481,14 +426,16 @@ pub async fn add_reminder(uri: &str, title: &str, notes: Option<&str>) -> anyhow
     let list = uri
         .strip_prefix("cider://reminders/list/")
         .ok_or_else(|| anyhow!("Not a Reminders source: {uri}"))?;
-    let mut args = vec!["reminders", "create", "--title", title, "--list", list];
-    if let Some(n) = notes {
-        if !n.trim().is_empty() {
-            args.push("--notes");
-            args.push(n);
-        }
-    }
-    cider(&args).await.map(|_| ())
+    let notes = notes.map(str::trim).filter(|n| !n.is_empty());
+    cider(cider_lib::reminders::create(
+        title,
+        Some(list),
+        None,
+        None,
+        notes,
+    ))
+    .await
+    .map(|_| ())
 }
 
 /// Check off a reminder in the list this source mirrors.
@@ -496,8 +443,8 @@ pub async fn add_reminder(uri: &str, title: &str, notes: Option<&str>) -> anyhow
 /// Always by id, never by title: Reminders lets two items share a name, and a
 /// by-title completion picks one of them silently. The id is the one cider
 /// prints in `reminders list` and that `fetch` renders into the source text.
-/// Needs cider 0.2.0+ (`--id`); older builds reject the flag, which
-/// [`friendly_cider_error`] turns into an upgrade instruction.
+/// The id is what cider prints in `reminders list` and what `fetch` renders
+/// into the source text.
 pub async fn complete_reminder(uri: &str, id: &str) -> anyhow::Result<()> {
     let list = uri
         .strip_prefix("cider://reminders/list/")
@@ -505,9 +452,12 @@ pub async fn complete_reminder(uri: &str, id: &str) -> anyhow::Result<()> {
     if id.trim().is_empty() {
         anyhow::bail!("no reminder id — pick one from the list");
     }
-    cider(&["reminders", "complete", "--id", id.trim(), "--list", list])
-        .await
-        .map(|_| ())
+    cider(cider_lib::reminders::complete(
+        cider_lib::reminders::Target::Id(id.trim()),
+        Some(list),
+    ))
+    .await
+    .map(|_| ())
 }
 
 /// The resync sweep runs every minute, but Mac fetches go through osascript
@@ -541,14 +491,16 @@ mod tests {
     // Access) — the user must never see raw JSON or tracebacks.
     #[test]
     fn tcc_denials_become_one_instruction() {
+        // The library's anyhow chains, formatted `{e:#}` — the messages the
+        // old CLI wrapped in a JSON envelope now arrive bare.
         for raw in [
-            r#"{"error":{"code":"operation_failed","message":"sqlite3 failed: Error: unable to open database \"/Users/x/Library/Group Containers/group.com.apple.calendar/Calendar.sqlitedb\": authorization denied\n"},"ok":false}"#,
-            r#"{"error":{"code":"operation_failed","message":"ls failed: ls: /Users/x/Library/Group Containers/group.com.apple.reminders/Container_v1/Stores: Operation not permitted\n"},"ok":false}"#,
-            r#"{"error":{"code":"permission_denied","message":"python3 failed: Traceback (most recent call last):\n  File \"<string>\", line 24, in <module>\nPermissionError: [Errno 1] Operation not permitted: '/Users/x/…'"},"ok":false}"#,
+            "sqlite3 failed: Error: unable to open database \
+             \"/Users/x/…/Calendar.sqlitedb\": authorization denied",
+            "ls failed: ls: /Users/x/…/Stores: Operation not permitted",
+            "python3 failed: PermissionError: [Errno 1] Operation not permitted",
         ] {
-            let msg = friendly_cider_error(&envelope_message(raw));
+            let msg = friendly_cider_error(raw);
             assert!(msg.contains("Full Disk Access"), "got: {msg}");
-            assert!(!msg.contains('{'), "raw JSON leaked: {msg}");
         }
     }
 
@@ -556,16 +508,6 @@ mod tests {
     fn other_errors_keep_first_line_only() {
         let msg = friendly_cider_error("osascript failed: some error\nline two\nline three");
         assert_eq!(msg, "osascript failed: some error");
-
-        // An old cider rejecting --id must read as "upgrade", not as clap noise.
-        let stale = friendly_cider_error("error: unexpected argument '--id' found");
-        assert!(stale.contains("brew upgrade cider"), "{stale}");
-        assert!(stale.contains("0.2.0"), "{stale}");
-    }
-
-    #[test]
-    fn plain_stderr_passes_through() {
-        assert_eq!(envelope_message("not json at all"), "not json at all");
     }
 
     // Agents hand add_source raw cider:// strings (vs the UI's picker), so

@@ -21,14 +21,9 @@ const PROVIDERS = [
  * "Connect" buttons for the Mac providers (Settings → General, onboarding).
  * Each runs one benign read through cider so the macOS consent prompt fires
  * at a predictable moment — clicking Allow here means adding a Mac source
- * later just works. Hidden entirely when cider isn't installed unless
- * `showInstallHint`.
+ * later just works.
  */
-export function MacConnect({
-  showInstallHint = false,
-}: {
-  showInstallHint?: boolean;
-}) {
+export function MacConnect() {
   const macAvailable = useStore((s) => s.macAvailable);
   const pushToast = useStore((s) => s.pushToast);
   const [busy, setBusy] = useState<string | null>(null);
@@ -36,15 +31,8 @@ export function MacConnect({
   // a button straight to the right Settings pane, not just a toast.
   const [fdaError, setFdaError] = useState<string | null>(null);
 
-  if (macAvailable === false) {
-    return showInstallHint ? (
-      <p className="text-micro leading-relaxed text-subtle-foreground">
-        Install <code className="rounded bg-surface-2 px-1">cider</code> to use
-        Calendar, Reminders &amp; Apple Notes as sources:{" "}
-        <code className="rounded bg-surface-2 px-1">brew install cider</code>
-      </p>
-    ) : null;
-  }
+  // cider is linked into the app since v0.40 — the integration always exists,
+  // so the only remaining gate is the initial null while the probe resolves.
   if (!macAvailable) return null;
 
   return (
