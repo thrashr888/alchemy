@@ -345,6 +345,13 @@ const EARNINGS_SOURCES: &[ExampleSource] = &[
 /// alignment work that assumed them). Each body is a summary written for
 /// this notebook; `url` is the paper's arXiv abstract page, which is stable
 /// in a way that PDF links and conference URLs are not.
+///
+/// Additions land on existing installs through [`top_up_ai_research`], which
+/// inserts by-title-missing entries into an already-seeded notebook — append
+/// or insert here and bump [`EXAMPLES_VERSION`] so seeded installs get one
+/// top-up pass. Two asked-for topics are deliberately mapped sideways:
+/// "KV cache" has no standalone paper (multi-query attention IS its
+/// literature), and A2A is a protocol spec, not a paper, so it is absent.
 const AI_RESEARCH_SOURCES: &[ExampleSource] = &[
     (
         "Attention Is All You Need",
@@ -372,6 +379,11 @@ const AI_RESEARCH_SOURCES: &[ExampleSource] = &[
         include_str!("../examples/ai-research/adam.md"),
     ),
     (
+        "Auto-Encoding Variational Bayes (VAE)",
+        "https://arxiv.org/abs/1312.6114",
+        include_str!("../examples/ai-research/vae.md"),
+    ),
+    (
         "Generative Adversarial Networks",
         "https://arxiv.org/abs/1406.2661",
         include_str!("../examples/ai-research/gan.md"),
@@ -387,9 +399,49 @@ const AI_RESEARCH_SOURCES: &[ExampleSource] = &[
         include_str!("../examples/ai-research/vit.md"),
     ),
     (
+        "CLIP: Learning Transferable Visual Models From Natural Language Supervision",
+        "https://arxiv.org/abs/2103.00020",
+        include_str!("../examples/ai-research/clip.md"),
+    ),
+    (
+        "BLIP: Bootstrapping Language-Image Pre-training",
+        "https://arxiv.org/abs/2201.12086",
+        include_str!("../examples/ai-research/blip.md"),
+    ),
+    (
+        "Sparsely-Gated Mixture-of-Experts",
+        "https://arxiv.org/abs/1701.06538",
+        include_str!("../examples/ai-research/moe.md"),
+    ),
+    (
+        "RoFormer: Rotary Position Embedding (RoPE)",
+        "https://arxiv.org/abs/2104.09864",
+        include_str!("../examples/ai-research/rope.md"),
+    ),
+    (
+        "Multi-Query Attention: One Write-Head is All You Need",
+        "https://arxiv.org/abs/1911.02150",
+        include_str!("../examples/ai-research/multi-query-attention.md"),
+    ),
+    (
+        "FlashAttention: Fast and Memory-Efficient Exact Attention",
+        "https://arxiv.org/abs/2205.14135",
+        include_str!("../examples/ai-research/flashattention.md"),
+    ),
+    (
         "Chain-of-Thought Prompting Elicits Reasoning",
         "https://arxiv.org/abs/2201.11903",
         include_str!("../examples/ai-research/chain-of-thought.md"),
+    ),
+    (
+        "ReAct: Synergizing Reasoning and Acting in Language Models",
+        "https://arxiv.org/abs/2210.03629",
+        include_str!("../examples/ai-research/react.md"),
+    ),
+    (
+        "Adapters: Parameter-Efficient Transfer Learning for NLP",
+        "https://arxiv.org/abs/1902.00751",
+        include_str!("../examples/ai-research/adapters.md"),
     ),
     (
         "LoRA: Low-Rank Adaptation of Large Language Models",
@@ -402,9 +454,19 @@ const AI_RESEARCH_SOURCES: &[ExampleSource] = &[
         include_str!("../examples/ai-research/rag.md"),
     ),
     (
+        "GraphRAG: From Local to Global",
+        "https://arxiv.org/abs/2404.16130",
+        include_str!("../examples/ai-research/graphrag.md"),
+    ),
+    (
         "Scaling Laws for Neural Language Models",
         "https://arxiv.org/abs/2001.08361",
         include_str!("../examples/ai-research/scaling-laws.md"),
+    ),
+    (
+        "Deep Reinforcement Learning from Human Preferences (RLHF)",
+        "https://arxiv.org/abs/1706.03741",
+        include_str!("../examples/ai-research/rlhf.md"),
     ),
     (
         "Training Language Models to Follow Instructions (InstructGPT)",
@@ -422,10 +484,33 @@ const AI_RESEARCH_SOURCES: &[ExampleSource] = &[
 /// landed (so the caller can nudge open windows to refresh). Failures leave
 /// the marker unwritten and retry on the next launch; a user deleting the
 /// notebooks after the marker exists is final.
+/// Bump when the example content grows, so installs seeded by an older build
+/// get one [`top_up_ai_research`] pass. The marker file's CONTENT carries the
+/// version; the original release wrote "1".
+const EXAMPLES_VERSION: &str = "2";
+
 pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
     let marker = app_data_dir(state).join("examples-seeded");
-    if marker.exists() {
-        return false;
+    if let Ok(v) = std::fs::read_to_string(&marker) {
+        if v.trim() == EXAMPLES_VERSION {
+            return false;
+        }
+        // Seeded by an older build: add what that build didn't have, without
+        // re-offering anything the user deleted. Failure (embedder not up
+        // yet) leaves the marker at the old version so the next launch
+        // retries, same contract as first seeding.
+        let ai = state.ai.read().await.clone();
+        let added = match top_up_ai_research(&state.db, &ai).await {
+            Ok(n) => n > 0,
+            Err(err) => {
+                eprintln!("examples: papers top-up failed ({err:#}); will retry next launch");
+                return false;
+            }
+        };
+        if let Err(err) = std::fs::write(&marker, EXAMPLES_VERSION) {
+            eprintln!("examples: couldn't write marker: {err}");
+        }
+        return added;
     }
     // Clone the configured Ai under a momentary read guard — never held
     // across an await. The chunks table's vector dimensionality is fixed by
@@ -454,10 +539,48 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
         eprintln!("examples: seeding registry cards failed ({err:#}); will retry next launch");
         return seeded;
     }
-    if let Err(err) = std::fs::write(&marker, b"1") {
+    if let Err(err) = std::fs::write(&marker, EXAMPLES_VERSION) {
         eprintln!("examples: couldn't write marker: {err}");
     }
     seeded
+}
+
+/// Insert papers this build knows and the seeded notebook lacks (matched by
+/// title). Touches nothing else: a deleted notebook stays deleted (`Ok(0)`),
+/// and a paper the user removed only returns if a LATER version adds it back
+/// under this mechanism — which only ever runs once per version bump.
+async fn top_up_ai_research(db: &Db, ai: &Ai) -> anyhow::Result<usize> {
+    let notebooks = db.list_notebooks().await?;
+    let Some(nb) = notebooks.iter().find(|n| n.title == AI_RESEARCH_TITLE) else {
+        return Ok(0);
+    };
+    let have: std::collections::HashSet<String> = db
+        .list_sources(&nb.id)
+        .await?
+        .into_iter()
+        .map(|s| s.title)
+        .collect();
+    let missing: Vec<&ExampleSource> = AI_RESEARCH_SOURCES
+        .iter()
+        .filter(|(title, _, _)| !have.contains(*title))
+        .collect();
+    if missing.is_empty() {
+        return Ok(0);
+    }
+    // Embed everything before writing anything, like first seeding: a
+    // mid-list embedder failure must not leave a half-topped-up notebook
+    // behind a marker that says the work is done.
+    let mut prepared = Vec::with_capacity(missing.len());
+    for (src_title, url, body) in missing {
+        prepared.push(prepare_source(ai, src_title, url, body).await?);
+    }
+    let n = prepared.len();
+    let ts = now();
+    for p in prepared {
+        insert_prepared(db, &nb.id, ts, p).await?;
+    }
+    eprintln!("examples: added {n} papers to \u{201c}{AI_RESEARCH_TITLE}\u{201d}");
+    Ok(n)
 }
 
 /// Seed the example cast, then let the ordinary matcher file it.
@@ -546,6 +669,63 @@ async fn seed_registry_cards(db: &Db) -> anyhow::Result<()> {
 /// earlier attempt), so retries never duplicate. Every source is chunked and
 /// embedded *before* anything is written, so the common failure — no
 /// embedder available on a fresh machine — leaves no half-filled notebook.
+struct Prepared {
+    title: String,
+    url: String,
+    text: String,
+    chunks: Vec<(String, i32, String)>,
+    embeddings: Vec<Vec<f32>>,
+}
+
+/// Extract, chunk, and embed one example source, ready to insert.
+async fn prepare_source(
+    ai: &Ai,
+    src_title: &str,
+    url: &str,
+    body: &str,
+) -> anyhow::Result<Prepared> {
+    let extracted = ingest::extract_pasted(src_title, body)?;
+    let chunks = ingest::chunk_text(&extracted.title, &extracted.text);
+    let inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
+    let embeddings = ai.embed(&inputs).await?;
+    let tuples = chunks
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (new_id(), i as i32, c.text.clone()))
+        .collect();
+    Ok(Prepared {
+        title: extracted.title,
+        url: url.to_string(),
+        text: extracted.text,
+        chunks: tuples,
+        embeddings,
+    })
+}
+
+/// Write one prepared source into a notebook.
+async fn insert_prepared(db: &Db, notebook_id: &str, ts: i64, p: Prepared) -> anyhow::Result<()> {
+    let source = Source {
+        id: new_id(),
+        notebook_id: notebook_id.to_string(),
+        title: p.title,
+        source_type: "text".into(),
+        url: p.url,
+        content: p.text.clone(),
+        char_count: p.text.chars().count() as i64,
+        chunk_count: p.chunks.len() as i64,
+        created_at: ts,
+        status: "ready".into(),
+        error: String::new(),
+        parent_id: String::new(),
+        mtime: 0,
+        image_url: String::new(),
+        author: String::new(),
+        tags: String::new(),
+        note: String::new(),
+    };
+    db.insert_source(&source, &p.chunks, &p.embeddings).await
+}
+
 async fn seed_notebook(
     db: &Db,
     ai: &Ai,
@@ -557,31 +737,9 @@ async fn seed_notebook(
         return Ok(false);
     }
 
-    struct Prepared {
-        title: String,
-        url: String,
-        text: String,
-        chunks: Vec<(String, i32, String)>,
-        embeddings: Vec<Vec<f32>>,
-    }
     let mut prepared = Vec::with_capacity(sources.len());
     for (src_title, url, body) in sources {
-        let extracted = ingest::extract_pasted(src_title, body)?;
-        let chunks = ingest::chunk_text(&extracted.title, &extracted.text);
-        let inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
-        let embeddings = ai.embed(&inputs).await?;
-        let tuples = chunks
-            .iter()
-            .enumerate()
-            .map(|(i, c)| (new_id(), i as i32, c.text.clone()))
-            .collect();
-        prepared.push(Prepared {
-            title: extracted.title,
-            url: url.to_string(),
-            text: extracted.text,
-            chunks: tuples,
-            embeddings,
-        });
+        prepared.push(prepare_source(ai, src_title, url, body).await?);
     }
 
     let ts = now();
@@ -600,26 +758,7 @@ async fn seed_notebook(
     };
     db.create_notebook(&nb).await?;
     for p in prepared {
-        let source = Source {
-            id: new_id(),
-            notebook_id: nb.id.clone(),
-            title: p.title,
-            source_type: "text".into(),
-            url: p.url,
-            content: p.text.clone(),
-            char_count: p.text.chars().count() as i64,
-            chunk_count: p.chunks.len() as i64,
-            created_at: ts,
-            status: "ready".into(),
-            error: String::new(),
-            parent_id: String::new(),
-            mtime: 0,
-            image_url: String::new(),
-            author: String::new(),
-            tags: String::new(),
-            note: String::new(),
-        };
-        db.insert_source(&source, &p.chunks, &p.embeddings).await?;
+        insert_prepared(db, &nb.id, ts, p).await?;
     }
     Ok(true)
 }
@@ -652,6 +791,29 @@ mod tests {
             let n = words(body);
             assert!((350..=1000).contains(&n), "{title}: {n} words");
         }
+        // The papers notebook: unique titles, arXiv abstract urls (the
+        // stable form), bodies in the house shape with the url repeated in
+        // the "Read the paper" footer, at essay length not stub length.
+        assert_eq!(AI_RESEARCH_SOURCES.len(), 25);
+        for (title, url, body) in AI_RESEARCH_SOURCES {
+            assert!(!title.trim().is_empty());
+            assert!(titles.insert(*title), "duplicate title {title}");
+            assert!(
+                url.starts_with("https://arxiv.org/abs/"),
+                "{title}: url should be an arXiv abstract page, got {url}"
+            );
+            let n = words(body);
+            assert!((120..=280).contains(&n), "{title}: {n} words");
+            assert!(
+                body.contains(&format!("Read the paper: {url}")),
+                "{title} body missing its read-the-paper footer"
+            );
+            assert!(
+                body.lines().next().unwrap_or("").contains("arXiv:"),
+                "{title} first line missing its arXiv id"
+            );
+        }
+
         for (title, url, body) in EARNINGS_SOURCES {
             let n = words(body);
             assert!((120..=360).contains(&n), "{title}: {n} words");
@@ -703,6 +865,54 @@ mod tests {
         assert!(!created);
         let notebooks = db.list_notebooks().await.expect("list");
         assert_eq!(notebooks.len(), 1, "no duplicate notebook created");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The additive path: an install seeded before this build's papers
+    /// existed gets exactly the missing ones — and a deleted notebook stays
+    /// deleted. Uses the built-in embedder (CI-safe; skips offline).
+    #[tokio::test]
+    async fn top_up_adds_only_missing_papers() {
+        let Some(ai) = crate::evals::builtin_ai().await else {
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!("nbl-topup-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+
+        // No papers notebook at all: deletion is final, top-up is a no-op.
+        let n = top_up_ai_research(&db, &ai).await.expect("no-op path");
+        assert_eq!(n, 0, "a deleted notebook must not be resurrected");
+
+        // A v1 install: the notebook exists holding only the first paper.
+        let first = &AI_RESEARCH_SOURCES[0];
+        seed_notebook(&db, &ai, AI_RESEARCH_TITLE, std::slice::from_ref(first))
+            .await
+            .expect("seed one-paper notebook");
+
+        let added = top_up_ai_research(&db, &ai).await.expect("top-up");
+        assert_eq!(added, AI_RESEARCH_SOURCES.len() - 1);
+
+        let nb = db
+            .list_notebooks()
+            .await
+            .expect("list")
+            .into_iter()
+            .find(|n| n.title == AI_RESEARCH_TITLE)
+            .expect("papers notebook");
+        let titles: std::collections::HashSet<String> = db
+            .list_sources(&nb.id)
+            .await
+            .expect("sources")
+            .into_iter()
+            .map(|s| s.title)
+            .collect();
+        for (title, _, _) in AI_RESEARCH_SOURCES {
+            assert!(titles.contains(*title), "missing {title} after top-up");
+        }
+
+        // Running again adds nothing — by-title idempotence.
+        let again = top_up_ai_research(&db, &ai).await.expect("idempotent");
+        assert_eq!(again, 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
