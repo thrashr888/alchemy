@@ -347,6 +347,7 @@ pub fn run() {
             commands::check_ollama,
             commands::check_models,
             commands::list_gateway_models,
+            commands::provider_models,
             commands::get_model_stats,
             commands::suggest_followups,
             commands::generate_epigraph,

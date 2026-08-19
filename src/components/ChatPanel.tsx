@@ -16,7 +16,14 @@ import {
   slashNorm,
   type SlashCommandMeta,
 } from "@/lib/slashCommands";
-import type { Citation, GrepHit, Message, NoteKind } from "@/lib/types";
+import type {
+  Citation,
+  GrepHit,
+  Message,
+  NoteKind,
+  ProviderEntry,
+  ProviderModels,
+} from "@/lib/types";
 import {
   MessageSquare,
   Wrench,
@@ -86,6 +93,7 @@ export function ChatPanel() {
   const sending = useStore((s) => s.sending);
   const streamingText = useStore((s) => s.streamingText);
   const steps = useStore((s) => s.steps);
+  const waiting = useStore((s) => s.waiting);
   const agentMode = useStore((s) => s.agentMode);
   const toggleAgentMode = useStore((s) => s.toggleAgentMode);
   const send = useStore((s) => s.sendMessage);
@@ -196,9 +204,13 @@ export function ChatPanel() {
     const unToken = listen<{ content: string }>("chat://token", (e) => {
       if (useStore.getState().sending) appendToken(e.payload.content);
     });
-    const unStep = listen<{ label: string }>("chat://step", (e) => {
-      if (useStore.getState().sending) appendStep(e.payload.label);
-    });
+    const unStep = listen<{ label: string; transient: boolean }>(
+      "chat://step",
+      (e) => {
+        if (useStore.getState().sending)
+          appendStep(e.payload.label, e.payload.transient);
+      },
+    );
     // Verify-and-repair swaps a revised answer under the same message id
     // (backend spawn_answer_verify). Events reach every window — apply
     // only when the message is in this window's transcript.
@@ -699,7 +711,13 @@ export function ChatPanel() {
           {sending && (
             <div className="flex flex-col gap-2">
               <RoleLabel role="assistant" />
-              {steps.length > 0 && <StepTrail steps={steps} done={!!streamingText} />}
+              {steps.length > 0 && (
+                <StepTrail
+                  steps={steps}
+                  waiting={waiting}
+                  done={!!streamingText}
+                />
+              )}
               {streamingText ? (
                 <Markdown>{streamingText}</Markdown>
               ) : (
@@ -1483,11 +1501,21 @@ function Citations({ citations }: { citations: Citation[] }) {
   );
 }
 
-function StepTrail({ steps, done }: { steps: string[]; done: boolean }) {
+function StepTrail({
+  steps,
+  waiting,
+  done,
+}: {
+  steps: string[];
+  waiting: string;
+  done: boolean;
+}) {
   return (
     <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface/60 px-3 py-2">
       {steps.map((s, i) => {
-        const isLast = i === steps.length - 1;
+        // The countdown, when there is one, is the thing still running — the
+        // last completed step hands its spinner over to it.
+        const isLast = i === steps.length - 1 && !waiting;
         const spinning = isLast && !done;
         return (
           <div key={i} className="flex items-center gap-2 text-caption">
@@ -1503,6 +1531,15 @@ function StepTrail({ steps, done }: { steps: string[]; done: boolean }) {
           </div>
         );
       })}
+      {waiting && !done && (
+        <div className="flex items-center gap-2 text-caption" aria-live="polite">
+          <span
+            className="h-2.5 w-2.5 shrink-0 rounded-full border-[1.5px] border-primary border-t-transparent animate-spin"
+            aria-hidden
+          />
+          <span className="text-muted-foreground">{waiting}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -1612,111 +1649,486 @@ function RotatingQuote({ theme }: { theme: string }) {
 }
 
 
-/** Composer model pill: which brain answers this notebook. Lists only
- *  providers that are ready right now; settings stay a click away. */
+/** Provider kinds that are a vendor CLI (family B), where a blank model means
+ *  "the CLI's own default" rather than "no model". Mirrors the Rust roster in
+ *  `inference::AgentKind::id`. */
+const AGENT_KINDS = new Set([
+  "claude-code",
+  "codex",
+  "gemini-cli",
+  "cursor-cli",
+  "opencode",
+  "copilot",
+  "hermes",
+  "bob-shell",
+  "prime-agent",
+  "pi",
+]);
+const isAgentProvider = (kind: string) => AGENT_KINDS.has(kind);
+
+/** Composer model controls: provider, then that provider's model, then its
+ *  reasoning effort. Three pills rather than one nested menu — a flyout inside
+ *  a popover anchored above the composer has nowhere to go, and each list is
+ *  short and flat on its own. The Effort pill is absent, not disabled, for a
+ *  provider with no effort control (see `ProviderModels.efforts`). */
 function ModelPill() {
   const aiConfig = useStore((s) => s.aiConfig);
   const saveAiConfig = useStore((s) => s.saveAiConfig);
   const openSettings = useStore((s) => s.openSettings);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState<null | "provider" | "model" | "effort">(null);
   const [ready, setReady] = useState<
     { id: string; ready: boolean; detail: string }[]
   >([]);
+  // What the active provider offers. Fetched when a menu that needs it opens
+  // (listing spawns a CLI), and re-fetched when the provider changes.
+  const [offer, setOffer] = useState<ProviderModels | null>(null);
+
+  const active = aiConfig?.providers.find((p) => p.id === aiConfig.chatProvider);
+  const activeId = active?.id;
 
   useEffect(() => {
-    if (open) void api.providerReadiness().then(setReady).catch(() => {});
+    if (open === "provider") void api.providerReadiness().then(setReady).catch(() => {});
   }, [open]);
 
-  if (!aiConfig) return null;
-  const active = aiConfig.providers.find((p) => p.id === aiConfig.chatProvider);
+  useEffect(() => {
+    setOffer(null);
+    if (!activeId) return;
+    let live = true;
+    void api
+      .providerModels(activeId)
+      .then((m) => live && setOffer(m))
+      // A catalogue we couldn't fetch is an empty one: Default and Custom…
+      // still work, so the pill is never a dead end.
+      .catch(
+        () =>
+          live &&
+          setOffer({
+            models: [],
+            supportsDefault: true,
+            efforts: [],
+            defaultModel: null,
+          }),
+      );
+    return () => {
+      live = false;
+    };
+  }, [activeId]);
 
+  if (!aiConfig || !active) return null;
+
+  /** Save a change to the active provider. `keepOpen` is for the effort
+   *  slider, which commits as you drag — closing the menu under the pointer
+   *  mid-drag would be its own bug. */
+  function commit(next: Partial<ProviderEntry>, keepOpen = false) {
+    if (!aiConfig || !active) return;
+    const id = active.id;
+    if (!keepOpen) setOpen(null);
+    void saveAiConfig({
+      ...aiConfig,
+      chatProvider: id,
+      providers: aiConfig.providers.map((p) =>
+        p.id === id ? { ...p, ...next } : p,
+      ),
+    });
+  }
+
+  const efforts = offer?.efforts ?? [];
+
+  return (
+    <span className="inline-flex items-center gap-1">
+      <MenuPill
+        label={active.label}
+        open={open === "provider"}
+        onToggle={() => setOpen((o) => (o === "provider" ? null : "provider"))}
+        onClose={() => setOpen(null)}
+        title="Which provider answers this notebook"
+        menuLabel="Answer with"
+      >
+        {aiConfig.providers.map((p) => {
+          const r = ready.find((x) => x.id === p.id);
+          const selectable = r ? r.ready : true;
+          return (
+            <MenuRow
+              key={p.id}
+              label={p.label}
+              selected={aiConfig.chatProvider === p.id}
+              disabled={!selectable}
+              note={!selectable ? "unavailable" : undefined}
+              autoFocus={p.id === aiConfig.chatProvider}
+              onPick={() => {
+                setOpen(null);
+                void saveAiConfig({ ...aiConfig, chatProvider: p.id });
+              }}
+            />
+          );
+        })}
+        <div className="mx-2 my-1 h-px bg-border" />
+        <MenuRow
+          label="Model settings…"
+          muted
+          onPick={() => {
+            setOpen(null);
+            openSettings("models");
+          }}
+        />
+      </MenuPill>
+
+      {active.kind !== "fm" && (
+        <MenuPill
+          // Naming the inherited model beats the bare word "Default", which
+          // tells the user nothing about what will actually answer. Muted, so
+          // "inherited" still reads differently from "chosen".
+          label={active.chatModel || offer?.defaultModel || "Default"}
+          muted={!active.chatModel}
+          open={open === "model"}
+          onToggle={() => setOpen((o) => (o === "model" ? null : "model"))}
+          onClose={() => setOpen(null)}
+          title={
+            active.chatModel
+              ? `Model for ${active.label}`
+              : offer?.defaultModel
+                ? `${active.label} default: ${offer.defaultModel}`
+                : `Model for ${active.label} — using its own default`
+          }
+          menuLabel="Models"
+        >
+          {!offer ? (
+            <div className="px-2.5 py-1.5 text-micro text-subtle-foreground">
+              reading models…
+            </div>
+          ) : (
+            <>
+              {offer.supportsDefault && (
+                <MenuRow
+                  label="Default"
+                  // Name the model when Default resolves to one we know;
+                  // otherwise say whose default it is.
+                  badge={
+                    offer.defaultModel ??
+                    (isAgentProvider(active.kind) ? "the CLI's own" : undefined)
+                  }
+                  selected={!active.chatModel}
+                  onPick={() => commit({ chatModel: "" })}
+                />
+              )}
+              {offer.models.map((m: string) => (
+                <MenuRow
+                  key={m}
+                  label={m}
+                  selected={active.chatModel === m}
+                  onPick={() => commit({ chatModel: m })}
+                />
+              ))}
+              <div className="mx-2 my-1 h-px bg-border" />
+              <CustomModelRow
+                current={active.chatModel}
+                known={offer.models}
+                onCommit={(m) => commit({ chatModel: m })}
+              />
+            </>
+          )}
+        </MenuPill>
+      )}
+
+      {efforts.length > 0 && (
+        <MenuPill
+          label={active.effort || "Default"}
+          muted={!active.effort}
+          open={open === "effort"}
+          onToggle={() => setOpen((o) => (o === "effort" ? null : "effort"))}
+          onClose={() => setOpen(null)}
+          title={`Reasoning effort for ${active.label}`}
+          menuLabel=""
+          wide
+        >
+          <EffortSlider
+            levels={efforts}
+            value={active.effort}
+            onPick={(e) => commit({ effort: e }, true)}
+          />
+        </MenuPill>
+      )}
+    </span>
+  );
+}
+
+/** A composer pill that opens a popover menu above it. */
+function MenuPill({
+  label,
+  muted,
+  open,
+  onToggle,
+  onClose,
+  title,
+  menuLabel,
+  wide,
+  children,
+}: {
+  label: string;
+  muted?: boolean;
+  open: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+  title: string;
+  menuLabel: string;
+  wide?: boolean;
+  children: React.ReactNode;
+}) {
   return (
     <span className="relative">
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={onToggle}
         aria-expanded={open}
         aria-haspopup="menu"
-        title="Which model answers this notebook"
-        className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-1 text-micro text-muted-foreground transition-colors hover:text-foreground"
+        title={title}
+        className={cn(
+          "inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-1 text-micro transition-colors hover:text-foreground",
+          muted ? "text-subtle-foreground" : "text-muted-foreground",
+        )}
       >
-        {active?.label ?? "Model"}
+        {label}
         <ChevronDown className="h-3 w-3" />
       </button>
       {open && (
         <>
           <button
             type="button"
-            aria-label="Close model menu"
+            aria-label="Close menu"
             className="fixed inset-0 z-20 cursor-default"
-            onClick={() => setOpen(false)}
+            onClick={onClose}
           />
           <div
             role="menu"
-            aria-label="Answer with"
-            className="menu-glass absolute bottom-full left-0 z-30 mb-1.5 min-w-52 rounded-md py-1"
+            aria-label={menuLabel || title}
+            className={cn(
+              "menu-glass absolute bottom-full left-0 z-30 mb-1.5 max-h-[60vh] overflow-y-auto rounded-md py-1",
+              wide ? "w-60 px-1" : "min-w-52",
+            )}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
                 e.stopPropagation();
-                setOpen(false);
+                onClose();
               }
             }}
           >
-            <div className="px-2.5 py-1 text-micro text-subtle-foreground">
-              Answer with
-            </div>
-            {aiConfig.providers.map((p) => {
-              const r = ready.find((x) => x.id === p.id);
-              const selectable = r ? r.ready : true;
-              return (
-                <button
-                  key={p.id}
-                  type="button"
-                  role="menuitem"
-                  autoFocus={p.id === aiConfig.chatProvider}
-                  disabled={!selectable}
-                  onClick={() => {
-                    setOpen(false);
-                    void saveAiConfig({ ...aiConfig, chatProvider: p.id });
-                  }}
-                  className={cn(
-                    "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[0.78125rem]",
-                    selectable
-                      ? "text-foreground hover:bg-surface-2"
-                      : "cursor-default text-subtle-foreground",
-                  )}
-                >
-                  <span className="min-w-0 flex-1 truncate">
-                    {p.label}
-                    {p.chatModel ? (
-                      <span className="text-subtle-foreground">
-                        {" "}
-                        · {p.chatModel}
-                      </span>
-                    ) : null}
-                  </span>
-                  {aiConfig.chatProvider === p.id ? (
-                    <Check className="h-3.5 w-3.5 text-citation" />
-                  ) : !selectable ? (
-                    <span className="text-micro">unavailable</span>
-                  ) : null}
-                </button>
-              );
-            })}
-            <div className="mx-2 my-1 h-px bg-border" />
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setOpen(false);
-                openSettings("models");
-              }}
-              className="w-full px-2.5 py-1.5 text-left text-caption text-muted-foreground hover:bg-surface-2 hover:text-foreground"
-            >
-              Model settings…
-            </button>
+            {menuLabel && (
+              <div className="px-2.5 py-1 text-micro text-subtle-foreground">
+                {menuLabel}
+              </div>
+            )}
+            {children}
           </div>
         </>
       )}
     </span>
+  );
+}
+
+/** One row in a pill's menu. */
+function MenuRow({
+  label,
+  badge,
+  note,
+  selected,
+  disabled,
+  muted,
+  autoFocus,
+  onPick,
+}: {
+  label: string;
+  badge?: string;
+  note?: string;
+  selected?: boolean;
+  disabled?: boolean;
+  muted?: boolean;
+  autoFocus?: boolean;
+  onPick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      autoFocus={autoFocus}
+      disabled={disabled}
+      onClick={onPick}
+      className={cn(
+        "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[0.78125rem]",
+        disabled
+          ? "cursor-default text-subtle-foreground"
+          : muted
+            ? "text-muted-foreground hover:bg-surface-2 hover:text-foreground"
+            : "text-foreground hover:bg-surface-2",
+      )}
+    >
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {badge && (
+        <span className="shrink-0 rounded bg-surface-2 px-1.5 py-0.5 text-micro text-subtle-foreground">
+          {badge}
+        </span>
+      )}
+      {selected ? (
+        <Check className="h-3.5 w-3.5 shrink-0 text-citation" />
+      ) : note ? (
+        <span className="shrink-0 text-micro">{note}</span>
+      ) : null}
+    </button>
+  );
+}
+
+/** A menu row that becomes a text field in place — the model name a provider
+ *  will accept is its own vocabulary, so there is nothing to pick from. */
+function CustomModelRow({
+  current,
+  known,
+  onCommit,
+}: {
+  current: string;
+  known: string[];
+  onCommit: (model: string) => void;
+}) {
+  const isCustom = !!current && !known.includes(current);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(current);
+
+  if (!editing) {
+    return (
+      <MenuRow
+        label={isCustom ? current : "Custom…"}
+        muted={!isCustom}
+        selected={isCustom}
+        onPick={() => {
+          setDraft(current);
+          setEditing(true);
+        }}
+      />
+    );
+  }
+  return (
+    <div className="px-2.5 py-1.5">
+      <input
+        autoFocus
+        aria-label="Custom model name"
+        value={draft}
+        placeholder="model name"
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter") onCommit(draft.trim());
+          if (e.key === "Escape") setEditing(false);
+        }}
+        onBlur={() => setEditing(false)}
+        className="h-6 w-full rounded border border-input bg-surface-2 px-1.5 text-micro text-foreground focus:outline-none focus:border-border-strong"
+      />
+      <div className="pt-1 text-micro text-subtle-foreground">
+        Enter to use · Esc to cancel
+      </div>
+    </div>
+  );
+}
+
+/** Effort as a ladder rather than a list: the levels are ordered cheapest to
+ *  most thorough, so the trade-off is the control. Stop 0 is the provider's
+ *  own default — the state everything ships in.
+ *
+ *  Draggable, and the fill stops at the thumb: both dots and fill are
+ *  positioned as a percentage of the track, inset by the thumb's radius so the
+ *  end stops sit ON the ends rather than half off them. */
+function EffortSlider({
+  levels,
+  value,
+  onPick,
+}: {
+  levels: string[];
+  value: string;
+  onPick: (effort: string) => void;
+}) {
+  const stops = ["", ...levels];
+  const track = useRef<HTMLDivElement | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const at = Math.max(0, stops.indexOf(value));
+  const pct = (i: number) => (i / (stops.length - 1)) * 100;
+
+  /** Nearest stop to a pointer x, in track coordinates. */
+  function stopAt(clientX: number) {
+    const el = track.current;
+    if (!el) return at;
+    const r = el.getBoundingClientRect();
+    const t = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+    return Math.round(t * (stops.length - 1));
+  }
+
+  function pickAt(clientX: number) {
+    const next = stopAt(clientX);
+    if (next !== at) onPick(stops[next]);
+  }
+
+  return (
+    <div className="flex flex-col gap-2 px-2 py-1.5">
+      <div className="flex items-baseline gap-2">
+        <span className="text-caption text-subtle-foreground">Effort</span>
+        <span className="text-[0.78125rem] capitalize text-foreground">
+          {value || "Default"}
+        </span>
+      </div>
+      <div className="flex items-center justify-between text-micro text-subtle-foreground">
+        <span>Faster</span>
+        <span>Smarter</span>
+      </div>
+      <div
+        role="slider"
+        aria-label="Reasoning effort"
+        aria-valuemin={0}
+        aria-valuemax={stops.length - 1}
+        aria-valuenow={at}
+        aria-valuetext={value || "Default"}
+        tabIndex={0}
+        onKeyDown={(e) => {
+          const delta =
+            e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+          if (!delta) return;
+          e.preventDefault();
+          const next = Math.min(stops.length - 1, Math.max(0, at + delta));
+          if (next !== at) onPick(stops[next]);
+        }}
+        onPointerDown={(e) => {
+          e.preventDefault();
+          e.currentTarget.setPointerCapture(e.pointerId);
+          setDragging(true);
+          pickAt(e.clientX);
+        }}
+        onPointerMove={(e) => dragging && pickAt(e.clientX)}
+        onPointerUp={(e) => {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+          setDragging(false);
+        }}
+        onPointerCancel={() => setDragging(false)}
+        className="relative h-6 cursor-ew-resize select-none rounded focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+      >
+        {/* Inset by the thumb's radius so stop 0 and the last stop sit fully
+            on the track instead of hanging off its ends. */}
+        <div ref={track} className="absolute inset-y-0 left-[7px] right-[7px]">
+          <div className="absolute top-1/2 h-px w-full -translate-y-1/2 bg-border" />
+          <div
+            className="absolute top-1/2 h-px -translate-y-1/2 bg-primary"
+            style={{ width: `${pct(at)}%` }}
+          />
+          {stops.map((s, i) => (
+            <span
+              key={s || "default"}
+              title={s || "Default"}
+              style={{ left: `${pct(i)}%` }}
+              className={cn(
+                "absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full transition-[height,width]",
+                i === at
+                  ? "h-3.5 w-3.5 bg-foreground"
+                  : i < at
+                    ? "h-1.5 w-1.5 bg-primary"
+                    : "h-1.5 w-1.5 bg-border",
+              )}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }

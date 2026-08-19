@@ -79,6 +79,10 @@ export interface AppState {
   sending: boolean;
   streamingText: string;
   steps: string[];
+  /** The live "still waiting" line, if the backend is counting down toward a
+   *  timeout. Replaced on every tick and cleared the moment anything else
+   *  happens, so it never joins the trail. */
+  waiting: string;
   agentMode: boolean;
   chatConfig: ChatConfig;
   followups: string[];
@@ -253,7 +257,7 @@ export interface AppState {
   /** Step to the previous/next document in rail order (sources then notes). */
   readerStep: (dir: 1 | -1) => void;
   appendToken: (token: string) => void;
-  appendStep: (label: string) => void;
+  appendStep: (label: string, transient: boolean) => void;
   toggleAgentMode: () => void;
   setChatConfig: (config: ChatConfig) => void;
   loadFollowups: () => Promise<void>;

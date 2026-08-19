@@ -20,7 +20,7 @@ mod ollama;
 #[cfg_attr(not(test), allow(dead_code))]
 pub mod rerank;
 
-pub use agent_cli::{agent_status, AgentCli, AgentKind};
+pub use agent_cli::{agent_default_model, agent_status, list_agent_models, AgentCli, AgentKind};
 pub use fm::FmEngine;
 pub use gateway::OpenAiClient;
 pub use local_embed::{EmbedderProgress, LocalEmbedder};
@@ -197,6 +197,43 @@ pub struct OllamaConfig {
     pub chat_model: String,
     pub embed_model: String,
     pub vision_model: String,
+    /// Reasoning effort, empty = don't ask. Sent as Ollama's `think`; a model
+    /// with no thinking mode ignores it rather than erroring (verified live
+    /// against laguna-s-2.1, which simply answers without a thinking block).
+    pub effort: String,
+}
+
+/// Reasoning-effort levels for the two engines that take it as a request
+/// parameter rather than a CLI flag. Both speak the OpenAI ladder: the
+/// gateway sends `reasoning_effort`, Ollama sends `think`.
+pub const BODY_PARAM_EFFORTS: &[&str] = &["minimal", "low", "medium", "high"];
+
+/// One progress line for the chat UI.
+///
+/// `transient` marks a live status that REPLACES the previous transient line
+/// instead of adding to the trail — a countdown while a CLI sits silent would
+/// otherwise write one trail entry per tick. Ordinary steps ("Using search",
+/// "Thinking") are not transient and accumulate as they always have.
+#[derive(Debug, Clone, Copy)]
+pub struct Step<'a> {
+    pub label: &'a str,
+    pub transient: bool,
+}
+
+impl<'a> Step<'a> {
+    pub fn new(label: &'a str) -> Self {
+        Self {
+            label,
+            transient: false,
+        }
+    }
+
+    pub fn transient(label: &'a str) -> Self {
+        Self {
+            label,
+            transient: true,
+        }
+    }
 }
 
 /// Chat-capable engines. Enum dispatch rather than `dyn Trait` because
@@ -248,7 +285,7 @@ impl ChatEngine {
     ) -> Result<ChatOutcome>
     where
         F: FnMut(&str),
-        S: FnMut(&str),
+        S: FnMut(Step<'_>),
     {
         match self {
             ChatEngine::Agent(a) => a.chat_stream_steps(messages, on_token, on_step).await,

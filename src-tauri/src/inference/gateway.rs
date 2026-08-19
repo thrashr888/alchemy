@@ -14,6 +14,9 @@ pub struct OpenAiClient {
     base_url: String,
     api_key: String,
     model: String,
+    /// Reasoning effort, empty = omit the parameter. Sent as OpenAI's
+    /// `reasoning_effort`; gateways that don't know it ignore unknown keys.
+    effort: String,
     /// Gateway instance/team headers, fetched once from /admin/v1/profile
     /// (LiteLLM-style gateways that resolve billing from them).
     team_ctx: std::sync::Arc<tokio::sync::OnceCell<Option<TeamContext>>>,
@@ -27,6 +30,10 @@ struct TeamContext {
 
 impl OpenAiClient {
     pub fn new(base_url: &str, api_key: &str, model: &str) -> Self {
+        Self::with_effort(base_url, api_key, model, "")
+    }
+
+    pub fn with_effort(base_url: &str, api_key: &str, model: &str, effort: &str) -> Self {
         // 600s total covers long generations, but a throttled/hung gateway
         // must fail fast, never spin: connect in 10s, and a bounded quiet
         // window between bytes (streams tick every token). Local servers
@@ -56,6 +63,7 @@ impl OpenAiClient {
             base_url: base.to_string(),
             api_key: api_key.to_string(),
             model: model.to_string(),
+            effort: effort.trim().to_string(),
             team_ctx: std::sync::Arc::new(tokio::sync::OnceCell::new()),
         }
     }
@@ -227,6 +235,11 @@ impl OpenAiClient {
         // 2026-07-20). Wall-clock stats cover the loss.
         if self.base_url.contains("integrate.api.nvidia.com") {
             body.as_object_mut().unwrap().remove("stream_options");
+        }
+        // Absent unless asked for: a gateway fronting a non-reasoning model
+        // should see the request it has always seen.
+        if !self.effort.is_empty() {
+            body["reasoning_effort"] = json!(self.effort);
         }
         let mut attempt = 0;
         let resp = loop {

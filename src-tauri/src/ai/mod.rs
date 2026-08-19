@@ -26,6 +26,11 @@ pub struct ProviderEntry {
     pub base_url: String,
     pub api_key: String,
     pub chat_model: String,
+    /// Reasoning effort for this provider, empty = the provider's own default.
+    /// Only meaningful where the engine has somewhere to put it (see
+    /// `inference::efforts_for`); every other provider hides the control.
+    /// `serde(default)` on the struct keeps older configs loading.
+    pub effort: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -206,6 +211,7 @@ impl AiConfig {
                 base_url: self.base_url.clone(),
                 api_key: String::new(),
                 chat_model: self.chat_model.clone(),
+                effort: String::new(),
             });
             if !self.openai_base_url.trim().is_empty() || !self.openai_api_key.is_empty() {
                 self.providers.push(ProviderEntry {
@@ -215,6 +221,7 @@ impl AiConfig {
                     base_url: self.openai_base_url.clone(),
                     api_key: self.openai_api_key.clone(),
                     chat_model: self.openai_chat_model.clone(),
+                    effort: String::new(),
                 });
             }
             for agent in ["claude", "codex"] {
@@ -378,12 +385,14 @@ pub struct Ai {
     data_dir: std::path::PathBuf,
 }
 
-fn ollama_config(config: &AiConfig) -> OllamaConfig {
+pub(crate) fn ollama_config(config: &AiConfig) -> OllamaConfig {
     OllamaConfig {
         base_url: config.base_url.clone(),
         chat_model: config.chat_model.clone(),
         embed_model: config.embed_model.clone(),
         vision_model: config.vision_model.clone(),
+        // Effort is a per-provider choice; the shared slice carries none.
+        effort: String::new(),
     }
 }
 
@@ -405,14 +414,22 @@ impl Ai {
                     // back to Ollama so a stale selection can't dead-end.
                     None => ChatEngine::Ollama(Ollama::new(ollama_config(&config))),
                 },
-                "gateway" => ChatEngine::Gateway(OpenAiClient::new(
+                "gateway" => ChatEngine::Gateway(OpenAiClient::with_effort(
                     entry.base_url.trim(),
                     &entry.api_key,
                     &entry.chat_model,
+                    &entry.effort,
                 )),
                 kind => match AgentKind::from_id(kind) {
-                    // Family B: the vendor CLI carries the subscription.
-                    Some(agent) => ChatEngine::Agent(AgentCli::new(agent)),
+                    // Family B: the vendor CLI carries the subscription. The
+                    // model and effort are still ours to pass — blank means
+                    // "the CLI's own default", which is exactly what goes
+                    // stale when a vendor retires a model out from under it.
+                    Some(agent) => ChatEngine::Agent(AgentCli::configured(
+                        agent,
+                        &entry.chat_model,
+                        &entry.effort,
+                    )),
                     None => {
                         let mut oc = ollama_config(&config);
                         if !entry.base_url.trim().is_empty() {
@@ -421,6 +438,7 @@ impl Ai {
                         if !entry.chat_model.trim().is_empty() {
                             oc.chat_model = entry.chat_model.clone();
                         }
+                        oc.effort = entry.effort.clone();
                         ChatEngine::Ollama(Ollama::new(oc))
                     }
                 },
@@ -652,7 +670,7 @@ impl Ai {
     ) -> Result<ChatOutcome>
     where
         F: FnMut(&str),
-        S: FnMut(&str),
+        S: FnMut(crate::inference::Step<'_>),
     {
         self.router
             .chat_engine(Role::Chat)
