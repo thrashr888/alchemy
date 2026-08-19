@@ -431,7 +431,7 @@ function SourcesTab() {
           Connect once to grant macOS permissions; any notebook can then add
           Calendar, Reminders, and Apple Notes as auto-syncing sources.
         </p>
-        <MacConnect showInstallHint />
+        <MacConnect />
       </div>
 
       <div className="h-px bg-border" />

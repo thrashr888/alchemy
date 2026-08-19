@@ -340,14 +340,6 @@ export function AddSourceModal() {
               ))}
             </div>
           )}
-          {macAvailable === false && (
-            <p className="text-micro leading-relaxed text-subtle-foreground">
-              Connect Calendar, Reminders & Notes —{" "}
-              <code className="rounded bg-surface-2 px-1 py-0.5">
-                brew install cider
-              </code>
-            </p>
-          )}
         </div>
       )}
 
