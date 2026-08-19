@@ -375,7 +375,13 @@ fn auth_fix_hint(kind: AgentKind, error_text: &str) -> Option<String> {
 /// name that lives in Alchemy's own settings is a dead end.
 fn model_fix_hint(kind: AgentKind, model: Option<&str>, error_text: &str) -> Option<String> {
     let t = error_text.to_lowercase();
-    if !(t.contains("model_not_supported") || t.contains("model is not supported")) {
+    // Three live phrasings: copilot's old gateway JSON (model_not_supported),
+    // codex's prose ("model is not supported"), and copilot 1.x's flag
+    // rejection ("Model \"x\" from --model flag is not available").
+    let modelish = t.contains("model_not_supported")
+        || t.contains("model is not supported")
+        || (t.contains("model") && t.contains("not available"));
+    if !modelish {
         return None;
     }
     let bin = kind.binary_name();
@@ -386,12 +392,85 @@ fn model_fix_hint(kind: AgentKind, model: Option<&str>, error_text: &str) -> Opt
             kind.label(),
         ),
         None => format!(
-            "Fix: the {} CLI's saved model has been retired — update the CLI \
-             (`{}`), run `{bin}` and choose a current model (usually the \
-             /model command), or name one in Settings → Models, then retry here.",
+            "Fix: the {} CLI is likely outdated, or pinned to a model that has \
+             been retired — update it (`{}`) and retry here. If that doesn't \
+             clear it, run `{bin}` and pick a current model (usually the \
+             /model command), or name one in Settings → Models.",
             kind.label(),
             kind.install_hint()
         ),
+    })
+}
+
+/// copilot's end-of-run stats footer, printed to stderr after the answer:
+/// `Changes    +N -M` and `AI Credits X.XX (Ys)`. Matched by shape so a real
+/// answer line has essentially no way to collide (verified live on CLI
+/// 1.0.80).
+fn is_copilot_footer(line: &str) -> bool {
+    let t = line.trim();
+    if let Some(rest) = t.strip_prefix("Changes") {
+        let rest = rest.trim();
+        if let Some((add, del)) = rest.split_once(' ') {
+            return add
+                .strip_prefix('+')
+                .is_some_and(|n| n.parse::<u64>().is_ok())
+                && del
+                    .trim()
+                    .strip_prefix('-')
+                    .is_some_and(|n| n.parse::<u64>().is_ok());
+        }
+        return false;
+    }
+    if let Some(rest) = t.strip_prefix("AI Credits") {
+        let rest = rest.trim();
+        return rest.ends_with(')')
+            && rest.contains('(')
+            && rest.chars().next().is_some_and(|c| c.is_ascii_digit());
+    }
+    false
+}
+
+/// Did a plain-text CLI print an error transcript instead of an answer?
+///
+/// Old copilot builds put their whole failure on stdout — five "× Model call
+/// failed" retries and a final "× Execution failed" — which the plain-text
+/// passthrough would otherwise return as a successful reply. Only when EVERY
+/// non-blank line is error-shaped is the text reclassified as a failure, so
+/// an answer that merely discusses an error can never be swallowed. Returns
+/// the first and last lines, the same shape the stderr tail keeps.
+fn plain_text_error_transcript(kind: AgentKind, text: &str) -> Option<String> {
+    if !matches!(
+        kind,
+        AgentKind::Gemini
+            | AgentKind::Bob
+            | AgentKind::Cursor
+            | AgentKind::Copilot
+            | AgentKind::Hermes
+    ) {
+        return None;
+    }
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    let error_shaped = |l: &str| {
+        l.starts_with('\u{00d7}') // ×
+            || l.starts_with('\u{2717}') // ✗
+            || l.starts_with("Error:")
+            || l.starts_with("Execution failed")
+    };
+    if !lines.iter().all(|l| error_shaped(l)) {
+        return None;
+    }
+    let (first, last) = (lines[0], lines[lines.len() - 1]);
+    Some(if first == last {
+        first.to_string()
+    } else {
+        format!("{first} \u{2014} {last}")
     })
 }
 
@@ -445,6 +524,12 @@ fn fold_system(system: &str, prompt: &str) -> String {
 /// would be worse than saying nothing — those return `None`, and the UI falls
 /// back to "Default".
 fn cli_default_model(kind: AgentKind) -> Option<String> {
+    // Copilot's default is what Alchemy passes, not what the CLI saved:
+    // blank model = `--model auto` (see the invocation arm), so "auto" is the
+    // truth the picker should show.
+    if kind == AgentKind::Copilot {
+        return Some("auto".to_string());
+    }
     let home = std::env::var("HOME").ok()?;
     let (path, key) = match kind {
         AgentKind::Codex => (format!("{home}/.codex/config.toml"), "model"),
@@ -764,14 +849,24 @@ impl AgentCli {
                 cmd.arg(&full);
             }
             AgentKind::Copilot => {
-                // Best-known programmatic flags; unverifiable until installed
-                // (detection gates selection). Plain-text output parse.
+                // Verified live (CLI 1.0.80): `copilot -p <prompt>` answers on
+                // stdout. Plain-text output parse.
                 let full = fold_system(&system, &prompt);
                 if full.len() > 150_000 {
                     return Err(anyhow!("context too large for copilot's argv-based prompt"));
                 }
                 cmd.args(["-p", &full]);
                 set_model(&mut cmd);
+                // No model configured: pass `auto` rather than nothing. The
+                // CLI's own saved model goes stale when GitHub retires it —
+                // non-interactively it then burns five retries and ~100s
+                // before failing with model_not_supported (Paul's live
+                // report, twice). `auto` is copilot's documented ask-the-
+                // service alias ("use 'auto' to let Copilot pick
+                // automatically"), so it can never name a retired model.
+                if self.model.is_none() {
+                    cmd.args(["--model", "auto"]);
+                }
             }
             AgentKind::Hermes => {
                 // Verified live: `hermes -z <prompt>` prints the reply as
@@ -856,6 +951,7 @@ impl AgentCli {
         // Drain stderr on a task so a chatty CLI can't deadlock the pipe
         // (tradr's scar); keep the tail for error messages.
         let stderr = child.stderr.take();
+        let err_kind = self.kind;
         let err_tail = tokio::spawn(async move {
             // Vendors put the cause on the first line and decoration after
             // ("must specify GEMINI_API_KEY" … "Update your environment…"),
@@ -866,6 +962,13 @@ impl AgentCli {
                 let mut lines = BufReader::new(e).lines();
                 while let Ok(Some(l)) = lines.next_line().await {
                     if !is_meaningful_stderr(&l) {
+                        continue;
+                    }
+                    // copilot ends every run with a stats footer on stderr
+                    // ("Changes    +0 -0", "AI Credits 3.4 (4s)") — session
+                    // accounting that would otherwise be kept as the "last
+                    // meaningful line" and quoted as a failure's cause.
+                    if err_kind == AgentKind::Copilot && is_copilot_footer(&l) {
                         continue;
                     }
                     if first.is_empty() {
@@ -1188,11 +1291,19 @@ impl AgentCli {
                 // lines — only decide after the stream closes.
                 Some(msg) if text.is_empty() => Err(anyhow!("{msg}")),
                 _ if text.is_empty() => Err(anyhow!("agent produced no output")),
-                _ => Ok(ChatOutcome {
-                    text,
-                    stats: None,
-                    cost_usd,
-                }),
+                _ => match plain_text_error_transcript(kind, &text) {
+                    // A plain-text CLI prints its failures to stdout, where
+                    // the passthrough would deliver them as the ANSWER — the
+                    // user then reads a wall of "× Model call failed" with no
+                    // guidance, because none of the fix-hint machinery ever
+                    // saw an error (Paul's second copilot report, verbatim).
+                    Some(msg) => Err(anyhow!("{msg}")),
+                    None => Ok(ChatOutcome {
+                        text,
+                        stats: None,
+                        cost_usd,
+                    }),
+                },
             }
         };
 
@@ -1342,6 +1453,43 @@ mod tests {
         }
     }
 
+    /// Paul's second copilot report, verbatim: an OLD copilot printed its
+    /// whole failure to stdout, so the passthrough delivered five retry
+    /// errors as the ANSWER and no fix hint ever fired.
+    #[test]
+    fn an_all_error_stdout_transcript_is_a_failure_not_an_answer() {
+        let transcript = "\u{00d7} Model call failed: {\"message\":\"The requested model is not supported.\",\"code\":\"model_not_supported\",\"param\":\"model\",\"type\":\"invalid_request_error\"}\n\
+             \n\
+             \u{00d7} Model call failed: {\"message\":\"The requested model is not supported.\",\"code\":\"model_not_supported\",\"param\":\"model\",\"type\":\"invalid_request_error\"}\n\
+             \u{00d7} Execution failed: Failed to get response from the AI model; retried 5 times";
+        let msg = plain_text_error_transcript(AgentKind::Copilot, transcript)
+            .expect("an all-error transcript is a failure");
+        // The reclassified message must still trip the model fix hint.
+        assert!(
+            model_fix_hint(AgentKind::Copilot, None, &msg).is_some(),
+            "{msg}"
+        );
+
+        // An answer that merely DISCUSSES an error is never swallowed.
+        let discussing = "The error you saw was:\n\u{00d7} Model call failed: model_not_supported";
+        assert!(plain_text_error_transcript(AgentKind::Copilot, discussing).is_none());
+
+        // Event-protocol CLIs are exempt — their text came out of JSON fields.
+        assert!(plain_text_error_transcript(AgentKind::Codex, transcript).is_none());
+    }
+
+    /// copilot's stderr stats footer must never be quoted as a failure's
+    /// cause (shapes verified live on CLI 1.0.80).
+    #[test]
+    fn copilot_footer_lines_are_recognised() {
+        assert!(is_copilot_footer("Changes    +0 -0"));
+        assert!(is_copilot_footer("AI Credits 3.4 (4s)"));
+        assert!(is_copilot_footer("AI Credits 5.98 (4s)"));
+        assert!(!is_copilot_footer("Changes to the API are breaking"));
+        assert!(!is_copilot_footer("AI Credits are a billing concept"));
+        assert!(!is_copilot_footer("Error: something real"));
+    }
+
     /// The countdown says what it is waiting on and how long is left, in a
     /// shape that reads as a wait rather than a warning.
     #[test]
@@ -1402,11 +1550,17 @@ mod tests {
             assert!(ours.contains("Settings → Models"), "{ours}");
             assert!(ours.contains("gpt-5.1-codex-max"), "{ours}");
 
-            // Nothing set on our side: the CLI's own default is the suspect.
+            // Nothing set on our side: the CLI itself is the suspect, and
+            // updating it is the fix that actually worked in the field.
             let theirs =
                 model_fix_hint(AgentKind::Codex, None, text).expect("recognised as a model error");
-            assert!(theirs.contains("saved model has been retired"), "{theirs}");
+            assert!(theirs.contains("outdated"), "{theirs}");
+            assert!(theirs.contains("update it"), "{theirs}");
         }
+
+        // copilot 1.x's phrasing for a bad --model value (verified live).
+        let flag = r#"Error: Model "fake-model-9000" from --model flag is not available."#;
+        assert!(model_fix_hint(AgentKind::Copilot, Some("fake-model-9000"), flag).is_some());
 
         // An unrelated failure is not a model failure.
         assert!(model_fix_hint(AgentKind::Codex, None, "connection reset").is_none());
@@ -1515,6 +1669,25 @@ mod live_smokes {
                 out.text
             );
         }
+    }
+
+    /// The full copilot path — `-p` prompt, `--model auto` default, footer
+    /// on stderr never in the answer.
+    ///   cargo test agent_cli_copilot_smoke -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn agent_cli_copilot_smoke() {
+        let cli = AgentCli::configured(AgentKind::Copilot, "", "");
+        let out = cli
+            .chat(&[ChatTurn::user("What is 2+2? Reply with only the number.")])
+            .await
+            .expect("copilot chat failed");
+        assert!(out.text.contains('4'), "unexpected: {}", out.text);
+        assert!(
+            !out.text.contains("AI Credits") && !out.text.contains("Changes"),
+            "footer leaked into the answer: {}",
+            out.text
+        );
     }
 
     /// cargo test agent_cli_opencode_smoke -- --ignored --nocapture
