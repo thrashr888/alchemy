@@ -32,6 +32,17 @@ That one command, from a clean `main`:
 
 Typical time: a few minutes with a warm `target/` cache (vs. ~25 min on CI).
 
+If the final push is rejected because main moved during the build, the tag
+may already be on the remote pointing at a commit main will never contain.
+Retract it, resync, and rerun — the second build is fast on the warm cache:
+```bash
+git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z
+git checkout -- . && git fetch && git reset --hard origin/main
+RELEASE_APPROVED=yes scripts/release.sh X.Y.Z
+```
+Also quiet the machine first: a dev instance's background sweeps can wedge
+Ollama hard enough that the gate's live tests time out mid-release.
+
 ## Release notes format
 
 Replace the auto-generated changelog with notes in the house style
@@ -60,6 +71,31 @@ You need three things on your machine:
    ```bash
    xcrun notarytool store-credentials alchemy-notary \
      --apple-id you@example.com --team-id YOURTEAMID
+   ```
+
+   Two things about this profile that have already cost a release attempt:
+
+   - notarytool stores it in the **data-protection keychain**, which the
+     legacy `security` tools (`dump-keychain`, `find-generic-password`)
+     cannot see. "Not in `security` output" does not mean it's gone —
+     `xcrun notarytool history --keychain-profile alchemy-notary` is the
+     only meaningful check.
+   - Access is per-context: a profile that works in your terminal can
+     read as "No Keychain password item found" from an agent's
+     non-interactive shell. If that happens, re-running the
+     `store-credentials` command above from your own terminal refreshes
+     the item and its authorization; the v0.40.0 release was unblocked
+     exactly that way.
+
+   The app-specific password itself is backed up in 1Password (Private
+   vault, "Apple notary app-specific password"), so recreating the
+   profile never requires minting a new password. An agent can recreate
+   it without ever seeing the secret by piping it straight from 1Password
+   into notarytool's stdin prompt:
+   ```bash
+   op read "op://Private/Apple notary app-specific password/password" |
+     xcrun notarytool store-credentials alchemy-notary \
+       --apple-id thrashr888@gmail.com --team-id 5T4QSYSNP2
    ```
 
 3. **`gh`** authenticated with push + release access (`gh auth login`).
