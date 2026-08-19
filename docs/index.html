@@ -1816,8 +1816,8 @@
       <article class="feature-card full">
         <div class="feature-copy">
           <div class="feature-kicker">Benchmarks</div>
-          <h3>Retrieval you can measure.</h3>
-          <p>Public BEIR benchmarks run against the shipping pipeline as tests. Hybrid search plus an on-device cross-encoder reranker beats the classic BM25 baseline (0.665 SciFact) and published dense retrievers like TAS-B (0.643) out of the box—ColBERT-class retrieval (0.671) with no cloud, no setup, on the built-in engine.</p>
+          <h3>Search, benchmarked.</h3>
+          <p>Alchemy&rsquo;s search is tested against public BEIR benchmarks. The built-in engine scores 0.737 on SciFact &mdash; higher than BM25 (0.665) and TAS-B (0.643) &mdash; with everything running on your Mac.</p>
           <div class="card-meta"><span>nDCG@10, higher is better</span><span>Run them yourself: cargo test --lib beir_</span></div>
         </div>
         <div class="bench-rows" aria-label="BEIR benchmark results">
@@ -1844,7 +1844,7 @@
   <section class="models wrap" id="model-guide" aria-labelledby="models-title">
     <div class="models-intro">
       <h2 id="models-title">Which model should you run?</h2>
-      <p>We measure every model end to end on a judged harness—real retrieval, real prompts, real answers, scored on whether the gold evidence gets cited and whether each claim is actually supported by the excerpt it cites. The notables, so you can pick with data instead of vibes:</p>
+      <p>Each model is evaluated against the full pipeline — retrieval, citation of known-correct evidence, and per-claim support — with a reproducible test suite.</p>
     </div>
     <div class="models-table-wrap">
       <table class="models-table" aria-label="Measured chat model results">
@@ -1852,58 +1852,58 @@
           <tr>
             <th>Model</th>
             <th>Evidence cited</th>
-            <th>Multi&#8209;hop (both docs)</th>
+            <th>Two&#8209;source questions</th>
             <th>Faithfulness</th>
             <th>Notes</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td class="m-name">muse-glimmer<span class="m-pick">multi-hop pick</span></td>
+            <td class="m-name">muse-glimmer<span class="m-pick">two-source pick</span></td>
             <td>68%</td>
             <td>88%</td>
             <td>0.89 / 0.94</td>
-            <td class="m-note">Best cross-document citer tested; the 30B variant adds cost, not accuracy.</td>
+            <td class="m-note">Best two-source citations tested. The 30B variant costs more, scores the same.</td>
           </tr>
           <tr>
             <td class="m-name">gemma4:31b-mlx<span class="m-pick">balanced pick</span></td>
             <td>68%</td>
             <td>80%</td>
             <td>0.91 / 0.98</td>
-            <td class="m-note">Highest faithfulness of the big models, and the tersest answers.</td>
+            <td class="m-note">Highest faithfulness of the large models. Shortest answers.</td>
           </tr>
           <tr>
             <td class="m-name">qwen3.8:27b-mlx</td>
             <td>76%</td>
             <td>88%</td>
             <td>0.69 / 0.95</td>
-            <td class="m-note">Sharpest citation targeting and fast—but overstates what sources say. Alchemy&rsquo;s answer-verify pass earns its keep here.</td>
+            <td class="m-note">Fastest accurate citations. Overstates sources; the verify pass corrects it.</td>
           </tr>
           <tr>
             <td class="m-name">bonsai-8b<span class="m-pick">speed pick</span></td>
             <td>60%</td>
             <td>26%</td>
             <td>0.91 / 0.70</td>
-            <td class="m-note">1.2&nbsp;GB and 4&ndash;20&times; faster than the rest; Alchemy&rsquo;s retrieval loop covers its multi-hop gap.</td>
+            <td class="m-note">1.2&nbsp;GB, 4&ndash;20&times; faster than the rest. The retrieval loop covers its two-source gap.</td>
           </tr>
           <tr>
             <td class="m-name">gpt-oss:120b</td>
             <td>24%</td>
             <td>12%</td>
             <td>1.00 / 0.83</td>
-            <td class="m-note">Extremely conservative: usually declines or answers without citations on hard corpora&mdash;but flawless on the claims it does cite.</td>
+            <td class="m-note">Declines often. Perfect when it commits.</td>
           </tr>
           <tr>
             <td class="m-name">nemotron-3.5-lightning</td>
             <td>68%</td>
             <td>84%</td>
             <td>0.62 / 0.96</td>
-            <td class="m-note">Answers everything confidently; a third of its cited claims aren&rsquo;t supported by the source. Not recommended for grounded work.</td>
+            <td class="m-note">Answers everything. A third of its cited claims don&rsquo;t hold up. Skip it for cited research.</td>
           </tr>
         </tbody>
       </table>
     </div>
-    <p class="models-foot">SciFact claims and HotpotQA multi-hop, 25–50 questions per model, run through the shipping pipeline on the built-in retrieval tier. Faithfulness is scored per cited sentence by an on-device cross-encoder calibrated against a frontier-model judge (shown SciFact&nbsp;/&nbsp;HotpotQA). Every number is reproducible: <code>cargo test --lib judged_</code>.</p>
+    <p class="models-foot">SciFact claims and HotpotQA two-source questions, 25–50 per model, run through the shipping pipeline on the built-in retrieval tier. Faithfulness is scored per cited sentence by an on-device cross-encoder calibrated against a stronger cloud model (shown SciFact&nbsp;/&nbsp;HotpotQA). Every number is reproducible: <code>cargo test --lib judged_</code>.</p>
   </section>
 
   <section class="etc" aria-labelledby="more-title">
@@ -2047,7 +2047,7 @@
         </div>
         <div class="reports-copy">
           <div class="utility-kicker">Reports</div>
-          <h3>Make useful checks recur.</h3>
+          <h3>Run checks on a schedule.</h3>
           <p>Run on a timer or when a source changes. Each result lands as a note.</p>
           <div class="reports-stats"><span>7 runs</span><span>1 source change</span></div>
         </div>
