@@ -1,9 +1,12 @@
 //! Prompt token budgeting for tight-window engines.
 //!
-//! Apple's on-device Foundation Models model has a hard 8192-token context
-//! window shared between the prompt and the response; a prompt over that
-//! ceiling doesn't degrade, it hard-errors ("Content contains N tokens, which
-//! exceeds the maximum allowed context size of 8192"). Every other engine
+//! Apple's on-device Foundation Models model has a hard context window shared
+//! between the prompt and the response; a prompt over that ceiling doesn't
+//! degrade, it hard-errors ("Content contains N tokens, which exceeds the
+//! maximum allowed context size of M"). That M is NOT a constant across
+//! machines and OS builds — 8192 on the box this was written against, 4096 on
+//! others — so the ceiling here is a *default* that the framework's own
+//! rejection overrides at runtime (`note_context_limit`). Every other engine
 //! (Ollama, gateways, agent CLIs) carries a far larger window, so this budget
 //! is applied ONLY on the Foundation Models path — at prompt assembly where the
 //! structure is known (`crate::ai::Ai::fm_input_budget` gates it), and again as
@@ -18,21 +21,61 @@
 //! turn's head (the instruction) and tail (a trailing question).
 
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::ChatTurn;
 
-/// Apple's on-device Foundation Models context window, in tokens. The prompt
-/// and the response share it; this is the hard ceiling the framework enforces.
+/// Assumed on-device Foundation Models context window, in tokens, before the
+/// framework has told us otherwise. The prompt and the response share it.
+/// Treat this as a starting guess, not a fact: read the live value with
+/// [`fm_context_tokens`], which prefers a limit the framework itself reported.
 pub const FM_CONTEXT_TOKENS: usize = 8192;
 
 /// Tokens held back from the window for the model's own response, so a prompt
-/// that exactly fills the input budget still leaves room to answer.
+/// that exactly fills the input budget still leaves room to answer. Scaled
+/// proportionally when the real window turns out to be smaller.
 pub const FM_OUTPUT_RESERVE_TOKENS: usize = 1536;
 
-/// The most prompt (input) tokens we will hand the on-device model: the window
-/// minus the response reserve. ~6656 — comfortably inside the 6500–7000 target
-/// band, and the estimator over-counts prose, so the true count runs lower.
-pub const FM_INPUT_BUDGET_TOKENS: usize = FM_CONTEXT_TOKENS - FM_OUTPUT_RESERVE_TOKENS;
+/// Never trim below this, however small the reported window: a budget under a
+/// few hundred tokens can hold no useful prompt, and shrinking further only
+/// burns attempts.
+const MIN_INPUT_BUDGET_TOKENS: usize = 256;
+
+/// The window the framework has actually enforced on this machine, learned from
+/// its own overflow rejection. Zero until one is observed. Process-lifetime:
+/// the first over-budget prompt after launch pays one extra (pre-generation,
+/// zero-token) round-trip, and every prompt after it is assembled to fit.
+static OBSERVED_CONTEXT_TOKENS: AtomicUsize = AtomicUsize::new(0);
+
+/// Record a context limit the framework reported ("...maximum allowed context
+/// size of M"). Keeps the SMALLEST limit seen: a machine that rejects at 4096
+/// will not start accepting 8192 later, and under-filling is always safe.
+pub fn note_context_limit(limit: usize) {
+    if limit < MIN_INPUT_BUDGET_TOKENS {
+        return; // Nonsense reading - don't poison the budget with it.
+    }
+    let _ = OBSERVED_CONTEXT_TOKENS.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+        (cur == 0 || limit < cur).then_some(limit)
+    });
+}
+
+/// The on-device context window in force right now: what the framework
+/// reported if it ever has, else the assumed default.
+pub fn fm_context_tokens() -> usize {
+    match OBSERVED_CONTEXT_TOKENS.load(Ordering::Relaxed) {
+        0 => FM_CONTEXT_TOKENS,
+        observed => observed,
+    }
+}
+
+/// The live input-token budget: the window in force minus a response reserve
+/// scaled to that window (the same 3/16 the default pair encodes, so an
+/// unlearned window still yields the same 6656 it always did).
+pub fn fm_input_budget_tokens() -> usize {
+    let window = fm_context_tokens();
+    let reserve = window * FM_OUTPUT_RESERVE_TOKENS / FM_CONTEXT_TOKENS;
+    window.saturating_sub(reserve).max(MIN_INPUT_BUDGET_TOKENS)
+}
 
 /// Small fixed cost charged per message for the chat template's role markers
 /// and separators, which the raw content length does not capture.
@@ -165,12 +208,40 @@ pub fn fit_messages<'a>(messages: &'a [ChatTurn], budget: usize) -> Cow<'a, [Cha
 mod tests {
     use super::*;
 
+    /// The input budget at the assumed window: 8192 - 1536 = 6656, comfortably
+    /// inside the 6500–7000 target band. Fixtures size themselves against it.
+    const DEFAULT_BUDGET: usize = FM_CONTEXT_TOKENS - FM_OUTPUT_RESERVE_TOKENS;
+
     fn joined(messages: &[ChatTurn]) -> String {
         messages
             .iter()
             .map(|m| m.content.as_str())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// The window is not a constant across machines (8192 here, 4096 on Paul's),
+    /// so the framework's own rejection is the authority. This test is the only
+    /// mutator of the process-wide observed limit, so it may assert the default
+    /// first.
+    #[test]
+    fn a_reported_limit_retunes_the_budget_downward_only() {
+        assert_eq!(fm_context_tokens(), FM_CONTEXT_TOKENS, "default before any");
+        assert_eq!(fm_input_budget_tokens(), DEFAULT_BUDGET);
+
+        note_context_limit(4096);
+        assert_eq!(fm_context_tokens(), 4096);
+        // Same 3/16 reserve, scaled to the real window.
+        assert_eq!(fm_input_budget_tokens(), 3328);
+
+        // A later, larger reading never widens it back: under-filling is safe,
+        // overflowing is a hard error.
+        note_context_limit(8192);
+        assert_eq!(fm_context_tokens(), 4096);
+
+        // A nonsense reading can't poison the budget either.
+        note_context_limit(3);
+        assert_eq!(fm_context_tokens(), 4096);
     }
 
     #[test]
@@ -190,7 +261,7 @@ mod tests {
             ChatTurn::system("short system rules"),
             ChatTurn::user("Question: what is x?"),
         ];
-        let fitted = fit_messages(&messages, FM_INPUT_BUDGET_TOKENS);
+        let fitted = fit_messages(&messages, DEFAULT_BUDGET);
         assert!(matches!(fitted, Cow::Borrowed(_)), "small prompt untouched");
         assert_eq!(fitted.len(), messages.len());
     }
@@ -216,11 +287,11 @@ mod tests {
             ChatTurn::user(final_turn),
         ];
         assert!(
-            messages_tokens(&messages) > FM_INPUT_BUDGET_TOKENS,
+            messages_tokens(&messages) > DEFAULT_BUDGET,
             "fixture must start over budget"
         );
 
-        let fitted = fit_messages(&messages, FM_INPUT_BUDGET_TOKENS);
+        let fitted = fit_messages(&messages, DEFAULT_BUDGET);
         assert!(
             matches!(fitted, Cow::Owned(_)),
             "over-budget prompt trimmed"
@@ -228,8 +299,8 @@ mod tests {
 
         // Now within budget.
         assert!(
-            messages_tokens(&fitted) <= FM_INPUT_BUDGET_TOKENS,
-            "trimmed to {} tokens, budget {FM_INPUT_BUDGET_TOKENS}",
+            messages_tokens(&fitted) <= DEFAULT_BUDGET,
+            "trimmed to {} tokens, budget {DEFAULT_BUDGET}",
             messages_tokens(&fitted)
         );
 
@@ -272,10 +343,10 @@ mod tests {
         let corpus = "source paragraph number seven. ".repeat(10_000); // ~310k chars
         let user = format!("{instruction}\n\n--- SOURCES ---\n\n{corpus}");
         let messages = vec![ChatTurn::system(system), ChatTurn::user(user)];
-        assert!(messages_tokens(&messages) > FM_INPUT_BUDGET_TOKENS);
+        assert!(messages_tokens(&messages) > DEFAULT_BUDGET);
 
-        let fitted = fit_messages(&messages, FM_INPUT_BUDGET_TOKENS);
-        assert!(messages_tokens(&fitted) <= FM_INPUT_BUDGET_TOKENS);
+        let fitted = fit_messages(&messages, DEFAULT_BUDGET);
+        assert!(messages_tokens(&fitted) <= DEFAULT_BUDGET);
         assert_eq!(fitted[0].content, system, "system preamble untouched");
         let text = joined(&fitted);
         assert!(
@@ -293,7 +364,7 @@ mod tests {
     #[test]
     fn single_oversized_turn_is_fitted() {
         let messages = vec![ChatTurn::user("x".repeat(100_000))];
-        let fitted = fit_messages(&messages, FM_INPUT_BUDGET_TOKENS);
-        assert!(messages_tokens(&fitted) <= FM_INPUT_BUDGET_TOKENS);
+        let fitted = fit_messages(&messages, DEFAULT_BUDGET);
+        assert!(messages_tokens(&fitted) <= DEFAULT_BUDGET);
     }
 }

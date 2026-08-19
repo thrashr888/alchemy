@@ -97,21 +97,34 @@ impl FmEngine {
     {
         // Hard boundary guard (backstop): this sidecar runs ONLY when the
         // active engine is the on-device model, whose context window is a hard
-        // 8192 tokens — a prompt past it does not degrade, it hard-errors.
+        // ceiling — a prompt past it does not degrade, it hard-errors.
         // Structure-aware callers already budget the prompt before assembly;
         // this catches every path that didn't (agentic retrieval, rerank,
         // distill, tool routing…) and any estimate that drifted.
         //
-        // The token estimate (chars/3.5) is calibrated to English prose; dense
-        // content (code, RFCs, dense markdown, CJK) tokenizes to MORE tokens per
-        // char, so a prompt the estimator calls "in budget" can still exceed
-        // 8192 and get rejected up front — before any token — with the exact
-        // count ("Content contains N tokens, which exceeds … 8192"). We read
-        // that measured count and re-trim to its true ratio, retrying a bounded
-        // number of times. Overflow is a pre-generation rejection, so no token
-        // has reached `on_token` when we retry. See `inference::budget`.
+        // Two things can put us over that ceiling, and the retry handles both
+        // by trusting only what the framework measured:
+        //
+        //  * The window is smaller than we assumed. It is not the same number
+        //    on every machine and OS build (8192 here, 4096 on Paul's), and the
+        //    rejection names the real one — so record it (`note_context_limit`)
+        //    and re-derive the budget from it, for this call and every later
+        //    one. Scaling off the ASSUMED budget instead was the bug behind
+        //    "i still get this error": with a true window of 4096, a 4502-token
+        //    prompt scaled to 6656 * 5990 / 4502 = 8854, clamped to
+        //    budget - 1 — a one-token step that changed nothing, twice, before
+        //    surfacing the same error.
+        //  * The estimate drifted. `estimate_tokens` (chars/3.5) is calibrated
+        //    to English prose; dense content (code, RFCs, dense markdown, CJK)
+        //    tokenizes to MORE tokens per char, so a prompt the estimator calls
+        //    "in budget" can still overflow. The measured/estimated ratio of
+        //    the prompt we just sent converts the token target back into an
+        //    estimator-space budget.
+        //
+        // Overflow is a pre-generation rejection, so no token has reached
+        // `on_token` when we retry. See `inference::budget`.
         const MAX_ATTEMPTS: usize = 3;
-        let mut budget_tokens = budget::FM_INPUT_BUDGET_TOKENS;
+        let mut budget_tokens = budget::fm_input_budget_tokens();
         for attempt in 0..MAX_ATTEMPTS {
             let fitted = budget::fit_messages(messages, budget_tokens);
             if let Cow::Owned(_) = &fitted {
@@ -121,20 +134,22 @@ impl FmEngine {
                     budget::messages_tokens(messages),
                 );
             }
+            // What OUR estimator thinks we are about to send. The rejection
+            // reports what the REAL tokenizer counted for this same prompt, and
+            // the pair is the conversion factor between the two spaces.
+            let sent_est = budget::messages_tokens(&fitted).max(1);
             match self.run_once(&fitted, &mut on_token).await {
                 Ok(outcome) => return Ok(outcome),
                 Err(e) => match parse_context_overflow(&e) {
                     // Still over the real window and attempts remain: recalibrate
-                    // the budget from the measured count (with headroom) and retry.
+                    // from the framework's own numbers and retry.
                     Some((actual, limit)) if attempt + 1 < MAX_ATTEMPTS => {
-                        let target = budget::FM_INPUT_BUDGET_TOKENS * 9 / 10; // 10% headroom
-                        let scaled = (budget_tokens as u128 * target as u128
-                            / (actual.max(1) as u128))
-                            as usize;
-                        let next = scaled.min(budget_tokens.saturating_sub(1)).max(256);
+                        budget::note_context_limit(limit);
+                        let next =
+                            retuned_budget(sent_est, actual, budget::fm_input_budget_tokens());
                         eprintln!(
-                            "foundation models: prompt measured {actual} tokens (limit {limit}); \
-                             re-trimming to ~{next} est input tokens and retrying",
+                            "foundation models: prompt measured {actual} tokens (limit {limit}, \
+                             ~{sent_est} est); re-trimming to ~{next} est input tokens and retrying",
                         );
                         budget_tokens = next;
                     }
@@ -146,7 +161,7 @@ impl FmEngine {
         Err(anyhow!(
             "foundation models: could not fit the prompt within the {}-token window \
              after {MAX_ATTEMPTS} attempts",
-            budget::FM_CONTEXT_TOKENS,
+            budget::fm_context_tokens(),
         ))
     }
 
@@ -242,6 +257,20 @@ impl FmEngine {
     }
 }
 
+/// Estimator-space budget that should land the next attempt at `target` real
+/// tokens, given that a prompt we estimated at `sent_est` really measured
+/// `actual`. `actual / sent_est` is this prompt's measured tokens-per-estimated
+/// -token, so `target * sent_est / actual` is the estimate that maps to
+/// `target`.
+///
+/// Clamped strictly below `sent_est`: whatever the ratio says, the next attempt
+/// must be smaller than the one that just overflowed, so the loop can only
+/// converge downward.
+fn retuned_budget(sent_est: usize, actual: usize, target: usize) -> usize {
+    let scaled = (sent_est as u128 * target as u128 / (actual.max(1) as u128)) as usize;
+    scaled.min(sent_est.saturating_sub(1)).max(256)
+}
+
 /// Parse the framework's over-budget rejection — "Content contains N tokens,
 /// which exceeds the maximum allowed context size of M" — into `(actual, limit)`.
 /// Returns `None` for any other error, so only a true context overflow triggers
@@ -264,6 +293,45 @@ fn parse_context_overflow(err: &anyhow::Error) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Paul's live failure: a machine whose real window is 4096, not the 8192
+    /// this code assumed. The prompt fit our 6656-token budget, measured 4502,
+    /// and was rejected. The old recalibration aimed at 90% of the ASSUMED
+    /// budget (5990) — above the true window — so it computed a bigger budget,
+    /// got clamped to `budget - 1`, and retried the same prompt until the
+    /// attempts ran out. Retuning against the REPORTED limit has to shrink it
+    /// enough to actually fit.
+    #[test]
+    fn retunes_against_the_reported_limit_not_the_assumed_one() {
+        let (sent_est, actual, limit) = (6656_usize, 4502_usize, 4096_usize);
+        // The budget the reported limit implies (window minus a scaled reserve).
+        let target = limit - limit * budget::FM_OUTPUT_RESERVE_TOKENS / budget::FM_CONTEXT_TOKENS;
+        assert_eq!(target, 3328);
+
+        let next = retuned_budget(sent_est, actual, target);
+        assert_eq!(next, 4920);
+
+        // The point of the exercise: at this prompt's measured ratio, the next
+        // attempt lands inside the real window instead of overflowing again.
+        let projected = actual * next / sent_est;
+        assert!(
+            projected <= limit,
+            "retuned budget still projects {projected} tokens over a {limit} window"
+        );
+
+        // The old formula's target (90% of the assumed 6656 budget) is what
+        // made the retry a no-op — it must not be what we aim at any more.
+        let old_target = (budget::FM_CONTEXT_TOKENS - budget::FM_OUTPUT_RESERVE_TOKENS) * 9 / 10;
+        assert_eq!(retuned_budget(sent_est, actual, old_target), sent_est - 1);
+    }
+
+    #[test]
+    fn retuned_budget_always_shrinks() {
+        // Even a ratio claiming there is room to grow steps down instead.
+        assert_eq!(retuned_budget(1000, 10, 6656), 999);
+        // And it never collapses below a usable floor.
+        assert_eq!(retuned_budget(1000, 1_000_000, 3328), 256);
+    }
 
     #[test]
     fn parses_the_context_overflow_rejection() {

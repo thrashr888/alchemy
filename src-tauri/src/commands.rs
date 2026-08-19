@@ -259,6 +259,7 @@ async fn readiness_for_entry(
                 chat_model: config.chat_model.clone(),
                 embed_model: config.embed_model.clone(),
                 vision_model: config.vision_model.clone(),
+                effort: String::new(),
             };
             if !entry.base_url.trim().is_empty() {
                 cfg.base_url = entry.base_url.clone();
@@ -3023,6 +3024,19 @@ pub async fn add_mac_reminder(
     resync_mac_source(&state, existing).await
 }
 
+/// Check off a reminder in the list a Reminders source mirrors, then resync.
+#[tauri::command]
+pub async fn complete_mac_reminder(
+    state: State<'_, AppState>,
+    source_id: String,
+    reminder_id: String,
+) -> Result<Source, String> {
+    let existing =
+        e(state.db.get_source(&source_id).await)?.ok_or_else(|| "Source not found".to_string())?;
+    e(crate::mac::complete_reminder(&existing.url, &reminder_id).await)?;
+    resync_mac_source(&state, existing).await
+}
+
 /// Post-write resync: fetch the item's current state and re-embed it.
 pub(crate) async fn resync_mac_source(
     state: &AppState,
@@ -4867,8 +4881,12 @@ struct TokenEvent {
 }
 
 #[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct StepEvent {
     label: String,
+    /// A live status line that replaces the previous transient one rather than
+    /// growing the trail (see `inference::Step`).
+    transient: bool,
 }
 
 /// Per-notebook chat configuration sent from the frontend.
@@ -5439,6 +5457,7 @@ async fn try_tool_route(
         "chat://step",
         StepEvent {
             label: "Checking for commands".into(),
+            transient: false,
         },
     );
     // Fetched once: the router prompt and the remove/refresh arms all use it.
@@ -5497,6 +5516,7 @@ async fn try_tool_route(
                 "chat://step",
                 StepEvent {
                     label: format!("Generating {label}"),
+                    transient: false,
                 },
             );
             match generate_content(state, None, notebook_id, &kind, &prompt, None, None).await {
@@ -5577,6 +5597,7 @@ async fn try_tool_route(
                     "chat://step",
                     StepEvent {
                         label: format!("Refreshing: {}", src.title),
+                        transient: false,
                     },
                 );
                 let result = async {
@@ -5855,6 +5876,7 @@ async fn add_url_sources(
             "chat://step",
             StepEvent {
                 label: format!("Adding source: {}", host_of(url)),
+                transient: false,
             },
         );
         let result = if crate::mac::is_mac_uri(url) {
@@ -6075,10 +6097,13 @@ pub async fn send_message(
                     "chat://token",
                     TokenEvent { content: tok.to_string() },
                 );
-            }, |label| {
+            }, |step: crate::inference::Step<'_>| {
                 let _ = app_for_steps.emit(
                     "chat://step",
-                    StepEvent { label: label.to_string() },
+                    StepEvent {
+                        label: step.label.to_string(),
+                        transient: step.transient,
+                    },
                 );
             }) => Some(out),
             _ = cancel.cancelled() => None,
@@ -9516,6 +9541,96 @@ pub async fn search_everything(
 pub async fn list_gateway_models(base_url: String, api_key: String) -> Result<Vec<String>, String> {
     let client = crate::ai::OpenAiClient::new(&base_url, &api_key, "");
     e(client.list_models().await)
+}
+
+/// One provider's model choices for the composer's picker.
+///
+/// `supportsDefault` is the honest part: for a vendor CLI, leaving the model
+/// blank means "whatever the CLI itself is set to", which is a real and usually
+/// correct choice. A gateway has no such fallback — it needs a name — so its
+/// picker offers no Default entry. `models` may be empty (no catalogue, or a
+/// listing that failed); the picker still offers Default and a free-text entry,
+/// so an empty list is a thinner menu, never a dead end.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderModels {
+    pub models: Vec<String>,
+    pub supports_default: bool,
+    /// Reasoning-effort levels this provider accepts, cheapest first. Empty
+    /// means it has no such control — the composer hides the Effort pill
+    /// rather than offering a setting that goes nowhere.
+    pub efforts: Vec<String>,
+    /// What "Default" actually resolves to, when that is knowable. Ollama's
+    /// blank falls through to the app's main Ollama model, which is a real
+    /// name the user deserves to see next to the word Default. A vendor CLI's
+    /// default lives inside the CLI and it won't tell us, so it stays `None`
+    /// rather than being guessed at.
+    pub default_model: Option<String>,
+}
+
+#[tauri::command]
+pub async fn provider_models(
+    provider_id: String,
+    state: State<'_, AppState>,
+) -> Result<ProviderModels, String> {
+    let ai = state.ai.read().await.clone();
+    let cfg = ai.config().clone();
+    let entry = cfg
+        .providers
+        .iter()
+        .find(|p| p.id == provider_id)
+        .ok_or_else(|| format!("no provider {provider_id}"))?
+        .clone();
+
+    let ladder = |levels: &[&str]| levels.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+
+    // Failures degrade to an empty list rather than an error: a menu that
+    // cannot reach a gateway should still open, with Default and Custom…
+    Ok(match entry.kind.as_str() {
+        // The on-device model is the one model. Nothing to choose.
+        "fm" => ProviderModels {
+            models: Vec::new(),
+            supports_default: false,
+            efforts: Vec::new(),
+            default_model: None,
+        },
+        "gateway" => ProviderModels {
+            models: crate::ai::OpenAiClient::new(&entry.base_url, &entry.api_key, "")
+                .list_models()
+                .await
+                .unwrap_or_default(),
+            supports_default: false,
+            efforts: ladder(crate::inference::BODY_PARAM_EFFORTS),
+            default_model: None,
+        },
+        kind => match crate::inference::AgentKind::from_id(kind) {
+            Some(agent) => ProviderModels {
+                models: crate::inference::list_agent_models(agent).await,
+                supports_default: true,
+                efforts: ladder(agent.efforts()),
+                default_model: crate::inference::agent_default_model(agent),
+            },
+            // Ollama (the catch-all): blank falls back to the app's main
+            // Ollama model, so Default means something here too.
+            None => {
+                let mut oc = crate::ai::ollama_config(&cfg);
+                if !entry.base_url.trim().is_empty() {
+                    oc.base_url = entry.base_url.clone();
+                }
+                ProviderModels {
+                    models: crate::inference::Ollama::new(oc)
+                        .list_models()
+                        .await
+                        .unwrap_or_default(),
+                    supports_default: true,
+                    efforts: ladder(crate::inference::BODY_PARAM_EFFORTS),
+                    // Blank here means "the app's main Ollama model" — a real
+                    // name, so show it rather than leaving Default opaque.
+                    default_model: Some(cfg.chat_model.clone()).filter(|m| !m.trim().is_empty()),
+                }
+            }
+        },
+    })
 }
 
 #[tauri::command]

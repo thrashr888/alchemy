@@ -59,6 +59,14 @@ fn friendly_cider_error(raw: &str) -> String {
                 then relaunch Alchemy."
             .to_string();
     }
+    // An installed-but-old cider rejects a flag we rely on. clap's own wording
+    // ("unexpected argument '--id' found") tells the user nothing about which
+    // side is behind, so name the fix instead.
+    if raw.contains("unexpected argument") {
+        return "This needs a newer cider. Run `brew upgrade cider` \
+                (Alchemy needs 0.2.0 or later), then try again."
+            .to_string();
+    }
     // Keep the first line — subprocess tracebacks aren't toast material.
     raw.lines()
         .next()
@@ -299,6 +307,13 @@ pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
                 "- [ ] {}",
                 r["title"].as_str().unwrap_or("Untitled")
             ));
+            // Carry the id into the text: titles repeat (two identical bug
+            // reports is the case that prompted this), so it is the only way
+            // for a reader — or an agent — to name one reminder exactly when
+            // asking to complete it.
+            if let Some(id) = r["id"].as_str() {
+                out.push_str(&format!(" `{id}`"));
+            }
             if let Some(due) = r["due_date"].as_str() {
                 out.push_str(&format!(
                     " — due {}",
@@ -476,6 +491,25 @@ pub async fn add_reminder(uri: &str, title: &str, notes: Option<&str>) -> anyhow
     cider(&args).await.map(|_| ())
 }
 
+/// Check off a reminder in the list this source mirrors.
+///
+/// Always by id, never by title: Reminders lets two items share a name, and a
+/// by-title completion picks one of them silently. The id is the one cider
+/// prints in `reminders list` and that `fetch` renders into the source text.
+/// Needs cider 0.2.0+ (`--id`); older builds reject the flag, which
+/// [`friendly_cider_error`] turns into an upgrade instruction.
+pub async fn complete_reminder(uri: &str, id: &str) -> anyhow::Result<()> {
+    let list = uri
+        .strip_prefix("cider://reminders/list/")
+        .ok_or_else(|| anyhow!("Not a Reminders source: {uri}"))?;
+    if id.trim().is_empty() {
+        anyhow::bail!("no reminder id — pick one from the list");
+    }
+    cider(&["reminders", "complete", "--id", id.trim(), "--list", list])
+        .await
+        .map(|_| ())
+}
+
 /// The resync sweep runs every minute, but Mac fetches go through osascript
 /// and permission-guarded databases — re-checking every 15 minutes is plenty
 /// for calendars and reminders. Manual refresh bypasses this.
@@ -522,6 +556,11 @@ mod tests {
     fn other_errors_keep_first_line_only() {
         let msg = friendly_cider_error("osascript failed: some error\nline two\nline three");
         assert_eq!(msg, "osascript failed: some error");
+
+        // An old cider rejecting --id must read as "upgrade", not as clap noise.
+        let stale = friendly_cider_error("error: unexpected argument '--id' found");
+        assert!(stale.contains("brew upgrade cider"), "{stale}");
+        assert!(stale.contains("0.2.0"), "{stale}");
     }
 
     #[test]

@@ -109,6 +109,10 @@ const AGENT_LABELS: Record<string, string> = {
   pi: "Pi",
 };
 
+/** A provider entry backed by a vendor CLI on this Mac (family B), as opposed
+ *  to a gateway or a local server. */
+const isAgentKind = (kind: string) => kind in AGENT_LABELS;
+
 type CliStatus = { id: string; installed: boolean; detail: string };
 
 /** One provider row's live-probe slice. Each row owns its own state so it can
@@ -281,6 +285,7 @@ export function ModelsTab({
             baseUrl: "",
             apiKey: "",
             chatModel: "",
+            effort: "",
           },
         ];
     choose({ providers, chatProvider: best.id });
@@ -445,7 +450,9 @@ export function ModelsTab({
                   )}
                 </span>
                 <span className="flex w-[52px] shrink-0 items-center justify-end gap-0.5">
-                {(p.kind === "gateway" || p.kind === "ollama") && (
+                {(p.kind === "gateway" ||
+                  p.kind === "ollama" ||
+                  isAgentKind(p.kind)) && (
                   <button
                     type="button"
                     aria-label={`Edit ${p.label}`}
@@ -614,7 +621,7 @@ export function ModelsTab({
                     label="Embedding model"
                     value={draft.embedModel}
                     onChange={(v) => setDraft({ ...draft, embedModel: v })}
-                    placeholder="nomic-embed-text"
+                    placeholder="mxbai-embed-large"
                     filter={(m) => /embed|bge|minilm|gte|e5/i.test(m)}
                   />
                 )}
@@ -803,8 +810,14 @@ function ProviderWizard({
   onClose: () => void;
 }) {
   const editing = draft.providers.find((p) => p.id === editId);
-  const [step, setStep] = useState<"door" | "key" | "local" | "done">(
-    editing ? (editing.kind === "ollama" ? "local" : "key") : "door",
+  const [step, setStep] = useState<"door" | "key" | "local" | "cli" | "done">(
+    editing
+      ? editing.kind === "ollama"
+        ? "local"
+        : isAgentKind(editing.kind)
+          ? "cli"
+          : "key"
+      : "door",
   );
   const [service, setService] = useState(() => {
     const preset = GATEWAY_PRESETS.find((g) => g.url === editing?.baseUrl);
@@ -820,6 +833,7 @@ function ProviderWizard({
   const [localModel, setLocalModel] = useState(
     editing?.chatModel || draft.chatModel,
   );
+  const [cliModel, setCliModel] = useState(editing?.chatModel ?? "");
   const [added, setAdded] = useState<ProviderEntry | null>(null);
   const debounce = useRef<number | null>(null);
 
@@ -887,6 +901,7 @@ function ProviderWizard({
       baseUrl: "",
       apiKey: "",
       chatModel: "",
+      effort: "",
     };
     setAdded(entry);
     setStep("done");
@@ -1082,6 +1097,7 @@ function ProviderWizard({
                     baseUrl,
                     apiKey: key,
                     chatModel: model,
+                    effort: editing?.effort ?? "",
                   },
                   !editing,
                 )
@@ -1111,7 +1127,7 @@ function ProviderWizard({
               label="Local model"
               value={localModel}
               onChange={setLocalModel}
-              placeholder="gpt-oss:120b"
+              placeholder="gpt-oss:20b"
             />
           </Field>
           <div className="flex items-center justify-between pt-1">
@@ -1129,12 +1145,40 @@ function ProviderWizard({
                     baseUrl: localUrl,
                     apiKey: "",
                     chatModel: localModel,
+                    effort: editing?.effort ?? "",
                   },
                   !editing,
                 )
               }
             >
               {editing ? "Save" : "Add local server"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {step === "cli" && editing && (
+        <div className="flex flex-col gap-3">
+          <Field
+            label="Model"
+            hint="Blank uses whatever model the CLI itself is set to. Name one here when that model has been retired — the CLI answers “The requested model is not supported” and only it knows the new names."
+          >
+            <Input
+              aria-label="Model"
+              value={cliModel}
+              onChange={(e) => setCliModel(e.target.value)}
+              placeholder="the CLI's own default"
+            />
+          </Field>
+          <div className="flex items-center justify-between pt-1">
+            <Button variant="ghost" onClick={onClose}>
+              ‹ Back
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => finishAdd({ ...editing, chatModel: cliModel }, false)}
+            >
+              Save
             </Button>
           </div>
         </div>

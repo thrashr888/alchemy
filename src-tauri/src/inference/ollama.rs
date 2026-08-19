@@ -221,11 +221,19 @@ impl Ollama {
         let resp = self
             .http
             .post(self.url("/api/chat"))
-            .json(&json!({
-                "model": self.config.chat_model,
-                "messages": messages,
-                "stream": true,
-            }))
+            .json(&{
+                let mut body = json!({
+                    "model": self.config.chat_model,
+                    "messages": messages,
+                    "stream": true,
+                });
+                // Only when the user asked for one: the parameter is absent by
+                // default, which is what every model expects.
+                if !self.config.effort.trim().is_empty() {
+                    body["think"] = json!(self.config.effort.trim());
+                }
+                body
+            })
             .send()
             .await
             .context("ollama chat request failed")?;

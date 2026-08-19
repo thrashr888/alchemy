@@ -20,11 +20,14 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use super::{ChatOutcome, ChatTurn};
 
-/// A CLI that has printed NOTHING for this long is wedged at startup — a
-/// healthy one banners within seconds (codex emits thread.started before
-/// its model runs). Observed live: the Morning Brief burned a whole
-/// 600-second budget on codex's MCP handshake into a CPU-pinned process,
-/// before any model call happened.
+/// A CLI that *banners* — one speaking a structured event stream — and has
+/// printed NOTHING for this long is wedged at startup; a healthy one banners
+/// within seconds (codex emits thread.started before its model runs). Observed
+/// live: the Morning Brief burned a whole 600-second budget on codex's MCP
+/// handshake into a CPU-pinned process, before any model call happened.
+///
+/// This only detects a wedge for CLIs that announce themselves. See
+/// [`AgentKind::banners_at_startup`].
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
 /// Mid-run silence cap: ten minutes of nothing after output began is a
 /// hang, not thinking.
@@ -32,6 +35,15 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 /// Ceiling for an actively-streaming run — agentic briefs tool-loop and
 /// legitimately run long.
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(1800);
+/// How often the wait is re-examined while a CLI is silent. One second keeps
+/// the countdown honest without costing anything — the read future is held
+/// across ticks, so a tick is a `sleep`, not a re-read.
+const COUNTDOWN_TICK: Duration = Duration::from_secs(1);
+/// Grace period before silence becomes visible. Under this, a quiet CLI is
+/// just latency and a countdown would be noise; past it, a run that is going
+/// to take minutes should say so rather than sit behind a spinner.
+const COUNTDOWN_AFTER: Duration = Duration::from_secs(10);
+
 /// Backstop on the whole future, over and above the per-read deadlines —
 /// only a bug in the deadline logic could ever reach it.
 const RUN_BACKSTOP: Duration = Duration::from_secs(1860);
@@ -119,6 +131,81 @@ impl AgentKind {
             AgentKind::Bob => "Bob Shell",
             AgentKind::Prime => "Prime Agent",
             AgentKind::Pi => "Pi",
+        }
+    }
+
+    /// Does this CLI print something before the model answers?
+    ///
+    /// The event-protocol CLIs do — a session/thread banner lands within
+    /// seconds — so silence past [`STARTUP_TIMEOUT`] means a wedged handshake.
+    /// The plain-text one-shot CLIs (bob, gemini, copilot, hermes) print
+    /// NOTHING until the answer itself begins: their pre-answer silence covers
+    /// MCP discovery, extension loading, and the whole model call, and is
+    /// indistinguishable from thinking. Holding them to the startup deadline
+    /// killed healthy slow runs and then blamed whatever boot warning happened
+    /// to be last on stderr — Paul's two "bob produced no output 120s" reports,
+    /// captioned with an unrelated gpg-agent path and a stray `}`.
+    pub fn banners_at_startup(&self) -> bool {
+        match self {
+            AgentKind::Claude
+            | AgentKind::Codex
+            | AgentKind::Cursor
+            | AgentKind::Opencode
+            | AgentKind::Prime
+            | AgentKind::Pi => true,
+            AgentKind::Gemini | AgentKind::Bob | AgentKind::Copilot | AgentKind::Hermes => false,
+        }
+    }
+
+    /// The reasoning-effort levels this CLI accepts, cheapest first. Empty
+    /// means the CLI has no such control and the UI hides it rather than
+    /// offering a setting that does nothing.
+    ///
+    /// Read off each CLI's own `--help` (2026-08-18), which is also why the
+    /// ladders differ in length: codex tops out where OpenAI's
+    /// `reasoning_effort` does, while claude and pi carry two rungs above it.
+    pub fn efforts(&self) -> &'static [&'static str] {
+        match self {
+            // `--effort <level>`: low, medium, high, xhigh, max.
+            AgentKind::Claude => &["low", "medium", "high", "xhigh", "max"],
+            // `-c model_reasoning_effort="<level>"` — OpenAI's own ladder.
+            AgentKind::Codex => &["minimal", "low", "medium", "high"],
+            // `--thinking <level>`: off, minimal, low, medium, high, xhigh,
+            // max. "off" is left out — Default already means "don't ask".
+            AgentKind::Pi | AgentKind::Prime => {
+                &["minimal", "low", "medium", "high", "xhigh", "max"]
+            }
+            // `--variant <level>`, documented as provider-specific with
+            // "high, max, minimal" named: offer only those three.
+            AgentKind::Opencode => &["minimal", "high", "max"],
+            AgentKind::Gemini
+            | AgentKind::Cursor
+            | AgentKind::Copilot
+            | AgentKind::Hermes
+            | AgentKind::Bob => &[],
+        }
+    }
+
+    /// Argv that makes this CLI print the models it can reach, when it has
+    /// such a command. `None` means "no catalogue" — the CLI still accepts
+    /// `--model`, we just can't enumerate for it, so the picker offers Default
+    /// plus a free-text entry rather than a list we made up.
+    ///
+    /// Bob is deliberately `None`: bobshell has no list command, and its only
+    /// catalogue is the IBM inference API, which refuses third-party clients
+    /// outright (Cloudflare 403 — IBM policy, not a bug to route around).
+    pub fn list_models_args(&self) -> Option<&'static [&'static str]> {
+        match self {
+            AgentKind::Opencode => Some(&["models"]),
+            AgentKind::Pi => Some(&["--list-models"]),
+            AgentKind::Prime => Some(&["model", "list"]),
+            AgentKind::Cursor => Some(&["--list-models"]),
+            AgentKind::Claude
+            | AgentKind::Codex
+            | AgentKind::Gemini
+            | AgentKind::Copilot
+            | AgentKind::Hermes
+            | AgentKind::Bob => None,
         }
     }
 
@@ -280,23 +367,57 @@ fn auth_fix_hint(kind: AgentKind, error_text: &str) -> Option<String> {
     Some(format!("Fix: open Terminal, {fix}, then retry here."))
 }
 
-/// A vendor gateway rejecting the CLI's saved default model ("The requested
-/// model is not supported" / `model_not_supported`) means the CLI is pinned
-/// to a retired model — seen live with GitHub Copilot. The fix is the CLI's,
-/// not ours: update it, or re-pick a model in its own UI.
-fn model_fix_hint(kind: AgentKind, error_text: &str) -> Option<String> {
+/// A vendor gateway rejecting the model ("The requested model is not
+/// supported" / `model_not_supported`) means a retired name is being asked
+/// for — seen live with GitHub Copilot and codex. Point at whoever chose it:
+/// Alchemy, when the provider entry names a model, and the CLI's own saved
+/// default otherwise. Sending someone to the CLI's /model command to fix a
+/// name that lives in Alchemy's own settings is a dead end.
+fn model_fix_hint(kind: AgentKind, model: Option<&str>, error_text: &str) -> Option<String> {
     let t = error_text.to_lowercase();
     if !(t.contains("model_not_supported") || t.contains("model is not supported")) {
         return None;
     }
     let bin = kind.binary_name();
-    Some(format!(
-        "Fix: the {} CLI's saved model has been retired — update the CLI \
-         (`{}`), or run `{bin}` and choose a current model (usually the \
-         /model command), then retry here.",
-        kind.label(),
-        kind.install_hint()
-    ))
+    Some(match model {
+        Some(m) => format!(
+            "Fix: “{m}” is the model set for {} in Settings → Models — clear it \
+             to use the CLI's own default, or name one {bin} still offers.",
+            kind.label(),
+        ),
+        None => format!(
+            "Fix: the {} CLI's saved model has been retired — update the CLI \
+             (`{}`), run `{bin}` and choose a current model (usually the \
+             /model command), or name one in Settings → Models, then retry here.",
+            kind.label(),
+            kind.install_hint()
+        ),
+    })
+}
+
+/// Is this stderr line worth quoting back to the user as the cause?
+///
+/// CLIs that pretty-print JSON to stderr leave structural crumbs — a bare `}`,
+/// `],`, a lone quote — that say nothing on their own. Keeping the last
+/// *non-empty* line is how Paul's bug report ended up captioned "— }". Require
+/// a few actual word characters before a line is allowed to speak for a failure.
+fn is_meaningful_stderr(line: &str) -> bool {
+    line.chars().filter(|c| c.is_alphanumeric()).count() >= 3
+}
+
+/// The live line shown while a CLI has said nothing for a while: what we are
+/// waiting on, and how long before we stop waiting. Phrased as a wait rather
+/// than a warning — most of these finish.
+fn waiting_label(kind: AgentKind, saw_output: bool, left: Duration) -> String {
+    let secs = left.as_secs();
+    let remaining = match secs {
+        0..=59 => format!("{secs}s"),
+        _ => format!("{}m {:02}s", secs / 60, secs % 60),
+    };
+    match saw_output {
+        false => format!("Waiting for {} — {remaining} left", kind.label()),
+        true => format!("{} has gone quiet — {remaining} left", kind.label()),
+    }
 }
 
 /// "mcp__alchemy__search_notebook" → "Using search notebook": the last
@@ -314,16 +435,173 @@ fn fold_system(system: &str, prompt: &str) -> String {
     }
 }
 
+/// What a CLI will use when we pass no `--model`, read from its own config so
+/// the composer can show a name instead of the bare word "Default".
+///
+/// Only where the location and key are documented and stable: codex writes
+/// `model = "…"` at the top level of `~/.codex/config.toml`. The others either
+/// keep it behind an authenticated command (`claude config get model` fails on
+/// an expired session) or don't record one at all, and a guess shown as fact
+/// would be worse than saying nothing — those return `None`, and the UI falls
+/// back to "Default".
+fn cli_default_model(kind: AgentKind) -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let (path, key) = match kind {
+        AgentKind::Codex => (format!("{home}/.codex/config.toml"), "model"),
+        _ => return None,
+    };
+    let text = std::fs::read_to_string(path).ok()?;
+    text.lines()
+        .map(str::trim)
+        // Top-level only: a `model` under some `[profiles.x]` table is not the
+        // default. Stop at the first table header.
+        .take_while(|l| !l.starts_with('['))
+        .find_map(|l| l.strip_prefix(key)?.trim_start().strip_prefix('='))
+        .map(|v| v.trim().trim_matches('"').to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// Drop ANSI colour/cursor escapes so a CLI's decorated output parses. These
+/// CLIs redraw a "Loading models…" spinner before printing, and the control
+/// bytes otherwise glue themselves to the first model name.
+fn strip_ansi(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        // CSI/OSC run: skip to the terminating byte.
+        for c in chars.by_ref() {
+            if c.is_ascii_alphabetic() || c == '~' {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Parse a CLI's model listing into ids we can hand back to `--model`.
+///
+/// Two shapes in the wild, told apart by their own header rather than by which
+/// CLI printed them:
+///   * a `provider  model  context …` table (pi, prime-agent) — the pair joins
+///     into the `provider/id` form both accept back;
+///   * one id per line (opencode's `provider/model`).
+///
+/// Anything else on the line — spinners, "No models available for this
+/// account.", totals — has the wrong shape and is dropped rather than offered
+/// to the user as a model name.
+fn parse_model_list(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut table = false;
+    for raw in text.lines() {
+        let line = strip_ansi(raw);
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.first() == Some(&"provider") && cols.get(1) == Some(&"model") {
+            table = true;
+            continue;
+        }
+        let id = if table {
+            match cols.len() >= 2 {
+                true => format!("{}/{}", cols[0], cols[1]),
+                false => continue,
+            }
+        } else {
+            match cols.as_slice() {
+                [only] => only.to_string(),
+                _ => continue,
+            }
+        };
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    out
+}
+
+/// How long a model listing may take before we give up and fall back to
+/// Default-plus-free-text. Listing spawns the CLI, which boots like any other
+/// run; it is still a menu opening, so it cannot hang behind a spinner.
+const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// Process-lifetime cache of model listings, keyed by CLI id. Spawning these
+/// costs seconds; the picker opens on a click.
+fn model_cache() -> &'static std::sync::Mutex<HashMap<&'static str, Vec<String>>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<&'static str, Vec<String>>>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// The model this CLI falls back to with no `--model`, when it is knowable.
+pub fn agent_default_model(kind: AgentKind) -> Option<String> {
+    cli_default_model(kind)
+}
+
+/// The models `kind` says it can reach. Empty when the CLI has no catalogue
+/// command, is not installed, or fails — every caller treats "no list" and "a
+/// list we could not fetch" the same way, so neither is an error.
+pub async fn list_agent_models(kind: AgentKind) -> Vec<String> {
+    if let Some(hit) = model_cache().lock().unwrap().get(kind.id()) {
+        return hit.clone();
+    }
+    let Some(args) = kind.list_models_args() else {
+        return Vec::new();
+    };
+    let Some(bin) = find_binary_cached(kind.binary_name()) else {
+        return Vec::new();
+    };
+    let env = tokio::task::spawn_blocking(load_shell_env)
+        .await
+        .unwrap_or_default();
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.env_clear()
+        .envs(&env)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let models = match tokio::time::timeout(LIST_MODELS_TIMEOUT, cmd.output()).await {
+        Ok(Ok(out)) => parse_model_list(&String::from_utf8_lossy(&out.stdout)),
+        _ => Vec::new(),
+    };
+    // Cache even an empty result: a CLI without a catalogue should not be
+    // re-spawned every time the menu opens.
+    model_cache()
+        .lock()
+        .unwrap()
+        .insert(kind.id(), models.clone());
+    models
+}
+
 #[derive(Clone)]
 pub struct AgentCli {
     kind: AgentKind,
     binary: Option<PathBuf>,
+    /// Model override from the provider entry, empty = the CLI's own default.
+    /// Without this, a CLI pinned to a retired model ("The requested model is
+    /// not supported" / `model_not_supported`, seen live on codex and copilot)
+    /// could only be fixed outside Alchemy — the provider's model field was
+    /// collected and then dropped on the floor for family B.
+    model: Option<String>,
+    /// Reasoning effort, empty = the CLI's own default. Ignored for CLIs whose
+    /// [`AgentKind::efforts`] ladder is empty.
+    effort: Option<String>,
 }
 
 impl AgentCli {
-    pub fn new(kind: AgentKind) -> Self {
+    pub fn configured(kind: AgentKind, model: &str, effort: &str) -> Self {
+        let model = model.trim();
+        let effort = effort.trim();
         Self {
             kind,
+            model: (!model.is_empty()).then(|| model.to_string()),
+            // A level this CLI does not offer is dropped rather than passed
+            // through to be rejected — provider ladders differ in length, and
+            // switching providers must not poison the next run.
+            effort: kind.efforts().contains(&effort).then(|| effort.to_string()),
             binary: find_binary_cached(kind.binary_name()),
         }
     }
@@ -379,7 +657,7 @@ impl AgentCli {
     ) -> Result<ChatOutcome>
     where
         F: FnMut(&str),
-        S: FnMut(&str),
+        S: FnMut(super::Step<'_>),
     {
         let bin = self.binary.as_ref().ok_or_else(|| {
             anyhow!(
@@ -395,6 +673,32 @@ impl AgentCli {
 
         let mut cmd = tokio::process::Command::new(bin);
         cmd.env_clear().envs(&env);
+        // Every CLI in the roster spells this `--model` (verified against
+        // --help for the eight installed here; copilot per its docs). It must
+        // go on before the positional-prompt arms below append theirs.
+        let model = self.model.clone();
+        let effort = self.effort.clone();
+        let kind = self.kind;
+        // Each CLI spells effort differently; the ladder is validated in
+        // `configured`, so by here the level is one this CLI accepts.
+        let set_model = |cmd: &mut tokio::process::Command| {
+            if let Some(m) = &model {
+                cmd.args(["--model", m]);
+            }
+            let Some(e) = &effort else { return };
+            match kind {
+                AgentKind::Claude => cmd.args(["--effort", e]),
+                // A codex config override is TOML: the value needs its quotes.
+                AgentKind::Codex => cmd.args(["-c", &format!("model_reasoning_effort={e:?}")]),
+                AgentKind::Pi | AgentKind::Prime => cmd.args(["--thinking", e]),
+                AgentKind::Opencode => cmd.args(["--variant", e]),
+                AgentKind::Gemini
+                | AgentKind::Cursor
+                | AgentKind::Copilot
+                | AgentKind::Hermes
+                | AgentKind::Bob => cmd,
+            };
+        };
         match self.kind {
             AgentKind::Claude => {
                 // Streamed structured events; tools restricted to Alchemy's
@@ -410,6 +714,7 @@ impl AgentCli {
                     "--allowedTools",
                     "mcp__alchemy__*",
                 ]);
+                set_model(&mut cmd);
                 if !system.is_empty() {
                     cmd.args(["--append-system-prompt", &system]);
                 }
@@ -427,7 +732,9 @@ impl AgentCli {
                 };
                 // --skip-git-repo-check: bundled apps run outside any repo
                 // and codex refuses non-repo cwds without it.
-                cmd.args(["exec", "--json", "--skip-git-repo-check", &full]);
+                cmd.args(["exec", "--json", "--skip-git-repo-check"]);
+                set_model(&mut cmd);
+                cmd.arg(&full);
             }
             AgentKind::Cursor => {
                 // cursor-agent print mode speaks claude-shaped stream-json;
@@ -435,10 +742,12 @@ impl AgentCli {
                 // plain-text builds still work. No system flag — folded
                 // into the prompt below. Prompt over stdin.
                 cmd.args(["-p", "--output-format", "stream-json"]);
+                set_model(&mut cmd);
             }
             AgentKind::Gemini => {
                 // Plain-text CLI reading the prompt from stdin; stdout
                 // chunks stream through as tokens. No system flag — folded.
+                set_model(&mut cmd);
             }
             AgentKind::Opencode => {
                 // Verified live: `run --format json` emits step_start / text
@@ -450,7 +759,9 @@ impl AgentCli {
                         "context too large for opencode's argv-based prompt"
                     ));
                 }
-                cmd.args(["run", "--format", "json", &full]);
+                cmd.args(["run", "--format", "json"]);
+                set_model(&mut cmd);
+                cmd.arg(&full);
             }
             AgentKind::Copilot => {
                 // Best-known programmatic flags; unverifiable until installed
@@ -460,6 +771,7 @@ impl AgentCli {
                     return Err(anyhow!("context too large for copilot's argv-based prompt"));
                 }
                 cmd.args(["-p", &full]);
+                set_model(&mut cmd);
             }
             AgentKind::Hermes => {
                 // Verified live: `hermes -z <prompt>` prints the reply as
@@ -469,10 +781,14 @@ impl AgentCli {
                     return Err(anyhow!("context too large for hermes's argv-based prompt"));
                 }
                 cmd.args(["-z", &full]);
+                set_model(&mut cmd);
             }
             AgentKind::Bob => {
-                // bobshell takes -p <prompt> as argv (no stdin mode known);
-                // guard oversized stuffed contexts against ARG_MAX.
+                // The prompt goes in positionally — bobshell's own --help now
+                // marks `-p` deprecated ("Use the positional prompt instead.
+                // This flag will be removed in a future version"), and the
+                // positional form is one-shot by default. Argv-based either
+                // way, so guard oversized stuffed contexts against ARG_MAX.
                 let full = fold_system(&system, &prompt);
                 if full.len() > 150_000 {
                     return Err(anyhow!(
@@ -480,7 +796,8 @@ impl AgentCli {
                          trim source selection or use another provider"
                     ));
                 }
-                cmd.args(["-p", &full]);
+                set_model(&mut cmd);
+                cmd.arg(&full);
             }
             AgentKind::Prime | AgentKind::Pi => {
                 // pi / prime-agent --mode json: the same structured JSONL
@@ -494,6 +811,7 @@ impl AgentCli {
                     ));
                 }
                 cmd.args(["--mode", "json"]);
+                set_model(&mut cmd);
                 if !system.is_empty() {
                     cmd.args(["--append-system-prompt", &system]);
                 }
@@ -541,13 +859,13 @@ impl AgentCli {
         let err_tail = tokio::spawn(async move {
             // Vendors put the cause on the first line and decoration after
             // ("must specify GEMINI_API_KEY" … "Update your environment…"),
-            // so keep first + last non-empty lines, not just the last.
+            // so keep first + last meaningful lines, not just the last.
             let mut first = String::new();
             let mut last = String::new();
             if let Some(e) = stderr {
                 let mut lines = BufReader::new(e).lines();
                 while let Ok(Some(l)) = lines.next_line().await {
-                    if l.trim().is_empty() {
+                    if !is_meaningful_stderr(&l) {
                         continue;
                     }
                     if first.is_empty() {
@@ -608,15 +926,18 @@ impl AgentCli {
             let mut on_step = on_step;
             // Consecutive-duplicate guard: event streams repeat themselves
             // (several deltas per tool call), and the step trail shouldn't.
+            // Transient lines skip the guard — their whole job is to change.
             let mut last_step = String::new();
-            let mut emit_step = move |label: String| {
-                if label != last_step {
-                    on_step(&label);
+            let mut emit_step = move |label: String, transient: bool| {
+                if transient {
+                    on_step(super::Step::transient(&label));
+                } else if label != last_step {
+                    on_step(super::Step::new(&label));
                     last_step = label;
                 }
             };
             // Immediate first line — the CLI takes seconds just to boot.
-            emit_step(format!("Asking {}", kind.label()));
+            emit_step(format!("Asking {}", kind.label()), false);
             let mut text = String::new();
             let mut errored: Option<String> = None;
             let mut cost_usd: Option<f64> = None;
@@ -626,27 +947,46 @@ impl AgentCli {
             // room, bounded by a mid-run silence cap and a total ceiling.
             let started = std::time::Instant::now();
             let mut saw_output = false;
+            // A CLI that never banners gets the idle budget from the start:
+            // there is no handshake signal to time out on, only thinking.
+            let startup = if kind.banners_at_startup() {
+                STARTUP_TIMEOUT
+            } else {
+                IDLE_TIMEOUT
+            };
             while let Some(line) = {
-                let stage = if saw_output {
-                    IDLE_TIMEOUT
-                } else {
-                    STARTUP_TIMEOUT
-                };
-                let left = TOTAL_TIMEOUT
-                    .saturating_sub(started.elapsed())
-                    .min(stage)
-                    .max(Duration::from_millis(1));
-                match tokio::time::timeout(left, lines.next_line()).await {
-                    Ok(l) => l?,
-                    Err(_) => {
+                let stage = if saw_output { IDLE_TIMEOUT } else { startup };
+                let quiet_since = std::time::Instant::now();
+                // The wait is sliced so a long silence can say so out loud.
+                // The read future is held across ticks rather than re-created,
+                // so nothing buffered is lost to a cancelled `next_line`.
+                let next = lines.next_line();
+                tokio::pin!(next);
+                loop {
+                    let stage_left = stage.saturating_sub(quiet_since.elapsed());
+                    let total_left = TOTAL_TIMEOUT.saturating_sub(started.elapsed());
+                    let left = stage_left.min(total_left);
+                    if left.is_zero() {
                         let (what, secs) = if !saw_output {
-                            ("produced no output", STARTUP_TIMEOUT.as_secs())
-                        } else if started.elapsed() >= TOTAL_TIMEOUT {
+                            ("produced no output", startup.as_secs())
+                        } else if total_left.is_zero() {
                             ("exceeded the run ceiling of", TOTAL_TIMEOUT.as_secs())
                         } else {
                             ("went silent mid-run for", IDLE_TIMEOUT.as_secs())
                         };
                         return Err(anyhow!("{} {what} {secs}s", kind.binary_name()));
+                    }
+                    tokio::select! {
+                        line = &mut next => break line?,
+                        _ = tokio::time::sleep(COUNTDOWN_TICK.min(left)) => {
+                            // Short silences are just latency; past the grace
+                            // period the wait becomes visible, with the deadline
+                            // it is counting toward, so a slow run reads as slow
+                            // rather than frozen.
+                            if quiet_since.elapsed() >= COUNTDOWN_AFTER {
+                                emit_step(waiting_label(kind, saw_output, left), true);
+                            }
+                        }
                     }
                 }
             } {
@@ -671,7 +1011,7 @@ impl AgentCli {
                             if let Some(tool) = t.strip_prefix("[using tool ") {
                                 // Scaffolding, not reply — but it IS status.
                                 let name = tool.trim_end_matches(']').trim();
-                                emit_step(format!("Using {name}"));
+                                emit_step(format!("Using {name}"), false);
                                 continue;
                             }
                             if t == "---output---" {
@@ -704,10 +1044,10 @@ impl AgentCli {
                                     on_token(t);
                                 }
                             }
-                            Some("step_start") => emit_step("Thinking".into()),
+                            Some("step_start") => emit_step("Thinking".into(), false),
                             Some("tool") => {
                                 let name = v["part"]["tool"].as_str().unwrap_or("a tool");
-                                emit_step(tool_step_label(name));
+                                emit_step(tool_step_label(name), false);
                             }
                             _ => {}
                         }
@@ -732,7 +1072,7 @@ impl AgentCli {
                                 let name = v["event"]["content_block"]["name"]
                                     .as_str()
                                     .unwrap_or("a tool");
-                                emit_step(tool_step_label(name));
+                                emit_step(tool_step_label(name), false);
                             }
                         }
                         // Full assistant turns; authoritative when partial
@@ -745,7 +1085,7 @@ impl AgentCli {
                                 for b in blocks {
                                     if b["type"].as_str() == Some("tool_use") {
                                         let name = b["name"].as_str().unwrap_or("a tool");
-                                        emit_step(tool_step_label(name));
+                                        emit_step(tool_step_label(name), false);
                                     } else if let Some(t) = b["text"].as_str() {
                                         if !streamed_already {
                                             text.push_str(t);
@@ -802,9 +1142,9 @@ impl AgentCli {
                             }
                             Some("tool_execution_start") => {
                                 let name = v["toolName"].as_str().unwrap_or("a tool");
-                                emit_step(tool_step_label(name));
+                                emit_step(tool_step_label(name), false);
                             }
-                            Some("auto_retry_start") => emit_step("Retrying".into()),
+                            Some("auto_retry_start") => emit_step("Retrying".into(), false),
                             Some("auto_retry_end") if v["success"].as_bool() == Some(false) => {
                                 if let Some(msg) = v["finalError"].as_str() {
                                     errored = Some(msg.to_string());
@@ -835,7 +1175,7 @@ impl AgentCli {
                                 Some(other) => format!("Working: {}", other.replace('_', " ")),
                                 None => "Working".to_string(),
                             };
-                            emit_step(label);
+                            emit_step(label, false);
                         } else if v["type"].as_str() == Some("error") {
                             errored =
                                 Some(v["message"].as_str().unwrap_or("codex error").to_string());
@@ -866,12 +1206,19 @@ impl AgentCli {
             )),
             Ok(Err(e)) => {
                 let tail = err_tail.await.unwrap_or_default();
+                // Label it as stderr rather than splicing it in as the cause:
+                // a CLI's boot warnings (a missing gpg-agent.conf, an MCP
+                // server it could not reach) are noise that happened to be on
+                // the pipe, and reading "produced no output 120s: Path could
+                // not be resolved…" sent Paul hunting the wrong bug.
                 let base = if tail.is_empty() {
                     format!("{e:#}")
                 } else {
-                    format!("{e:#}: {tail}")
+                    format!("{e:#} (stderr: {tail})")
                 };
-                match auth_fix_hint(self.kind, &base).or_else(|| model_fix_hint(self.kind, &base)) {
+                let hint = auth_fix_hint(self.kind, &base)
+                    .or_else(|| model_fix_hint(self.kind, self.model.as_deref(), &base));
+                match hint {
                     Some(hint) => Err(anyhow!("{base} — {hint}")),
                     None => Err(anyhow!("{base}")),
                 }
@@ -894,7 +1241,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn agent_cli_codex_smoke() {
-        let cli = AgentCli::new(AgentKind::Codex);
+        let cli = AgentCli::configured(AgentKind::Codex, "", "");
         let messages = vec![
             ChatTurn::system("Answer with exactly one word."),
             ChatTurn::user("What is 2+2? Reply with only the number."),
@@ -909,7 +1256,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn agent_cli_claude_smoke() {
-        let cli = AgentCli::new(AgentKind::Claude);
+        let cli = AgentCli::configured(AgentKind::Claude, "", "");
         let messages = vec![
             ChatTurn::system("Answer with exactly one word."),
             ChatTurn::user("What is 2+2? Reply with only the number."),
@@ -922,17 +1269,259 @@ mod tests {
         assert!(out.text.contains('4'), "unexpected: {}", out.text);
         assert!(!streamed.is_empty(), "no tokens streamed");
     }
+
+    /// codex's real config shape. A `model` under a profile table is not the
+    /// default and must not be mistaken for one.
+    #[test]
+    fn a_clis_default_model_comes_from_its_own_top_level_config() {
+        let parse = |text: &str| -> Option<String> {
+            text.lines()
+                .map(str::trim)
+                .take_while(|l| !l.starts_with('['))
+                .find_map(|l| l.strip_prefix("model")?.trim_start().strip_prefix('='))
+                .map(|v| v.trim().trim_matches('"').to_string())
+                .filter(|v| !v.is_empty())
+        };
+        let real = "model = \"gpt-5.6-sol\"\nmodel_reasoning_effort = \"medium\"\n";
+        assert_eq!(parse(real), Some("gpt-5.6-sol".to_string()));
+
+        let profiled = "approval_policy = \"on-request\"\n\n[profiles.fast]\nmodel = \"mini\"\n";
+        assert_eq!(
+            parse(profiled),
+            None,
+            "a profile's model is not the default"
+        );
+
+        // Every CLI without a documented location says so rather than guessing.
+        assert!(cli_default_model(AgentKind::Bob).is_none());
+        assert!(cli_default_model(AgentKind::Gemini).is_none());
+    }
+
+    /// Two listing shapes, told apart by their own header. Fixtures are the
+    /// real thing: `pi --list-models` and `opencode models`, run live.
+    #[test]
+    fn model_listings_parse_into_ids_we_can_hand_back() {
+        let pi = "provider  model                         context  max-out  thinking  images\n\
+                  ollama    gpt-oss:120b                  128K     16.4K    no        no\n\
+                  ollama    qwen3.6:35b-mlx               128K     16.4K    no        no\n";
+        assert_eq!(
+            parse_model_list(pi),
+            vec!["ollama/gpt-oss:120b", "ollama/qwen3.6:35b-mlx"]
+        );
+
+        let opencode = "opencode/big-pickle\ngithub-copilot/claude-sonnet-5\n";
+        assert_eq!(
+            parse_model_list(opencode),
+            vec!["opencode/big-pickle", "github-copilot/claude-sonnet-5"]
+        );
+    }
+
+    /// A CLI with nothing to offer must yield an empty list, not a menu entry
+    /// reading "No models available for this account." — cursor-agent's real
+    /// output on an account with none, spinner escapes and all.
+    #[test]
+    fn status_chatter_is_never_offered_as_a_model() {
+        let cursor = "\u{1b}[2K\u{1b}[GLoading models…\n\
+                      \u{1b}[2K\u{1b}[1A\u{1b}[2K\u{1b}[GNo models available for this account.\n";
+        assert!(parse_model_list(cursor).is_empty());
+        assert_eq!(
+            strip_ansi("\u{1b}[2K\u{1b}[Gopencode/big-pickle"),
+            "opencode/big-pickle"
+        );
+    }
+
+    /// Only the CLIs that really have a catalogue command get spawned for one.
+    #[test]
+    fn only_cataloguing_clis_are_listed() {
+        for kind in AgentKind::ALL {
+            let expected = matches!(
+                kind,
+                AgentKind::Opencode | AgentKind::Pi | AgentKind::Prime | AgentKind::Cursor
+            );
+            assert_eq!(kind.list_models_args().is_some(), expected, "{kind:?}");
+        }
+    }
+
+    /// The countdown says what it is waiting on and how long is left, in a
+    /// shape that reads as a wait rather than a warning.
+    #[test]
+    fn the_countdown_names_the_wait_and_the_deadline() {
+        let before = waiting_label(AgentKind::Bob, false, Duration::from_secs(605));
+        assert_eq!(before, "Waiting for Bob Shell — 10m 05s left");
+
+        let after = waiting_label(AgentKind::Bob, true, Duration::from_secs(42));
+        assert_eq!(after, "Bob Shell has gone quiet — 42s left");
+    }
+
+    /// The startup deadline is a wedge detector, and it only detects anything
+    /// for a CLI that announces itself before the model runs. Verified against
+    /// each CLI's real behaviour: bob's first stdout line is its own
+    /// `<thinking>` block, i.e. the answer already starting.
+    #[test]
+    fn only_bannering_clis_get_the_startup_deadline() {
+        for kind in AgentKind::ALL {
+            let expected = !matches!(
+                kind,
+                AgentKind::Gemini | AgentKind::Bob | AgentKind::Copilot | AgentKind::Hermes
+            );
+            assert_eq!(
+                kind.banners_at_startup(),
+                expected,
+                "{} classified wrong",
+                kind.binary_name()
+            );
+        }
+    }
+
+    /// Paul's report was captioned "… — }": the last non-empty stderr line was
+    /// a closing brace from a pretty-printed JSON error.
+    #[test]
+    fn structural_stderr_crumbs_never_speak_for_a_failure() {
+        assert!(!is_meaningful_stderr("}"));
+        assert!(!is_meaningful_stderr("  },"));
+        assert!(!is_meaningful_stderr("]"));
+        assert!(!is_meaningful_stderr(""));
+        assert!(is_meaningful_stderr(
+            r#"× Model call failed: {"code":"model_not_supported"}"#
+        ));
+        assert!(is_meaningful_stderr(
+            "Error: ENOENT: no such file or directory"
+        ));
+    }
+
+    /// codex's live phrasing differs from copilot's `model_not_supported`
+    /// code, and the fix depends on who picked the name.
+    #[test]
+    fn a_retired_model_names_whoever_chose_it() {
+        let copilot = r#"× Model call failed: {"code":"model_not_supported"}"#;
+        let codex = "The 'gpt-5.1-codex-max' model is not supported when using \
+                     Codex with a ChatGPT account.";
+        for text in [copilot, codex] {
+            let ours = model_fix_hint(AgentKind::Codex, Some("gpt-5.1-codex-max"), text)
+                .expect("recognised as a model error");
+            assert!(ours.contains("Settings → Models"), "{ours}");
+            assert!(ours.contains("gpt-5.1-codex-max"), "{ours}");
+
+            // Nothing set on our side: the CLI's own default is the suspect.
+            let theirs =
+                model_fix_hint(AgentKind::Codex, None, text).expect("recognised as a model error");
+            assert!(theirs.contains("saved model has been retired"), "{theirs}");
+        }
+
+        // An unrelated failure is not a model failure.
+        assert!(model_fix_hint(AgentKind::Codex, None, "connection reset").is_none());
+    }
+
+    /// Effort ladders differ in length by CLI, and switching providers must
+    /// not carry a level the new one has never heard of into its argv.
+    #[test]
+    fn an_effort_the_cli_does_not_offer_is_dropped() {
+        // codex tops out where OpenAI's reasoning_effort does.
+        assert_eq!(
+            AgentCli::configured(AgentKind::Codex, "", "high").effort,
+            Some("high".to_string())
+        );
+        assert!(AgentCli::configured(AgentKind::Codex, "", "max")
+            .effort
+            .is_none());
+        // claude carries two rungs above it.
+        assert_eq!(
+            AgentCli::configured(AgentKind::Claude, "", "max").effort,
+            Some("max".to_string())
+        );
+        // And a CLI with no effort control never gets one.
+        assert!(AgentKind::Bob.efforts().is_empty());
+        assert!(AgentCli::configured(AgentKind::Bob, "", "high")
+            .effort
+            .is_none());
+    }
+
+    /// Every advertised level must be one the CLI's own flag accepts — the
+    /// ladders are read off `--help`, so a typo here is a broken run.
+    #[test]
+    fn advertised_efforts_are_ordered_cheapest_first() {
+        const ORDER: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+        for kind in AgentKind::ALL {
+            let ranks: Vec<usize> = kind
+                .efforts()
+                .iter()
+                .map(|e| ORDER.iter().position(|o| o == e).expect("known level"))
+                .collect();
+            assert!(
+                ranks.windows(2).all(|w| w[0] < w[1]),
+                "{} ladder out of order: {:?}",
+                kind.binary_name(),
+                kind.efforts()
+            );
+        }
+    }
+
+    /// The provider's model field reaches the CLI, and blank still means "the
+    /// CLI's own default" — the state every existing entry is saved in.
+    #[test]
+    fn a_blank_model_stays_unset() {
+        assert!(AgentCli::configured(AgentKind::Codex, "", "")
+            .model
+            .is_none());
+        assert!(AgentCli::configured(AgentKind::Codex, "   ", "")
+            .model
+            .is_none());
+        assert_eq!(
+            AgentCli::configured(AgentKind::Codex, " gpt-5.1-codex ", "").model,
+            Some("gpt-5.1-codex".to_string())
+        );
+    }
 }
 
 #[cfg(test)]
 mod live_smokes {
     use super::*;
 
+    /// The positional-prompt shape (bobshell deprecated `-p`) against the real
+    /// CLI, plus the no-banner deadline: bob prints nothing until its answer.
+    ///   cargo test agent_cli_bob_smoke -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn agent_cli_bob_smoke() {
+        let cli = AgentCli::configured(AgentKind::Bob, "", "");
+        let out = cli
+            .chat(&[ChatTurn::user("What is 2+2? Reply with only the number.")])
+            .await
+            .expect("bob chat failed");
+        assert!(out.text.contains('4'), "unexpected: {}", out.text);
+    }
+
+    /// Effort reaches each CLI through its own flag, and the run still
+    /// succeeds — the flags differ enough (`--effort`, a TOML `-c` override,
+    /// `--thinking`, `--variant`) that only a live run proves the spelling.
+    ///   cargo test agent_cli_effort_smoke -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn agent_cli_effort_smoke() {
+        for (kind, effort) in [
+            (AgentKind::Codex, "low"),
+            (AgentKind::Claude, "low"),
+            (AgentKind::Pi, "low"),
+        ] {
+            let cli = AgentCli::configured(kind, "", effort);
+            let out = cli
+                .chat(&[ChatTurn::user("What is 2+2? Reply with only the number.")])
+                .await
+                .unwrap_or_else(|e| panic!("{} at effort {effort}: {e:#}", kind.binary_name()));
+            assert!(
+                out.text.contains('4'),
+                "{}: unexpected {}",
+                kind.binary_name(),
+                out.text
+            );
+        }
+    }
+
     /// cargo test agent_cli_opencode_smoke -- --ignored --nocapture
     #[tokio::test]
     #[ignore]
     async fn agent_cli_opencode_smoke() {
-        let cli = AgentCli::new(AgentKind::Opencode);
+        let cli = AgentCli::configured(AgentKind::Opencode, "", "");
         let out = cli
             .chat(&[ChatTurn::user("What is 2+2? Reply with only the number.")])
             .await
@@ -944,7 +1533,7 @@ mod live_smokes {
     #[tokio::test]
     #[ignore]
     async fn agent_cli_pi_smoke() {
-        let cli = AgentCli::new(AgentKind::Pi);
+        let cli = AgentCli::configured(AgentKind::Pi, "", "");
         let out = cli
             .chat(&[ChatTurn::user("What is 2+2? Reply with only the number.")])
             .await
@@ -956,7 +1545,7 @@ mod live_smokes {
     #[tokio::test]
     #[ignore]
     async fn agent_cli_prime_smoke() {
-        let cli = AgentCli::new(AgentKind::Prime);
+        let cli = AgentCli::configured(AgentKind::Prime, "", "");
         let out = cli
             .chat(&[ChatTurn::user("What is 2+2? Reply with only the number.")])
             .await
@@ -968,7 +1557,7 @@ mod live_smokes {
     #[tokio::test]
     #[ignore]
     async fn agent_cli_hermes_smoke() {
-        let cli = AgentCli::new(AgentKind::Hermes);
+        let cli = AgentCli::configured(AgentKind::Hermes, "", "");
         let out = cli
             .chat(&[ChatTurn::user("What is 2+2? Reply with only the number.")])
             .await

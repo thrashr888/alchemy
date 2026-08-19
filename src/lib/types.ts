@@ -416,6 +416,20 @@ export interface NightShiftStatus {
   paused: boolean;
 }
 
+/** What a provider offers the model picker. `supportsDefault` is false for a
+ *  gateway, which has no fallback model of its own — it needs a name. */
+export interface ProviderModels {
+  models: string[];
+  supportsDefault: boolean;
+  /** Reasoning-effort levels, cheapest first. Empty = this provider has no
+   *  effort control, and the composer hides the pill entirely. */
+  efforts: string[];
+  /** What "Default" resolves to, when knowable — Ollama falls through to the
+   *  app's main model. `null` for a vendor CLI, whose default is its own
+   *  business and which won't tell us. */
+  defaultModel: string | null;
+}
+
 /** One configured inference provider (list entry in Settings → Models). */
 export interface ProviderEntry {
   id: string;
@@ -424,6 +438,8 @@ export interface ProviderEntry {
   baseUrl: string;
   apiKey: string;
   chatModel: string;
+  /** Reasoning effort; "" = the provider's own default. */
+  effort: string;
 }
 
 export interface AiConfig {

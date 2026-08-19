@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Cause, Duration, Effect, Schedule } from "effect";
 import { describe, IpcError, TimeoutError, type AppError } from "./errors";
 import type {
+  ProviderModels,
   Citation,
   AiConfig,
   BuildInfo,
@@ -243,6 +244,9 @@ export const api = {
     run(query<string>("mac_note_body", { sourceId })),
   updateMacNote: (sourceId: string, body: string) =>
     run(ai<Source>("update_mac_note", { sourceId, body })),
+  /** Check off a reminder by its id — titles repeat, ids don't. */
+  completeMacReminder: (sourceId: string, reminderId: string) =>
+    run(ai<Source>("complete_mac_reminder", { sourceId, reminderId })),
   addMacReminder: (sourceId: string, title: string, notes?: string) =>
     run(
       ai<Source>("add_mac_reminder", { sourceId, title, notes: notes ?? null }),
@@ -559,6 +563,10 @@ export const api = {
   listModels: () => run(query<string[]>("list_models")),
   listGatewayModels: (baseUrl: string, apiKey: string) =>
     run(probe<string[]>("list_gateway_models", { baseUrl, apiKey })),
+  /** One provider's model choices for the composer picker. Never throws for a
+   *  provider that simply has no catalogue — the list comes back empty. */
+  providerModels: (providerId: string) =>
+    run(probe<ProviderModels>("provider_models", { providerId })),
   checkOllama: () => run(query<boolean>("check_ollama")),
   checkModels: () => run(query<ModelHealth>("check_models")),
   getModelStats: () => run(query<ModelStat[]>("get_model_stats")),

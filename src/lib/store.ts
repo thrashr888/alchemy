@@ -234,6 +234,7 @@ export const useStore = create<AppState>((set, get) => {
     sending: false,
     streamingText: "",
     steps: [],
+    waiting: "",
     agentMode: localStorage.getItem("agentMode") === "true",
     chatConfig: DEFAULT_CHAT_CONFIG,
     followups: [],
@@ -753,6 +754,7 @@ export const useStore = create<AppState>((set, get) => {
         reportSchedules: [],
         streamingText: "",
         steps: [],
+        waiting: "",
         followups: [],
         chatConfig,
         summary: localStorage.getItem(`summary:${id}`) ?? "",
@@ -795,6 +797,7 @@ export const useStore = create<AppState>((set, get) => {
         reportSchedules: [],
         ingestQueue: [],
         steps: [],
+        waiting: "",
         reader: { open: false, history: [], index: -1 },
       });
     },
@@ -1271,6 +1274,7 @@ export const useStore = create<AppState>((set, get) => {
         sending: true,
         streamingText: "",
         steps: [],
+        waiting: "",
         followups: [],
         error: null,
         failedInput: null,
@@ -1335,7 +1339,7 @@ export const useStore = create<AppState>((set, get) => {
       } finally {
         // sending/steps are global in-flight flags — always clear them, even if
         // the user switched notebooks while the request ran.
-        set({ sending: false, streamingText: "", steps: [] });
+        set({ sending: false, streamingText: "", steps: [], waiting: "" });
         void get().refreshModelStats();
       }
     },
@@ -1450,6 +1454,7 @@ export const useStore = create<AppState>((set, get) => {
       // token. Buffer and commit once per animation frame; the tail left in
       // the buffer when a stream ends is dropped on purpose — the finished
       // message arrives whole from the backend.
+      if (get().waiting) set({ waiting: "" });
       tokenBuffer += t;
       if (tokenFlushHandle !== 0) return;
       tokenFlushHandle = requestAnimationFrame(() => {
@@ -1461,7 +1466,14 @@ export const useStore = create<AppState>((set, get) => {
       });
     },
 
-    appendStep: (label) => set({ steps: [...get().steps, label] }),
+    appendStep: (label, transient) =>
+      // A transient line is a live status, not a trail entry: it replaces the
+      // previous one and never accumulates.
+      set(
+        transient
+          ? { waiting: label }
+          : { steps: [...get().steps, label], waiting: "" },
+      ),
 
     toggleAgentMode: () => {
       const next = !get().agentMode;

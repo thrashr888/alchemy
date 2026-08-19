@@ -232,6 +232,7 @@ fn chat_tier(kind: &str, runtime: AiRuntime) -> Ai {
         base_url: String::new(),
         api_key: String::new(),
         chat_model: String::new(),
+        effort: String::new(),
     });
     config.chat_provider = kind.to_string();
     Ai::new(config, runtime)
