@@ -21,6 +21,16 @@ struct AddReminderReq {
     notes: Option<String>,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct CompleteReminderReq {
+    /// Source id of a Reminders-list source (from list_sources).
+    source_id: String,
+    /// The reminder's id, as printed after its title in the source text.
+    /// Always use the id: reminder titles are not unique, and there is no
+    /// way to name one by title when two of them match.
+    reminder_id: String,
+}
+
 #[tool_router(router = mac_router, vis = "pub(super)")]
 impl AlchemyMcp {
     // -- Mac source write-back (Apple Notes / Reminders via cider) --
@@ -69,6 +79,34 @@ impl AlchemyMcp {
             .map_err(internal)?
             .ok_or_else(|| invalid(format!("no source with id {source_id}")))?;
         crate::mac::add_reminder(&source.url, &title, notes.as_deref())
+            .await
+            .map_err(|e| invalid(format!("{e:#}")))?;
+        let notebook_id = source.notebook_id.clone();
+        let updated = commands::resync_mac_source(&state, source)
+            .await
+            .map_err(internal)?;
+        self.changed("sources", Some(&notebook_id));
+        json_result(&updated)
+    }
+
+    #[tool(
+        description = "Check off a reminder in the Apple Reminders list behind a Reminders source (a source whose url starts with cider://reminders/list/). Takes the reminder's id, which the source text prints after each title — titles repeat, so an id is the only way to name one exactly. Writes to Apple Reminders, then re-syncs the source."
+    )]
+    async fn complete_reminder(
+        &self,
+        Parameters(CompleteReminderReq {
+            source_id,
+            reminder_id,
+        }): Parameters<CompleteReminderReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let source = state
+            .db
+            .get_source(&source_id)
+            .await
+            .map_err(internal)?
+            .ok_or_else(|| invalid(format!("no source with id {source_id}")))?;
+        crate::mac::complete_reminder(&source.url, &reminder_id)
             .await
             .map_err(|e| invalid(format!("{e:#}")))?;
         let notebook_id = source.notebook_id.clone();

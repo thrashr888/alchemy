@@ -3024,6 +3024,19 @@ pub async fn add_mac_reminder(
     resync_mac_source(&state, existing).await
 }
 
+/// Check off a reminder in the list a Reminders source mirrors, then resync.
+#[tauri::command]
+pub async fn complete_mac_reminder(
+    state: State<'_, AppState>,
+    source_id: String,
+    reminder_id: String,
+) -> Result<Source, String> {
+    let existing =
+        e(state.db.get_source(&source_id).await)?.ok_or_else(|| "Source not found".to_string())?;
+    e(crate::mac::complete_reminder(&existing.url, &reminder_id).await)?;
+    resync_mac_source(&state, existing).await
+}
+
 /// Post-write resync: fetch the item's current state and re-embed it.
 pub(crate) async fn resync_mac_source(
     state: &AppState,

@@ -269,6 +269,7 @@ pub fn run() {
             commands::mac_note_body,
             commands::update_mac_note,
             commands::add_mac_reminder,
+            commands::complete_mac_reminder,
             mac::mac_available,
             mac::open_privacy_settings,
             mac::mac_connect,

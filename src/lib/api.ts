@@ -244,6 +244,9 @@ export const api = {
     run(query<string>("mac_note_body", { sourceId })),
   updateMacNote: (sourceId: string, body: string) =>
     run(ai<Source>("update_mac_note", { sourceId, body })),
+  /** Check off a reminder by its id — titles repeat, ids don't. */
+  completeMacReminder: (sourceId: string, reminderId: string) =>
+    run(ai<Source>("complete_mac_reminder", { sourceId, reminderId })),
   addMacReminder: (sourceId: string, title: string, notes?: string) =>
     run(
       ai<Source>("add_mac_reminder", { sourceId, title, notes: notes ?? null }),
