@@ -5519,7 +5519,8 @@ async fn try_tool_route(
                     transient: false,
                 },
             );
-            match generate_content(state, None, notebook_id, &kind, &prompt, None, None).await {
+            match generate_content(state, None, notebook_id, &kind, &prompt, None, None, None).await
+            {
                 Ok((title, body)) => {
                     let ts = now();
                     let note = Note {
@@ -6978,6 +6979,7 @@ pub async fn convert_note_to_source(
 /// the corpus to those sources; None uses everything. `prior_report` is the
 /// previous run's output for scheduled reports — included so the model can
 /// report what changed since, instead of apologizing that it can't.
+#[allow(clippy::too_many_arguments)]
 async fn generate_content(
     state: &AppState,
     app: Option<&AppHandle>,
@@ -6986,6 +6988,7 @@ async fn generate_content(
     prompt: &str,
     source_ids: Option<&[String]>,
     prior_report: Option<&str>,
+    provider: Option<&str>,
 ) -> anyhow::Result<(String, String)> {
     // Instruction base by kind precedence: "template:<id>" resolves the
     // template at RUN time (a schedule tracks the template's current body,
@@ -7131,7 +7134,7 @@ async fn generate_content(
         rag::persona_block(&ai.config().profile)
     };
     let messages = rag::build_artifact_messages(&instruction, &corpus, &persona);
-    let mut content = run_generation_chat(state, app, &messages).await?;
+    let mut content = run_generation_chat(state, app, &messages, provider).await?;
 
     // A twenty-minute episode is ~3,000 words, and chat models routinely fade
     // early. Continue the episode (dropping any premature outro) until it's
@@ -7145,7 +7148,7 @@ async fn generate_content(
             }
             let trimmed = strip_outro(&content);
             let messages = rag::build_audio_continuation(&instruction, &corpus, &persona, &trimmed);
-            let more = run_generation_chat(state, app, &messages).await?;
+            let more = run_generation_chat(state, app, &messages, provider).await?;
             // A tiny continuation means the model considers the episode done.
             if more.split_whitespace().count() < 100 {
                 break;
@@ -7162,24 +7165,56 @@ async fn run_generation_chat(
     state: &AppState,
     app: Option<&AppHandle>,
     messages: &[crate::ai::ChatTurn],
+    provider: Option<&str>,
 ) -> anyhow::Result<String> {
     let (text, stats, model) = {
         let ai = state.ai.read().await.clone();
-        // On-device model only: cap the corpus prompt to its 8192-token window
+        // A per-call provider override (the MCP generate tool's optional
+        // field) resolves to one configured entry's engine and bypasses role
+        // routing for THIS call only — host settings still own every default.
+        let overridden = provider.map(|id| ai.engine_for_provider(id)).transpose()?;
+        // On-device model only: cap the corpus prompt to its context window
         // before generating (the instruction survives at the head; the source
-        // body is trimmed to fit). Streaming runs the Generate role, the
-        // non-streaming summary path the Chat role — budget whichever answers.
-        let role = if app.is_some() {
-            crate::inference::Role::Generate
-        } else {
-            crate::inference::Role::Chat
+        // body is trimmed to fit). With an override, budget by the engine
+        // that will actually answer; otherwise streaming runs the Generate
+        // role, the non-streaming summary path the Chat role.
+        let needs_fm_budget = match &overridden {
+            Some((engine, _)) => {
+                matches!(engine, crate::inference::ChatEngine::FoundationModels(_))
+            }
+            None => {
+                let role = if app.is_some() {
+                    crate::inference::Role::Generate
+                } else {
+                    crate::inference::Role::Chat
+                };
+                ai.fm_input_budget(role).is_some()
+            }
         };
-        let budgeted = ai
-            .fm_input_budget(role)
-            .map(|budget| crate::inference::budget::fit_messages(messages, budget).into_owned());
+        let budgeted = needs_fm_budget.then(|| {
+            crate::inference::budget::fit_messages(
+                messages,
+                crate::inference::budget::fm_input_budget_tokens(),
+            )
+            .into_owned()
+        });
         let messages: &[crate::ai::ChatTurn] = budgeted.as_deref().unwrap_or(messages);
-        let out = match app {
-            Some(app) => {
+        let out = match (&overridden, app) {
+            (Some((engine, _)), Some(app)) => {
+                let app = app.clone();
+                engine
+                    .chat_stream(messages, move |tok| {
+                        let _ = app.emit(
+                            "artifact://token",
+                            TokenEvent {
+                                content: tok.to_string(),
+                            },
+                        );
+                    })
+                    .await?
+            }
+            (Some((engine, _)), None) => engine.chat(messages).await?,
+            (None, Some(app)) => {
                 let app = app.clone();
                 ai.chat_role_stream(crate::inference::Role::Generate, messages, move |tok| {
                     let _ = app.emit(
@@ -7191,9 +7226,13 @@ async fn run_generation_chat(
                 })
                 .await?
             }
-            None => ai.chat(messages).await?,
+            (None, None) => ai.chat(messages).await?,
         };
-        (out.text, out.stats, ai.active_chat_model())
+        let model = match overridden {
+            Some((_, model)) => model,
+            None => ai.active_chat_model(),
+        };
+        (out.text, out.stats, model)
     };
     state.record_chat_stats(&model, stats);
     Ok(text)
@@ -7236,7 +7275,7 @@ pub async fn generate_artifact(
     let prompt = prompt.unwrap_or_default();
     let cancel = state.begin_generation(&format!("artifact:{}", window.label()));
     let produced = tokio::select! {
-        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt, source_ids.as_deref(), None) => Some(e(r)?),
+        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt, source_ids.as_deref(), None, None) => Some(e(r)?),
         _ = cancel.cancelled() => None,
     };
     let (title, content) = match produced {
@@ -7277,7 +7316,16 @@ pub async fn start_generation_detached(
     notebook_id: &str,
     kind: &str,
     prompt: &str,
+    provider: Option<String>,
 ) -> anyhow::Result<Note> {
+    // Fail fast on an unknown provider id: the whole point of the override is
+    // an agent steering one call, and a typo should error at the tool call,
+    // not as a dead "generating" note discovered by polling.
+    if let Some(id) = provider.as_deref() {
+        let state = app.state::<AppState>();
+        let ai = state.ai.read().await.clone();
+        ai.engine_for_provider(id)?;
+    }
     // Fail fast on kinds the async path can't honor: audio synthesis needs
     // the window-side player anyway, and a wrong kind should error at the
     // tool call, not twenty seconds into a background task.
@@ -7340,6 +7388,7 @@ pub async fn start_generation_detached(
                 &spawned.prompt,
                 None,
                 None,
+                provider.as_deref(),
             ),
         )
         .await
@@ -7403,7 +7452,7 @@ pub async fn rebuild_note(
 ) -> Result<Note, String> {
     let cancel = state.begin_generation(&format!("artifact:{}", window.label()));
     let produced = tokio::select! {
-        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt, None, None) => Some(e(r)?),
+        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt, None, None, None) => Some(e(r)?),
         _ = cancel.cancelled() => None,
     };
     let (title, content) = match produced {
@@ -7547,6 +7596,7 @@ pub async fn generate_notebook_summary(
         "custom",
         "Write a 2-4 sentence plain-prose overview of what these sources collectively cover. \
          No lists, headings, or preamble — just the overview.",
+        None,
         None,
         None,
     )

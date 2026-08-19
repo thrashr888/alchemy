@@ -172,6 +172,7 @@ pub(crate) async fn run_report_inner(
         &schedule.prompt,
         None,
         prior_content.as_deref(),
+        None,
     )
     .await)?;
 
