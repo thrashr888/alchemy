@@ -621,7 +621,7 @@ export function ModelsTab({
                     label="Embedding model"
                     value={draft.embedModel}
                     onChange={(v) => setDraft({ ...draft, embedModel: v })}
-                    placeholder="nomic-embed-text"
+                    placeholder="mxbai-embed-large"
                     filter={(m) => /embed|bge|minilm|gte|e5/i.test(m)}
                   />
                 )}
@@ -1127,7 +1127,7 @@ function ProviderWizard({
               label="Local model"
               value={localModel}
               onChange={setLocalModel}
-              placeholder="gpt-oss:120b"
+              placeholder="gpt-oss:20b"
             />
           </Field>
           <div className="flex items-center justify-between pt-1">

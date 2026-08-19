@@ -316,7 +316,12 @@ impl Default for AiConfig {
             provider: default_provider(),
             embedder: default_provider(),
             base_url: "http://localhost:11434".to_string(),
-            chat_model: "gpt-oss:120b".to_string(),
+            // 20b, not 120b: the big one is a 65GB download needing ~64GB of
+            // RAM, so the shipped default was unrunnable on the 32GB Macs most
+            // people have. Same family, so the citation style `verify.rs`
+            // parses and the prompt tuning around it still hold. Fresh configs
+            // only — an existing config keeps whatever it already had.
+            chat_model: "gpt-oss:20b".to_string(),
             small_model: String::new(),
             // A/B'd on BEIR (2026-08-09): mxbai beat nomic-embed-text on
             // every dataset pair tried (scifact 0.743 vs 0.727, fiqa 0.390

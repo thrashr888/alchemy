@@ -397,8 +397,8 @@ Requires [Ollama](https://ollama.com) running locally.
 - Models pulled — for example:
 
   ```bash
-  ollama pull nomic-embed-text        # embeddings
-  ollama pull gpt-oss:120b            # chat (or any chat model)
+  ollama pull mxbai-embed-large       # embeddings
+  ollama pull gpt-oss:20b             # chat (or any chat model)
   ollama pull glm-ocr                 # OCR (optional, for images / scanned PDFs)
   ```
 
@@ -436,8 +436,8 @@ Open **Settings** (gear icon) to set the Ollama URL and choose models. Defaults:
 | Setting          | Default                    |
 | ---------------- | -------------------------- |
 | Ollama URL       | `http://localhost:11434`   |
-| Chat model       | `gpt-oss:120b`             |
-| Embedding model  | `nomic-embed-text:latest`  |
+| Chat model       | `gpt-oss:20b`              |
+| Embedding model  | `mxbai-embed-large`        |
 | Vision model     | _(unset — OCR disabled)_   |
 
 Switching the embedding model prompts to **re-embed all sources** (models produce
