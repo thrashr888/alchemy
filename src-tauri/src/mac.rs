@@ -147,7 +147,7 @@ pub async fn list_mac_collections(provider: String) -> Result<Vec<MacCollection>
                 .collect())
         }
         // Individual notes, not folders — one note becomes one source (its
-        // full text via `notes get`, past the list command's 2000-char cap).
+        // full text via `notes get`).
         // --brief (cider >= 0.1.8) skips bodies and returns the whole
         // library fast; the picker searches and groups it by folder
         // client-side.

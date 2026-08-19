@@ -53,7 +53,7 @@ csv = "1"
 # Apple Notes/Reminders/Calendar/Stocks sources (mac.rs) — linked, not shelled
 # out to, so users need no `brew install cider`. default-features = false
 # drops its Clap CLI front-end. cider is Paul's repo: fix bugs there.
-cider = { package = "cider-cli", version = "0.3", default-features = false }
+cider = { package = "cider-cli", version = "0.4", default-features = false }
 percent-encoding = "2"
 # Folder scanning for all folder sources (docs/RFC-git-sources.md): ripgrep's
 # own walker — .gitignore/.ignore-aware, symlink-safe, prunes dot-dirs.
