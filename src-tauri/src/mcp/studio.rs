@@ -17,6 +17,14 @@ struct GenerateReq {
     /// Extra instructions (required for "custom", optional otherwise).
     #[serde(default)]
     instructions: Option<String>,
+    /// Optional provider override for THIS generation: the id of one of the
+    /// user's configured providers (list them via provider errors — an
+    /// unknown id fails fast naming the valid ones). Leave unset to use the
+    /// app's configured Studio provider, which is almost always right; set it
+    /// when that provider is failing (out of credit, offline) or the user
+    /// asked for a specific one.
+    #[serde(default)]
+    provider: Option<String>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -141,12 +149,14 @@ impl AlchemyMcp {
             notebook_id,
             kind,
             instructions,
+            provider,
         }): Parameters<GenerateReq>,
     ) -> Result<CallToolResult, McpError> {
         let prompt = instructions.unwrap_or_default();
-        let note = commands::start_generation_detached(&self.app, &notebook_id, &kind, &prompt)
-            .await
-            .map_err(|e| invalid(format!("{e:#}")))?;
+        let note =
+            commands::start_generation_detached(&self.app, &notebook_id, &kind, &prompt, provider)
+                .await
+                .map_err(|e| invalid(format!("{e:#}")))?;
         self.changed("notes", Some(&notebook_id));
         json_result(&note)
     }

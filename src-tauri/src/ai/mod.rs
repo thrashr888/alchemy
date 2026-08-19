@@ -388,6 +388,9 @@ pub struct Ai {
     /// distillation family can find it without threading a path through every
     /// `spawn_sweep` call site.
     data_dir: std::path::PathBuf,
+    /// The FM sidecar path the constructor resolved, kept so a per-call
+    /// provider override can rebuild any entry's engine after construction.
+    fm_sidecar: Option<std::path::PathBuf>,
 }
 
 pub(crate) fn ollama_config(config: &AiConfig) -> OllamaConfig {
@@ -398,6 +401,52 @@ pub(crate) fn ollama_config(config: &AiConfig) -> OllamaConfig {
         vision_model: config.vision_model.clone(),
         // Effort is a per-provider choice; the shared slice carries none.
         effort: String::new(),
+    }
+}
+
+/// The chat engine one configured provider entry resolves to. Shared by the
+/// constructor (roles) and by per-call provider overrides (the MCP generate
+/// tool), so the two can never disagree about what an entry means.
+fn engine_for_entry(
+    config: &AiConfig,
+    fm_sidecar: Option<&std::path::Path>,
+    entry: &ProviderEntry,
+) -> ChatEngine {
+    match entry.kind.as_str() {
+        "fm" => match fm_sidecar.filter(|p| p.exists()) {
+            Some(p) => ChatEngine::FoundationModels(FmEngine::new(p.to_path_buf())),
+            // Sidecar missing (pre-26 macOS, unbundled build): fall
+            // back to Ollama so a stale selection can't dead-end.
+            None => ChatEngine::Ollama(Ollama::new(ollama_config(config))),
+        },
+        "gateway" => ChatEngine::Gateway(OpenAiClient::with_effort(
+            entry.base_url.trim(),
+            &entry.api_key,
+            &entry.chat_model,
+            &entry.effort,
+        )),
+        kind => match AgentKind::from_id(kind) {
+            // Family B: the vendor CLI carries the subscription. The
+            // model and effort are still ours to pass — blank means
+            // "the CLI's own default", which is exactly what goes
+            // stale when a vendor retires a model out from under it.
+            Some(agent) => ChatEngine::Agent(AgentCli::configured(
+                agent,
+                &entry.chat_model,
+                &entry.effort,
+            )),
+            None => {
+                let mut oc = ollama_config(config);
+                if !entry.base_url.trim().is_empty() {
+                    oc.base_url = entry.base_url.clone();
+                }
+                if !entry.chat_model.trim().is_empty() {
+                    oc.chat_model = entry.chat_model.clone();
+                }
+                oc.effort = entry.effort.clone();
+                ChatEngine::Ollama(Ollama::new(oc))
+            }
+        },
     }
 }
 
@@ -412,42 +461,7 @@ impl Ai {
         });
         let fm_path = runtime.fm_sidecar.clone();
         let engine_for = |entry: &ProviderEntry| -> ChatEngine {
-            match entry.kind.as_str() {
-                "fm" => match fm_path.as_ref().filter(|p| p.exists()) {
-                    Some(p) => ChatEngine::FoundationModels(FmEngine::new(p.clone())),
-                    // Sidecar missing (pre-26 macOS, unbundled build): fall
-                    // back to Ollama so a stale selection can't dead-end.
-                    None => ChatEngine::Ollama(Ollama::new(ollama_config(&config))),
-                },
-                "gateway" => ChatEngine::Gateway(OpenAiClient::with_effort(
-                    entry.base_url.trim(),
-                    &entry.api_key,
-                    &entry.chat_model,
-                    &entry.effort,
-                )),
-                kind => match AgentKind::from_id(kind) {
-                    // Family B: the vendor CLI carries the subscription. The
-                    // model and effort are still ours to pass — blank means
-                    // "the CLI's own default", which is exactly what goes
-                    // stale when a vendor retires a model out from under it.
-                    Some(agent) => ChatEngine::Agent(AgentCli::configured(
-                        agent,
-                        &entry.chat_model,
-                        &entry.effort,
-                    )),
-                    None => {
-                        let mut oc = ollama_config(&config);
-                        if !entry.base_url.trim().is_empty() {
-                            oc.base_url = entry.base_url.clone();
-                        }
-                        if !entry.chat_model.trim().is_empty() {
-                            oc.chat_model = entry.chat_model.clone();
-                        }
-                        oc.effort = entry.effort.clone();
-                        ChatEngine::Ollama(Ollama::new(oc))
-                    }
-                },
-            }
+            engine_for_entry(&config, fm_path.as_deref(), entry)
         };
         let chat = config
             .provider_by_id(&config.chat_provider)
@@ -509,6 +523,7 @@ impl Ai {
             ollama,
             openai,
             data_dir,
+            fm_sidecar: fm_path,
             xenc,
             verifier,
         }
@@ -622,6 +637,37 @@ impl Ai {
             },
             None => self.config.chat_model.clone(),
         }
+    }
+
+    /// Resolve a per-call provider override: the engine for the configured
+    /// entry with this id, plus the model name to key stats under. `Err`
+    /// names the valid ids — an agent typo should read as "pick one of
+    /// these", not "provider broken". Host settings still own every default;
+    /// this narrows one call to one already-configured entry.
+    pub fn engine_for_provider(&self, id: &str) -> Result<(ChatEngine, String)> {
+        let entry = self
+            .config
+            .providers
+            .iter()
+            .find(|p| p.id == id)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no provider with id \"{id}\" — configured providers: {}",
+                    self.config
+                        .providers
+                        .iter()
+                        .map(|p| format!("\"{}\" ({})", p.id, p.label))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?;
+        let engine = engine_for_entry(&self.config, self.fm_sidecar.as_deref(), entry);
+        let model = if entry.chat_model.trim().is_empty() {
+            entry.label.clone()
+        } else {
+            entry.chat_model.clone()
+        };
+        Ok((engine, model))
     }
 
     pub async fn chat(&self, messages: &[ChatTurn]) -> Result<ChatOutcome> {
