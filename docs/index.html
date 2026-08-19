@@ -1711,7 +1711,7 @@
         <div class="feature-copy">
           <div class="feature-kicker">Models</div>
           <h3>Use existing subscriptions and local models.</h3>
-          <p>Bring your Claude Code, Codex, Gemini CLI, Copilot, or Cursor subscription. Route a thread through a gateway, Ollama, LM Studio, or Apple’s on-device model—and see which provider answered.</p>
+          <p>Bring your Claude Code, Codex, Gemini CLI, Copilot, or Cursor subscription. Route a thread through a gateway, Ollama, LM Studio, or Apple’s on-device model. Every answer shows which provider wrote it.</p>
           <div class="card-meta"><span>Existing sign-ins</span><span>30+ gateway presets</span></div>
         </div>
       </article>
@@ -1844,7 +1844,7 @@
   <section class="models wrap" id="model-guide" aria-labelledby="models-title">
     <div class="models-intro">
       <h2 id="models-title">Which model should you run?</h2>
-      <p>Each model is evaluated against the full pipeline — retrieval, citation of known-correct evidence, and per-claim support — with a reproducible test suite.</p>
+      <p>Each model is evaluated against the full pipeline: retrieval, citation of the known-correct evidence, and per-claim support. The test suite is reproducible from the repository.</p>
     </div>
     <div class="models-table-wrap">
       <table class="models-table" aria-label="Measured chat model results">
@@ -1863,7 +1863,7 @@
             <td>68%</td>
             <td>88%</td>
             <td>0.89 / 0.94</td>
-            <td class="m-note">Best two-source citations tested. The 30B variant costs more, scores the same.</td>
+            <td class="m-note">Best at two-source citations. The 30B variant costs more, scores the same.</td>
           </tr>
           <tr>
             <td class="m-name">gemma4:31b-mlx<span class="m-pick">balanced pick</span></td>
@@ -1877,14 +1877,14 @@
             <td>76%</td>
             <td>88%</td>
             <td>0.69 / 0.95</td>
-            <td class="m-note">Fastest accurate citations. Overstates sources; the verify pass corrects it.</td>
+            <td class="m-note">Fast, precise citations, but it overstates what sources say. The verify pass corrects it.</td>
           </tr>
           <tr>
             <td class="m-name">bonsai-8b<span class="m-pick">speed pick</span></td>
             <td>60%</td>
             <td>26%</td>
             <td>0.91 / 0.70</td>
-            <td class="m-note">1.2&nbsp;GB, 4&ndash;20&times; faster than the rest. The retrieval loop covers its two-source gap.</td>
+            <td class="m-note">1.2&nbsp;GB, 4&ndash;20&times; faster than the rest. The follow-up search covers its two-source gap.</td>
           </tr>
           <tr>
             <td class="m-name">gpt-oss:120b</td>
@@ -1898,12 +1898,12 @@
             <td>68%</td>
             <td>84%</td>
             <td>0.62 / 0.96</td>
-            <td class="m-note">Answers everything. A third of its cited claims don&rsquo;t hold up. Skip it for cited research.</td>
+            <td class="m-note">Answers everything. A third of its cited claims don&rsquo;t hold up. Skip it for work you’ll cite.</td>
           </tr>
         </tbody>
       </table>
     </div>
-    <p class="models-foot">SciFact claims and HotpotQA two-source questions, 25–50 per model, run through the shipping pipeline on the built-in retrieval tier. Faithfulness is scored per cited sentence by an on-device cross-encoder calibrated against a stronger cloud model (shown SciFact&nbsp;/&nbsp;HotpotQA). Every number is reproducible: <code>cargo test --lib judged_</code>.</p>
+    <p class="models-foot">SciFact claims and HotpotQA two-source questions, 25–50 per model, run through the same pipeline the app ships, on the built-in search engine. Faithfulness is the share of cited sentences the source actually supports, checked on your Mac and calibrated against a stronger cloud model (shown SciFact&nbsp;/&nbsp;HotpotQA). Every number is reproducible: <code>cargo test --lib judged_</code>.</p>
   </section>
 
   <section class="etc" aria-labelledby="more-title">
@@ -2048,7 +2048,7 @@
         <div class="reports-copy">
           <div class="utility-kicker">Reports</div>
           <h3>Run checks on a schedule.</h3>
-          <p>Run on a timer or when a source changes. Each result lands as a note.</p>
+          <p>Run on a timer or when a source changes. Each result is saved as a note.</p>
           <div class="reports-stats"><span>7 runs</span><span>1 source change</span></div>
         </div>
       </article>
