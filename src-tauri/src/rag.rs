@@ -671,10 +671,23 @@ pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
             "Turn the sources below into a presentation deck in Marp-style Markdown, working \
              like a world-class presentation designer. The deck must tell ONE clear story and \
              stand on its own without a presenter.\n\
-             Plan silently before writing: decide the single thing a reader should walk away \
-             believing, the 2-4 acts that build to it, and the strongest specific evidence in \
-             the sources for each act — numbers, names, dates, comparisons, quotes. Only then \
-             write slides.\n\
+             Plan silently before writing, in three passes. First, the JOB: decide what this \
+             deck must do for its reader, and meet that job's obligations — explaining \
+             something obliges every mechanism to be traceable (what causes what, and why); \
+             persuading obliges evidence for each claim AND an honest answer to the strongest \
+             objection; supporting a decision obliges the options, the criteria, the \
+             trade-offs, and the cost of deciding late; reporting obliges the baseline, what \
+             changed, and the variance that needs explaining; teaching obliges prerequisites \
+             before use and one worked example. Second, the STORY: the single thing a reader \
+             should walk away believing, and the 2-4 acts that build to it. Third, the \
+             ROSTER: one line per planned slide naming its audience move — what the reader \
+             knows or believes before that slide versus after — and the specific evidence \
+             from the sources (numbers, names, dates, comparisons, quotes) that carries the \
+             move. A slide whose move you cannot name is filler: cut it now, not after \
+             writing. Only then write slides — and the plan itself NEVER appears in them: \
+             no act numbers or \u{201c}Act N\u{201d} labels (a divider carries the act's title as a \
+             reader would say it), no before/after or audience-move lines, no roster. The \
+             reader sees only finished slides.\n\
              Start the output with a front-matter block — a `---` line, `theme: <name>`, \
              `font: <name>`, and another `---` line. Pick the theme whose mood fits the topic: \
              sepia (warm paper — essays, history, writing), latte (soft light — friendly, \
@@ -704,12 +717,17 @@ pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
              source has a genuinely quotable line; (6) table slide — `## <headline>` plus a \
              small GFM table (3-5 columns) — for ANY comparison of options, versions, or \
              trade-offs; tables beat bullets for comparisons every time.\n\
-             Stay faithful: every claim comes from the sources, nothing invented; where sources \
-             disagree, show the disagreement instead of smoothing it over. Cover the whole \
-             corpus in 10-16 slides building from context to specifics, and close with a `## \
-             Takeaways` slide of 3-5 bullets that pays off the title slide's promise and says \
-             what to do next. Output ONLY the deck markdown: no code fences around it, no \
-             speaker notes, no prose outside the slides.",
+             Stay faithful: every claim comes from the sources, nothing invented. A number, \
+             date, or quote carries its origin in the flow of the text or a plain \
+             parenthetical — “per the 2024 10-K”, “(Vaswani et al., 2017)” — never a \
+             footnote marker or bracketed reference glyph. A statistic that would arrive \
+             naked is better left out. Where sources disagree, show the disagreement \
+             instead of smoothing it over. Cover the whole corpus in the count the material \
+             earns — usually 10-16 slides, building from context to specifics — never padding \
+             thin material to reach a number, never cramming two moves into one slide to stay \
+             under one. Close with a `## Takeaways` slide of 3-5 bullets that pays off the \
+             title slide's promise and says what to do next. Output ONLY the deck markdown: \
+             no code fences around it, no speaker notes, no prose outside the slides.",
         )),
         "infographic" => Some((
             "Infographic",
