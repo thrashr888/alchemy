@@ -1,6 +1,6 @@
 # RFC: Self-Resolve
 
-**Status:** phase 1 shipped; phases 2–4 designed
+**Status:** all four phases shipped
 **Goal:** when something breaks, the app helps the user fix it — in place,
 in plain language, with the cheapest loop that can do the job.
 
@@ -111,18 +111,37 @@ opt-in.
 
 ## Phases
 
-- **Phase 1 (this change):** deterministic classifier in
+- **Phase 1 (shipped, v0.42.0):** deterministic classifier in
   `friendly_error`, wired into the chat error rows (`send_message`,
   `send_message_agentic`) so streams and IPC rejections both benefit;
   `ollama serve` / `ollama pull <model>` join the Terminal-fix
   allowlist; error toasts that point at Settings → Models open it on
   click. No model calls.
-- **Phase 2:** diagnose-and-suggest via Small role / FM sidecar, fix
-  actions from a fixed vocabulary, `selfDiagnose` toggle.
-- **Phase 3:** `settings` chat/MCP tool over the safe `AiConfig`
-  allowlist; phase-2 fix buttons apply through it.
-- **Phase 4:** per-reply local fallback (Ollama / Apple FM) from the
-  error row, gated on live readiness.
+- **Phase 2 (shipped):** diagnose-and-suggest in `selfheal.rs` —
+  `diagnose` runs one capped call on `Ai::diagnosis_engine` (Small role
+  unless Small IS the failing stack, then the FM sidecar, else skip),
+  over a redacted error + `config_snapshot`; `parse_diagnosis` is
+  parse-or-skip with per-action validation (terminal commands re-checked
+  against the allowlist, providers against the config); `selfDiagnose`
+  toggle in Settings → General, default ON. Renders through the same
+  literal grammars the error row already parses, plus
+  `` Fix: switch <role> to provider `<id>` `` for the switch button.
+- **Phase 3 (shipped):** `settings` tool — `selfheal::settings_get` /
+  `settings_set` over the safe `AiConfig` allowlist (chatProvider,
+  studioProvider, chatModel/effort/baseUrl per provider, smallModel,
+  embedder), reachable from the chat tool router
+  (`ToolAction::Settings`), as an MCP tool (`mcp/settings.rs`), and
+  from error-row fix buttons (`apply_settings_fix`, which echoes the
+  applied change into the transcript as a tool row). `apiKey` is
+  neither readable nor writable; reads redact key-shaped values and
+  URL credentials; key-shaped values are refused on write.
+- **Phase 4 (shipped):** per-reply local fallback from the error row —
+  "Answer with Ollama" / "Answer with Apple Intelligence" reruns the
+  failed question via the Retry mechanism plus a one-shot
+  `provider_override` on `send_message` (resolved through
+  `engine_for_provider`; config untouched), offered only when the
+  engine's readiness probe answers alive and it isn't the provider
+  that just failed.
 
 ## Non-goals
 
