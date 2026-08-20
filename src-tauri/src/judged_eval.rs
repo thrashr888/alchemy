@@ -81,6 +81,10 @@ enum Variant {
     /// The shipped chat chain INCLUDING verify-and-repair — scores the
     /// answer users actually see after the repair pass (RFC §5 measured).
     Repaired,
+    /// Lost-in-the-Middle ordering (Liu et al. 2023): the same reranked
+    /// pool, presented strongest-first-and-last instead of best-first.
+    /// Scoring uses the reordered list, so [n] markers stay aligned.
+    Litm,
 }
 
 impl Variant {
@@ -90,6 +94,7 @@ impl Variant {
             Some("fenced") => Variant::Fenced,
             Some("iterative") => Variant::Iterative,
             Some("repaired") => Variant::Repaired,
+            Some("litm") => Variant::Litm,
             _ => Variant::Baseline,
         }
     }
@@ -101,6 +106,7 @@ impl Variant {
             Variant::Fenced => "fenced",
             Variant::Iterative => "iterative",
             Variant::Repaired => "repaired",
+            Variant::Litm => "litm",
         }
     }
 }
@@ -233,12 +239,15 @@ async fn score_question(
         }
     }
 
-    let hits: Vec<Citation> = if variant == Variant::NoXenc {
+    let mut hits: Vec<Citation> = if variant == Variant::NoXenc {
         pool.truncate(judged_k());
         pool
     } else {
         retrieval.rerank_hits(&q.text, pool, judged_k()).await
     };
+    if variant == Variant::Litm {
+        hits = crate::rag::litm_order(hits);
+    }
 
     let profile = generator.profile(crate::inference::Role::Chat);
     let messages = if variant == Variant::Fenced {

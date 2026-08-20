@@ -147,6 +147,11 @@ In order, each a targeted run with a CSV verdict:
    Judged on answer hit + faithfulness, cost on latency + tokens.
 4. **Rerank on/off through the full chain** — confirm the retrieval win
    survives generation (it should; prove it).
+5. **Lost-in-the-Middle ordering** (`JUDGED_VARIANT=litm`): the same
+   reranked pool presented strongest-first-and-last (`rag::litm_order`)
+   instead of best-first — models attend worst to mid-prompt evidence
+   (Liu et al. 2023). Judged on gold recall + faithfulness; free at
+   runtime if it wins.
 
 ## §5 — Runtime verify-and-repair (the Mellea payoff)
 
