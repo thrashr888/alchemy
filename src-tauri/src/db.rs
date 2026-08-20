@@ -196,6 +196,13 @@ pub struct Db {
     /// only marks the index dirty; `flush_fts` rebuilds once at the end.
     fts_deferred: std::sync::atomic::AtomicBool,
     fts_dirty: std::sync::atomic::AtomicBool,
+    /// Appends to `chunks` (readers) vs the FTS index build (writer).
+    /// lance-index 7.0's inverted builder panics with an index-out-of-bounds
+    /// when rows land mid-build (builder.rs:856, observed live 2026-08-20) —
+    /// the build must see a frozen table. Same-process only; a second binary
+    /// on the shared store can still append, which is what the panic
+    /// isolation in `rebuild_chunks_fts` is for.
+    fts_build_gate: tokio::sync::RwLock<()>,
     /// Nudged on every non-deferred chunk write; the debounced flusher task
     /// (lib.rs) listens and rebuilds once per burst.
     fts_notify: tokio::sync::Notify,
@@ -234,6 +241,7 @@ impl Db {
             fts_lock: tokio::sync::Mutex::new(()),
             fts_deferred: std::sync::atomic::AtomicBool::new(false),
             fts_dirty: std::sync::atomic::AtomicBool::new(false),
+            fts_build_gate: tokio::sync::RwLock::new(()),
             fts_notify: tokio::sync::Notify::new(),
             fusion_vector_weight: std::sync::atomic::AtomicU32::new(1.0f32.to_bits()),
             fusion_rrf_k: std::sync::atomic::AtomicU32::new(60.0f32.to_bits()),
@@ -650,6 +658,13 @@ impl Db {
     /// added a column. Unknown columns are filled with defaults ("", 0);
     /// anything unsynthesizable falls through so the original error surfaces.
     async fn add_batch(&self, table: &str, schema: SchemaRef, batch: RecordBatch) -> Result<()> {
+        // Chunks appends wait out an in-flight FTS index build (see
+        // `fts_build_gate`); concurrent appends share the read side freely.
+        let _append_ok = if table == T_CHUNKS {
+            Some(self.fts_build_gate.read().await)
+        } else {
+            None
+        };
         let tbl = self.conn.open_table(table).execute().await?;
         let (schema, batch) = match tbl.schema().await {
             Ok(live) => conform_to_live(&live, schema, batch),
@@ -1386,24 +1401,39 @@ impl Db {
         let _guard = self.fts_lock.lock().await;
         let mut attempt = 0u32;
         loop {
+            // Exclusive side of `fts_build_gate`: same-process chunk appends
+            // wait until the builder is done with its frozen view.
+            let _frozen = self.fts_build_gate.write().await;
             let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
             let has_fts = tbl
                 .list_indices()
                 .await?
                 .iter()
                 .any(|i| i.columns == ["text"]);
-            let result = if has_fts {
-                tbl.optimize(lancedb::table::OptimizeAction::Index(
-                    lancedb::table::OptimizeOptions::default(),
-                ))
-                .await
-                .map(|_| ())
-            } else {
-                tbl.create_index(&["text"], Index::FTS(FtsIndexBuilder::default()))
-                    .replace(true)
-                    .execute()
+            // The inverted builder PANICS (not errors) when rows land
+            // mid-build — the gate stops our own writers, but a second
+            // binary on the shared store can still commit. Spawned task:
+            // a panic becomes a retryable JoinError instead of killing
+            // whichever caller awaited the flush.
+            let t = tbl.clone();
+            let result: std::result::Result<(), String> = tokio::spawn(async move {
+                if has_fts {
+                    t.optimize(lancedb::table::OptimizeAction::Index(
+                        lancedb::table::OptimizeOptions::default(),
+                    ))
                     .await
-            };
+                    .map(|_| ())
+                } else {
+                    t.create_index(&["text"], Index::FTS(FtsIndexBuilder::default()))
+                        .replace(true)
+                        .execute()
+                        .await
+                }
+                .map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|join| format!("Retryable: index build panicked: {join}"))
+            .and_then(|r| r);
             match result {
                 Ok(()) => {
                     // Each pass leaves its predecessor behind as a dead
@@ -1418,8 +1448,7 @@ impl Db {
                         .await;
                     return Ok(());
                 }
-                Err(e) => {
-                    let msg = e.to_string();
+                Err(msg) => {
                     let retryable = msg.contains("Retryable")
                         || msg.contains("commit conflict")
                         || msg.contains("preempted");
@@ -1431,7 +1460,8 @@ impl Db {
                         .await;
                         continue;
                     }
-                    return Err(e).context("failed to update full-text index on chunks");
+                    return Err(anyhow::anyhow!(msg))
+                        .context("failed to update full-text index on chunks");
                 }
             }
         }
