@@ -489,25 +489,14 @@ pub fn pdf_page_image(path: String, page: usize, width: u32) -> Result<String, S
     Ok(format!("data:image/png;base64,{b64}"))
 }
 
-/// Launch Terminal.app running one of the known agent sign-in commands (the
-/// "Fix:" hints on error rows). Strictly allowlisted: the command string
-/// travels through model-adjacent error text, so nothing outside this fixed
-/// set may ever reach a shell.
+/// Launch Terminal.app running one of the known fix commands (the "Fix:"
+/// hints on error rows): agent sign-ins plus the Ollama fixes. Strictly
+/// allowlisted (`terminal_command_allowed`): the command string travels
+/// through model-adjacent error text, so nothing outside that set may ever
+/// reach a shell.
 #[tauri::command]
 pub fn open_in_terminal(command: String) -> Result<(), String> {
-    const ALLOWED: [&str; 10] = [
-        "claude",
-        "codex login",
-        "gemini",
-        "cursor-agent login",
-        "opencode auth login",
-        "copilot",
-        "hermes",
-        "bob",
-        "prime-agent",
-        "pi",
-    ];
-    if !ALLOWED.contains(&command.as_str()) {
+    if !terminal_command_allowed(&command) {
         return Err("unsupported command".into());
     }
     let script =
@@ -569,6 +558,9 @@ pub(crate) fn friendly_error(raw: &str) -> String {
                 from the newer copy) and try again."
             .into();
     }
+    if let Some(msg) = classify_model_error(raw) {
+        return msg;
+    }
     // Drop `, location: /path/to/file.rs:12:3` fragments and collapse the
     // duplicate sentence Lance nests inside its own context chain.
     let mut out = String::with_capacity(raw.len());
@@ -590,6 +582,127 @@ pub(crate) fn friendly_error(raw: &str) -> String {
         }
     }
     out
+}
+
+/// Deterministic first pass over provider/model failures (RFC-self-resolve
+/// phase 1): recognize the shapes users actually hit and answer with the fix
+/// instead of the transport noise. Two grammars in the output are load-bearing
+/// because the frontend turns them into buttons: `` Fix: open Terminal, run
+/// `cmd`, then retry here. `` becomes a Terminal launch (allowlisted in
+/// `open_in_terminal`), and the literal phrase "Settings → Models" becomes a
+/// jump to that Settings tab (chat error rows and error toasts both).
+fn classify_model_error(raw: &str) -> Option<String> {
+    // Already translated upstream — the gateway's status advice and the agent
+    // CLIs' sign-in/model hints are more specific than anything matched here.
+    if raw.contains("Fix:") || raw.contains("Settings → Models") {
+        return None;
+    }
+    let lower = raw.to_lowercase();
+
+    // Ollama 404 body: {"error":"model \"x\" not found, try pulling it first"}
+    // — the model name is either a typo or simply not pulled yet.
+    if lower.contains("not found, try pulling it first") {
+        return Some(match ollama_missing_model(raw) {
+            Some(m) => format!(
+                "The model “{m}” isn't downloaded in Ollama. Fix: open Terminal, \
+                 run `ollama pull {m}`, then retry here. (If the name looks wrong, \
+                 pick an installed model in Settings → Models.)"
+            ),
+            None => "That model isn't downloaded in Ollama — pull it in Terminal \
+                     (`ollama pull <model>`) or pick an installed model in \
+                     Settings → Models."
+                .into(),
+        });
+    }
+
+    // Nothing listening on the Ollama port: the daemon isn't running.
+    if lower.contains("connection refused") && (lower.contains("ollama") || lower.contains("11434"))
+    {
+        return Some(
+            "Ollama isn't running — nothing answered at its address. Fix: open \
+             Terminal, run `ollama serve` (or launch the Ollama app), then retry \
+             here. Or switch to another provider in Settings → Models."
+                .into(),
+        );
+    }
+
+    // A model-shaped timeout: still loading into memory, or holding the GPU
+    // for another job. Scoped to provider-ish errors so a slow source fetch
+    // during import never gets model advice.
+    if lower.contains("operation timed out")
+        && (lower.contains("ollama")
+            || lower.contains("model")
+            || lower.contains("provider")
+            || lower.contains("gateway"))
+    {
+        return Some(
+            "The model took too long to answer — it may still be loading into \
+             memory, or busy with another generation. Wait a moment and retry; \
+             if it keeps happening, pick a smaller model in Settings → Models."
+                .into(),
+        );
+    }
+
+    // Key trouble outside the gateway's own status translation.
+    if lower.contains("invalid api key")
+        || lower.contains("incorrect api key")
+        || lower.contains("invalid_api_key")
+        || lower.contains("401 unauthorized")
+    {
+        return Some("This provider rejected the API key — check it in Settings → Models.".into());
+    }
+
+    None
+}
+
+/// Model name out of an Ollama "not found, try pulling it first" body. The
+/// name travels into a `Fix: … run `ollama pull X`` hint that a button can
+/// execute, so it is charset-validated here as well as at execution time —
+/// error text must never smuggle shell.
+fn ollama_missing_model(raw: &str) -> Option<String> {
+    let head = &raw[..raw.find(" not found")?];
+    let start = head.rfind("model ")? + "model ".len();
+    let name = head[start..]
+        .trim_matches(|c: char| matches!(c, '\\' | '"' | '\'' | '“' | '”'))
+        .to_string();
+    is_safe_model_name(&name).then_some(name)
+}
+
+/// The character set a model name may use to reach a terminal command.
+fn is_safe_model_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._:/-".contains(c))
+}
+
+/// The full allowlist behind `open_in_terminal`: the fixed agent sign-in
+/// commands, plus the Ollama fixes the error classifier can name. Pure and
+/// separate from the command so tests can cover it without spawning Terminal.
+pub(crate) fn terminal_command_allowed(command: &str) -> bool {
+    const ALLOWED: [&str; 11] = [
+        "claude",
+        "codex login",
+        "gemini",
+        "cursor-agent login",
+        "opencode auth login",
+        "copilot",
+        "hermes",
+        "bob",
+        "prime-agent",
+        "pi",
+        "ollama serve",
+    ];
+    if ALLOWED.contains(&command) {
+        return true;
+    }
+    // `ollama pull <model>`: the name arrives via error text, so only the
+    // strict model-name charset may pass — nothing that could escape the
+    // AppleScript string or the shell.
+    command
+        .strip_prefix("ollama pull ")
+        .is_some_and(is_safe_model_name)
 }
 
 // Keep this palette in sync with the Rust DB schema helper constant in
@@ -6126,8 +6239,15 @@ pub async fn send_message(
             Some(Ok(out)) => (out.text, "chat", out.stats, out.cost_usd, model),
             // A provider failure becomes a durable transcript row instead of
             // a vanishing toast: the stored user turn would otherwise sit
-            // unanswered in history with no trace of why.
-            Some(Err(err)) => (format!("{err:#}"), "error", None, None, model),
+            // unanswered in history with no trace of why. friendly_error
+            // turns the known failure shapes into the fix (RFC-self-resolve).
+            Some(Err(err)) => (
+                friendly_error(&format!("{err:#}")),
+                "error",
+                None,
+                None,
+                model,
+            ),
             None => (partial.lock().unwrap().clone(), "chat", None, None, model),
         }
     };
@@ -6233,8 +6353,14 @@ pub async fn send_message_agentic(
         match out {
             Some(Ok((answer, citations, stats))) => (answer, "chat", citations, stats, model),
             // Durable transcript row for a failed run — same contract as the
-            // direct chat path.
-            Some(Err(err)) => (format!("{err:#}"), "error", vec![], None, model),
+            // direct chat path, fix-classified the same way.
+            Some(Err(err)) => (
+                friendly_error(&format!("{err:#}")),
+                "error",
+                vec![],
+                None,
+                model,
+            ),
             None => ("_(Stopped.)_".to_string(), "chat", vec![], None, model),
         }
     };

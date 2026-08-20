@@ -71,12 +71,20 @@ function App() {
 
   // Bridge the legacy `error` field into the toast stack so every error path
   // (many still `set({ error })` directly) surfaces consistently and dismisses.
+  // An error whose fix lives in Settings → Models (the backend classifier's
+  // literal grammar, RFC-self-resolve) is clickable and jumps straight there.
   useEffect(() => {
     if (error) {
-      pushToast("error", error);
+      pushToast(
+        "error",
+        error,
+        error.includes("Settings → Models")
+          ? () => openSettings("models")
+          : undefined,
+      );
       setError(null);
     }
-  }, [error, pushToast, setError]);
+  }, [error, pushToast, setError, openSettings]);
 
   // A note-reader window renders just the note — no panels, no palette.
   if (window.__ALCHEMY_NOTE__) {

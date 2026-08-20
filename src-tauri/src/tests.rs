@@ -686,3 +686,80 @@ fn ipc_errors_read_like_sentences() {
     // Ordinary errors pass through untouched.
     assert_eq!(friendly_error("Source not found"), "Source not found");
 }
+
+/// RFC-self-resolve phase 1: the known provider failure shapes come out as
+/// the fix, phrased in the two grammars the frontend turns into buttons —
+/// `` Fix: open Terminal, run `cmd`, then retry here. `` and the literal
+/// "Settings → Models".
+#[test]
+fn model_errors_classify_to_fixes() {
+    use crate::commands::friendly_error;
+
+    // Ollama daemon down: connection refused on its port, chat path.
+    let down = "ollama chat request failed: error sending request for url \
+                (http://localhost:11434/api/chat): error trying to connect: \
+                tcp connect error: Connection refused (os error 61)";
+    let msg = friendly_error(down);
+    assert!(msg.contains("Ollama isn't running"), "{msg}");
+    assert!(msg.contains("run `ollama serve`"), "{msg}");
+    assert!(msg.contains("Settings → Models"), "{msg}");
+
+    // Same daemon-down shape through the embedding path (pre-stream failure,
+    // surfaces as a toast) gets the same fix.
+    let embed = "embedding request to Ollama failed or timed out — is `ollama serve` \
+                 running and is the model `nomic-embed-text` available? (a large chat \
+                 model loading can also stall this): error sending request for url \
+                 (http://127.0.0.1:11434/api/embed): Connection refused";
+    assert!(friendly_error(embed).contains("run `ollama serve`"));
+
+    // Model not pulled: the exact pull command, with the name extracted from
+    // the Ollama 404 body.
+    let missing = r#"ollama chat 404 Not Found: {"error":"model \"gemma3:270m\" not found, try pulling it first"}"#;
+    let msg = friendly_error(missing);
+    assert!(msg.contains("run `ollama pull gemma3:270m`"), "{msg}");
+    assert!(msg.contains("Settings → Models"), "{msg}");
+
+    // A hostile "model name" in the body must never reach the pull hint —
+    // the charset gate drops it and the generic advice shows instead.
+    let hostile = r#"ollama chat 404 Not Found: {"error":"model \"x; rm -rf ~\" not found, try pulling it first"}"#;
+    let msg = friendly_error(hostile);
+    assert!(!msg.contains("rm -rf"), "{msg}");
+    assert!(msg.contains("Settings → Models"), "{msg}");
+
+    // Model-shaped timeout: loading/busy advice, not transport noise.
+    let slow = "ollama chat request failed: error sending request for url \
+                (http://localhost:11434/api/chat): operation timed out";
+    let msg = friendly_error(slow);
+    assert!(msg.contains("took too long"), "{msg}");
+
+    // A slow *source fetch* is not a model problem — no model advice.
+    let fetch = "could not read https://example.com/big.pdf: operation timed out";
+    assert!(!friendly_error(fetch).contains("model"), "{fetch}");
+
+    // Key rejection outside the gateway's own status translation.
+    let key = "agent replied: 401 Unauthorized";
+    assert!(friendly_error(key).contains("API key"));
+}
+
+/// The Terminal fix affordance stays strictly allowlisted: fixed commands
+/// plus `ollama pull <name>` under the model-name charset — nothing that
+/// could escape the AppleScript string or the shell.
+#[test]
+fn terminal_allowlist_covers_ollama_fixes() {
+    use crate::commands::terminal_command_allowed;
+
+    assert!(terminal_command_allowed("ollama serve"));
+    assert!(terminal_command_allowed("ollama pull gemma3:270m"));
+    assert!(terminal_command_allowed("ollama pull hf.co/org/model-1.5B"));
+    assert!(terminal_command_allowed("claude"));
+    assert!(terminal_command_allowed("codex login"));
+
+    assert!(!terminal_command_allowed("ollama pull"));
+    assert!(!terminal_command_allowed("ollama pull "));
+    assert!(!terminal_command_allowed("ollama pull x; rm -rf ~"));
+    assert!(!terminal_command_allowed("ollama pull a b"));
+    assert!(!terminal_command_allowed("ollama pull \"x\""));
+    assert!(!terminal_command_allowed("ollama run gemma3"));
+    assert!(!terminal_command_allowed("rm -rf /"));
+    assert!(!terminal_command_allowed(""));
+}
