@@ -23,12 +23,18 @@ what ships and exports it deliberately.
 
 That one command, from a clean `main`:
 
-1. Bumps the version in `package.json`, `src-tauri/tauri.conf.json`, and `Cargo.toml`.
+1. Bumps the version in `package.json`, `src-tauri/tauri.conf.json`, and
+   `Cargo.toml`, and **commits the bump immediately** — that commit is the
+   only step that needs your (1Password-backed) signing key, and it runs
+   while the vault is still open from you approving the release. Nothing
+   after it touches the vault, so a re-lock during the long build can't
+   kill the release anymore.
 2. Runs the quality gate — `tsc`, `cargo fmt`, `clippy`, `cargo test`.
 3. Signs the bundled PDFium dylib, then builds a signed `.app` + `.dmg`.
 4. Notarizes with Apple, staples the ticket, and verifies with `spctl`.
-5. Commits the bump, tags `v0.4.2`, pushes, and creates the GitHub release with
-   the notarized DMG and auto-generated notes.
+5. Tags `v0.4.2`, pushes, and creates the GitHub release with the notarized
+   DMG and auto-generated notes. A failure between steps 1 and 5 strands the
+   bump commit locally (never pushed) — the rerun flow below resets it away.
 
 Typical time: a few minutes with a warm `target/` cache (vs. ~25 min on CI).
 
