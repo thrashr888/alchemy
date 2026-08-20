@@ -90,6 +90,14 @@ tauri-plugin-liquid-glass = "0.1.6"
 ast-grep-language = { version = "0.44.1", default-features = false, features = ["tree-sitter-rust", "tree-sitter-typescript", "tree-sitter-javascript", "tree-sitter-python", "tree-sitter-go", "tree-sitter-ruby", "tree-sitter-java", "tree-sitter-swift", "tree-sitter-c", "tree-sitter-cpp", "tree-sitter-php", "tree-sitter-html", "tree-sitter-bash", "tree-sitter-hcl"] }
 ast-grep-core = "0.44.1"
 exif = { version = "0.6.1", package = "kamadak-exif" }
+
+# Per-note export (docs/RFC-note-export.md). pulldown-cmark parses the note's
+# markdown once for both writers (CommonMark + tables, zero-dep with default
+# features off); docx-rs writes Word documents (pure Rust, no image feature —
+# notes are text); rust_xlsxwriter writes spreadsheets for table notes.
+pulldown-cmark = { version = "0.13", default-features = false }
+docx-rs = { version = "0.4", default-features = false }
+rust_xlsxwriter = "0.98"
 pdf-inspector = "0.1.7"
 anydoc = "0.1.7"
 fastembed = { version = "5.17.4", default-features = false, features = ["ort-download-binaries", "hf-hub-native-tls"] }

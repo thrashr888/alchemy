@@ -5,5 +5,8 @@ interface Window {
   __ALCHEMY_NOTEBOOK__?: string;
   /** Render this window as a single-note reader (notebook id also set). */
   __ALCHEMY_NOTE__?: string;
+  /** PNG export window: print the note's sheet to this temp PDF path, then
+   *  the backend rasterizes it and closes the window (export.rs). */
+  __ALCHEMY_PNG_EXPORT__?: string;
   __ALCHEMY_FRESH__?: boolean;
 }

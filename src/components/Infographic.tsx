@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { FileDown } from "lucide-react";
+import { useStore } from "@/lib/store";
 import { Markdown } from "./Markdown";
 import { PrintPortal, usePrintExport } from "./printExport";
 
@@ -769,6 +771,10 @@ function PrintInfographic({ doc }: { doc: InfographicDoc }) {
           fontSize: 12,
           maxWidth: 620,
           margin: "0 auto",
+          // The bar/funnel fills are plain CSS backgrounds; WebKit drops
+          // backgrounds from print output unless told to keep the ink.
+          WebkitPrintColorAdjust: "exact",
+          printColorAdjust: "exact",
         }}
       >
         <div style={{ fontSize: 26, fontWeight: 650, letterSpacing: "-0.015em" }}>
@@ -802,6 +808,54 @@ function PrintInfographic({ doc }: { doc: InfographicDoc }) {
             </div>
           </div>
         ))}
+      </div>
+    </PrintPortal>
+  );
+}
+
+/**
+ * The whole surface of a `win-export-*` window (export.rs): render the
+ * note's fixed-ink print sheet, silently print it to the temp PDF the boot
+ * script named, and let the backend rasterize the pages into a PNG and close
+ * the window. Non-infographic content falls back to a plain print sheet so
+ * the export never comes back blank.
+ */
+export function PngExportView({
+  noteId,
+  pdfPath,
+}: {
+  noteId: string;
+  pdfPath: string;
+}) {
+  const notes = useStore((s) => s.notes);
+  const note = notes.find((n) => n.id === noteId);
+  const fired = useRef(false);
+  useEffect(() => {
+    if (!note || fired.current) return;
+    fired.current = true;
+    // Two frames: one for the print portal to mount, one for layout.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        void invoke("print_webview", { landscape: false, savePath: pdfPath });
+      });
+    });
+  }, [note, pdfPath]);
+  if (!note) return null;
+  const doc = parseInfographic(note.content);
+  if (doc) return <PrintInfographic doc={doc} />;
+  return (
+    <PrintPortal pageCss="@page { size: auto; margin: 16mm; }">
+      <div
+        style={{
+          color: "#111",
+          background: "#fff",
+          fontFamily: "system-ui, sans-serif",
+          fontSize: 12,
+          maxWidth: 620,
+          margin: "0 auto",
+        }}
+      >
+        <Markdown>{note.content}</Markdown>
       </div>
     </PrintPortal>
   );

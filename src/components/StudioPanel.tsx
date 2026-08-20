@@ -34,6 +34,7 @@ import {
   type Artifact,
 } from "./studioArtifacts";
 import {
+  FileDown,
   FileText,
   Plus,
   Trash2,
@@ -46,6 +47,55 @@ import {
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
+import { save } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+
+/** True when the note body is essentially one markdown table. */
+function isTabular(content: string): boolean {
+  const lines = content
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const tableLines = lines.filter((line) => line.startsWith("|")).length;
+  return tableLines >= 2 && tableLines >= lines.length - 2;
+}
+
+/** The export format matched to the note's shape (docs/RFC-note-export.md):
+ *  poster image for infographics, episode audio for Audio Overviews, a
+ *  workbook for tables, a Word document for prose. */
+function exportTarget(n: Note): {
+  label: string;
+  format: string;
+  ext: string;
+  name: string;
+} {
+  if (n.kind === "infographic")
+    return { label: "Export PNG", format: "png", ext: "png", name: "PNG image" };
+  if (n.kind === "audio_overview")
+    return { label: "Export audio", format: "m4a", ext: "m4a", name: "Audio" };
+  if (n.kind === "data_table" || isTabular(n.content))
+    return { label: "Export Excel", format: "xlsx", ext: "xlsx", name: "Excel workbook" };
+  return { label: "Export Word", format: "docx", ext: "docx", name: "Word document" };
+}
+
+/** Pick a destination in the native save dialog, export, reveal in Finder. */
+async function exportNote(n: Note): Promise<void> {
+  const t = exportTarget(n);
+  const safe = n.title.replace(/[/\\:]/g, "-").trim() || "Note";
+  const dest = await save({
+    defaultPath: `${safe}.${t.ext}`,
+    filters: [{ name: t.name, extensions: [t.ext] }],
+  });
+  if (!dest) return;
+  const { pushToast } = useStore.getState();
+  try {
+    const path = await api.exportNote(n.id, t.format, dest);
+    pushToast("success", "Exported");
+    void revealItemInDir(path);
+  } catch (e) {
+    pushToast("error", e instanceof Error ? e.message : String(e));
+  }
+}
 
 /** Generator families carry a quiet color identity: the icon takes the family
  *  accent (tokens in index.css) and the tile gets a faint matching wash that
@@ -509,6 +559,11 @@ export function StudioPanel() {
                               .getState()
                               .pushToast("success", "Note copied");
                           },
+                        },
+                        {
+                          label: exportTarget(n).label,
+                          icon: <FileDown className="h-3.5 w-3.5" />,
+                          onClick: () => void exportNote(n),
                         },
                         {
                           label: "Second Look",
