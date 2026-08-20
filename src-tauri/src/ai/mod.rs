@@ -147,6 +147,13 @@ pub struct AiConfig {
     /// api.notion.com; empty means Notion URLs fall through to page capture.
     #[serde(default)]
     pub notion_token: String,
+    /// Diagnose-and-suggest on unclassified provider errors
+    /// (docs/RFC-self-resolve.md phase 2): one Small-role call turns the raw
+    /// error into a plain-language diagnosis plus clickable fixes. On by
+    /// default — the toggle exists for cost control, not opt-in; phase 1's
+    /// deterministic classifier keeps working either way.
+    #[serde(default = "default_true")]
+    pub self_diagnose: bool,
 }
 
 fn default_git_sync_minutes() -> u32 {
@@ -354,6 +361,7 @@ impl Default for AiConfig {
             vision_provider: String::new(),
             setup_seen: false,
             git_sync_minutes: default_git_sync_minutes(),
+            self_diagnose: default_true(),
         }
     }
 }
@@ -562,9 +570,45 @@ impl Ai {
     /// Stable id of the engine a role resolves to ("ollama", "gateway",
     /// "foundation-models", or an agent kind) — evals verify they measured
     /// the engine they meant to, since unavailable tiers fall through.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn chat_engine_id(&self, role: Role) -> &'static str {
         self.router.chat_engine(role).id()
+    }
+
+    /// The engine currently answering `role` — per-call provider overrides
+    /// (the chat fallback buttons, the MCP generate tool) resolve through
+    /// `engine_for_provider` instead.
+    pub fn engine(&self, role: Role) -> &ChatEngine {
+        self.router.chat_engine(role)
+    }
+
+    /// The engine allowed to diagnose a failure of `failing_id`
+    /// (RFC-self-resolve phase 2): the diagnosing model must never be the
+    /// failing engine. The Small engine wins when it isn't the failing
+    /// stack; when the local stack IS the failure, the Apple FM sidecar
+    /// steps in if it's alive; when neither qualifies, None — the caller
+    /// skips the loop and the phase-1 cleaned error stands alone.
+    pub async fn diagnosis_engine(&self, failing_id: &str) -> Option<ChatEngine> {
+        if self.router.has_small() {
+            let small = self.router.chat_engine(Role::Small);
+            let usable = match small {
+                ChatEngine::FoundationModels(fm) => {
+                    failing_id != "foundation-models" && fm.available().await
+                }
+                other => other.id() != failing_id,
+            };
+            if usable {
+                return Some(small.clone());
+            }
+        }
+        if failing_id != "foundation-models" {
+            if let Some(path) = self.fm_sidecar.as_ref().filter(|p| p.exists()) {
+                let fm = FmEngine::new(path.clone());
+                if fm.available().await {
+                    return Some(ChatEngine::FoundationModels(fm));
+                }
+            }
+        }
+        None
     }
 
     /// The embedder tier's RRF (vector weight, k) — see
@@ -715,24 +759,6 @@ impl Ai {
         self.router
             .chat_engine(Role::Chat)
             .chat_stream(messages, on_token)
-            .await
-    }
-
-    /// `chat_stream` plus progress lines — agent CLI engines narrate their
-    /// tool use through `on_step`; other engines never call it.
-    pub async fn chat_stream_steps<F, S>(
-        &self,
-        messages: &[ChatTurn],
-        on_token: F,
-        on_step: S,
-    ) -> Result<ChatOutcome>
-    where
-        F: FnMut(&str),
-        S: FnMut(crate::inference::Step<'_>),
-    {
-        self.router
-            .chat_engine(Role::Chat)
-            .chat_stream_steps(messages, on_token, on_step)
             .await
     }
 

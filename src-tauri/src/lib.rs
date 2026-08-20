@@ -26,6 +26,7 @@ mod pptx;
 mod rag;
 mod router;
 mod scheduler;
+mod selfheal;
 #[cfg(target_os = "macos")]
 mod services;
 #[cfg(target_os = "macos")]
@@ -347,6 +348,7 @@ pub fn run() {
             commands::rebuild_note,
             commands::get_ai_config,
             commands::set_ai_config,
+            commands::apply_settings_fix,
             commands::send_notification,
             commands::list_models,
             commands::check_ollama,

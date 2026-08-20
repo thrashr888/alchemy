@@ -591,7 +591,7 @@ pub(crate) fn friendly_error(raw: &str) -> String {
 /// `cmd`, then retry here. `` becomes a Terminal launch (allowlisted in
 /// `open_in_terminal`), and the literal phrase "Settings → Models" becomes a
 /// jump to that Settings tab (chat error rows and error toasts both).
-fn classify_model_error(raw: &str) -> Option<String> {
+pub(crate) fn classify_model_error(raw: &str) -> Option<String> {
     // Already translated upstream — the gateway's status advice and the agent
     // CLIs' sign-in/model hints are more specific than anything matched here.
     if raw.contains("Fix:") || raw.contains("Settings → Models") {
@@ -5213,7 +5213,7 @@ fn tool_gate(content: &str) -> bool {
         "add", "import", "ingest", "attach", "load", "grab", "pull in", "paste", "make", "create",
         "generate", "write", "build", "remove", "delete", "drop", "get rid", "refresh", "re-fetch",
         "refetch", "update", "save", "schedule", "edit", "rename", "change", "pause", "enable",
-        "disable", "resume",
+        "disable", "resume", "switch", "use", "show", "set",
     ]
     .iter()
     .any(|k| l.contains(k));
@@ -5238,6 +5238,15 @@ fn tool_gate(content: &str) -> bool {
         "doc",
         "template",
         "generator",
+        // The settings tool (RFC-self-resolve phase 3).
+        "provider",
+        "model",
+        "settings",
+        "embedder",
+        "effort",
+        "ollama",
+        "gateway",
+        "apple intelligence",
     ]
     .iter()
     .any(|k| l.contains(k));
@@ -5278,6 +5287,13 @@ enum ToolAction {
         prompt: String,
         enabled: String,
     },
+    /// The settings tool (RFC-self-resolve phase 3): get/set over the safe
+    /// AiConfig allowlist. `get` = read-only redacted snapshot.
+    Settings {
+        get: bool,
+        field: String,
+        value: String,
+    },
     Chat,
 }
 
@@ -5294,6 +5310,8 @@ Tools:\n\
 - {\"action\":\"create_template\",\"name\":\"<short name>\",\"description\":\"<one line>\",\"prompt\":\"<the reusable generation instruction>\"} — save a reusable custom generator the user can run from Studio later. Compose \"prompt\" yourself from what they asked the generator to do.\n\
 - {\"action\":\"schedule_report\",\"kind\":\"<KINDS>|custom, or a template name from the list below\",\"interval\":\"hourly|daily|weekly\",\"name\":\"<report name>\",\"prompt\":\"<what the report should cover, for kind custom; else empty>\"} — create a recurring report (echo the user's cadence word in \"interval\" even if unsupported).\n\
 - {\"action\":\"update_report\",\"name\":\"<existing report name fragment>\",\"new_name\":\"\",\"kind\":\"\",\"interval\":\"\",\"prompt\":\"\",\"enabled\":\"true|false or empty\"} — change an existing recurring report; leave fields empty to keep them.\n\
+- {\"action\":\"settings\",\"op\":\"get\"} — show the current AI provider/model settings (always redacted; API keys are never readable).\n\
+- {\"action\":\"settings\",\"op\":\"set\",\"field\":\"chatProvider|studioProvider|chatModel|effort|baseUrl|smallModel|embedder|provider.<id>.chatModel|provider.<id>.effort|provider.<id>.baseUrl\",\"value\":\"<new value>\"} — change ONE AI setting (\"switch chat to ollama\" → field chatProvider, value ollama; bare chatModel/effort/baseUrl target the active chat provider). API keys can never be read or set through this tool.\n\
 - {\"action\":\"chat\"} — not a command; answer normally.\n\n\
 Prefer {\"action\":\"chat\"} when unsure. Questions ABOUT sources (\"what does the spec say\") are chat, \
 not tools.";
@@ -5472,6 +5490,26 @@ fn parse_tool_action(raw: &str) -> ToolAction {
                 }
             }
         }
+        "settings" => match s("op").as_str() {
+            "get" => ToolAction::Settings {
+                get: true,
+                field: String::new(),
+                value: String::new(),
+            },
+            "set" => {
+                let field = s("field");
+                if field.is_empty() {
+                    ToolAction::Chat
+                } else {
+                    ToolAction::Settings {
+                        get: false,
+                        field,
+                        value: s("value"),
+                    }
+                }
+            }
+            _ => ToolAction::Chat,
+        },
         _ => ToolAction::Chat,
     }
 }
@@ -5864,6 +5902,26 @@ async fn try_tool_route(
                 Err(err) => Some(format!("Couldn't create the schedule: {err:#}")),
             }
         }
+        ToolAction::Settings { get, field, value } => {
+            // The settings tool (RFC-self-resolve phase 3). The reply comes
+            // back as a tool row via finish_tool_reply, so every applied
+            // change is a visible line in the transcript — the config never
+            // moves silently. Secrets are refused inside settings_set/get.
+            let mut config = { state.ai.read().await.config().clone() };
+            if get {
+                return Some(crate::selfheal::settings_get(&config));
+            }
+            match crate::selfheal::settings_set(&mut config, &field, &value) {
+                Ok(echo) => match apply_ai_config(app, state, config).await {
+                    Ok(()) => {
+                        notify_changed("settings", None);
+                        Some(echo)
+                    }
+                    Err(err) => Some(format!("Couldn't apply that setting: {err}")),
+                },
+                Err(msg) => Some(msg),
+            }
+        }
         ToolAction::UpdateReport {
             name,
             new_name,
@@ -6041,6 +6099,10 @@ async fn add_url_sources(
     out
 }
 
+// The IPC surface is a flat argument list; one more one-shot knob
+// (provider_override, RFC-self-resolve phase 4) tips the count over
+// clippy's default without making the call harder to read.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn send_message(
     app: AppHandle,
@@ -6050,6 +6112,7 @@ pub async fn send_message(
     content: String,
     config: Option<ChatConfig>,
     source_ids: Option<Vec<String>>,
+    provider_override: Option<String>,
 ) -> Result<Message, String> {
     let content = content.trim().to_string();
     if content.is_empty() {
@@ -6191,13 +6254,39 @@ pub async fn send_message(
         &persona,
         &profile,
     );
+    // One-shot provider override (RFC-self-resolve phase 4): the error row's
+    // "Answer with Ollama / Apple Intelligence" rerun answers THIS question
+    // on the named engine — config untouched, one send only.
+    let override_id = provider_override
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let (override_engine, model) = {
+        let ai = state.ai.read().await.clone();
+        match override_id {
+            Some(id) => {
+                let (engine, model) = ai
+                    .engine_for_provider(id)
+                    .map_err(|err| friendly_error(&format!("{err:#}")))?;
+                (Some(engine), model)
+            }
+            None => (None, ai.active_chat_model()),
+        }
+    };
     // On-device model only: cap the prompt to its 8192-token window before
     // streaming (structure-aware — the system rules and the question survive,
     // retrieved excerpts and old history are trimmed). No-op for the
     // larger-window engines, whose prompts must not be shrunk.
     let messages = {
         let ai = state.ai.read().await.clone();
-        match ai.fm_input_budget(crate::inference::Role::Chat) {
+        let budget = match &override_engine {
+            Some(crate::inference::ChatEngine::FoundationModels(_)) => {
+                Some(crate::inference::budget::fm_input_budget_tokens())
+            }
+            Some(_) => None,
+            None => ai.fm_input_budget(crate::inference::Role::Chat),
+        };
+        match budget {
             Some(budget) => crate::inference::budget::fit_messages(&messages, budget).into_owned(),
             None => messages,
         }
@@ -6212,13 +6301,15 @@ pub async fn send_message(
     let partial_cb = partial.clone();
     let (answer, kind, stats, cost_usd, model) = {
         let ai = state.ai.read().await.clone();
-        let model = ai.active_chat_model();
+        let engine = override_engine
+            .as_ref()
+            .unwrap_or_else(|| ai.engine(crate::inference::Role::Chat));
         // Agent-CLI engines narrate their work (booting, tool calls) through
         // the same step trail the deep-research loop uses — a long silent
         // spinner otherwise reads as a hang.
         let app_for_steps = app.clone();
         let streamed = tokio::select! {
-            out = ai.chat_stream_steps(&messages, |tok| {
+            out = engine.chat_stream_steps(&messages, |tok| {
                 partial_cb.lock().unwrap().push_str(tok);
                 let _ = app_for_cb.emit(
                     "chat://token",
@@ -6240,14 +6331,19 @@ pub async fn send_message(
             // A provider failure becomes a durable transcript row instead of
             // a vanishing toast: the stored user turn would otherwise sit
             // unanswered in history with no trace of why. friendly_error
-            // turns the known failure shapes into the fix (RFC-self-resolve).
-            Some(Err(err)) => (
-                friendly_error(&format!("{err:#}")),
-                "error",
-                None,
-                None,
-                model,
-            ),
+            // turns the known failure shapes into the fix (RFC-self-resolve
+            // phase 1), and unclassified shapes get one capped diagnosis
+            // call (phase 2) — parse-or-skip, never the failing engine.
+            Some(Err(err)) => {
+                let raw = format!("{err:#}");
+                let mut text = friendly_error(&raw);
+                if override_id.is_none() {
+                    if let Some(extra) = crate::selfheal::diagnose(&ai, &raw).await {
+                        text.push_str(&extra);
+                    }
+                }
+                (text, "error", None, None, model)
+            }
             None => (partial.lock().unwrap().clone(), "chat", None, None, model),
         }
     };
@@ -6353,14 +6449,16 @@ pub async fn send_message_agentic(
         match out {
             Some(Ok((answer, citations, stats))) => (answer, "chat", citations, stats, model),
             // Durable transcript row for a failed run — same contract as the
-            // direct chat path, fix-classified the same way.
-            Some(Err(err)) => (
-                friendly_error(&format!("{err:#}")),
-                "error",
-                vec![],
-                None,
-                model,
-            ),
+            // direct chat path: fix-classified (phase 1), then one capped
+            // diagnosis call for unclassified shapes (phase 2).
+            Some(Err(err)) => {
+                let raw = format!("{err:#}");
+                let mut text = friendly_error(&raw);
+                if let Some(extra) = crate::selfheal::diagnose(&ai, &raw).await {
+                    text.push_str(&extra);
+                }
+                (text, "error", vec![], None, model)
+            }
             None => ("_(Stopped.)_".to_string(), "chat", vec![], None, model),
         }
     };
@@ -10021,6 +10119,17 @@ pub async fn get_ai_config(state: State<'_, AppState>) -> Result<AiConfig, Strin
 pub async fn set_ai_config(
     app: AppHandle,
     state: State<'_, AppState>,
+    config: AiConfig,
+) -> Result<(), String> {
+    apply_ai_config(&app, &state, config).await
+}
+
+/// Persist a new AiConfig and rebuild the live Ai around it. Shared by the
+/// Settings UI (`set_ai_config`), the chat/MCP `settings` tool, and the
+/// error-row fix buttons — one write path, so nothing can half-apply.
+pub(crate) async fn apply_ai_config(
+    app: &AppHandle,
+    state: &AppState,
     mut config: AiConfig,
 ) -> Result<(), String> {
     // Keep the provider list and flat legacy fields coherent on every save.
@@ -10029,7 +10138,7 @@ pub async fn set_ai_config(
     std::fs::write(&state.config_path, json).map_err(|e| e.to_string())?;
     let (mcp_enabled, mcp_port) = (config.mcp_enabled, config.mcp_port);
     let (clip_enabled, clip_port) = (config.clip_enabled, config.clip_port);
-    crate::integrations::set_tray_visible(&app, config.tray_enabled);
+    crate::integrations::set_tray_visible(app, config.tray_enabled);
     {
         let mut ai = state.ai.write().await;
         let data_dir = state
@@ -10041,9 +10150,28 @@ pub async fn set_ai_config(
         // Fusion follows the embedder tier (BEIR-measured; db.rs).
         state.db.set_fusion(ai.fusion_params());
     }
-    crate::mcp::apply_config(&app, mcp_enabled, mcp_port).await;
-    crate::clip::apply_config(&app, clip_enabled, clip_port).await;
+    crate::mcp::apply_config(app, mcp_enabled, mcp_port).await;
+    crate::clip::apply_config(app, clip_enabled, clip_port).await;
     Ok(())
+}
+
+/// Apply one settings-tool change from an error-row fix button
+/// (RFC-self-resolve phases 2+3): same allowlist and refusals as the chat
+/// `settings` tool, and the applied change lands in the transcript as a
+/// tool row — the config never moves silently.
+#[tauri::command]
+pub async fn apply_settings_fix(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    notebook_id: String,
+    field: String,
+    value: String,
+) -> Result<Message, String> {
+    let mut config = { state.ai.read().await.config().clone() };
+    let echo = crate::selfheal::settings_set(&mut config, &field, &value)?;
+    apply_ai_config(&app, &state, config).await?;
+    notify_changed("settings", None);
+    finish_tool_reply(&app, &state, &notebook_id, echo).await
 }
 
 #[tauri::command]
@@ -10434,6 +10562,44 @@ mod tool_tests {
             parse_tool_action(r#"{"action":"add_urls","urls":["httpfoo"]}"#),
             ToolAction::Chat
         ));
+    }
+
+    #[test]
+    fn parses_settings_tool() {
+        assert!(matches!(
+            parse_tool_action(r#"{"action":"settings","op":"get"}"#),
+            ToolAction::Settings { get: true, .. }
+        ));
+        match parse_tool_action(
+            r#"{"action":"settings","op":"set","field":"chatProvider","value":"ollama"}"#,
+        ) {
+            ToolAction::Settings { get, field, value } => {
+                assert!(!get);
+                assert_eq!(field, "chatProvider");
+                assert_eq!(value, "ollama");
+            }
+            _ => panic!("expected settings"),
+        }
+        // A set with no field can't do anything — falls through to chat,
+        // as does an unknown op.
+        assert!(matches!(
+            parse_tool_action(r#"{"action":"settings","op":"set","value":"x"}"#),
+            ToolAction::Chat
+        ));
+        assert!(matches!(
+            parse_tool_action(r#"{"action":"settings","op":"delete"}"#),
+            ToolAction::Chat
+        ));
+    }
+
+    #[test]
+    fn settings_requests_pass_the_gate() {
+        assert!(tool_gate("switch chat to ollama"));
+        assert!(tool_gate("use apple intelligence for chat"));
+        assert!(tool_gate("show my model settings"));
+        assert!(tool_gate("set the embedder to builtin"));
+        // Plain questions still skip the router.
+        assert!(!tool_gate("what does the spec say about latency?"));
     }
 
     #[test]

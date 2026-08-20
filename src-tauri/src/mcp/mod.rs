@@ -26,6 +26,7 @@ mod notebooks;
 mod notes;
 mod registry;
 mod search;
+mod settings;
 mod sources;
 mod studio;
 
@@ -246,7 +247,8 @@ impl AlchemyMcp {
     + Self::notes_router()
     + Self::studio_router()
     + Self::ledger_router()
-    + Self::registry_router()))]
+    + Self::registry_router()
+    + Self::settings_router()))]
 impl ServerHandler for AlchemyMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
