@@ -68,11 +68,7 @@ pub async fn run_second_look(
                         notebook_id: Some(&report.notebook_id),
                     },
                 );
-                let wants_notify = {
-                    let ai = state.ai.read().await;
-                    ai.config().show_notifications
-                };
-                if wants_notify {
+                if crate::scheduler::notifications_wanted(&app).await {
                     use tauri_plugin_notification::NotificationExt;
                     let _ = app
                         .notification()

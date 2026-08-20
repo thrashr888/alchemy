@@ -1,21 +1,12 @@
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from "@tauri-apps/plugin-notification";
+import { api } from "./api";
 
-let granted: boolean | null = null;
-
-/** Send a desktop notification, requesting permission once. No-op on failure.
- *  Gated by the "Show notifications" preference (Settings → General). */
+/** Send a desktop notification. Routed through the backend, which owns both
+ *  gates — the "Show notifications" preference and the quiet-while-focused
+ *  rule — so focus is measured across every window in one place
+ *  (scheduler::notifications_wanted). No-op on failure. */
 export async function notify(title: string, body: string) {
-  if (localStorage.getItem("showNotifications") === "false") return;
   try {
-    if (granted === null) {
-      granted = await isPermissionGranted();
-      if (!granted) granted = (await requestPermission()) === "granted";
-    }
-    if (granted) sendNotification({ title, body });
+    await api.sendNotification(title, body);
   } catch {
     /* notifications unavailable */
   }

@@ -353,8 +353,9 @@ export const useStore = create<AppState>((set, get) => {
       // Releases any OS entry point that arrived before the corpus was known.
       markNotebooksLoaded();
       // showNotifications lives in config now (the Night Shift's resident
-      // scheduler reads it backend-side). Honor a pre-migration localStorage
-      // opt-out once, then mirror config down for notify()'s sync check.
+      // scheduler reads it backend-side, as does notify()'s send_notification
+      // path). Honor a pre-migration localStorage opt-out once, then mirror
+      // config down so the legacy key can't re-trigger this migration.
       if (
         localStorage.getItem("showNotifications") === "false" &&
         aiConfig.showNotifications
@@ -366,6 +367,13 @@ export const useStore = create<AppState>((set, get) => {
           String(aiConfig.showNotifications),
         );
       }
+      // Quiet-while-focused mirrors config → localStorage for the sound
+      // module's synchronous check (desktop notifications read config
+      // directly, backend-side).
+      localStorage.setItem(
+        "quietWhenFocused",
+        String(aiConfig.quietWhenFocused),
+      );
       void get().refreshModelHealth();
       void get().refreshModelStats();
       void get().refreshKokoroStatus();

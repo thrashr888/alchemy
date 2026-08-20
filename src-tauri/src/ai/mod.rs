@@ -110,6 +110,12 @@ pub struct AiConfig {
     /// it with no window open; the frontend mirrors it for its own checks.
     #[serde(default = "default_true")]
     pub show_notifications: bool,
+    /// Quiet-while-focused rule: skip notifications (and the frontend's
+    /// sound cues) while an Alchemy window is focused — the user is already
+    /// looking. On by default; off means always deliver. Checked at send
+    /// time by `scheduler::notifications_wanted`.
+    #[serde(default = "default_true")]
+    pub quiet_when_focused: bool,
     /// Weekly LLM consolidation of auto-created evidence notes (the note
     /// curator's phase-5 pass, docs/RFC-note-curator.md). On by default —
     /// smart defaults over opt-ins; the pass is idle-gated, capped, and
@@ -342,6 +348,7 @@ impl Default for AiConfig {
             tray_enabled: default_true(),
             background_enabled: default_true(),
             show_notifications: default_true(),
+            quiet_when_focused: default_true(),
             curator_consolidate: default_true(),
             source_gists: default_true(),
             vision_provider: String::new(),
