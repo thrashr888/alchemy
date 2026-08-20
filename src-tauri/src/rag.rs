@@ -265,6 +265,29 @@ pub fn build_meta_messages(
     messages
 }
 
+/// Reorder a best-first ranked hit list so the strongest excerpts sit at the
+/// START and END of the prompt and the weakest in the middle — the positions
+/// long-context models attend to worst ("Lost in the Middle", Liu et al.
+/// 2023). Even ranks fill from the front, odd ranks from the back:
+/// `[r0 r1 r2 r3 r4]` becomes `[r0 r2 r4 r3 r1]`. Callers must use the
+/// returned order for BOTH the prompt and the persisted citation list so [n]
+/// markers keep lining up. Eval-only (`JUDGED_VARIANT=litm`) until the
+/// judged numbers earn it a place in the shipped chat chain.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn litm_order<T>(ranked: Vec<T>) -> Vec<T> {
+    let mut front = Vec::with_capacity(ranked.len());
+    let mut back = Vec::new();
+    for (i, hit) in ranked.into_iter().enumerate() {
+        if i % 2 == 0 {
+            front.push(hit);
+        } else {
+            back.push(hit);
+        }
+    }
+    front.extend(back.into_iter().rev());
+    front
+}
+
 /// The evidence block for a chat prompt: ranked citations plus optional
 /// neighbor-expanded prompt bodies keyed by chunk id
 /// (RFC-infinite-context §3). Citations stay verbatim — expansion changes
@@ -1011,6 +1034,17 @@ mod tests {
             snippet: snippet.into(),
             distance: 0.0,
         }
+    }
+
+    /// Lost-in-the-Middle ordering: strongest hits land first and last,
+    /// weakest in the middle, and nothing is dropped or duplicated.
+    #[test]
+    fn litm_order_puts_strongest_at_the_extremes() {
+        assert_eq!(litm_order(vec![0, 1, 2, 3, 4]), vec![0, 2, 4, 3, 1]);
+        assert_eq!(litm_order(vec![0, 1, 2, 3, 4, 5]), vec![0, 2, 4, 5, 3, 1]);
+        assert_eq!(litm_order(vec![0, 1]), vec![0, 1]);
+        assert_eq!(litm_order(vec![0]), vec![0]);
+        assert_eq!(litm_order(Vec::<u8>::new()), Vec::<u8>::new());
     }
 
     /// RFC-source-tags: manifest lines carry the user's tags between title
