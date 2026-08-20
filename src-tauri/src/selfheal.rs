@@ -578,6 +578,184 @@ pub(crate) async fn diagnose(ai: &Ai, raw: &str) -> Option<String> {
     Some(render_diagnosis(config, &d))
 }
 
+// ---- Model verbs (RFC-conversational-setup phase 1) -------------------------
+//
+// `models`, `test`, and `pull` grow the settings tool into onboarding. The
+// pure halves live here (target resolution, rendering, the pull command's
+// charset gate); the live probes stay in commands.rs beside the readiness
+// machinery they reuse.
+
+/// What a `test <target>` invocation resolved to. Provider targets probe the
+/// configured entry's engine; a bare model name probes Ollama with that
+/// model — the pre-commitment "is it any good" check.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum TestTarget {
+    /// A configured provider, by id.
+    Provider(String),
+    /// An installed (or about-to-be-tested) Ollama model name.
+    OllamaModel(String),
+}
+
+/// Resolve a `test` target: empty means the active chat provider, otherwise
+/// a provider id/label/alias, otherwise an Ollama model name — which must
+/// pass the same charset gate as `pull` (the name may travel onward into a
+/// terminal affordance) and must never be key-shaped.
+pub(crate) fn resolve_test_target(config: &AiConfig, target: &str) -> Result<TestTarget, String> {
+    let target = target.trim();
+    if looks_key_shaped(target) {
+        return Err(
+            "That looks like an API key, not a provider or model — keys never pass \
+             through this tool."
+                .to_string(),
+        );
+    }
+    if target.is_empty() {
+        return Ok(TestTarget::Provider(config.chat_provider.clone()));
+    }
+    if let Some(p) = find_provider(config, target) {
+        return Ok(TestTarget::Provider(p.id.clone()));
+    }
+    if crate::commands::is_safe_model_name(target) {
+        return Ok(TestTarget::OllamaModel(target.to_string()));
+    }
+    Err(format!(
+        "\"{target}\" isn't a configured provider ({}) or a valid model name.",
+        provider_roster(config)
+    ))
+}
+
+/// The validated `ollama pull` command for a model name — the ONLY thing
+/// either surface ever hands onward, and only as text: the app never shells
+/// out on its own. Charset-gated here and re-gated at execution
+/// (`terminal_command_allowed`), so both ends refuse anything shell-shaped.
+pub(crate) fn pull_command(model: &str) -> Result<String, String> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err("Which model? Say e.g. \"pull gemma3\".".to_string());
+    }
+    if !crate::commands::is_safe_model_name(model) {
+        return Err(format!(
+            "\"{}\" isn't a valid Ollama model name (letters, digits, and ._:/- only, \
+             at most 64 characters).",
+            model.chars().take(80).collect::<String>()
+        ));
+    }
+    Ok(format!("ollama pull {model}"))
+}
+
+/// Chat-side `pull` reply: stages the command through the same literal
+/// `` Fix: open Terminal, run `cmd` `` grammar the error rows use, which the
+/// transcript renders as a one-click Terminal launch. Never executed here.
+pub(crate) fn settings_pull(model: &str) -> Result<String, String> {
+    let command = pull_command(model)?;
+    let model = model.trim();
+    Ok(format!(
+        "Ready to download “{model}”. Fix: open Terminal, run `{command}`, then come \
+         back — Alchemy stages the command but never runs it. When the download \
+         finishes, say “test {model}”."
+    ))
+}
+
+/// One provider row of the `models` roster, precomputed by the live side.
+pub(crate) struct ProviderStatus {
+    pub label: String,
+    pub model: String,
+    pub ready: bool,
+    pub detail: String,
+    pub is_chat: bool,
+    pub is_studio: bool,
+}
+
+/// The `models` roster: installed Ollama models plus each configured
+/// provider's active model and readiness. Pure formatting — the live side
+/// gathers the inputs — with the usual key-shape scrub on the way out.
+pub(crate) fn format_models_report(
+    installed: &Result<Vec<String>, String>,
+    providers: &[ProviderStatus],
+) -> String {
+    let mut out = String::new();
+    match installed {
+        Ok(models) if models.is_empty() => {
+            out.push_str(
+                "No models installed in Ollama yet — say \"pull gemma3\" (or any model \
+                 from ollama.com/library) to stage a download.\n",
+            );
+        }
+        Ok(models) => {
+            out.push_str(&format!("Installed in Ollama ({}):\n", models.len()));
+            for m in models {
+                out.push_str(&format!("- {m}\n"));
+            }
+        }
+        Err(_) => {
+            out.push_str("Ollama isn't reachable, so its installed models can't be listed.\n");
+        }
+    }
+    out.push_str("\nProviders:\n");
+    for p in providers {
+        let mut line = format!("- {}", p.label);
+        if !p.model.trim().is_empty() {
+            line.push_str(&format!(" · {}", p.model.trim()));
+        }
+        line.push_str(if p.ready {
+            " — ready"
+        } else {
+            " — not ready"
+        });
+        if !p.detail.trim().is_empty() {
+            line.push_str(&format!(" ({})", p.detail.trim()));
+        }
+        if p.is_chat {
+            line.push_str(" [chat]");
+        }
+        if p.is_studio {
+            line.push_str(" [studio]");
+        }
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out.push_str("\nSay \"test <provider or model>\" for a live probe, or \"switch chat to <provider>\" to change.");
+    redact_key_shaped(&out)
+}
+
+/// One leg of a `test` probe, as measured by the live side.
+pub(crate) enum ProbeResult {
+    Ok { first_ms: u128, total_ms: u128 },
+    Failed(String),
+}
+
+/// The `test` transcript row. Pure formatting; errors are redacted before
+/// rendering (the raw may quote a provider response body).
+pub(crate) fn format_test_report(
+    config: &AiConfig,
+    label: &str,
+    chat: &ProbeResult,
+    embed: Option<&(String, ProbeResult)>,
+) -> String {
+    let mut out = match chat {
+        ProbeResult::Ok { first_ms, total_ms } => {
+            format!("Tested {label}: alive — first token in {first_ms} ms, total {total_ms} ms.")
+        }
+        ProbeResult::Failed(err) => {
+            format!("Tested {label}: failed — {}", redact_error(err, config))
+        }
+    };
+    if let Some((embed_model, result)) = embed {
+        match result {
+            ProbeResult::Ok { total_ms, .. } => {
+                out.push_str(&format!(" Embedding ({embed_model}): ok in {total_ms} ms."));
+            }
+            ProbeResult::Failed(err) => {
+                out.push_str(&format!(
+                    " Embedding ({embed_model}): failed — {}",
+                    redact_error(err, config)
+                ));
+            }
+        }
+    }
+    redact_key_shaped(&out)
+}
+
 // ---- Tests ------------------------------------------------------------------
 
 #[cfg(test)]
@@ -887,6 +1065,154 @@ mod tests {
         assert!(out.contains("Settings → Models"), "{out}");
         // Retry renders nothing extra — the row already has the button.
         assert!(!out.contains("retry the question"), "{out}");
+    }
+
+    // -- Model verbs (RFC-conversational-setup phase 1) ----------------------
+
+    #[test]
+    fn pull_gates_the_charset_at_staging_time() {
+        // Valid names render the error-row grammar AND pass the execution
+        // allowlist — the same command string survives both gates.
+        for model in ["gemma3", "qwen3:8b", "hf.co/org/model:Q4_K-M"] {
+            let cmd = pull_command(model).unwrap();
+            assert_eq!(cmd, format!("ollama pull {model}"));
+            assert!(
+                crate::commands::terminal_command_allowed(&cmd),
+                "{cmd} must pass the execution-side allowlist"
+            );
+            let staged = settings_pull(model).unwrap();
+            assert!(
+                staged.contains(&format!("Fix: open Terminal, run `{cmd}`")),
+                "{staged}"
+            );
+            assert!(staged.contains("never runs it"), "{staged}");
+        }
+        // Shell-shaped, quoted, oversized, and empty names are refused —
+        // nothing outside the charset can ever reach the affordance.
+        for bad in [
+            "gemma3; rm -rf /",
+            "a`b`",
+            "model && curl evil",
+            "name with spaces",
+            "$(whoami)",
+            "",
+            "        ",
+        ] {
+            assert!(pull_command(bad).is_err(), "{bad:?} should be refused");
+            assert!(settings_pull(bad).is_err());
+        }
+        let long = "a".repeat(65);
+        assert!(pull_command(&long).is_err());
+    }
+
+    #[test]
+    fn test_target_resolves_provider_model_or_refuses() {
+        let c = test_config();
+        // Empty = the active chat provider.
+        assert_eq!(
+            resolve_test_target(&c, "").unwrap(),
+            TestTarget::Provider("gateway".into())
+        );
+        // Provider by id, label, or alias.
+        assert_eq!(
+            resolve_test_target(&c, "Ollama").unwrap(),
+            TestTarget::Provider("ollama".into())
+        );
+        assert_eq!(
+            resolve_test_target(&c, "apple intelligence").unwrap(),
+            TestTarget::Provider("on-device".into())
+        );
+        // Anything else that fits the model charset is an Ollama model.
+        assert_eq!(
+            resolve_test_target(&c, "gemma3:4b").unwrap(),
+            TestTarget::OllamaModel("gemma3:4b".into())
+        );
+        // Shell-shaped targets are refused with the roster named.
+        let err = resolve_test_target(&c, "x; rm -rf /").unwrap_err();
+        assert!(err.contains("\"ollama\""), "{err}");
+        // Key-shaped targets are refused outright — the inherited
+        // secret discipline extends to every new verb.
+        let err = resolve_test_target(&c, "sk-abcdef1234567890").unwrap_err();
+        assert!(err.contains("key"), "{err}");
+    }
+
+    #[test]
+    fn models_report_lists_and_redacts() {
+        let installed = Ok(vec![
+            "gpt-oss:20b".to_string(),
+            "mxbai-embed-large".to_string(),
+        ]);
+        let providers = vec![
+            ProviderStatus {
+                label: "Ollama".into(),
+                model: "gpt-oss:20b".into(),
+                ready: true,
+                detail: "gpt-oss:20b · running".into(),
+                is_chat: true,
+                is_studio: false,
+            },
+            ProviderStatus {
+                label: "Gateway".into(),
+                model: "big-model".into(),
+                ready: false,
+                // A hostile/leaky readiness detail must not survive the
+                // formatting pass.
+                detail: "rejected key sk-abcdef1234567890".into(),
+                is_chat: false,
+                is_studio: true,
+            },
+        ];
+        let out = format_models_report(&installed, &providers);
+        assert!(out.contains("Installed in Ollama (2):"), "{out}");
+        assert!(out.contains("- gpt-oss:20b"), "{out}");
+        assert!(out.contains("Ollama · gpt-oss:20b — ready"), "{out}");
+        assert!(out.contains("[chat]"), "{out}");
+        assert!(out.contains("Gateway · big-model — not ready"), "{out}");
+        assert!(out.contains("[studio]"), "{out}");
+        assert!(!out.contains("sk-abcdef"), "{out}");
+        // Unreachable Ollama degrades to a sentence, not an error dump.
+        let down = format_models_report(&Err("connection refused".into()), &providers);
+        assert!(down.contains("Ollama isn't reachable"), "{down}");
+    }
+
+    #[test]
+    fn test_report_formats_and_redacts() {
+        let c = test_config();
+        let ok = format_test_report(
+            &c,
+            "Ollama · gpt-oss:20b",
+            &ProbeResult::Ok {
+                first_ms: 412,
+                total_ms: 1180,
+            },
+            Some(&(
+                "mxbai-embed-large".to_string(),
+                ProbeResult::Ok {
+                    first_ms: 0,
+                    total_ms: 89,
+                },
+            )),
+        );
+        assert!(
+            ok.contains("alive — first token in 412 ms, total 1180 ms"),
+            "{ok}"
+        );
+        assert!(
+            ok.contains("Embedding (mxbai-embed-large): ok in 89 ms"),
+            "{ok}"
+        );
+        // Failures carry the redacted error, never the configured key.
+        let failed = format_test_report(
+            &c,
+            "Gateway · big-model",
+            &ProbeResult::Failed("401 unauthorized for key sk-secret1234567890abcdef".to_string()),
+            None,
+        );
+        assert!(
+            failed.contains("Tested Gateway · big-model: failed"),
+            "{failed}"
+        );
+        assert!(!failed.contains("sk-secret"), "{failed}");
     }
 
     #[test]

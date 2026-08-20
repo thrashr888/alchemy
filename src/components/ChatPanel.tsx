@@ -1121,12 +1121,29 @@ const ChatMessage = memo(function ChatMessage({
   // Tool confirmations are process, not conversation: one quiet gray row,
   // no bubble, no role label — the Claude-desktop "Ran ..." grammar.
   if (message.kind === "tool") {
+    // The settings tool's `pull` verb stages a download through the same
+    // literal grammar the error rows use — the backend allowlists and
+    // charset-gates the command, so the button can only ever launch it.
+    const toolFixCmd = /Fix: open Terminal, run `([^`]+)`/.exec(
+      message.content,
+    )?.[1];
     return (
       <div className="flex items-start gap-2 py-0.5 text-caption text-muted-foreground">
         <Wrench className="mt-0.5 h-3 w-3 shrink-0 text-subtle-foreground" />
         {/* pre-line: the settings tool's snapshot reply is multi-line. */}
         <span className="selectable min-w-0 whitespace-pre-line">
           {message.content}
+          {toolFixCmd && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-2 inline-flex align-middle"
+              onClick={() => void api.openInTerminal(toolFixCmd)}
+            >
+              <ExternalLink className="h-3 w-3" />
+              Open Terminal: {toolFixCmd}
+            </Button>
+          )}
         </span>
       </div>
     );

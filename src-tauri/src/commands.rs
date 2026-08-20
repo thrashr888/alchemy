@@ -669,7 +669,7 @@ fn ollama_missing_model(raw: &str) -> Option<String> {
 }
 
 /// The character set a model name may use to reach a terminal command.
-fn is_safe_model_name(name: &str) -> bool {
+pub(crate) fn is_safe_model_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
         && name
@@ -5172,6 +5172,138 @@ fn host_of(url: &str) -> String {
         .to_string()
 }
 
+/// The `models` roster (RFC-conversational-setup phase 1): installed Ollama
+/// models (the same `list_models` the OllamaModelPicker reads) plus every
+/// configured provider's active model and live readiness. Read-only.
+pub(crate) async fn settings_models_report(app: &AppHandle, state: &AppState) -> String {
+    let ai = state.ai.read().await.clone();
+    let config = ai.config().clone();
+    let installed =
+        match tokio::time::timeout(std::time::Duration::from_secs(5), ai.list_models()).await {
+            Ok(Ok(models)) => Ok(models),
+            Ok(Err(err)) => Err(format!("{err:#}")),
+            Err(_) => Err("timed out".to_string()),
+        };
+    let mut providers = Vec::new();
+    for entry in &config.providers {
+        let (ready, detail) = readiness_for_entry(app, entry, &config)
+            .await
+            .unwrap_or((false, "probe failed".into()));
+        providers.push(crate::selfheal::ProviderStatus {
+            label: entry.label.clone(),
+            model: entry.chat_model.clone(),
+            ready,
+            detail,
+            is_chat: entry.id == config.chat_provider,
+            is_studio: entry.id == config.studio_provider,
+        });
+    }
+    crate::selfheal::format_models_report(&installed, &providers)
+}
+
+/// One live `test` probe (RFC-conversational-setup phase 1): readiness grown
+/// into evidence. Hard-capped by construction at ONE tiny chat call plus at
+/// most ONE embed call per invocation, each under a short timeout — an agent
+/// looping `test` can never turn probing into open-ended spend. Never
+/// mutates config.
+pub(crate) async fn settings_test_report(state: &AppState, target: &str) -> String {
+    use crate::selfheal::{ProbeResult, TestTarget};
+    let ai = state.ai.read().await.clone();
+    let config = ai.config().clone();
+    let resolved = match crate::selfheal::resolve_test_target(&config, target) {
+        Ok(t) => t,
+        Err(msg) => return msg,
+    };
+    // Engine + display label + the Ollama config for the embed leg, which
+    // applies only when the target reaches an Ollama server (the embed
+    // model lives there); FM/gateway/agent targets get the chat leg only.
+    let (engine, label, embed_cfg) = match &resolved {
+        TestTarget::Provider(id) => match ai.engine_for_provider(id) {
+            Ok((engine, model)) => {
+                let entry = config.provider_by_id(id);
+                let label = entry
+                    .map(|p| {
+                        if p.chat_model.trim().is_empty() {
+                            p.label.clone()
+                        } else {
+                            format!("{} · {}", p.label, p.chat_model.trim())
+                        }
+                    })
+                    .unwrap_or(model);
+                let embed = entry.filter(|p| p.kind == "ollama").map(|p| {
+                    let mut oc = crate::ai::ollama_config(&config);
+                    if !p.base_url.trim().is_empty() {
+                        oc.base_url = p.base_url.trim().to_string();
+                    }
+                    oc
+                });
+                (engine, label, embed)
+            }
+            Err(err) => return friendly_error(&format!("{err:#}")),
+        },
+        TestTarget::OllamaModel(name) => {
+            let mut oc = crate::ai::ollama_config(&config);
+            oc.chat_model = name.clone();
+            (
+                crate::inference::ChatEngine::Ollama(crate::ai::Ollama::new(oc.clone())),
+                format!("Ollama · {name}"),
+                Some(oc),
+            )
+        }
+    };
+
+    // Leg 1 of exactly 2: one tiny chat, streamed so the first token stamps
+    // time-to-first separately from total.
+    let messages = vec![crate::ai::ChatTurn::user(
+        "Reply with only the word OK.".to_string(),
+    )];
+    let start = std::time::Instant::now();
+    let mut first: Option<u128> = None;
+    let chat = match tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        engine.chat_stream(&messages, |_tok| {
+            if first.is_none() {
+                first = Some(start.elapsed().as_millis());
+            }
+        }),
+    )
+    .await
+    {
+        Err(_) => ProbeResult::Failed("no answer within 30 seconds".into()),
+        Ok(Err(err)) => ProbeResult::Failed(format!("{err:#}")),
+        Ok(Ok(_)) => {
+            let total_ms = start.elapsed().as_millis();
+            ProbeResult::Ok {
+                first_ms: first.unwrap_or(total_ms),
+                total_ms,
+            }
+        }
+    };
+
+    // Leg 2 of exactly 2: one embed, only where the target embeds.
+    let embed = match embed_cfg {
+        Some(oc) => {
+            let embed_model = oc.embed_model.clone();
+            let ollama = crate::ai::Ollama::new(oc);
+            let estart = std::time::Instant::now();
+            let result =
+                match tokio::time::timeout(std::time::Duration::from_secs(15), ollama.test_embed())
+                    .await
+                {
+                    Err(_) => ProbeResult::Failed("no embedding within 15 seconds".into()),
+                    Ok(Err(err)) => ProbeResult::Failed(format!("{err:#}")),
+                    Ok(Ok(_dims)) => ProbeResult::Ok {
+                        first_ms: 0,
+                        total_ms: estart.elapsed().as_millis(),
+                    },
+                };
+            Some((embed_model, result))
+        }
+        None => None,
+    };
+    crate::selfheal::format_test_report(&config, &label, &chat, embed.as_ref())
+}
+
 /// Persist a tool-produced assistant reply and finish the chat turn.
 async fn finish_tool_reply(
     app: &AppHandle,
@@ -5213,7 +5345,7 @@ fn tool_gate(content: &str) -> bool {
         "add", "import", "ingest", "attach", "load", "grab", "pull in", "paste", "make", "create",
         "generate", "write", "build", "remove", "delete", "drop", "get rid", "refresh", "re-fetch",
         "refetch", "update", "save", "schedule", "edit", "rename", "change", "pause", "enable",
-        "disable", "resume", "switch", "use", "show", "set",
+        "disable", "resume", "switch", "use", "show", "set", "pull", "test", "download", "list",
     ]
     .iter()
     .any(|k| l.contains(k));
@@ -5287,10 +5419,12 @@ enum ToolAction {
         prompt: String,
         enabled: String,
     },
-    /// The settings tool (RFC-self-resolve phase 3): get/set over the safe
-    /// AiConfig allowlist. `get` = read-only redacted snapshot.
+    /// The settings tool (RFC-self-resolve phase 3, grown by
+    /// RFC-conversational-setup phase 1). `op` is one of get | set |
+    /// models | test | pull; `field` carries set's field, test's target,
+    /// or pull's model name; `value` is set-only.
     Settings {
-        get: bool,
+        op: String,
         field: String,
         value: String,
     },
@@ -5312,6 +5446,9 @@ Tools:\n\
 - {\"action\":\"update_report\",\"name\":\"<existing report name fragment>\",\"new_name\":\"\",\"kind\":\"\",\"interval\":\"\",\"prompt\":\"\",\"enabled\":\"true|false or empty\"} — change an existing recurring report; leave fields empty to keep them.\n\
 - {\"action\":\"settings\",\"op\":\"get\"} — show the current AI provider/model settings (always redacted; API keys are never readable).\n\
 - {\"action\":\"settings\",\"op\":\"set\",\"field\":\"chatProvider|studioProvider|chatModel|effort|baseUrl|smallModel|embedder|provider.<id>.chatModel|provider.<id>.effort|provider.<id>.baseUrl\",\"value\":\"<new value>\"} — change ONE AI setting (\"switch chat to ollama\" → field chatProvider, value ollama; bare chatModel/effort/baseUrl target the active chat provider). API keys can never be read or set through this tool.\n\
+- {\"action\":\"settings\",\"op\":\"models\"} — list installed Ollama models plus every provider's active model and readiness (\"what models do I have\").\n\
+- {\"action\":\"settings\",\"op\":\"test\",\"target\":\"<provider or model name, or empty for the active chat provider>\"} — live-probe one provider or model (one tiny chat + embed) and report latency (\"is ollama working\", \"test gemma3\").\n\
+- {\"action\":\"settings\",\"op\":\"pull\",\"model\":\"<ollama model name>\"} — stage `ollama pull <model>` as a one-click Terminal command; it is never executed automatically (\"download gemma3\", \"pull qwen3:8b\").\n\
 - {\"action\":\"chat\"} — not a command; answer normally.\n\n\
 Prefer {\"action\":\"chat\"} when unsure. Questions ABOUT sources (\"what does the spec say\") are chat, \
 not tools.";
@@ -5492,7 +5629,7 @@ fn parse_tool_action(raw: &str) -> ToolAction {
         }
         "settings" => match s("op").as_str() {
             "get" => ToolAction::Settings {
-                get: true,
+                op: "get".into(),
                 field: String::new(),
                 value: String::new(),
             },
@@ -5502,9 +5639,34 @@ fn parse_tool_action(raw: &str) -> ToolAction {
                     ToolAction::Chat
                 } else {
                     ToolAction::Settings {
-                        get: false,
+                        op: "set".into(),
                         field,
                         value: s("value"),
+                    }
+                }
+            }
+            // Model verbs (RFC-conversational-setup phase 1). `test` with no
+            // target probes the active chat provider; `pull` without a model
+            // can't do anything and falls through to chat.
+            "models" => ToolAction::Settings {
+                op: "models".into(),
+                field: String::new(),
+                value: String::new(),
+            },
+            "test" => ToolAction::Settings {
+                op: "test".into(),
+                field: s("target"),
+                value: String::new(),
+            },
+            "pull" => {
+                let model = s("model");
+                if model.is_empty() {
+                    ToolAction::Chat
+                } else {
+                    ToolAction::Settings {
+                        op: "pull".into(),
+                        field: model,
+                        value: String::new(),
                     }
                 }
             }
@@ -5570,6 +5732,158 @@ pub(crate) fn resolve_report_kind(kind: &str, prompt: &str) -> Result<String, St
     ))
 }
 
+/// Deterministic settings fast-path gate (RFC-conversational-setup): tight
+/// imperative shapes that reach the settings verbs in BOTH chat modes — deep
+/// research skips the LLM router entirely, so without this a "switch chat to
+/// ollama" ask came back as a cited research essay. Returns
+/// `(op, field, value)` for the settings dispatcher, or None to fall through.
+///
+/// Tightness is the contract: only short messages (≤ 80 chars), only shapes
+/// that START with the imperative, and never anything question-shaped —
+/// "how do I switch chat providers in LM Studio?" must still reach research.
+/// The one interrogative exception is a closed set of exact roster asks
+/// ("what models do i have"). A gate hit that later fails to resolve (an
+/// unknown provider, an unresolvable test target) falls through to normal
+/// flow in the dispatcher — a false positive must never eat a research ask.
+pub(crate) fn settings_gate(content: &str) -> Option<(String, String, String)> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() || trimmed.len() > 80 {
+        return None;
+    }
+    let lower = trimmed.to_lowercase();
+    let l = lower.trim_end_matches(['?', '!', '.', ' ']);
+    let hit = |op: &str, field: &str, value: &str| {
+        Some((op.to_string(), field.to_string(), value.to_string()))
+    };
+
+    // Closed set of exact roster asks — the only interrogatives allowed.
+    const MODELS_ASKS: [&str; 9] = [
+        "what models do i have",
+        "what models do i have installed",
+        "what models are installed",
+        "which models do i have",
+        "which models are installed",
+        "list models",
+        "list my models",
+        "list installed models",
+        "show my models",
+    ];
+    if MODELS_ASKS.contains(&l) {
+        return hit("models", "", "");
+    }
+
+    // Anything else that opens like a question is research, not a command.
+    const INTERROGATIVES: [&str; 13] = [
+        "how ", "why ", "when ", "where ", "what ", "which ", "who ", "can ", "could ", "should ",
+        "would ", "does ", "is ",
+    ];
+    if INTERROGATIVES.iter().any(|p| l.starts_with(p)) {
+        return None;
+    }
+
+    const SETTINGS_ASKS: [&str; 5] = [
+        "show my settings",
+        "show settings",
+        "get my settings",
+        "show my model settings",
+        "show my ai settings",
+    ];
+    if SETTINGS_ASKS.contains(&l) {
+        return hit("get", "", "");
+    }
+
+    // switch chat|studio [provider] to <provider> — resolved (and refused,
+    // falling through) against the live roster at dispatch time.
+    for (prefix, field) in [
+        ("switch chat to ", "chatProvider"),
+        ("switch chat provider to ", "chatProvider"),
+        ("switch studio to ", "studioProvider"),
+        ("switch studio provider to ", "studioProvider"),
+        ("switch the embedder to ", "embedder"),
+        ("switch embedder to ", "embedder"),
+    ] {
+        if let Some(rest) = l.strip_prefix(prefix) {
+            let rest = rest.trim();
+            if !rest.is_empty() {
+                return hit("set", field, rest);
+            }
+        }
+    }
+
+    // test <provider|model>: at most three short charset-clean words (the
+    // multi-word forms are provider aliases like "apple intelligence");
+    // dispatch re-resolves the target and falls through when it's neither a
+    // provider nor a model name — "test the hypothesis …" stays research.
+    if let Some(rest) = l.strip_prefix("test ") {
+        let rest = rest.trim();
+        if !rest.is_empty()
+            && rest.len() <= 40
+            && rest.split_whitespace().count() <= 3
+            && rest
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || " ._:/-".contains(c))
+        {
+            return hit("test", rest, "");
+        }
+    }
+
+    // pull <model> — only a bare name in the pull charset; the staged
+    // command is re-gated at execution either way.
+    for prefix in ["ollama pull ", "pull "] {
+        if let Some(rest) = l.strip_prefix(prefix) {
+            let rest = rest.trim();
+            if is_safe_model_name(rest) {
+                return hit("pull", rest, "");
+            }
+            return None;
+        }
+    }
+
+    None
+}
+
+/// Dispatch a settings_gate hit through the settings verbs — shared by both
+/// chat modes, no LLM router involved. None = fall through to normal flow
+/// (research/chat): the gate hit didn't resolve cleanly, and a false
+/// positive must never break a real question.
+async fn try_settings_fast_path(
+    app: &AppHandle,
+    state: &AppState,
+    content: &str,
+) -> Option<String> {
+    let (op, field, value) = settings_gate(content)?;
+    match op.as_str() {
+        "get" => {
+            let config = { state.ai.read().await.config().clone() };
+            Some(crate::selfheal::settings_get(&config))
+        }
+        "models" => Some(settings_models_report(app, state).await),
+        "pull" => crate::selfheal::settings_pull(&field).ok(),
+        "test" => {
+            let config = { state.ai.read().await.config().clone() };
+            // Pre-resolve: an unresolvable target means this probably wasn't
+            // a settings ask after all.
+            crate::selfheal::resolve_test_target(&config, &field).ok()?;
+            Some(settings_test_report(state, &field).await)
+        }
+        "set" => {
+            let mut config = { state.ai.read().await.config().clone() };
+            match crate::selfheal::settings_set(&mut config, &field, &value) {
+                Ok(echo) => match apply_ai_config(app, state, config).await {
+                    Ok(()) => {
+                        notify_changed("settings", None);
+                        Some(echo)
+                    }
+                    Err(err) => Some(format!("Couldn't apply that setting: {err}")),
+                },
+                // Unknown provider etc. — not clean, so not ours.
+                Err(_) => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Verbs that mean the URL in a message is a *target*, not something to add.
 fn has_non_add_verb(content: &str) -> bool {
     let l = content.to_lowercase();
@@ -5591,6 +5905,12 @@ async fn try_tool_route(
     content: &str,
     allow_router: bool,
 ) -> Option<String> {
+    // Settings fast path first, and OUTSIDE tool_gate: it carries its own,
+    // much tighter gate, and runs in both chat modes — "test gemma3" has no
+    // tool_gate noun, and deep research never reaches the LLM router.
+    if let Some(reply) = try_settings_fast_path(app, state, content).await {
+        return Some(reply);
+    }
     if !tool_gate(content) {
         return None;
     }
@@ -5902,24 +6222,32 @@ async fn try_tool_route(
                 Err(err) => Some(format!("Couldn't create the schedule: {err:#}")),
             }
         }
-        ToolAction::Settings { get, field, value } => {
-            // The settings tool (RFC-self-resolve phase 3). The reply comes
+        ToolAction::Settings { op, field, value } => {
+            // The settings tool (RFC-self-resolve phase 3, plus the model
+            // verbs of RFC-conversational-setup phase 1). The reply comes
             // back as a tool row via finish_tool_reply, so every applied
             // change is a visible line in the transcript — the config never
-            // moves silently. Secrets are refused inside settings_set/get.
+            // moves silently. Secrets are refused inside the core fns.
             let mut config = { state.ai.read().await.config().clone() };
-            if get {
-                return Some(crate::selfheal::settings_get(&config));
-            }
-            match crate::selfheal::settings_set(&mut config, &field, &value) {
-                Ok(echo) => match apply_ai_config(app, state, config).await {
-                    Ok(()) => {
-                        notify_changed("settings", None);
-                        Some(echo)
-                    }
-                    Err(err) => Some(format!("Couldn't apply that setting: {err}")),
+            match op.as_str() {
+                "get" => Some(crate::selfheal::settings_get(&config)),
+                "models" => Some(settings_models_report(app, state).await),
+                "test" => Some(settings_test_report(state, &field).await),
+                // `pull` stages the command as a one-click Terminal
+                // affordance — it is never executed from here.
+                "pull" => Some(match crate::selfheal::settings_pull(&field) {
+                    Ok(text) | Err(text) => text,
+                }),
+                _ => match crate::selfheal::settings_set(&mut config, &field, &value) {
+                    Ok(echo) => match apply_ai_config(app, state, config).await {
+                        Ok(()) => {
+                            notify_changed("settings", None);
+                            Some(echo)
+                        }
+                        Err(err) => Some(format!("Couldn't apply that setting: {err}")),
+                    },
+                    Err(msg) => Some(msg),
                 },
-                Err(msg) => Some(msg),
             }
         }
         ToolAction::UpdateReport {
@@ -10568,13 +10896,13 @@ mod tool_tests {
     fn parses_settings_tool() {
         assert!(matches!(
             parse_tool_action(r#"{"action":"settings","op":"get"}"#),
-            ToolAction::Settings { get: true, .. }
+            ToolAction::Settings { op, .. } if op == "get"
         ));
         match parse_tool_action(
             r#"{"action":"settings","op":"set","field":"chatProvider","value":"ollama"}"#,
         ) {
-            ToolAction::Settings { get, field, value } => {
-                assert!(!get);
+            ToolAction::Settings { op, field, value } => {
+                assert_eq!(op, "set");
                 assert_eq!(field, "chatProvider");
                 assert_eq!(value, "ollama");
             }
@@ -10592,6 +10920,45 @@ mod tool_tests {
         ));
     }
 
+    /// RFC-conversational-setup phase 1: the model verbs' router grammar.
+    #[test]
+    fn parses_model_verbs() {
+        assert!(matches!(
+            parse_tool_action(r#"{"action":"settings","op":"models"}"#),
+            ToolAction::Settings { op, .. } if op == "models"
+        ));
+        // `test` carries its target in `field`; empty = active chat provider.
+        match parse_tool_action(r#"{"action":"settings","op":"test","target":"gemma3"}"#) {
+            ToolAction::Settings { op, field, .. } => {
+                assert_eq!(op, "test");
+                assert_eq!(field, "gemma3");
+            }
+            _ => panic!("expected settings test"),
+        }
+        assert!(matches!(
+            parse_tool_action(r#"{"action":"settings","op":"test"}"#),
+            ToolAction::Settings { op, field, .. } if op == "test" && field.is_empty()
+        ));
+        // `pull` needs a model name; without one it falls through to chat.
+        match parse_tool_action(r#"{"action":"settings","op":"pull","model":"qwen3:8b"}"#) {
+            ToolAction::Settings { op, field, .. } => {
+                assert_eq!(op, "pull");
+                assert_eq!(field, "qwen3:8b");
+            }
+            _ => panic!("expected settings pull"),
+        }
+        assert!(matches!(
+            parse_tool_action(r#"{"action":"settings","op":"pull"}"#),
+            ToolAction::Chat
+        ));
+        // Gate examples: the phrasings users actually type reach the router.
+        assert!(tool_gate("list my installed models"));
+        assert!(tool_gate("show me my models"));
+        assert!(tool_gate("test ollama"));
+        assert!(tool_gate("pull the qwen model"));
+        assert!(tool_gate("download gemma3 in ollama"));
+    }
+
     #[test]
     fn settings_requests_pass_the_gate() {
         assert!(tool_gate("switch chat to ollama"));
@@ -10600,6 +10967,74 @@ mod tool_tests {
         assert!(tool_gate("set the embedder to builtin"));
         // Plain questions still skip the router.
         assert!(!tool_gate("what does the spec say about latency?"));
+    }
+
+    /// The deterministic settings fast path runs in BOTH chat modes (deep
+    /// research skips the LLM router), so its gate must be tight both ways:
+    /// unambiguous imperatives route; anything question-shaped or long
+    /// falls through to research untouched.
+    #[test]
+    fn settings_gate_routes_imperatives() {
+        let gate = |s: &str| settings_gate(s).expect(s);
+        assert_eq!(
+            gate("switch chat to ollama"),
+            ("set".into(), "chatProvider".into(), "ollama".into())
+        );
+        assert_eq!(
+            gate("Switch studio to Apple Intelligence."),
+            (
+                "set".into(),
+                "studioProvider".into(),
+                "apple intelligence".into()
+            )
+        );
+        assert_eq!(
+            gate("switch the embedder to builtin"),
+            ("set".into(), "embedder".into(), "builtin".into())
+        );
+        assert_eq!(gate("show my settings").0, "get");
+        assert_eq!(gate("Get my settings?").0, "get");
+        assert_eq!(gate("what models do I have?").0, "models");
+        assert_eq!(gate("list my models").0, "models");
+        assert_eq!(
+            gate("test ollama"),
+            ("test".into(), "ollama".into(), String::new())
+        );
+        assert_eq!(gate("Test gemma3:4b").1, "gemma3:4b");
+        assert_eq!(gate("test apple intelligence").1, "apple intelligence");
+        assert_eq!(
+            gate("pull gemma3"),
+            ("pull".into(), "gemma3".into(), String::new())
+        );
+        assert_eq!(gate("ollama pull qwen3:8b").1, "qwen3:8b");
+    }
+
+    #[test]
+    fn settings_gate_never_eats_research_questions() {
+        // Paul's literal failure class: setup QUESTIONS are research.
+        assert!(settings_gate("how do I set up ollama?").is_none());
+        assert!(settings_gate("how do I switch chat providers in LM Studio?").is_none());
+        assert!(settings_gate("why does my model keep timing out").is_none());
+        assert!(settings_gate("can you switch chat to ollama").is_none());
+        assert!(settings_gate("should I use the builtin embedder?").is_none());
+        // Interrogative model questions outside the closed roster set.
+        assert!(settings_gate("what models does llama.cpp support?").is_none());
+        assert!(settings_gate("which models are best for summarization?").is_none());
+        // "test …" with a research-shaped tail (too many words / bad charset).
+        assert!(settings_gate("test the hypothesis that rates drive housing prices").is_none());
+        assert!(settings_gate("test whether the spec covers latency, please").is_none());
+        // "pull …" that isn't a bare model name.
+        assert!(settings_gate("pull the latest research on transformers").is_none());
+        assert!(settings_gate("pull gemma3; rm -rf /").is_none());
+        // Long messages never gate, even with an imperative prefix.
+        let long = format!(
+            "switch chat to ollama {}",
+            "because I read a very long argument about local inference".repeat(2)
+        );
+        assert!(settings_gate(&long).is_none());
+        // Mid-sentence mentions don't gate — only leading imperatives.
+        assert!(settings_gate("the paper says to switch chat to ollama").is_none());
+        assert!(settings_gate("").is_none());
     }
 
     #[test]

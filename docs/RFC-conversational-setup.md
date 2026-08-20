@@ -101,8 +101,15 @@ embed, short timeout) so a looping agent can't turn probing into spend;
 
 ## Phases
 
-- **Phase 1:** model verbs — `models`, `test`, `pull`. The wall every
-  fresh install hits first.
+- **Phase 1 (shipped):** model verbs — `models`, `test`, `pull` — on
+  both surfaces (`ToolAction::Settings` ops in the chat router, the MCP
+  `settings` tool's new ops). `test` is capped by construction at one
+  chat + one embed under short timeouts; `pull` stages the charset-gated
+  command through the error rows' Terminal grammar (MCP returns the
+  validated command string); the refusal/redaction discipline extends to
+  every new verb. A deterministic `settings_gate` fast path also routes
+  tight imperative settings shapes in BOTH chat modes, since deep
+  research never reaches the LLM router.
 - **Phase 2:** `profile`, `style`, `theme`.
 - **Phase 3:** `connect`, both surfaces, confirm-gated.
 - **Phase 4:** router awareness for the already-shipped template and
