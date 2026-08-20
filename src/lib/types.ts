@@ -372,6 +372,9 @@ export interface CardFact {
 export interface SuggestOutcome {
   created: string[];
   reply: string;
+  /** True when another suggest pass already held the single-flight guard
+   *  and this ask did nothing. */
+  alreadyRunning: boolean;
 }
 
 /** One document filed under a card. `matched` is the receipt and is never

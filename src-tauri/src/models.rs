@@ -190,7 +190,7 @@ pub struct LedgerEntry {
 
 /// One key fact on a registry card — an ordered label/value pair, the same
 /// shape the reader's document-properties grid already renders.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CardFact {
     pub label: String,

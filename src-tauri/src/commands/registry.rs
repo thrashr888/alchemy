@@ -200,6 +200,83 @@ const GIST_EXCERPT_CHARS: usize = 300;
 /// A notebook this small hasn't told us what it's about yet.
 const MIN_GISTS_TO_SUGGEST: usize = 3;
 
+/// One suggest pass at a time, across every entrance — the background
+/// sweep, the Tauri command, and the MCP tool. Three overlapping passes
+/// once each read `existing` before the others' inserts landed, and the
+/// queue held the same 4Runner three times. Single-flight is the fix
+/// (the scheduler's REPORTS_RUNNING idiom); the fresh re-read before each
+/// insert below is the belt to this suspender.
+static SUGGEST_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// RAII pass ticket: `acquire` wins the flag or returns `None`; dropping
+/// releases it, so an early `?` can never wedge the pass shut.
+struct SuggestFlight;
+impl SuggestFlight {
+    fn acquire() -> Option<Self> {
+        use std::sync::atomic::Ordering::SeqCst;
+        (!SUGGEST_RUNNING.swap(true, SeqCst)).then_some(SuggestFlight)
+    }
+}
+impl Drop for SuggestFlight {
+    fn drop(&mut self) {
+        SUGGEST_RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Collapse duplicate still-suggested cards — what an earlier race (or a
+/// model restating one thing two ways across runs) left behind. Among
+/// `origin: "auto"` cards, a `same_thing` group collapses into its oldest
+/// member, which absorbs any fact labels it was missing; an auto card that
+/// restates a card the user owns or dismissed is dropped outright, since a
+/// settled cast could never have proposed it. User-owned and dismissed
+/// cards are never touched. Returns how many duplicates were removed.
+pub(crate) async fn heal_suggested_duplicates(db: &crate::db::Db) -> usize {
+    let Ok(cards) = db.list_registry().await else {
+        return 0;
+    };
+    let settled: Vec<&RegistryCard> = cards.iter().filter(|c| c.origin != "auto").collect();
+    let mut autos: Vec<RegistryCard> = cards
+        .iter()
+        .filter(|c| c.origin == "auto")
+        .cloned()
+        .collect();
+    // Oldest first, so "keep the oldest" is "keep the first seen".
+    autos.sort_by_key(|c| c.created_at);
+    let mut kept: Vec<RegistryCard> = Vec::new();
+    let mut removed = 0usize;
+    for card in autos {
+        if settled.iter().any(|s| same_thing(&s.name, &card.name)) {
+            if db.delete_registry_card(&card.id).await.is_ok() {
+                removed += 1;
+            }
+            continue;
+        }
+        if let Some(keeper) = kept.iter_mut().find(|k| same_thing(&k.name, &card.name)) {
+            let mut grew = false;
+            for f in &card.facts {
+                if !keeper
+                    .facts
+                    .iter()
+                    .any(|kf| kf.label.eq_ignore_ascii_case(&f.label))
+                {
+                    keeper.facts.push(f.clone());
+                    grew = true;
+                }
+            }
+            if grew {
+                keeper.updated_at = now();
+                let _ = db.update_registry_card(keeper).await;
+            }
+            if db.delete_registry_card(&card.id).await.is_ok() {
+                removed += 1;
+            }
+            continue;
+        }
+        kept.push(card);
+    }
+    removed
+}
+
 /// Propose cards for notebooks that haven't been looked at this run.
 ///
 /// One `Small` call per notebook over its existing gists — no per-source
@@ -208,6 +285,14 @@ const MIN_GISTS_TO_SUGGEST: usize = 3;
 /// vocabulary, and anything already in the cast (in any origin, including
 /// dismissed) is skipped. Returns how many cards were proposed.
 pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Result<usize> {
+    let Some(_flight) = SuggestFlight::acquire() else {
+        // Another pass is mid-flight; the sweep loop just moves on.
+        return Ok(0);
+    };
+    // Heal what an earlier race left behind before proposing more.
+    if heal_suggested_duplicates(db).await > 0 {
+        super::notify_changed("registry", None);
+    }
     let gists = db.list_gists().await?;
     if gists.is_empty() {
         return Ok(0);
@@ -276,29 +361,58 @@ pub(crate) async fn triage_suggested_cards(
     if queue.len() < MIN_QUEUE_TO_TRIAGE {
         return Ok(0);
     }
-    // Frequency across the corpus's gists is the recurrence signal; the
-    // snippet is the source context. Lowercase once, not once per card.
-    let gists = db.list_gists().await.unwrap_or_default();
-    let lowered: Vec<String> = gists.iter().map(|g| g.text.to_lowercase()).collect();
+    // Frequency across the corpus's SOURCES, not its gists. A fresh import
+    // mentions its entities long before the distillation sweep has gisted
+    // it, and counting gists scored exactly those recurring names as
+    // passing mentions while long-gisted old names got recommended. The
+    // documents are what the prompt's "in N documents" actually claims, and
+    // they are the data in hand: one content scan per notebook, streamed in
+    // the `rematch_all` shape, nothing retained past the source being
+    // counted.
+    let names: Vec<String> = queue.iter().map(|c| c.name.to_lowercase()).collect();
+    let mut mentions = vec![0usize; queue.len()];
+    let mut snippets = vec![String::new(); queue.len()];
+    for nb in db.list_notebooks().await.unwrap_or_default() {
+        let Ok(sources) = db.sources_with_content(&nb.id).await else {
+            continue;
+        };
+        for s in sources {
+            if s.source_type == "folder" {
+                continue;
+            }
+            let hay: String = s
+                .content
+                .chars()
+                .take(SCAN_CAP)
+                .collect::<String>()
+                .to_lowercase();
+            for (i, name) in names.iter().enumerate() {
+                if hay.contains(name) {
+                    mentions[i] += 1;
+                    if snippets[i].is_empty() {
+                        snippets[i] =
+                            snippet_around(&hay, name, TRIAGE_SNIPPET_RADIUS).unwrap_or_default();
+                    }
+                }
+            }
+        }
+        // Breathe between notebooks so the scan shares the machine with
+        // the person using it.
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
     let mut lines = String::new();
     for (i, c) in queue.iter().enumerate() {
-        let name_lc = c.name.to_lowercase();
-        let mentions = lowered.iter().filter(|t| t.contains(&name_lc)).count();
-        let snippet = lowered
-            .iter()
-            .find_map(|t| snippet_around(t, &name_lc, TRIAGE_SNIPPET_RADIUS))
-            .unwrap_or_default();
         lines.push_str(&format!(
             "{}. {}|{} — in {} document{}{}\n",
             i + 1,
             c.kind,
             c.name,
-            mentions,
-            if mentions == 1 { "" } else { "s" },
-            if snippet.is_empty() {
+            mentions[i],
+            if mentions[i] == 1 { "" } else { "s" },
+            if snippets[i].is_empty() {
                 String::new()
             } else {
-                format!("; \u{201c}\u{2026}{snippet}\u{2026}\u{201d}")
+                format!("; \u{201c}\u{2026}{}\u{2026}\u{201d}", snippets[i])
             },
         ));
     }
@@ -467,6 +581,14 @@ async fn suggest_for_notebook(
             {
                 continue;
             }
+            // Belt to the single-flight suspender: re-read the cast the
+            // instant before inserting, in case anything landed while the
+            // model was thinking (an agent's add, a manual card, a pass
+            // from before the guard existed).
+            let fresh = db.list_registry().await.unwrap_or_default();
+            if fresh.iter().any(|c| same_thing(&c.name, &name)) {
+                continue;
+            }
             let ts = now();
             let card = RegistryCard {
                 id: new_id(),
@@ -499,6 +621,19 @@ pub(crate) async fn suggest_now(
     ai: crate::ai::Ai,
     notebook_id: Option<String>,
 ) -> Result<SuggestOutcome, String> {
+    let Some(_flight) = SuggestFlight::acquire() else {
+        // Say so instead of silently double-proposing or silently skipping
+        // — the caller (button or agent) deserves to know why nothing came.
+        return Ok(SuggestOutcome {
+            created: Vec::new(),
+            reply: String::new(),
+            already_running: true,
+        });
+    };
+    // Heal what an earlier race left behind before proposing more.
+    if heal_suggested_duplicates(db).await > 0 {
+        super::notify_changed("registry", None);
+    }
     let gists = db.list_gists().await.map_err(|e| e.to_string())?;
     let nbs: Vec<String> = match notebook_id {
         Some(id) => vec![id],
@@ -536,6 +671,7 @@ pub(crate) async fn suggest_now(
     Ok(SuggestOutcome {
         created: made,
         reply,
+        already_running: false,
     })
 }
 
@@ -558,6 +694,10 @@ pub async fn suggest_cards_now(
 pub struct SuggestOutcome {
     pub created: Vec<String>,
     pub reply: String,
+    /// True when another suggest pass held the single-flight guard and this
+    /// ask did nothing — surfaced so the caller can say "already running"
+    /// instead of "nothing new".
+    pub already_running: bool,
 }
 
 fn build_suggest_messages(material: &str) -> Vec<crate::ai::ChatTurn> {
@@ -1292,6 +1432,21 @@ mod tests {
         let picked = parse_triage_reply("Recommended: 2 and 7.", 5);
         assert_eq!(picked.len(), 1);
         assert!(picked.contains(&2));
+    }
+
+    #[test]
+    fn only_one_suggest_pass_flies_at_a_time() {
+        let first = SuggestFlight::acquire();
+        assert!(first.is_some());
+        assert!(
+            SuggestFlight::acquire().is_none(),
+            "a second acquire must lose while the first flight is up"
+        );
+        drop(first);
+        assert!(
+            SuggestFlight::acquire().is_some(),
+            "dropping the ticket releases the flag"
+        );
     }
 
     #[test]

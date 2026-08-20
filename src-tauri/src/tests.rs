@@ -708,6 +708,86 @@ async fn keep_recommended_rules_only_the_marked_suggestions() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// The heal pass collapses what a suggest race left behind — modeled on the
+/// live pollution: the same 4Runner three times, one utility in two
+/// casings, and auto cards restating a card the user owns or dismissed.
+/// The oldest of each group survives (absorbing fact labels it lacked);
+/// user-owned and dismissed cards are never touched.
+#[tokio::test]
+async fn heal_collapses_raced_suggestion_duplicates() {
+    use crate::models::{CardFact, RegistryCard};
+
+    let dir = std::env::temp_dir().join(format!("nbl-heal-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let card = |name: &str, origin: &str, created_at: i64, facts: Vec<CardFact>| RegistryCard {
+        id: uuid::Uuid::new_v4().to_string(),
+        kind: "asset".into(),
+        name: name.into(),
+        origin: origin.into(),
+        triage: String::new(),
+        identifiers: String::new(),
+        note: String::new(),
+        facts,
+        attachments: vec![],
+        created_at,
+        updated_at: created_at,
+    };
+    let vin = CardFact {
+        label: "VIN".into(),
+        value: "JTEBU5JR8K1234567".into(),
+    };
+    for c in [
+        card("2019 Toyota 4Runner SR5", "auto", 1, vec![]),
+        card("2019 Toyota 4Runner SR5", "auto", 2, vec![vin.clone()]),
+        card("2019 Toyota 4Runner SR5", "auto", 3, vec![]),
+        card("Pacific Light & Power", "auto", 4, vec![]),
+        card("PACIFIC LIGHT & POWER", "auto", 5, vec![]),
+        card("15217 Canyon Seven Rd", "", 6, vec![]),
+        card("15217 Canyon Seven Road", "auto", 7, vec![]),
+        card("Corley Automotive", "dismissed", 8, vec![]),
+        card("Corley Automotive", "auto", 9, vec![]),
+    ] {
+        db.add_registry_card(&c).await.expect("add");
+    }
+
+    let removed = crate::commands::heal_suggested_duplicates(&db).await;
+    assert_eq!(removed, 5, "2 extra 4Runners, 1 utility, road, corley");
+
+    let cards = db.list_registry().await.expect("list");
+    assert_eq!(cards.len(), 4);
+    let runner = cards
+        .iter()
+        .find(|c| c.name == "2019 Toyota 4Runner SR5")
+        .expect("oldest 4Runner survives");
+    assert_eq!(
+        runner.created_at, 1,
+        "the oldest of the group is the keeper"
+    );
+    assert_eq!(runner.origin, "auto", "still suggested, still un-ruled");
+    assert_eq!(
+        runner.facts,
+        vec![vin],
+        "the keeper absorbs facts its duplicates carried"
+    );
+    assert!(
+        cards
+            .iter()
+            .any(|c| c.name == "Pacific Light & Power" && c.origin == "auto"),
+        "one casing of the utility survives"
+    );
+    let owned = cards
+        .iter()
+        .find(|c| c.name == "15217 Canyon Seven Rd")
+        .expect("owned card untouched");
+    assert_eq!(owned.origin, "");
+    let dismissed = cards
+        .iter()
+        .find(|c| c.name == "Corley Automotive")
+        .expect("refusal memory untouched");
+    assert_eq!(dismissed.origin, "dismissed");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// The prod error dump from the shared-store schema skew must come out as
 /// one actionable sentence, and generic errors must lose their `location:`
 /// code-path noise.

@@ -189,9 +189,11 @@ export function RegistrySection() {
         .getState()
         .pushToast(
           out.created.length > 0 ? "success" : "info",
-          out.created.length > 0
-            ? `Suggested ${out.created.length} card${out.created.length === 1 ? "" : "s"}`
-            : "Nothing new to suggest",
+          out.alreadyRunning
+            ? "A suggest pass is already running"
+            : out.created.length > 0
+              ? `Suggested ${out.created.length} card${out.created.length === 1 ? "" : "s"}`
+              : "Nothing new to suggest",
         );
       void load();
     } catch (e) {
