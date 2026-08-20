@@ -366,6 +366,17 @@ export interface CardFact {
   value: string;
 }
 
+/** What an explicit "suggest cards" ask produced. `reply` carries the
+ *  model's raw answer so "it suggested nothing" can be told apart from
+ *  "it said something that didn't survive the grounding gate". */
+export interface SuggestOutcome {
+  created: string[];
+  reply: string;
+  /** True when another suggest pass already held the single-flight guard
+   *  and this ask did nothing. */
+  alreadyRunning: boolean;
+}
+
 /** One document filed under a card. `matched` is the receipt and is never
  *  empty: the identifier string that matched, "name", or "manual". */
 export interface CardAttachment {
@@ -387,6 +398,10 @@ export interface RegistryCard {
    *  verdict, "dismissed" = turned down and remembered so the suggester
    *  never proposes it again. */
   origin: "" | "auto" | "dismissed";
+  /** Triage verdict on a still-suggested card: "" = not yet triaged,
+   *  "recommended" = the triage pass thinks this one matters, "routine" =
+   *  triaged and not singled out. Cleared once the card is ruled on. */
+  triage: "" | "recommended" | "routine";
   /** Space-separated normalized tokens — the only thing that ever attaches
    *  a document without asking. */
   identifiers: string;

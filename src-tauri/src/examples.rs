@@ -609,6 +609,7 @@ async fn seed_registry_cards(db: &Db) -> anyhow::Result<()> {
             kind: (*kind).to_string(),
             name: (*name).to_string(),
             origin: String::new(),
+            triage: String::new(),
             identifiers: String::new(),
             note: String::new(),
             facts: Vec::new(),

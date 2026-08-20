@@ -45,6 +45,7 @@ import {
   Package,
   Plus,
   ScrollText,
+  Sparkles,
   Trash2,
   User,
   X,
@@ -108,6 +109,7 @@ export function RegistrySection() {
   const [notebook, setNotebook] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [suggesting, setSuggesting] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -175,6 +177,32 @@ export function RegistrySection() {
     [mine, kind, notebook, nbTitle, query],
   );
 
+  // The explicit ask (RFC-registry §3): read every notebook, propose, and
+  // let the background triage sort what lands. The strip refreshes itself
+  // on the registry bump; the toast is the receipt for "nothing new".
+  const suggestNow = async () => {
+    if (suggesting) return;
+    setSuggesting(true);
+    try {
+      const out = await api.suggestCardsNow();
+      useStore
+        .getState()
+        .pushToast(
+          out.created.length > 0 ? "success" : "info",
+          out.alreadyRunning
+            ? "A suggest pass is already running"
+            : out.created.length > 0
+              ? `Suggested ${out.created.length} card${out.created.length === 1 ? "" : "s"}`
+              : "Nothing new to suggest",
+        );
+      void load();
+    } catch (e) {
+      useStore.getState().pushToast("error", String(e));
+    } finally {
+      setSuggesting(false);
+    }
+  };
+
   const open = cards.find((c) => c.id === openCardId) ?? null;
   if (openCardId && open) {
     return (
@@ -203,7 +231,21 @@ export function RegistrySection() {
               "are there confirmed cards" made the whole row — filter AND
               view toggle — vanish whenever the cast was empty or held only
               suggestions, which reads as the control disappearing. */}
-          <HomeViewControls placeholder="Filter cards by name or identifier…" />
+          <HomeViewControls
+            placeholder="Filter cards by name or identifier…"
+            trailing={
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => void suggestNow()}
+                loading={suggesting}
+                title="Read your notebooks and suggest cards worth tracking"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                Suggest
+              </Button>
+            }
+          />
           {/* Kind groups and notebook chips sit inside the content column,
               under the controls — full-bleed they drew a band across the
               pane with dead clickable space beside them. */}
@@ -240,6 +282,7 @@ export function RegistrySection() {
               cards={shown}
               nbTitle={nbTitle}
               onNew={() => setCreating(true)}
+              onChanged={load}
             />
           ) : (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
@@ -490,9 +533,11 @@ export function AttachToCardModal({
       onClose={onClose}
       title="File under a card"
       footer={
-        <Button variant="secondary" onClick={onClose}>
-          Cancel
-        </Button>
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+        </div>
       }
     >
       <div className="flex flex-col gap-3">
@@ -550,13 +595,22 @@ function CardTable({
   cards,
   nbTitle,
   onNew,
+  onChanged,
 }: {
   cards: RegistryCard[];
   nbTitle: (id: string) => string;
   onNew: () => void;
+  onChanged: () => void;
 }) {
+  const { confirm, dialog } = useConfirm();
   return (
     <>
+      <div className="mb-3 flex justify-end">
+        <Button variant="secondary" onClick={onNew}>
+          <Plus className="h-4 w-4" />
+          New card
+        </Button>
+      </div>
       <HomeTable
         columns={[
           { key: "name", label: "Name" },
@@ -564,6 +618,7 @@ function CardTable({
           { key: "docs", label: "Documents", className: "text-right" },
           { key: "nb", label: "Notebooks" },
           { key: "id", label: "Identifiers" },
+          { key: "menu", label: "" },
         ]}
       >
         {cards.map((c) => {
@@ -580,7 +635,7 @@ function CardTable({
             <tr
               key={c.id}
               onClick={() => useStore.setState({ openCardId: c.id })}
-              className="cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2"
+              className="group cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2"
             >
               <td className="px-3 py-2">
                 <span className="flex items-center gap-2">
@@ -608,14 +663,37 @@ function CardTable({
               <td className="px-3 py-2 text-caption text-subtle-foreground">
                 {c.identifiers}
               </td>
+              <td className="w-8 px-2 py-2">
+                <RowMenu
+                  items={[
+                    {
+                      label: "Open",
+                      onClick: () => useStore.setState({ openCardId: c.id }),
+                    },
+                    {
+                      label: "Delete card…",
+                      danger: true,
+                      onClick: () => void (async () => {
+                        const ok = await confirm({
+                          title: `Delete “${c.name}”?`,
+                          message:
+                            "The documents filed under it are untouched — only the card and its filing go away.",
+                          confirmLabel: "Delete",
+                          danger: true,
+                        });
+                        if (!ok) return;
+                        await api.deleteRegistryCard(c.id);
+                        onChanged();
+                      })(),
+                    },
+                  ]}
+                />
+              </td>
             </tr>
           );
         })}
       </HomeTable>
-      <Button variant="secondary" className="mt-3" onClick={onNew}>
-        <Plus className="h-4 w-4" />
-        New card
-      </Button>
+      {dialog}
     </>
   );
 }
@@ -635,6 +713,14 @@ function SuggestionStrip({
   const [busy, setBusy] = useState<string | null>(null);
   if (cards.length === 0) return null;
 
+  // Recommended first — the triage pass exists so the ones worth keeping
+  // are the first ones you read.
+  const ordered = [...cards].sort(
+    (a, b) =>
+      Number(b.triage === "recommended") - Number(a.triage === "recommended"),
+  );
+  const recommended = cards.filter((c) => c.triage === "recommended").length;
+
   const rule = async (id: string, origin: string) => {
     setBusy(id);
     try {
@@ -645,10 +731,10 @@ function SuggestionStrip({
     }
   };
 
-  const ruleAll = async (origin: string) => {
-    setBusy("all");
+  const ruleAll = async (key: string, origin: string, onlyRec?: boolean) => {
+    setBusy(key);
     try {
-      await api.ruleAllSuggested(origin);
+      await api.ruleAllSuggested(origin, onlyRec);
       onChanged();
     } finally {
       setBusy(null);
@@ -665,11 +751,31 @@ function SuggestionStrip({
             chore; a single suggestion keeps the single pair of buttons. */}
         {cards.length > 1 && (
           <span className="ml-auto flex items-center gap-1">
+            {/* Only when triage split the queue — with everything (or
+                nothing) recommended it would just restate Keep all. */}
+            {recommended > 0 && recommended < cards.length && (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => void ruleAll("rec", "", true)}
+                loading={busy === "rec"}
+                disabled={busy === "all"}
+                title="Keep the marked suggestions; the rest stay queued"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                Keep recommended
+              </Button>
+            )}
             <Button
               size="sm"
-              variant="secondary"
-              onClick={() => void ruleAll("")}
+              variant={
+                recommended > 0 && recommended < cards.length
+                  ? "ghost"
+                  : "secondary"
+              }
+              onClick={() => void ruleAll("all", "")}
               loading={busy === "all"}
+              disabled={busy === "rec"}
             >
               <Check className="h-3.5 w-3.5" />
               Keep all
@@ -677,8 +783,8 @@ function SuggestionStrip({
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => void ruleAll("dismissed")}
-              disabled={busy === "all"}
+              onClick={() => void ruleAll("all", "dismissed")}
+              disabled={busy !== null}
               title="Not things I track — none will be suggested again"
             >
               <X className="h-3.5 w-3.5" />
@@ -693,13 +799,19 @@ function SuggestionStrip({
         documents themselves.
       </p>
       <div className="mt-2 flex flex-wrap gap-2">
-        {cards.map((c) => (
+        {ordered.map((c) => (
           <div
             key={c.id}
             className="flex items-center gap-2 rounded-lg border border-dashed border-border-strong bg-surface/40 px-2.5 py-1.5"
           >
+            {c.triage === "recommended" && (
+              <Sparkles
+                className="h-3 w-3 shrink-0 text-primary"
+                aria-label="Recommended"
+              />
+            )}
             <span className="text-muted-foreground">{kindIcon(c.kind)}</span>
-            <span className="text-body">{c.name}</span>
+            <span className="text-body" title={c.triage === "recommended" ? "Recommended — recurs across your documents" : undefined}>{c.name}</span>
             <span className="text-micro text-subtle-foreground">
               {kindLabel(c.kind)}
             </span>
@@ -836,7 +948,7 @@ function NewCardModal({
       onClose={onClose}
       title="New card"
       footer={
-        <>
+        <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>
             Cancel
           </Button>
@@ -848,7 +960,7 @@ function NewCardModal({
           >
             Create
           </Button>
-        </>
+        </div>
       }
     >
       <div className="flex flex-col gap-3">
