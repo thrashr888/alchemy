@@ -72,12 +72,20 @@ function App() {
 
   // Bridge the legacy `error` field into the toast stack so every error path
   // (many still `set({ error })` directly) surfaces consistently and dismisses.
+  // An error whose fix lives in Settings → Models (the backend classifier's
+  // literal grammar, RFC-self-resolve) is clickable and jumps straight there.
   useEffect(() => {
     if (error) {
-      pushToast("error", error);
+      pushToast(
+        "error",
+        error,
+        error.includes("Settings → Models")
+          ? () => openSettings("models")
+          : undefined,
+      );
       setError(null);
     }
-  }, [error, pushToast, setError]);
+  }, [error, pushToast, setError, openSettings]);
 
   // An export window renders only the note's print sheet, prints itself
   // to the boot-named temp PDF, and is closed by the backend (export.rs).
