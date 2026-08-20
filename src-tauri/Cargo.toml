@@ -111,6 +111,11 @@ objc2-app-kit = "0.3"
 objc2-core-spotlight = "0.3"
 block2 = "0.6"
 
+[dev-dependencies]
+# pptx tests only: well-formedness check over the hand-rolled OOXML parts.
+# Already in the dependency tree via docx-rs, so this costs nothing new.
+quick-xml = "0.41"
+
 [features]
 # Dev-only: exposes the debug bridge for CLI automation/inspection.
 debug = ["dep:tauri-plugin-debug-bridge"]

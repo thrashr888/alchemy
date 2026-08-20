@@ -22,6 +22,7 @@ mod models;
 mod notion;
 mod outline;
 mod pdf;
+mod pptx;
 mod rag;
 mod router;
 mod scheduler;

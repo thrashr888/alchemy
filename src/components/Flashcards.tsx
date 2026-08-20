@@ -77,7 +77,7 @@ export function Flashcards({ content, noteId }: { content: string; noteId?: stri
 
 /** Cards as a printable study sheet — front bold, back beneath, no page
  *  breaks inside a card. */
-function PrintCards({ cards }: { cards: Card[] }) {
+export function PrintCards({ cards }: { cards: Card[] }) {
   return (
     <PrintPortal pageCss="@page { size: auto; margin: 16mm; }">
       <div style={{ color: "#111", fontFamily: "system-ui, sans-serif", fontSize: 12 }}>

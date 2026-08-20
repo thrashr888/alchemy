@@ -9,7 +9,7 @@ import { ExternalAddModal } from "@/components/ExternalAddModal";
 import { FileDrop } from "@/components/FileDrop";
 import { MigrationOverlay } from "@/components/MigrationOverlay";
 import { NoteWindow } from "@/components/NoteWindow";
-import { PngExportView } from "@/components/Infographic";
+import { PrintExportView } from "@/components/PrintExportView";
 import { Onboarding } from "@/components/Onboarding";
 import { Toaster } from "@/components/ui";
 import { shortcutBlocked } from "@/lib/utils";
@@ -79,13 +79,13 @@ function App() {
     }
   }, [error, pushToast, setError]);
 
-  // A PNG-export window renders only the note's print sheet, prints itself
+  // An export window renders only the note's print sheet, prints itself
   // to the boot-named temp PDF, and is closed by the backend (export.rs).
-  if (window.__ALCHEMY_PNG_EXPORT__ && window.__ALCHEMY_NOTE__) {
+  if (window.__ALCHEMY_PRINT_EXPORT__ && window.__ALCHEMY_NOTE__) {
     return (
-      <PngExportView
+      <PrintExportView
         noteId={window.__ALCHEMY_NOTE__}
-        pdfPath={window.__ALCHEMY_PNG_EXPORT__}
+        pdfPath={window.__ALCHEMY_PRINT_EXPORT__}
       />
     );
   }

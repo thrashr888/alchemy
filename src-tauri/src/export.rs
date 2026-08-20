@@ -1,8 +1,9 @@
 //! Per-note export (docs/RFC-note-export.md): one backend path turns a note
 //! into the file that matches its shape — .docx for prose, .xlsx for table
-//! notes, .png for infographics, .m4a for Audio Overview episodes. Both the
-//! Studio note menu and the MCP `export_note` tool land here, so the UI and
-//! agents can never drift.
+//! notes, .pptx for slide decks and flashcards, .png for infographics and
+//! mind maps, .m4a for Audio Overview episodes, and .pdf of the note's own
+//! render for any kind. Both the Studio note menu and the MCP `export_note`
+//! tool land here, so the UI and agents can never drift.
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -27,9 +28,9 @@ pub async fn export_note(
         .map_err(|e| format!("{e:#}"))
 }
 
-/// Export `note_id` as `format` ("png" | "docx" | "xlsx" | "m4a") to `dest`,
-/// or to `~/Downloads/<title>.<ext>` when no destination is given. Returns
-/// the absolute path written.
+/// Export `note_id` as `format` ("png" | "pdf" | "pptx" | "docx" | "xlsx" |
+/// "m4a") to `dest`, or to `~/Downloads/<title>.<ext>` when no destination
+/// is given. Returns the absolute path written.
 pub async fn export_note_file(
     app: &AppHandle,
     note_id: &str,
@@ -48,8 +49,10 @@ pub async fn export_note_file(
         f => f,
     };
     let ext = match format {
-        "png" | "docx" | "xlsx" | "m4a" => format,
-        other => bail!("unknown export format \"{other}\" — use png, docx, xlsx, or m4a"),
+        "png" | "pdf" | "pptx" | "docx" | "xlsx" | "m4a" => format,
+        other => {
+            bail!("unknown export format \"{other}\" — use png, pdf, pptx, docx, xlsx, or m4a")
+        }
     };
     let dest: PathBuf = match dest {
         Some(d) => PathBuf::from(d),
@@ -63,19 +66,92 @@ pub async fn export_note_file(
         std::fs::create_dir_all(parent)?;
     }
 
+    // The builders and pdfium are CPU-bound and the copies are filesystem
+    // IO; none of it belongs on an async worker (and certainly not the main
+    // thread) — every arm funnels through spawn_blocking.
+    let out = dest.clone();
     match format {
-        "docx" => std::fs::write(&dest, docx_bytes(&note.title, &note.content)?)?,
-        "xlsx" => std::fs::write(&dest, xlsx_bytes(&note.content)?)?,
+        "docx" => {
+            let (title, content) = (note.title.clone(), note.content.clone());
+            blocking(move || {
+                std::fs::write(&out, docx_bytes(&title, &content)?).map_err(Into::into)
+            })
+            .await?
+        }
+        "xlsx" => {
+            let content = note.content.clone();
+            blocking(move || std::fs::write(&out, xlsx_bytes(&content)?).map_err(Into::into))
+                .await?
+        }
+        "pptx" => {
+            let note = note.clone();
+            blocking(move || std::fs::write(&out, pptx_note_bytes(&note)?).map_err(Into::into))
+                .await?
+        }
         "m4a" => {
             let src = crate::commands::audio_path(app, &note.id)
                 .context("could not resolve the app data dir")?;
             anyhow::ensure!(src.exists(), "This note has no audio yet.");
-            std::fs::copy(&src, &dest)?;
+            blocking(move || {
+                std::fs::copy(&src, &out)?;
+                Ok(())
+            })
+            .await?
         }
-        "png" => export_png(app, &note, &dest).await?,
+        "pdf" => {
+            // The note's own render, printed: whatever the print pipeline
+            // produced IS the artifact — no rasterizing, no conversion.
+            let tmp = print_note_pdf(app, &note).await?;
+            blocking(move || {
+                std::fs::copy(&tmp, &out)?;
+                let _ = std::fs::remove_file(&tmp);
+                Ok(())
+            })
+            .await?
+        }
+        "png" => {
+            let tmp = print_note_pdf(app, &note).await?;
+            // Mind maps scale to fit one sheet, so rasterize them wider to
+            // keep node labels crisp; posters get poster width.
+            let width = if note.kind == "mind_map" { 2200 } else { 1600 };
+            blocking(move || {
+                let pages = crate::pdf::render_pdf_pages(&tmp.to_string_lossy(), 8, width)?;
+                let png = stitch_png_pages(&pages)?;
+                let _ = std::fs::remove_file(&tmp);
+                std::fs::write(&out, png)?;
+                Ok(())
+            })
+            .await?
+        }
         _ => unreachable!(),
     }
     Ok(dest.to_string_lossy().into_owned())
+}
+
+/// spawn_blocking with the join flattened into the export's error.
+async fn blocking(work: impl FnOnce() -> Result<()> + Send + 'static) -> Result<()> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .context("the export task was cancelled")?
+}
+
+/// A note's pptx: flashcards become question/answer slide pairs, anything
+/// deck-shaped becomes title+bullets slides — whichever its content parses
+/// as (kind picks which parser gets first try).
+fn pptx_note_bytes(note: &Note) -> Result<Vec<u8>> {
+    let cards = crate::pptx::parse_cards(&note.content);
+    let deck = crate::pptx::parse_deck(&note.content);
+    // Same thresholds as the front-end renderers: ≥2 of either shape.
+    let slides = if note.kind == "flashcards" && cards.len() >= 2 {
+        crate::pptx::cards_to_slides(&cards)
+    } else if deck.len() >= 2 {
+        deck
+    } else if cards.len() >= 2 {
+        crate::pptx::cards_to_slides(&cards)
+    } else {
+        bail!("This note doesn't parse as a slide deck or flashcards.");
+    };
+    crate::pptx::pptx_bytes(&slides)
 }
 
 /// Titles become filenames; keep them, minus path separators.
@@ -98,12 +174,14 @@ fn safe_name(title: &str) -> String {
     }
 }
 
-// ---- PNG: print sheet → PDF → pdfium raster --------------------------------
+// ---- Print pipeline: note render → PDF (→ pdfium raster for png) -----------
 
-/// Render the note's fixed-ink print sheet in a throwaway window, silently
-/// print it to a temp PDF (the proven print_webview path), then rasterize
-/// the pages at poster width and stitch them into one tall PNG.
-async fn export_png(app: &AppHandle, note: &Note, dest: &Path) -> Result<()> {
+/// Render the note's print sheet in a throwaway window and silently print
+/// it to a temp PDF (the proven print_webview path). PDF export ships this
+/// file as-is; PNG export rasterizes it. The window picks the sheet by
+/// kind — infographic poster, mind map, slide pages, flashcard study
+/// sheet, or the note's markdown in print typography (PrintExportView.tsx).
+async fn print_note_pdf(app: &AppHandle, note: &Note) -> Result<PathBuf> {
     let tmp = std::env::temp_dir().join(format!("alchemy-export-{}.pdf", new_id()));
     let _ = std::fs::remove_file(&tmp);
     // win-* so the window matches the default capability and may invoke
@@ -111,7 +189,7 @@ async fn export_png(app: &AppHandle, note: &Note, dest: &Path) -> Result<()> {
     let label = format!("win-export-{}", new_id());
     let boot = format!(
         "window.__ALCHEMY_NOTEBOOK__ = '{}'; window.__ALCHEMY_NOTE__ = '{}'; \
-         window.__ALCHEMY_PNG_EXPORT__ = '{}';",
+         window.__ALCHEMY_PRINT_EXPORT__ = '{}';",
         note.notebook_id.replace('\'', ""),
         note.id.replace('\'', ""),
         tmp.to_string_lossy()
@@ -134,12 +212,7 @@ async fn export_png(app: &AppHandle, note: &Note, dest: &Path) -> Result<()> {
     let result = wait_for_stable_file(&tmp, 60).await;
     let _ = window.close();
     result?;
-
-    let pages = crate::pdf::render_pdf_pages(&tmp.to_string_lossy(), 8, 1600)?;
-    let png = stitch_png_pages(&pages)?;
-    let _ = std::fs::remove_file(&tmp);
-    std::fs::write(dest, png)?;
-    Ok(())
+    Ok(tmp)
 }
 
 /// The print job's finish signal is the file itself reaching a stable

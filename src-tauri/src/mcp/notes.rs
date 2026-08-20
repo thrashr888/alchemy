@@ -36,7 +36,7 @@ struct UpdateNoteReq {
 struct ExportNoteReq {
     /// Note id.
     note_id: String,
-    /// "png" | "docx" | "xlsx" | "m4a".
+    /// "png" | "pdf" | "pptx" | "docx" | "xlsx" | "m4a".
     format: String,
     /// Absolute destination path (defaults to ~/Downloads/<title>.<ext>).
     path: Option<String>,
@@ -168,7 +168,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Export a note to a file and return the written path. Formats match the note's shape: \"docx\" for prose, \"xlsx\" for notes with markdown tables, \"png\" for infographics (poster image), \"m4a\" for Audio Overview episodes. Writes to `path` when given, otherwise ~/Downloads/<title>.<ext>."
+        description = "Export a note to a file and return the written path. Formats match the note's shape: \"docx\" for prose, \"xlsx\" for notes with markdown tables, \"pptx\" for slide decks and flashcards, \"png\" for infographics and mind maps, \"m4a\" for Audio Overview episodes, and \"pdf\" for any kind (the note's own render, printed). Writes to `path` when given, otherwise ~/Downloads/<title>.<ext>."
     )]
     async fn export_note(
         &self,

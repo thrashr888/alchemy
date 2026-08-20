@@ -83,6 +83,7 @@ dependencies = [
  "pdfium-render",
  "percent-encoding",
  "pulldown-cmark",
+ "quick-xml 0.41.0",
  "reqwest 0.12.28",
  "rmcp",
  "rust_xlsxwriter",

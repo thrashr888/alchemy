@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Minus, Plus, RotateCcw } from "lucide-react";
 import { Markdown } from "./Markdown";
+import { PrintPortal } from "./printExport";
 
 /**
  * Native mind-map renderer. The generator emits a plain indented outline
@@ -325,5 +326,90 @@ function PanCanvas({ children }: { children: React.ReactNode }) {
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Fixed-ink print sheet for PDF/PNG export (PrintExportView): the whole
+ * laid-out map scaled to fit one page — print is a document, so paper ink
+ * (near-black on white, gray boxes) instead of theme tokens, and no
+ * pan/zoom canvas cropping it to a viewport.
+ */
+export function PrintMindMap({ content }: { content: string }) {
+  const tree = parseOutline(content);
+  if (!tree) {
+    return (
+      <PrintPortal pageCss="@page { size: auto; margin: 16mm; }">
+        <div style={{ color: "#111", background: "#fff", maxWidth: 620, margin: "0 auto" }}>
+          <Markdown>{content}</Markdown>
+        </div>
+      </PrintPortal>
+    );
+  }
+  const laid = layout(tree);
+  const nodes = flatten(laid.root);
+  const w = laid.width + MARGIN * 2;
+  const h = laid.height + MARGIN * 2;
+  // Fit the full map inside one Letter page's printable box.
+  const scale = Math.min(620 / w, 900 / h, 1);
+  return (
+    <PrintPortal pageCss="@page { size: auto; margin: 16mm; }">
+      <div
+        style={{
+          background: "#fff",
+          WebkitPrintColorAdjust: "exact",
+          printColorAdjust: "exact",
+        }}
+      >
+        <svg
+          width={w * scale}
+          height={h * scale}
+          viewBox={`${-MARGIN} ${-MARGIN} ${w} ${h}`}
+          role="img"
+          aria-label="Mind map"
+          style={{ fontFamily: "system-ui, sans-serif" }}
+        >
+          {nodes.map((n, i) => (
+            <g key={i}>
+              {n.children.map((c, j) => (
+                <path
+                  key={j}
+                  d={`M ${n.x + n.w} ${n.y} C ${n.x + n.w + COL_GAP / 2} ${n.y}, ${
+                    c.x - COL_GAP / 2
+                  } ${c.y}, ${c.x} ${c.y}`}
+                  fill="none"
+                  stroke="#999"
+                  strokeWidth={1.2}
+                />
+              ))}
+              <rect
+                x={n.x}
+                y={n.y - n.h / 2}
+                width={n.w}
+                height={n.h}
+                rx={7}
+                fill={n.depth === 0 ? "#e4e4e4" : "#f6f6f6"}
+                stroke={n.depth <= 1 ? "#777" : "#bbb"}
+              />
+              <text
+                x={n.x + n.w / 2}
+                y={n.y - ((n.lines.length - 1) * LINE_H) / 2}
+                textAnchor="middle"
+                dominantBaseline="central"
+                fontSize={11}
+                fontWeight={n.depth <= 1 ? 600 : 400}
+                fill="#111"
+              >
+                {n.lines.map((l, k) => (
+                  <tspan key={k} x={n.x + n.w / 2} dy={k === 0 ? 0 : LINE_H}>
+                    {l}
+                  </tspan>
+                ))}
+              </text>
+            </g>
+          ))}
+        </svg>
+      </div>
+    </PrintPortal>
   );
 }
