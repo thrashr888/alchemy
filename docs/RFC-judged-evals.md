@@ -151,7 +151,13 @@ In order, each a targeted run with a CSV verdict:
    reranked pool presented strongest-first-and-last (`rag::litm_order`)
    instead of best-first — models attend worst to mid-prompt evidence
    (Liu et al. 2023). Judged on gold recall + faithfulness; free at
-   runtime if it wins.
+   runtime if it wins. MEASURED 2026-08-19 (bonsai, n=50 ×2 paired reps
+   per suite): null. Every rep-1 delta (+14pt hotpot gold recall,
+   +0.11 scifact faithfulness) reversed in rep 2; baseline-vs-baseline
+   variance (hotpot gold 40→46%, scifact faith 0.73→0.94) exceeds every
+   litm delta. At k=6 the prompt has almost no middle to get lost in —
+   revisit only if JUDGED_K grows. The variant stays as harness
+   capability; the shipped chain keeps best-first order.
 
 ## §5 — Runtime verify-and-repair (the Mellea payoff)
 
