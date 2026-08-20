@@ -23,6 +23,7 @@ import type {
   NoteKind,
   ProviderEntry,
   ProviderModels,
+  Source,
 } from "@/lib/types";
 import {
   MessageSquare,
@@ -565,7 +566,10 @@ export function ChatPanel() {
           s.pushToast("info", "No answer to save yet");
           return;
         }
-        void s.createNote(noteTitleFrom(last.content), last.content);
+        void s.createNote(
+          noteTitleFrom(last.content),
+          noteContentFrom(last.content, last.citations, s.sources),
+        );
         s.pushToast("success", "Saved the last answer as a note");
         return;
       }
@@ -1137,7 +1141,7 @@ const ChatMessage = memo(function ChatMessage({
           {message.model}
         </div>
       )}
-      <MessageActions content={message.content} />
+      <MessageActions content={message.content} citations={message.citations} />
     </div>
   );
 });
@@ -1146,6 +1150,20 @@ function noteTitleFrom(content: string): string {
   const line = content.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
   const clean = line.replace(/^#+\s*/, "").replace(/[*_`>#]/g, "").trim();
   return clean.slice(0, 60) || "Chat response";
+}
+
+/** A chat answer's [n] markers reference the MESSAGE's citation list, which a
+ *  Note doesn't carry — saved bare, they go dead. Resolve them into a Sources
+ *  footer at save time, one line per marker number, so the note names its
+ *  evidence (and retrieval can find it by source title). */
+function noteContentFrom(content: string, citations: Citation[], sources: Source[]): string {
+  if (citations.length === 0) return content;
+  const lines = citations.map((c, i) => {
+    const url = sources.find((x) => x.id === c.sourceId)?.url || "";
+    const tail = c.noteId ? " (note)" : isWebUrl(url) ? ` — ${url}` : "";
+    return `[${i + 1}] ${c.sourceTitle}${tail}`;
+  });
+  return `${content}\n\n---\nSources:\n${lines.join("\n")}`;
 }
 
 /** `/grep` results as a chat message: a heading, then each hit as its source
@@ -1360,8 +1378,15 @@ function UserMessageActions({ message }: { message: Message }) {
   );
 }
 
-function MessageActions({ content }: { content: string }) {
+function MessageActions({
+  content,
+  citations,
+}: {
+  content: string;
+  citations: Citation[];
+}) {
   const createNote = useStore((s) => s.createNote);
+  const sources = useStore((s) => s.sources);
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -1375,7 +1400,7 @@ function MessageActions({ content }: { content: string }) {
     }
   }
   async function save() {
-    await createNote(noteTitleFrom(content), content);
+    await createNote(noteTitleFrom(content), noteContentFrom(content, citations, sources));
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
   }
