@@ -16,6 +16,17 @@ export function soundsEnabled(): boolean {
   return localStorage.getItem("playSounds") !== "false";
 }
 
+/** The quiet-while-focused rule, sound edition: with this window focused the
+ *  user is already looking, so skip the cue. Mirrored from AiConfig
+ *  (quietWhenFocused) into localStorage for this synchronous check — the
+ *  backend applies the same rule to desktop notifications. Off = cues play
+ *  focused or not. */
+function quietNow(): boolean {
+  return (
+    localStorage.getItem("quietWhenFocused") !== "false" && document.hasFocus()
+  );
+}
+
 /** One enveloped oscillator note; the building block for every cue. */
 function note(
   freq: number,
@@ -39,9 +50,9 @@ function note(
   osc.stop(t + dur + 0.05);
 }
 
-/** Soft two-note completion chime (generation finished, answer done). */
-export function playDone() {
-  if (!soundsEnabled()) return;
+/** Settings preview: the done chime with no gates — the user just asked to
+ *  hear it, focused or not. */
+export function previewSound() {
   try {
     note(660, 0, 0.35, "sine", 0.08);
     note(880, 0.12, 0.35, "sine", 0.08);
@@ -50,12 +61,19 @@ export function playDone() {
   }
 }
 
+/** Soft two-note completion chime (generation finished, answer done). */
+export function playDone() {
+  if (!soundsEnabled() || quietNow()) return;
+  previewSound();
+}
+
 let lastArrival = 0;
 
 /** A single quiet ping: something arrived without being asked for. Silent
- *  while the window is focused — in view, the toast is enough. */
+ *  while the window is focused — in view, the toast is enough (unless the
+ *  quiet-while-focused rule is switched off). */
 export function playArrival() {
-  if (!soundsEnabled() || document.hasFocus()) return;
+  if (!soundsEnabled() || quietNow()) return;
   const now = Date.now();
   if (now - lastArrival < 30_000) return;
   lastArrival = now;
@@ -71,7 +89,7 @@ let lastError = 0;
 /** Low falling two-note: something failed. Throttled so a burst of related
  *  failures (an error state plus its toast, a failing queue) cues once. */
 export function playError() {
-  if (!soundsEnabled()) return;
+  if (!soundsEnabled() || quietNow()) return;
   const now = Date.now();
   if (now - lastError < 5_000) return;
   lastError = now;

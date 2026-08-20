@@ -481,6 +481,9 @@ export interface AiConfig {
   /** Desktop notifications; in config (not localStorage) so the resident
    *  scheduler can honor it with no window open. */
   showNotifications: boolean;
+  /** Quiet-while-focused rule: skip notifications and sound cues while an
+   *  Alchemy window is focused. On by default; off = always deliver. */
+  quietWhenFocused: boolean;
   /** Weekly LLM consolidation of auto-created evidence notes (note curator
    *  phase 5). On by default — idle-gated, capped, fully recoverable; the
    *  toggle is for cost control. */

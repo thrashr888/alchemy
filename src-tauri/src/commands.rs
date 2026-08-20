@@ -9872,6 +9872,19 @@ pub async fn check_models(state: State<'_, AppState>) -> Result<ModelHealth, Str
     })
 }
 
+/// Desktop notification with the standard gates applied backend-side
+/// ("Show notifications" plus the quiet-while-focused rule). The frontend's
+/// notify() routes here so focus is measured across every window, in the
+/// one place all notification paths share (scheduler::notifications_wanted).
+#[tauri::command]
+pub async fn send_notification(app: AppHandle, title: String, body: String) -> Result<(), String> {
+    if crate::scheduler::notifications_wanted(&app).await {
+        use tauri_plugin_notification::NotificationExt;
+        let _ = app.notification().builder().title(title).body(body).show();
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn get_ai_config(state: State<'_, AppState>) -> Result<AiConfig, String> {
     let ai = state.ai.read().await.clone();

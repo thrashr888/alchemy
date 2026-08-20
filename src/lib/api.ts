@@ -560,6 +560,10 @@ export const api = {
   getAiConfig: () => run(query<AiConfig>("get_ai_config")),
   setAiConfig: (config: AiConfig) =>
     run(cmd<void>("set_ai_config", { config })),
+  /** Desktop notification; the backend applies the gates ("Show
+   *  notifications" + quiet-while-focused) so every path shares them. */
+  sendNotification: (title: string, body: string) =>
+    run(cmd<void>("send_notification", { title, body })),
   listModels: () => run(query<string[]>("list_models")),
   listGatewayModels: (baseUrl: string, apiKey: string) =>
     run(probe<string[]>("list_gateway_models", { baseUrl, apiKey })),

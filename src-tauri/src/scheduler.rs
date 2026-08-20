@@ -70,6 +70,30 @@ pub(crate) fn next_local_hour_ms(hour: u32) -> i64 {
         .unwrap_or_else(|| now_ms() + 8 * 60 * 60 * 1000)
 }
 
+/// Is any Alchemy window focused? Frontmost means the user is already
+/// looking — a desktop banner would be noise. Hidden and background windows
+/// report unfocused, so tray-resident operation notifies as before.
+pub fn app_is_frontmost(app: &AppHandle) -> bool {
+    app.webview_windows()
+        .values()
+        .any(|w| w.is_focused().unwrap_or(false))
+}
+
+/// The one notification gate, asked at send time by every desktop
+/// notification path: the "Show notifications" preference, plus the
+/// quiet-while-focused rule (suppress while a window is focused; the
+/// Settings toggle turns that rule off, not on). `first_close_notice`
+/// stays exempt on purpose — it explains a disappearance, once.
+pub async fn notifications_wanted(app: &AppHandle) -> bool {
+    let state = app.state::<AppState>();
+    let (on, quiet) = {
+        let ai = state.ai.read().await;
+        let config = ai.config();
+        (config.show_notifications, config.quiet_when_focused)
+    };
+    on && !(quiet && app_is_frontmost(app))
+}
+
 /// One-time close-to-tray notice, so the first hidden window isn't a mystery.
 /// Deliberately ignores the notifications setting — it explains where the
 /// app went, once, and never fires again (marker file in the data dir).
@@ -142,10 +166,9 @@ async fn run_pass(app: &AppHandle) {
             Err(err) => eprintln!("db maintenance failed: {err:#}"),
         }
     }
-    let (background, notify) = {
+    let background = {
         let ai = state.ai.read().await;
-        let config = ai.config();
-        (config.background_enabled, config.show_notifications)
+        ai.config().background_enabled
     };
     if !background {
         crate::integrations::set_tray_status(app, "Background work is off");
@@ -222,7 +245,9 @@ async fn run_pass(app: &AppHandle) {
                     match commands::run_report_inner(&app, &state, &schedule.id).await {
                         Ok(_) => {
                             finished += 1;
-                            if notify {
+                            // At send time, not pass time: a report can run
+                            // for minutes, and focus may have changed.
+                            if notifications_wanted(&app).await {
                                 let (title, body) = if schedule.kind == "brief" {
                                     (
                                         "Your brief is ready",

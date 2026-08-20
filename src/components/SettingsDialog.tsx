@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import { playDone } from "@/lib/sound";
+import { previewSound } from "@/lib/sound";
 import { checkForUpdates, type UpdateFlow } from "@/lib/updates";
 import { Button, Input, Modal, Spinner, Switch } from "./ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -413,8 +413,9 @@ function GeneralTab() {
         storageKey="playSounds"
         label="Play sounds"
         hint="Soft cues for finished work, new arrivals, and errors."
-        onEnable={playDone}
+        onEnable={previewSound}
       />
+      <QuietWhenFocusedToggle />
       <BackgroundToggle />
       <TrayToggle />
     </div>
@@ -682,10 +683,9 @@ function GitSyncSelect() {
   );
 }
 
-/** Menu bar extra on/off — lives in AiConfig so the backend applies it live. */
 /** Config-backed (not localStorage) so the Night Shift's resident scheduler
- *  can honor it with no window open; mirrored to localStorage for notify()'s
- *  synchronous check. */
+ *  can honor it with no window open; the localStorage write keeps the legacy
+ *  pre-migration key coherent (store.ts honors a stale "false" at boot). */
 function NotificationsToggle() {
   const aiConfig = useStore((s) => s.aiConfig);
   const saveAiConfig = useStore((s) => s.saveAiConfig);
@@ -698,6 +698,28 @@ function NotificationsToggle() {
       onChange={(v) => {
         localStorage.setItem("showNotifications", String(v));
         void saveAiConfig({ ...aiConfig, showNotifications: v });
+      }}
+    />
+  );
+}
+
+/** The quiet-while-focused rule: notifications and sound cues land only when
+ *  no Alchemy window is focused — in view, the toast is enough. On by
+ *  default; the toggle exists to turn the suppression off. Config-backed so
+ *  the backend gates its own senders; mirrored to localStorage for the sound
+ *  module's synchronous check. */
+function QuietWhenFocusedToggle() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  if (!aiConfig) return null;
+  return (
+    <SettingRow
+      label="Only alert in the background"
+      hint="Skips notifications and sounds while you're in an Alchemy window. Off, they always come through."
+      checked={aiConfig.quietWhenFocused}
+      onChange={(v) => {
+        localStorage.setItem("quietWhenFocused", String(v));
+        void saveAiConfig({ ...aiConfig, quietWhenFocused: v });
       }}
     />
   );

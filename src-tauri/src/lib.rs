@@ -344,6 +344,7 @@ pub fn run() {
             commands::rebuild_note,
             commands::get_ai_config,
             commands::set_ai_config,
+            commands::send_notification,
             commands::list_models,
             commands::check_ollama,
             commands::check_models,
