@@ -611,7 +611,7 @@ function plain(text: string): string {
  * the flashcards study sheet it uses fixed paper ink — near-black on white,
  * gray bars — instead of the screen theme, which could be light-on-dark.
  */
-function PrintInfographic({ doc }: { doc: InfographicDoc }) {
+export function PrintInfographic({ doc }: { doc: InfographicDoc }) {
   const muted = { color: "#555" };
   const card: React.CSSProperties = {
     border: "1px solid #ddd",
@@ -769,6 +769,10 @@ function PrintInfographic({ doc }: { doc: InfographicDoc }) {
           fontSize: 12,
           maxWidth: 620,
           margin: "0 auto",
+          // The bar/funnel fills are plain CSS backgrounds; WebKit drops
+          // backgrounds from print output unless told to keep the ink.
+          WebkitPrintColorAdjust: "exact",
+          printColorAdjust: "exact",
         }}
       >
         <div style={{ fontSize: 26, fontWeight: 650, letterSpacing: "-0.015em" }}>

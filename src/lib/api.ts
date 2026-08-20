@@ -351,6 +351,8 @@ export const api = {
     run(query<string | null>("get_audio_path", { noteId })),
   exportAudio: (noteId: string, dest: string) =>
     run(cmd<void>("export_audio", { noteId, dest })),
+  exportNote: (noteId: string, format: string, dest: string) =>
+    run(slow<string>("export_note", { noteId, format, dest })),
   kokoroStatus: () => run(query<KokoroStatus>("kokoro_status")),
   setupKokoro: () => run(slow<KokoroStatus>("setup_kokoro")),
   removeKokoro: () => run(cmd<KokoroStatus>("remove_kokoro")),

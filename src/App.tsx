@@ -9,6 +9,7 @@ import { ExternalAddModal } from "@/components/ExternalAddModal";
 import { FileDrop } from "@/components/FileDrop";
 import { MigrationOverlay } from "@/components/MigrationOverlay";
 import { NoteWindow } from "@/components/NoteWindow";
+import { PrintExportView } from "@/components/PrintExportView";
 import { Onboarding } from "@/components/Onboarding";
 import { Toaster } from "@/components/ui";
 import { shortcutBlocked } from "@/lib/utils";
@@ -77,6 +78,17 @@ function App() {
       setError(null);
     }
   }, [error, pushToast, setError]);
+
+  // An export window renders only the note's print sheet, prints itself
+  // to the boot-named temp PDF, and is closed by the backend (export.rs).
+  if (window.__ALCHEMY_PRINT_EXPORT__ && window.__ALCHEMY_NOTE__) {
+    return (
+      <PrintExportView
+        noteId={window.__ALCHEMY_NOTE__}
+        pdfPath={window.__ALCHEMY_PRINT_EXPORT__}
+      />
+    );
+  }
 
   // A note-reader window renders just the note — no panels, no palette.
   if (window.__ALCHEMY_NOTE__) {

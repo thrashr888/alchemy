@@ -32,6 +32,16 @@ struct UpdateNoteReq {
     content: String,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct ExportNoteReq {
+    /// Note id.
+    note_id: String,
+    /// "png" | "pdf" | "pptx" | "docx" | "xlsx" | "m4a".
+    format: String,
+    /// Absolute destination path (defaults to ~/Downloads/<title>.<ext>).
+    path: Option<String>,
+}
+
 #[tool_router(router = notes_router, vis = "pub(super)")]
 impl AlchemyMcp {
     // -- Notes --
@@ -155,6 +165,23 @@ impl AlchemyMcp {
         }
         self.changed("notes", Some(&note.notebook_id));
         json_result(&serde_json::json!({ "ok": true }))
+    }
+
+    #[tool(
+        description = "Export a note to a file and return the written path. Formats match the note's shape: \"docx\" for prose, \"xlsx\" for notes with markdown tables, \"pptx\" for slide decks and flashcards, \"png\" for infographics and mind maps, \"m4a\" for Audio Overview episodes, and \"pdf\" for any kind (the note's own render, printed). Writes to `path` when given, otherwise ~/Downloads/<title>.<ext>."
+    )]
+    async fn export_note(
+        &self,
+        Parameters(ExportNoteReq {
+            note_id,
+            format,
+            path,
+        }): Parameters<ExportNoteReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let written = crate::export::export_note_file(&self.app, &note_id, &format, path)
+            .await
+            .map_err(internal)?;
+        json_result(&serde_json::json!({ "path": written }))
     }
 
     #[tool(description = "Delete a note.")]

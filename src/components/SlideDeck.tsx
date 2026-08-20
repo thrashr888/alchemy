@@ -216,7 +216,7 @@ function SlideCanvas({ slide, style }: { slide: string; style: DeckStyle }) {
 }
 
 /** All slides as fixed 960×540 print pages (one per @page, see index.css). */
-function PrintDeck({ deck }: { deck: Deck }) {
+export function PrintDeck({ deck }: { deck: Deck }) {
   return (
     <PrintPortal pageCss="@page { size: 960px 540px; margin: 0; }">
       {deck.slides.map((slide, i) => (

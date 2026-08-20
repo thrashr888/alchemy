@@ -6,6 +6,7 @@ mod commands;
 mod connectors;
 mod db;
 mod examples;
+mod export;
 mod filesearch;
 mod gist;
 mod git;
@@ -21,6 +22,7 @@ mod models;
 mod notion;
 mod outline;
 mod pdf;
+mod pptx;
 mod rag;
 mod router;
 mod scheduler;
@@ -317,6 +319,7 @@ pub fn run() {
             commands::setup_kokoro,
             commands::remove_kokoro,
             commands::export_audio,
+            export::export_note,
             commands::new_window,
             commands::print_webview,
             commands::set_window_glass,
