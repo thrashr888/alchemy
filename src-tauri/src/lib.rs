@@ -349,6 +349,7 @@ pub fn run() {
             commands::get_ai_config,
             commands::set_ai_config,
             commands::apply_settings_fix,
+            commands::apply_connect_fix,
             commands::send_notification,
             commands::list_models,
             commands::check_ollama,

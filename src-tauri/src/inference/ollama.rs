@@ -295,4 +295,29 @@ impl Ollama {
         let parsed: TagsResponse = resp.json().await.context("invalid tags response")?;
         Ok(parsed.models.into_iter().map(|m| m.name).collect())
     }
+
+    /// Names of models currently loaded — or mid-load — in the server
+    /// (`/api/ps`). Used to tell "cold model still paging in" apart from
+    /// "daemon gone" when a probe times out. Short timeout: this runs right
+    /// after a failure, and a wedged daemon must not stall the report.
+    pub async fn ps(&self) -> Result<Vec<String>> {
+        #[derive(Deserialize)]
+        struct PsModel {
+            name: String,
+        }
+        #[derive(Deserialize)]
+        struct PsResponse {
+            #[serde(default)]
+            models: Vec<PsModel>,
+        }
+        let resp = self
+            .http
+            .get(self.url("/api/ps"))
+            .timeout(std::time::Duration::from_secs(3))
+            .send()
+            .await
+            .context("ollama ps request failed")?;
+        let parsed: PsResponse = resp.json().await.context("invalid ps response")?;
+        Ok(parsed.models.into_iter().map(|m| m.name).collect())
+    }
 }

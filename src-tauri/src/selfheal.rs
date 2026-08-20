@@ -209,6 +209,19 @@ pub(crate) fn settings_get(config: &AiConfig) -> String {
         out.push_str(&line);
         out.push('\n');
     }
+    let unset = |s: &str| {
+        if s.trim().is_empty() {
+            "(not set)".to_string()
+        } else {
+            s.trim().to_string()
+        }
+    };
+    out.push_str(&format!(
+        "\nProfile:\n- Name: {}\n- Profession: {}\n- Standing instructions: {}\n",
+        unset(&config.profile.name),
+        unset(&config.profile.profession),
+        unset(&config.profile.instructions)
+    ));
     out.push_str(
         "\nAPI keys are never shown here — manage them in Settings → Models. \
          Say \"switch chat to <provider>\" to change providers.",
@@ -217,7 +230,8 @@ pub(crate) fn settings_get(config: &AiConfig) -> String {
 }
 
 const SETTABLE_FIELDS: &str = "chatProvider, studioProvider, chatModel, effort, baseUrl, \
-     smallModel, embedder, provider.<id>.chatModel, provider.<id>.effort, provider.<id>.baseUrl";
+     smallModel, embedder, provider.<id>.chatModel, provider.<id>.effort, provider.<id>.baseUrl, \
+     profile.name, profile.profession, profile.instructions";
 
 const EFFORTS: [&str; 5] = ["", "minimal", "low", "medium", "high"];
 
@@ -299,6 +313,47 @@ pub(crate) fn settings_set(
             }
             _ => Err("The embedder can be \"ollama\" or \"builtin\".".to_string()),
         },
+        // Personalization (RFC-conversational-setup §2): free text, but the
+        // key-shape refusal above still applies — "remember this token for
+        // me" can never smuggle a secret into the prompt-borne profile.
+        "profile.name" | "profile.profession" | "profile.instructions" if target_id.is_none() => {
+            let cap = if sub == "profile.instructions" {
+                500
+            } else {
+                80
+            };
+            if value.chars().count() > cap {
+                return Err(format!(
+                    "That's too long for {sub} — keep it under {cap} characters."
+                ));
+            }
+            match sub.as_str() {
+                "profile.name" => {
+                    config.profile.name = value.to_string();
+                    Ok(if value.is_empty() {
+                        "Cleared your name from the profile.".to_string()
+                    } else {
+                        format!("Got it — I'll call you {value}.")
+                    })
+                }
+                "profile.profession" => {
+                    config.profile.profession = value.to_string();
+                    Ok(if value.is_empty() {
+                        "Cleared your profession from the profile.".to_string()
+                    } else {
+                        format!("Noted your profession: {value}.")
+                    })
+                }
+                _ => {
+                    config.profile.instructions = value.to_string();
+                    Ok(if value.is_empty() {
+                        "Cleared your standing instructions.".to_string()
+                    } else {
+                        format!("Standing instructions saved: “{value}”")
+                    })
+                }
+            }
+        }
         "chatModel" | "model" | "effort" | "baseUrl" => {
             let id = match &target_id {
                 Some(id) => id.clone(),
@@ -756,6 +811,398 @@ pub(crate) fn format_test_report(
     redact_key_shaped(&out)
 }
 
+// ---- Timeout stories (test-verb refinement) ---------------------------------
+
+/// What the Ollama daemon looked like right after a probe timed out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OllamaTimeoutContext {
+    /// The daemon itself stopped answering — that IS the problem now.
+    DaemonUnreachable,
+    /// Daemon up and `/api/ps` shows the model — mid-load, not broken.
+    Loading,
+    /// Daemon up, model not (yet) listed — likely still paging in.
+    AliveIdle,
+}
+
+/// A probe timeout is usually a cold load, not a broken setup — a 26GB model
+/// takes longer than the probe budget to page in. Tell that story instead of
+/// a bare "no answer": daemon-down gets the serve affordance, daemon-alive
+/// gets "still loading, retry in a minute". `what` is "answer" | "embedding".
+pub(crate) fn timeout_story(
+    what: &str,
+    secs: u64,
+    model: &str,
+    ctx: Option<OllamaTimeoutContext>,
+) -> String {
+    match ctx {
+        Some(OllamaTimeoutContext::Loading) => format!(
+            "no {what} within {secs} seconds, but the Ollama server is up and “{model}” is \
+             loading into memory right now. Large models can take a few minutes on first \
+             load — try again in a minute."
+        ),
+        Some(OllamaTimeoutContext::AliveIdle) => format!(
+            "no {what} within {secs} seconds — the Ollama server is up, so “{model}” is \
+             probably still loading into memory (the first use of a large model takes a \
+             while). Try again in a minute."
+        ),
+        Some(OllamaTimeoutContext::DaemonUnreachable) => format!(
+            "no {what} within {secs} seconds, and the Ollama server stopped responding — \
+             it may have gone down under the load. Fix: open Terminal, run `ollama serve`, \
+             then retry here."
+        ),
+        None => format!("no {what} within {secs} seconds"),
+    }
+}
+
+// ---- Personalization: style (RFC-conversational-setup §2) -------------------
+
+/// The non-preset style ids that predate CHAT_STYLES; "default" is the
+/// frontend ChatConfig's explicit default id.
+const EXTRA_STYLES: [(&str, &str); 2] = [("learning", "Learning guide"), ("custom", "Custom")];
+
+/// Resolve a style by id, label, or unique label fragment ("google" → the
+/// Google Developer Docs style). "default"/"normal"/"none" clear to default.
+pub(crate) fn resolve_style(input: &str) -> Option<(&'static str, &'static str)> {
+    let q = input.trim().to_lowercase();
+    if q.is_empty() {
+        return None;
+    }
+    if ["default", "normal", "none", "reset"].contains(&q.as_str()) {
+        return Some(("default", "Default"));
+    }
+    let all: Vec<(&'static str, &'static str)> = crate::rag::CHAT_STYLES
+        .iter()
+        .map(|(id, label, ..)| (*id, *label))
+        .chain(EXTRA_STYLES.iter().copied())
+        .collect();
+    if let Some(hit) = all
+        .iter()
+        .find(|(id, label)| *id == q || label.to_lowercase() == q)
+    {
+        return Some(*hit);
+    }
+    let fragment: Vec<_> = all
+        .iter()
+        .filter(|(id, label)| id.contains(&q) || label.to_lowercase().contains(&q))
+        .collect();
+    match fragment.as_slice() {
+        [one] => Some(**one),
+        _ => None,
+    }
+}
+
+fn style_roster() -> String {
+    crate::rag::CHAT_STYLES
+        .iter()
+        .map(|(_, label, ..)| *label)
+        .chain(["Learning guide", "Default"])
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Validate a per-notebook style/length change. Returns (style, length,
+/// echo): None = leave that half unchanged. Pure — the caller emits the
+/// event the frontend applies to its per-notebook ChatConfig.
+pub(crate) fn settings_style(
+    style_in: &str,
+    length_in: &str,
+) -> Result<(Option<String>, Option<String>, String), String> {
+    let style = match style_in.trim() {
+        "" => None,
+        q => match resolve_style(q) {
+            Some((id, label)) => Some((id.to_string(), label.to_string())),
+            None => {
+                return Err(format!(
+                    "I don't know a “{q}” style. This notebook can answer as: {}.",
+                    style_roster()
+                ))
+            }
+        },
+    };
+    let length = match length_in.trim().to_lowercase().as_str() {
+        "" => None,
+        "default" | "normal" | "medium" => Some(("default", "default")),
+        "shorter" | "short" | "concise" | "brief" => Some(("shorter", "shorter")),
+        "longer" | "long" | "detailed" | "thorough" => Some(("longer", "longer")),
+        other => {
+            return Err(format!(
+                "“{other}” isn't a length I know — say shorter, longer, or default."
+            ))
+        }
+    };
+    if style.is_none() && length.is_none() {
+        return Err(format!(
+            "Which style? This notebook can answer as: {} — and shorter/longer/default \
+             for length.",
+            style_roster()
+        ));
+    }
+    let mut parts = Vec::new();
+    if let Some((_, label)) = &style {
+        parts.push(format!("style → {label}"));
+    }
+    if let Some((_, l)) = &length {
+        parts.push(format!("length → {l} answers"));
+    }
+    let echo = format!("Set this notebook's chat voice: {}.", parts.join(", "));
+    Ok((
+        style.map(|(id, _)| id),
+        length.map(|(id, _)| id.to_string()),
+        echo,
+    ))
+}
+
+// ---- Appearance: theme (RFC-conversational-setup §3) ------------------------
+
+/// Mirror of the theme roster in `src/lib/themes.ts` (id, label, dark).
+/// Keep in sync when themes.ts changes — the tool refuses unknown ids, so
+/// drift fails safe (a new theme is just not settable from chat until added).
+pub(crate) const THEME_ROSTER: &[(&str, &str, bool)] = &[
+    ("midnight", "Midnight", true),
+    ("light", "Light", false),
+    ("slate", "Slate", true),
+    ("dracula", "Dracula", true),
+    ("monokai", "Monokai", true),
+    ("one-dark", "One Dark", true),
+    ("nord", "Nord", true),
+    ("gruvbox", "Gruvbox", true),
+    ("github", "GitHub", true),
+    ("github-light", "GitHub Light", false),
+    ("solarized", "Solarized", true),
+    ("solarized-light", "Solarized Light", false),
+    ("tokyo-night", "Tokyo Night", true),
+    ("matrix", "Matrix", true),
+    ("synthwave", "Synthwave '84", true),
+    ("claude", "Claude", true),
+    ("openai", "OpenAI", true),
+    ("latte", "Catppuccin Latte", false),
+    ("rose-pine-dawn", "Rose Pine Dawn", false),
+    ("carrera", "Carrera", false),
+    ("italia", "Italia", true),
+    ("panigale", "Panigale", true),
+    ("sepia", "Sepia", false),
+];
+
+pub(crate) fn theme_roster_text() -> String {
+    let list = THEME_ROSTER
+        .iter()
+        .map(|(_, label, dark)| format!("{label}{}", if *dark { "" } else { " (light)" }))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("Themes: {list} — or System to follow macOS. Say “use the <name> theme”.")
+}
+
+/// Fuzzy theme resolution: exact id/label first, then every query word must
+/// appear in the id or label — with "dark"/"light" acting as a variant
+/// filter, so "the dark rust one" finds Gruvbox. Err carries the reply for
+/// an ambiguous or unmatched ask.
+pub(crate) fn resolve_theme(query: &str) -> Result<(&'static str, &'static str), String> {
+    let folded: String = query
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'é' | 'è' | 'ê' => 'e',
+            '’' | '\'' => ' ',
+            c => c,
+        })
+        .collect();
+    if folded == "system" {
+        return Ok(("system", "System"));
+    }
+    if let Some((id, label, _)) = THEME_ROSTER
+        .iter()
+        .find(|(id, label, _)| *id == folded || label.to_lowercase() == folded)
+    {
+        return Ok((id, label));
+    }
+    let mut want_dark: Option<bool> = None;
+    let mut tokens: Vec<String> = Vec::new();
+    for tok in folded.split_whitespace() {
+        match tok {
+            "the" | "a" | "one" | "theme" | "mode" | "please" => {}
+            "dark" => want_dark = Some(true),
+            "light" => want_dark = Some(false),
+            // A couple of vibe aliases users actually reach for.
+            "rust" | "rusty" => tokens.push("gruvbox".into()),
+            t => tokens.push(t.to_string()),
+        }
+    }
+    if tokens.is_empty() && want_dark.is_none() {
+        return Err(theme_roster_text());
+    }
+    let matches: Vec<&(&str, &str, bool)> = THEME_ROSTER
+        .iter()
+        .filter(|(id, label, dark)| {
+            want_dark.is_none_or(|w| w == *dark)
+                && tokens
+                    .iter()
+                    .all(|t| id.contains(t.as_str()) || label.to_lowercase().contains(t.as_str()))
+        })
+        .collect();
+    match matches.as_slice() {
+        [(id, label, _)] => Ok((id, label)),
+        [] => Err(format!(
+            "No theme matches “{}”. {}",
+            query.trim(),
+            theme_roster_text()
+        )),
+        many => Err(format!(
+            "“{}” matches several themes: {} — which one?",
+            query.trim(),
+            many.iter()
+                .map(|(_, label, _)| *label)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+// ---- Agents: connect (RFC-conversational-setup §4) --------------------------
+
+/// The confirm-click reply for a connect ask. Connecting writes ANOTHER
+/// app's config, so it NEVER auto-applies from chat: this text renders the
+/// `` Confirm: connect agent `<id>` (<Name>) `` grammar the transcript turns
+/// into a button, and only that click writes anything.
+pub(crate) fn connect_confirm_text(id: &str, name: &str, config_path: &str) -> String {
+    let file = if config_path.trim().is_empty() {
+        "its config file".to_string()
+    } else {
+        config_path.trim().to_string()
+    };
+    format!(
+        "Connecting Alchemy to {name} registers the MCP server and the alchemy skill by \
+         writing {file}. Nothing is written until you click. Confirm: connect agent \
+         `{id}` ({name})."
+    )
+}
+
+/// The MCP-side refusal when `confirm: true` is missing — the one verb that
+/// never applies without it, on either surface.
+pub(crate) fn connect_refusal(name: &str, config_path: &str) -> String {
+    format!(
+        "connecting writes {name}'s config at {} — pass confirm: true to proceed",
+        if config_path.trim().is_empty() {
+            "its config file"
+        } else {
+            config_path.trim()
+        }
+    )
+}
+
+// ---- The guided flow: setup (RFC-conversational-setup §5) -------------------
+
+/// Everything `setup` inspects, gathered by the live side so this decision
+/// stays pure and testable.
+pub(crate) struct SetupState {
+    pub chat_label: String,
+    pub chat_kind: String,
+    pub chat_ready: bool,
+    pub chat_detail: String,
+    /// The chat model an Ollama chat provider would run.
+    pub chat_model: String,
+    pub chat_model_installed: bool,
+    pub fm_ready: bool,
+    pub ollama_reachable: bool,
+    pub embedder: String,
+    pub embed_model: String,
+    pub embed_model_installed: bool,
+    pub profile_named: bool,
+    /// (id, name, installed, configured) per known agent client.
+    pub connectors: Vec<(String, String, bool, bool)>,
+}
+
+/// One next unmet step per invocation — never a checklist dump, never
+/// auto-advancing. Each step renders through the existing button grammars
+/// (Terminal fix, switch-provider, Settings tab, connect confirm), so the
+/// user walks the whole path with clicks and re-asks.
+pub(crate) fn setup_next_step(s: &SetupState) -> String {
+    let fm_offer = if s.fm_ready && s.chat_kind != "fm" {
+        "\nOr answer on-device instead: Fix: switch chat to provider `on-device` \
+         (On this Mac)."
+    } else {
+        ""
+    };
+    // 1. A provider that answers.
+    if !s.chat_ready {
+        if s.chat_kind == "ollama" && !s.ollama_reachable {
+            return format!(
+                "Setup 1 of 5 — start your model engine. Chat is set to {}, but the Ollama \
+                 server isn't running. Fix: open Terminal, run `ollama serve`, then say \
+                 “help me get set up” again.{fm_offer}",
+                s.chat_label
+            );
+        }
+        return format!(
+            "Setup 1 of 5 — get a provider answering. {} isn't ready ({}). Check \
+             Settings → Models.{fm_offer}",
+            s.chat_label,
+            if s.chat_detail.trim().is_empty() {
+                "not responding"
+            } else {
+                s.chat_detail.trim()
+            }
+        );
+    }
+    // 2. A chat model on disk (Ollama chat only — other kinds carry theirs).
+    if s.chat_kind == "ollama" && !s.chat_model_installed {
+        if let Ok(cmd) = pull_command(&s.chat_model) {
+            return format!(
+                "Setup 2 of 5 — download your chat model. “{}” isn't installed yet. Fix: \
+                 open Terminal, run `{cmd}`, then say “test {}”.",
+                s.chat_model, s.chat_model
+            );
+        }
+        return format!(
+            "Setup 2 of 5 — pick a chat model. The configured model “{}” doesn't look like \
+             an Ollama model name — choose one in Settings → Models.",
+            s.chat_model
+        );
+    }
+    // 3. The embedder. Builtin needs nothing — that's the point of it.
+    if s.embedder == "ollama" && !s.embed_model_installed {
+        let fix = match pull_command(&s.embed_model) {
+            Ok(cmd) => format!("Fix: open Terminal, run `{cmd}`"),
+            Err(_) => "pick one in Settings → Models".to_string(),
+        };
+        return format!(
+            "Setup 3 of 5 — the embedder. Retrieval embeds with “{}”, which isn't \
+             installed. {fix} — or say “switch the embedder to builtin” to use the \
+             built-in one (no download).",
+            s.embed_model
+        );
+    }
+    // 4. Who you are.
+    if !s.profile_named {
+        return "Setup 4 of 5 — make it yours. Tell me what to call you (“call me Paul”), \
+                and add a profession or standing instructions any time (“my profession \
+                is …”, or Settings → General)."
+            .to_string();
+    }
+    // 5. Agents (optional).
+    if let Some((id, name, _, _)) = s
+        .connectors
+        .iter()
+        .find(|(_, _, installed, configured)| *installed && !configured)
+    {
+        return format!(
+            "Setup 5 of 5 — connect your agents (optional). {name} is installed but not \
+             connected to Alchemy yet. {} Or ignore this step — everything else is ready.",
+            connect_confirm_text(id, name, "")
+        );
+    }
+    format!(
+        "You're set up: chat answers with {}, retrieval embeds with {}, and your profile \
+         is in. Ask anything — or say “what models do I have” any time.",
+        s.chat_label,
+        if s.embedder == "builtin" {
+            "the built-in embedder".to_string()
+        } else {
+            format!("{} ({})", s.embedder, s.embed_model)
+        }
+    )
+}
+
 // ---- Tests ------------------------------------------------------------------
 
 #[cfg(test)]
@@ -915,7 +1362,12 @@ mod tests {
     #[test]
     fn unknown_field_is_refused_with_the_allowlist() {
         let mut c = test_config();
-        for field in ["notionThing", "mcpPort", "provider.ollama", "profile.name"] {
+        for field in [
+            "notionThing",
+            "mcpPort",
+            "provider.ollama",
+            "profile.avatar",
+        ] {
             let err = settings_set(&mut c, field, "x").unwrap_err();
             assert!(err.contains("chatProvider"), "{field}: {err}");
         }
@@ -1213,6 +1665,222 @@ mod tests {
             "{failed}"
         );
         assert!(!failed.contains("sk-secret"), "{failed}");
+    }
+
+    // -- Phase 2: profile, style, theme --------------------------------------
+
+    #[test]
+    fn profile_fields_set_echo_and_refuse() {
+        let mut c = test_config();
+        let echo = settings_set(&mut c, "profile.name", "Paul").unwrap();
+        assert_eq!(c.profile.name, "Paul");
+        assert!(echo.contains("call you Paul"), "{echo}");
+        settings_set(&mut c, "profile.profession", "software engineer").unwrap();
+        assert_eq!(c.profile.profession, "software engineer");
+        let echo = settings_set(&mut c, "profile.instructions", "keep answers short").unwrap();
+        assert!(echo.contains("keep answers short"), "{echo}");
+        // The inherited secret discipline: key-shaped free text is refused
+        // even in profile fields — instructions ride every prompt.
+        let err = settings_set(&mut c, "profile.instructions", "sk-abcdef1234567890").unwrap_err();
+        assert!(err.contains("API key"), "{err}");
+        assert_eq!(c.profile.instructions, "keep answers short"); // untouched
+                                                                  // Length caps hold.
+        let long = "x".repeat(501);
+        assert!(settings_set(&mut c, "profile.instructions", &long).is_err());
+        assert!(settings_set(&mut c, "profile.name", &"y".repeat(81)).is_err());
+        // And the snapshot shows the profile.
+        let out = settings_get(&c);
+        assert!(out.contains("Name: Paul"), "{out}");
+    }
+
+    #[test]
+    fn style_resolves_and_validates() {
+        assert_eq!(resolve_style("gdev").unwrap().0, "gdev");
+        assert_eq!(resolve_style("Google").unwrap().0, "gdev"); // unique fragment
+        assert_eq!(resolve_style("default").unwrap().0, "default");
+        assert_eq!(resolve_style("learning").unwrap().0, "learning");
+        assert!(resolve_style("shakespearean").is_none());
+
+        let (style, length, echo) = settings_style("govuk", "shorter").unwrap();
+        assert_eq!(style.as_deref(), Some("govuk"));
+        assert_eq!(length.as_deref(), Some("shorter"));
+        assert!(echo.contains("GOV.UK"), "{echo}");
+        assert!(echo.contains("shorter answers"), "{echo}");
+        // Half-changes leave the other half untouched (None).
+        let (style, length, _) = settings_style("", "longer").unwrap();
+        assert!(style.is_none());
+        assert_eq!(length.as_deref(), Some("longer"));
+        // Unknown style names the roster; unknown length names the ladder;
+        // an empty ask is a question back, not a change.
+        assert!(settings_style("shakespearean", "")
+            .unwrap_err()
+            .contains("GOV.UK"));
+        assert!(settings_style("", "verbose-ish")
+            .unwrap_err()
+            .contains("shorter"));
+        assert!(settings_style("", "").is_err());
+    }
+
+    #[test]
+    fn theme_fuzzy_resolution() {
+        assert_eq!(resolve_theme("gruvbox").unwrap().0, "gruvbox");
+        assert_eq!(resolve_theme("Tokyo Night").unwrap().0, "tokyo-night");
+        assert_eq!(resolve_theme("tokyo").unwrap().0, "tokyo-night");
+        // The RFC's own example: vibe words plus a dark filter.
+        assert_eq!(resolve_theme("the dark rust one").unwrap().0, "gruvbox");
+        // Exact ids win even when a longer sibling exists.
+        assert_eq!(resolve_theme("github").unwrap().0, "github");
+        assert_eq!(resolve_theme("system").unwrap().0, "system");
+        // Ambiguity lists the candidates; nonsense lists the roster.
+        let err = resolve_theme("git").unwrap_err();
+        assert!(err.contains("GitHub Light"), "{err}");
+        let err = resolve_theme("banana").unwrap_err();
+        assert!(err.contains("Gruvbox"), "{err}");
+    }
+
+    // -- Phase 3: connect is confirm-gated -----------------------------------
+
+    #[test]
+    fn connect_grammar_and_refusal() {
+        let text = connect_confirm_text("claude", "Claude Code", "~/.claude.json");
+        // The literal grammar the transcript turns into the confirm button.
+        assert!(
+            text.contains("Confirm: connect agent `claude` (Claude Code)."),
+            "{text}"
+        );
+        assert!(text.contains("~/.claude.json"), "{text}");
+        assert!(
+            text.contains("Nothing is written until you click"),
+            "{text}"
+        );
+        // The MCP-side no-confirm refusal names the file and the flag.
+        let refusal = connect_refusal("Claude Code", "~/.claude.json");
+        assert!(refusal.contains("confirm: true"), "{refusal}");
+        assert!(refusal.contains("~/.claude.json"), "{refusal}");
+    }
+
+    // -- test-verb timeout stories -------------------------------------------
+
+    #[test]
+    fn timeout_stories_distinguish_cold_load_from_daemon_down() {
+        let loading = timeout_story(
+            "answer",
+            30,
+            "laguna-s-2.1",
+            Some(OllamaTimeoutContext::Loading),
+        );
+        assert!(loading.contains("loading into memory"), "{loading}");
+        assert!(loading.contains("try again in a minute"), "{loading}");
+        let idle = timeout_story(
+            "answer",
+            30,
+            "laguna-s-2.1",
+            Some(OllamaTimeoutContext::AliveIdle),
+        );
+        assert!(idle.contains("server is up"), "{idle}");
+        assert!(idle.contains("Try again in a minute"), "{idle}");
+        let down = timeout_story(
+            "embedding",
+            15,
+            "nomic-embed-text",
+            Some(OllamaTimeoutContext::DaemonUnreachable),
+        );
+        // Daemon-down renders the one-click serve affordance.
+        assert!(
+            down.contains("Fix: open Terminal, run `ollama serve`"),
+            "{down}"
+        );
+        // Non-Ollama engines keep the plain sentence.
+        assert_eq!(
+            timeout_story("answer", 30, "x", None),
+            "no answer within 30 seconds"
+        );
+    }
+
+    // -- Phase 5: setup picks exactly one next step ---------------------------
+
+    fn setup_state() -> SetupState {
+        SetupState {
+            chat_label: "Ollama".into(),
+            chat_kind: "ollama".into(),
+            chat_ready: true,
+            chat_detail: "gpt-oss:20b · running".into(),
+            chat_model: "gpt-oss:20b".into(),
+            chat_model_installed: true,
+            fm_ready: true,
+            ollama_reachable: true,
+            embedder: "ollama".into(),
+            embed_model: "mxbai-embed-large".into(),
+            embed_model_installed: true,
+            profile_named: true,
+            connectors: vec![("claude".into(), "Claude Code".into(), true, true)],
+        }
+    }
+
+    #[test]
+    fn setup_walks_one_step_at_a_time() {
+        // 1: engine down → serve affordance + the on-device alternative.
+        let mut s = setup_state();
+        s.chat_ready = false;
+        s.ollama_reachable = false;
+        let step = setup_next_step(&s);
+        assert!(step.contains("Setup 1 of 5"), "{step}");
+        assert!(
+            step.contains("Fix: open Terminal, run `ollama serve`"),
+            "{step}"
+        );
+        assert!(
+            step.contains("switch chat to provider `on-device`"),
+            "{step}"
+        );
+        assert!(!step.contains("Setup 2"), "one step only: {step}");
+
+        // 2: engine up, chat model missing → pull affordance.
+        let mut s = setup_state();
+        s.chat_model_installed = false;
+        let step = setup_next_step(&s);
+        assert!(step.contains("Setup 2 of 5"), "{step}");
+        assert!(
+            step.contains("Fix: open Terminal, run `ollama pull gpt-oss:20b`"),
+            "{step}"
+        );
+
+        // 3: embed model missing → pull or builtin.
+        let mut s = setup_state();
+        s.embed_model_installed = false;
+        let step = setup_next_step(&s);
+        assert!(step.contains("Setup 3 of 5"), "{step}");
+        assert!(step.contains("ollama pull mxbai-embed-large"), "{step}");
+        assert!(step.contains("builtin"), "{step}");
+        // …but the builtin embedder needs nothing, ever.
+        s.embedder = "builtin".into();
+        assert!(
+            !setup_next_step(&s).contains("Setup 3"),
+            "builtin skips step 3"
+        );
+
+        // 4: no name → the profile prompt-back.
+        let mut s = setup_state();
+        s.profile_named = false;
+        let step = setup_next_step(&s);
+        assert!(step.contains("Setup 4 of 5"), "{step}");
+        assert!(step.contains("call me"), "{step}");
+
+        // 5: an installed-but-unconnected client → the confirm grammar.
+        let mut s = setup_state();
+        s.connectors = vec![("claude".into(), "Claude Code".into(), true, false)];
+        let step = setup_next_step(&s);
+        assert!(step.contains("Setup 5 of 5"), "{step}");
+        assert!(
+            step.contains("Confirm: connect agent `claude` (Claude Code)."),
+            "{step}"
+        );
+        assert!(step.contains("Or ignore this step"), "{step}");
+
+        // All met → done summary, no steps.
+        let done = setup_next_step(&setup_state());
+        assert!(done.contains("You're set up"), "{done}");
+        assert!(!done.contains("Setup"), "{done}");
     }
 
     #[test]

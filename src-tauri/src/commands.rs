@@ -5235,6 +5235,11 @@ pub(crate) async fn settings_test_report(state: &AppState, target: &str) -> Stri
                     if !p.base_url.trim().is_empty() {
                         oc.base_url = p.base_url.trim().to_string();
                     }
+                    // Carry the effective chat model so a timeout can ask
+                    // /api/ps whether THAT model is mid-load.
+                    if !p.chat_model.trim().is_empty() {
+                        oc.chat_model = p.chat_model.trim().to_string();
+                    }
                     oc
                 });
                 (engine, label, embed)
@@ -5269,7 +5274,20 @@ pub(crate) async fn settings_test_report(state: &AppState, target: &str) -> Stri
     )
     .await
     {
-        Err(_) => ProbeResult::Failed("no answer within 30 seconds".into()),
+        // A timeout with the daemon still up is usually a cold model paging
+        // in, not a broken setup — ask /api/ps and tell that story instead
+        // of a bare "no answer" (the story fn covers daemon-down too).
+        Err(_) => {
+            let ctx = match &embed_cfg {
+                Some(oc) => Some(ollama_timeout_context(oc, &oc.chat_model).await),
+                None => None,
+            };
+            let model = embed_cfg
+                .as_ref()
+                .map(|oc| oc.chat_model.clone())
+                .unwrap_or_else(|| label.clone());
+            ProbeResult::Failed(crate::selfheal::timeout_story("answer", 30, &model, ctx))
+        }
         Ok(Err(err)) => ProbeResult::Failed(format!("{err:#}")),
         Ok(Ok(_)) => {
             let total_ms = start.elapsed().as_millis();
@@ -5284,13 +5302,21 @@ pub(crate) async fn settings_test_report(state: &AppState, target: &str) -> Stri
     let embed = match embed_cfg {
         Some(oc) => {
             let embed_model = oc.embed_model.clone();
-            let ollama = crate::ai::Ollama::new(oc);
+            let ollama = crate::ai::Ollama::new(oc.clone());
             let estart = std::time::Instant::now();
             let result =
                 match tokio::time::timeout(std::time::Duration::from_secs(15), ollama.test_embed())
                     .await
                 {
-                    Err(_) => ProbeResult::Failed("no embedding within 15 seconds".into()),
+                    Err(_) => {
+                        let ctx = ollama_timeout_context(&oc, &oc.embed_model).await;
+                        ProbeResult::Failed(crate::selfheal::timeout_story(
+                            "embedding",
+                            15,
+                            &oc.embed_model,
+                            Some(ctx),
+                        ))
+                    }
                     Ok(Err(err)) => ProbeResult::Failed(format!("{err:#}")),
                     Ok(Ok(_dims)) => ProbeResult::Ok {
                         first_ms: 0,
@@ -5302,6 +5328,242 @@ pub(crate) async fn settings_test_report(state: &AppState, target: &str) -> Stri
         None => None,
     };
     crate::selfheal::format_test_report(&config, &label, &chat, embed.as_ref())
+}
+
+/// What is the Ollama daemon doing right after one of our probes timed out?
+/// `/api/ps` distinguishes "model mid-load" from "daemon idle" from "daemon
+/// gone"; an old daemon without /api/ps falls back to /api/tags for the
+/// alive check. Short timeouts throughout — this runs inside a failure path.
+async fn ollama_timeout_context(
+    oc: &crate::ai::OllamaConfig,
+    model: &str,
+) -> crate::selfheal::OllamaTimeoutContext {
+    use crate::selfheal::OllamaTimeoutContext as Ctx;
+    let ollama = crate::ai::Ollama::new(oc.clone());
+    match tokio::time::timeout(std::time::Duration::from_secs(3), ollama.ps()).await {
+        Ok(Ok(loaded)) => {
+            if loaded.iter().any(|n| n == model || n.starts_with(model)) {
+                Ctx::Loading
+            } else {
+                Ctx::AliveIdle
+            }
+        }
+        Ok(Err(_)) => {
+            match tokio::time::timeout(std::time::Duration::from_secs(3), ollama.list_models())
+                .await
+            {
+                Ok(Ok(_)) => Ctx::AliveIdle,
+                _ => Ctx::DaemonUnreachable,
+            }
+        }
+        Err(_) => Ctx::DaemonUnreachable,
+    }
+}
+
+/// Apply a per-notebook chat style/length change (RFC-conversational-setup
+/// §2). The per-notebook ChatConfig lives frontend-side, so the validated
+/// change travels as a `settings://style` event every window applies to its
+/// stored config; the returned echo is the transcript row.
+pub(crate) async fn settings_style_apply(
+    app: &AppHandle,
+    state: &AppState,
+    notebook_id: &str,
+    style_in: &str,
+    length_in: &str,
+) -> String {
+    let (style, length, echo) = match crate::selfheal::settings_style(style_in, length_in) {
+        Ok(v) => v,
+        Err(msg) => return msg,
+    };
+    let known = state
+        .db
+        .list_notebooks()
+        .await
+        .map(|nbs| nbs.iter().any(|n| n.id == notebook_id))
+        .unwrap_or(false);
+    if !known {
+        return "I couldn't find that notebook — styles are per notebook, so tell me which \
+                one (or ask from inside it)."
+            .to_string();
+    }
+    let _ = app.emit(
+        "settings://style",
+        serde_json::json!({
+            "notebookId": notebook_id,
+            "style": style,
+            "length": length,
+        }),
+    );
+    echo
+}
+
+/// Switch the app theme (RFC-conversational-setup §3). The theme is
+/// frontend state (localStorage + applyTheme), so the resolved id travels
+/// as a `settings://theme` event; every window applies it through the same
+/// setTheme path the Settings dialog uses.
+pub(crate) fn settings_theme_apply(app: &AppHandle, query: &str) -> String {
+    if query.trim().is_empty() {
+        return crate::selfheal::theme_roster_text();
+    }
+    match crate::selfheal::resolve_theme(query) {
+        Ok((id, label)) => {
+            let _ = app.emit("settings://theme", serde_json::json!({ "theme": id }));
+            format!("Switched the theme to {label}.")
+        }
+        Err(msg) => msg,
+    }
+}
+
+/// The `connect` verb's read/confirm side (RFC-conversational-setup §4).
+/// NEVER writes: an empty target lists the agent clients; a named target
+/// answers with the confirm-click grammar — only that click (or the MCP
+/// call with confirm: true) reaches `connect_agent`.
+pub(crate) async fn settings_connect_report(app: &AppHandle, target: &str) -> String {
+    let list = match crate::connectors::list_agent_connectors(app.clone()).await {
+        Ok(l) => l,
+        Err(err) => return format!("Couldn't read the agent clients: {err}"),
+    };
+    if target.trim().is_empty() {
+        let rows = list
+            .iter()
+            .map(|c| {
+                format!(
+                    "- {} — {}{}",
+                    c.name,
+                    if !c.installed {
+                        "not installed"
+                    } else if c.configured {
+                        "connected"
+                    } else {
+                        "installed, not connected"
+                    },
+                    if c.installed && !c.configured && c.can_auto {
+                        format!(" (say “connect {}”)", c.name.to_lowercase())
+                    } else {
+                        String::new()
+                    }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        return format!("Agent clients:\n{rows}");
+    }
+    let t = target.trim().to_lowercase();
+    let found = list
+        .iter()
+        .find(|c| c.id.to_lowercase() == t || c.name.to_lowercase() == t)
+        .or_else(|| list.iter().find(|c| c.name.to_lowercase().contains(&t)));
+    let Some(c) = found else {
+        return format!(
+            "No agent client matches “{}” — I know: {}.",
+            target.trim(),
+            list.iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    };
+    if !c.installed {
+        return format!(
+            "{} doesn't look installed on this Mac, so there's nothing to connect yet.",
+            c.name
+        );
+    }
+    if c.configured && (!c.supports_skill || c.skill_installed) {
+        return format!("{} is already connected ({}).", c.name, c.config_path);
+    }
+    if !c.can_auto {
+        return format!(
+            "{} needs manual setup — paste this into {}:\n{}",
+            c.name, c.config_path, c.snippet
+        );
+    }
+    crate::selfheal::connect_confirm_text(&c.id, &c.name, &c.config_path)
+}
+
+/// The guided flow (RFC-conversational-setup §5): gather live state, then
+/// let the pure `setup_next_step` pick and render the ONE next unmet step.
+pub(crate) async fn settings_setup_report(app: &AppHandle, state: &AppState) -> String {
+    let ai = state.ai.read().await.clone();
+    let config = ai.config().clone();
+    let chat_entry = config.provider_by_id(&config.chat_provider).cloned();
+    let (chat_ready, chat_detail) = match &chat_entry {
+        Some(entry) => readiness_for_entry(app, entry, &config)
+            .await
+            .unwrap_or((false, "probe failed".into())),
+        None => (false, "no provider selected".into()),
+    };
+    let fm_ready = match config.providers.iter().find(|p| p.kind == "fm") {
+        Some(entry) => readiness_for_entry(app, entry, &config)
+            .await
+            .map(|(ready, _)| ready)
+            .unwrap_or(false),
+        None => false,
+    };
+    let installed: Option<Vec<String>> =
+        match tokio::time::timeout(std::time::Duration::from_secs(4), ai.list_models()).await {
+            Ok(Ok(models)) => Some(models),
+            _ => None,
+        };
+    let has_model = |name: &str| {
+        installed.as_ref().is_some_and(|ms| {
+            ms.iter()
+                .any(|m| m == name || m.starts_with(&format!("{name}:")))
+        })
+    };
+    let chat_model = chat_entry
+        .as_ref()
+        .map(|e| e.chat_model.trim())
+        .filter(|m| !m.is_empty())
+        .unwrap_or(config.chat_model.trim())
+        .to_string();
+    let connectors = crate::connectors::list_agent_connectors(app.clone())
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| (c.id, c.name, c.installed, c.configured))
+        .collect();
+    crate::selfheal::setup_next_step(&crate::selfheal::SetupState {
+        chat_label: chat_entry
+            .as_ref()
+            .map(|e| e.label.clone())
+            .unwrap_or_else(|| config.chat_provider.clone()),
+        chat_kind: chat_entry.map(|e| e.kind).unwrap_or_default(),
+        chat_ready,
+        chat_detail,
+        chat_model_installed: has_model(&chat_model),
+        chat_model,
+        fm_ready,
+        ollama_reachable: installed.is_some(),
+        embedder: config.embedder.clone(),
+        embed_model_installed: has_model(config.embed_model.trim()),
+        embed_model: config.embed_model.trim().to_string(),
+        profile_named: !config.profile.name.trim().is_empty(),
+        connectors,
+    })
+}
+
+/// Apply a confirmed connect from the transcript's confirm-click
+/// (RFC-conversational-setup §4): the ONLY chat-side path that writes an
+/// agent client's config, and the echo names the file it touched.
+#[tauri::command]
+pub async fn apply_connect_fix(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    notebook_id: String,
+    client_id: String,
+) -> Result<Message, String> {
+    let status = crate::connectors::connect_agent(app.clone(), client_id).await?;
+    let skill = if status.supports_skill && status.skill_installed {
+        " and installed the alchemy skill"
+    } else {
+        ""
+    };
+    let echo = format!(
+        "Connected {} — wrote {}{skill}. Restart {} to pick up the change.",
+        status.name, status.config_path, status.name
+    );
+    finish_tool_reply(&app, &state, &notebook_id, echo).await
 }
 
 /// Persist a tool-produced assistant reply and finish the chat turn.
@@ -5346,6 +5608,7 @@ fn tool_gate(content: &str) -> bool {
         "generate", "write", "build", "remove", "delete", "drop", "get rid", "refresh", "re-fetch",
         "refetch", "update", "save", "schedule", "edit", "rename", "change", "pause", "enable",
         "disable", "resume", "switch", "use", "show", "set", "pull", "test", "download", "list",
+        "connect", "call me", "help",
     ]
     .iter()
     .any(|k| l.contains(k));
@@ -5370,7 +5633,8 @@ fn tool_gate(content: &str) -> bool {
         "doc",
         "template",
         "generator",
-        // The settings tool (RFC-self-resolve phase 3).
+        // The settings tool (RFC-self-resolve phase 3 +
+        // RFC-conversational-setup).
         "provider",
         "model",
         "settings",
@@ -5379,6 +5643,16 @@ fn tool_gate(content: &str) -> bool {
         "ollama",
         "gateway",
         "apple intelligence",
+        "theme",
+        "style",
+        "profile",
+        "brief",
+        "agent",
+        "claude",
+        "codex",
+        "alchemy",
+        "set up",
+        "setup",
     ]
     .iter()
     .any(|k| l.contains(k));
@@ -5442,13 +5716,18 @@ Tools:\n\
 - {\"action\":\"refresh_sources\",\"name\":\"<name fragment, or empty for all URL sources>\"} — re-fetch URL sources.\n\
 - {\"action\":\"save_note\",\"title\":\"<title or empty>\"} — save the assistant's previous answer as a note.\n\
 - {\"action\":\"create_template\",\"name\":\"<short name>\",\"description\":\"<one line>\",\"prompt\":\"<the reusable generation instruction>\"} — save a reusable custom generator the user can run from Studio later. Compose \"prompt\" yourself from what they asked the generator to do.\n\
-- {\"action\":\"schedule_report\",\"kind\":\"<KINDS>|custom, or a template name from the list below\",\"interval\":\"hourly|daily|weekly\",\"name\":\"<report name>\",\"prompt\":\"<what the report should cover, for kind custom; else empty>\"} — create a recurring report (echo the user's cadence word in \"interval\" even if unsupported).\n\
+- {\"action\":\"schedule_report\",\"kind\":\"<KINDS>|brief|custom, or a template name from the list below\",\"interval\":\"hourly|daily|weekly\",\"name\":\"<report name>\",\"prompt\":\"<what the report should cover, for kind custom; else empty>\"} — create a recurring report (\"make a weekly brief of this notebook\" → kind brief, interval weekly; echo the user's cadence word in \"interval\" even if unsupported).\n\
 - {\"action\":\"update_report\",\"name\":\"<existing report name fragment>\",\"new_name\":\"\",\"kind\":\"\",\"interval\":\"\",\"prompt\":\"\",\"enabled\":\"true|false or empty\"} — change an existing recurring report; leave fields empty to keep them.\n\
 - {\"action\":\"settings\",\"op\":\"get\"} — show the current AI provider/model settings (always redacted; API keys are never readable).\n\
 - {\"action\":\"settings\",\"op\":\"set\",\"field\":\"chatProvider|studioProvider|chatModel|effort|baseUrl|smallModel|embedder|provider.<id>.chatModel|provider.<id>.effort|provider.<id>.baseUrl\",\"value\":\"<new value>\"} — change ONE AI setting (\"switch chat to ollama\" → field chatProvider, value ollama; bare chatModel/effort/baseUrl target the active chat provider). API keys can never be read or set through this tool.\n\
 - {\"action\":\"settings\",\"op\":\"models\"} — list installed Ollama models plus every provider's active model and readiness (\"what models do I have\").\n\
 - {\"action\":\"settings\",\"op\":\"test\",\"target\":\"<provider or model name, or empty for the active chat provider>\"} — live-probe one provider or model (one tiny chat + embed) and report latency (\"is ollama working\", \"test gemma3\").\n\
 - {\"action\":\"settings\",\"op\":\"pull\",\"model\":\"<ollama model name>\"} — stage `ollama pull <model>` as a one-click Terminal command; it is never executed automatically (\"download gemma3\", \"pull qwen3:8b\").\n\
+- {\"action\":\"settings\",\"op\":\"set\",\"field\":\"profile.name|profile.profession|profile.instructions\",\"value\":\"<free text>\"} — personalize (\"call me Paul\" → profile.name Paul; \"always answer briefly\" as a standing preference → profile.instructions).\n\
+- {\"action\":\"settings\",\"op\":\"style\",\"style\":\"default|learning|friendly|professional|scientific|adhd|ste100|govuk|plain|gdev|custom or empty\",\"length\":\"default|shorter|longer or empty\"} — set THIS notebook's answer voice/length (\"use the Google style here\", \"shorter answers in this notebook\"). Empty keeps that half unchanged.\n\
+- {\"action\":\"settings\",\"op\":\"theme\",\"theme\":\"<theme name, or empty to list them>\"} — switch the app theme (\"use the gruvbox theme\", \"something dark\").\n\
+- {\"action\":\"settings\",\"op\":\"connect\",\"target\":\"<agent client name, or empty to list>\"} — connect Alchemy to an installed agent client (Claude Code, Codex, …). Always confirmed with a click before anything is written.\n\
+- {\"action\":\"settings\",\"op\":\"setup\"} — guided setup: reports the next unmet setup step (\"help me get set up\").\n\
 - {\"action\":\"chat\"} — not a command; answer normally.\n\n\
 Prefer {\"action\":\"chat\"} when unsure. Questions ABOUT sources (\"what does the spec say\") are chat, \
 not tools.";
@@ -5670,6 +5949,29 @@ fn parse_tool_action(raw: &str) -> ToolAction {
                     }
                 }
             }
+            // Phase-2/3/5 verbs (RFC-conversational-setup): style carries
+            // (style, length) in (field, value); theme and connect carry
+            // their target in `field`; setup takes nothing.
+            "style" => ToolAction::Settings {
+                op: "style".into(),
+                field: s("style"),
+                value: s("length"),
+            },
+            "theme" => ToolAction::Settings {
+                op: "theme".into(),
+                field: s("theme"),
+                value: String::new(),
+            },
+            "connect" => ToolAction::Settings {
+                op: "connect".into(),
+                field: s("target"),
+                value: String::new(),
+            },
+            "setup" => ToolAction::Settings {
+                op: "setup".into(),
+                field: String::new(),
+                value: String::new(),
+            },
             _ => ToolAction::Chat,
         },
         _ => ToolAction::Chat,
@@ -5792,6 +6094,67 @@ pub(crate) fn settings_gate(content: &str) -> Option<(String, String, String)> {
         return hit("get", "", "");
     }
 
+    // The guided flow (RFC-conversational-setup §5) — exact imperative
+    // shapes only; "how do I set up X" stayed research above.
+    const SETUP_ASKS: [&str; 6] = [
+        "help me get set up",
+        "help me set up",
+        "help me get set up with alchemy",
+        "help me set up alchemy",
+        "set up alchemy",
+        "get me set up",
+    ];
+    if SETUP_ASKS.contains(&l) {
+        return hit("setup", "", "");
+    }
+
+    // Theme: "switch/set/change [the] theme to X" and "use the X theme".
+    for prefix in [
+        "switch theme to ",
+        "switch the theme to ",
+        "set theme to ",
+        "set the theme to ",
+        "change theme to ",
+        "change the theme to ",
+    ] {
+        if let Some(rest) = l.strip_prefix(prefix) {
+            let rest = rest.trim();
+            if !rest.is_empty() {
+                return hit("theme", rest, "");
+            }
+        }
+    }
+    if let Some(mid) = l
+        .strip_prefix("use the ")
+        .and_then(|r| r.strip_suffix(" theme"))
+    {
+        let mid = mid.trim();
+        if !mid.is_empty() {
+            return hit("theme", mid, "");
+        }
+    }
+
+    // "call me <name>" — the day-one profile one-liner. Case is recovered
+    // from the original text (the gate lowercases only for matching).
+    if l.starts_with("call me ") {
+        let orig: String = trimmed
+            .trim_end_matches(['?', '!', '.', ' '])
+            .chars()
+            .skip("call me ".chars().count())
+            .collect();
+        let name = orig.trim();
+        if !name.is_empty()
+            && name.chars().count() <= 30
+            && name.split_whitespace().count() <= 3
+            && name
+                .chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '\'' | '.'))
+        {
+            return hit("set", "profile.name", name);
+        }
+        return None;
+    }
+
     // switch chat|studio [provider] to <provider> — resolved (and refused,
     // falling through) against the live roster at dispatch time.
     for (prefix, field) in [
@@ -5859,6 +6222,11 @@ async fn try_settings_fast_path(
         }
         "models" => Some(settings_models_report(app, state).await),
         "pull" => crate::selfheal::settings_pull(&field).ok(),
+        // A gated theme ask is unambiguous as an ASK even when the name
+        // isn't — the roster/ambiguity reply is the right answer, not
+        // fallthrough. Same for setup: the phrase set is exact.
+        "theme" => Some(settings_theme_apply(app, &field)),
+        "setup" => Some(settings_setup_report(app, state).await),
         "test" => {
             let config = { state.ai.read().await.config().clone() };
             // Pre-resolve: an unresolvable target means this probably wasn't
@@ -5882,6 +6250,109 @@ async fn try_settings_fast_path(
         }
         _ => None,
     }
+}
+
+/// Create a report schedule and render the confirmation/refusal reply.
+/// Shared by the LLM router's schedule_report action and the deterministic
+/// schedule gate below, so the two can never validate differently.
+///
+/// Validates the kind against the live registry: any artifact kind, any
+/// existing template (by "template:<id>" or by name), the cross-notebook
+/// brief, or "custom" with a prompt. Refusing beats coercing — a schedule
+/// that quietly generates the wrong report erodes trust in all of them.
+async fn create_schedule_reply(
+    state: &AppState,
+    notebook_id: &str,
+    kind: &str,
+    interval: &str,
+    name: &str,
+    prompt: &str,
+) -> String {
+    let kind = match resolve_report_kind(kind, prompt) {
+        Ok(k) => k,
+        Err(msg) => return msg,
+    };
+    let interval_secs = match interval {
+        "hourly" => 3_600,
+        "daily" => 86_400,
+        "weekly" => 604_800,
+        other => {
+            return format!(
+                "I can schedule reports **hourly**, **daily**, or **weekly** — “{other}” isn't supported yet, so I haven't created anything. Rephrase with one of those cadences?"
+            );
+        }
+    };
+    let schedule = ReportSchedule {
+        id: new_id(),
+        notebook_id: notebook_id.to_string(),
+        name: name.trim().to_string(),
+        kind,
+        prompt: prompt.to_string(),
+        trigger: "interval".into(),
+        interval_secs,
+        enabled: true,
+        last_run_at: 0,
+        created_at: now(),
+    };
+    match state.db.add_report_schedule(&schedule).await {
+        Ok(()) => format!(
+            "Scheduled **{name}** to run {interval} — it refreshes your URL sources, then writes a timestamped note (first run starts shortly). Manage it under Studio → Reports."
+        ),
+        Err(err) => format!("Couldn't create the schedule: {err:#}"),
+    }
+}
+
+/// Deterministic schedule gate (RFC-conversational-setup phase 4): the
+/// "make a weekly brief of this notebook" shape is unambiguous and
+/// imperative, so it schedules in BOTH chat modes without the LLM router.
+/// Returns (kind, interval, name). Same tightness contract as
+/// `settings_gate`: short, leading imperative, cadence + known kind, and
+/// only filler words after — anything else falls through to normal flow.
+pub(crate) fn schedule_gate(content: &str) -> Option<(String, String, String)> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() || trimmed.len() > 80 {
+        return None;
+    }
+    let lower = trimmed.to_lowercase();
+    let l = lower.trim_end_matches(['?', '!', '.', ' ']);
+    let rest = [
+        "make me a ",
+        "make me an ",
+        "make a ",
+        "make an ",
+        "create a ",
+        "create an ",
+        "schedule a ",
+        "schedule an ",
+    ]
+    .iter()
+    .find_map(|p| l.strip_prefix(p))?;
+    let mut words = rest.split_whitespace();
+    let interval = match words.next()? {
+        i @ ("hourly" | "daily" | "weekly") => i,
+        _ => return None,
+    };
+    let kind = match words.next()? {
+        k @ ("brief" | "briefing" | "summary" | "timeline" | "faq") => k,
+        _ => return None,
+    };
+    // Whatever follows must be pure filler ("of this notebook", "report
+    // for my sources") — a real clause means a real request, not this shape.
+    const FILLER: [&str; 9] = [
+        "of", "for", "on", "this", "the", "my", "notebook", "report", "sources",
+    ];
+    if !words.all(|w| FILLER.contains(&w)) {
+        return None;
+    }
+    let mut cadence: String = interval.to_string();
+    if let Some(first) = cadence.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
+    Some((
+        kind.to_string(),
+        interval.to_string(),
+        format!("{cadence} {kind}"),
+    ))
 }
 
 /// Verbs that mean the URL in a message is a *target*, not something to add.
@@ -5910,6 +6381,12 @@ async fn try_tool_route(
     // tool_gate noun, and deep research never reaches the LLM router.
     if let Some(reply) = try_settings_fast_path(app, state, content).await {
         return Some(reply);
+    }
+    // Same for the unambiguous schedule shape (RFC-conversational-setup
+    // phase 4): "make a weekly brief of this notebook" schedules in both
+    // modes; validation still runs through the shared creation path.
+    if let Some((kind, interval, name)) = schedule_gate(content) {
+        return Some(create_schedule_reply(state, notebook_id, &kind, &interval, &name, "").await);
     }
     if !tool_gate(content) {
         return None;
@@ -6183,44 +6660,7 @@ async fn try_tool_route(
             name,
             prompt,
         } => {
-            // Validate the kind against the live registry: any artifact kind,
-            // any existing template (by "template:<id>" or by name), or
-            // "custom" with a prompt. Refusing beats coercing — a schedule
-            // that quietly generates the wrong report erodes trust in all of
-            // them. Template names resolve to ids here, at creation, so the
-            // stored kind is always the stable reference.
-            let kind = match resolve_report_kind(&kind, &prompt) {
-                Ok(k) => k,
-                Err(msg) => return Some(msg),
-            };
-            let interval_secs = match interval.as_str() {
-                "hourly" => 3_600,
-                "daily" => 86_400,
-                "weekly" => 604_800,
-                other => {
-                    return Some(format!(
-                        "I can schedule reports **hourly**, **daily**, or **weekly** — “{other}” isn't supported yet, so I haven't created anything. Rephrase with one of those cadences?"
-                    ));
-                }
-            };
-            let schedule = ReportSchedule {
-                id: new_id(),
-                notebook_id: notebook_id.to_string(),
-                name: name.trim().to_string(),
-                kind,
-                prompt,
-                trigger: "interval".into(),
-                interval_secs,
-                enabled: true,
-                last_run_at: 0,
-                created_at: now(),
-            };
-            match state.db.add_report_schedule(&schedule).await {
-                Ok(()) => Some(format!(
-                    "Scheduled **{name}** to run {interval} — it refreshes your URL sources, then writes a timestamped note (first run starts shortly). Manage it under Studio → Reports."
-                )),
-                Err(err) => Some(format!("Couldn't create the schedule: {err:#}")),
-            }
+            Some(create_schedule_reply(state, notebook_id, &kind, &interval, &name, &prompt).await)
         }
         ToolAction::Settings { op, field, value } => {
             // The settings tool (RFC-self-resolve phase 3, plus the model
@@ -6238,6 +6678,13 @@ async fn try_tool_route(
                 "pull" => Some(match crate::selfheal::settings_pull(&field) {
                     Ok(text) | Err(text) => text,
                 }),
+                "style" => {
+                    Some(settings_style_apply(app, state, notebook_id, &field, &value).await)
+                }
+                "theme" => Some(settings_theme_apply(app, &field)),
+                // Read/confirm only — the write happens on the confirm click.
+                "connect" => Some(settings_connect_report(app, &field).await),
+                "setup" => Some(settings_setup_report(app, state).await),
                 _ => match crate::selfheal::settings_set(&mut config, &field, &value) {
                     Ok(echo) => match apply_ai_config(app, state, config).await {
                         Ok(()) => {
@@ -11007,6 +11454,59 @@ mod tool_tests {
             ("pull".into(), "gemma3".into(), String::new())
         );
         assert_eq!(gate("ollama pull qwen3:8b").1, "qwen3:8b");
+    }
+
+    /// RFC-conversational-setup phases 2 and 5: setup, theme, and "call me"
+    /// join the deterministic gate.
+    #[test]
+    fn settings_gate_routes_setup_theme_and_profile() {
+        let gate = |s: &str| settings_gate(s).expect(s);
+        assert_eq!(gate("help me get set up").0, "setup");
+        assert_eq!(gate("Set up Alchemy!").0, "setup");
+        assert_eq!(
+            gate("use the gruvbox theme"),
+            ("theme".into(), "gruvbox".into(), String::new())
+        );
+        assert_eq!(gate("set the theme to nord").1, "nord");
+        assert_eq!(gate("switch theme to tokyo night").1, "tokyo night");
+        // Case survives for names — the gate lowercases only for matching.
+        assert_eq!(
+            gate("call me Paul"),
+            ("set".into(), "profile.name".into(), "Paul".into())
+        );
+        assert_eq!(gate("Call me Dr. Thrash.").2, "Dr. Thrash");
+        // Not-routed: clause-shaped or question-shaped stays research.
+        assert!(settings_gate("call me when the report is done").is_none());
+        assert!(settings_gate("how do I set up a home lab?").is_none());
+        assert!(settings_gate("use the same theme as the website mockup").is_none());
+    }
+
+    /// RFC-conversational-setup phase 4: the unambiguous schedule shape
+    /// routes deterministically in both modes; everything else falls through.
+    #[test]
+    fn schedule_gate_routes_the_brief_shape() {
+        assert_eq!(
+            schedule_gate("make a weekly brief of this notebook").unwrap(),
+            ("brief".into(), "weekly".into(), "Weekly brief".into())
+        );
+        assert_eq!(
+            schedule_gate("Create a daily summary.").unwrap(),
+            ("summary".into(), "daily".into(), "Daily summary".into())
+        );
+        assert_eq!(
+            schedule_gate("schedule an hourly faq for my sources")
+                .unwrap()
+                .0,
+            "faq"
+        );
+        // Not-routed: real clauses, questions, unknown cadences/kinds, length.
+        assert!(schedule_gate("make a weekly brief comparing rates and prices").is_none());
+        assert!(schedule_gate("why make a weekly brief of this notebook").is_none());
+        assert!(schedule_gate("make a monthly brief of this notebook").is_none());
+        assert!(schedule_gate("make a weekly podcast of this notebook").is_none());
+        assert!(schedule_gate("make a brief weekly of this notebook").is_none());
+        let long = format!("make a weekly brief {}", "of this notebook ".repeat(5));
+        assert!(schedule_gate(&long).is_none());
     }
 
     #[test]
