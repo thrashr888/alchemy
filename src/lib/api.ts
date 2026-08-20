@@ -279,9 +279,16 @@ export const api = {
     content: string,
     config: ChatConfig,
     sourceIds?: string[] | null,
+    providerOverride?: string | null,
   ) =>
     run(
-      ai<Message>("send_message", { notebookId, content, config, sourceIds }),
+      ai<Message>("send_message", {
+        notebookId,
+        content,
+        config,
+        sourceIds,
+        providerOverride: providerOverride ?? null,
+      }),
     ),
   sendMessageAgentic: (
     notebookId: string,
@@ -299,6 +306,11 @@ export const api = {
     ),
   openInTerminal: (command: string) =>
     run(cmd<void>("open_in_terminal", { command })),
+  /** Apply one settings-tool change from an error-row fix button
+   *  (RFC-self-resolve): same allowlist as the chat `settings` tool; the
+   *  returned Message is the tool row echoed into the transcript. */
+  applySettingsFix: (notebookId: string, field: string, value: string) =>
+    run(cmd<Message>("apply_settings_fix", { notebookId, field, value })),
   /** Which notebook an incoming source belongs in. A bare `url` is fetched
    *  and extracted first, so this can take a second. */
   suggestNotebook: (input: { title?: string; text?: string; url?: string }) =>

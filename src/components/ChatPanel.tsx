@@ -1019,6 +1019,92 @@ function SummaryBanner({
   );
 }
 
+/** Resend the question an error row failed to answer: both rows leave the
+ *  transcript and the normal send pipeline owns the fresh attempt. With a
+ *  providerOverride, the rerun answers on that engine — config untouched
+ *  (RFC-self-resolve phase 4). Never loops: one click, one resend. */
+async function resendFailed(message: Message, providerOverride?: string) {
+  const msgs = useStore.getState().messages;
+  const i = msgs.findIndex((m) => m.id === message.id);
+  const prevUser = msgs
+    .slice(0, Math.max(i, 0))
+    .reverse()
+    .find((m) => m.role === "user");
+  if (!prevUser || useStore.getState().sending) return;
+  await api.deleteMessage(message.id);
+  await api.deleteMessage(prevUser.id);
+  useStore.setState({
+    messages: msgs.filter((m) => m.id !== message.id && m.id !== prevUser.id),
+  });
+  void useStore
+    .getState()
+    .sendMessage(prevUser.content, undefined, providerOverride);
+}
+
+/** Display name for a provider id in fix buttons; falls back to the id. */
+function providerLabelFor(providerId: string): string {
+  const p = useStore
+    .getState()
+    .aiConfig?.providers.find((x) => x.id === providerId);
+  return p?.label || providerId;
+}
+
+/** "Answer with Ollama / Apple Intelligence" on the latest error row
+ *  (RFC-self-resolve phase 4): one-click rerun of this question on a local
+ *  engine, offered only when that engine is actually alive (same readiness
+ *  probe the provider pill uses) and isn't the provider that just failed. */
+function FallbackOffers({ message }: { message: Message }) {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const chatProvider = aiConfig?.chatProvider;
+  const [alive, setAlive] = useState<{ id: string; label: string }[]>([]);
+  useEffect(() => {
+    if (!aiConfig) return;
+    let live = true;
+    const candidates = aiConfig.providers.filter(
+      (p) => (p.kind === "ollama" || p.kind === "fm") && p.id !== chatProvider,
+    );
+    void Promise.all(
+      candidates.map(async (p) => {
+        try {
+          const r = await api.providerReadinessOne(p.id);
+          return r.ready ? p : null;
+        } catch {
+          return null;
+        }
+      }),
+    ).then((rs) => {
+      if (!live) return;
+      setAlive(
+        rs
+          .filter((p): p is NonNullable<typeof p> => p !== null)
+          .map((p) => ({
+            id: p.id,
+            label: p.kind === "fm" ? "Apple Intelligence" : p.label,
+          })),
+      );
+    });
+    return () => {
+      live = false;
+    };
+    // Re-probe only when the failing provider changes, not per render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatProvider]);
+  return (
+    <>
+      {alive.map((p) => (
+        <Button
+          key={p.id}
+          variant="ghost"
+          size="sm"
+          onClick={() => void resendFailed(message, p.id)}
+        >
+          Answer with {p.label}
+        </Button>
+      ))}
+    </>
+  );
+}
+
 // Memoized: message objects are stable across renders, and without this
 // every streamed token re-rendered (and re-parsed the markdown of) the
 // entire transcript, not just the growing tail.
@@ -1038,7 +1124,10 @@ const ChatMessage = memo(function ChatMessage({
     return (
       <div className="flex items-start gap-2 py-0.5 text-caption text-muted-foreground">
         <Wrench className="mt-0.5 h-3 w-3 shrink-0 text-subtle-foreground" />
-        <span className="selectable min-w-0">{message.content}</span>
+        {/* pre-line: the settings tool's snapshot reply is multi-line. */}
+        <span className="selectable min-w-0 whitespace-pre-line">
+          {message.content}
+        </span>
       </div>
     );
   }
@@ -1057,30 +1146,41 @@ const ChatMessage = memo(function ChatMessage({
   // Provider failures are part of the conversation record: a quiet danger
   // wash naming the provider, so an unanswered question is never a mystery.
   // When the advice names a fix, it becomes a button: launch Terminal with
-  // the sign-in command (backend allowlists the set), or jump to Settings.
+  // the sign-in command (backend allowlists the set), jump to Settings,
+  // apply a suggested provider switch through the settings tool, or rerun
+  // this question on a live local engine (RFC-self-resolve phases 2–4).
   if (message.kind === "error") {
     const fixCmd = /Fix: open Terminal, run `([^`]+)`/.exec(
       message.content,
     )?.[1];
-    const pointsAtSettings = message.content.includes("Settings → Models");
-    // Resend the question this row failed to answer: both rows leave the
-    // transcript and the normal send pipeline owns the fresh attempt.
-    const retry = async () => {
-      const msgs = useStore.getState().messages;
-      const i = msgs.findIndex((m) => m.id === message.id);
-      const prevUser = msgs
-        .slice(0, Math.max(i, 0))
-        .reverse()
-        .find((m) => m.role === "user");
-      if (!prevUser || useStore.getState().sending) return;
-      await api.deleteMessage(message.id);
-      await api.deleteMessage(prevUser.id);
-      useStore.setState({
-        messages: msgs.filter(
-          (m) => m.id !== message.id && m.id !== prevUser.id,
-        ),
-      });
-      void useStore.getState().sendMessage(prevUser.content);
+    // Phase 1's grammar named only Models; phase-2 diagnoses may point at
+    // any tab ("Settings → General"). Same literal-phrase contract.
+    const settingsTab = /Settings → (Models|General|Sources|Studio|Agents)/.exec(
+      message.content,
+    )?.[1]?.toLowerCase();
+    // Phase-2 "switch provider" fix: applied through the phase-3 settings
+    // tool, so the change echoes into the transcript as a tool row.
+    const switchFix = /Fix: switch (chat|studio) to provider `([^`]+)`/.exec(
+      message.content,
+    );
+    const applySwitch = async (role: string, providerId: string) => {
+      const nb = useStore.getState().currentId;
+      if (!nb) return;
+      try {
+        const toolRow = await api.applySettingsFix(
+          nb,
+          role === "studio" ? "studioProvider" : "chatProvider",
+          providerId,
+        );
+        useStore.setState({
+          messages: [...useStore.getState().messages, toolRow],
+          aiConfig: await api.getAiConfig(),
+        });
+      } catch (e) {
+        useStore
+          .getState()
+          .pushToast("error", e instanceof Error ? e.message : String(e));
+      }
     };
     return (
       <div className="flex flex-col gap-1.5">
@@ -1088,11 +1188,18 @@ const ChatMessage = memo(function ChatMessage({
         <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3.5 py-2.5">
           <div className="flex items-start gap-2 text-body text-foreground">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
-            <span className="selectable min-w-0">{message.content}</span>
+            {/* pre-line: a phase-2 diagnosis arrives as extra lines. */}
+            <span className="selectable min-w-0 whitespace-pre-line">
+              {message.content}
+            </span>
           </div>
-          <div className="mt-2 flex items-center gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             {isLast && (
-              <Button variant="ghost" size="sm" onClick={() => void retry()}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => void resendFailed(message)}
+              >
                 <RefreshCw className="h-3.5 w-3.5" />
                 Retry
               </Button>
@@ -1107,15 +1214,25 @@ const ChatMessage = memo(function ChatMessage({
                   Open Terminal: {fixCmd}
                 </Button>
               )}
-              {pointsAtSettings && (
+              {switchFix && (
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => useStore.getState().openSettings("models")}
+                  onClick={() => void applySwitch(switchFix[1], switchFix[2])}
                 >
-                  Model settings…
+                  Switch {switchFix[1]} to {providerLabelFor(switchFix[2])}
                 </Button>
               )}
+              {settingsTab && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => useStore.getState().openSettings(settingsTab)}
+                >
+                  {settingsTab === "models" ? "Model settings…" : "Open Settings"}
+                </Button>
+              )}
+              {isLast && <FallbackOffers message={message} />}
           </div>
           {message.model && (
             <div className="mt-1.5 text-micro text-subtle-foreground">

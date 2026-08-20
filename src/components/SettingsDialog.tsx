@@ -416,9 +416,28 @@ function GeneralTab() {
         onEnable={previewSound}
       />
       <QuietWhenFocusedToggle />
+      <SelfDiagnoseToggle />
       <BackgroundToggle />
       <TrayToggle />
     </div>
+  );
+}
+
+/** Diagnose-and-suggest on unclassified provider errors (RFC-self-resolve
+ *  phase 2). On by default — the toggle is cost control (one small-model
+ *  call per unknown failure), not opt-in; the deterministic error
+ *  classifier keeps working either way. */
+function SelfDiagnoseToggle() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  if (!aiConfig) return null;
+  return (
+    <SettingRow
+      label="Diagnose model errors"
+      hint="When a provider fails in a way Alchemy doesn't recognize, a small local model explains it and suggests fixes. Off, you get the plain error."
+      checked={aiConfig.selfDiagnose}
+      onChange={(v) => void saveAiConfig({ ...aiConfig, selfDiagnose: v })}
+    />
   );
 }
 

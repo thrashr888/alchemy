@@ -507,6 +507,10 @@ export interface AiConfig {
   setupSeen: boolean;
   gitSyncMinutes: number;
   notionToken: string;
+  /** Diagnose-and-suggest on unclassified provider errors (RFC-self-resolve
+   *  phase 2): one small-model call per unknown failure. On by default; the
+   *  toggle is cost control. */
+  selfDiagnose: boolean;
 }
 
 /** One passage behind a meta-chat answer: what it is and where it lives. */

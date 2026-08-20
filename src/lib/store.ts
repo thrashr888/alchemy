@@ -518,6 +518,12 @@ export const useStore = create<AppState>((set, get) => {
         "mcp://changed",
         (e) => {
           const { scope, notebookId } = e.payload;
+          // A settings change (chat/MCP settings tool, error-row fix button)
+          // is a config move, not an arrival — refresh quietly, no chime.
+          if (scope === "settings") {
+            void api.getAiConfig().then((aiConfig) => set({ aiConfig }));
+            return;
+          }
           playArrival();
           // Debounced: an agent looping tool calls fires one of these per
           // call, and each refresh is a notebooks read plus a native menu
@@ -1264,7 +1270,7 @@ export const useStore = create<AppState>((set, get) => {
       set({ selectedSourceIds: sel });
     },
 
-    sendMessage: async (content, overrideSourceIds) => {
+    sendMessage: async (content, overrideSourceIds, providerOverride) => {
       const id = get().currentId;
       if (!id || get().sending) return;
       const optimistic: Message = {
@@ -1292,10 +1298,13 @@ export const useStore = create<AppState>((set, get) => {
         // @ mentions replace (not merge with) the checkbox selection: the
         // user named exactly what this question is about.
         const sourceIds = overrideSourceIds ?? selectedIdsForIpc();
-        if (get().agentMode) {
+        // A provider-override rerun (the error row's "Answer with X") takes
+        // the direct chat path even in deep-research mode: the point is one
+        // grounded answer from the named local engine, now.
+        if (get().agentMode && !providerOverride) {
           await api.sendMessageAgentic(id, content, cfg, sourceIds);
         } else {
-          await api.sendMessage(id, content, cfg, sourceIds);
+          await api.sendMessage(id, content, cfg, sourceIds, providerOverride);
         }
         // Reload in parallel; chat tools can touch sources, notes, report
         // schedules, and templates, so refresh them all with the transcript.

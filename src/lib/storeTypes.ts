@@ -243,7 +243,13 @@ export interface AppState {
   /** overrideSourceIds: per-message retrieval narrowing from @ mentions —
    *  raw owner ids (source ids and "note:<id>"), replacing the checkbox
    *  selection for this send only. */
-  sendMessage: (content: string, overrideSourceIds?: string[]) => Promise<void>;
+  sendMessage: (
+    content: string,
+    overrideSourceIds?: string[],
+    /** One-shot provider override (RFC-self-resolve phase 4): rerun this
+     *  question on the named provider without touching the config. */
+    providerOverride?: string,
+  ) => Promise<void>;
   loadOlderMessages: () => Promise<void>;
   cancelGeneration: (scope?: "chat" | "artifact") => void;
   openSourceViewer: (sourceId: string, title: string, highlight?: string) => void;
