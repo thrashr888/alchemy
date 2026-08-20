@@ -110,12 +110,34 @@ embed, short timeout) so a looping agent can't turn probing into spend;
   every new verb. A deterministic `settings_gate` fast path also routes
   tight imperative settings shapes in BOTH chat modes, since deep
   research never reaches the LLM router.
-- **Phase 2:** `profile`, `style`, `theme`.
-- **Phase 3:** `connect`, both surfaces, confirm-gated.
-- **Phase 4:** router awareness for the already-shipped template and
-  schedule tools ("make a weekly brief of this notebook" →
-  `schedule_report`) — no new surface, just routing.
-- **Phase 5:** `setup`, composing 1–4.
+- **Phase 2 (shipped):** `profile` rides the `set` verb
+  (`profile.name|profession|instructions`, capped free text, key-shaped
+  values refused, snapshot shows it); `style` validates against
+  `rag::CHAT_STYLES` (+ learning/custom/default) with label-fragment
+  matching and travels as a `settings://style` event the frontend merges
+  into the notebook's stored ChatConfig (MCP takes `notebook_id`);
+  `theme` fuzzy-resolves over a Rust mirror of the themes.ts roster
+  ("the dark rust one" → Gruvbox) and applies via `settings://theme`
+  through the normal setTheme path. All echo transcript rows.
+  Also shipped here: `test` timeouts now consult `/api/ps` — a cold
+  model paging in reads as "still loading, try again in a minute", a
+  dead daemon gets the `ollama serve` affordance.
+- **Phase 3 (shipped):** `connect` — read side lists the connectors.rs
+  clients and their state; the write is confirm-gated on BOTH surfaces
+  (chat renders `` Confirm: connect agent `<id>` (<Name>) `` as a
+  click that calls `apply_connect_fix`; MCP refuses without
+  `confirm: true`, naming the file); the echo names the config file
+  written.
+- **Phase 4 (shipped):** router awareness — `brief` joined the
+  schedule_report router grammar, and the deterministic `schedule_gate`
+  routes the tight "make a weekly brief of this notebook" shape in both
+  chat modes through the shared `create_schedule_reply` validation.
+- **Phase 5 (shipped):** `setup` — live state gathered in
+  `settings_setup_report`, one next unmet step chosen and rendered by
+  the pure `setup_next_step` through the existing button grammars;
+  "help me get set up" sits in the deterministic gate; the MCP op
+  drives the same flow headlessly (minus `connect`'s confirm, which an
+  agent must pass explicitly).
 
 ## Non-goals
 
