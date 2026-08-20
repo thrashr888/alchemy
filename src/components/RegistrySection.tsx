@@ -241,6 +241,7 @@ export function RegistrySection() {
               cards={shown}
               nbTitle={nbTitle}
               onNew={() => setCreating(true)}
+              onChanged={load}
             />
           ) : (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
@@ -491,9 +492,11 @@ export function AttachToCardModal({
       onClose={onClose}
       title="File under a card"
       footer={
-        <Button variant="secondary" onClick={onClose}>
-          Cancel
-        </Button>
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+        </div>
       }
     >
       <div className="flex flex-col gap-3">
@@ -551,13 +554,22 @@ function CardTable({
   cards,
   nbTitle,
   onNew,
+  onChanged,
 }: {
   cards: RegistryCard[];
   nbTitle: (id: string) => string;
   onNew: () => void;
+  onChanged: () => void;
 }) {
+  const { confirm, dialog } = useConfirm();
   return (
     <>
+      <div className="mb-3 flex justify-end">
+        <Button variant="secondary" onClick={onNew}>
+          <Plus className="h-4 w-4" />
+          New card
+        </Button>
+      </div>
       <HomeTable
         columns={[
           { key: "name", label: "Name" },
@@ -565,6 +577,7 @@ function CardTable({
           { key: "docs", label: "Documents", className: "text-right" },
           { key: "nb", label: "Notebooks" },
           { key: "id", label: "Identifiers" },
+          { key: "menu", label: "" },
         ]}
       >
         {cards.map((c) => {
@@ -581,7 +594,7 @@ function CardTable({
             <tr
               key={c.id}
               onClick={() => useStore.setState({ openCardId: c.id })}
-              className="cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2"
+              className="group cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2"
             >
               <td className="px-3 py-2">
                 <span className="flex items-center gap-2">
@@ -609,14 +622,37 @@ function CardTable({
               <td className="px-3 py-2 text-caption text-subtle-foreground">
                 {c.identifiers}
               </td>
+              <td className="w-8 px-2 py-2">
+                <RowMenu
+                  items={[
+                    {
+                      label: "Open",
+                      onClick: () => useStore.setState({ openCardId: c.id }),
+                    },
+                    {
+                      label: "Delete card…",
+                      danger: true,
+                      onClick: () => void (async () => {
+                        const ok = await confirm({
+                          title: `Delete “${c.name}”?`,
+                          message:
+                            "The documents filed under it are untouched — only the card and its filing go away.",
+                          confirmLabel: "Delete",
+                          danger: true,
+                        });
+                        if (!ok) return;
+                        await api.deleteRegistryCard(c.id);
+                        onChanged();
+                      })(),
+                    },
+                  ]}
+                />
+              </td>
             </tr>
           );
         })}
       </HomeTable>
-      <Button variant="secondary" className="mt-3" onClick={onNew}>
-        <Plus className="h-4 w-4" />
-        New card
-      </Button>
+      {dialog}
     </>
   );
 }
@@ -871,7 +907,7 @@ function NewCardModal({
       onClose={onClose}
       title="New card"
       footer={
-        <>
+        <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>
             Cancel
           </Button>
@@ -883,7 +919,7 @@ function NewCardModal({
           >
             Create
           </Button>
-        </>
+        </div>
       }
     >
       <div className="flex flex-col gap-3">
