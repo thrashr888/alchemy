@@ -542,6 +542,8 @@ export interface ChatConfig {
   style:
     | "default"
     | "learning"
+    | "friendly"
+    | "professional"
     | "scientific"
     | "adhd"
     | "ste100"
@@ -550,6 +552,7 @@ export interface ChatConfig {
     | "gdev"
     | "custom";
   customPrompt: string;
+  /** Persisted ids; the UI labels these Concise, Balanced, and Thorough. */
   length: "default" | "longer" | "shorter";
 }
 

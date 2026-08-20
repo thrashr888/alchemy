@@ -4906,8 +4906,7 @@ fn chat_style_instruction(cfg: &ChatConfig) -> String {
             "Act as a patient learning guide: explain step by step, define key terms, and build intuition.".into(),
         ),
         "custom" if !cfg.custom_prompt.trim().is_empty() => parts.push(cfg.custom_prompt.trim().into()),
-        // Writing standards (rag::CHAT_STYLES): scientific, adhd, ste100,
-        // govuk, plain, gdev — real style guides compressed to prompt size.
+        // Shared voice and writing-standard presets in rag::CHAT_STYLES.
         id => {
             if let Some(text) = rag::style_instructions(id) {
                 parts.push(text.into());
@@ -4915,9 +4914,23 @@ fn chat_style_instruction(cfg: &ChatConfig) -> String {
         }
     }
     match cfg.length.as_str() {
-        "longer" => parts.push("Give thorough, detailed answers with examples.".into()),
-        "shorter" => parts.push("Be concise — answer in just a few sentences.".into()),
+        // Keep the legacy ids so existing per-notebook localStorage selections
+        // survive the clearer Concise / Balanced / Thorough labels.
+        "longer" => parts.push(
+            "Answer thoroughly. Lead with the conclusion, then explain how the cited evidence supports it, including relevant uncertainty, caveats, and source-supported examples. Do not pad, repeat, or add unsupported background."
+                .into(),
+        ),
+        "shorter" => parts.push(
+            "Answer directly. Aim for no more than three short paragraphs or five bullets, unless accuracy, completeness, or the user's request requires more. Include essential evidence, caveats, and citations."
+                .into(),
+        ),
         _ => {}
+    }
+    if !parts.is_empty() {
+        parts.push(
+            "This guidance controls presentation only; it must not change facts, uncertainty, citations, or a format the user explicitly requested."
+                .into(),
+        );
     }
     parts.join(" ")
 }
@@ -9909,6 +9922,35 @@ pub async fn check_ollama(state: State<'_, AppState>) -> Result<bool, String> {
 #[cfg(test)]
 mod tool_tests {
     use super::*;
+
+    #[test]
+    fn chat_presets_compose_style_and_length_guidance() {
+        let instruction = |style: &str, length: &str| {
+            chat_style_instruction(&ChatConfig {
+                style: style.into(),
+                length: length.into(),
+                ..Default::default()
+            })
+        };
+
+        let friendly = instruction("friendly", "default");
+        assert!(friendly.starts_with(rag::style_instructions("friendly").unwrap()));
+        assert!(friendly.contains("presentation only"));
+
+        let professional_concise = instruction("professional", "shorter");
+        assert!(professional_concise.starts_with(rag::style_instructions("professional").unwrap()));
+        assert!(
+            professional_concise.contains("no more than three short paragraphs or five bullets")
+        );
+        assert!(professional_concise.contains("essential evidence, caveats, and citations"));
+
+        let thorough = instruction("default", "longer");
+        assert!(thorough.starts_with("Answer thoroughly. Lead with the conclusion"));
+        assert!(thorough.contains("source-supported examples"));
+        assert!(thorough.contains("Do not pad, repeat, or add unsupported background"));
+
+        assert_eq!(instruction("default", "default"), "");
+    }
 
     /// RFC-source-tags: `#foo` → `foo`, lowercase, dedupe (first-seen order
     /// kept), whitespace/commas both split, empties vanish.

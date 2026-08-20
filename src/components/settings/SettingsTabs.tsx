@@ -13,11 +13,13 @@ import { Input, Textarea } from "../ui";
 import {
   AlignLeft,
   Braces,
+  Briefcase,
   Feather,
   FlaskConical,
   Globe,
   GraduationCap,
   Landmark,
+  MessageCircle,
   PenLine,
   Scissors,
   ScrollText,
@@ -27,11 +29,13 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-// The writing-standard presets mirror rag::CHAT_STYLES in the backend —
-// real style guides (ASD-STE100, GOV.UK, US Federal Plain Language, the
-// i-have-adhd rules) compressed to prompt size.
+// These presets mirror rag::CHAT_STYLES in the backend. The specialist
+// choices compress real writing standards (ASD-STE100, GOV.UK, US Federal
+// Plain Language, and the i-have-adhd rules) to prompt size.
 const CHAT_STYLES = [
   { id: "default", label: "Default", icon: Sparkles, hint: "Balanced, grounded answers for research and brainstorming." },
+  { id: "friendly", label: "Friendly", icon: MessageCircle, hint: "Warm, approachable, and direct, without cheerleading or filler." },
+  { id: "professional", label: "Professional", icon: Briefcase, hint: "Takeaway first, then evidence and caveats in clear workplace prose." },
   { id: "learning", label: "Learning Guide", icon: GraduationCap, hint: "Explains step by step, defines terms, builds intuition." },
   { id: "scientific", label: "Scientific", icon: FlaskConical, hint: "Precise and hedged to the evidence; quantified, summary first." },
   { id: "adhd", label: "ADHD-friendly", icon: Zap, hint: "Answer first, numbered steps, short lists, no preamble or closers." },
@@ -43,9 +47,9 @@ const CHAT_STYLES = [
 ] as const;
 
 const CHAT_LENGTHS = [
-  { id: "default", label: "Default", icon: AlignLeft },
-  { id: "longer", label: "Longer", icon: ScrollText },
-  { id: "shorter", label: "Shorter", icon: Scissors },
+  { id: "shorter", label: "Concise", icon: Scissors, hint: "Direct answer in up to three short paragraphs or five bullets." },
+  { id: "default", label: "Balanced", icon: AlignLeft, hint: "Matches the level of detail to the question." },
+  { id: "longer", label: "Thorough", icon: ScrollText, hint: "Conclusion first, then evidence, reasoning, uncertainty, and useful examples." },
 ] as const;
 
 const CHAT_FONTS = [
@@ -76,6 +80,7 @@ export function ChatTab() {
   const apply = (patch: Partial<ChatConfig>) =>
     setChatConfig({ ...chatConfig, ...patch });
   const styleHint = CHAT_STYLES.find((style) => style.id === chatConfig.style)?.hint;
+  const lengthHint = CHAT_LENGTHS.find((length) => length.id === chatConfig.length)?.hint;
 
   return (
     <div className="flex flex-col gap-4">
@@ -130,6 +135,7 @@ export function ChatTab() {
             />
           ))}
         </div>
+        {lengthHint && <span className="text-micro text-subtle-foreground">{lengthHint}</span>}
       </Field>
     </div>
   );

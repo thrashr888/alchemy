@@ -22,10 +22,25 @@ fn cap_excerpt(body: &str, compact: bool) -> Cow<'_, str> {
 }
 
 /// Selectable answer-voice presets (Settings → Chat, per notebook): (id,
-/// label, hint, instructions). Real writing standards compressed to
-/// system-prompt size, applied through the per-notebook `ChatConfig` style
-/// alongside the existing default/learning/custom options.
+/// label, hint, instructions). Everyday voices and real writing standards
+/// compressed to system-prompt size, applied through the per-notebook
+/// `ChatConfig` style alongside the existing default/learning/custom options.
 pub const CHAT_STYLES: &[(&str, &str, &str, &str)] = &[
+    (
+        "friendly",
+        "Friendly",
+        "Warm, approachable, and direct",
+        "Use a warm, approachable, conversational tone. Prefer everyday language and natural \
+         contractions. Be direct; avoid cheerleading, emojis, and filler.",
+    ),
+    (
+        "professional",
+        "Professional",
+        "Clear workplace prose, takeaway first",
+        "Write for a busy professional. Lead with the takeaway, then the supporting evidence and \
+         material caveats. Use precise language and clear structure; avoid corporate jargon and \
+         filler.",
+    ),
     (
         "scientific",
         "Scientific",
@@ -134,7 +149,8 @@ Rules:\n\
 excerpts each contributed evidence, cite each one — comparisons, multi-part questions, and claims \
 that link two facts usually need citations from two or more different sources.\n\
 - If the excerpts do not contain the answer, say so plainly. Do not fabricate.\n\
-- Be concise and well-structured. Prefer short paragraphs and bullet lists.\n\
+- Be clear, well-structured, and proportionate to the question. Prefer short paragraphs and bullet \
+lists when useful.\n\
 - Exception: when the user asks you to FIND or ADD sources, you may propose full, concrete URLs — \
 adapt the URLs of existing sources (e.g. change a search query in one) or use well-known sites. \
 List each proposed URL on its own line and tell the user to reply \"add those links\" to import them.";
@@ -351,7 +367,7 @@ pub fn build_chat_messages(
         CHAT_SYSTEM.to_string()
     } else {
         format!(
-            "{CHAT_SYSTEM}\n\nAdditional style guidance: {}",
+            "{CHAT_SYSTEM}\n\nAdditional presentation guidance (apply it without weakening the grounding or citation rules above): {}",
             extra_system.trim()
         )
     };
@@ -1045,6 +1061,14 @@ mod tests {
         assert_eq!(litm_order(vec![0, 1]), vec![0, 1]);
         assert_eq!(litm_order(vec![0]), vec![0]);
         assert_eq!(litm_order(Vec::<u8>::new()), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn base_chat_prompt_is_length_neutral() {
+        assert!(!CHAT_SYSTEM.to_ascii_lowercase().contains("be concise"));
+        assert!(
+            CHAT_SYSTEM.contains("Be clear, well-structured, and proportionate to the question")
+        );
     }
 
     /// RFC-source-tags: manifest lines carry the user's tags between title
