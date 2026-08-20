@@ -357,11 +357,13 @@ pub(crate) async fn triage_suggested_cards(
     // frequency counts a verdict rests on CHANGE as documents arrive, and a
     // "routine" stamped when a thing sat in two documents is stale once it
     // sits in eight. (This is also how a signal fix reaches cards the old
-    // signal already judged.) Within a run, judged cards stay judged.
+    // signal already judged.) Within a run, judged cards stay judged. The
+    // marker is consumed only when verdicts actually land — a failed model
+    // call must not strand stale verdicts until the next restart.
     use std::sync::atomic::Ordering::SeqCst;
     static RETRIAGED_THIS_RUN: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
-    let refresh = !RETRIAGED_THIS_RUN.swap(true, SeqCst);
+    let refresh = !RETRIAGED_THIS_RUN.load(SeqCst);
     let queue: Vec<RegistryCard> = cards
         .into_iter()
         .filter(|c| c.origin == "auto" && (refresh || c.triage.is_empty()))
@@ -449,6 +451,9 @@ pub(crate) async fn triage_suggested_cards(
         }
     }
     if marked > 0 {
+        if refresh {
+            RETRIAGED_THIS_RUN.store(true, SeqCst);
+        }
         super::notify_changed("registry", None);
     }
     Ok(marked)
