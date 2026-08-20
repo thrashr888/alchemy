@@ -554,6 +554,36 @@ export const useStore = create<AppState>((set, get) => {
               .then((reportSchedules) => set({ reportSchedules }));
         },
       );
+      // The settings tool's per-notebook style verb (RFC-conversational-setup
+      // §2): the validated change arrives as an event because ChatConfig is
+      // frontend state. Merge into the notebook's stored config; update the
+      // live store only when that notebook is in front here.
+      void listen<{
+        notebookId: string;
+        style?: string | null;
+        length?: string | null;
+      }>("settings://style", (e) => {
+        const { notebookId, style, length } = e.payload;
+        const key = `chatConfig:${notebookId}`;
+        let cur: ChatConfig = { ...DEFAULT_CHAT_CONFIG };
+        try {
+          const raw = localStorage.getItem(key);
+          if (raw) cur = { ...DEFAULT_CHAT_CONFIG, ...JSON.parse(raw) };
+        } catch {
+          // Unreadable stored config — rebuild from the defaults.
+        }
+        // The backend validated these against the same rosters this union
+        // mirrors (selfheal::resolve_style / settings_style).
+        if (style != null) cur.style = style as ChatConfig["style"];
+        if (length != null) cur.length = length as ChatConfig["length"];
+        localStorage.setItem(key, JSON.stringify(cur));
+        if (get().currentId === notebookId) set({ chatConfig: cur });
+      });
+      // The settings tool's theme verb (§3): the resolved id travels as an
+      // event and applies through the same setTheme path Settings uses.
+      void listen<{ theme: string }>("settings://theme", (e) => {
+        get().setTheme(e.payload.theme);
+      });
       // Safety net: the backend broadcasts every finished generation. If the
       // invoke path lost the result (e.g. a long synthesis outlived a timeout),
       // this still lands the note in the list instead of losing it silently.

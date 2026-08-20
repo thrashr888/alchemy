@@ -311,6 +311,11 @@ export const api = {
    *  returned Message is the tool row echoed into the transcript. */
   applySettingsFix: (notebookId: string, field: string, value: string) =>
     run(cmd<Message>("apply_settings_fix", { notebookId, field, value })),
+  /** Confirmed connect from the transcript's confirm-click — the only
+   *  chat-side path that writes an agent client's config; the returned
+   *  Message is the tool row naming the file touched. */
+  applyConnectFix: (notebookId: string, clientId: string) =>
+    run(ai<Message>("apply_connect_fix", { notebookId, clientId })),
   /** Which notebook an incoming source belongs in. A bare `url` is fetched
    *  and extracted first, so this can take a second. */
   suggestNotebook: (input: { title?: string; text?: string; url?: string }) =>

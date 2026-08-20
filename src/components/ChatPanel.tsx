@@ -1105,6 +1105,99 @@ function FallbackOffers({ message }: { message: Message }) {
   );
 }
 
+/** The transcript's literal button grammars, shared by tool rows and error
+ *  rows (RFC-self-resolve + RFC-conversational-setup): a Terminal launch
+ *  (backend-allowlisted), a Settings-tab jump, a provider switch applied
+ *  through the settings tool, and the connect confirm-click — the ONLY
+ *  chat-side path that writes an agent client's config. */
+function GrammarActions({ content }: { content: string }) {
+  const fixCmd = /Fix: open Terminal, run `([^`]+)`/.exec(content)?.[1];
+  const settingsTab = /Settings → (Models|General|Sources|Studio|Agents)/.exec(
+    content,
+  )?.[1]?.toLowerCase();
+  const switchFix = /Fix: switch (chat|studio) to provider `([^`]+)`/.exec(
+    content,
+  );
+  const connectFix = /Confirm: connect agent `([^`]+)` \(([^)]+)\)/.exec(
+    content,
+  );
+  const appendToolRow = (toolRow: Message) =>
+    useStore.setState({
+      messages: [...useStore.getState().messages, toolRow],
+    });
+  const applySwitch = async (role: string, providerId: string) => {
+    const nb = useStore.getState().currentId;
+    if (!nb) return;
+    try {
+      appendToolRow(
+        await api.applySettingsFix(
+          nb,
+          role === "studio" ? "studioProvider" : "chatProvider",
+          providerId,
+        ),
+      );
+      useStore.setState({ aiConfig: await api.getAiConfig() });
+    } catch (e) {
+      useStore
+        .getState()
+        .pushToast("error", e instanceof Error ? e.message : String(e));
+    }
+  };
+  const applyConnect = async (clientId: string) => {
+    const nb = useStore.getState().currentId;
+    if (!nb) return;
+    try {
+      appendToolRow(await api.applyConnectFix(nb, clientId));
+    } catch (e) {
+      useStore
+        .getState()
+        .pushToast("error", e instanceof Error ? e.message : String(e));
+    }
+  };
+  if (!fixCmd && !settingsTab && !switchFix && !connectFix) return null;
+  return (
+    <>
+      {fixCmd && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void api.openInTerminal(fixCmd)}
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+          Open Terminal: {fixCmd}
+        </Button>
+      )}
+      {switchFix && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void applySwitch(switchFix[1], switchFix[2])}
+        >
+          Switch {switchFix[1]} to {providerLabelFor(switchFix[2])}
+        </Button>
+      )}
+      {connectFix && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void applyConnect(connectFix[1])}
+        >
+          Connect {connectFix[2]}
+        </Button>
+      )}
+      {settingsTab && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => useStore.getState().openSettings(settingsTab)}
+        >
+          {settingsTab === "models" ? "Model settings…" : "Open Settings"}
+        </Button>
+      )}
+    </>
+  );
+}
+
 // Memoized: message objects are stable across renders, and without this
 // every streamed token re-rendered (and re-parsed the markdown of) the
 // entire transcript, not just the growing tail.
@@ -1119,30 +1212,20 @@ const ChatMessage = memo(function ChatMessage({
     (s) => s.messages[s.messages.length - 1]?.id === message.id,
   );
   // Tool confirmations are process, not conversation: one quiet gray row,
-  // no bubble, no role label — the Claude-desktop "Ran ..." grammar.
+  // no bubble, no role label — the Claude-desktop "Ran ..." grammar. The
+  // settings tool's verbs (pull staging, setup steps, connect confirms)
+  // carry the shared button grammars, parsed on the latest row only.
   if (message.kind === "tool") {
-    // The settings tool's `pull` verb stages a download through the same
-    // literal grammar the error rows use — the backend allowlists and
-    // charset-gates the command, so the button can only ever launch it.
-    const toolFixCmd = /Fix: open Terminal, run `([^`]+)`/.exec(
-      message.content,
-    )?.[1];
     return (
       <div className="flex items-start gap-2 py-0.5 text-caption text-muted-foreground">
         <Wrench className="mt-0.5 h-3 w-3 shrink-0 text-subtle-foreground" />
         {/* pre-line: the settings tool's snapshot reply is multi-line. */}
         <span className="selectable min-w-0 whitespace-pre-line">
           {message.content}
-          {toolFixCmd && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="ml-2 inline-flex align-middle"
-              onClick={() => void api.openInTerminal(toolFixCmd)}
-            >
-              <ExternalLink className="h-3 w-3" />
-              Open Terminal: {toolFixCmd}
-            </Button>
+          {isLast && (
+            <span className="ml-2 inline-flex flex-wrap items-center gap-2 align-middle">
+              <GrammarActions content={message.content} />
+            </span>
           )}
         </span>
       </div>
@@ -1167,38 +1250,6 @@ const ChatMessage = memo(function ChatMessage({
   // apply a suggested provider switch through the settings tool, or rerun
   // this question on a live local engine (RFC-self-resolve phases 2–4).
   if (message.kind === "error") {
-    const fixCmd = /Fix: open Terminal, run `([^`]+)`/.exec(
-      message.content,
-    )?.[1];
-    // Phase 1's grammar named only Models; phase-2 diagnoses may point at
-    // any tab ("Settings → General"). Same literal-phrase contract.
-    const settingsTab = /Settings → (Models|General|Sources|Studio|Agents)/.exec(
-      message.content,
-    )?.[1]?.toLowerCase();
-    // Phase-2 "switch provider" fix: applied through the phase-3 settings
-    // tool, so the change echoes into the transcript as a tool row.
-    const switchFix = /Fix: switch (chat|studio) to provider `([^`]+)`/.exec(
-      message.content,
-    );
-    const applySwitch = async (role: string, providerId: string) => {
-      const nb = useStore.getState().currentId;
-      if (!nb) return;
-      try {
-        const toolRow = await api.applySettingsFix(
-          nb,
-          role === "studio" ? "studioProvider" : "chatProvider",
-          providerId,
-        );
-        useStore.setState({
-          messages: [...useStore.getState().messages, toolRow],
-          aiConfig: await api.getAiConfig(),
-        });
-      } catch (e) {
-        useStore
-          .getState()
-          .pushToast("error", e instanceof Error ? e.message : String(e));
-      }
-    };
     return (
       <div className="flex flex-col gap-1.5">
         <RoleLabel role="assistant" />
@@ -1221,35 +1272,8 @@ const ChatMessage = memo(function ChatMessage({
                 Retry
               </Button>
             )}
-            {fixCmd && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void api.openInTerminal(fixCmd)}
-                >
-                  <ExternalLink className="h-3.5 w-3.5" />
-                  Open Terminal: {fixCmd}
-                </Button>
-              )}
-              {switchFix && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void applySwitch(switchFix[1], switchFix[2])}
-                >
-                  Switch {switchFix[1]} to {providerLabelFor(switchFix[2])}
-                </Button>
-              )}
-              {settingsTab && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => useStore.getState().openSettings(settingsTab)}
-                >
-                  {settingsTab === "models" ? "Model settings…" : "Open Settings"}
-                </Button>
-              )}
-              {isLast && <FallbackOffers message={message} />}
+            <GrammarActions content={message.content} />
+            {isLast && <FallbackOffers message={message} />}
           </div>
           {message.model && (
             <div className="mt-1.5 text-micro text-subtle-foreground">
