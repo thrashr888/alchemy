@@ -353,9 +353,18 @@ pub(crate) async fn triage_suggested_cards(
 ) -> anyhow::Result<usize> {
     use crate::inference::Role;
     let cards = db.list_registry().await?;
+    // Once per app run, verdicts are re-judged rather than skipped: the
+    // frequency counts a verdict rests on CHANGE as documents arrive, and a
+    // "routine" stamped when a thing sat in two documents is stale once it
+    // sits in eight. (This is also how a signal fix reaches cards the old
+    // signal already judged.) Within a run, judged cards stay judged.
+    use std::sync::atomic::Ordering::SeqCst;
+    static RETRIAGED_THIS_RUN: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    let refresh = !RETRIAGED_THIS_RUN.swap(true, SeqCst);
     let queue: Vec<RegistryCard> = cards
         .into_iter()
-        .filter(|c| c.origin == "auto" && c.triage.is_empty())
+        .filter(|c| c.origin == "auto" && (refresh || c.triage.is_empty()))
         .take(MAX_TRIAGE_BATCH)
         .collect();
     if queue.len() < MIN_QUEUE_TO_TRIAGE {
@@ -368,8 +377,11 @@ pub(crate) async fn triage_suggested_cards(
     // documents are what the prompt's "in N documents" actually claims, and
     // they are the data in hand: one content scan per notebook, streamed in
     // the `rematch_all` shape, nothing retained past the source being
-    // counted.
-    let names: Vec<String> = queue.iter().map(|c| c.name.to_lowercase()).collect();
+    // counted. Mentions are canonical-word matches (see `CanonDoc`), not
+    // literal substrings — a card stored as "BAYSIDE MUTUAL INSURANCE" is
+    // mentioned by a document that writes "Bayside Mutual", and the
+    // 4Runner's third document counts even though it never says "SR5".
+    let names: Vec<Vec<String>> = queue.iter().map(|c| canon_words(&c.name)).collect();
     let mut mentions = vec![0usize; queue.len()];
     let mut snippets = vec![String::new(); queue.len()];
     for nb in db.list_notebooks().await.unwrap_or_default() {
@@ -386,12 +398,12 @@ pub(crate) async fn triage_suggested_cards(
                 .take(SCAN_CAP)
                 .collect::<String>()
                 .to_lowercase();
+            let doc = CanonDoc::new(&hay);
             for (i, name) in names.iter().enumerate() {
-                if hay.contains(name) {
+                if doc.mentions(name) {
                     mentions[i] += 1;
                     if snippets[i].is_empty() {
-                        snippets[i] =
-                            snippet_around(&hay, name, TRIAGE_SNIPPET_RADIUS).unwrap_or_default();
+                        snippets[i] = snippet_for(&hay, &queue[i].name);
                     }
                 }
             }
@@ -440,6 +452,106 @@ pub(crate) async fn triage_suggested_cards(
         super::notify_changed("registry", None);
     }
     Ok(marked)
+}
+
+/// A name reduced to the canonical word forms `same_thing` compares.
+fn canon_words(name: &str) -> Vec<String> {
+    name.split_whitespace()
+        .map(canon_word)
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
+/// A word distinctive enough to stand for a multi-word name on its own:
+/// the model-number shape, letters and digits together — "4runner",
+/// "xr16", a policy number. A bare word ("toyota") or a bare number
+/// ("2019") is not; alone, either could belong to anything.
+fn distinctive_word(w: &str) -> bool {
+    w.chars().any(|c| c.is_ascii_digit()) && w.chars().any(|c| c.is_alphabetic())
+}
+
+/// One document's text reduced to canonical words — the same forms
+/// `same_thing` compares — plus its adjacent pairs, so each candidate's
+/// mention check is a set lookup instead of a rescan.
+struct CanonDoc {
+    words: std::collections::HashSet<String>,
+    pairs: std::collections::HashSet<(String, String)>,
+}
+
+impl CanonDoc {
+    fn new(text: &str) -> Self {
+        let seq: Vec<String> = text
+            .split_whitespace()
+            .map(canon_word)
+            .filter(|w| !w.is_empty())
+            .collect();
+        let pairs = seq
+            .windows(2)
+            .map(|w| (w[0].clone(), w[1].clone()))
+            .collect();
+        let words = seq.into_iter().collect();
+        CanonDoc { words, pairs }
+    }
+
+    /// Whether this document mentions the name whose canonical words are
+    /// `name` — the count behind triage's "in N documents".
+    ///
+    /// Literal whole-string matching lied: "BAYSIDE MUTUAL INSURANCE" was
+    /// never "mentioned" by a letter that writes "Bayside Mutual", so
+    /// recurring entities read as passing mentions and triage judged them
+    /// accordingly. A mention is now graded like `same_thing`:
+    /// - a one-word name requires exactly that word ("Juniper" needs the
+    ///   word juniper — whole, not a substring of "juniperus");
+    /// - a multi-word name is mentioned by two of its words in order and
+    ///   adjacent, provided the pair carries an anchor — the name's head
+    ///   word ("Bayside") or a model-number word — so "Bayside Mutual"
+    ///   counts but a generic "mutual insurance" in someone else's
+    ///   document does not;
+    /// - or by one of its words alone when that word could belong to
+    ///   nothing else ("4Runner") — the model-number gate above, so a
+    ///   lone "Toyota" or "2019" never counts.
+    fn mentions(&self, name: &[String]) -> bool {
+        match name {
+            [] => false,
+            [one] => self.words.contains(one),
+            many => {
+                let is_article = |w: &str| matches!(w, "the" | "a" | "an" | "of");
+                let head = many
+                    .iter()
+                    .find(|w| !is_article(w) && !w.chars().all(|c| c.is_ascii_digit()));
+                let anchored = |w: &String| Some(w) == head || distinctive_word(w);
+                many.windows(2).any(|p| {
+                    (anchored(&p[0]) || anchored(&p[1]))
+                        && self.pairs.contains(&(p[0].clone(), p[1].clone()))
+                }) || many
+                    .iter()
+                    .any(|w| distinctive_word(w) && self.words.contains(w))
+            }
+        }
+    }
+}
+
+/// The snippet shown beside a candidate: context around the full name when
+/// the document writes it verbatim, else around the name's longest word —
+/// canonical matching means the full string may appear nowhere.
+fn snippet_for(hay: &str, name: &str) -> String {
+    let full = name.to_lowercase();
+    if let Some(s) = snippet_around(hay, &full, TRIAGE_SNIPPET_RADIUS) {
+        return s;
+    }
+    let mut words: Vec<String> = name
+        .split_whitespace()
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        })
+        .filter(|w| !w.is_empty())
+        .collect();
+    words.sort_by_key(|w| std::cmp::Reverse(w.chars().count()));
+    words
+        .iter()
+        .find_map(|w| snippet_around(hay, w, TRIAGE_SNIPPET_RADIUS))
+        .unwrap_or_default()
 }
 
 /// A snippet of `text` around the first occurrence of `needle`, or `None`.
@@ -1432,6 +1544,32 @@ mod tests {
         let picked = parse_triage_reply("Recommended: 2 and 7.", 5);
         assert_eq!(picked.len(), 1);
         assert!(picked.contains(&2));
+    }
+
+    #[test]
+    fn a_partial_or_recased_name_still_counts_as_a_mention() {
+        // The two live shapes that under-counted: the stored name is
+        // "BAYSIDE MUTUAL INSURANCE" but the documents write it in other
+        // casings and without the last word…
+        let bayside = canon_words("BAYSIDE MUTUAL INSURANCE");
+        assert!(CanonDoc::new("insured by bayside mutual insurance").mentions(&bayside));
+        assert!(CanonDoc::new("your bayside mutual policy renews").mentions(&bayside));
+        assert!(!CanonDoc::new("the mutual insurance industry").mentions(&bayside));
+
+        // …and the 4Runner's third document says "(VIN…)" where the others
+        // say "SR5". The distinctive word alone also counts.
+        let runner = canon_words("2019 Toyota 4Runner SR5");
+        assert!(CanonDoc::new("2019 toyota 4runner sr5, clean title").mentions(&runner));
+        assert!(CanonDoc::new("2019 toyota 4runner (vin jtebu5jr8k1234567)").mentions(&runner));
+        assert!(CanonDoc::new("the 4runner needs tires").mentions(&runner));
+        // A lone generic word or bare number never stands for the vehicle.
+        assert!(!CanonDoc::new("toyota makes reliable cars").mentions(&runner));
+        assert!(!CanonDoc::new("back in 2019 we moved house").mentions(&runner));
+
+        // One-word names require the exact word — whole, not a substring.
+        let juniper = canon_words("Juniper");
+        assert!(CanonDoc::new("juniper needs her shots").mentions(&juniper));
+        assert!(!CanonDoc::new("juniperus communis is a shrub").mentions(&juniper));
     }
 
     #[test]
