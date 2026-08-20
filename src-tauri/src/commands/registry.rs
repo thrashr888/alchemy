@@ -489,34 +489,45 @@ async fn suggest_for_notebook(
     Ok(made)
 }
 
-/// Ask for suggestions on one notebook, now — the Registry's "Suggest cards"
-/// action. Ignores the once-per-run marker: an explicit ask is not the
-/// background pass, and a user who clicks twice means it.
-#[tauri::command]
-pub async fn suggest_cards_now(
-    state: State<'_, AppState>,
-    notebook_id: String,
+/// Ask for suggestions now — the Registry's "Suggest cards" action, and the
+/// MCP `suggest_cards` tool. Ignores the once-per-run marker: an explicit
+/// ask is not the background pass, and a user who clicks twice means it.
+/// With no notebook, reads every notebook — the Registry is corpus-scoped,
+/// and its button lives on Home where no notebook is open.
+pub(crate) async fn suggest_now(
+    db: &std::sync::Arc<crate::db::Db>,
+    ai: crate::ai::Ai,
+    notebook_id: Option<String>,
 ) -> Result<SuggestOutcome, String> {
-    let gists = e(state.db.list_gists().await)?;
-    let existing = e(state.db.list_registry().await)?;
-    let ai = state.ai.read().await.clone();
+    let gists = db.list_gists().await.map_err(|e| e.to_string())?;
+    let nbs: Vec<String> = match notebook_id {
+        Some(id) => vec![id],
+        None => db
+            .list_notebooks()
+            .await
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|n| n.id)
+            .collect(),
+    };
     let mut reply = String::new();
-    let made = suggest_for_notebook(
-        &state.db,
-        &ai,
-        &notebook_id,
-        &gists,
-        &existing,
-        Some(&mut reply),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    let mut made: Vec<String> = Vec::new();
+    for nb in nbs {
+        // Refetched per notebook, like the sweep: a card minted for the
+        // previous notebook must block the same name here.
+        let existing = db.list_registry().await.unwrap_or_default();
+        made.extend(
+            suggest_for_notebook(db, &ai, &nb, &gists, &existing, Some(&mut reply))
+                .await
+                .map_err(|e| e.to_string())?,
+        );
+    }
     if !made.is_empty() {
         super::notify_changed("registry", None);
     }
-    // Triage in the background — the click shouldn't wait on a second
-    // model call, and the strip re-sorts itself on the registry bump.
-    let db = state.db.clone();
+    // Triage in the background — the ask shouldn't wait on a second model
+    // call, and the strip re-sorts itself on the registry bump.
+    let db = db.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(err) = triage_suggested_cards(&db, &ai).await {
             eprintln!("registry triage failed: {err:#}");
@@ -526,6 +537,16 @@ pub async fn suggest_cards_now(
         created: made,
         reply,
     })
+}
+
+/// The Tauri face of `suggest_now`.
+#[tauri::command]
+pub async fn suggest_cards_now(
+    state: State<'_, AppState>,
+    notebook_id: Option<String>,
+) -> Result<SuggestOutcome, String> {
+    let ai = state.ai.read().await.clone();
+    suggest_now(&state.db, ai, notebook_id).await
 }
 
 /// What an explicit ask produced. `reply` carries the model's raw answer so

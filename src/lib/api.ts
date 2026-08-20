@@ -36,6 +36,7 @@ import type {
   SearchHit,
   Source,
   SourceEvent,
+  SuggestOutcome,
   Template,
 } from "./types";
 
@@ -496,6 +497,11 @@ export const api = {
    *  `onlyRecommended` limits the verdict to the triage pass's picks. */
   ruleAllSuggested: (origin: string, onlyRecommended?: boolean) =>
     run(cmd<number>("rule_all_suggested", { origin, onlyRecommended })),
+  /** Run the card suggester now. Omit notebookId to read every notebook —
+   *  the Registry's own button is corpus-scoped. Triage follows in the
+   *  background and lands on a registry bump. */
+  suggestCardsNow: (notebookId?: string) =>
+    run(cmd<SuggestOutcome>("suggest_cards_now", { notebookId })),
   cardsForSource: (sourceId: string) =>
     run(query<RegistryCard[]>("cards_for_source", { sourceId })),
   rematchRegistry: (notebookId: string) =>

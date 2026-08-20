@@ -366,6 +366,14 @@ export interface CardFact {
   value: string;
 }
 
+/** What an explicit "suggest cards" ask produced. `reply` carries the
+ *  model's raw answer so "it suggested nothing" can be told apart from
+ *  "it said something that didn't survive the grounding gate". */
+export interface SuggestOutcome {
+  created: string[];
+  reply: string;
+}
+
 /** One document filed under a card. `matched` is the receipt and is never
  *  empty: the identifier string that matched, "name", or "manual". */
 export interface CardAttachment {

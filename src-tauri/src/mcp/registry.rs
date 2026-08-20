@@ -112,6 +112,14 @@ struct SourceIdReq {
     source_id: String,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct SuggestCardsReq {
+    /// Limit the pass to one notebook's sources; omit to read every
+    /// notebook (the Registry is corpus-scoped).
+    #[serde(default)]
+    notebook_id: Option<String>,
+}
+
 fn to_facts(facts: Option<Vec<FactReq>>) -> Vec<CardFact> {
     facts
         .unwrap_or_default()
@@ -341,6 +349,24 @@ impl AlchemyMcp {
             self.changed("registry", None);
         }
         json_result(&serde_json::json!({ "ruled": ruled }))
+    }
+
+    #[tool(
+        description = "Run the card suggester now: read the notebooks' distilled gists and propose registry cards for the recurring things they mention. Suggestions land as origin \"auto\" for the user (or you, via rule_all_suggested / set-origin flows) to rule on — nothing enters the cast without a deliberate keep. A triage pass marks the recommended ones in the background when the queue is long. Returns the created card names; an empty list with a non-empty reply means nothing the model said survived the grounding gate."
+    )]
+    async fn suggest_cards(
+        &self,
+        Parameters(SuggestCardsReq { notebook_id }): Parameters<SuggestCardsReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let ai = state.ai.read().await.clone();
+        let out = commands::suggest_now(&state.db, ai, notebook_id)
+            .await
+            .map_err(internal)?;
+        if !out.created.is_empty() {
+            self.changed("registry", None);
+        }
+        json_result(&out)
     }
 
     #[tool(

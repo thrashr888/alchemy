@@ -109,6 +109,7 @@ export function RegistrySection() {
   const [notebook, setNotebook] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [suggesting, setSuggesting] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -176,6 +177,30 @@ export function RegistrySection() {
     [mine, kind, notebook, nbTitle, query],
   );
 
+  // The explicit ask (RFC-registry §3): read every notebook, propose, and
+  // let the background triage sort what lands. The strip refreshes itself
+  // on the registry bump; the toast is the receipt for "nothing new".
+  const suggestNow = async () => {
+    if (suggesting) return;
+    setSuggesting(true);
+    try {
+      const out = await api.suggestCardsNow();
+      useStore
+        .getState()
+        .pushToast(
+          out.created.length > 0 ? "success" : "info",
+          out.created.length > 0
+            ? `Suggested ${out.created.length} card${out.created.length === 1 ? "" : "s"}`
+            : "Nothing new to suggest",
+        );
+      void load();
+    } catch (e) {
+      useStore.getState().pushToast("error", String(e));
+    } finally {
+      setSuggesting(false);
+    }
+  };
+
   const open = cards.find((c) => c.id === openCardId) ?? null;
   if (openCardId && open) {
     return (
@@ -204,7 +229,21 @@ export function RegistrySection() {
               "are there confirmed cards" made the whole row — filter AND
               view toggle — vanish whenever the cast was empty or held only
               suggestions, which reads as the control disappearing. */}
-          <HomeViewControls placeholder="Filter cards by name or identifier…" />
+          <HomeViewControls
+            placeholder="Filter cards by name or identifier…"
+            trailing={
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => void suggestNow()}
+                loading={suggesting}
+                title="Read your notebooks and suggest cards worth tracking"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                Suggest
+              </Button>
+            }
+          />
           {/* Kind groups and notebook chips sit inside the content column,
               under the controls — full-bleed they drew a band across the
               pane with dead clickable space beside them. */}
