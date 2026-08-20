@@ -240,6 +240,12 @@ pub struct RegistryCard {
     /// suggester proposing it again (the `gist.rs` idiom).
     #[serde(default)]
     pub origin: String,
+    /// The triage verdict on a still-suggested card ("auto" origin only):
+    /// "" = not yet triaged, "recommended" = the triage pass thinks this one
+    /// matters, "routine" = triaged and not singled out. Cleared when the
+    /// card is ruled on — it is queue metadata, not a property of the thing.
+    #[serde(default)]
+    pub triage: String,
     /// Space-separated normalized tokens (the `normalize_tags` form): VIN,
     /// policy number, serial, model number. The auto-attach key, and the
     /// only thing that ever attaches a document without asking.

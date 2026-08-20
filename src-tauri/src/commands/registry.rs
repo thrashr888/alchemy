@@ -234,7 +234,161 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
     if proposed > 0 {
         super::notify_changed("registry", None);
     }
+    // Triage whatever has queued up — this run's proposals and any left
+    // over from earlier ones. One batched Small call; when the queue is
+    // short enough to rule on by hand it costs nothing at all.
+    if let Err(err) = triage_suggested_cards(db, ai).await {
+        eprintln!("registry triage failed: {err:#}");
+    }
     Ok(proposed)
+}
+
+// ---- Triage ---------------------------------------------------------------
+//
+// A busy corpus can queue more suggestions than anyone wants to rule on
+// one by one. The triage pass reads the whole queue in ONE Small call —
+// each candidate with how often it recurs and a snippet of the material
+// that mentions it — and marks the ones worth keeping as `triage:
+// "recommended"`. It marks; it never rules. "Keep recommended" is still a
+// human (or agent) click, so the closed-cast rule stands untouched.
+
+/// Pending, untriaged suggestions it takes before triage spends a model
+/// call. Below this a person rules on the strip faster than a model can.
+const MIN_QUEUE_TO_TRIAGE: usize = 4;
+/// Suggestions weighed per pass — one batched call, never one per card.
+const MAX_TRIAGE_BATCH: usize = 40;
+/// Characters of context shown on each side of a candidate's first mention.
+const TRIAGE_SNIPPET_RADIUS: usize = 70;
+
+/// Mark the suggested cards worth recommending. Returns how many cards got
+/// a verdict (recommended or routine); 0 when the queue is too short.
+pub(crate) async fn triage_suggested_cards(
+    db: &crate::db::Db,
+    ai: &crate::ai::Ai,
+) -> anyhow::Result<usize> {
+    use crate::inference::Role;
+    let cards = db.list_registry().await?;
+    let queue: Vec<RegistryCard> = cards
+        .into_iter()
+        .filter(|c| c.origin == "auto" && c.triage.is_empty())
+        .take(MAX_TRIAGE_BATCH)
+        .collect();
+    if queue.len() < MIN_QUEUE_TO_TRIAGE {
+        return Ok(0);
+    }
+    // Frequency across the corpus's gists is the recurrence signal; the
+    // snippet is the source context. Lowercase once, not once per card.
+    let gists = db.list_gists().await.unwrap_or_default();
+    let lowered: Vec<String> = gists.iter().map(|g| g.text.to_lowercase()).collect();
+    let mut lines = String::new();
+    for (i, c) in queue.iter().enumerate() {
+        let name_lc = c.name.to_lowercase();
+        let mentions = lowered.iter().filter(|t| t.contains(&name_lc)).count();
+        let snippet = lowered
+            .iter()
+            .find_map(|t| snippet_around(t, &name_lc, TRIAGE_SNIPPET_RADIUS))
+            .unwrap_or_default();
+        lines.push_str(&format!(
+            "{}. {}|{} — in {} document{}{}\n",
+            i + 1,
+            c.kind,
+            c.name,
+            mentions,
+            if mentions == 1 { "" } else { "s" },
+            if snippet.is_empty() {
+                String::new()
+            } else {
+                format!("; \u{201c}\u{2026}{snippet}\u{2026}\u{201d}")
+            },
+        ));
+    }
+    let reply = ai
+        .chat_role(Role::Small, &build_triage_messages(&lines))
+        .await
+        .map_err(|e| anyhow::anyhow!("{e:#}"))?
+        .text;
+    let picked = parse_triage_reply(&reply, queue.len());
+    let ts = now();
+    let mut marked = 0usize;
+    for (i, mut card) in queue.into_iter().enumerate() {
+        card.triage = if picked.contains(&(i + 1)) {
+            "recommended"
+        } else {
+            "routine"
+        }
+        .into();
+        card.updated_at = ts;
+        if db.update_registry_card(&card).await.is_ok() {
+            marked += 1;
+        }
+    }
+    if marked > 0 {
+        super::notify_changed("registry", None);
+    }
+    Ok(marked)
+}
+
+/// A snippet of `text` around the first occurrence of `needle`, or `None`.
+/// `text` and `needle` are already lowercased; slicing stays on the byte
+/// boundary `find` returns, then counts chars so multibyte text can't panic.
+fn snippet_around(text: &str, needle: &str, radius: usize) -> Option<String> {
+    let at = text.find(needle)?;
+    let prefix_chars = text[..at].chars().count();
+    let begin = prefix_chars.saturating_sub(radius);
+    let take = radius * 2 + needle.chars().count();
+    let s: String = text.chars().skip(begin).take(take).collect();
+    Some(s.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+fn build_triage_messages(candidates: &str) -> Vec<crate::ai::ChatTurn> {
+    vec![
+        crate::ai::ChatTurn {
+            role: "system".into(),
+            content: "You triage a queue of suggested registry cards — things that turned \
+                 up across a person's documents, each a candidate to track over time. \
+                 Mark the ones worth recommending.\n\n\
+                 Recommend a candidate when the person will keep accumulating paperwork \
+                 about it: something they own, insure, pay, or work on — especially when \
+                 it recurs across documents or is central to the ones that mention it. \
+                 Skip anything mentioned only in passing: a company named as context, a \
+                 person merely quoted, a place passed through.\n\n\
+                 Reply with only the numbers of the recommended candidates, \
+                 comma-separated (for example: 1, 3, 4). If none stand out, reply: none."
+                .into(),
+        },
+        crate::ai::ChatTurn {
+            role: "user".into(),
+            content: candidates.to_string(),
+        },
+    ]
+}
+
+/// The candidate numbers a triage reply recommends, bounded to 1..=n.
+/// Forgiving like `gate_suggestions`: bullets, restated lines, and prose
+/// around the numbers all still parse; "none" (however decorated) is empty.
+fn parse_triage_reply(reply: &str, n: usize) -> std::collections::HashSet<usize> {
+    let mut out = std::collections::HashSet::new();
+    if reply.trim().to_lowercase().starts_with("none") {
+        return out;
+    }
+    let mut cur = 0usize;
+    let mut in_num = false;
+    for ch in reply.chars() {
+        if let Some(d) = ch.to_digit(10) {
+            cur = cur.saturating_mul(10) + d as usize;
+            in_num = true;
+        } else {
+            if in_num && (1..=n).contains(&cur) {
+                out.insert(cur);
+            }
+            cur = 0;
+            in_num = false;
+        }
+    }
+    if in_num && (1..=n).contains(&cur) {
+        out.insert(cur);
+    }
+    out
 }
 
 /// Propose cards for one notebook. Split out of the sweep so it can also be
@@ -304,7 +458,7 @@ async fn suggest_for_notebook(
                     .collect::<String>()
             );
         }
-        for (kind, name) in gated {
+        for (kind, name, facts) in gated {
             // Anything already in the cast — yours, pending, or turned down
             // — is settled. Never re-propose it. `made` guards within this
             // reply: a model can restate one thing twice in one answer.
@@ -319,9 +473,10 @@ async fn suggest_for_notebook(
                 kind,
                 name: name.clone(),
                 origin: "auto".into(),
+                triage: String::new(),
                 identifiers: String::new(),
                 note: String::new(),
-                facts: Vec::new(),
+                facts,
                 attachments: Vec::new(),
                 created_at: ts,
                 updated_at: ts,
@@ -359,6 +514,14 @@ pub async fn suggest_cards_now(
     if !made.is_empty() {
         super::notify_changed("registry", None);
     }
+    // Triage in the background — the click shouldn't wait on a second
+    // model call, and the strip re-sorts itself on the registry bump.
+    let db = state.db.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = triage_suggested_cards(&db, &ai).await {
+            eprintln!("registry triage failed: {err:#}");
+        }
+    });
     Ok(SuggestOutcome {
         created: made,
         reply,
@@ -406,6 +569,12 @@ fn build_suggest_messages(material: &str) -> Vec<crate::ai::ChatTurn> {
                  Name it the way a person would say it out loud, not as a bare reference \
                  number: \"Ashfield Mutual studio rider\", not \"AM-88214\". A number may \
                  follow the name, never replace it.\n\n\
+                 After the name you may add up to {MAX_FACTS_PER_CARD} key facts, each as \
+                 one more pipe field written \"Label: value\" — a policy number, a serial, \
+                 a renewal date, a model:\n\
+                 asset|Ducati Monster|VIN: ZDM1RAZ4XWB012345|Year: 2019\n\
+                 Only facts whose value is copied word-for-word from the material; \
+                 anything paraphrased or guessed is discarded. No facts is fine.\n\n\
                  Leave out anything that is not theirs to track: a company named only as \
                  context or comparison, a person merely quoted, a place merely passed \
                  through. If there is genuinely nothing, reply with nothing at all.",
@@ -419,19 +588,67 @@ fn build_suggest_messages(material: &str) -> Vec<crate::ai::ChatTurn> {
     ]
 }
 
+/// One word, spelled the way it would be spelled out loud: lowercased,
+/// punctuation dropped, and the everyday address abbreviations expanded —
+/// "Rd" is "Road", "St" is "Street". This is what lets "15217 Canyon Seven
+/// Rd" and "15217 Canyon Seven Road" read as one thing instead of two.
+/// Deliberately not fuzzy: digits must match exactly ("Timberline 2.0" and
+/// "Timberline 3.0" stay two projects), and an unknown word is only itself.
+fn canon_word(w: &str) -> String {
+    let w: String = w
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect::<String>()
+        .to_lowercase();
+    match w.as_str() {
+        "rd" => "road",
+        "st" => "street",
+        "ave" | "av" => "avenue",
+        "blvd" => "boulevard",
+        "dr" => "drive",
+        "ln" => "lane",
+        "hwy" => "highway",
+        "ct" => "court",
+        "pkwy" => "parkway",
+        "cir" => "circle",
+        "pl" => "place",
+        "sq" => "square",
+        "ste" => "suite",
+        "apt" => "apartment",
+        "mt" => "mount",
+        "ft" => "fort",
+        "n" => "north",
+        "s" => "south",
+        "e" => "east",
+        "w" => "west",
+        _ => return w,
+    }
+    .to_string()
+}
+
 /// Whether a proposed name restates a card that already exists.
 ///
 /// Exact match isn't enough: across runs the same model names one object
 /// two ways — "Rheem Performance Platinum" and "Rheem Performance Platinum
-/// water heater", "Paul Thrasher" and "Paul Scott Thrasher" — and two cards
-/// for one thing is precisely the mess the Registry exists to prevent. The
-/// shorter name's words, in order and whole, inside the longer one is a
-/// restatement; anything less leaves genuinely different things alone
-/// ("Apple" does not swallow "Pineapple Studios"), and this only ever
+/// water heater", "Paul Thrasher" and "Paul Scott Thrasher", "15217 Canyon
+/// Seven Rd" and "…Road" — and two cards for one thing is precisely the
+/// mess the Registry exists to prevent. Words are compared in `canon_word`
+/// form; the shorter name's words, in order and whole, inside the longer
+/// one is a restatement. Anything less leaves genuinely different things
+/// alone ("Apple" does not swallow "Pineapple Studios"), and this only ever
 /// suppresses a suggestion, never a card someone made.
 fn same_thing(existing: &str, proposed: &str) -> bool {
-    let a = existing.trim().to_lowercase();
-    let b = proposed.trim().to_lowercase();
+    let words = |s: &str| -> Vec<String> {
+        s.split_whitespace()
+            .map(canon_word)
+            .filter(|w| !w.is_empty())
+            .collect()
+    };
+    let a = words(existing);
+    let b = words(proposed);
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
     if a == b {
         return true;
     }
@@ -440,25 +657,53 @@ fn same_thing(existing: &str, proposed: &str) -> bool {
     } else {
         (&b, &a)
     };
-    if short.chars().count() < MIN_NAME_LEN {
+    if short.iter().map(|w| w.chars().count()).sum::<usize>() < MIN_NAME_LEN {
         return false;
     }
     // Whole words, in order — "Sea Otter" reads inside "Sea Otter II" and a
-    // middle name never splits a person in two, but "Timberline 2.0" and
-    // "Timberline 3.0" stay two projects.
-    let mut long_words = long.split_whitespace();
-    short
-        .split_whitespace()
-        .all(|w| long_words.any(|lw| lw == w))
+    // middle name never splits a person in two, but "Chen Maya" is not
+    // "Maya Chen Portfolio".
+    let mut long_words = long.iter();
+    short.iter().all(|w| long_words.any(|lw| lw == w))
+}
+
+/// Facts allowed onto one suggested card. Auto-fill, not an essay: the
+/// facts grid should arrive started, not finished.
+const MAX_FACTS_PER_CARD: usize = 4;
+const MAX_FACT_LABEL_LEN: usize = 24;
+const MAX_FACT_VALUE_LEN: usize = 80;
+
+/// Parse one "Label: value" field into a fact, or refuse it.
+///
+/// Gated exactly like a name: the value must appear verbatim in the
+/// material. An invented fact on a card is a lie with a label — worse than
+/// the empty grid, because it reads as checked.
+fn gate_fact(part: &str, haystack: &str) -> Option<CardFact> {
+    let (label, value) = part.split_once(':')?;
+    let label = label.trim().trim_matches('"');
+    let value = value.trim().trim_matches('"').trim();
+    if label.is_empty() || label.chars().count() > MAX_FACT_LABEL_LEN {
+        return None;
+    }
+    if value.is_empty() || value.chars().count() > MAX_FACT_VALUE_LEN {
+        return None;
+    }
+    if !haystack.contains(&value.to_lowercase()) {
+        return None;
+    }
+    Some(CardFact {
+        label: label.to_string(),
+        value: value.to_string(),
+    })
 }
 
 /// Keep only proposals that are grounded and well-formed.
 ///
-/// The load-bearing check is the last one: the name must appear verbatim in
-/// the material. An invented card is worse than no card — it is a thing in
-/// your registry that was never in your life.
-fn gate_suggestions(reply: &str, haystack: &str) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = Vec::new();
+/// The load-bearing check is the verbatim one: the name must appear in the
+/// material, and so must every fact value. An invented card is worse than
+/// no card — it is a thing in your registry that was never in your life.
+fn gate_suggestions(reply: &str, haystack: &str) -> Vec<(String, String, Vec<CardFact>)> {
+    let mut out: Vec<(String, String, Vec<CardFact>)> = Vec::new();
     for line in reply.lines() {
         if out.len() >= MAX_SUGGESTIONS {
             break;
@@ -492,7 +737,23 @@ fn gate_suggestions(reply: &str, haystack: &str) -> Vec<(String, String)> {
             continue;
         }
         let kind = parts[at].to_lowercase();
-        let joined = parts[at + 1..].join(" ");
+        // The field after the kind is the name; fields after that are fact
+        // attempts ("Label: value" — kept only when gated) or, colon-less,
+        // strays a model split out of the name itself.
+        let mut name_parts: Vec<&str> = vec![parts[at + 1]];
+        let mut facts: Vec<CardFact> = Vec::new();
+        for p in &parts[at + 2..] {
+            if p.contains(':') {
+                if facts.len() < MAX_FACTS_PER_CARD {
+                    if let Some(f) = gate_fact(p, haystack) {
+                        facts.push(f);
+                    }
+                }
+            } else if facts.is_empty() {
+                name_parts.push(p);
+            }
+        }
+        let joined = name_parts.join(" ");
         let name = joined.trim().trim_matches('"').trim();
         let len = name.chars().count();
         if !(MIN_NAME_LEN..=60).contains(&len) {
@@ -510,10 +771,12 @@ fn gate_suggestions(reply: &str, haystack: &str) -> Vec<(String, String)> {
         if !haystack.contains(&name.to_lowercase()) {
             continue;
         }
-        if out.iter().any(|(_, n)| n.eq_ignore_ascii_case(name)) {
+        // Near-duplicates within one reply merge into the first ("15217
+        // Canyon Seven Rd" and "…Road" are one address, not two cards).
+        if out.iter().any(|(_, n, _)| same_thing(n, name)) {
             continue;
         }
-        out.push((kind, name.to_string()));
+        out.push((kind, name.to_string(), facts));
     }
     out
 }
@@ -540,6 +803,8 @@ pub async fn set_card_origin(
     };
     let confirming = card.origin == "auto" && origin.is_empty();
     card.origin = origin;
+    // The triage verdict is queue metadata; a ruled-on card carries none.
+    card.triage = String::new();
     card.updated_at = now();
     e(state.db.update_registry_card(&card).await)?;
     // Keeping a suggestion is the moment it should acquire its documents —
@@ -553,13 +818,16 @@ pub async fn set_card_origin(
     Ok(card)
 }
 
-/// Rule on every suggested card at once — the strip's "Keep all" /
-/// "Dismiss all". Shared with the MCP tool. One rematch sweep at the end
-/// instead of one per card, so keeping a dozen suggestions doesn't read the
-/// corpus a dozen times over.
+/// Rule on suggested cards in bulk — the strip's "Keep recommended" /
+/// "Keep all" / "Dismiss all". Shared with the MCP tool. With
+/// `only_recommended`, only the cards the triage pass marked are ruled; the
+/// rest stay in the queue. One rematch sweep at the end instead of one per
+/// card, so keeping a dozen suggestions doesn't read the corpus a dozen
+/// times over.
 pub(crate) async fn rule_all_suggested_cards(
     db: &std::sync::Arc<crate::db::Db>,
     origin: &str,
+    only_recommended: bool,
 ) -> Result<usize, String> {
     let cards = db.list_registry().await.map_err(|e| e.to_string())?;
     let ts = now();
@@ -568,7 +836,11 @@ pub(crate) async fn rule_all_suggested_cards(
         if card.origin != "auto" {
             continue;
         }
+        if only_recommended && card.triage != "recommended" {
+            continue;
+        }
         card.origin = origin.to_string();
+        card.triage = String::new();
         card.updated_at = ts;
         db.update_registry_card(&card)
             .await
@@ -581,17 +853,20 @@ pub(crate) async fn rule_all_suggested_cards(
     Ok(ruled)
 }
 
-/// The Tauri face of `rule_all_suggested_cards`: "" keeps every suggestion,
-/// "dismissed" turns them all down (remembered, like a one-by-one dismiss).
+/// The Tauri face of `rule_all_suggested_cards`: "" keeps suggestions,
+/// "dismissed" turns them down (remembered, like a one-by-one dismiss).
+/// `only_recommended` limits either verdict to the triage pass's picks.
 #[tauri::command]
 pub async fn rule_all_suggested(
     state: State<'_, AppState>,
     origin: String,
+    only_recommended: Option<bool>,
 ) -> Result<usize, String> {
     if !["", "dismissed"].contains(&origin.as_str()) {
         return Err(format!("Unknown card origin \u{201c}{origin}\u{201d}"));
     }
-    let ruled = rule_all_suggested_cards(&state.db, &origin).await?;
+    let ruled =
+        rule_all_suggested_cards(&state.db, &origin, only_recommended.unwrap_or(false)).await?;
     if ruled > 0 {
         super::notify_changed("registry", None);
     }
@@ -680,6 +955,7 @@ pub async fn add_registry_card(
         kind,
         name,
         origin: String::new(),
+        triage: String::new(),
         identifiers: normalize_tags(&identifiers.unwrap_or_default()),
         note: note.unwrap_or_default().trim().to_string(),
         facts: facts.unwrap_or_default(),
@@ -853,6 +1129,7 @@ mod tests {
             kind: "asset".into(),
             name: name.into(),
             origin: String::new(),
+            triage: String::new(),
             identifiers: identifiers.into(),
             note: String::new(),
             facts: vec![],
@@ -938,5 +1215,69 @@ mod tests {
         let c = card("Ducati Monster", "wj9401ab2233");
         let (_, status) = match_card(&c, "ducati monster, vin wj9401ab2233").unwrap();
         assert_eq!(status, "confirmed");
+    }
+
+    #[test]
+    fn an_abbreviated_address_is_the_same_address() {
+        // The reminder's own example: one address, two spellings.
+        assert!(same_thing(
+            "15217 Canyon Seven Rd",
+            "15217 Canyon Seven Road"
+        ));
+        assert!(same_thing("Main St. Studio", "Main Street Studio"));
+        assert!(same_thing("123 N Elm Ave", "123 North Elm Avenue"));
+        // Different house numbers are different places.
+        assert!(!same_thing(
+            "15217 Canyon Seven Rd",
+            "15219 Canyon Seven Rd"
+        ));
+    }
+
+    #[test]
+    fn facts_ride_the_suggestion_only_when_verbatim() {
+        let hay = "ducati monster, vin zdm1raz4xwb012345, first titled in 2019";
+        let got = gate_suggestions(
+            "asset|Ducati Monster|VIN: ZDM1RAZ4XWB012345|Year: 2019|Color: red",
+            hay,
+        );
+        assert_eq!(got.len(), 1);
+        let (_, name, facts) = &got[0];
+        assert_eq!(name, "Ducati Monster");
+        // "red" is nowhere in the material — an invented fact is discarded;
+        // the grounded two survive.
+        assert_eq!(facts.len(), 2);
+        assert_eq!(facts[0].label, "VIN");
+        assert_eq!(facts[0].value, "ZDM1RAZ4XWB012345");
+        assert_eq!(facts[1].value, "2019");
+    }
+
+    #[test]
+    fn one_reply_never_mints_the_same_address_twice() {
+        let hay = "deed for 15217 canyon seven rd; the 15217 canyon seven road property";
+        let got = gate_suggestions(
+            "asset|15217 Canyon Seven Rd\nasset|15217 Canyon Seven Road",
+            hay,
+        );
+        assert_eq!(got.len(), 1);
+    }
+
+    #[test]
+    fn triage_replies_parse_forgivingly() {
+        let all: Vec<usize> = parse_triage_reply("1, 3, 4", 5).into_iter().collect();
+        assert_eq!(all.len(), 3);
+        assert!(parse_triage_reply("none", 5).is_empty());
+        assert!(parse_triage_reply("None stand out.", 5).is_empty());
+        // Out-of-range numbers are noise, not verdicts.
+        let picked = parse_triage_reply("Recommended: 2 and 7.", 5);
+        assert_eq!(picked.len(), 1);
+        assert!(picked.contains(&2));
+    }
+
+    #[test]
+    fn snippet_stays_on_char_boundaries() {
+        let text = "caf\u{e9} \u{201c}r\u{e9}sum\u{e9}\u{201d} the ducati monster lives here";
+        let s = snippet_around(text, "ducati monster", 8).unwrap();
+        assert!(s.contains("ducati monster"));
+        assert!(snippet_around(text, "vespa", 8).is_none());
     }
 }

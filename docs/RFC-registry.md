@@ -191,6 +191,30 @@ only in a **Suggested** strip above the cast, with **Keep** and a dismiss.
 - **Keep** flips origin to "" and kicks off a corpus-wide rematch in the
   background, so a card you accept immediately acquires its documents rather
   than waiting for the next import.
+- **Suggestions arrive started, not blank.** The same call may hand each
+  card up to four key facts (`Label: value` pipe fields — a policy number,
+  a renewal date, a model), each gated like the name: the value must appear
+  verbatim in the material or it is discarded. Extracted reference numbers
+  land as *facts*, never as identifiers — an identifier is an auto-attach
+  key and stays user-entered or user-confirmed.
+- **Near-duplicates merge before they propose.** `same_thing` compares
+  names word-by-word in canonical form — case and punctuation dropped,
+  everyday address abbreviations expanded (Rd/Road, St/Street, N/North) —
+  so "15217 Canyon Seven Rd" and "15217 Canyon Seven Road" are one card,
+  not two. Digits must match exactly; nothing fuzzy, nothing embedded.
+
+When the queue builds past a handful (4+ untriaged), a **triage pass** reads
+it in one batched `Small` call — each candidate with how many documents
+mention it and a snippet of the material around its first mention — and
+marks the ones worth keeping as `triage: "recommended"`. It marks, it never
+rules: the strip sorts recommended first and grows a **Keep recommended**
+button (mirrored as the `keep-recommended` verdict on the MCP
+`rule_all_suggested` tool), and the click is still yours. The verdict is
+queue metadata — cleared the moment a card is ruled on — and an unparseable
+reply just leaves the queue unmarked. The Ledger's `origin: "auto"` rows are
+a different shape (per-notebook lifecycle statuses, no suggested strip), so
+they keep their own review flow; folding them into this triage is follow-up
+work if their queue ever grows a keep-all surface.
 
 The Small role it runs on had no setting until now: it was Apple Foundation
 Models when the sidecar was present, else a fallthrough to the chat

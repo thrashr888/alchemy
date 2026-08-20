@@ -99,8 +99,10 @@ struct CardIdReq {
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 struct RuleSuggestedReq {
     /// "keep" confirms every suggested card — they become the user's and
-    /// their documents are re-matched in the background. "dismiss" turns
-    /// them all down, remembered so the same guesses never come back.
+    /// their documents are re-matched in the background. "keep-recommended"
+    /// confirms only the cards the triage pass marked recommended (triage ==
+    /// "recommended"), leaving the rest queued. "dismiss" turns them all
+    /// down, remembered so the same guesses never come back.
     verdict: String,
 }
 
@@ -147,6 +149,7 @@ impl AlchemyMcp {
             kind,
             name,
             origin: String::new(),
+            triage: String::new(),
             identifiers: commands::normalize_tags(&identifiers.unwrap_or_default()),
             note: note.unwrap_or_default().trim().to_string(),
             facts: to_facts(facts),
@@ -315,18 +318,23 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Rule on every suggested card (origin \"auto\") at once: \"keep\" confirms them all into the user's registry, \"dismiss\" turns them all down (remembered, so the same guesses never return). Returns how many were ruled. Only do this when the user asked for a sweep — suggestions are normally theirs to judge one by one."
+        description = "Rule on suggested cards (origin \"auto\") in bulk: \"keep\" confirms them all into the user's registry, \"keep-recommended\" confirms only the ones the triage pass marked (triage \"recommended\"), \"dismiss\" turns them all down (remembered, so the same guesses never return). Returns how many were ruled. Only do this when the user asked for a sweep — suggestions are normally theirs to judge one by one."
     )]
     async fn rule_all_suggested(
         &self,
         Parameters(RuleSuggestedReq { verdict }): Parameters<RuleSuggestedReq>,
     ) -> Result<CallToolResult, McpError> {
-        let origin = match verdict.as_str() {
-            "keep" => "",
-            "dismiss" => "dismissed",
-            _ => return Err(invalid("verdict must be \"keep\" or \"dismiss\"")),
+        let (origin, only_recommended) = match verdict.as_str() {
+            "keep" => ("", false),
+            "keep-recommended" => ("", true),
+            "dismiss" => ("dismissed", false),
+            _ => {
+                return Err(invalid(
+                    "verdict must be \"keep\", \"keep-recommended\", or \"dismiss\"",
+                ))
+            }
         };
-        let ruled = commands::rule_all_suggested_cards(&self.state().db, origin)
+        let ruled = commands::rule_all_suggested_cards(&self.state().db, origin, only_recommended)
             .await
             .map_err(internal)?;
         if ruled > 0 {

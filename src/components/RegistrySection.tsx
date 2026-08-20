@@ -45,6 +45,7 @@ import {
   Package,
   Plus,
   ScrollText,
+  Sparkles,
   Trash2,
   User,
   X,
@@ -635,6 +636,14 @@ function SuggestionStrip({
   const [busy, setBusy] = useState<string | null>(null);
   if (cards.length === 0) return null;
 
+  // Recommended first — the triage pass exists so the ones worth keeping
+  // are the first ones you read.
+  const ordered = [...cards].sort(
+    (a, b) =>
+      Number(b.triage === "recommended") - Number(a.triage === "recommended"),
+  );
+  const recommended = cards.filter((c) => c.triage === "recommended").length;
+
   const rule = async (id: string, origin: string) => {
     setBusy(id);
     try {
@@ -645,10 +654,10 @@ function SuggestionStrip({
     }
   };
 
-  const ruleAll = async (origin: string) => {
-    setBusy("all");
+  const ruleAll = async (key: string, origin: string, onlyRec?: boolean) => {
+    setBusy(key);
     try {
-      await api.ruleAllSuggested(origin);
+      await api.ruleAllSuggested(origin, onlyRec);
       onChanged();
     } finally {
       setBusy(null);
@@ -665,11 +674,31 @@ function SuggestionStrip({
             chore; a single suggestion keeps the single pair of buttons. */}
         {cards.length > 1 && (
           <span className="ml-auto flex items-center gap-1">
+            {/* Only when triage split the queue — with everything (or
+                nothing) recommended it would just restate Keep all. */}
+            {recommended > 0 && recommended < cards.length && (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => void ruleAll("rec", "", true)}
+                loading={busy === "rec"}
+                disabled={busy === "all"}
+                title="Keep the marked suggestions; the rest stay queued"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                Keep recommended
+              </Button>
+            )}
             <Button
               size="sm"
-              variant="secondary"
-              onClick={() => void ruleAll("")}
+              variant={
+                recommended > 0 && recommended < cards.length
+                  ? "ghost"
+                  : "secondary"
+              }
+              onClick={() => void ruleAll("all", "")}
               loading={busy === "all"}
+              disabled={busy === "rec"}
             >
               <Check className="h-3.5 w-3.5" />
               Keep all
@@ -677,8 +706,8 @@ function SuggestionStrip({
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => void ruleAll("dismissed")}
-              disabled={busy === "all"}
+              onClick={() => void ruleAll("all", "dismissed")}
+              disabled={busy !== null}
               title="Not things I track — none will be suggested again"
             >
               <X className="h-3.5 w-3.5" />
@@ -693,13 +722,19 @@ function SuggestionStrip({
         documents themselves.
       </p>
       <div className="mt-2 flex flex-wrap gap-2">
-        {cards.map((c) => (
+        {ordered.map((c) => (
           <div
             key={c.id}
             className="flex items-center gap-2 rounded-lg border border-dashed border-border-strong bg-surface/40 px-2.5 py-1.5"
           >
+            {c.triage === "recommended" && (
+              <Sparkles
+                className="h-3 w-3 shrink-0 text-primary"
+                aria-label="Recommended"
+              />
+            )}
             <span className="text-muted-foreground">{kindIcon(c.kind)}</span>
-            <span className="text-body">{c.name}</span>
+            <span className="text-body" title={c.triage === "recommended" ? "Recommended — recurs across your documents" : undefined}>{c.name}</span>
             <span className="text-micro text-subtle-foreground">
               {kindLabel(c.kind)}
             </span>

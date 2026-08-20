@@ -286,9 +286,11 @@ impl Db {
         Ok(())
     }
 
-    /// Add the `origin` column ("") to pre-existing registry tables.
+    /// Add the `origin` and `triage` columns ("") to pre-existing registry
+    /// tables.
     async fn migrate_registry(&self) -> Result<()> {
-        self.add_string_column(T_REGISTRY, "origin", "").await
+        self.add_string_column(T_REGISTRY, "origin", "").await?;
+        self.add_string_column(T_REGISTRY, "triage", "").await
     }
 
     /// Add the `origin` column ("") to pre-existing ledger tables.
@@ -2881,6 +2883,7 @@ impl Db {
             let kind = str_col(b, "kind")?;
             let name = str_col(b, "name")?;
             let origin = opt_str_col(b, "origin");
+            let triage = opt_str_col(b, "triage");
             let identifiers = str_col(b, "identifiers")?;
             let note = str_col(b, "note")?;
             let facts = str_col(b, "facts")?;
@@ -2893,6 +2896,10 @@ impl Db {
                     kind: kind.value(i).to_string(),
                     name: name.value(i).to_string(),
                     origin: origin
+                        .as_ref()
+                        .map(|c| c.value(i).to_string())
+                        .unwrap_or_default(),
+                    triage: triage
                         .as_ref()
                         .map(|c| c.value(i).to_string())
                         .unwrap_or_default(),
@@ -2924,6 +2931,10 @@ impl Db {
                         .as_ref()
                         .map(|c| c.value(0).to_string())
                         .unwrap_or_default(),
+                    triage: opt_str_col(b, "triage")
+                        .as_ref()
+                        .map(|c| c.value(0).to_string())
+                        .unwrap_or_default(),
                     identifiers: str_col(b, "identifiers")?.value(0).to_string(),
                     note: str_col(b, "note")?.value(0).to_string(),
                     facts: serde_json::from_str(str_col(b, "facts")?.value(0)).unwrap_or_default(),
@@ -2946,6 +2957,7 @@ impl Db {
             .only_if(format!("id = '{}'", esc(&card.id)))
             .column("name", format!("'{}'", esc(&card.name)))
             .column("origin", format!("'{}'", esc(&card.origin)))
+            .column("triage", format!("'{}'", esc(&card.triage)))
             .column("identifiers", format!("'{}'", esc(&card.identifiers)))
             .column("note", format!("'{}'", esc(&card.note)))
             .column(
@@ -3510,6 +3522,7 @@ fn registry_schema() -> SchemaRef {
         Field::new("kind", DataType::Utf8, false),
         Field::new("name", DataType::Utf8, false),
         Field::new("origin", DataType::Utf8, false),
+        Field::new("triage", DataType::Utf8, false),
         Field::new("identifiers", DataType::Utf8, false),
         Field::new("note", DataType::Utf8, false),
         Field::new("facts", DataType::Utf8, false),
@@ -3527,6 +3540,7 @@ fn registry_batch(schema: &SchemaRef, c: &RegistryCard) -> Result<RecordBatch> {
             Arc::new(StringArray::from(vec![c.kind.clone()])),
             Arc::new(StringArray::from(vec![c.name.clone()])),
             Arc::new(StringArray::from(vec![c.origin.clone()])),
+            Arc::new(StringArray::from(vec![c.triage.clone()])),
             Arc::new(StringArray::from(vec![c.identifiers.clone()])),
             Arc::new(StringArray::from(vec![c.note.clone()])),
             Arc::new(StringArray::from(vec![

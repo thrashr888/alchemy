@@ -658,6 +658,56 @@ async fn ledger_round_trip() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// The triage column survives the write → read round trip, and "keep
+/// recommended" rules exactly the triage pass's picks: the recommended
+/// suggestion joins the cast (triage cleared — it is queue metadata), the
+/// routine one stays queued, and cards the user already owns are untouched.
+#[tokio::test]
+async fn keep_recommended_rules_only_the_marked_suggestions() {
+    use crate::models::RegistryCard;
+    use std::sync::Arc;
+
+    let dir = std::env::temp_dir().join(format!("nbl-triage-{}", uuid::Uuid::new_v4()));
+    let db = Arc::new(Db::open(&dir).await.expect("open db"));
+    let card = |name: &str, origin: &str, triage: &str| RegistryCard {
+        id: uuid::Uuid::new_v4().to_string(),
+        kind: "asset".into(),
+        name: name.into(),
+        origin: origin.into(),
+        triage: triage.into(),
+        identifiers: String::new(),
+        note: String::new(),
+        facts: vec![],
+        attachments: vec![],
+        created_at: now(),
+        updated_at: now(),
+    };
+    db.add_registry_card(&card("Ducati Monster", "auto", "recommended"))
+        .await
+        .expect("add");
+    db.add_registry_card(&card("Corley Automotive", "auto", "routine"))
+        .await
+        .expect("add");
+    db.add_registry_card(&card("Sea Otter", "", ""))
+        .await
+        .expect("add");
+
+    let ruled = crate::commands::rule_all_suggested_cards(&db, "", true)
+        .await
+        .expect("rule");
+    assert_eq!(ruled, 1, "only the recommended suggestion is ruled");
+
+    let cards = db.list_registry().await.expect("list");
+    let by_name = |n: &str| cards.iter().find(|c| c.name == n).unwrap();
+    let kept = by_name("Ducati Monster");
+    assert_eq!(kept.origin, "");
+    assert_eq!(kept.triage, "", "verdicts clear once ruled on");
+    assert_eq!(by_name("Corley Automotive").origin, "auto");
+    assert_eq!(by_name("Corley Automotive").triage, "routine");
+    assert_eq!(by_name("Sea Otter").origin, "");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// The prod error dump from the shared-store schema skew must come out as
 /// one actionable sentence, and generic errors must lose their `location:`
 /// code-path noise.
