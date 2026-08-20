@@ -12,6 +12,7 @@ import { AlchemySymbol } from "../AlchemyHero";
 import { Input, Textarea } from "../ui";
 import {
   AlignLeft,
+  Braces,
   Feather,
   FlaskConical,
   Globe,
@@ -37,6 +38,7 @@ const CHAT_STYLES = [
   { id: "ste100", label: "Simplified Technical", icon: Wrench, hint: "ASD-STE100: short sentences, one instruction each, one word per meaning." },
   { id: "govuk", label: "GOV.UK", icon: Landmark, hint: "Plain English, front-loaded, everyday words, no metaphors." },
   { id: "plain", label: "Plain Language", icon: Feather, hint: "US Federal guidelines: main point first, active voice, no hidden verbs." },
+  { id: "gdev", label: "Google Developer", icon: Braces, hint: "Google's developer docs: second person, present tense, no marketing." },
   { id: "custom", label: "Custom", icon: PenLine, hint: "Give your own goal, style, or role." },
 ] as const;
 

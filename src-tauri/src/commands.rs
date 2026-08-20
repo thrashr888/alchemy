@@ -4907,7 +4907,7 @@ fn chat_style_instruction(cfg: &ChatConfig) -> String {
         ),
         "custom" if !cfg.custom_prompt.trim().is_empty() => parts.push(cfg.custom_prompt.trim().into()),
         // Writing standards (rag::CHAT_STYLES): scientific, adhd, ste100,
-        // govuk, plain — real style guides compressed to prompt size.
+        // govuk, plain, gdev — real style guides compressed to prompt size.
         id => {
             if let Some(text) = rag::style_instructions(id) {
                 parts.push(text.into());

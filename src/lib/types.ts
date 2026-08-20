@@ -547,6 +547,7 @@ export interface ChatConfig {
     | "ste100"
     | "govuk"
     | "plain"
+    | "gdev"
     | "custom";
   customPrompt: string;
   length: "default" | "longer" | "shorter";

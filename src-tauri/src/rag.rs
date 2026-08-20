@@ -81,6 +81,17 @@ pub const CHAT_STYLES: &[(&str, &str, &str, &str)] = &[
          material. Avoid hidden verbs (\"apply\", not \"make an application\"), double \
          negatives, and undefined abbreviations.",
     ),
+    (
+        "gdev",
+        "Google Developer Docs",
+        "Direct developer documentation",
+        "Follow the Google developer documentation style guide: address the reader as \
+         \"you\" in plain, direct prose. Use present tense and active voice (\"the \
+         command creates\", not \"the command will create\"). Keep sentences short and \
+         factual; no marketing language. Spell out each acronym on first use. Avoid \
+         idioms and colloquialisms. Use sentence case for headings, and write \
+         procedures as numbered steps with one action per step.",
+    ),
 ];
 
 /// The instruction text for a style id; None for "" / unknown ids.
