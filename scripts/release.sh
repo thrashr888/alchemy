@@ -75,9 +75,9 @@ node -e "for (const f of ['package.json','src-tauri/tauri.conf.json']) {
   require('fs').writeFileSync(f, JSON.stringify(j, null, 2) + '\n');
 }"
 perl -i -pe 'if (!$d && /^version = /) { s/^version = ".*"/version = "'"$VERSION"'"/; $d=1 }' src-tauri/Cargo.toml
-# Sync Cargo.lock's own version entry without running build scripts (the
-# natives aren't fetched yet); metadata rewrites the lock from the manifest.
-(cd src-tauri && cargo metadata --format-version 1 --no-deps >/dev/null)
+# Sync Cargo.lock (cargo update --workspace rewrites workspace members.
+# versions without touching deps or build scripts; metadata --no-deps did NOT write the lock and tripped the post-build dirty-tree guard on v0.43.0).
+(cd src-tauri && cargo update --workspace --quiet)
 git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
 git commit -m "$TAG"
 # From here to the push, a failure strands this commit locally (never
