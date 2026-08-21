@@ -131,8 +131,17 @@ detected agents, pick default, per-agent auth status.
 - **Auth failure looks like a transport failure.** An agent that isn't signed
   in dies at `session/new` with a generic wire error ("Query closed before
   response received"). The agent does advertise its auth methods at
-  `initialize`, so the start error appends them ("Log in with Claude Code").
-  Anything richer — an in-app login flow — is phase 3 work.
+  `initialize`, so the message leads with those ("Claude Code couldn't open a
+  session — it may need you to sign in first (Log in with Claude Code)") and
+  the wire text trails, flattened to one line.
+- **Session failures must not be toasts.** They auto-dismissed before the
+  message could be read, which made the auth problem above invisible in
+  practice. Failures render in-pane until dismissed, and carry the fix: an
+  "Open Terminal: `claude`" button plus a Retry that replays the prompt that
+  never got sent. Login commands come from a fixed per-agent table, and a
+  test asserts each is on `commands::terminal_command_allowed` — that
+  allowlist, not the table, is the security boundary. An in-app login flow is
+  still phase 3.
 
 ## Smoke-test status (2026-08-20)
 
@@ -159,5 +168,8 @@ Exercised live against the dev app, opencode 1.18.15:
 - **Claude Code end-to-end is unverified.** The adapter reaches `session/new`
   but this machine's `claude` OAuth is expired ("OAuth session expired and
   could not be refreshed"), which is environmental rather than an Alchemy
-  bug. Re-test after `claude /login`; that run also validates permissions.
+  bug. Its *failure* path is now well covered — the notice, the sign-in hint,
+  Open Terminal, and Retry were all exercised against this exact failure —
+  but a successful Claude Code turn has never run. Re-test after signing in;
+  that run also validates permissions.
 - Gemini and Codex are detected but never launched.
