@@ -1,4 +1,4 @@
-Chat is a conversation; the Ledger is a record. It is the notebook's typed memory — the third mode of the center column, next to Chat and Reader — and it holds the things you have actually concluded, decided, or still need to answer, as structured rows rather than prose scrolled away in a transcript.
+Chat is a conversation; the Ledger is a record. It is the third mode of the center column, next to Chat and Reader, and it holds the things you have actually concluded, decided, or still need to answer — structured rows instead of prose scrolled away in a transcript.
 
 ## What a ledger entry is
 
@@ -18,16 +18,16 @@ A research notebook accumulates two different kinds of knowledge. The sources ho
 
 Some patterns that work well:
 
-- **Decisions on file.** Every time a discussion in chat ends with a call, add a decision entry with a one-line why. When circumstances change, mark it superseded rather than deleting it — the history is the value.
+- **Decisions on file.** Every time a discussion in chat ends with a call, add a decision entry with a one-line why. When circumstances change, mark it superseded rather than deleting it; the history is the value.
 - **Open questions as a queue.** Add questions as they occur to you; resolve them to *answered* as sources arrive that settle them.
 - **Assertions under test.** When a source makes a claim you are not sure about, record it as an assertion. As other sources weigh in, promote it to corroborated or flag it contradicted.
 
 ## Agents can keep it too
 
-The Ledger is fully agent-reachable through Alchemy's MCP server: an agent can list entries, add them, and update statuses. That means an agent doing research for you can leave behind structured findings — dated, typed, and anchored — instead of a wall of text, and you can audit exactly what it concluded. See the "Use Cases & Power Tips" source for how to connect agents.
+The Ledger is fully agent-reachable through Alchemy's MCP server: an agent can list entries, add them, and update statuses. That means an agent doing research for you can leave behind structured findings — dated, typed, and anchored — instead of a wall of text, and you can audit exactly what it concluded. See the "Tips and examples" source for how to connect agents.
 
 ## Where it shows up
 
-Ledger entries are visible in the Ledger pane, and the daily Brief can call out when new activity touches a decision you have on file. Entries are deliberately kept out of retrieval until they are woven in carefully — a wrong merge would poison the notebook's memory worse than no memory at all.
+Ledger entries are visible in the Ledger pane, and the daily Brief can call out when new activity touches a decision you have on file. Entries are deliberately kept out of search results until they are merged in carefully. A wrong merge would poison the notebook's memory worse than no memory at all.
 
 Start small: one decision, one open question. The habit compounds.

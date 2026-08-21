@@ -66,7 +66,7 @@ const ACTIONS: SlashCommandMeta[] = [
   {
     name: "research",
     family: "Actions",
-    description: "Toggle deep research (agentic retrieval)",
+    description: "Toggle deep research: several searches before answering",
     argHint: "[on|off]",
     aliases: ["deep-research", "agent"],
   },

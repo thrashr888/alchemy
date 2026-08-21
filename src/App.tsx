@@ -140,7 +140,7 @@ function App() {
           <span className="h-2 w-2 animate-pulse rounded-full bg-primary" />
           <div className="flex flex-col">
             <span className="text-caption font-medium text-foreground">
-              {embedderDownload.title ?? "Setting up the built-in embedder"}
+              {embedderDownload.title ?? "Setting up the built-in search model"}
             </span>
             <span className="text-micro text-muted-foreground">
               One-time download ·{" "}

@@ -203,7 +203,7 @@ function Deck({ cards, noteId }: { cards: Card[]; noteId?: string }) {
       {done ? (
         <div className="flex min-h-[220px] flex-col items-center justify-center gap-3 rounded-xl border border-border bg-surface-2 px-8 py-6 text-center">
           <span className="text-section font-medium text-foreground">
-            Session complete — {gotIt} got it, {missed.length} missed
+            Session complete. {gotIt} got it, {missed.length} missed.
           </span>
           <span className="text-caption text-muted-foreground">
             Missed cards come back immediately; the rest return on a 1 / 3 / 7 / 21

@@ -100,8 +100,8 @@ const isOrphan = (c: RegistryCard) =>
   !c.origin && confirmed(c).length === 0 && proposed(c).length === 0;
 
 const ORPHAN_HINT =
-  "No documents left — its sources may have been deleted with their notebook. " +
-  "The sweep retried matching and found nothing.";
+  "No documents left; its sources may have been deleted with their notebook. " +
+  "Alchemy retried the match and found nothing.";
 
 type RegistrySort = "latest" | "docs" | "title";
 const SORTS: { value: RegistrySort; label: string }[] = [
@@ -531,7 +531,7 @@ export function CardRail({ sourceId }: { sourceId: string }) {
               {pending && (
                 <>
                   <div className="mt-1.5 text-micro text-muted-foreground">
-                    Filing it here changes nothing in the document.
+                    Filing changes nothing in the document.
                   </div>
                   <div className="mt-1.5 flex items-center gap-1">
                     <Button
@@ -545,7 +545,7 @@ export function CardRail({ sourceId }: { sourceId: string }) {
                       size="sm"
                       variant="ghost"
                       onClick={() => void setStatus(c.id, "rejected")}
-                      title="Turn this down — it won't be proposed again"
+                      title="Won't be suggested again"
                     >
                       Not this
                     </Button>
@@ -625,8 +625,8 @@ export function AttachToCardModal({
     >
       <div className="flex flex-col gap-3">
         <p className="text-caption text-muted-foreground">
-          Filing &ldquo;{sourceTitle}&rdquo; under a card only groups it there.
-          It changes nothing in the document.
+          Groups &ldquo;{sourceTitle}&rdquo; under a card. Filing changes
+          nothing in the document.
         </p>
         <Input
           autoFocus
@@ -870,7 +870,7 @@ function SuggestionStrip({
               variant="ghost"
               onClick={() => void ruleAll("all", "dismissed")}
               disabled={busy !== null}
-              title="Not things I track — none will be suggested again"
+              title="These won't be suggested again"
             >
               <X className="h-3.5 w-3.5" />
               Dismiss all
@@ -880,8 +880,8 @@ function SuggestionStrip({
       </div>
       <p className="mt-1 text-caption text-muted-foreground">
         Things that recur across your documents. Keeping one adds it to your
-        registry and files its documents under it — it changes nothing in the
-        documents themselves.
+        registry and files its documents under it. Filing changes nothing in
+        the documents themselves.
       </p>
       <div className="mt-2 flex flex-wrap gap-2">
         {ordered.map((c) => (
@@ -910,7 +910,7 @@ function SuggestionStrip({
             </Button>
             <button
               className="rounded p-1 text-muted-foreground transition hover:text-destructive"
-              title="Not a thing I track — won't be suggested again"
+              title="Won't be suggested again"
               onClick={() => void rule(c.id, "dismissed")}
             >
               <X className="h-3.5 w-3.5" />
@@ -1208,7 +1208,7 @@ function CardDetail({
               size="sm"
               variant="ghost"
               onClick={() => void setStatus(a.sourceId, "rejected")}
-              title="Turn this down — it won't be proposed again"
+              title="Won't be suggested again"
             >
               <X className="h-3.5 w-3.5" />
               Not this
@@ -1286,8 +1286,8 @@ function CardDetail({
             </h2>
             <p className="mt-1 text-caption text-muted-foreground">
               These matched this card&rsquo;s name, which is a guess, not proof.
-              Confirming only files the document here — it changes nothing in
-              the document.
+              Confirming only files the document here. Filing changes nothing
+              in the document.
             </p>
             <div className="mt-2">{pending.map((a) => row(a, true))}</div>
           </section>

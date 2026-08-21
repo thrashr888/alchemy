@@ -187,7 +187,7 @@ function ArchivedNotes({
                 {n.title}
               </span>
               <span className="text-micro text-subtle-foreground">
-                {relativeTime(n.updatedAt)} — editing revives it
+                {relativeTime(n.updatedAt)} · editing keeps it
               </span>
             </button>
           ))}
@@ -638,7 +638,7 @@ export function StudioPanel() {
                     {n.origin === "auto" && (
                       <span
                         className="pointer-events-auto"
-                        title="Chat saved this on its own — editing it makes it yours"
+                        title="Chat saved this on its own. Edit it to make it yours."
                       >
                         <Badge>auto</Badge>
                       </span>
@@ -646,7 +646,7 @@ export function StudioPanel() {
                     {n.status === "stale" && (
                       <span
                         className="pointer-events-auto"
-                        title="Unused for a while — the curator will archive it eventually; opening or editing revives it"
+                        title="Unused for a while. Alchemy archives old notes; opening or editing keeps this one."
                       >
                         <Badge>stale</Badge>
                       </span>
@@ -683,8 +683,8 @@ export function StudioPanel() {
             <span className="flex items-center gap-2 text-caption tabular-nums text-muted-foreground">
               <Spinner className="h-3.5 w-3.5" />
               {audioProgress
-                ? `Voicing the episode — line ${audioProgress.done} of ${audioProgress.total}`
-                : "Streaming — closing this keeps generating"}
+                ? `Voicing line ${audioProgress.done} of ${audioProgress.total}`
+                : "Streaming. Closing this keeps generating."}
             </span>
             <Button
               variant="danger"

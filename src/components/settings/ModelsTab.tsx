@@ -299,8 +299,8 @@ export function ModelsTab({
             How should Alchemy answer?
           </div>
           <p className="mt-0.5 text-caption text-subtle-foreground">
-            It already works — this just picks the brain. Change it anytime
-            from the chat box.
+            Sets which model answers chat. Changeable anytime, here or from
+            the chat box.
           </p>
         </div>
         <FirstRunDoor
@@ -377,7 +377,7 @@ export function ModelsTab({
     <div className="flex flex-col gap-5">
       <Field
         label="Model"
-        hint="Answers chat and writes studio documents. Change it anytime — here or from the chat box."
+        hint="Answers chat and writes studio documents."
       >
         <div
           className="flex flex-col gap-1"
@@ -601,12 +601,12 @@ export function ModelsTab({
               </div>
             </Field>
             <Field
-              label="Embeddings"
-              hint="Powers search and citations. Changing it re-indexes every source — deliberately separate from chat."
+              label="Search model"
+              hint="Used for search and citations. Changing it re-indexes every source."
             >
               <div className="flex flex-col gap-1.5">
                 <select
-                  aria-label="Embedding engine"
+                  aria-label="Search engine"
                   value={draft.embedder}
                   onChange={(e) =>
                     setDraft({ ...draft, embedder: e.target.value })
@@ -618,7 +618,7 @@ export function ModelsTab({
                 </select>
                 {draft.embedder === "ollama" && (
                   <OllamaModelPicker
-                    label="Embedding model"
+                    label="Search model"
                     value={draft.embedModel}
                     onChange={(v) => setDraft({ ...draft, embedModel: v })}
                     placeholder="mxbai-embed-large"
@@ -643,7 +643,7 @@ export function ModelsTab({
                   ? "Needs Ollama running with this model pulled."
                   : draft.visionProvider === "gateway"
                     ? "Uses your gateway key; pick a vision-capable model."
-                    : "Reads images and scanned PDFs. Off means image sources are listed, not read."
+                    : "Reads images and scanned PDFs."
               }
             >
               <div className="flex flex-col gap-1.5">
@@ -675,7 +675,7 @@ export function ModelsTab({
 
             <Field
               label="Small model"
-              hint="Quick background jobs: gists, tags, suggestions. A local 8–12B beats paying chat-model latency."
+              hint="Quick background jobs: summaries, tags, suggestions. A small local model keeps them fast."
             >
               <OllamaModelPicker
                 label="Small model"
@@ -920,7 +920,7 @@ function ProviderWizard({
           </div>
           {clis.filter((c) => c.installed).length === 0 && (
             <p className="text-caption text-subtle-foreground">
-              None found — Claude, ChatGPT, Gemini, Cursor, and Bob appear here
+              None found. Claude, ChatGPT, Gemini, Cursor, and Bob appear here
               once their apps are installed and signed in.
             </p>
           )}
@@ -1051,7 +1051,7 @@ function ProviderWizard({
               placeholder="paste your key"
             />
           </Field>
-          <Field label="Model" hint="Picked for you — change it if you like.">
+          <Field label="Model" hint="Picked for you. Change it if you like.">
             <div className="flex items-center gap-1.5">
               {found.length > 0 ? (
                 <Select
@@ -1161,7 +1161,7 @@ function ProviderWizard({
         <div className="flex flex-col gap-3">
           <Field
             label="Model"
-            hint="Blank uses whatever model the CLI itself is set to. Name one here when that model has been retired — the CLI answers “The requested model is not supported” and only it knows the new names."
+            hint="Blank uses the CLI's own default model. Name one here if that default has been retired and the CLI rejects it."
           >
             <Input
               aria-label="Model"

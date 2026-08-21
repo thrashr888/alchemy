@@ -2254,8 +2254,8 @@ function SourceReader({
                 <>
                   <span>
                     This file is online-only in{" "}
-                    {folderProvider(source.url) ?? "its cloud drive"} — its
-                    bytes aren't on this Mac yet.
+                    {folderProvider(source.url) ?? "its cloud drive"} and
+                    hasn't been downloaded to this Mac yet.
                   </span>
                   {/* Same queued refresh the Sources row uses: hydrates
                       (brctl for iCloud, the read itself for File Provider
@@ -2899,7 +2899,7 @@ function RepoTreeRows({
                   ? "bg-[color:var(--citation)]"
                   : "border border-subtle-foreground",
               )}
-              title={n.child.chunkCount > 0 ? "Embedded" : "Search-only"}
+              title={n.child.chunkCount > 0 ? "Indexed" : "Text only"}
             />
             <span className="truncate">{n.name}</span>
           </button>
@@ -3349,8 +3349,8 @@ function RepoView({ source, map }: { source: Source; map: string | null }) {
                   disabled={tierBusy}
                   title={
                     sel.chunkCount > 0
-                      ? "Demote: keep the file searchable but stop embedding it"
-                      : "Promote: embed this file so hybrid retrieval sees it"
+                      ? "Keep this file findable by text match only"
+                      : "Include this file in search and citations"
                   }
                   className={cn(
                     "flex shrink-0 items-center gap-1 rounded-full border border-border px-2 py-px text-micro hover:border-border-strong hover:bg-surface-2",
@@ -3358,7 +3358,7 @@ function RepoView({ source, map }: { source: Source; map: string | null }) {
                   )}
                 >
                   {tierBusy && <Spinner className="h-2.5 w-2.5" />}
-                  {sel.chunkCount > 0 ? "Embedded" : "Search-only"}
+                  {sel.chunkCount > 0 ? "Indexed" : "Text only"}
                 </button>
                 <span className="flex-1" />
                 {/* Reveal the selected file itself — the reader header's Show

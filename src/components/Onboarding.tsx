@@ -140,7 +140,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
     });
     if (model) {
       // Let the success state land before health flips the overlay away.
-      setGwStatus(`Connected — using ${model}`);
+      setGwStatus(`Connected. Using ${model}.`);
       setGwSaving(false);
       await new Promise((r) => setTimeout(r, 1400));
     } else {
@@ -172,7 +172,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
             {provider === "openai" ? (
               <>
                 Connect an OpenAI-compatible gateway. Your sources are indexed
-                locally — only your chat prompts are sent to the gateway.
+                locally; only your chat prompts are sent to the gateway.
               </>
             ) : (
               <>
@@ -183,7 +183,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
                 >
                   Ollama
                 </button>{" "}
-                and two local models — nothing leaves your computer.
+                and two local models. Nothing leaves your computer.
               </>
             )}
           </p>
@@ -216,7 +216,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
             <Input
               value={gwUrl}
               onChange={(e) => setGwUrl(e.target.value)}
-              placeholder="Gateway URL — optional for OpenAI / Anthropic / OpenRouter / Groq keys"
+              placeholder="Gateway URL (optional for OpenAI, Anthropic, OpenRouter, or Groq keys)"
             />
             <Input
               type="password"
@@ -321,12 +321,12 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
 
           <Step
             ok={embed.working}
-            title={aiConfig?.embedder === "builtin" ? "Built-in embedder" : "Embedding model"}
+            title={aiConfig?.embedder === "builtin" ? "Built-in search model" : "Search model"}
             detail={
               aiConfig?.embedder === "builtin"
                 ? embed.detail
                 : health.reachable
-                  ? `Indexes your sources for retrieval (274 MB). ${embed.detail}`
+                  ? `Indexes your sources for search (274 MB). ${embed.detail}`
                   : "Waiting for Ollama."
             }
           >
@@ -341,7 +341,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
             title="Vision model"
             detail={
               provider === "openai"
-                ? "Enables OCR for images and scanned PDFs — set a vision-capable model (e.g. gpt-4o) in the Gateway box above."
+                ? "Enables OCR for images and scanned PDFs. Set a vision-capable model (e.g. gpt-4o) in the Gateway box above."
                 : "Enables OCR for images and scanned PDFs. Skip it if you don't need that."
             }
           >

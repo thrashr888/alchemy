@@ -111,6 +111,14 @@ pub fn is_pdf(path: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Final path component for user-facing errors — the full path is noise in a toast.
+fn err_name(path: &str) -> &str {
+    Path::new(path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(path)
+}
+
 /// File stem as a display title.
 pub fn file_title(path: &str) -> String {
     Path::new(path)
@@ -155,7 +163,7 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
     if is_code_path(path) {
         let text = read_text_lossy(path)?.replace('\r', "");
         if text.trim().is_empty() {
-            return Err(anyhow!("no extractable text found in {path}"));
+            return Err(anyhow!("No readable text in {}", err_name(path)));
         }
         return Ok(Extracted {
             image_url: String::new(),
@@ -181,7 +189,7 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
     let finish = |md: String| -> Result<Extracted> {
         let text = normalize(&tidy_markdown_tables(&md));
         if text.trim().is_empty() {
-            return Err(anyhow!("no extractable text found in {path}"));
+            return Err(anyhow!("No readable text in {}", err_name(path)));
         }
         Ok(Extracted {
             image_url: String::new(),
@@ -238,7 +246,8 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
                 // Not an error the user can act on — the caller catches this
                 // and rasterizes the pages through the vision model instead.
                 return Err(anyhow!(
-                    "no selectable text in {path} — it looks like a scanned/image PDF."
+                    "No selectable text in {}; it looks like a scanned PDF.",
+                    err_name(path)
                 ));
             }
             ("pdf".to_string(), extracted.markdown())
@@ -271,7 +280,7 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
 
     let text = normalize(&text);
     if text.trim().is_empty() {
-        return Err(anyhow!("no extractable text found in {path}"));
+        return Err(anyhow!("No readable text in {}", err_name(path)));
     }
     Ok(Extracted {
         image_url: String::new(),
@@ -518,7 +527,10 @@ fn extract_boxnote(path: &str) -> Result<String> {
         return Ok(text.to_string());
     }
 
-    Err(anyhow!("no extractable text in Box Note {path}"))
+    Err(anyhow!(
+        "No readable text in the Box Note {}",
+        err_name(path)
+    ))
 }
 
 /// Walk a Box Note ProseMirror document, concatenating text nodes and inserting
@@ -720,7 +732,7 @@ pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
             let extracted = crate::pdf::extract_text_mem(&bytes)?;
             if extracted.is_scanned() {
                 return Err(anyhow!(
-                    "no selectable text in {url} — it looks like a scanned PDF."
+                    "No selectable text in this PDF; it looks like a scanned PDF."
                 ));
             }
             return Ok(Extracted {

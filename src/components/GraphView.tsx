@@ -488,7 +488,7 @@ export function GraphView() {
         <EmptyState
           icon={<Share2 className="h-5 w-5" />}
           title="Nothing to graph yet"
-          hint="Links between sources and notes show up here — a URL, a filename, or a [[wikilink]]."
+          hint="Links between sources and notes show up here: a URL, a filename, or a [[wikilink]]."
         />
       )}
       {focus && meta.get(focus) && (
@@ -766,8 +766,8 @@ function ZoomButton({
  *  runs both, and a hint naming the wrong key is worse than none. */
 const NAV_HINT =
   typeof navigator !== "undefined" && /Mac/i.test(navigator.platform)
-    ? "Click to open · ⌘-click to see just its neighbourhood"
-    : "Click to open · Ctrl-click to see just its neighbourhood";
+    ? "Click a node to open it · ⌘-click to focus its neighbourhood"
+    : "Click a node to open it · Ctrl-click to focus its neighbourhood";
 
 /** Titles are long and the graph is not the place to read one in full. */
 function labelOf(title: string) {

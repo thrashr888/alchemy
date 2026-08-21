@@ -18,9 +18,9 @@ export function MigrationOverlay() {
             <Layers className="h-4.5 w-4.5" />
           </div>
           <div>
-            <div className="text-card font-semibold text-foreground">Re-embedding sources</div>
+            <div className="text-card font-semibold text-foreground">Re-indexing sources</div>
             <div className="text-caption text-muted-foreground">
-              Rebuilding the vector index with your new model.
+              Rebuilding the search index with your new model.
             </div>
           </div>
         </div>

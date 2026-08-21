@@ -56,32 +56,32 @@ const EXAMPLE_CARDS: &[ExampleCard] = &[
 
 const INTRO_SOURCES: &[ExampleSource] = &[
     (
-        "Getting Started",
+        "Getting started",
         "",
         include_str!("../examples/intro/getting-started.md"),
     ),
     (
-        "Source Management",
+        "Adding sources",
         "",
         include_str!("../examples/intro/source-management.md"),
     ),
     (
-        "Chat & Citations",
+        "Chatting with citations",
         "",
         include_str!("../examples/intro/chat-and-citations.md"),
     ),
     (
-        "Content Generation (Studio)",
+        "Generating documents",
         "",
         include_str!("../examples/intro/content-generation-studio.md"),
     ),
     (
-        "Ledger Memory",
+        "The Ledger",
         "",
         include_str!("../examples/intro/ledger-memory.md"),
     ),
     (
-        "Use Cases & Power Tips",
+        "Tips and examples",
         "",
         include_str!("../examples/intro/use-cases-and-power-tips.md"),
     ),

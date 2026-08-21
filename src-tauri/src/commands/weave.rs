@@ -126,8 +126,7 @@ async fn weave_pass(
         let mut updated = entry.clone();
         updated.status = next.to_string();
         let stamp = chrono::Local::now().format("%Y-%m-%d").to_string();
-        let line =
-            format!("Weave {stamp}: {verdict} by \u{201c}{source_title}\u{201d} \u{2014} {reason}");
+        let line = format!("{stamp}: {next} by \u{201c}{source_title}\u{201d} ({reason})");
         updated.why = if updated.why.is_empty() {
             line
         } else {
