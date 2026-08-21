@@ -120,9 +120,23 @@ things don't get superseded, their documents do.
 ("one registry, every surface" — Reports.tsx:59). The module header says so
 once, the way RFC-night-shift disambiguated "paused."
 
-### 2. Attach: identifiers act, everything else proposes
+### 2. Attach: identifiers act, and strong names act too
 
-Two paths in, and only one of them writes without asking.
+> **Revised 2026-08.** The shipped v1 of this section proposed name
+> matches instead of attaching them. Live use buried the registry in
+> pending rows — observed at 771 proposals against 30 confirmed
+> attachments, with most cards showing zero documents because ruling on
+> every proposal is a chore nobody does. Per the house rule (intelligent
+> behavior ships applied; toggles and controls are for undoing, not
+> pre-approving), strong name matches now attach directly and the user's
+> control moved to removal-after-the-fact: unfiling an attachment marks
+> the pair `rejected`, which is remembered, so the sweep never re-attaches
+> that document to that card. The one-time migration promoted existing
+> pending name-match proposals to attached — they were created by the same
+> matching logic now trusted. `proposed` stays in the schema (manual
+> proposals and agents still use it); the sweep just stops minting it.
+
+Two paths in, both writing with a visible receipt.
 
 1. **Identifier match — auto-attach.** On arrival, a source's text is scanned
    for every card's identifiers. A hit attaches at `confirmed` with
@@ -132,12 +146,19 @@ Two paths in, and only one of them writes without asking.
    4-character alphabetic "serial" is a false-positive machine. Identifiers
    are user-entered or user-confirmed, **never inferred and written** — the
    Clerk's header extraction may *propose* one, and a proposed identifier
-   attaches nothing until it is confirmed.
-2. **Name match — propose only.** A card's name is ordinary language, so a
-   document containing it is a candidate and nothing more: it queues a
-   `proposed` attachment with `matched: "name"`. Names must be ≥4
-   characters, and a card stops accruing past `MAX_PENDING_PER_CARD` — a
-   queue nobody can face is the same as no queue.
+   attaches nothing until it is confirmed. Auto-extracted reference numbers
+   land as **facts**, never as identifiers (see auto-facts below).
+2. **Strong name match — auto-attach, conservatively.** A document
+   containing the card name's FULL canonical word sequence (`same_thing`'s
+   `canon_word` forms — "Canyon Seven Rd" is "canyon seven road") in order
+   and adjacent attaches at `confirmed` with `matched: "name"`, rendered as
+   the receipt "name matched". Nothing fuzzy clears the bar: partial
+   mentions, reordered words, and `CanonDoc::mentions`-grade anchored pairs
+   do NOT attach — a bad auto-attach now costs the user effort to undo, so
+   weak signals simply do nothing (no proposal purgatory). Names must be ≥4
+   characters, and a card stops accruing name-matched attachments past
+   `MAX_NAME_MATCHES_PER_CARD` — a name generic enough to hit dozens of
+   documents is a bad signal by definition.
 
    *This is where the built version diverged from the first draft, which
    called for a cosine pass against embedded card summaries with the
@@ -167,6 +188,56 @@ The third path is the fastest and seeds the cast: **"File under a card…"**
 in the gallery's card menu and the sources panel's `RowMenu`, opening a
 picker that also mints a card from what you type. Most of a household's cast
 gets built this way in an afternoon, and every sweep after that is a bonus.
+
+**Auto-facts (2026-08).** The suggester's verbatim-gated fact extraction
+also runs over cards the user already owns: on the sweep cadence, one Small
+call per (card, attached document) proposes `Label: value` lines, each value
+gated `haystack.contains(...)` against the document (`gate_fact`) — copied
+word-for-word or discarded. Only MISSING labels land; a value the user may
+have edited is never overwritten, and duplicate values under new labels are
+skipped. Bad facts are deleted from the card detail. Budgeted
+(`MAX_ENRICH_CALLS_PER_PASS`) and once-per-card-per-run, so the pass
+converges. Reference numbers extracted this way stay facts; promotion to an
+auto-attach identifier remains a human act.
+
+**Orphan lifecycle (2026-08).** A card with no living documents is an
+orphan, and what happens to it depends on whose it is:
+
+- **Attachment aliveness is source-existence.** Archived notebooks keep
+  their source rows, so an attachment in an archived notebook counts as
+  alive — archived ≠ deleted; only notebook DELETION removes sources and
+  orphans a card. This is deliberate: archiving is "out of my way", not
+  "never existed".
+- **Dangling rows prune.** Attachment rows whose source no longer exists
+  are dropped on the sweep, every status included — a deleted source id can
+  never be re-proposed, so even its `rejected` memory is dead weight.
+- **Rematch before ruling.** When any orphan exists, the sweep runs one
+  gated corpus rematch first, so identifier and strong-name receipts can
+  re-attach what a reimport brought back.
+- **Auto-origin orphans remove themselves.** A suggested card the user
+  never ruled on, still documentless after the rematch, is machine-made and
+  machine-removed; the suggester can recreate it if the corpus mentions it
+  again. Dismissal memory is untouched.
+- **User-owned orphans are badged, never auto-removed.** A card the user
+  made or kept gets a hairline "orphaned" badge with the reason on hover,
+  and a "Clean up orphans (n)" bulk action removes them after one confirm.
+  A kept card vanishing on its own would break the registry's
+  shows-its-reason trust model.
+
+**Backfill (2026-08).** Existing stores converge via the sweep — the first
+sweep after an upgrade IS the migration, and there is no migration script,
+version marker, or flag. Every pass is idempotent over the FULL registry:
+promotion converts pending name-match proposals wherever it finds them (and
+after promotion none remain, so re-runs no-op); pruning removes only rows
+whose sources are gone; the rematch is single-flight-gated and batched one
+content scan per notebook with breathing pauses (the Lance scan-storm
+lesson), and fires only when an orphan actually exists; fact enrichment is
+capped per pass and once-per-card-per-run, so a large backlog spreads over
+sweeps instead of pegging the CPU on upgrade day. Later sweeps are plain
+maintenance of the same shape. One deliberate incompleteness: a store with
+no orphans doesn't get a retroactive corpus-wide rematch, so name matches
+the old model's pending-cap skipped converge through arrival-time matching
+and the next orphan- or confirm-triggered rematch, not on day one.
 
 ### 3. The suggester: the cast populates itself, by proposing
 

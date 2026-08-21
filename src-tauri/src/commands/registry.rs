@@ -8,11 +8,19 @@
 //! The one load-bearing rule is graded literal matching. A card's
 //! *identifiers* are distinctive strings — a VIN, a policy number, a serial
 //! — so a document containing one is that card's document, and it attaches
-//! without asking. A card's *name* is ordinary language, so a document
-//! containing it is a candidate and nothing more: it proposes. Nothing here
-//! infers, embeds, or calls a model; a wrong attachment files a document
-//! under the wrong thing and then answers questions from it, and no
-//! similarity score is worth that.
+//! without asking. A card's *name* also attaches when the match is STRONG:
+//! the full canonical word sequence (`same_thing`'s forms — "Canyon Seven
+//! Rd" is "canyon seven road"), every word in order and adjacent, nothing
+//! fuzzy. The original model proposed name matches instead of attaching
+//! them, and the approval burden buried the registry in pending rows the
+//! user never ruled on (observed live: 771 proposals against 30 confirmed);
+//! per the house rule, the intelligent behavior now ships applied, and the
+//! user's control is removal-after-the-fact — removing an attachment marks
+//! it `rejected`, which is remembered, so the sweep never re-attaches the
+//! same document to the same card. Weak or partial name matches simply
+//! don't attach. Nothing here infers, embeds, or calls a model to match; a
+//! wrong attachment files a document under the wrong thing and then answers
+//! questions from it, and no similarity score is worth that.
 
 use super::*;
 use crate::models::{CardAttachment, CardFact, RegistryCard};
@@ -35,11 +43,12 @@ pub(crate) const ATTACHMENT_STATUSES: &[&str] = &["confirmed", "proposed", "reje
 /// on its own: long enough not to collide, and carrying a digit so an
 /// ordinary word can never be one. "ab12" attaches nothing, ever.
 const MIN_IDENTIFIER_LEN: usize = 6;
-/// Below this a name is too short to be a safe proposal signal.
+/// Below this a name is too short to be a safe match signal.
 const MIN_NAME_LEN: usize = 4;
-/// A card stops accruing proposals past this many pending — a queue nobody
-/// can face is the same as no queue.
-const MAX_PENDING_PER_CARD: usize = 12;
+/// A card stops accruing name-matched attachments past this many — a name
+/// generic enough to hit dozens of documents is a bad auto-attach signal,
+/// and each bad attach now costs the user effort to undo.
+const MAX_NAME_MATCHES_PER_CARD: usize = 12;
 /// The prefix of a document weighed on arrival. Identifiers and names live
 /// near the top of a document (headers, title blocks); scanning a whole
 /// book to find a VIN in the appendix is not worth the read.
@@ -79,20 +88,34 @@ fn attaching_identifiers(identifiers: &str) -> Vec<&str> {
         .collect()
 }
 
+/// Strong canonical-name presence: the name's FULL canonical word sequence
+/// (`canon_words`) appears contiguously in the document's canonical words.
+/// Deliberately not `CanonDoc::mentions` — that grades partial mentions for
+/// triage counts; an ATTACH needs every word, in order, adjacent.
+fn canon_sequence_present(doc: &[String], name: &[String]) -> bool {
+    !name.is_empty() && doc.len() >= name.len() && doc.windows(name.len()).any(|w| w == name)
+}
+
 /// Why this document belongs to this card, or `None`.
 ///
-/// Returns the receipt that will be stored verbatim: the matched identifier
-/// (auto-attach), or "name" (propose only). The haystack must already be
-/// lowercased — the caller lowercases once per document, not once per card.
-fn match_card(card: &RegistryCard, haystack: &str) -> Option<(String, &'static str)> {
+/// Returns the receipt that will be stored verbatim: the matched identifier,
+/// or "name" (rendered as "name matched") for a strong canonical-name hit —
+/// both attach as `confirmed` now; the receipt keeps the reason visible.
+/// The haystack must already be lowercased and `doc_seq` is its canonical
+/// word sequence — the caller computes both once per document, not per card.
+fn match_card(
+    card: &RegistryCard,
+    haystack: &str,
+    doc_seq: &[String],
+) -> Option<(String, &'static str)> {
     for id in attaching_identifiers(&card.identifiers) {
         if haystack.contains(id) {
             return Some((id.to_string(), "confirmed"));
         }
     }
-    let name = card.name.trim().to_lowercase();
-    if name.chars().count() >= MIN_NAME_LEN && haystack.contains(&name) {
-        return Some(("name".into(), "proposed"));
+    let name = card.name.trim();
+    if name.chars().count() >= MIN_NAME_LEN && canon_sequence_present(doc_seq, &canon_words(name)) {
+        return Some(("name".into(), "confirmed"));
     }
     None
 }
@@ -117,22 +140,23 @@ pub(crate) async fn match_source_to_cards(
     }
     let head: String = text.chars().take(SCAN_CAP).collect();
     let haystack = head.to_lowercase();
+    let doc_seq = canon_words(&haystack);
     let ts = now();
     let mut filed = 0;
     for mut card in cards {
         if card.attachments.iter().any(|a| a.source_id == source_id) {
             continue;
         }
-        let Some((matched, status)) = match_card(&card, &haystack) else {
+        let Some((matched, status)) = match_card(&card, &haystack, &doc_seq) else {
             continue;
         };
-        if status == "proposed"
+        if matched == "name"
             && card
                 .attachments
                 .iter()
-                .filter(|a| a.status == "proposed")
+                .filter(|a| a.matched == "name")
                 .count()
-                >= MAX_PENDING_PER_CARD
+                >= MAX_NAME_MATCHES_PER_CARD
         {
             continue;
         }
@@ -168,6 +192,304 @@ pub(crate) fn spawn_registry_match(
     tauri::async_runtime::spawn(async move {
         match_source_to_cards(&db, &notebook_id, &source_id, &text).await;
     });
+}
+
+// ---- Orphan lifecycle ------------------------------------------------------
+//
+// A card with no living documents is an orphan. What happens to it depends
+// on whose it is (the trust model): an `auto` card the user never ruled on
+// is machine-made and machine-removable once a rematch confirms nothing
+// claims it; a card the user made or kept NEVER vanishes on its own — it is
+// badged in the list and cleaned up only by an explicit bulk action.
+// Archived notebooks keep their sources, so an attachment in an archived
+// notebook counts as alive — only notebook DELETION (which removes the
+// source rows) orphans a card.
+
+/// One-time promotion for the model change above: pending name-match
+/// proposals on cards the user owns become attached — they were created by
+/// the same matching logic the sweep now trusts. Manual proposals and
+/// auto/dismissed cards are untouched. Idempotent: promoted rows stop being
+/// `proposed`, so a second pass finds nothing.
+pub(crate) fn promote_name_proposals(card: &mut RegistryCard, ts: i64) -> usize {
+    if !card.origin.is_empty() {
+        return 0;
+    }
+    let mut promoted = 0;
+    for a in &mut card.attachments {
+        if a.status == "proposed" && a.matched == "name" {
+            a.status = "confirmed".into();
+            a.at = ts;
+            promoted += 1;
+        }
+    }
+    if promoted > 0 {
+        card.updated_at = ts;
+    }
+    promoted
+}
+
+/// Attachments that still stand: confirmed (or a legacy proposal) whose
+/// source row still exists. Existence-based on purpose — archived notebooks
+/// keep their sources, so archived counts as alive.
+pub(crate) fn live_docs(
+    card: &RegistryCard,
+    existing_sources: &std::collections::HashSet<String>,
+) -> usize {
+    card.attachments
+        .iter()
+        .filter(|a| {
+            (a.status == "confirmed" || a.status == "proposed")
+                && existing_sources.contains(&a.source_id)
+        })
+        .count()
+}
+
+/// Drop attachment rows whose source no longer exists (their notebook was
+/// deleted). Every status goes, including `rejected` — a source id that no
+/// longer exists can never be re-proposed, so the refusal memory it carried
+/// is dead weight. Returns how many rows were pruned.
+pub(crate) fn prune_dangling(
+    card: &mut RegistryCard,
+    existing_sources: &std::collections::HashSet<String>,
+) -> usize {
+    let before = card.attachments.len();
+    card.attachments
+        .retain(|a| existing_sources.contains(&a.source_id));
+    before - card.attachments.len()
+}
+
+/// What the sweep may do with a card, by ownership.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum OrphanVerdict {
+    Alive,
+    /// Machine-made, never ruled on, nothing claims it: remove. The
+    /// suggester can recreate it if the corpus mentions it again.
+    RemoveAuto,
+    /// The user's card: badge it orphaned in the list; only an explicit
+    /// "Clean up orphans" click removes it.
+    KeepBadged,
+}
+
+pub(crate) fn orphan_verdict(
+    card: &RegistryCard,
+    existing_sources: &std::collections::HashSet<String>,
+) -> OrphanVerdict {
+    if card.origin == "dismissed" {
+        // Refusal memory, not a result — never touched.
+        return OrphanVerdict::Alive;
+    }
+    if live_docs(card, existing_sources) > 0 {
+        return OrphanVerdict::Alive;
+    }
+    if card.origin == "auto" {
+        OrphanVerdict::RemoveAuto
+    } else {
+        OrphanVerdict::KeepBadged
+    }
+}
+
+/// Heal and clean orphaned cards, on the background sweep cadence and the
+/// Suggest-now pass. In order: promote pending name proposals (the one-time
+/// model-change migration), prune attachment rows whose sources are gone,
+/// then — if any card is orphaned — ONE gated corpus rematch so identifier
+/// and strong-name receipts can re-attach, and only after that remove the
+/// auto-origin cards the rematch couldn't rescue. User-owned orphans are
+/// left for the UI to badge. Returns (promoted, pruned, removed).
+pub(crate) async fn sweep_orphan_cards(
+    db: &crate::db::Db,
+) -> anyhow::Result<(usize, usize, usize)> {
+    use std::sync::atomic::Ordering::SeqCst;
+    let ts = now();
+    let existing: std::collections::HashSet<String> = db
+        .all_source_meta()
+        .await?
+        .into_iter()
+        .map(|(id, ..)| id)
+        .collect();
+    let mut promoted = 0usize;
+    let mut pruned = 0usize;
+    let mut cards = db.list_registry().await?;
+    for card in &mut cards {
+        let p = promote_name_proposals(card, ts);
+        let d = prune_dangling(card, &existing);
+        if p + d > 0 {
+            card.updated_at = ts;
+            db.update_registry_card(card).await?;
+            promoted += p;
+            pruned += d;
+        }
+    }
+
+    let mut removed = 0usize;
+    let any_orphan = cards
+        .iter()
+        .any(|c| orphan_verdict(c, &existing) != OrphanVerdict::Alive);
+    if any_orphan {
+        // One rematch, gated like every other (the Lance scan-storm rule);
+        // if a sweep is already running, this round simply skips — the next
+        // cadence tick retries.
+        if !REMATCH_RUNNING.swap(true, SeqCst) {
+            rematch_all(db).await;
+            while REMATCH_PENDING.swap(false, SeqCst) {
+                rematch_all(db).await;
+            }
+            REMATCH_RUNNING.store(false, SeqCst);
+            // Only what the rematch could NOT rescue is ruled on.
+            for c in db.list_registry().await? {
+                if orphan_verdict(&c, &existing) == OrphanVerdict::RemoveAuto {
+                    db.delete_registry_card(&c.id).await?;
+                    removed += 1;
+                }
+            }
+        }
+    }
+    if promoted + pruned + removed > 0 {
+        super::notify_changed("registry", None);
+    }
+    Ok((promoted, pruned, removed))
+}
+
+// ---- Auto-facts ------------------------------------------------------------
+//
+// The suggester's fact extraction, grown to cards the user already owns:
+// one Small call per (card, document) over the documents filed under it,
+// every value verbatim-gated against the document (`gate_fact`), and only
+// MISSING labels land — a value the user may have edited is never
+// overwritten. Bad facts are deleted from the card detail. Reference
+// numbers extracted this way stay facts; they are never promoted into
+// auto-attach identifiers (the RFC safety rule stands).
+
+/// Facts a card holds at most — enrichment stops here.
+const MAX_CARD_FACTS: usize = 10;
+/// Documents read per card per pass.
+const ENRICH_DOCS_PER_CARD: usize = 2;
+/// Small calls one enrichment pass may spend; the once-per-run set below
+/// resumes where the budget stopped.
+const MAX_ENRICH_CALLS_PER_PASS: usize = 12;
+
+/// Cards enriched this app run — the pass converges (the SUGGESTED idiom).
+static ENRICHED: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+    std::sync::Mutex::new(None);
+
+/// Add candidate facts to a card: missing labels only, existing values
+/// never overwritten, duplicate values (under any label) skipped, capped.
+pub(crate) fn merge_new_facts(card: &mut RegistryCard, candidates: Vec<CardFact>) -> usize {
+    let mut added = 0;
+    for f in candidates {
+        if card.facts.len() >= MAX_CARD_FACTS {
+            break;
+        }
+        let label_taken = card
+            .facts
+            .iter()
+            .any(|e| e.label.trim().eq_ignore_ascii_case(f.label.trim()));
+        let value_known = card
+            .facts
+            .iter()
+            .any(|e| e.value.trim().eq_ignore_ascii_case(f.value.trim()));
+        if label_taken || value_known {
+            continue;
+        }
+        card.facts.push(f);
+        added += 1;
+    }
+    added
+}
+
+fn build_enrich_messages(card: &RegistryCard, head: &str) -> Vec<crate::ai::ChatTurn> {
+    vec![
+        crate::ai::ChatTurn::system(format!(
+            "You extract key facts about one specific thing from a document. Reply with at \
+             most {MAX_FACTS_PER_CARD} lines, each exactly \"Label: value\" — a policy \
+             number, serial, VIN, renewal or expiry date, model, account reference. Values \
+             must be copied word-for-word from the document; anything paraphrased is \
+             discarded. Only facts about the named thing itself. If the document holds \
+             nothing new, reply exactly NONE."
+        )),
+        crate::ai::ChatTurn::user(format!(
+            "The thing: {} ({}).\n\nDocument:\n---\n{head}",
+            card.name, card.kind
+        )),
+    ]
+}
+
+/// Enrich owned cards with facts from their attached documents. Background
+/// only; returns how many facts landed.
+pub(crate) async fn enrich_card_facts(
+    db: &crate::db::Db,
+    ai: &crate::ai::Ai,
+) -> anyhow::Result<usize> {
+    use crate::inference::Role;
+    const ENRICH_HEAD_CHARS: usize = 10_000;
+    let cards = db.list_registry().await?;
+    let mut calls = 0usize;
+    let mut added_total = 0usize;
+    for mut card in cards {
+        if calls >= MAX_ENRICH_CALLS_PER_PASS {
+            break;
+        }
+        if !card.origin.is_empty() || card.facts.len() >= MAX_CARD_FACTS {
+            continue;
+        }
+        let docs: Vec<(String, i64)> = card
+            .attachments
+            .iter()
+            .filter(|a| a.status == "confirmed")
+            .take(ENRICH_DOCS_PER_CARD)
+            .map(|a| (a.source_id.clone(), a.at))
+            .collect();
+        if docs.is_empty() {
+            continue;
+        }
+        // Marked only once actually processed — a budget-skipped card gets
+        // its turn on the next pass this run.
+        {
+            let mut guard = ENRICHED.lock().unwrap();
+            let seen = guard.get_or_insert_with(Default::default);
+            if !seen.insert(card.id.clone()) {
+                continue;
+            }
+        }
+        let mut candidates: Vec<CardFact> = Vec::new();
+        for (source_id, _) in docs {
+            if calls >= MAX_ENRICH_CALLS_PER_PASS {
+                break;
+            }
+            let Ok(content) = db.source_content(&source_id).await else {
+                continue;
+            };
+            let head: String = content.chars().take(ENRICH_HEAD_CHARS).collect();
+            let hay = head.to_lowercase();
+            calls += 1;
+            let Ok(out) = ai
+                .chat_role(Role::Small, &build_enrich_messages(&card, &head))
+                .await
+            else {
+                continue;
+            };
+            if out.text.trim().eq_ignore_ascii_case("none") {
+                continue;
+            }
+            for line in out.text.lines() {
+                let line = line.trim().trim_start_matches(['-', '*', ' ']).trim();
+                if line.contains(':') {
+                    if let Some(f) = gate_fact(line, &hay) {
+                        candidates.push(f);
+                    }
+                }
+            }
+        }
+        let added = merge_new_facts(&mut card, candidates);
+        if added > 0 {
+            card.updated_at = now();
+            db.update_registry_card(&card).await?;
+            added_total += added;
+        }
+    }
+    if added_total > 0 {
+        super::notify_changed("registry", None);
+    }
+    Ok(added_total)
 }
 
 // ---- The suggester -------------------------------------------------------
@@ -292,6 +614,17 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
     // Heal what an earlier race left behind before proposing more.
     if heal_suggested_duplicates(db).await > 0 {
         super::notify_changed("registry", None);
+    }
+    // Orphan healing and fact enrichment ride this cadence, BEFORE the gist
+    // gate below — an existing store converges through the sweep whether or
+    // not it has gists (the first pass after an upgrade IS the migration:
+    // promotion and pruning are naturally once-only, the rematch is gated,
+    // and enrichment is budgeted per pass).
+    if let Err(err) = sweep_orphan_cards(db).await {
+        eprintln!("registry orphan sweep failed: {err:#}");
+    }
+    if let Err(err) = enrich_card_facts(db, ai).await {
+        eprintln!("registry fact enrichment failed: {err:#}");
     }
     let gists = db.list_gists().await?;
     if gists.is_empty() {
@@ -777,12 +1110,19 @@ pub(crate) async fn suggest_now(
     if !made.is_empty() {
         super::notify_changed("registry", None);
     }
-    // Triage in the background — the ask shouldn't wait on a second model
-    // call, and the strip re-sorts itself on the registry bump.
+    // Triage, orphan healing, and fact enrichment in the background — the
+    // ask shouldn't wait on more model calls or a corpus rematch, and the
+    // strip re-sorts itself on the registry bump.
     let db = db.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(err) = triage_suggested_cards(&db, &ai).await {
             eprintln!("registry triage failed: {err:#}");
+        }
+        if let Err(err) = sweep_orphan_cards(&db).await {
+            eprintln!("registry orphan sweep failed: {err:#}");
+        }
+        if let Err(err) = enrich_card_facts(&db, &ai).await {
+            eprintln!("registry fact enrichment failed: {err:#}");
         }
     });
     Ok(SuggestOutcome {
@@ -1417,33 +1757,193 @@ mod tests {
         }
     }
 
+    /// `match_card` with the haystack's canonical sequence computed the way
+    /// `match_source_to_cards` computes it.
+    fn matched(c: &RegistryCard, hay: &str) -> Option<(String, &'static str)> {
+        match_card(c, hay, &canon_words(hay))
+    }
+
     #[test]
     fn identifier_match_attaches_and_reports_itself() {
         let c = card("Ducati Monster", "zdm1raz4 wj9401ab2233");
-        let (matched, status) = match_card(&c, "vin wj9401ab2233 registered 2019").unwrap();
+        let (m, status) = matched(&c, "vin wj9401ab2233 registered 2019").unwrap();
         assert_eq!(status, "confirmed");
-        assert_eq!(matched, "wj9401ab2233");
+        assert_eq!(m, "wj9401ab2233");
     }
 
     #[test]
     fn short_or_wordlike_identifiers_never_attach() {
         // Too short, and no digit — either disqualifies.
         let c = card("Zzzz", "ab12 monster");
-        assert!(match_card(&c, "the ab12 monster truck").is_none());
+        assert!(matched(&c, "the ab12 monster truck").is_none());
     }
 
+    /// The design change (2026-08): a strong name match ATTACHES — status
+    /// confirmed, receipt "name" (rendered "name matched") — instead of
+    /// minting a proposal for the user to rule on.
     #[test]
-    fn name_match_only_proposes() {
+    fn strong_name_match_attaches_with_a_visible_receipt() {
         let c = card("Ducati Monster", "");
-        let (matched, status) = match_card(&c, "sold my ducati monster last week").unwrap();
-        assert_eq!(status, "proposed");
-        assert_eq!(matched, "name");
+        let (m, status) = matched(&c, "sold my ducati monster last week").unwrap();
+        assert_eq!(status, "confirmed");
+        assert_eq!(m, "name");
+        // Canonical forms carry it: "Rd" in the card, "Road" in the deed.
+        let addr = card("15217 Canyon Seven Rd", "");
+        let (_, status) = matched(&addr, "deed for 15217 canyon seven road").unwrap();
+        assert_eq!(status, "confirmed");
+    }
+
+    /// "Strong" is conservative: the FULL canonical sequence, in order and
+    /// adjacent. Partial or reordered mentions don't attach at all — no
+    /// proposal purgatory, and no bad auto-attach to undo.
+    #[test]
+    fn weak_name_matches_do_not_attach() {
+        let c = card("Bayside Mutual Insurance", "");
+        assert!(matched(&c, "insured by bayside mutual").is_none());
+        assert!(matched(&c, "mutual bayside insurance quote").is_none());
+        assert!(matched(&c, "the mutual insurance industry").is_none());
+        // And the full sequence still lands.
+        assert!(matched(&c, "a bayside mutual insurance letter").is_some());
     }
 
     #[test]
-    fn short_names_do_not_propose() {
+    fn short_names_do_not_attach() {
         let c = card("Cat", "");
-        assert!(match_card(&c, "the cat sat on the mat").is_none());
+        assert!(matched(&c, "the cat sat on the mat").is_none());
+    }
+
+    // -- Orphan lifecycle -----------------------------------------------------
+
+    fn with_attachment(
+        mut c: RegistryCard,
+        source_id: &str,
+        status: &str,
+        m: &str,
+    ) -> RegistryCard {
+        c.attachments.push(CardAttachment {
+            source_id: source_id.into(),
+            notebook_id: "nb1".into(),
+            status: status.into(),
+            matched: m.into(),
+            at: 1,
+        });
+        c
+    }
+
+    fn sources(ids: &[&str]) -> std::collections::HashSet<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn name_proposals_promote_once_on_owned_cards_only() {
+        // Owned card: pending name proposals become attached.
+        let mut owned = with_attachment(card("Bayside", ""), "s1", "proposed", "name");
+        owned = with_attachment(owned, "s2", "proposed", "manual");
+        owned = with_attachment(owned, "s3", "rejected", "name");
+        assert_eq!(promote_name_proposals(&mut owned, 9), 1);
+        assert_eq!(owned.attachments[0].status, "confirmed");
+        // A manual proposal is a human's pending judgment — untouched.
+        assert_eq!(owned.attachments[1].status, "proposed");
+        // Rejection memory is untouched.
+        assert_eq!(owned.attachments[2].status, "rejected");
+        // Idempotent: nothing left to promote.
+        assert_eq!(promote_name_proposals(&mut owned, 10), 0);
+        // Auto and dismissed cards are not yours yet / turned down — no-ops.
+        let mut auto = with_attachment(card("A thing", ""), "s1", "proposed", "name");
+        auto.origin = "auto".into();
+        assert_eq!(promote_name_proposals(&mut auto, 9), 0);
+        let mut dis = with_attachment(card("B thing", ""), "s1", "proposed", "name");
+        dis.origin = "dismissed".into();
+        assert_eq!(promote_name_proposals(&mut dis, 9), 0);
+    }
+
+    #[test]
+    fn orphan_verdicts_follow_ownership() {
+        let existing = sources(&["s1"]);
+        // A live confirmed attachment keeps any card alive — and existence
+        // is the test, so an ARCHIVED notebook's attachment (source rows
+        // survive archiving) still counts; only deletion removes them.
+        let alive = with_attachment(card("Alive", ""), "s1", "confirmed", "name");
+        assert_eq!(orphan_verdict(&alive, &existing), OrphanVerdict::Alive);
+        // The same attachment pointing at a DELETED source is no defense.
+        let dead_doc = with_attachment(card("Gone", ""), "s9", "confirmed", "name");
+        assert_eq!(
+            orphan_verdict(&dead_doc, &existing),
+            OrphanVerdict::KeepBadged
+        );
+        // Machine-made and unclaimed → removable; user-owned → badge only.
+        let mut auto = card("Machine made", "");
+        auto.origin = "auto".into();
+        assert_eq!(orphan_verdict(&auto, &existing), OrphanVerdict::RemoveAuto);
+        assert_eq!(
+            orphan_verdict(&card("Mine", ""), &existing),
+            OrphanVerdict::KeepBadged
+        );
+        // Rejected rows never count as living documents.
+        let rejected = with_attachment(card("Refused", ""), "s1", "rejected", "name");
+        assert_eq!(
+            orphan_verdict(&rejected, &existing),
+            OrphanVerdict::KeepBadged
+        );
+        // Dismissed suggestions are refusal memory — always left alone.
+        let mut dis = card("Dismissed", "");
+        dis.origin = "dismissed".into();
+        assert_eq!(orphan_verdict(&dis, &existing), OrphanVerdict::Alive);
+    }
+
+    #[test]
+    fn dangling_rows_prune_when_their_source_is_deleted() {
+        let existing = sources(&["s1"]);
+        let mut c = with_attachment(card("Boat", ""), "s1", "confirmed", "name");
+        c = with_attachment(c, "s2", "confirmed", "name");
+        c = with_attachment(c, "s3", "rejected", "name");
+        assert_eq!(prune_dangling(&mut c, &existing), 2);
+        assert_eq!(c.attachments.len(), 1);
+        assert_eq!(c.attachments[0].source_id, "s1");
+        assert_eq!(live_docs(&c, &existing), 1);
+    }
+
+    // -- Auto-facts -----------------------------------------------------------
+
+    #[test]
+    fn fact_enrichment_adds_missing_labels_only() {
+        let mut c = card("Ducati Monster", "");
+        c.facts = vec![CardFact {
+            label: "VIN".into(),
+            value: "USER-EDITED".into(),
+        }];
+        let added = merge_new_facts(
+            &mut c,
+            vec![
+                // Same label (case-insensitive): NEVER overwritten.
+                CardFact {
+                    label: "vin".into(),
+                    value: "ZDM1RAZ4XWB012345".into(),
+                },
+                CardFact {
+                    label: "Year".into(),
+                    value: "2019".into(),
+                },
+                // Same value under a new label: skipped as a duplicate.
+                CardFact {
+                    label: "Model year".into(),
+                    value: "2019".into(),
+                },
+            ],
+        );
+        assert_eq!(added, 1);
+        assert_eq!(c.facts.len(), 2);
+        assert_eq!(c.facts[0].value, "USER-EDITED");
+        assert_eq!(c.facts[1].label, "Year");
+        // The cap holds.
+        let many: Vec<CardFact> = (0..20)
+            .map(|i| CardFact {
+                label: format!("L{i}"),
+                value: format!("V{i}"),
+            })
+            .collect();
+        merge_new_facts(&mut c, many);
+        assert!(c.facts.len() <= MAX_CARD_FACTS);
     }
 
     #[test]
@@ -1490,9 +1990,12 @@ mod tests {
 
     #[test]
     fn identifier_wins_over_name() {
+        // Both attach now, but the identifier is the stronger receipt and
+        // still wins the `matched` field.
         let c = card("Ducati Monster", "wj9401ab2233");
-        let (_, status) = match_card(&c, "ducati monster, vin wj9401ab2233").unwrap();
+        let (m, status) = matched(&c, "ducati monster, vin wj9401ab2233").unwrap();
         assert_eq!(status, "confirmed");
+        assert_eq!(m, "wj9401ab2233");
     }
 
     #[test]

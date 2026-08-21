@@ -21,11 +21,20 @@ export function matchesHomeQuery(query: string, ...fields: string[]): boolean {
 export function HomeViewControls({
   placeholder,
   trailing,
+  sort,
 }: {
   placeholder: string;
   /** Optional section-specific control rendered after the view toggle —
    *  the Registry's "Suggest" lives here. Keep it one small button. */
   trailing?: React.ReactNode;
+  /** Optional sort order for the collection, rendered as a quiet select
+   *  beside the view toggle. The caller persists the choice (the homeView
+   *  localStorage idiom). */
+  sort?: {
+    value: string;
+    options: { value: string; label: string }[];
+    onChange: (value: string) => void;
+  };
 }) {
   const view = useStore((s) => s.homeView);
   const query = useStore((s) => s.homeQuery);
@@ -78,6 +87,21 @@ export function HomeViewControls({
           </button>
         )}
       </div>
+      {sort && (
+        <select
+          value={sort.value}
+          onChange={(e) => sort.onChange(e.target.value)}
+          title="Sort order"
+          aria-label="Sort order"
+          className="h-8 shrink-0 rounded-md border border-border bg-transparent px-2 text-caption text-muted-foreground outline-none transition-colors hover:text-foreground focus:border-ring/70"
+        >
+          {sort.options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      )}
       <div className="flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5">
         {(
           [

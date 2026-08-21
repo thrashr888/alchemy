@@ -91,6 +91,47 @@ const confirmed = (c: RegistryCard) =>
 const proposed = (c: RegistryCard) =>
   c.attachments.filter((a) => a.status === "proposed");
 
+/** A user-owned card with no standing documents. The sweep prunes rows
+ *  whose sources were deleted, so "no confirmed or proposed rows" IS the
+ *  orphan test client-side. Badged, never auto-removed — a card the user
+ *  kept vanishing on its own would break the shows-its-reason trust model
+ *  (auto-origin orphans are the sweep's to remove, and never reach `mine`). */
+const isOrphan = (c: RegistryCard) =>
+  !c.origin && confirmed(c).length === 0 && proposed(c).length === 0;
+
+const ORPHAN_HINT =
+  "No documents left — its sources may have been deleted with their notebook. " +
+  "The sweep retried matching and found nothing.";
+
+type RegistrySort = "latest" | "docs" | "title";
+const SORTS: { value: RegistrySort; label: string }[] = [
+  { value: "latest", label: "Latest" },
+  { value: "docs", label: "Documents" },
+  { value: "title", label: "A–Z" },
+];
+
+function sortCards(cards: RegistryCard[], sort: RegistrySort): RegistryCard[] {
+  const out = [...cards];
+  switch (sort) {
+    case "docs":
+      out.sort(
+        (a, b) =>
+          confirmed(b).length - confirmed(a).length ||
+          a.name.localeCompare(b.name),
+      );
+      break;
+    case "title":
+      out.sort((a, b) => a.name.localeCompare(b.name));
+      break;
+    default:
+      out.sort(
+        (a, b) =>
+          Math.max(b.updatedAt, b.createdAt) - Math.max(a.updatedAt, a.createdAt),
+      );
+  }
+  return out;
+}
+
 /** How an attachment got here, in the user's words. The identifier case
     quotes the actual string — that's the whole point of the receipt. */
 function receipt(a: CardAttachment) {
@@ -113,6 +154,15 @@ export function RegistrySection() {
     useStore.setState({ registryCreating: open });
   const [loaded, setLoaded] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
+  // Sort order, remembered like homeView.
+  const [sort, setSort] = useState<RegistrySort>(
+    () => (localStorage.getItem("registrySort") as RegistrySort) || "latest",
+  );
+  const changeSort = (v: string) => {
+    localStorage.setItem("registrySort", v);
+    setSort(v as RegistrySort);
+  };
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   const load = useCallback(async () => {
     try {
@@ -166,19 +216,40 @@ export function RegistrySection() {
 
   const shown = useMemo(
     () =>
-      mine.filter((c) => {
-        if (!matchesHomeQuery(query, c.name, c.identifiers)) return false;
-        if (kind !== "all" && c.kind !== kind) return false;
-        if (notebook !== null) {
-          const inNb = c.attachments.some(
-            (a) => a.status !== "rejected" && nbTitle(a.notebookId) === notebook,
-          );
-          if (!inNb) return false;
-        }
-        return true;
-      }),
-    [mine, kind, notebook, nbTitle, query],
+      sortCards(
+        mine.filter((c) => {
+          if (!matchesHomeQuery(query, c.name, c.identifiers)) return false;
+          if (kind !== "all" && c.kind !== kind) return false;
+          if (notebook !== null) {
+            const inNb = c.attachments.some(
+              (a) =>
+                a.status !== "rejected" && nbTitle(a.notebookId) === notebook,
+            );
+            if (!inNb) return false;
+          }
+          return true;
+        }),
+        sort,
+      ),
+    [mine, kind, notebook, nbTitle, query, sort],
   );
+
+  // User-owned orphans (see isOrphan): badged in the list, removed only by
+  // this explicit bulk action — one confirm, then they go together.
+  const orphans = useMemo(() => mine.filter(isOrphan), [mine]);
+  const cleanUpOrphans = async () => {
+    const ok = await confirm({
+      title: `Remove ${orphans.length} orphaned card${orphans.length === 1 ? "" : "s"}?`,
+      message:
+        "These cards have no documents left — their sources were deleted and " +
+        "rematching found nothing. Identifiers and facts on them go too.",
+      confirmLabel: "Remove",
+      danger: true,
+    });
+    if (!ok) return;
+    for (const c of orphans) await api.deleteRegistryCard(c.id);
+    void load();
+  };
 
   // The explicit ask (RFC-registry §3): read every notebook, propose, and
   // let the background triage sort what lands. The strip refreshes itself
@@ -236,17 +307,30 @@ export function RegistrySection() {
               suggestions, which reads as the control disappearing. */}
           <HomeViewControls
             placeholder="Filter cards by name or identifier…"
+            sort={{ value: sort, options: SORTS, onChange: changeSort }}
             trailing={
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => void suggestNow()}
-                loading={suggesting}
-                title="Read your notebooks and suggest cards worth tracking"
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                Suggest
-              </Button>
+              <>
+                {orphans.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void cleanUpOrphans()}
+                    title={ORPHAN_HINT}
+                  >
+                    Clean up orphans ({orphans.length})
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => void suggestNow()}
+                  loading={suggesting}
+                  title="Read your notebooks and suggest cards worth tracking"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Suggest
+                </Button>
+              </>
             }
           />
           {/* Kind groups and notebook chips sit inside the content column,
@@ -281,12 +365,7 @@ export function RegistrySection() {
               </Button>
             </EmptyState>
           ) : view === "table" ? (
-            <CardTable
-              cards={shown}
-              nbTitle={nbTitle}
-              onNew={() => setCreating(true)}
-              onChanged={load}
-            />
+            <CardTable cards={shown} nbTitle={nbTitle} onChanged={load} />
           ) : (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
               <button
@@ -323,6 +402,7 @@ export function RegistrySection() {
           useStore.setState({ openCardId: c.id });
         }}
       />
+      {confirmDialog}
     </div>
   );
 }
@@ -597,23 +677,17 @@ export function AttachToCardModal({
 function CardTable({
   cards,
   nbTitle,
-  onNew,
   onChanged,
 }: {
   cards: RegistryCard[];
   nbTitle: (id: string) => string;
-  onNew: () => void;
   onChanged: () => void;
 }) {
   const { confirm, dialog } = useConfirm();
   return (
     <>
-      <div className="mb-3 flex justify-end">
-        <Button variant="secondary" onClick={onNew}>
-          <Plus className="h-4 w-4" />
-          New card
-        </Button>
-      </div>
+      {/* No "New card" button here — the Home hero's covers it, and the
+          grid keeps its dashed tile. */}
       <HomeTable
         columns={[
           { key: "name", label: "Name" },
@@ -651,6 +725,14 @@ function CardTable({
                       className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
                       title={`${pending} waiting`}
                     />
+                  )}
+                  {isOrphan(c) && (
+                    <span
+                      className="shrink-0 rounded border border-border px-1 text-micro text-subtle-foreground"
+                      title={ORPHAN_HINT}
+                    >
+                      orphaned
+                    </span>
                   )}
                 </span>
               </td>
@@ -883,6 +965,14 @@ function CardTile({
         </Badge>
         <span>·</span>
         <span className="truncate">{kindLabel(card.kind)}</span>
+        {isOrphan(card) && (
+          <span
+            className="pointer-events-auto shrink-0 rounded border border-border px-1"
+            title={ORPHAN_HINT}
+          >
+            orphaned
+          </span>
+        )}
       </div>
       <div className="absolute right-2 top-2 z-20 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
         <RowMenu
@@ -1127,8 +1217,11 @@ function CardDetail({
         ) : (
           <button
             className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition hover:bg-elevated group-hover:opacity-100"
-            title="Unfile this document"
-            onClick={() => void setStatus(a.sourceId, "remove")}
+            // Rejection, not deletion: the pair is remembered, so the sweep
+            // never re-attaches this document to this card — removal after
+            // the fact IS the control now that matches auto-attach.
+            title="Unfile this document — remembered, so it won't re-attach"
+            onClick={() => void setStatus(a.sourceId, "rejected")}
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
