@@ -1928,6 +1928,73 @@ impl Db {
         Ok(out)
     }
 
+    /// (notebook_id, role, model, created_at, content words) for every chat
+    /// message — tool confirmations excluded. Feeds the Activity view's
+    /// read-time aggregation (activity.rs); content is reduced to a word
+    /// count here so only counts leave the scan.
+    pub async fn message_activity(&self) -> Result<Vec<(String, String, String, i64, i64)>> {
+        let batches = self
+            .collect_cols(
+                T_MESSAGES,
+                Some("kind != 'tool'"),
+                &["notebook_id", "role", "model", "content", "created_at"],
+            )
+            .await?;
+        let mut out = Vec::new();
+        for b in &batches {
+            let nb = str_col(b, "notebook_id")?;
+            let role = str_col(b, "role")?;
+            let model = str_col(b, "model")?;
+            let content = str_col(b, "content")?;
+            let created = i64_col(b, "created_at")?;
+            for i in 0..b.num_rows() {
+                out.push((
+                    nb.value(i).to_string(),
+                    role.value(i).to_string(),
+                    model.value(i).to_string(),
+                    created.value(i),
+                    content.value(i).split_whitespace().count() as i64,
+                ));
+            }
+        }
+        Ok(out)
+    }
+
+    /// created_at for every note — the Activity view only needs the when.
+    pub async fn note_activity(&self) -> Result<Vec<i64>> {
+        let batches = self.collect_cols(T_NOTES, None, &["created_at"]).await?;
+        let mut out = Vec::new();
+        for b in &batches {
+            let created = i64_col(b, "created_at")?;
+            for i in 0..b.num_rows() {
+                out.push(created.value(i));
+            }
+        }
+        Ok(out)
+    }
+
+    /// (source_type, created_at, char_count) for every source — the Activity
+    /// view's import series and corpus-size line, without dragging content.
+    pub async fn source_activity(&self) -> Result<Vec<(String, i64, i64)>> {
+        let batches = self
+            .collect_cols(
+                T_SOURCES,
+                None,
+                &["source_type", "created_at", "char_count"],
+            )
+            .await?;
+        let mut out = Vec::new();
+        for b in &batches {
+            let ty = str_col(b, "source_type")?;
+            let created = i64_col(b, "created_at")?;
+            let chars = i64_col(b, "char_count")?;
+            for i in 0..b.num_rows() {
+                out.push((ty.value(i).to_string(), created.value(i), chars.value(i)));
+            }
+        }
+        Ok(out)
+    }
+
     /// Aggregate (source count, total chars, note count, ledger count)
     /// across every notebook.
     pub async fn corpus_stats(&self) -> Result<(i64, i64, i64, i64)> {

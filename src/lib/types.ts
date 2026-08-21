@@ -254,6 +254,47 @@ export interface CorpusStats {
   ledger: number;
 }
 
+/** One local calendar day of activity (Settings → Activity; Rust activity.rs). */
+export interface ActivityDay {
+  /** Local date, "YYYY-MM-DD". */
+  date: string;
+  messages: number;
+  sources: number;
+  notes: number;
+  retrievals: number;
+}
+
+/** A labeled count for the "most used" lists. */
+export interface ActivityCount {
+  label: string;
+  count: number;
+}
+
+/** Everything Settings → Activity renders, aggregated read-time in Rust. */
+export interface ActivityStats {
+  /** Ascending by date; sparse — active days only. */
+  days: ActivityDay[];
+  totalMessages: number;
+  totalUserMessages: number;
+  totalSources: number;
+  totalNotes: number;
+  totalNotebooks: number;
+  /** Retained trace history only (~months), not lifetime. */
+  totalRetrievals: number;
+  corpusChars: number;
+  assistantWords: number;
+  activeDays: number;
+  currentStreak: number;
+  longestStreak: number;
+  /** Local hour 0–23; -1 with no messages. */
+  peakHour: number;
+  favoriteModel: string;
+  models: ActivityCount[];
+  notebooks: ActivityCount[];
+  sourceTypes: ActivityCount[];
+  firstActivityAt: number;
+}
+
 /** One exact-match window from the `/grep` chat command (Rust grep_sources). */
 export interface GrepHit {
   sourceId: string;

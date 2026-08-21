@@ -3,6 +3,7 @@ import { Cause, Duration, Effect, Schedule } from "effect";
 import { describe, IpcError, TimeoutError, type AppError } from "./errors";
 import type {
   ProviderModels,
+  ActivityStats,
   Citation,
   AiConfig,
   BuildInfo,
@@ -360,6 +361,7 @@ export const api = {
   listRecentReports: (limit = 10) =>
     run(query<Note[]>("list_recent_reports", { limit })),
   corpusStats: () => run(query<CorpusStats>("corpus_stats")),
+  activityStats: () => run(query<ActivityStats>("activity_stats")),
   homeActivity: () => run(query<HomeActivity>("home_activity")),
   newWindow: (notebookId?: string, noteId?: string) =>
     run(cmd<void>("new_window", { notebookId, noteId })),
