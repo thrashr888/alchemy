@@ -371,6 +371,31 @@ fn send_cmd(app: &AppHandle, notebook_id: &str, cmd: HostCmd) -> Result<(), Stri
 
 // ---- Session task -----------------------------------------------------------
 
+/// Turn the agent's advertised auth methods into a sign-in hint, or "" when it
+/// didn't advertise any. Read through JSON rather than matching the schema
+/// enum: `AuthMethod` is `#[non_exhaustive]` and gains variants between
+/// releases, and every variant carries a human-readable name either way.
+fn auth_hint<T: Serialize>(methods: &[T]) -> String {
+    let names: Vec<String> = methods
+        .iter()
+        .filter_map(|m| serde_json::to_value(m).ok())
+        .filter_map(|v| {
+            v.get("name")
+                .or_else(|| v.get("description"))
+                .or_else(|| v.get("id"))
+                .and_then(|n| n.as_str().map(str::to_string))
+        })
+        .collect();
+    if names.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " — this agent may need you to sign in first ({}). Run its login from a terminal, then try again.",
+            names.join(", ")
+        )
+    }
+}
+
 /// The agent's working directory: a per-notebook scratch dir under app data.
 /// Deliberately not the LanceDB data dir — the agent's file tools operate
 /// here, and notebook content is reachable only through our MCP tools.
@@ -482,7 +507,15 @@ async fn run_session(
                 Ok(s) => s,
                 Err(err) => {
                     if let Some(tx) = ready_tx.take() {
-                        let _ = tx.send(Err(format!("agent failed to open a session: {err}")));
+                        // A session that dies on open is usually the agent not
+                        // being signed in, and the wire error for that is
+                        // unhelpfully generic ("Query closed before response
+                        // received"). The agent told us at initialize how it
+                        // wants to be authenticated — pass that along so the
+                        // user knows to go run its login.
+                        let hint = auth_hint(&init.auth_methods);
+                        let _ =
+                            tx.send(Err(format!("agent failed to open a session: {err}{hint}")));
                     }
                     return Err(err);
                 }
@@ -556,4 +589,38 @@ async fn run_session(
             Ok(())
         })
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn auth_hint_is_empty_without_methods() {
+        let none: [serde_json::Value; 0] = [];
+        assert_eq!(auth_hint(&none), "");
+    }
+
+    #[test]
+    fn auth_hint_names_each_method() {
+        let methods = [
+            json!({"id": "claude-login", "name": "Log in with Claude Code"}),
+            json!({"id": "gemini-api-key", "name": "Use a Gemini API key"}),
+        ];
+        let hint = auth_hint(&methods);
+        assert!(hint.contains("Log in with Claude Code"), "{hint}");
+        assert!(hint.contains("Use a Gemini API key"), "{hint}");
+    }
+
+    /// The schema enum is `#[non_exhaustive]`, so a future variant may not
+    /// carry `name` — fall back rather than dropping the method silently.
+    #[test]
+    fn auth_hint_falls_back_to_description_then_id() {
+        assert!(auth_hint(&[json!({"description": "Sign in via browser"})])
+            .contains("Sign in via browser"));
+        assert!(auth_hint(&[json!({"id": "opaque-method"})]).contains("opaque-method"));
+        // Nothing human-readable at all: skipped, not rendered as "null".
+        assert_eq!(auth_hint(&[json!({"type": "oauth"})]), "");
+    }
 }
