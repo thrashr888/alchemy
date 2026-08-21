@@ -1021,12 +1021,15 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                     )
                   ) : (
                     <div className="flex h-12 shrink-0 items-center gap-2 px-6">
-                      <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+                      <span className="whitespace-nowrap text-caption font-semibold uppercase tracking-wide text-muted-foreground">
                         Latest reports
                       </span>
                       {totalUnread > 0 && (
-                        <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-badge font-medium tabular-nums text-citation">
-                          {totalUnread} unread
+                        <span
+                          title={`${totalUnread} unread`}
+                          className="rounded-full bg-primary/15 px-1.5 py-0.5 text-badge font-medium tabular-nums text-citation"
+                        >
+                          {totalUnread}
                         </span>
                       )}
                       <button
