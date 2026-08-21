@@ -282,15 +282,14 @@ impl Db {
         if tbl.schema().await?.field_with_name(column).is_ok() {
             return Ok(());
         }
-        tbl.add_columns(
-            lancedb::table::NewColumnTransform::SqlExpressions(vec![(
+        tbl.add_columns()
+            .transform(lancedb::table::NewColumnTransform::SqlExpressions(vec![(
                 column.to_string(),
                 format!("'{}'", esc(default)),
-            )]),
-            None,
-        )
-        .await
-        .with_context(|| format!("failed to add {table}.{column}"))?;
+            )]))
+            .execute()
+            .await
+            .with_context(|| format!("failed to add {table}.{column}"))?;
         Ok(())
     }
 
