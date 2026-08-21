@@ -230,7 +230,7 @@ impl AgentKind {
 /// The user's login-shell environment. macOS GUI apps don't inherit dotfile
 /// exports, so PATH additions and auth land only in a login shell — the
 /// Argos/tradr pattern, copied verbatim in spirit.
-fn load_shell_env() -> HashMap<String, String> {
+pub(crate) fn load_shell_env() -> HashMap<String, String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
     let out = std::process::Command::new(&shell)
         .args(["-l", "-c", "env"])
@@ -266,7 +266,7 @@ fn binary_cache() -> &'static std::sync::Mutex<HashMap<String, Option<PathBuf>>>
     CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
-fn find_binary_cached(name: &str) -> Option<PathBuf> {
+pub(crate) fn find_binary_cached(name: &str) -> Option<PathBuf> {
     if let Some(hit) = binary_cache().lock().unwrap().get(name) {
         return hit.clone();
     }

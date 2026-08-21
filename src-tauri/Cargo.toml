@@ -68,6 +68,9 @@ tauri-plugin-process = "2.3.1"
 # Embedded MCP server for agent access (see docs/RFC-mcp-server.md):
 # official Rust MCP SDK + axum to host the streamable-HTTP transport.
 rmcp = { version = "3.1", features = ["transport-streamable-http-server"] }
+# Hosted agents (docs/RFC-acp-agents.md). Pinned to the 2.x minor: young crate,
+# stable wire-protocol v1 only — do not enable unstable_protocol_v2.
+agent-client-protocol = "2.0"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 
 # Tiny pure-Rust WAV reader/writer — stitches per-line TTS output into one

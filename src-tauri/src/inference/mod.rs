@@ -21,6 +21,7 @@ mod ollama;
 pub mod rerank;
 
 pub use agent_cli::{agent_default_model, agent_status, list_agent_models, AgentCli, AgentKind};
+pub(crate) use agent_cli::{find_binary_cached, load_shell_env};
 pub use fm::FmEngine;
 pub use gateway::OpenAiClient;
 pub use local_embed::{EmbedderProgress, LocalEmbedder};

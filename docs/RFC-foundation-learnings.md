@@ -113,17 +113,16 @@ threads circle around:
   would consolidate chat turns into durable notebook knowledge — which in
   Alchemy terms should write **ledger entries and notes**, not a parallel
   SQLite store, or it violates the one-store guardrail and agent parity.
-  Two viable shapes:
-  1. cortex as a library: needs an upstream lib target (it's binary-only
-     today — same fix-upstream pattern as cider), then its consolidation
-     passes run in-process writing to LanceDB;
-  2. cortex as inspiration: implement wake/sleep-style consolidation
-     natively on the ledger (a Night-Shift-adjacent pass distilling recent
-     chat turns into facts/decisions/questions).
-  Recommendation: (2), with (1) revisited if the consolidation logic proves
-  hairy — the value is the loop, not the binary. Either way BEAM-style evals
-  are the acceptance metric, which is why cortex belongs in this RFC and not
-  its own: build the eval first, then the memory pass has a scoreboard.
+  Decision (Paul, 2026-08-20): **cortex as a library.** Add a lib target
+  upstream (it's binary-only today — same fix-upstream-then-bump pattern as
+  cider), which also makes cortex more usable for everyone else. The
+  Alchemy adapter satisfies the guardrails: cortex's consolidation loop
+  runs in-process, and consolidated learnings are mirrored into **ledger
+  entries and notes** so they stay agent-reachable and visible in the UI —
+  cortex's own store is the episodic layer, the ledger is the durable one.
+  Either way BEAM-style evals are the acceptance metric, which is why
+  cortex belongs in this RFC and not its own: build the eval first, then
+  the memory pass has a scoreboard.
 
 ## Sequencing
 
@@ -132,4 +131,5 @@ threads circle around:
 2. Pillar 4a (BEAM-style eval harness) — establishes the scoreboard.
 3. Pillar 2 (links table + backfill + backlinks UI).
 4. Pillar 3 (bounded multi-hop) — measured against the Pillar-4 harness.
-5. Pillar 4b (consolidation pass / cortex decision) — last, scored.
+5. Pillar 4b (cortex lib-ification upstream + Alchemy adapter) — last,
+   scored against the Pillar-4a harness.

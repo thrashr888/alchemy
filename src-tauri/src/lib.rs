@@ -1,3 +1,4 @@
+mod acp;
 mod agent;
 mod ai;
 mod capture;
@@ -181,6 +182,7 @@ pub fn run() {
 
             // Agent access: embedded MCP server (see docs/RFC-mcp-server.md).
             app.manage(mcp::McpState::default());
+            app.manage(acp::AcpState::default());
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 mcp::apply_config(&handle, mcp_enabled, mcp_port).await;
@@ -392,6 +394,13 @@ pub fn run() {
             templates::save_template,
             templates::delete_template,
             mcp::mcp_status,
+            acp::acp_agents,
+            acp::acp_status,
+            acp::acp_start,
+            acp::acp_prompt,
+            acp::acp_cancel,
+            acp::acp_stop,
+            acp::acp_permission,
             connectors::list_agent_connectors,
             connectors::connect_agent,
             textsize::get_system_text_scale,
