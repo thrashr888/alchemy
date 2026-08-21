@@ -514,7 +514,11 @@ impl Db {
                     .and_then(|rest| rest.split('/').next())
                     .unwrap_or("")
                     .trim_start_matches("www.");
-                let new_title = if host.is_empty() { "Untitled" } else { host };
+                let new_title = if host.is_empty() {
+                    "Untitled source"
+                } else {
+                    host
+                };
                 let tbl = self.conn.open_table(T_SOURCES).execute().await?;
                 tbl.update()
                     .only_if(format!("id = '{}'", esc(id.value(i))))

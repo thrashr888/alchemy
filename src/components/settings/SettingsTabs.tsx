@@ -33,23 +33,23 @@ import {
 // choices compress real writing standards (ASD-STE100, GOV.UK, US Federal
 // Plain Language, and the i-have-adhd rules) to prompt size.
 const CHAT_STYLES = [
-  { id: "default", label: "Default", icon: Sparkles, hint: "Balanced, grounded answers for research and brainstorming." },
-  { id: "friendly", label: "Friendly", icon: MessageCircle, hint: "Warm, approachable, and direct, without cheerleading or filler." },
-  { id: "professional", label: "Professional", icon: Briefcase, hint: "Takeaway first, then evidence and caveats in clear workplace prose." },
-  { id: "learning", label: "Learning Guide", icon: GraduationCap, hint: "Explains step by step, defines terms, builds intuition." },
-  { id: "scientific", label: "Scientific", icon: FlaskConical, hint: "Precise and hedged to the evidence; quantified, summary first." },
-  { id: "adhd", label: "ADHD-friendly", icon: Zap, hint: "Answer first, numbered steps, short lists, no preamble or closers." },
-  { id: "ste100", label: "Simplified Technical", icon: Wrench, hint: "ASD-STE100: short sentences, one instruction each, one word per meaning." },
-  { id: "govuk", label: "GOV.UK", icon: Landmark, hint: "Plain English, front-loaded, everyday words, no metaphors." },
-  { id: "plain", label: "Plain Language", icon: Feather, hint: "US Federal guidelines: main point first, active voice, no hidden verbs." },
-  { id: "gdev", label: "Google Developer", icon: Braces, hint: "Google's developer docs: second person, present tense, no marketing." },
+  { id: "default", label: "Default", icon: Sparkles, hint: "Balanced answers, cited to your sources." },
+  { id: "friendly", label: "Friendly", icon: MessageCircle, hint: "Warm and direct. No cheerleading, no filler." },
+  { id: "professional", label: "Professional", icon: Briefcase, hint: "The takeaway first; evidence and caveats after, in workplace prose." },
+  { id: "learning", label: "Learning Guide", icon: GraduationCap, hint: "Step-by-step explanations that define terms and build intuition." },
+  { id: "scientific", label: "Scientific", icon: FlaskConical, hint: "Hedged to the evidence. Quantified, summary first." },
+  { id: "adhd", label: "ADHD-friendly", icon: Zap, hint: "Answer first. Numbered steps, short lists, no preamble." },
+  { id: "ste100", label: "Simplified Technical", icon: Wrench, hint: "Simplified Technical English (ASD-STE100): short sentences, one instruction each." },
+  { id: "govuk", label: "GOV.UK", icon: Landmark, hint: "GOV.UK style. Everyday words, no metaphors, the point up front." },
+  { id: "plain", label: "Plain Language", icon: Feather, hint: "US Federal plain-language rules: main point first, active voice." },
+  { id: "gdev", label: "Google Developer", icon: Braces, hint: "Google's developer-docs voice: second person, present tense, no marketing." },
   { id: "custom", label: "Custom", icon: PenLine, hint: "Give your own goal, style, or role." },
 ] as const;
 
 const CHAT_LENGTHS = [
   { id: "shorter", label: "Concise", icon: Scissors, hint: "Direct answer in up to three short paragraphs or five bullets." },
   { id: "default", label: "Balanced", icon: AlignLeft, hint: "Matches the level of detail to the question." },
-  { id: "longer", label: "Thorough", icon: ScrollText, hint: "Conclusion first, then evidence, reasoning, uncertainty, and useful examples." },
+  { id: "longer", label: "Thorough", icon: ScrollText, hint: "Conclusion first, then evidence, reasoning, and examples." },
 ] as const;
 
 const CHAT_FONTS = [

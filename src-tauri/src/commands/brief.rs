@@ -349,13 +349,7 @@ fn brief_script(content: &str) -> String {
             continue;
         }
         if let Some(header) = trimmed.strip_prefix("## ") {
-            let intro = match header {
-                "Needs you" => "First: what needs you.",
-                "What changed" => "Next: what changed.",
-                "For the record" => "And for the record.",
-                other => other,
-            };
-            lines.push(format!("HOST: {intro}"));
+            lines.push(format!("HOST: {header}."));
             continue;
         }
         let body = trimmed.trim_start_matches(['-', '*', ' ']).trim();

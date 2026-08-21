@@ -9,7 +9,7 @@ import { cn, chatReadingClass, fmtDateTime, isWebUrl, relativeTime } from "@/lib
 import { DitherBackground } from "./DitherBackground";
 import { AlchemySymbol } from "./AlchemyHero";
 import { DEFAULT_VERBS, THEMES, resolveThemeId } from "@/lib/themes";
-import { generatedEpigraph } from "@/lib/epigraph";
+import { FALLBACK_EPIGRAPHS, generatedEpigraph } from "@/lib/epigraph";
 import {
   parseSlash,
   slashFilter,
@@ -498,7 +498,7 @@ export function ChatPanel() {
       if (c.name === "audio_overview" && !s.kokoroStatus?.verified) {
         s.pushToast(
           "info",
-          "Audio Overview needs the voice model — set it up in Settings → Studio",
+          "Audio Overview needs its voices. Set them up in Settings → Studio.",
         );
         return;
       }
@@ -912,7 +912,7 @@ export function ChatPanel() {
             <div className="flex items-center gap-1.5 px-1.5 pt-1">
               <button
                 onClick={toggleAgentMode}
-                title="Agentic mode: the model plans multiple searches over your sources before answering"
+                title="Deep research: several searches over your sources before answering"
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-micro transition-colors",
                   agentMode
@@ -1793,7 +1793,7 @@ function ChatHero({
             {!hasNotebook
               ? "Create a notebook to begin"
               : !hasSources
-                ? "Add sources to start a grounded chat"
+                ? "Add sources to chat with citations"
                 : "Ask anything about your sources"}
           </div>
           <RotatingQuote theme={theme} />
@@ -1803,26 +1803,12 @@ function ChatHero({
   );
 }
 
-/** Alchemy-flavored lines about what the chat actually does — a fresh one
- *  each page load, set in proper typographic quotes. */
-const QUOTES = [
-  "“Solve et coagula” — your sources dissolved, your answers given form.",
-  "“Every answer shows its work: citations back to the exact passage.”",
-  "“The athanor burns on your own machine; nothing leaves the laboratory.”",
-  "“Prima materia in, quintessence out.”",
-  "“As above, so below” — every claim traces to a line in your sources.",
-  "“Transmutation, with receipts.”",
-  "“Distill a hundred pages into one clear draught.”",
-  "“The Great Work proceeds one question at a time.”",
-  "“Hermetically sealed: your corpus, your model, your machine.”",
-];
-
 /** Chosen once per page load — module scope, so remounts don't reshuffle. */
-const QUOTE = QUOTES[Math.floor(Math.random() * QUOTES.length)];
+const QUOTE = `“${FALLBACK_EPIGRAPHS[Math.floor(Math.random() * FALLBACK_EPIGRAPHS.length)]}”`;
 
 function RotatingQuote({ theme }: { theme: string }) {
-  // A generated daily epigraph (mood-matched to the theme) takes the slot;
-  // the curated product quotes remain the fallback.
+  // One epigraph system for the hero and this slot: the generated daily line
+  // (mood-matched to the theme) when cached, else a curated fallback.
   const gen = generatedEpigraph(theme);
   return (
     <p className="max-w-[360px] animate-[quote-fade_0.8s_ease] text-body text-muted-foreground">

@@ -114,7 +114,7 @@ pub async fn ensure_kokoro_files(
             .await
             .with_context(|| {
                 format!(
-                    "downloading the Audio Overview voice model failed ({label}) — check \
+                    "Downloading the Audio Overview voices failed ({label}); check \
                      your network/proxy access to huggingface.co"
                 )
             })?;
@@ -227,7 +227,7 @@ impl KokoroEngine {
     pub async fn load(dir: &Path) -> Result<Self> {
         let tts = kokoro_en::KokoroTts::new(dir.join(KOKORO_MODEL), dir.join("voices"))
             .await
-            .map_err(|e| anyhow::anyhow!("failed to load the Kokoro voice model: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("Couldn't load the Audio Overview voices: {e}"))?;
         Ok(Self { tts })
     }
 
@@ -255,10 +255,10 @@ impl KokoroEngine {
                 .tts
                 .synth(chunk, voice)
                 .await
-                .map_err(|e| anyhow::anyhow!("Kokoro synthesis failed: {e}"))?;
+                .map_err(|e| anyhow::anyhow!("Voice synthesis failed: {e}"))?;
             samples.extend(chunk_samples);
         }
-        anyhow::ensure!(!samples.is_empty(), "Kokoro produced no audio for a line");
+        anyhow::ensure!(!samples.is_empty(), "No audio was produced for a line");
         let spec = hound::WavSpec {
             channels: 1,
             sample_rate: Self::SAMPLE_RATE,

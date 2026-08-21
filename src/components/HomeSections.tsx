@@ -125,8 +125,8 @@ export function BriefSidebar({
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
           {!brief ? (
             <p className="text-caption text-subtle-foreground">
-              No brief yet — it runs each morning, or press play above to run
-              it now.
+              No brief yet. It runs each morning; press play above to run it
+              now.
             </p>
           ) : (
             <>
@@ -284,7 +284,7 @@ export function StaffSidebar({
             onClick={() => useStore.getState().openSettings("general")}
             className="mb-3 w-full rounded-md border border-border bg-surface px-3 py-2 text-left text-caption text-muted-foreground transition-colors hover:bg-surface-2"
           >
-            Night Shift is off — turn it on in Settings to run reports and
+            Night Shift is off. Turn it on in Settings to run reports and
             syncs in the background.
           </button>
         )}
@@ -470,7 +470,7 @@ export function StaffSidebar({
 
         <StaffGroup title="Recent notes">
           {recentNotes.length === 0 ? (
-            <StaffQuiet>Notes you write or generate land here.</StaffQuiet>
+            <StaffQuiet>Notes you write or generate appear here.</StaffQuiet>
           ) : (
             recentNotes.slice(0, 8).map((n) => (
               <button

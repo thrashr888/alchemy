@@ -10,7 +10,7 @@ You have the tour; here is what people actually do with Alchemy, and the shortcu
 
 **Prepare for meetings.** Connect a rolling Calendar window and the relevant Apple Notes; ask "what's on deck this week and what do I owe anyone?" The Morning Brief does a version of this for you daily.
 
-**Build a team knowledge base.** Export any notebook as an OKF bundle — plain markdown, readable by humans and agents — and share the .okf.zip. Imports re-embed locally and skip duplicates.
+**Build a team knowledge base.** Export any notebook as an Open Knowledge Format bundle — plain markdown, readable by humans and agents — and share the .okf.zip. Imports re-index locally and skip duplicates.
 
 ## Power tips
 
@@ -26,8 +26,8 @@ You have the tour; here is what people actually do with Alchemy, and the shortcu
 
 ## For the agent-inclined
 
-Alchemy ships an embedded MCP server (localhost-only). One click in Settings → Agents connects Claude Code, Codex, Gemini CLI, GitHub Copilot, and friends — after which an agent can create notebooks, add sources, run the same hybrid search you use, write notes, and update Ledger entries, with changes appearing live in the app. Anything you can do in the UI, an agent can do for you: "collect the reviews for these three products into a notebook and write up a comparison" is a one-line request.
+Alchemy ships an embedded MCP server (localhost-only). One click in Settings → Agents connects Claude Code, Codex, Gemini CLI, GitHub Copilot, and friends. After that, an agent can create notebooks, add sources, run the same search you use, write notes, and update Ledger entries, with changes appearing live in the app. Anything you can do in the UI, an agent can do for you: "collect the reviews for these three products into a notebook and write up a comparison" is a one-line request.
 
 ## Housekeeping
 
-Both example notebooks are yours: rename them, add to them, or delete them from the home screen — deleted examples stay deleted. If you keep one, keep the earnings notebook; it is a good sandbox for trying every generator against real-shaped data.
+Both example notebooks are yours: rename them, add to them, or delete them from the home screen; deleted examples stay deleted. If you keep one, keep the earnings notebook; it is a good sandbox for trying every generator against real-shaped data.

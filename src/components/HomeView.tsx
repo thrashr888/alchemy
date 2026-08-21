@@ -451,7 +451,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         <div className="flex-1">
           <AlchemyHero
             title="Alchemy"
-            subtitle="Local-first research notebooks — chat with your own sources, grounded in citations, running entirely on your machine."
+            subtitle="Research notebooks that stay on your Mac."
             epigraph={currentEpigraph(theme)}
             themeKey={theme}
           >
@@ -533,8 +533,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   </h1>
                   {homeSection === "registry" ? (
                     <p className="mt-1 text-body text-muted-foreground">
-                      The things your documents are about — assets, people,
-                      policies, providers, projects, dependencies.
+                      The things your documents are about: assets, people,
+                      projects.
                     </p>
                   ) : (
                   <p className="mt-1 text-body text-muted-foreground">
@@ -546,7 +546,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                             `${stats.notes} ${stats.notes === 1 ? "note" : "notes"}`,
                           stats.ledger > 0 &&
                             `${stats.ledger} ledger ${stats.ledger === 1 ? "entry" : "entries"}`,
-                          `${Intl.NumberFormat().format(stats.chars)} chars indexed`,
+                          `${Intl.NumberFormat().format(stats.chars)} characters indexed`,
                         ]
                           .filter(Boolean)
                           .join(" · ")
@@ -589,7 +589,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                             },
                           })
                         }
-                        title="Save a link or note — Alchemy suggests the notebook"
+                        title="Save a link or note; Alchemy suggests the notebook"
                       >
                         <Plus className="h-4 w-4" />
                         Add source…
@@ -1024,7 +1024,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               <div className="flex flex-1 items-center justify-center p-8">
                 <EmptyState
                   icon={<Newspaper className="h-7 w-7" />}
-                  title={activityError ? "Reports unavailable" : "Reports land here"}
+                  title={activityError ? "Reports unavailable" : "Reports appear here"}
                   hint={
                     activityError
                       ? "Alchemy couldn’t load recent reports."

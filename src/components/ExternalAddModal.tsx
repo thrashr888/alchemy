@@ -256,7 +256,7 @@ function ExternalAddForm({
             !touched && (
               <>
                 <Sparkles className="h-3 w-3" />
-                <span>Suggested — change it if you'd rather file it elsewhere</span>
+                <span>Suggested. Change it to file this elsewhere.</span>
               </>
             )
           )}

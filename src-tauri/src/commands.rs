@@ -1060,7 +1060,7 @@ pub(crate) fn is_blank_title(s: &str) -> bool {
 /// A source never persists a blank title — lists would render an unlabeled
 /// row (seen live: pages with no <title>). Extractors already provide file
 /// stems and readability titles; this is the last-resort funnel guard,
-/// falling back to the origin's host and then "Untitled".
+/// falling back to the origin's host and then "Untitled source".
 fn presentable_title(title: &str, url: &str) -> String {
     let t = title.trim();
     if !is_blank_title(t) {
@@ -1073,7 +1073,7 @@ fn presentable_title(title: &str, url: &str) -> String {
         .unwrap_or("")
         .trim_start_matches("www.");
     if host.is_empty() {
-        "Untitled".to_string()
+        "Untitled source".to_string()
     } else {
         host.to_string()
     }
@@ -1605,9 +1605,11 @@ pub(crate) async fn extract_any_file(
         // Try fast text extraction; fall back to per-page OCR for scanned PDFs.
         match ingest::extract_file(path) {
             Ok(ex) => ex,
-            Err(text_err) => extract_pdf_ocr(state, path)
-                .await
-                .map_err(|ocr_err| anyhow::anyhow!("{text_err} OCR fallback failed: {ocr_err}"))?,
+            Err(text_err) => extract_pdf_ocr(state, path).await.map_err(|ocr_err| {
+                anyhow::anyhow!(
+                    "{text_err} OCR failed: {ocr_err}. A vision model in Settings → Models reads scanned PDFs."
+                )
+            })?,
         }
     } else {
         ingest::extract_file(path)?
@@ -1961,11 +1963,11 @@ pub async fn grep_sources(
 ) -> Result<Vec<GrepHitOut>, String> {
     let pattern = pattern.trim().to_string();
     if pattern.is_empty() {
-        return Err("Enter a pattern to grep for.".to_string());
+        return Err("Enter text to search for.".to_string());
     }
     let files = repo_backed_files(&state, &notebook_id, None).await;
     if files.is_empty() {
-        return Err("This notebook has no repo- or folder-backed files to grep.".to_string());
+        return Err("This notebook has no files from repos or folders to search.".to_string());
     }
     let k = max_results.unwrap_or(8).clamp(1, 20) as usize;
     let paths: Vec<String> = files.iter().map(|f| f.0.clone()).collect();
@@ -4422,7 +4424,7 @@ async fn consolidate_notes(state: &AppState) -> anyhow::Result<Vec<CuratorAction
             actions.push(CuratorAction {
                 notebook_id: nb.id.clone(),
                 note_id: winner.id.clone(),
-                title: format!("\"{title}\" absorbed \"{}\"", loser.title),
+                title: format!("\"{}\" merged into \"{title}\"", loser.title),
                 action: "merged",
             });
         }
@@ -4544,7 +4546,7 @@ async fn note_curator_tick(app: &AppHandle, state: &AppState) {
                     .add_note(&Note {
                         id: new_id(),
                         notebook_id: notebook_id.to_string(),
-                        title: "Curator report".into(),
+                        title: "Notebook housekeeping".into(),
                         content: body,
                         kind: "note".into(),
                         prompt: String::new(),
@@ -7851,7 +7853,7 @@ pub async fn setup_kokoro(
         engine
             .synth(
                 crate::tts::Speaker::Host,
-                "Your podcast voices are ready.",
+                "Your Audio Overview voices are ready.",
                 &probe,
             )
             .await?;
@@ -7919,7 +7921,7 @@ async fn synthesize_audio(
     let dir = kokoro_dir(app)?;
     anyhow::ensure!(
         crate::tts::kokoro_files_present(&dir),
-        "The podcast voices aren't set up — download them in Settings → Models."
+        "The Audio Overview voices aren't set up. Download them in Settings → Models."
     );
     let engine = crate::tts::KokoroEngine::load(&dir).await?;
 
@@ -8582,9 +8584,13 @@ pub async fn generate_epigraph(state: State<'_, AppState>, mood: String) -> Resu
     let messages = vec![
         crate::ai::ChatTurn::system(
             "You write epigraphs for Alchemy, a local-first research notebook. \
-             Respond with ONLY one original aphorism of 8-14 words about research, \
+             Respond with ONLY one original aphorism of 5-14 words about research, \
              knowledge, or transformation, in the voice of an alchemist's notebook, \
-             tinted by the given mood. No quotation marks, no attribution, no preamble.",
+             tinted by the given mood. Quiet and plain, not grand; it must not read \
+             like a motivational post. Vary the sentence shape — do not write \
+             'X is not A but B' or 'no X but Y; no Z but W' antitheses. Never use \
+             the words corpus, distill, retrieval, or pipeline. No quotation marks, \
+             no attribution, no preamble.",
         ),
         crate::ai::ChatTurn::user(format!("Mood: {mood}")),
     ];
@@ -9705,7 +9711,7 @@ fn find_bundle_root(dir: std::path::PathBuf) -> Result<std::path::PathBuf, Strin
             return Ok(only.clone());
         }
     }
-    Err("Not an OKF bundle — expected index.md with sources/ and notes/ folders".into())
+    Err("This isn't an Open Knowledge Format bundle: expected index.md with sources/ and notes/ folders".into())
 }
 
 /// Sorted markdown docs in a bundle subdirectory (index.md excluded).
@@ -9800,7 +9806,7 @@ async fn import_bundle(
         .unwrap_or_else(|| {
             root.file_name()
                 .and_then(|n| n.to_str())
-                .unwrap_or("Imported notebook")
+                .unwrap_or("Untitled notebook")
                 .to_string()
         });
 
@@ -9855,7 +9861,7 @@ async fn import_bundle(
             .unwrap_or_else(|| {
                 doc.file_stem()
                     .and_then(|s| s.to_str())
-                    .unwrap_or("Untitled")
+                    .unwrap_or("Untitled source")
                     .to_string()
             });
         let source_type = fm
@@ -9916,7 +9922,7 @@ async fn import_bundle(
             title: fm.get("title").cloned().unwrap_or_else(|| {
                 doc.file_stem()
                     .and_then(|s| s.to_str())
-                    .unwrap_or("Untitled")
+                    .unwrap_or("Untitled note")
                     .to_string()
             }),
             content: body,
@@ -10100,7 +10106,7 @@ pub(crate) async fn retrieve_everything(
     let routed: Option<Vec<String>> = if nb_titles.len() > crate::router::MIN_NOTEBOOKS_TO_ROUTE {
         meta_step(
             app,
-            format!("Routing your question across {} notebooks", nb_titles.len()),
+            format!("Searching {} notebooks", nb_titles.len()),
             false,
         );
         let ai = state.ai.read().await.clone();
@@ -11241,7 +11247,7 @@ mod tool_tests {
             presentable_title("\u{200b}", "https://www.example.com/page"),
             "example.com"
         );
-        assert_eq!(presentable_title("   ", ""), "Untitled");
+        assert_eq!(presentable_title("   ", ""), "Untitled source");
     }
 
     #[test]

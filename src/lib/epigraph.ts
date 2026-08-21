@@ -11,18 +11,20 @@ const DEFAULT_MOOD = "quiet alchemical mysticism";
 const KEY = "epigraph";
 const DAY_MS = 86_400_000;
 
-/** Curated aphorisms, day-rotated. Same register the generator is asked for. */
-const FALLBACKS = [
-  "The stone is not found but refined, one reading at a time.",
+/** Curated aphorisms, day-rotated. Same register the generator is asked for.
+ *  Varied sentence shapes on purpose — a stack of identical epigram
+ *  architectures reads generated (WRITING.md, tell #3). */
+export const FALLBACK_EPIGRAPHS = [
+  "The stone is refined, not found.",
   "Lead becomes gold slowly; understanding, the same.",
-  "Every source is ore; the question is the furnace.",
-  "What is dissolved with care returns as clarity.",
-  "The work is patient: gather, distill, and ask again.",
-  "No flame needed but attention; no vessel but the page.",
-  "From many pages, one draught of understanding.",
-  "As the corpus ripens, so the answers clarify.",
-  "Read as the alchemist weighs: nothing trusted, everything tested.",
-  "Knowledge transmutes only in a sealed and quiet vessel.",
+  "Ore in, understanding out.",
+  "What dissolves with care returns as clarity.",
+  "An alchemist trusts nothing untested.",
+  "Attention is the only flame this work needs.",
+  "From many pages, one clear draught.",
+  "The question is the furnace.",
+  "Read once to gather, twice to weigh.",
+  "Knowledge transmutes in a sealed, quiet vessel.",
 ];
 
 interface Cached {
@@ -55,7 +57,7 @@ export function currentEpigraph(themeKey?: string): string {
   const gen = generatedEpigraph(themeKey);
   if (gen) return gen;
   const day = Math.floor(Date.now() / DAY_MS);
-  return FALLBACKS[(day + themeMood(themeKey).length) % FALLBACKS.length];
+  return FALLBACK_EPIGRAPHS[(day + themeMood(themeKey).length) % FALLBACK_EPIGRAPHS.length];
 }
 
 /** Fire-and-forget on app open: regenerate when stale (>24h) or the theme's

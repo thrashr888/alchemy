@@ -430,7 +430,7 @@ export const useStore = create<AppState>((set, get) => {
             set({ updateAvailable: v });
             get().pushToast(
               "info",
-              `Alchemy ${v} is available — click to review and install.`,
+              `Alchemy ${v} is available. Click to review and install.`,
               () => {
                 set({ pendingUpdateCheck: true });
                 get().openSettings("general");
@@ -606,7 +606,7 @@ export const useStore = create<AppState>((set, get) => {
           set({
             embedderDownload: {
               ...p,
-              title: "Downloading the podcast voice model",
+              title: "Downloading the Audio Overview voices",
             },
           });
         },
@@ -1285,7 +1285,7 @@ export const useStore = create<AppState>((set, get) => {
       if (get().reader.open) get().closeReader();
       get().pushToast(
         "success",
-        `Chat scoped to "${visibleTitle(target.title) || "this source"}"`,
+        `Chat focused on “${visibleTitle(target.title) || "this source"}”`,
       );
     },
 
@@ -1666,7 +1666,7 @@ export const useStore = create<AppState>((set, get) => {
           notes: get().notes.map((n) => (n.id === updated.id ? updated : n)),
         });
         playDone();
-        void notify("Rebuilt", `“${updated.title}” was regenerated.`);
+        void notify("Rebuilt", `“${updated.title}” was rebuilt.`);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         if (msg.includes("Generation stopped"))
@@ -1774,7 +1774,7 @@ export const useStore = create<AppState>((set, get) => {
       if (!dest) return;
       try {
         const path = await api.exportNotebookOkfZip(id, dest);
-        get().pushToast("success", `Saved ${path}`);
+        get().pushToast("success", `Saved ${path.split("/").pop() ?? "the bundle"}`);
       } catch (e) {
         get().pushToast("error", e instanceof Error ? e.message : String(e));
       }
@@ -1868,7 +1868,7 @@ export const useStore = create<AppState>((set, get) => {
       try {
         const status = await api.setupKokoro();
         set({ kokoroStatus: status });
-        get().pushToast("success", "Podcast voices ready");
+        get().pushToast("success", "Audio Overview voices ready");
         playDone();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -1884,7 +1884,7 @@ export const useStore = create<AppState>((set, get) => {
     removeKokoro: () =>
       guard(async () => {
         set({ kokoroStatus: await api.removeKokoro() });
-        get().pushToast("success", "Podcast voices removed");
+        get().pushToast("success", "Audio Overview voices removed");
       }),
 
     setError: (e) => set({ error: e }),

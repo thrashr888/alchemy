@@ -230,7 +230,8 @@ pub(crate) fn settings_get(config: &AiConfig) -> String {
 }
 
 const SETTABLE_FIELDS: &str = "chatProvider, studioProvider, chatModel, effort, baseUrl, \
-     smallModel, embedder, provider.<id>.chatModel, provider.<id>.effort, provider.<id>.baseUrl, \
+     smallModel, embedder (the \"search model\" in user terms), provider.<id>.chatModel, \
+     provider.<id>.effort, provider.<id>.baseUrl, \
      profile.name, profile.profession, profile.instructions";
 
 const EFFORTS: [&str; 5] = ["", "minimal", "low", "medium", "high"];
@@ -309,9 +310,9 @@ pub(crate) fn settings_set(
         "embedder" if target_id.is_none() => match value {
             "ollama" | "builtin" => {
                 config.embedder = value.to_string();
-                Ok(format!("Switched the embedder to {value}"))
+                Ok(format!("Switched the search model to {value}"))
             }
-            _ => Err("The embedder can be \"ollama\" or \"builtin\".".to_string()),
+            _ => Err("The search model can be \"ollama\" or \"builtin\".".to_string()),
         },
         // Personalization (RFC-conversational-setup §2): free text, but the
         // key-shape refusal above still applies — "remember this token for
@@ -1166,9 +1167,9 @@ pub(crate) fn setup_next_step(s: &SetupState) -> String {
             Err(_) => "pick one in Settings → Models".to_string(),
         };
         return format!(
-            "Setup 3 of 5 — the embedder. Retrieval embeds with “{}”, which isn't \
-             installed. {fix} — or say “switch the embedder to builtin” to use the \
-             built-in one (no download).",
+            "Setup 3 of 5: the search model. Search uses “{}”, which isn't \
+             installed. {fix}. Or say “switch the search model to builtin” to use \
+             the built-in one (no download).",
             s.embed_model
         );
     }
@@ -1192,11 +1193,11 @@ pub(crate) fn setup_next_step(s: &SetupState) -> String {
         );
     }
     format!(
-        "You're set up: chat answers with {}, retrieval embeds with {}, and your profile \
-         is in. Ask anything — or say “what models do I have” any time.",
+        "You're set up: chat answers with {} and search uses {}. Ask anything, or say \
+         “what models do I have” any time.",
         s.chat_label,
         if s.embedder == "builtin" {
-            "the built-in embedder".to_string()
+            "the built-in model".to_string()
         } else {
             format!("{} ({})", s.embedder, s.embed_model)
         }

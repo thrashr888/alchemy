@@ -392,14 +392,14 @@ export function AddSourceModal() {
                 })}
               </div>
               <p className="text-micro leading-relaxed text-subtle-foreground">
-                A git repository — import just the README, prose docs, or docs
+                A git repository: import just the README, prose docs, or docs
                 and code. Re-syncs automatically with your own git
                 credentials; widen it later from the source's Refresh.
               </p>
             </div>
           ) : (
             <p className="text-micro leading-relaxed text-subtle-foreground">
-              Google Docs, Sheets, and Slides links work too — share them as
+              Google Docs, Sheets, and Slides links work too; share them as
               “Anyone with the link” first.
             </p>
           )}
@@ -812,8 +812,8 @@ function MacFileSearch({
         </div>
       )}
       <p className="mt-2 text-micro leading-relaxed text-subtle-foreground">
-        Files add to this notebook and embed into its local index; folders sync
-        as living sources. Arrow keys move, Enter adds.
+        Files join this notebook's search index; folders stay in sync as they
+        change. Arrow keys move, Enter adds.
       </p>
     </div>
   );

@@ -162,8 +162,8 @@ export function LedgerPane() {
               </p>
               <p className="mt-1.5">
                 It mostly fills itself: chat answers that establish something
-                new land here as anchored assertions (marked auto), and agents
-                write entries over MCP. Record your own with the composer.
+                new appear here as anchored assertions (marked auto), and
+                agents write entries too. Record your own with the composer.
                 Click an anchor to open the source at the quoted passage; use
                 a row&rsquo;s menu to move it through its lifecycle as the
                 record corroborates, contradicts, or supersedes it.
@@ -275,7 +275,7 @@ export function LedgerPane() {
                 title={
                   filter === "all" ? "Nothing on the record yet" : "None yet"
                 }
-                hint="Assertions, facts, decisions, questions, and log lines land here — typed memory with a lifecycle, anchored to sources. Agents write here too (add_ledger_entry over MCP)."
+                hint="Facts, decisions, and open questions appear here, each anchored to a source. Agents can write entries too."
               />
             </div>
           ) : (

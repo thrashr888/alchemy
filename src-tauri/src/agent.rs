@@ -146,9 +146,9 @@ pub async fn run(
                     fetched.push((source_id, title, content));
                 }
                 if fetched.len() > 1 {
-                    emit_step(app, format!("Distilling {} sources", fetched.len()));
+                    emit_step(app, format!("Reading {} sources", fetched.len()));
                 } else if let Some((_, title, _)) = fetched.first() {
-                    emit_step(app, format!("Distilling: {title}"));
+                    emit_step(app, format!("Reading: {title}"));
                 }
                 // RLM-style sub-read: a separate model call distills each
                 // document against the question into verbatim quotes, so a

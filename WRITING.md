@@ -24,6 +24,10 @@ live, not by mood:
 | Methodology, claims, footnotes | Sober and precise, zero personality | HashiCorp | "Each model is evaluated against the full pipeline: retrieval, citation of the known-correct evidence, and per-claim support." |
 | Table cells, chips, micro-copy | Clipped fragments | Vercel | "Declines often. Perfect when it commits." |
 | Release notes | Bold-led benefit, then the evidence | house (RELEASE.md) | "**Answers check themselves.** …faithfulness 0.69 → 0.84, measured." |
+| In-app setting hints | One clipped line stating what On does; the toggle speaks for Off | Vercel | "Scheduled reports and syncs run with the window closed." |
+| In-app empty states | One plain sentence; "appear here", never "land here" | Google | "Passages from your sources appear here as you write." |
+| Epigraphs (hero, blank chat) | Alchemy flavor, quiet not grand, varied shapes | Linear | "The stone is refined, not found." |
+| Error toasts | What failed in user terms, then one concrete fix | house | "No readable text in scan.pdf." |
 
 Fragments are a micro-surface tool. In a paragraph, write sentences.
 
@@ -32,6 +36,14 @@ Fragments are a micro-surface tool. In a paragraph, write sentences.
 - **Em dashes**: at most one per paragraph, and never as a dramatic pivot
   ("—and see which provider answered"). If the dash is doing a reveal,
   use a period.
+- **No em dashes in micro-copy** — tooltips, placeholders, toasts, and
+  setting hints use a period, colon, or semicolon instead. (This rule
+  resolved ~two dozen findings in the 2026-08 app copy review; the dash
+  had become the house hinge.)
+- **Safety reassurances repeat verbatim.** One canonical sentence
+  ("Filing changes nothing in the document."), reused word-for-word
+  wherever it applies. Identical copy is a label; four paraphrases of
+  one reassurance are what reads generated.
 - **Parallel items get different shapes.** Six table rows must not share
   one sentence template. Praise-pivot-caveat is fine once; repeated, it
   reads generated.
@@ -57,6 +69,14 @@ Internal names stay internal. Translate before publishing:
 | hard corpora | dense technical material |
 | retrieval tier, shipping pipeline | the built-in search engine, the same pipeline the app ships |
 | lands (as/in) | is saved / appears |
+| embedder, embedding model | the search model |
+| embed / re-embed (a source) | index / re-index |
+| routing (a question) | searching / matching to notebooks |
+| distilling (sources) | reading / summarizing |
+| agentic retrieval, agentic mode | deep research |
+| the curator / the sweep / Weave (job names) | Alchemy (the app just does it) |
+| podcast voices, voice model | the Audio Overview voices |
+| Embedded / Search-only (source tiers) | Indexed / Text only |
 
 Banned outright in public copy: "vibes", "honest/honestly" as framing,
 "seamless", "powerful", "supercharge", "leverage" (verb), "delve",
@@ -94,3 +114,12 @@ The reworked benchmark sections (2026-08-18) are the reference example:
 same numbers before and after, but the after reads like a person wrote
 it. When adding new copy, match the register table above, then read it
 aloud once. If you stumble, the reader will too.
+
+The 2026-08-20 in-app copy pass set the app-surface precedents: the
+epigraph lists in `src/lib/epigraph.ts` (Linear-voice alchemy flavor,
+varied shapes — the generator prompt in `generate_epigraph` enforces the
+same register), the settings hints (clipped, no off-clause), and
+`friendly_error` in `src-tauri/src/commands.rs` as the model for every
+user-facing error. Generated copy surfaces (epigraphs, briefs) get their
+register from the prompt; when the register changes here, change the
+prompt too.

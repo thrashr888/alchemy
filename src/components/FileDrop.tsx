@@ -44,7 +44,7 @@ export function FileDrop() {
         console.error("file-drop listener failed", error);
         useStore
           .getState()
-          .pushToast("error", "File drop is unavailable. Use Add Source instead.");
+          .pushToast("error", "File drop is unavailable. Use Add sources instead.");
       });
 
     return () => {

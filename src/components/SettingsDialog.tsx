@@ -245,17 +245,17 @@ export function SettingsDialog({
       <Modal
         open={confirmReembed}
         onClose={cancelSwitch}
-        title="Switch embedding model?"
+        title="Switch search model?"
       >
         <div className="flex flex-col gap-4">
           <p className="text-body leading-relaxed text-muted-foreground">
-            Different embedders produce incompatible vectors, so switching to{" "}
+            Switching to{" "}
             <span className="font-medium text-foreground">
               {draft.embedder === "builtin"
-                ? "the built-in embedder"
+                ? "the built-in model"
                 : draft.embedModel}
             </span>{" "}
-            requires re-embedding all{" "}
+            rebuilds the search index for all{" "}
             <span className="font-medium text-foreground">{totalSources}</span>{" "}
             source
             {totalSources === 1 ? "" : "s"}. This runs locally and may take a
@@ -434,7 +434,7 @@ function SelfDiagnoseToggle() {
   return (
     <SettingRow
       label="Diagnose model errors"
-      hint="When a provider fails in a way Alchemy doesn't recognize, a small local model explains it and suggests fixes. Off, you get the plain error."
+      hint="Explains unrecognized provider errors with a small local model."
       checked={aiConfig.selfDiagnose}
       onChange={(v) => void saveAiConfig({ ...aiConfig, selfDiagnose: v })}
     />
@@ -494,7 +494,7 @@ function WebClipperToggle() {
             >
               Alchemy Web Clipper
             </button>{" "}
-            sends the page you're viewing — including login-walled pages — to
+            sends the page you're viewing, including login-walled pages, to
             Alchemy over a local endpoint.
           </>
         }
@@ -695,7 +695,7 @@ function GitSyncSelect() {
         </select>
       </label>
       <span className="text-micro leading-relaxed text-subtle-foreground">
-        Re-fetches when the branch moves, with your own git credentials —
+        Re-fetches when the branch moves, using your own git credentials.
         Alchemy stores no tokens.
       </span>
     </div>
@@ -712,7 +712,7 @@ function NotificationsToggle() {
   return (
     <SettingRow
       label="Show notifications"
-      hint="When imports, rebuilds, and reports finish — even with no window open."
+      hint="When imports, rebuilds, and reports finish, even with no window open."
       checked={aiConfig.showNotifications}
       onChange={(v) => {
         localStorage.setItem("showNotifications", String(v));
@@ -734,7 +734,7 @@ function QuietWhenFocusedToggle() {
   return (
     <SettingRow
       label="Only alert in the background"
-      hint="Skips notifications and sounds while you're in an Alchemy window. Off, they always come through."
+      hint="No notifications or sounds while Alchemy is frontmost."
       checked={aiConfig.quietWhenFocused}
       onChange={(v) => {
         localStorage.setItem("quietWhenFocused", String(v));
@@ -752,7 +752,7 @@ function BackgroundToggle() {
   return (
     <SettingRow
       label="Night Shift"
-      hint="Runs scheduled reports and source syncing with the window closed. Off, Alchemy works only when you ask."
+      hint="Scheduled reports and syncs run with the window closed."
       checked={aiConfig.backgroundEnabled}
       onChange={(v) => void saveAiConfig({ ...aiConfig, backgroundEnabled: v })}
     />
@@ -766,7 +766,7 @@ function TrayToggle() {
   return (
     <SettingRow
       label="Show menu bar icon"
-      hint="Closing the window keeps Alchemy running in the menu bar; off, it quits."
+      hint="Close keeps Alchemy in the menu bar instead of quitting."
       checked={aiConfig.trayEnabled}
       onChange={(v) => void saveAiConfig({ ...aiConfig, trayEnabled: v })}
     />
@@ -808,7 +808,7 @@ function AgentsTab() {
         pushToast(
           "success",
           updated.configured
-            ? `${updated.name} connected — restart it to pick up the change`
+            ? `${updated.name} connected. Restart it to pick up the change.`
             : `Skill installed for ${updated.name}`,
         );
       })
@@ -970,12 +970,12 @@ function PodcastVoicesSection() {
   const setup = useStore((s) => s.setupKokoro);
   const remove = useStore((s) => s.removeKokoro);
   const download = useStore((s) => s.embedderDownload);
-  const downloading = busy && !!download?.title?.includes("podcast");
+  const downloading = busy && !!download?.title?.includes("Audio Overview");
 
   const state = !status
     ? { label: "Checking…", cls: "text-subtle-foreground" }
     : status.verified
-      ? { label: "Ready — voices verified", cls: "text-success" }
+      ? { label: "Ready. Voices verified.", cls: "text-success" }
       : status.downloaded
         ? {
             label: "Downloaded, not yet verified",
@@ -985,7 +985,7 @@ function PodcastVoicesSection() {
 
   return (
     <Field
-      label="Podcast voices"
+      label="Audio Overview voices"
       hint="Audio Overview speaks with Kokoro-82M, on-device TTS (~93 MB download). The generator appears once a test synthesis verifies the voices."
     >
       <div className="flex items-center gap-3 rounded-md border border-border bg-surface-2/60 px-3 py-2.5">
@@ -1032,8 +1032,8 @@ function PodcastVoicesSection() {
               variant="ghost"
               size="icon"
               onClick={() => void remove()}
-              title="Remove the downloaded voice model (~93 MB)"
-              aria-label="Remove the podcast voice model"
+              title="Remove the downloaded voices (~93 MB)"
+              aria-label="Remove the Audio Overview voices"
             >
               <Trash2 className="h-3.5 w-3.5" />
             </Button>

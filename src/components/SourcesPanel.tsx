@@ -488,8 +488,13 @@ export function SourcesPanel() {
           <EmptyState
             icon={<FileText className="h-7 w-7" />}
             title="No sources yet"
-            hint="Upload PDFs, Word, PowerPoint, Excel, OpenDocument, RTF, EPUB, CSVs, images, or markdown; add a folder (it stays in sync — great for Google Drive, OneDrive, Dropbox, Box & iCloud, including Box Notes); add a URL (Google Docs, Sheets & Slides work); or paste text. You can also drag files or folders onto the window."
-          />
+            hint="Drop files or folders here, add a URL, or paste text."
+          >
+            <p className="max-w-[260px] text-micro text-subtle-foreground">
+              PDF, Word, PowerPoint, Excel, images, EPUB, markdown, and more.
+              Folders stay in sync, including cloud drives.
+            </p>
+          </EmptyState>
         ) : (
           <>
             {/* Master selection row: which sources feed chat & Studio. Always
@@ -954,8 +959,8 @@ export function SourcesPanel() {
             }
           />
           <p className="text-micro leading-relaxed text-subtle-foreground">
-            Space-separated; "#" and case don't matter. Tags sharpen
-            cross-notebook routing and show up in chat's source list.
+            Space-separated; "#" and case don't matter. Tags show up in
+            chat's source list and help match questions to notebooks.
           </p>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={() => setTagEdit(null)}>

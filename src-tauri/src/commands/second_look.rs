@@ -172,7 +172,7 @@ async fn judge(ai: &crate::ai::Ai, claim: &str, hits: &[Citation]) -> ClaimVerdi
     };
     if hits.is_empty() {
         best.verdict = "unsupported".into();
-        best.reason = "Fresh retrieval returned nothing relevant.".into();
+        best.reason = "A fresh search returned nothing relevant.".into();
         return best;
     }
     let excerpts = hits

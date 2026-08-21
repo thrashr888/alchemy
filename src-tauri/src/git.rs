@@ -546,7 +546,9 @@ async fn clone_with_fallback(remote: &str, extra: &[&str], dest: &Path) -> anyho
             args.push(&ssh);
             args.push(&dest_s);
             run_git(None, &args, 120).await.map_err(|e| {
-                anyhow::anyhow!("git clone failed — check your git credentials for {host} ({e})")
+                anyhow::anyhow!(
+                    "Couldn't clone the repository; check your git credentials for {host} ({e})"
+                )
             })?;
             Ok(ssh)
         }
@@ -636,11 +638,11 @@ async fn clone_target_inner(dir: &Path, target: &GitTarget) -> anyhow::Result<St
             clone_with_fallback(remote, blobless, dir).await?;
             let listing = run_git(Some(dir), &["ls-tree", "--name-only", "HEAD"], 15)
                 .await
-                .map_err(|e| anyhow::anyhow!("git ls-tree failed: {e}"))?;
+                .map_err(|e| anyhow::anyhow!("Couldn't list the repository's files ({e})"))?;
             let readme = pick_readme(&listing).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "no README found in {remote} — paste a /blob/ URL to a specific file, \
-                     or a /tree/ URL for the whole repo"
+                    "No README found in {remote}. Paste a /blob/ URL to a specific file, \
+                     or a /tree/ URL for the whole repo."
                 )
             })?;
             sparse_checkout(dir, &format!("/{readme}"), false).await?;
@@ -707,10 +709,12 @@ async fn clone_at_ref(remote: &str, reff: &str, base: &[&str], dir: &Path) -> an
         clone_with_fallback(remote, base, dir).await?;
         run_git(Some(dir), &["fetch", "--depth", "1", "origin", reff], 120)
             .await
-            .map_err(|e| anyhow::anyhow!("git fetch {reff} failed: {e}"))?;
+            .map_err(|e| {
+                anyhow::anyhow!("Couldn't fetch {reff}; check your git credentials ({e})")
+            })?;
         run_git(Some(dir), &["update-ref", "HEAD", reff], 10)
             .await
-            .map_err(|e| anyhow::anyhow!("git update-ref failed: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("Couldn't check out the pinned commit ({e})"))?;
         return Ok(());
     }
     let mut args: Vec<&str> = base.to_vec();
@@ -724,10 +728,10 @@ async fn sparse_checkout(dir: &Path, pattern: &str, cone: bool) -> anyhow::Resul
     let mode = if cone { "--cone" } else { "--no-cone" };
     run_git(Some(dir), &["sparse-checkout", "set", mode, pattern], 30)
         .await
-        .map_err(|e| anyhow::anyhow!("git sparse-checkout failed: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("Couldn't narrow the checkout ({e})"))?;
     run_git(Some(dir), &["checkout"], 120)
         .await
-        .map_err(|e| anyhow::anyhow!("git checkout failed: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("Couldn't check out the files ({e})"))?;
     Ok(())
 }
 
@@ -802,10 +806,10 @@ pub async fn sync_remote(dir: &Path) -> anyhow::Result<Option<String>> {
         120,
     )
     .await
-    .map_err(|e| anyhow::anyhow!("git fetch failed: {e}"))?;
+    .map_err(|e| anyhow::anyhow!("Couldn't fetch updates; check your git credentials ({e})"))?;
     run_git(Some(dir), &["reset", "--hard", "FETCH_HEAD"], 60)
         .await
-        .map_err(|e| anyhow::anyhow!("git reset failed: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("Couldn't apply the fetched updates ({e})"))?;
     Ok(Some(short_sha(dir).await))
 }
 
