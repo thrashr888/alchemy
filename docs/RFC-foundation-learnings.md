@@ -115,14 +115,39 @@ threads circle around:
   SQLite store, or it violates the one-store guardrail and agent parity.
   Decision (Paul, 2026-08-20): **cortex as a library.** Add a lib target
   upstream (it's binary-only today — same fix-upstream-then-bump pattern as
-  cider), which also makes cortex more usable for everyone else. The
-  Alchemy adapter satisfies the guardrails: cortex's consolidation loop
-  runs in-process, and consolidated learnings are mirrored into **ledger
-  entries and notes** so they stay agent-reachable and visible in the UI —
-  cortex's own store is the episodic layer, the ledger is the durable one.
-  Either way BEAM-style evals are the acceptance metric, which is why
-  cortex belongs in this RFC and not its own: build the eval first, then
-  the memory pass has a scoreboard.
+  cider), which also makes cortex more usable for everyone else.
+
+### Storage: one store, not two
+
+A cortex SQLite file living wherever cortex likes it would give Alchemy a
+second store with its own lifecycle — invisible to backup, export, "delete
+this notebook", and to agents. Two levels of fix, in preference order:
+
+1. **Consolidated (target).** cortex's lib API takes a *storage trait*
+   rather than owning `rusqlite`. Alchemy implements it over LanceDB, so
+   episodic rows land in an Alchemy table (`memories`, `notebook_id`-scoped
+   like every other entity) and consolidated learnings become ledger entries
+   and notes. One store, one backup, one delete path, and agent parity for
+   free: memory becomes MCP-reachable because it's ordinary Alchemy data.
+   This is also the better upstream shape — a storage seam makes cortex
+   embeddable by anyone, not just usable as a CLI.
+2. **Co-located (fallback, if the trait proves invasive).** cortex keeps
+   `rusqlite`, but Alchemy passes an explicit store path under its own
+   `app_data_dir()` (e.g. `<app-data>/cortex/`), so the file is at least
+   inside the data directory that backup/export/reset already own. Needs
+   cortex's lib entry points to accept a caller-supplied path instead of
+   deriving `~/.cortex` — small upstream change, worth doing regardless
+   since it's what makes cortex embeddable at all.
+
+Either way the split stays: episodic capture is cortex's loop, durable
+knowledge is Alchemy's ledger/notes, and nothing user-visible lives only in
+a memory store. Build (2) first if (1) needs design time upstream — but do
+not ship a store outside `app_data_dir()`.
+
+Either way BEAM-style evals are the acceptance metric, which is why cortex
+belongs in this RFC and not its own: **build the eval first**, then the
+memory pass has a scoreboard and "did consolidation help?" is a measurable
+question rather than a vibe.
 
 ## Sequencing
 
