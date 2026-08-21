@@ -4,11 +4,12 @@ import {
   ArrowUp,
   Bot,
   ChevronDown,
+  ExternalLink,
+  RotateCw,
   Square,
   Wrench,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import { useStore } from "@/lib/store";
 import { Button, Textarea } from "./ui";
 import { Markdown } from "./Markdown";
 import { cn } from "@/lib/utils";
@@ -33,7 +34,6 @@ type Entry =
 const COMPOSER_MAX_H = 200;
 
 export function AgentPane({ notebookId }: { notebookId: string }) {
-  const pushToast = useStore((s) => s.pushToast);
   const [agents, setAgents] = useState<AcpAgentInfo[] | null>(null);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
@@ -42,6 +42,14 @@ export function AgentPane({ notebookId }: { notebookId: string }) {
   const [permission, setPermission] = useState<AcpPermissionEvent | null>(null);
   const [draft, setDraft] = useState("");
   const [starting, setStarting] = useState(false);
+  // Session failures stay on screen until the user acts on them. They used to
+  // be toasts, which auto-dismissed before the message — usually "sign in
+  // first" — could be read, let alone acted on. `prompt` carries the message
+  // that never got sent, so Retry can replay it.
+  const [failure, setFailure] = useState<{
+    message: string;
+    prompt?: string;
+  } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
@@ -93,10 +101,10 @@ export function AgentPane({ notebookId }: { notebookId: string }) {
       setState(e.payload.state);
       if (e.payload.state === "error") {
         const detail = e.payload.detail;
-        pushToast(
-          "error",
-          typeof detail === "string" ? detail : "The agent hit an error",
-        );
+        setFailure({
+          message:
+            typeof detail === "string" ? detail : "The agent hit an error",
+        });
       }
     });
     const unlistenUpdate = listen<AcpUpdateEvent>("acp://update", (e) => {
@@ -115,7 +123,7 @@ export function AgentPane({ notebookId }: { notebookId: string }) {
       void unlistenUpdate.then((fn) => fn());
       void unlistenPermission.then((fn) => fn());
     };
-  }, [notebookId, pushToast]);
+  }, [notebookId]);
 
   // Stop the session when the pane goes away, so no agent subprocess
   // outlives the UI that was driving it.
@@ -130,33 +138,67 @@ export function AgentPane({ notebookId }: { notebookId: string }) {
     if (el) el.scrollTop = el.scrollHeight;
   }, [entries, permission]);
 
-  const start = useCallback(async () => {
-    if (!agentId) return;
+  /// Returns whether the session came up — a failed start must not fall
+  /// through to a prompt, or the real error is buried under a second,
+  /// misleading "no agent session for this notebook".
+  const start = useCallback(async (): Promise<boolean> => {
+    if (!agentId) return false;
     setStarting(true);
     try {
       await api.acpStart(notebookId, agentId);
       setEntries([]);
+      setFailure(null);
       composerRef.current?.focus();
+      return true;
     } catch (err) {
-      pushToast("error", err instanceof Error ? err.message : String(err));
       setState(null);
+      setFailure({
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return false;
     } finally {
       setStarting(false);
     }
-  }, [agentId, notebookId, pushToast]);
+  }, [agentId, notebookId]);
+
+  const sendPrompt = useCallback(
+    async (text: string) => {
+      setFailure(null);
+      setEntries((prev) => [...prev, { kind: "user", text }]);
+      try {
+        await api.acpPrompt(notebookId, text);
+      } catch (err) {
+        setFailure({
+          message: err instanceof Error ? err.message : String(err),
+          prompt: text,
+        });
+      }
+    },
+    [notebookId],
+  );
 
   async function submit() {
     const text = draft.trim();
     if (!text || busy) return;
-    if (!running) {
-      await start();
+    if (!running && !(await start())) {
+      // Keep the text in the composer: the session never opened, so the
+      // message was never sent and retyping it would be busywork.
+      setFailure((f) => (f ? { ...f, prompt: text } : f));
+      return;
     }
     setDraft("");
-    setEntries((prev) => [...prev, { kind: "user", text }]);
-    try {
-      await api.acpPrompt(notebookId, text);
-    } catch (err) {
-      pushToast("error", err instanceof Error ? err.message : String(err));
+    await sendPrompt(text);
+  }
+
+  /// Re-run whatever failed: start the session, then replay the prompt that
+  /// never made it.
+  async function retry() {
+    const pending = failure?.prompt;
+    setFailure(null);
+    if (!(await start())) return;
+    if (pending) {
+      setDraft("");
+      await sendPrompt(pending);
     }
   }
 
@@ -167,7 +209,9 @@ export function AgentPane({ notebookId }: { notebookId: string }) {
     try {
       await api.acpPermission(notebookId, requestId, optionId);
     } catch (err) {
-      pushToast("error", err instanceof Error ? err.message : String(err));
+      setFailure({
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -207,6 +251,17 @@ export function AgentPane({ notebookId }: { notebookId: string }) {
             <PermissionPrompt
               request={permission}
               onAnswer={(id) => void answerPermission(id)}
+            />
+          )}
+          {failure && (
+            <FailureNotice
+              message={failure.message}
+              loginCommand={
+                agents?.find((a) => a.id === agentId)?.loginCommand ?? null
+              }
+              retrying={starting}
+              onRetry={() => void retry()}
+              onDismiss={() => setFailure(null)}
             />
           )}
           {busy && entries.length > 0 && (
@@ -344,6 +399,55 @@ function findLastToolIndex(entries: Entry[]): number {
     if (entries[i].kind === "tool") return i;
   }
   return -1;
+}
+
+/** A session failure that stays put. Most of these are "the agent isn't
+ *  signed in", which is fixable in a terminal — so the notice carries the
+ *  sign-in command and a retry, rather than making the user find both. */
+function FailureNotice({
+  message,
+  loginCommand,
+  retrying,
+  onRetry,
+  onDismiss,
+}: {
+  message: string;
+  loginCommand: string | null;
+  retrying: boolean;
+  onRetry: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5">
+      <p className="text-caption text-destructive [overflow-wrap:anywhere]">
+        {message}
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {loginCommand && (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => void api.openInTerminal(loginCommand)}
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            Open Terminal: {loginCommand}
+          </Button>
+        )}
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={retrying}
+          onClick={onRetry}
+        >
+          <RotateCw className={cn("h-3.5 w-3.5", retrying && "animate-spin")} />
+          {retrying ? "Retrying…" : "Retry"}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onDismiss}>
+          Dismiss
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 function EntryRow({ entry }: { entry: Entry }) {

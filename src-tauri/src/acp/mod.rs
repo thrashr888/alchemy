@@ -70,6 +70,21 @@ impl AcpAgentKind {
         AGENTS.into_iter().find(|k| k.id() == id)
     }
 
+    /// The terminal command that signs this agent in, for the "Open Terminal"
+    /// fix on an auth failure. Every entry must already be on
+    /// `commands::terminal_command_allowed`'s allowlist — that list, not this
+    /// one, is the security boundary.
+    fn login_command(self) -> &'static str {
+        match self {
+            // `claude` alone: /login is a slash command inside the session.
+            AcpAgentKind::ClaudeCode => "claude",
+            AcpAgentKind::Opencode => "opencode auth login",
+            AcpAgentKind::Codex => "codex login",
+            // Gemini authenticates on first interactive run.
+            AcpAgentKind::Gemini => "gemini",
+        }
+    }
+
     /// Launch config without environment, or None when the required binaries
     /// aren't installed. Kept free of `load_shell_env` on purpose: that spawns
     /// a login shell, and discovery asks this for every agent — paying for one
@@ -192,6 +207,9 @@ pub struct AcpAgentInfo {
     pub id: String,
     pub label: String,
     pub available: bool,
+    /// Terminal command that signs this agent in — offered as a fix when a
+    /// session dies on open because the agent isn't authenticated.
+    pub login_command: String,
 }
 
 /// Detected ACP agents for the picker. The binary probe falls back to a login
@@ -206,6 +224,7 @@ pub async fn acp_agents() -> Vec<AcpAgentInfo> {
                 id: kind.id().to_string(),
                 label: kind.label().to_string(),
                 available: kind.command().is_some(),
+                login_command: kind.login_command().to_string(),
             })
             .collect()
     })
@@ -371,12 +390,12 @@ fn send_cmd(app: &AppHandle, notebook_id: &str, cmd: HostCmd) -> Result<(), Stri
 
 // ---- Session task -----------------------------------------------------------
 
-/// Turn the agent's advertised auth methods into a sign-in hint, or "" when it
-/// didn't advertise any. Read through JSON rather than matching the schema
-/// enum: `AuthMethod` is `#[non_exhaustive]` and gains variants between
-/// releases, and every variant carries a human-readable name either way.
-fn auth_hint<T: Serialize>(methods: &[T]) -> String {
-    let names: Vec<String> = methods
+/// Names of the agent's advertised sign-in methods. Read through JSON rather
+/// than matching the schema enum: `AuthMethod` is `#[non_exhaustive]` and
+/// gains variants between releases, while every variant carries a
+/// human-readable name either way.
+fn auth_method_names<T: Serialize>(methods: &[T]) -> Vec<String> {
+    methods
         .iter()
         .filter_map(|m| serde_json::to_value(m).ok())
         .filter_map(|v| {
@@ -385,12 +404,21 @@ fn auth_hint<T: Serialize>(methods: &[T]) -> String {
                 .or_else(|| v.get("id"))
                 .and_then(|n| n.as_str().map(str::to_string))
         })
-        .collect();
+        .collect()
+}
+
+/// The message for a session that died on open. The actionable sentence goes
+/// first — the raw wire error is multi-line JSON that says nothing a user can
+/// use, so it trails as flattened detail rather than leading.
+fn session_open_error<T: Serialize>(label: &str, methods: &[T], wire: &str) -> String {
+    let detail = wire.split_whitespace().collect::<Vec<_>>().join(" ");
+    let names = auth_method_names(methods);
     if names.is_empty() {
-        String::new()
+        format!("{label} couldn't open a session. {detail}")
     } else {
         format!(
-            " — this agent may need you to sign in first ({}). Run its login from a terminal, then try again.",
+            "{label} couldn't open a session — it may need you to sign in first ({}). \
+             Sign in from a terminal, then retry. ({detail})",
             names.join(", ")
         )
     }
@@ -419,6 +447,9 @@ async fn run_session(
     permissions: Arc<Mutex<HashMap<String, PendingPermission>>>,
 ) -> Result<(), agent_client_protocol::Error> {
     let agent = AcpAgent::new(config);
+    // Errors name the agent the way the picker does ("Claude Code"), not by
+    // its id — the id is ours, the label is what the user chose.
+    let agent_label = AcpAgentKind::from_id(&agent_id).map_or("The agent", |k| k.label());
 
     let update_app = app.clone();
     let update_notebook = notebook_id.clone();
@@ -490,7 +521,13 @@ async fn run_session(
                 Ok(init) => init,
                 Err(err) => {
                     if let Some(tx) = ready_tx.take() {
-                        let _ = tx.send(Err(format!("agent failed to initialize: {err}")));
+                        let _ = tx.send(Err(format!(
+                            "{agent_label} didn't start. {}",
+                            err.to_string()
+                                .split_whitespace()
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        )));
                     }
                     return Err(err);
                 }
@@ -510,12 +547,14 @@ async fn run_session(
                         // A session that dies on open is usually the agent not
                         // being signed in, and the wire error for that is
                         // unhelpfully generic ("Query closed before response
-                        // received"). The agent told us at initialize how it
-                        // wants to be authenticated — pass that along so the
-                        // user knows to go run its login.
-                        let hint = auth_hint(&init.auth_methods);
-                        let _ =
-                            tx.send(Err(format!("agent failed to open a session: {err}{hint}")));
+                        // received"). Lead with what the user can act on — the
+                        // agent told us at initialize how it wants to be
+                        // authenticated — and keep the wire text behind it.
+                        let _ = tx.send(Err(session_open_error(
+                            agent_label,
+                            &init.auth_methods,
+                            &err.to_string(),
+                        )));
                     }
                     return Err(err);
                 }
@@ -596,31 +635,76 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// The "Open Terminal" fix can only run commands the allowlist accepts,
+    /// so a login command that isn't on it is a dead button.
     #[test]
-    fn auth_hint_is_empty_without_methods() {
-        let none: [serde_json::Value; 0] = [];
-        assert_eq!(auth_hint(&none), "");
+    fn every_login_command_is_allowlisted() {
+        for kind in AGENTS {
+            let cmd = kind.login_command();
+            assert!(
+                crate::commands::terminal_command_allowed(cmd),
+                "{} login command {cmd:?} is not on the terminal allowlist",
+                kind.label()
+            );
+        }
     }
 
     #[test]
-    fn auth_hint_names_each_method() {
+    fn session_error_without_auth_methods_is_plain() {
+        let none: [serde_json::Value; 0] = [];
+        let msg = session_open_error("opencode", &none, "connection reset");
+        assert_eq!(msg, "opencode couldn't open a session. connection reset");
+    }
+
+    #[test]
+    fn session_error_leads_with_the_sign_in_hint() {
         let methods = [
             json!({"id": "claude-login", "name": "Log in with Claude Code"}),
-            json!({"id": "gemini-api-key", "name": "Use a Gemini API key"}),
+            json!({"id": "api-key", "name": "Use an API key"}),
         ];
-        let hint = auth_hint(&methods);
-        assert!(hint.contains("Log in with Claude Code"), "{hint}");
-        assert!(hint.contains("Use a Gemini API key"), "{hint}");
+        let msg = session_open_error("Claude Code", &methods, "Query closed");
+        // The actionable half comes before the wire text, which is what the
+        // user actually reads first in the failure notice.
+        assert!(
+            msg.starts_with("Claude Code couldn't open a session"),
+            "{msg}"
+        );
+        assert!(msg.contains("Log in with Claude Code"), "{msg}");
+        assert!(msg.contains("Use an API key"), "{msg}");
+        assert!(
+            msg.find("sign in first").unwrap() < msg.find("Query closed").unwrap(),
+            "wire detail should trail the hint: {msg}"
+        );
     }
 
-    /// The schema enum is `#[non_exhaustive]`, so a future variant may not
-    /// carry `name` — fall back rather than dropping the method silently.
+    /// The wire error is pretty-printed JSON; flattened it stays one readable
+    /// line instead of sprawling down the notice.
     #[test]
-    fn auth_hint_falls_back_to_description_then_id() {
-        assert!(auth_hint(&[json!({"description": "Sign in via browser"})])
-            .contains("Sign in via browser"));
-        assert!(auth_hint(&[json!({"id": "opaque-method"})]).contains("opaque-method"));
+    fn session_error_flattens_multiline_wire_text() {
+        let none: [serde_json::Value; 0] = [];
+        let msg = session_open_error(
+            "Codex",
+            &none,
+            "Internal error: {\n  \"details\": \"Query closed\"\n}",
+        );
+        assert!(!msg.contains('\n'), "{msg}");
+        assert!(
+            msg.contains("Internal error: { \"details\": \"Query closed\" }"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn auth_method_names_fall_back_to_description_then_id() {
+        assert_eq!(
+            auth_method_names(&[json!({"description": "Sign in via browser"})]),
+            ["Sign in via browser"]
+        );
+        assert_eq!(
+            auth_method_names(&[json!({"id": "opaque-method"})]),
+            ["opaque-method"]
+        );
         // Nothing human-readable at all: skipped, not rendered as "null".
-        assert_eq!(auth_hint(&[json!({"type": "oauth"})]), "");
+        assert!(auth_method_names(&[json!({"type": "oauth"})]).is_empty());
     }
 }

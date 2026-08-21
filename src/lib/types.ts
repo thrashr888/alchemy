@@ -353,12 +353,7 @@ export interface LedgerEntry {
 
 /** The Registry's kinds (RFC-registry). */
 export type CardKind =
-  | "asset"
-  | "person"
-  | "policy"
-  | "provider"
-  | "project"
-  | "dependency";
+  "asset" | "person" | "policy" | "provider" | "project" | "dependency";
 
 /** One key fact on a card — the reader's doc-properties grid shape. */
 export interface CardFact {
@@ -544,6 +539,8 @@ export interface AcpAgentInfo {
   id: string;
   label: string;
   available: boolean;
+  /** Terminal command that signs this agent in, offered as an auth-failure fix. */
+  loginCommand: string;
 }
 
 /** Lifecycle of a hosted agent session, from the `acp://state` event. */
