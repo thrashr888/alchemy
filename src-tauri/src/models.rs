@@ -437,3 +437,62 @@ pub struct NoteUsage {
     pub cited: i64,
     pub last_used_at: i64,
 }
+
+/// One local calendar day of activity — the unit the Activity view's heatmap
+/// and range toggles are built from (docs/RFC-activity-view.md). Only days
+/// with any activity are emitted; the frontend fills the empty cells.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityDay {
+    /// Local date, "YYYY-MM-DD".
+    pub date: String,
+    pub messages: i64,
+    pub sources: i64,
+    pub notes: i64,
+    pub retrievals: i64,
+}
+
+/// A labeled count for the "most used" lists (models, notebooks, source
+/// types).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityCount {
+    pub label: String,
+    pub count: i64,
+}
+
+/// Everything Settings → Activity renders, aggregated at read time from
+/// timestamps the app has always recorded — nothing new is tracked
+/// (docs/RFC-activity-view.md).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityStats {
+    /// Ascending by date; sparse (active days only).
+    pub days: Vec<ActivityDay>,
+    /// Chat turns, user + assistant; tool confirmations excluded.
+    pub total_messages: i64,
+    pub total_user_messages: i64,
+    pub total_sources: i64,
+    pub total_notes: i64,
+    pub total_notebooks: i64,
+    /// Retrievals in retained trace history (~months, not lifetime —
+    /// trace.rs rotates at 5 MB).
+    pub total_retrievals: i64,
+    /// Characters across all source content — powers the book comparison.
+    pub corpus_chars: i64,
+    /// Measured words across assistant answers.
+    pub assistant_words: i64,
+    pub active_days: i64,
+    /// Consecutive active days ending today or yesterday.
+    pub current_streak: i64,
+    pub longest_streak: i64,
+    /// Local hour (0–23) with the most messages; -1 with no messages.
+    pub peak_hour: i64,
+    /// Top assistant model caption, cost suffix stripped; "" with none.
+    pub favorite_model: String,
+    pub models: Vec<ActivityCount>,
+    pub notebooks: Vec<ActivityCount>,
+    pub source_types: Vec<ActivityCount>,
+    /// Millis of the earliest recorded activity; 0 for a fresh install.
+    pub first_activity_at: i64,
+}

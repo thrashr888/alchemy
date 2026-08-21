@@ -160,4 +160,35 @@ impl AlchemyMcp {
             ))),
         }
     }
+
+    #[tool(
+        description = "App-wide usage statistics (docs/RFC-activity-view.md): totals for \
+                       messages, sources, notes, and notebooks; a per-day activity series; \
+                       active days and streaks; most-used models, most-active notebooks, and \
+                       source-type breakdown. Read-only; the same numbers Settings → Activity \
+                       shows. Retrieval counts cover retained trace history only (~months)."
+    )]
+    async fn activity_stats(&self) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let messages = state.db.message_activity().await.map_err(internal)?;
+        let notes = state.db.note_activity().await.map_err(internal)?;
+        let sources = state.db.source_activity().await.map_err(internal)?;
+        let titles: std::collections::HashMap<String, String> = state
+            .db
+            .list_notebooks()
+            .await
+            .map_err(internal)?
+            .into_iter()
+            .map(|n| (n.id, n.title))
+            .collect();
+        let retrievals = crate::activity::trace_times(&state.trace_dir);
+        json_result(&crate::activity::aggregate(
+            &messages,
+            &notes,
+            &sources,
+            &titles,
+            &retrievals,
+            chrono::Local::now().date_naive(),
+        ))
+    }
 }

@@ -9329,6 +9329,30 @@ pub async fn corpus_stats(state: State<'_, AppState>) -> Result<CorpusStats, Str
     })
 }
 
+/// Everything Settings → Activity renders — see activity.rs and
+/// docs/RFC-activity-view.md. Read-only; aggregated fresh per call.
+#[tauri::command]
+pub async fn activity_stats(
+    state: State<'_, AppState>,
+) -> Result<crate::models::ActivityStats, String> {
+    let messages = e(state.db.message_activity().await)?;
+    let notes = e(state.db.note_activity().await)?;
+    let sources = e(state.db.source_activity().await)?;
+    let titles: std::collections::HashMap<String, String> = e(state.db.list_notebooks().await)?
+        .into_iter()
+        .map(|n| (n.id, n.title))
+        .collect();
+    let retrievals = crate::activity::trace_times(&state.trace_dir);
+    Ok(crate::activity::aggregate(
+        &messages,
+        &notes,
+        &sources,
+        &titles,
+        &retrievals,
+        chrono::Local::now().date_naive(),
+    ))
+}
+
 // ---- OKF export ------------------------------------------------------------
 
 /// Kebab-case a title into a filesystem/URL-safe slug.

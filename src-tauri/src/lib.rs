@@ -1,3 +1,4 @@
+mod activity;
 mod agent;
 mod ai;
 mod capture;
@@ -309,6 +310,7 @@ pub fn run() {
             commands::list_recent_notes,
             commands::list_recent_reports,
             commands::corpus_stats,
+            commands::activity_stats,
             commands::home_activity,
             commands::source_thumbnail,
             commands::source_snippets,

@@ -17,7 +17,9 @@ import {
 } from "./settings/SettingsTabs";
 import { ModelsTab } from "./settings/ModelsTab";
 import type { AiConfig, ConnectorStatus, McpStatus } from "@/lib/types";
+import { ActivityTab } from "./settings/ActivityTab";
 import {
+  ChartNoAxesColumn,
   CheckCircle2,
   Cpu,
   MessageSquare,
@@ -47,6 +49,7 @@ const TABS = [
   { id: "agents", label: "Agents", icon: Bot },
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
+  { id: "activity", label: "Activity", icon: ChartNoAxesColumn },
   { id: "about", label: "About", icon: Info },
 ];
 
@@ -236,6 +239,8 @@ export function SettingsDialog({
           {tab === "appearance" && <AppearanceTab />}
 
           {tab === "shortcuts" && <ShortcutsTab />}
+
+          {tab === "activity" && <ActivityTab />}
 
           {tab === "about" && <AboutTab />}
           </div>
