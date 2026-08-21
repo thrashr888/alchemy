@@ -128,3 +128,36 @@ detected agents, pick default, per-agent auth status.
   content stays reachable only through our MCP tools.
 - The pane stops its session on unmount, so no agent subprocess outlives the
   UI driving it; the SDK's `ChildGuard` reaps the process group.
+- **Auth failure looks like a transport failure.** An agent that isn't signed
+  in dies at `session/new` with a generic wire error ("Query closed before
+  response received"). The agent does advertise its auth methods at
+  `initialize`, so the start error appends them ("Log in with Claude Code").
+  Anything richer — an in-app login flow — is phase 3 work.
+
+## Smoke-test status (2026-08-20)
+
+Exercised live against the dev app, opencode 1.18.15:
+
+- Tool calls through the MCP hand-off (`alchemy_list_notebooks`), streamed
+  chunks, thought blocks, tool chips with status transitions.
+- File writes land in the per-notebook scratch cwd under app data, never the
+  LanceDB dir.
+- Cancel mid-turn leaves the session alive and accepting the next prompt.
+- Session replacement (start twice) and two notebooks holding independent
+  sessions; stopping one leaves the other running.
+- Error paths: unknown agent, prompt with no session, stale permission
+  answer — all return specific messages, and a failed start does not disturb
+  a running session.
+- No orphaned agent subprocesses after stop.
+
+**Not yet covered, and worth knowing:**
+
+- **The permission path has never fired.** opencode auto-allows tool use in
+  ACP mode, so `acp://permission` and `PermissionPrompt` are written but
+  unexercised — asking it to write a file produced no prompt. An agent with
+  stricter defaults (Claude Code) is needed to validate that flow.
+- **Claude Code end-to-end is unverified.** The adapter reaches `session/new`
+  but this machine's `claude` OAuth is expired ("OAuth session expired and
+  could not be refreshed"), which is environmental rather than an Alchemy
+  bug. Re-test after `claude /login`; that run also validates permissions.
+- Gemini and Codex are detected but never launched.
