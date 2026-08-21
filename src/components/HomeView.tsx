@@ -250,6 +250,21 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     clampSplit(Number(localStorage.getItem("homeBriefSplit") ?? 40)),
   );
   const rightColRef = useRef<HTMLDivElement>(null);
+  // The reading column's resize handle, rendered once per stacked card —
+  // each card's left edge is the column's, so either drags the whole column.
+  const rightResizeHandle = (
+    <ResizeHandle
+      edge="left"
+      width={rightWidth}
+      defaultWidth={520}
+      label="Resize the reading column"
+      onResize={(w) => {
+        const width = clampRightW(w);
+        setRightWidth(width);
+        localStorage.setItem("homeRightWidth", String(Math.round(width)));
+      }}
+    />
+  );
   const onSplitDrag = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
     const col = rightColRef.current;
@@ -920,17 +935,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               className="relative mx-2 mb-2 mt-1 hidden shrink-0 flex-col lg:flex"
               style={{ width: rightWidth }}
             >
-              <ResizeHandle
-                edge="left"
-                width={rightWidth}
-                defaultWidth={520}
-                label="Resize the reading column"
-                onResize={(w) => {
-                  const width = clampRightW(w);
-                  setRightWidth(width);
-                  localStorage.setItem("homeRightWidth", String(Math.round(width)));
-                }}
-              />
+              {/* One handle per stacked card (a column-spanning handle floats
+                  over the gap between the cards' rounded corners); both drag
+                  the whole column's width. The card's left edge IS the
+                  column's, so the parent-rect math is unchanged. */}
               <>
                 <BriefSidebar
                   open={briefOpen}
@@ -939,6 +947,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   schedules={allReports}
                   unread={briefUnread}
                   onRan={refreshActivity}
+                  resizeHandle={rightResizeHandle}
                   className={cn(
                     briefOpen && !reportsOpen && "min-h-0 flex-1",
                     briefOpen && reportsOpen && "shrink-0",
@@ -975,10 +984,11 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 )}
                 <aside
                   className={cn(
-                    "side-card flex min-h-0 flex-col",
+                    "side-card relative flex min-h-0 flex-col",
                     reportsOpen && "flex-1",
                   )}
                 >
+                  {rightResizeHandle}
                   {reportsOpen ? (
                     feedReports.length > 0 ? (
                       <ReportsFeed

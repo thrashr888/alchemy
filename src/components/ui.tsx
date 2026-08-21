@@ -464,7 +464,11 @@ export function Modal({
   }, [open]);
 
   if (!open) return null;
-  return (
+  // Portaled to <body> like RowMenu: rendered inline, `fixed` gets re-scoped
+  // by any transformed/filtered ancestor and the backdrop loses the z-battle
+  // against sibling stacking contexts (the Home hero painted over confirm
+  // dialogs opened from the content column).
+  return createPortal(
     <div
       className={cn(
         "fixed inset-0 z-50 flex items-start justify-center bg-black/40 backdrop-blur-[2px] animate-in fade-in duration-150",
@@ -538,7 +542,8 @@ export function Modal({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

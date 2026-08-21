@@ -42,6 +42,7 @@ export function BriefSidebar({
   onRan,
   className,
   style,
+  resizeHandle,
 }: {
   open: boolean;
   onToggle: () => void;
@@ -52,6 +53,8 @@ export function BriefSidebar({
   onRan: () => void;
   className?: string;
   style?: React.CSSProperties;
+  /** The reading column's width handle, rendered on this card's edge. */
+  resizeHandle?: React.ReactNode;
 }) {
   const markNotesRead = useStore((s) => s.markNotesRead);
   const pushToast = useStore((s) => s.pushToast);
@@ -80,9 +83,10 @@ export function BriefSidebar({
 
   return (
     <section
-      className={cn("side-card flex min-h-0 flex-col", className)}
+      className={cn("side-card relative flex min-h-0 flex-col", className)}
       style={style}
     >
+      {resizeHandle}
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-6">
         <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
           Brief
