@@ -534,7 +534,15 @@ async fn run_session(
             };
 
             let mut session_req = NewSessionRequest::new(cwd);
-            if mcp.running && init.agent_capabilities.mcp_capabilities.http {
+            // Notebook access is the entire point of hosting the agent here,
+            // so a session that opens without it is worth saying out loud
+            // rather than leaving the user to wonder why the agent can't find
+            // any of their sources. Two ways to end up here: the MCP server is
+            // switched off in Settings, or it failed to bind its port — which
+            // a second dev build on the same machine will cause, since the
+            // dev +1 offset only separates dev from the installed app.
+            let mcp_attached = mcp.running && init.agent_capabilities.mcp_capabilities.http;
+            if mcp_attached {
                 session_req = session_req.mcp_servers(vec![McpServer::Http(McpServerHttp::new(
                     "alchemy",
                     mcp.url.clone(),
@@ -569,7 +577,10 @@ async fn run_session(
                 &notebook_id,
                 &agent_id,
                 "ready",
-                serde_json::to_value(&init).ok(),
+                Some(serde_json::json!({
+                    "mcpAttached": mcp_attached,
+                    "agent": serde_json::to_value(&init).ok(),
+                })),
             );
 
             while let Some(cmd) = rx.recv().await {

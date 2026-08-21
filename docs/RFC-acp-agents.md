@@ -128,6 +128,16 @@ detected agents, pick default, per-agent auth status.
   content stays reachable only through our MCP tools.
 - The pane stops its session on unmount, so no agent subprocess outlives the
   UI driving it; the SDK's `ChildGuard` reaps the process group.
+- **A session can open with no notebook access, and used to do it silently.**
+  If the MCP server isn't running, `session/new` simply carries no
+  `mcpServers` — the agent works but can't see a single source, which is the
+  entire reason to host it here. The `ready` event now reports `mcpAttached`
+  and the pane says so. Two ways to land there: MCP switched off in Settings,
+  or the port failed to bind — **a second dev build on the same machine does
+  exactly this**, because the dev `+1` offset only separates dev from the
+  installed app, not dev from another worktree's dev. Both dev builds compute
+  41415 and the second one loses. Worth fixing in the MCP RFC (bind-and-probe
+  upward, or a per-worktree offset); out of scope here.
 - **Auth failure looks like a transport failure.** An agent that isn't signed
   in dies at `session/new` with a generic wire error ("Query closed before
   response received"). The agent does advertise its auth methods at

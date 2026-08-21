@@ -42,6 +42,11 @@ export function AgentPane({ notebookId }: { notebookId: string }) {
   const [permission, setPermission] = useState<AcpPermissionEvent | null>(null);
   const [draft, setDraft] = useState("");
   const [starting, setStarting] = useState(false);
+  // A session can open fine and still have no notebook tools, when Alchemy's
+  // MCP server isn't running. That's the whole reason to host the agent here,
+  // so it gets said out loud rather than leaving the user to wonder why the
+  // agent can't find their sources.
+  const [noNotebookAccess, setNoNotebookAccess] = useState(false);
   // Session failures stay on screen until the user acts on them. They used to
   // be toasts, which auto-dismissed before the message — usually "sign in
   // first" — could be read, let alone acted on. `prompt` carries the message
@@ -99,6 +104,10 @@ export function AgentPane({ notebookId }: { notebookId: string }) {
     const unlistenState = listen<AcpStateEvent>("acp://state", (e) => {
       if (e.payload.notebookId !== notebookId) return;
       setState(e.payload.state);
+      if (e.payload.state === "ready") {
+        const detail = e.payload.detail as { mcpAttached?: boolean } | null;
+        setNoNotebookAccess(detail?.mcpAttached === false);
+      }
       if (e.payload.state === "error") {
         const detail = e.payload.detail;
         setFailure({
@@ -252,6 +261,12 @@ export function AgentPane({ notebookId }: { notebookId: string }) {
               request={permission}
               onAnswer={(id) => void answerPermission(id)}
             />
+          )}
+          {running && noNotebookAccess && (
+            <p className="text-micro text-subtle-foreground">
+              Running without notebook access — Alchemy's MCP server isn't
+              available, so the agent can't search this notebook.
+            </p>
           )}
           {failure && (
             <FailureNotice
