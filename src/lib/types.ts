@@ -539,6 +539,43 @@ export interface McpStatus {
   url: string;
 }
 
+/** An ACP-capable agent Alchemy can host (docs/RFC-acp-agents.md). */
+export interface AcpAgentInfo {
+  id: string;
+  label: string;
+  available: boolean;
+}
+
+/** Lifecycle of a hosted agent session, from the `acp://state` event. */
+export interface AcpStateEvent {
+  notebookId: string;
+  agentId: string;
+  state: "starting" | "ready" | "turn" | "idle" | "error" | "stopped";
+  detail?: unknown;
+}
+
+/** One `session/update` notification, passed through as the ACP schema
+ *  shape — `sessionUpdate` discriminates the variant. */
+export interface AcpUpdateEvent {
+  notebookId: string;
+  update: {
+    sessionUpdate: string;
+    content?: { type: string; text?: string };
+    title?: string;
+    status?: string;
+    toolCallId?: string;
+    [key: string]: unknown;
+  };
+}
+
+/** A permission request awaiting the user's answer. */
+export interface AcpPermissionEvent {
+  notebookId: string;
+  requestId: string;
+  toolTitle: string;
+  options: { id: string; name: string; kind: string }[];
+}
+
 /** One agent client (Claude Code, Codex, …) and its connection state. */
 export interface ConnectorStatus {
   id: string;

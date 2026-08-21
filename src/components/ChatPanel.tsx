@@ -7,6 +7,7 @@ import { Button, CardAction, Textarea, useConfirm } from "./ui";
 import { Markdown } from "./Markdown";
 import { cn, chatReadingClass, fmtDateTime, isWebUrl, relativeTime } from "@/lib/utils";
 import { DitherBackground } from "./DitherBackground";
+import { AgentPane } from "./AgentPane";
 import { AlchemySymbol } from "./AlchemyHero";
 import { DEFAULT_VERBS, THEMES, resolveThemeId } from "@/lib/themes";
 import { generatedEpigraph } from "@/lib/epigraph";
@@ -26,6 +27,7 @@ import type {
   Source,
 } from "@/lib/types";
 import {
+  Bot,
   MessageSquare,
   Wrench,
   ArrowDown,
@@ -97,6 +99,10 @@ export function ChatPanel() {
   const waiting = useStore((s) => s.waiting);
   const agentMode = useStore((s) => s.agentMode);
   const toggleAgentMode = useStore((s) => s.toggleAgentMode);
+  // Hosted-agent mode (docs/RFC-acp-agents.md) swaps the RAG transcript for
+  // the user's own coding agent. Per-notebook and deliberately not persisted:
+  // a session is a live subprocess, so reopening a notebook starts in chat.
+  const [hostedAgent, setHostedAgent] = useState(false);
   const send = useStore((s) => s.sendMessage);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
   const reading = useStore((s) => s.reading);
@@ -634,12 +640,35 @@ export function ChatPanel() {
         </>
       )}
       <div className="relative z-10 flex items-center px-5 h-12 border-b border-border">
-        <MessageSquare className="h-4 w-4 text-muted-foreground" />
+        {hostedAgent ? (
+          <Bot className="h-4 w-4 text-muted-foreground" />
+        ) : (
+          <MessageSquare className="h-4 w-4 text-muted-foreground" />
+        )}
         <span className="ml-2 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-          Chat
+          {hostedAgent ? "Agent" : "Chat"}
         </span>
         <div className="ml-auto flex items-center gap-1">
-          {messages.length > 0 && (
+          {currentId && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setHostedAgent((v) => !v)}
+              title={
+                hostedAgent
+                  ? "Back to notebook chat"
+                  : "Run your own coding agent against this notebook"
+              }
+            >
+              {hostedAgent ? (
+                <MessageSquare className="h-3.5 w-3.5" />
+              ) : (
+                <Bot className="h-3.5 w-3.5" />
+              )}
+              {hostedAgent ? "Chat" : "Agent"}
+            </Button>
+          )}
+          {!hostedAgent && messages.length > 0 && (
             <Button
               variant="ghost"
               size="sm"
@@ -664,6 +693,10 @@ export function ChatPanel() {
         </div>
       </div>
 
+      {hostedAgent && currentId ? (
+        <AgentPane notebookId={currentId} />
+      ) : (
+      <>
       <div ref={scrollRef} onScroll={updateAtBottom} className="relative z-10 flex-1 overflow-y-auto">
         <div className={cn("mx-auto flex max-w-[720px] flex-col gap-6 px-5 py-6", chatReadingClass(reading))}>
           {canChat && (
@@ -960,6 +993,8 @@ export function ChatPanel() {
           </div>
         </div>
       </div>
+      </>
+      )}
 
       {confirmDialog}
     </div>

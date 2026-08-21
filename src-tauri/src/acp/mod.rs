@@ -70,12 +70,14 @@ impl AcpAgentKind {
         AGENTS.into_iter().find(|k| k.id() == id)
     }
 
-    /// Launch config, or None when the required binaries aren't installed.
-    /// The child inherits the login-shell env (GUI apps don't get dotfile
-    /// PATH/auth), with provider API keys stripped so the CLI's own login is
-    /// the credential — same scar as the headless providers.
-    fn launch(self) -> Option<AcpAgentConfig> {
-        let config = match self {
+    /// Launch config without environment, or None when the required binaries
+    /// aren't installed. Kept free of `load_shell_env` on purpose: that spawns
+    /// a login shell, and discovery asks this for every agent — paying for one
+    /// login shell per agent blew past the IPC timeout before the picker could
+    /// render. The env is attached in `launch`, once, only for the agent we
+    /// actually start.
+    fn command(self) -> Option<AcpAgentConfig> {
+        Some(match self {
             AcpAgentKind::Opencode => {
                 AcpAgentConfig::new(find_binary_cached("opencode")?).arg("acp")
             }
@@ -91,8 +93,15 @@ impl AcpAgentKind {
                 AcpAgentConfig::new(find_binary_cached("gemini")?).arg("--experimental-acp")
             }
             AcpAgentKind::Codex => AcpAgentConfig::new(find_binary_cached("codex")?).arg("acp"),
-        };
-        Some(config.envs(load_shell_env()))
+        })
+    }
+
+    /// Full launch config. The child inherits the login-shell env (GUI apps
+    /// don't get dotfile PATH/auth), with provider API keys stripped so the
+    /// CLI's own login is the credential — same scar as the headless
+    /// providers. Blocking: callers run it off the async runtime.
+    fn launch(self) -> Option<AcpAgentConfig> {
+        Some(self.command()?.envs(load_shell_env()))
     }
 }
 
@@ -185,18 +194,23 @@ pub struct AcpAgentInfo {
     pub available: bool,
 }
 
-/// Detected ACP agents for the picker. Availability is the cached binary
-/// probe — cheap enough for every Settings/composer open.
+/// Detected ACP agents for the picker. The binary probe falls back to a login
+/// shell `which` on a cache miss, so this runs on the blocking pool rather
+/// than stalling the IPC thread on first open.
 #[tauri::command]
-pub fn acp_agents() -> Vec<AcpAgentInfo> {
-    AGENTS
-        .into_iter()
-        .map(|kind| AcpAgentInfo {
-            id: kind.id().to_string(),
-            label: kind.label().to_string(),
-            available: kind.launch().is_some(),
-        })
-        .collect()
+pub async fn acp_agents() -> Vec<AcpAgentInfo> {
+    tauri::async_runtime::spawn_blocking(|| {
+        AGENTS
+            .into_iter()
+            .map(|kind| AcpAgentInfo {
+                id: kind.id().to_string(),
+                label: kind.label().to_string(),
+                available: kind.command().is_some(),
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// The active session's agent id for a notebook, if one is running — lets a
@@ -219,8 +233,11 @@ pub async fn acp_start(
 ) -> Result<(), String> {
     let kind =
         AcpAgentKind::from_id(&agent_id).ok_or_else(|| format!("unknown agent: {agent_id}"))?;
-    let config = kind
-        .launch()
+    // Building the config reads the login-shell environment — seconds of
+    // blocking work, so keep it off the async runtime.
+    let config = tauri::async_runtime::spawn_blocking(move || kind.launch())
+        .await
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("{} is not installed", kind.label()))?;
 
     let state = app.state::<AcpState>();
