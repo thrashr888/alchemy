@@ -107,7 +107,10 @@ export function RegistrySection() {
   const [cards, setCards] = useState<RegistryCard[]>([]);
   const [kind, setKind] = useState<string>("all");
   const [notebook, setNotebook] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  // Store-held so the Home hero's "New card" button opens the same modal.
+  const creating = useStore((s) => s.registryCreating);
+  const setCreating = (open: boolean) =>
+    useStore.setState({ registryCreating: open });
   const [loaded, setLoaded] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
 

@@ -145,6 +145,8 @@ export interface AppState {
   homeQuery: string;
   /** Card the Registry section has open; null shows the grid. */
   openCardId: string | null;
+  /** The Registry's New-card modal, openable from the Home hero too. */
+  registryCreating: boolean;
   pendingNewNote: boolean;
   artifactStreamText: string;
   audioProgress: { done: number; total: number } | null;

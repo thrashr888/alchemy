@@ -562,44 +562,58 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   )}
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  <Button
-                    variant="secondary"
-                    onClick={() =>
-                      useStore.setState({
-                        // Empty payload = capture first, then file. Home has
-                        // no current notebook, so this is the one add path
-                        // that has to pick one — and it suggests which.
-                        pendingExternalAdd: {
-                          files: [],
-                          url: null,
-                          text: null,
-                          title: null,
-                        },
-                      })
-                    }
-                    title="Save a link or note — Alchemy suggests the notebook"
-                  >
-                    <Plus className="h-4 w-4" />
-                    Add source…
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={() => useStore.setState({ importOkfOpen: true })}
-                    title="Import a shared .okf.zip or bundle folder"
-                  >
-                    <FolderInput className="h-4 w-4" />
-                    Import…
-                  </Button>
-                  <Button
-                    variant="primary"
-                    onClick={() => {
-                      setNewTitle("");
-                      setCreating(true);
-                    }}
-                  >
-                    <Plus className="h-4 w-4" />
-                    New notebook
-                  </Button>
+                  {homeSection === "registry" ? (
+                    // The registry's verbs are its own: source/import belong
+                    // to notebooks, and the primary action here mints a card.
+                    <Button
+                      variant="primary"
+                      onClick={() => useStore.setState({ registryCreating: true })}
+                    >
+                      <Plus className="h-4 w-4" />
+                      New card
+                    </Button>
+                  ) : (
+                    <>
+                      <Button
+                        variant="secondary"
+                        onClick={() =>
+                          useStore.setState({
+                            // Empty payload = capture first, then file. Home has
+                            // no current notebook, so this is the one add path
+                            // that has to pick one — and it suggests which.
+                            pendingExternalAdd: {
+                              files: [],
+                              url: null,
+                              text: null,
+                              title: null,
+                            },
+                          })
+                        }
+                        title="Save a link or note — Alchemy suggests the notebook"
+                      >
+                        <Plus className="h-4 w-4" />
+                        Add source…
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={() => useStore.setState({ importOkfOpen: true })}
+                        title="Import a shared .okf.zip or bundle folder"
+                      >
+                        <FolderInput className="h-4 w-4" />
+                        Import…
+                      </Button>
+                      <Button
+                        variant="primary"
+                        onClick={() => {
+                          setNewTitle("");
+                          setCreating(true);
+                        }}
+                      >
+                        <Plus className="h-4 w-4" />
+                        New notebook
+                      </Button>
+                    </>
+                  )}
                 </div>
               </div>
 

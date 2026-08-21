@@ -288,6 +288,7 @@ export const useStore = create<AppState>((set, get) => {
       (localStorage.getItem("homeView") as "grid" | "table") || "grid",
     homeQuery: "",
     openCardId: null,
+    registryCreating: false,
     pendingNewNote: false,
     artifactStreamText: "",
     audioProgress: null,
