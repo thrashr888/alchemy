@@ -99,8 +99,10 @@ struct CardIdReq {
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 struct RuleSuggestedReq {
     /// "keep" confirms every suggested card — they become the user's and
-    /// their documents are re-matched in the background. "dismiss" turns
-    /// them all down, remembered so the same guesses never come back.
+    /// their documents are re-matched in the background. "keep-recommended"
+    /// confirms only the cards the triage pass marked recommended (triage ==
+    /// "recommended"), leaving the rest queued. "dismiss" turns them all
+    /// down, remembered so the same guesses never come back.
     verdict: String,
 }
 
@@ -108,6 +110,14 @@ struct RuleSuggestedReq {
 struct SourceIdReq {
     /// Source id.
     source_id: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct SuggestCardsReq {
+    /// Limit the pass to one notebook's sources; omit to read every
+    /// notebook (the Registry is corpus-scoped).
+    #[serde(default)]
+    notebook_id: Option<String>,
 }
 
 fn to_facts(facts: Option<Vec<FactReq>>) -> Vec<CardFact> {
@@ -147,6 +157,7 @@ impl AlchemyMcp {
             kind,
             name,
             origin: String::new(),
+            triage: String::new(),
             identifiers: commands::normalize_tags(&identifiers.unwrap_or_default()),
             note: note.unwrap_or_default().trim().to_string(),
             facts: to_facts(facts),
@@ -315,24 +326,47 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Rule on every suggested card (origin \"auto\") at once: \"keep\" confirms them all into the user's registry, \"dismiss\" turns them all down (remembered, so the same guesses never return). Returns how many were ruled. Only do this when the user asked for a sweep — suggestions are normally theirs to judge one by one."
+        description = "Rule on suggested cards (origin \"auto\") in bulk: \"keep\" confirms them all into the user's registry, \"keep-recommended\" confirms only the ones the triage pass marked (triage \"recommended\"), \"dismiss\" turns them all down (remembered, so the same guesses never return). Returns how many were ruled. Only do this when the user asked for a sweep — suggestions are normally theirs to judge one by one."
     )]
     async fn rule_all_suggested(
         &self,
         Parameters(RuleSuggestedReq { verdict }): Parameters<RuleSuggestedReq>,
     ) -> Result<CallToolResult, McpError> {
-        let origin = match verdict.as_str() {
-            "keep" => "",
-            "dismiss" => "dismissed",
-            _ => return Err(invalid("verdict must be \"keep\" or \"dismiss\"")),
+        let (origin, only_recommended) = match verdict.as_str() {
+            "keep" => ("", false),
+            "keep-recommended" => ("", true),
+            "dismiss" => ("dismissed", false),
+            _ => {
+                return Err(invalid(
+                    "verdict must be \"keep\", \"keep-recommended\", or \"dismiss\"",
+                ))
+            }
         };
-        let ruled = commands::rule_all_suggested_cards(&self.state().db, origin)
+        let ruled = commands::rule_all_suggested_cards(&self.state().db, origin, only_recommended)
             .await
             .map_err(internal)?;
         if ruled > 0 {
             self.changed("registry", None);
         }
         json_result(&serde_json::json!({ "ruled": ruled }))
+    }
+
+    #[tool(
+        description = "Run the card suggester now: read the notebooks' distilled gists and propose registry cards for the recurring things they mention. Suggestions land as origin \"auto\" for the user (or you, via rule_all_suggested / set-origin flows) to rule on — nothing enters the cast without a deliberate keep. A triage pass marks the recommended ones in the background when the queue is long. Returns the created card names; an empty list with a non-empty reply means nothing the model said survived the grounding gate."
+    )]
+    async fn suggest_cards(
+        &self,
+        Parameters(SuggestCardsReq { notebook_id }): Parameters<SuggestCardsReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let ai = state.ai.read().await.clone();
+        let out = commands::suggest_now(&state.db, ai, notebook_id)
+            .await
+            .map_err(internal)?;
+        if !out.created.is_empty() {
+            self.changed("registry", None);
+        }
+        json_result(&out)
     }
 
     #[tool(

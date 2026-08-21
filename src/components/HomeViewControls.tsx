@@ -18,7 +18,15 @@ export function matchesHomeQuery(query: string, ...fields: string[]): boolean {
   return fields.some((f) => f?.toLowerCase().includes(q));
 }
 
-export function HomeViewControls({ placeholder }: { placeholder: string }) {
+export function HomeViewControls({
+  placeholder,
+  trailing,
+}: {
+  placeholder: string;
+  /** Optional section-specific control rendered after the view toggle —
+   *  the Registry's "Suggest" lives here. Keep it one small button. */
+  trailing?: React.ReactNode;
+}) {
   const view = useStore((s) => s.homeView);
   const query = useStore((s) => s.homeQuery);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -95,6 +103,7 @@ export function HomeViewControls({ placeholder }: { placeholder: string }) {
           </button>
         ))}
       </div>
+      {trailing}
     </div>
   );
 }

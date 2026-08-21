@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# Cut a release from this machine: gate -> build -> sign -> notarize -> publish.
+# Cut a release from this machine:
+#   bump+commit (needs the unlocked vault) -> gate -> build -> sign ->
+#   notarize -> tag -> publish (all keyless from the commit on).
 #
 # On Apple Silicon this is faster and far more reliable than the CI path -- the
 # signing identity and notary profile live in your Keychain, so the whole class
@@ -61,12 +63,27 @@ xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 \
 
 echo "==> Releasing $TAG  (identity: ${SIGNING_IDENTITY%% (*}..., profile: $NOTARY_PROFILE)"
 
-# --- Version bump ------------------------------------------------------------
+# --- Version bump + commit (signing happens NOW, not after the build) --------
+# The bump commit is the only step that needs the 1Password-backed signing
+# key, and the vault is open right now -- the human just approved this run.
+# Committing before the ~15-minute gate/build/notarize window is what stops
+# the vault's re-lock from killing the release at the finish line (it did,
+# twice, on 2026-08-20). The tag is lightweight and the push is keyless, so
+# nothing after this line touches the vault.
 node -e "for (const f of ['package.json','src-tauri/tauri.conf.json']) {
   const j = require('./'+f); j.version = '$VERSION';
   require('fs').writeFileSync(f, JSON.stringify(j, null, 2) + '\n');
 }"
 perl -i -pe 'if (!$d && /^version = /) { s/^version = ".*"/version = "'"$VERSION"'"/; $d=1 }' src-tauri/Cargo.toml
+# Sync Cargo.lock's own version entry without running build scripts (the
+# natives aren't fetched yet); metadata rewrites the lock from the manifest.
+(cd src-tauri && cargo metadata --format-version 1 --no-deps >/dev/null)
+git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+git commit -m "$TAG"
+# From here to the push, a failure strands this commit locally (never
+# pushed). The rerun flow in RELEASE.md resets to origin/main first, so a
+# stranded bump is self-healing; say so instead of leaving a mystery.
+trap 'echo "release: failed after the bump commit -- local main carries an unpushed $TAG bump; rerun per RELEASE.md (reset to origin/main first)." >&2' ERR
 
 # --- Quality gate (fast dev feature set) ------------------------------------
 echo "==> Quality gate"
@@ -108,12 +125,11 @@ xcrun stapler staple "$DMG"
 echo "==> Notarize done:  $(date -u +%FT%TZ)"
 spctl -a -t open --context context:primary-signature -vv "$DMG"
 
-# --- Commit, tag, publish ----------------------------------------------------
-echo "==> Committing, tagging, publishing"
-git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
-# The version may already be bumped (a dev-cycle bump landed early); an empty
-# commit is fine, a dead script here -- after notarization -- is not.
-git commit --allow-empty -m "$TAG"
+# --- Tag, publish ------------------------------------------------------------
+# The bump commit already exists (made up top, while the vault was open);
+# guard that the build didn't dirty the tracked tree, then tag it and push.
+echo "==> Tagging, publishing"
+[ -z "$(git status --porcelain)" ] || { echo "Build dirtied the tracked tree -- investigate before tagging:" >&2; git status --porcelain >&2; exit 1; }
 git tag "$TAG"
 git push origin main "$TAG"
 
