@@ -1,7 +1,10 @@
 # RFC: Hosted agents — interactive sessions via ACP
 
-Status: proposed. Spike verified 2026-08-20 (crate v2.0.0, round-trip against
-opencode 1.18.15 with Alchemy's live MCP server attached).
+Status: phases 1-2 implemented (2026-08-20). Backend in
+`src-tauri/src/acp/`, UI in `src/components/AgentPane.tsx` behind the
+Chat/Agent toggle in the chat panel header. Verified live in the dev app:
+prompt → `alchemy_list_notebooks` tool chip → answer, with the session's
+subprocess reaped on stop. Phases 3-4 (Settings row, session resume) open.
 
 ## Summary
 
@@ -102,8 +105,26 @@ detected agents, pick default, per-agent auth status.
 
 ## Phases
 
-1. Backend module + discovery + session round-trip behind a dev-only Tauri
-   command (no UI), integration-tested against opencode.
-2. Chat agent mode: streaming render, permission prompts, stop button.
+1. ~~Backend module + discovery + session round-trip.~~ Done.
+2. ~~Chat agent mode: streaming render, permission prompts, stop button.~~
+   Done.
 3. Settings row, default-agent choice, auth-status surfacing.
 4. Later: `session/load` resume, plans panel, terminal.
+
+## Implementation notes (things the build taught us)
+
+- **Discovery must not read the login-shell environment.** `load_shell_env`
+  spawns `$SHELL -l -c env`, and doing that once per agent to answer "is it
+  installed?" blew past the 30-second IPC timeout on first open — the picker
+  rendered "no agents found" on a machine with four. Availability now probes
+  binaries only (`AcpAgentKind::command`) on the blocking pool; the shell env
+  is attached only to the agent actually being started (`launch`).
+- **Don't swallow discovery errors.** The first version caught and dropped
+  the failure, so a broken probe was indistinguishable from an empty machine
+  and the timeout above stayed invisible. The pane now separates "still
+  loading", "genuinely none installed", and "the probe failed, here's why".
+- Session cwd is a per-notebook scratch dir under app data, never the
+  LanceDB dir: the agent's own file tools operate there, and notebook
+  content stays reachable only through our MCP tools.
+- The pane stops its session on unmount, so no agent subprocess outlives the
+  UI driving it; the SDK's `ChildGuard` reaps the process group.
