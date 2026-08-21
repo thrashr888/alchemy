@@ -402,8 +402,9 @@ export interface RegistryCard {
    *  "recommended" = the triage pass thinks this one matters, "routine" =
    *  triaged and not singled out. Cleared once the card is ruled on. */
   triage: "" | "recommended" | "routine";
-  /** Space-separated normalized tokens — the only thing that ever attaches
-   *  a document without asking. */
+  /** Space-separated normalized tokens (VIN, policy number, serial) — the
+   *  strongest auto-attach signal; strong full-name matches attach too,
+   *  with a "name matched" receipt. */
   identifiers: string;
   note: string;
   facts: CardFact[];
@@ -515,10 +516,12 @@ export interface AiConfig {
 
 /** One passage behind a meta-chat answer: what it is and where it lives. */
 export interface MetaCitation {
-  kind: "source" | "note";
+  /** "card" = a registry card riding as answer context (corpus-scoped:
+   *  notebookId is empty and the citation opens the card on Home). */
+  kind: "source" | "note" | "card";
   notebookId: string;
   notebookTitle: string;
-  /** Source id for source passages; note id for notes. */
+  /** Source id for source passages; note id for notes; card id for cards. */
   id: string;
   title: string;
   snippet: string;

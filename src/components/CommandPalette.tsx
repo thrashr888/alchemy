@@ -76,6 +76,13 @@ export function CommandPalette() {
   const [askText, setAskText] = useState("");
   const [askCitations, setAskCitations] = useState<MetaCitation[]>([]);
   const [askLoading, setAskLoading] = useState(false);
+  // The ask pipeline's live progress (meta://step, the chat step-trail
+  // grammar): `askSteps` is the trail of completed stages, `askWaiting` the
+  // current transient line (replaces, never accumulates — one "Reading X
+  // (2 of 6)" at a time). The palette renders only the current line plus a
+  // subtle done-count; it is a status, not a log.
+  const [askSteps, setAskSteps] = useState<string[]>([]);
+  const [askWaiting, setAskWaiting] = useState("");
   const askThread = useRef<{ role: string; content: string }[]>([]);
 
   useEffect(() => {
@@ -125,6 +132,24 @@ export function CommandPalette() {
     };
   }, [askLoading]);
 
+  // Progress steps while a question is in flight — same gating as the token
+  // stream: events broadcast to every window, only the one asking listens.
+  useEffect(() => {
+    if (!askLoading) return;
+    const un = listen<{ label: string; transient: boolean }>(
+      "meta://step",
+      (e) => {
+        if (e.payload.transient) {
+          setAskWaiting(e.payload.label);
+        } else {
+          setAskSteps((s) => [...s, e.payload.label]);
+          setAskWaiting("");
+        }
+      },
+    );
+    return () => void un.then((f) => f());
+  }, [askLoading]);
+
   function startAsk(question: string) {
     const q = question.trim();
     if (!q || askLoading) return;
@@ -132,6 +157,8 @@ export function CommandPalette() {
     setAskQuestion(q);
     setAskText("");
     setAskCitations([]);
+    setAskSteps([]);
+    setAskWaiting("");
     setAskLoading(true);
     setFollowup("");
     const history = [...askThread.current];
@@ -592,12 +619,16 @@ export function CommandPalette() {
   };
 
   /** Jump to a cited passage: select the notebook, then open the note card
-   *  or the source reader at the snippet — same routing as search hits. */
+   *  or the source reader at the snippet — same routing as search hits.
+   *  Registry cards are corpus-scoped and open on Home instead. */
   function openCitation(c: MetaCitation) {
     setPaletteOpen(false);
     void (async () => {
       const s = useStore.getState();
-      if (c.kind === "note") {
+      if (c.kind === "card") {
+        s.closeNotebook();
+        useStore.setState({ homeSection: "registry", openCardId: c.id });
+      } else if (c.kind === "note") {
         useStore.setState({ justCreatedNoteId: c.id });
         if (!s.studioOpen) s.toggleStudio();
         await s.selectNotebook(c.notebookId);
@@ -611,7 +642,9 @@ export function CommandPalette() {
   const askNotebooks = useMemo(() => {
     const seen = new Map<string, string>();
     for (const c of askCitations) {
-      if (!seen.has(c.notebookId)) seen.set(c.notebookId, c.notebookTitle);
+      // Card citations carry no notebook — the Registry isn't a chip.
+      if (c.notebookId && !seen.has(c.notebookId))
+        seen.set(c.notebookId, c.notebookTitle);
     }
     return [...seen.entries()];
   }, [askCitations]);
@@ -722,9 +755,22 @@ export function CommandPalette() {
                     </Markdown>
                   </div>
                 ) : (
+                  // Live stage, not a static spinner: the backend narrates
+                  // the real pipeline (routing → searching → reading →
+                  // synthesizing). One quiet line — the current step plus a
+                  // subtle count of finished stages, never a log dump.
                   <div className="flex items-center gap-2 py-4 text-caption text-muted-foreground">
-                    <Spinner className="h-3.5 w-3.5" />
-                    Searching every notebook…
+                    <Spinner className="h-3.5 w-3.5 shrink-0" />
+                    <span className="min-w-0 truncate">
+                      {askWaiting ||
+                        askSteps[askSteps.length - 1] ||
+                        "Searching every notebook…"}
+                    </span>
+                    {askSteps.length > 1 && (
+                      <span className="ml-auto shrink-0 text-micro tabular-nums text-subtle-foreground">
+                        {askSteps.length} steps
+                      </span>
+                    )}
                   </div>
                 )}
                 {!askLoading && askCitations.length > 0 && (
@@ -738,7 +784,9 @@ export function CommandPalette() {
                         <span className="shrink-0 text-badge text-subtle-foreground">
                           [{i + 1}]
                         </span>
-                        {c.kind === "note" ? (
+                        {c.kind === "card" ? (
+                          <Package className="h-3 w-3 shrink-0" />
+                        ) : c.kind === "note" ? (
                           <SquarePen className="h-3 w-3 shrink-0" />
                         ) : (
                           <FileText className="h-3 w-3 shrink-0" />

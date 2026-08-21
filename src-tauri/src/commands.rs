@@ -9942,14 +9942,118 @@ async fn import_bundle(
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetaCitation {
-    /// "source" (chunk passage) | "note".
+    /// "source" (chunk passage) | "note" | "card" (registry card).
     pub kind: String,
+    /// Empty for registry cards — they are corpus-scoped and open on Home.
     pub notebook_id: String,
     pub notebook_title: String,
-    /// Source id for source passages; note id for notes.
+    /// Source id for source passages; note id for notes; card id for cards.
     pub id: String,
     pub title: String,
     pub snippet: String,
+}
+
+/// Does a registry card answer this query? Two shapes share one matcher:
+/// palette typing (the whole query is a fragment of the name/identifiers)
+/// and ask-mode questions ("what's my policy number for the Bayside boat"),
+/// where a card-name word, an identifier token, or a fact label/value
+/// appearing IN the question is the signal. Word-level checks require some
+/// length so "the"/"a" never match a card into every answer.
+pub(crate) fn card_matches(card: &crate::models::RegistryCard, q_lower: &str) -> bool {
+    let name = card.name.to_lowercase();
+    if name.contains(q_lower) || card.identifiers.contains(q_lower) {
+        return true;
+    }
+    let name_hit = name
+        .split_whitespace()
+        .any(|w| w.chars().count() >= 4 && q_lower.contains(w));
+    // Identifiers are already normalized lowercase tokens (the auto-attach
+    // key), so containment in the question is exact-token evidence.
+    let id_hit = card
+        .identifiers
+        .split_whitespace()
+        .any(|t| t.chars().count() >= 3 && q_lower.contains(t));
+    let fact_hit = card.facts.iter().any(|f| {
+        let label = f.label.to_lowercase();
+        let value = f.value.to_lowercase();
+        (label.chars().count() >= 4 && q_lower.contains(&label))
+            || (value.chars().count() >= 3 && q_lower.contains(&value))
+    });
+    name_hit || id_hit || fact_hit
+}
+
+/// A registry card rendered as answer context: kind, identifiers, facts,
+/// and the user's note — the whole point is that "what's my policy number"
+/// can answer from the card's facts.
+pub(crate) fn card_passage_text(card: &crate::models::RegistryCard) -> String {
+    let mut out = format!("Registry card ({}).", card.kind);
+    if !card.identifiers.trim().is_empty() {
+        out.push_str(&format!(" Identifiers: {}.", card.identifiers.trim()));
+    }
+    if !card.facts.is_empty() {
+        let facts = card
+            .facts
+            .iter()
+            .map(|f| {
+                if f.value.trim().is_empty() {
+                    f.label.trim().to_string()
+                } else {
+                    format!("{}: {}", f.label.trim(), f.value.trim())
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        out.push_str(&format!(" Facts: {facts}."));
+    }
+    if !card.note.trim().is_empty() {
+        out.push_str(&format!(" Note: {}.", card.note.trim()));
+    }
+    out
+}
+
+/// Registry cards matching a question, as meta citations (RFC-registry ×
+/// meta-chat): matched cards ride into the ask-everything context so the
+/// answer can come straight off a card's facts. Shared by the command and
+/// the MCP ask_everything tool.
+pub(crate) async fn registry_card_citations(
+    state: &AppState,
+    question: &str,
+    cap: usize,
+) -> Vec<MetaCitation> {
+    let q = question.trim().to_lowercase();
+    if q.len() < 2 {
+        return Vec::new();
+    }
+    let cards = state.db.list_registry().await.unwrap_or_default();
+    cards
+        .iter()
+        .filter(|c| c.origin != "dismissed" && card_matches(c, &q))
+        .take(cap)
+        .map(|c| MetaCitation {
+            kind: "card".into(),
+            notebook_id: String::new(),
+            notebook_title: "Registry".into(),
+            id: c.id.clone(),
+            title: c.name.clone(),
+            snippet: card_passage_text(c),
+        })
+        .collect()
+}
+
+/// Progress line for the palette's ask flow — the same StepEvent grammar the
+/// chat step trail uses, on its own channel so a palette ask never writes
+/// into a notebook's step trail (or vice versa). `None` (the MCP path) emits
+/// nothing.
+fn meta_step(app: Option<&AppHandle>, label: impl Into<String>, transient: bool) {
+    if let Some(app) = app {
+        let _ = app.emit(
+            "meta://step",
+            StepEvent {
+                label: label.into(),
+                transient,
+            },
+        );
+    }
 }
 
 /// A corpus-wide answer (docs/RFC-meta-chat.md).
@@ -9971,6 +10075,7 @@ pub struct MetaAnswer {
 /// order, so deep can only reorder-or-equal, never lose the flat result.
 pub(crate) async fn retrieve_everything(
     state: &AppState,
+    app: Option<&AppHandle>,
     question: &str,
     k: usize,
     deep: bool,
@@ -9993,6 +10098,11 @@ pub(crate) async fn retrieve_everything(
     // keeps ROUTE_TOP_K notebooks, so corpora at or below that size are
     // searched in full either way.
     let routed: Option<Vec<String>> = if nb_titles.len() > crate::router::MIN_NOTEBOOKS_TO_ROUTE {
+        meta_step(
+            app,
+            format!("Routing your question across {} notebooks", nb_titles.len()),
+            false,
+        );
         let ai = state.ai.read().await.clone();
         // Piggyback the gist sweep on the same self-heal moment the router
         // uses — catches sources imported before gisting existed (or while
@@ -10033,6 +10143,17 @@ pub(crate) async fn retrieve_everything(
         // default, one on the tight on-device window.
         max_gists: profile.max_gists,
     };
+    meta_step(
+        app,
+        match &routed {
+            Some(ids) => format!("Searching the {} most likely notebooks", ids.len()),
+            None => match nb_titles.len() {
+                1 => "Searching your notebook".to_string(),
+                n => format!("Searching all {n} notebooks"),
+            },
+        },
+        false,
+    );
     // Deep search retrieves a wider pool for the reranker to pick from.
     let fetch_k = if deep { k * 3 } else { k };
     // The title-fallback passes below need the corpus source list and the
@@ -10080,6 +10201,14 @@ pub(crate) async fn retrieve_everything(
     // from the wide pool. Failure (model down, unparseable output) degrades
     // to the fusion-ordered top k — exactly the non-deep result.
     if deep && out.len() > k {
+        meta_step(
+            app,
+            format!(
+                "Picking the {k} passages that answer best (of {})",
+                out.len()
+            ),
+            false,
+        );
         let snippets: Vec<(String, String)> = out
             .iter()
             .map(|c| (c.title.clone(), c.snippet.chars().take(300).collect()))
@@ -10145,6 +10274,25 @@ pub(crate) async fn retrieve_everything(
                 snippet: n.content.chars().take(400).collect(),
             });
         }
+    }
+
+    {
+        let nb_count = out
+            .iter()
+            .map(|c| c.notebook_id.as_str())
+            .collect::<HashSet<_>>()
+            .len();
+        meta_step(
+            app,
+            format!(
+                "Found {} passage{} across {} notebook{}",
+                out.len(),
+                if out.len() == 1 { "" } else { "s" },
+                nb_count,
+                if nb_count == 1 { "" } else { "s" }
+            ),
+            false,
+        );
     }
 
     let note_ids: Vec<String> = out
@@ -10223,6 +10371,7 @@ async fn global_extract(ai: &Ai, question: &str, content: &str) -> Option<String
 /// caller then takes the pointed path unchanged.
 async fn global_meta_route(
     state: &AppState,
+    app: Option<&AppHandle>,
     question: &str,
 ) -> anyhow::Result<Option<(Vec<MetaCitation>, Vec<rag::MetaPassage>)>> {
     if state.db.list_gists().await?.is_empty() {
@@ -10265,7 +10414,28 @@ async fn global_meta_route(
     let mut citations: Vec<MetaCitation> = Vec::with_capacity(selected.len());
     let mut passages: Vec<rag::MetaPassage> = Vec::with_capacity(selected.len());
     let mut fallbacks: Vec<bool> = Vec::with_capacity(selected.len());
+    meta_step(
+        app,
+        format!(
+            "Reading {} source{} in depth",
+            selected.len(),
+            if selected.len() == 1 { "" } else { "s" }
+        ),
+        false,
+    );
     for (i, (nb_id, gist)) in selected.iter().enumerate() {
+        // Live per-source status, transient: each read replaces the last in
+        // the trail — a fan-out of six must not become six log lines.
+        meta_step(
+            app,
+            format!(
+                "Reading {} ({} of {})",
+                gist.source_title,
+                i + 1,
+                selected.len()
+            ),
+            true,
+        );
         let notebook_title = nb_titles.get(nb_id).cloned().unwrap_or_default();
         // The gist row's snippet IS the distilled overview — the guaranteed
         // fallback for this source when the extract fails or SKIPs.
@@ -10334,7 +10504,7 @@ pub async fn ask_everything(
     // classifier is pure; ANY failure inside the route degrades to None, so
     // the pointed path below runs unchanged whenever the route doesn't fire.
     let global = if rag::is_global_query(&question) {
-        match global_meta_route(&state, &question).await {
+        match global_meta_route(&state, Some(&app), &question).await {
             Ok(g) => g,
             Err(err) => {
                 eprintln!("meta-global route failed, falling back to pointed: {err:#}");
@@ -10348,10 +10518,10 @@ pub async fn ask_everything(
     // References are per SOURCE, not per chunk: several excerpts from one
     // source share a number, and the citation list the UI shows is deduped —
     // otherwise a source that contributed five chunks shows up five times.
-    let (citations, passages) = if let Some(g) = global {
+    let (mut citations, mut passages) = if let Some(g) = global {
         g
     } else {
-        let passages_raw = retrieve_everything(&state, &question, 16, deep).await?;
+        let passages_raw = retrieve_everything(&state, Some(&app), &question, 16, deep).await?;
         let mut citations: Vec<MetaCitation> = Vec::new();
         let mut passages: Vec<rag::MetaPassage> = Vec::new();
         for c in &passages_raw {
@@ -10375,6 +10545,33 @@ pub async fn ask_everything(
         }
         (citations, passages)
     };
+
+    // Registry cards join the context (RFC-registry × meta-chat): a question
+    // that names a card, an identifier, or a fact answers straight off the
+    // card — "what's my policy number" from the Bayside card's facts. Cards
+    // append after the retrieved passages so citation numbers stay stable.
+    let card_citations = registry_card_citations(&state, &question, 3).await;
+    if !card_citations.is_empty() {
+        meta_step(
+            Some(&app),
+            format!(
+                "Reading {} registry card{}",
+                card_citations.len(),
+                if card_citations.len() == 1 { "" } else { "s" }
+            ),
+            false,
+        );
+        for c in card_citations {
+            passages.push(rag::MetaPassage {
+                number: citations.len() + 1,
+                kind: c.kind.clone(),
+                notebook_title: c.notebook_title.clone(),
+                title: c.title.clone(),
+                snippet: c.snippet.clone(),
+            });
+            citations.push(c);
+        }
+    }
 
     let (persona, ctx_profile) = {
         let ai = state.ai.read().await.clone();
@@ -10402,6 +10599,15 @@ pub async fn ask_everything(
 
     // Same stream/cancel dance as notebook chat, under its own scope so a
     // palette Esc never kills a notebook stream (or vice versa).
+    meta_step(
+        Some(&app),
+        format!(
+            "Synthesizing from {} excerpt{}",
+            passages.len(),
+            if passages.len() == 1 { "" } else { "s" }
+        ),
+        false,
+    );
     let app_for_cb = app.clone();
     let cancel = state.begin_generation(&format!("meta:{}", window.label()));
     let partial = Arc::new(Mutex::new(String::new()));
@@ -10478,11 +10684,12 @@ pub async fn search_everything(
 
     // Registry cards: corpus-scoped, so they carry no notebook — the palette
     // opens them on Home rather than switching notebooks. Dismissed
-    // suggestions are refusal memory, not results.
-    for c in e(state.db.list_registry().await)?.iter().filter(|c| {
-        c.origin != "dismissed"
-            && (c.name.to_lowercase().contains(&q) || c.identifiers.contains(&q))
-    }) {
+    // suggestions are refusal memory, not results. The shared matcher also
+    // covers fact labels/values, so "policy number" finds the Bayside card.
+    for c in e(state.db.list_registry().await)?
+        .iter()
+        .filter(|c| c.origin != "dismissed" && card_matches(c, &q))
+    {
         if hits.iter().filter(|h| h.kind == "card").count() >= 4 {
             break;
         }
@@ -11535,6 +11742,52 @@ mod tool_tests {
         // Mid-sentence mentions don't gate — only leading imperatives.
         assert!(settings_gate("the paper says to switch chat to ollama").is_none());
         assert!(settings_gate("").is_none());
+    }
+
+    /// Registry cards as a search/ask leg: one matcher serves palette typing
+    /// and question-shaped asks, and the passage text carries the facts.
+    #[test]
+    fn registry_cards_match_palette_and_question_shapes() {
+        use crate::models::{CardFact, RegistryCard};
+        let card = RegistryCard {
+            id: "c1".into(),
+            kind: "policy".into(),
+            name: "Bayside Marina Policy".into(),
+            origin: String::new(),
+            triage: String::new(),
+            identifiers: "bay-4471 hull-9921".into(),
+            note: "Renews in September".into(),
+            facts: vec![CardFact {
+                label: "Policy number".into(),
+                value: "BAY-4471".into(),
+            }],
+            attachments: vec![],
+            created_at: 0,
+            updated_at: 0,
+        };
+        // Palette typing: the query is a fragment of the name/identifiers.
+        assert!(card_matches(&card, "bayside"));
+        assert!(card_matches(&card, "bay-4471"));
+        // Question shapes: a name word, an identifier token, or a fact
+        // label appearing IN the question is the signal.
+        assert!(card_matches(
+            &card,
+            "what's my policy number for the bayside boat"
+        ));
+        assert!(card_matches(
+            &card,
+            "when does hull-9921 come up for renewal?"
+        ));
+        assert!(card_matches(&card, "which marina am I insured with?"));
+        // Unrelated questions never pull a card in; short words don't bridge.
+        assert!(!card_matches(&card, "compare the q3 revenue projections"));
+        assert!(!card_matches(&card, "the a of"));
+        // The passage text is answer-grade: kind, identifiers, facts, note.
+        let text = card_passage_text(&card);
+        assert!(text.contains("Registry card (policy)"), "{text}");
+        assert!(text.contains("Policy number: BAY-4471"), "{text}");
+        assert!(text.contains("bay-4471 hull-9921"), "{text}");
+        assert!(text.contains("Note: Renews in September"), "{text}");
     }
 
     #[test]

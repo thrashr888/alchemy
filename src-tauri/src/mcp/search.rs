@@ -240,10 +240,14 @@ impl AlchemyMcp {
         }
         let state = self.state();
         // No deep rerank here: MCP agents synthesize from raw passages and
-        // are better served by fast, wide retrieval they can filter.
-        let passages = commands::retrieve_everything(&state, &question, 16, false)
+        // are better served by fast, wide retrieval they can filter. No app
+        // handle either — progress steps are a palette affordance.
+        let mut passages = commands::retrieve_everything(&state, None, &question, 16, false)
             .await
             .map_err(internal)?;
+        // Registry parity with the palette's ask flow: matched cards ride as
+        // kind:"card" passages (empty notebookId — cards are corpus-scoped).
+        passages.extend(commands::registry_card_citations(&state, &question, 3).await);
         json_result(&passages)
     }
 }
