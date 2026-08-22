@@ -151,6 +151,13 @@ detected agents, pick default, per-agent auth status.
   `initialize`, so the message leads with those ("Claude Code couldn't open a
   session — it may need you to sign in first (Log in with Claude Code)") and
   the wire text trails, flattened to one line.
+- **The agent needs to be told where it is.** MCP attachment alone isn't
+  context: the agent can see the alchemy tools but not which notebook the
+  session belongs to, so "what's the cheapest one?" got a coding assistant's
+  shrug instead of a search. The session's first prompt now carries a
+  preamble (`session_preamble`) naming the notebook (title + id) and
+  pointing at `search`/`list_sources`/`get_source` — only when the MCP
+  server actually attached. The transcript shows only what the user typed.
 - **Session failures must not be toasts.** They auto-dismissed before the
   message could be read, which made the auth problem above invisible in
   practice. Failures render in-pane until dismissed, and carry the fix: an

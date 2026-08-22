@@ -267,6 +267,17 @@ pub async fn acp_start(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("{} is not installed", kind.label()))?;
 
+    // The preamble names the notebook, so look the title up front; an empty
+    // title (notebook gone mid-start) degrades to id-only wording.
+    let db = app.state::<crate::commands::AppState>().db.clone();
+    let notebook_title = db
+        .list_notebooks()
+        .await
+        .ok()
+        .and_then(|nbs| nbs.into_iter().find(|n| n.id == notebook_id))
+        .map(|n| n.title)
+        .unwrap_or_default();
+
     let state = app.state::<AcpState>();
     let (tx, rx) = mpsc::unbounded_channel();
     let permissions: Arc<Mutex<HashMap<String, PendingPermission>>> = Arc::default();
@@ -295,6 +306,7 @@ pub async fn acp_start(
         let result = run_session(
             task_app.clone(),
             task_notebook.clone(),
+            notebook_title,
             task_agent.clone(),
             config,
             rx,
@@ -445,9 +457,34 @@ fn session_cwd(app: &AppHandle, notebook_id: &str) -> std::path::PathBuf {
     dir
 }
 
+/// The agent arrives with its own system prompt and no idea where it is
+/// running: it can see the alchemy MCP tools but not which notebook this
+/// session belongs to, so "what's the cheapest one?" gets a coding
+/// assistant's shrug instead of a search over the user's sources. Said once,
+/// at the head of the session's first prompt — and only when the MCP server
+/// actually attached, because pointing the agent at tools it doesn't have
+/// would be worse than silence.
+fn session_preamble(notebook_title: &str, notebook_id: &str) -> String {
+    let name = if notebook_title.is_empty() {
+        "this notebook".to_string()
+    } else {
+        format!("the notebook \"{notebook_title}\"")
+    };
+    format!(
+        "<context>You are running inside Alchemy, the user's local research notebook app, \
+         attached to {name} (notebook_id: {notebook_id}). The user's questions are usually \
+         about this notebook's contents. Its sources are reachable through the connected \
+         `alchemy` MCP tools: start with `search` (hybrid search over the notebook's sources \
+         and notes; pass this notebook_id), and use `list_sources`/`get_source` to read full \
+         documents. Ground answers about the notebook's subject in those sources.</context>"
+    )
+}
+
+#[expect(clippy::too_many_arguments)]
 async fn run_session(
     app: AppHandle,
     notebook_id: String,
+    notebook_title: String,
     agent_id: String,
     config: AcpAgentConfig,
     mut rx: mpsc::UnboundedReceiver<HostCmd>,
@@ -591,11 +628,24 @@ async fn run_session(
                 })),
             );
 
+            let mut first_prompt = true;
             while let Some(cmd) = rx.recv().await {
                 match cmd {
                     HostCmd::Stop => break,
                     HostCmd::Cancel => {} // nothing in flight
                     HostCmd::Prompt(text) => {
+                        // Orientation rides the first prompt (see
+                        // session_preamble); the transcript shows only what
+                        // the user typed, since the UI echoes their text
+                        // locally before it reaches us.
+                        let text = if std::mem::take(&mut first_prompt) && mcp_attached {
+                            format!(
+                                "{}\n\n{text}",
+                                session_preamble(&notebook_title, &notebook_id)
+                            )
+                        } else {
+                            text
+                        };
                         emit_state(&app, &notebook_id, &agent_id, "turn", None);
                         let prompt = connection
                             .send_request(PromptRequest::new(
