@@ -50,6 +50,14 @@ export function AgentPane({
   );
   const setAcpAgentId = useStore((s) => s.setAcpAgentId);
   const setAcpEntries = useStore((s) => s.setAcpEntries);
+  const hydrateAcpPane = useStore((s) => s.hydrateAcpPane);
+
+  // Restore the persisted transcript + agent choice before the picker's
+  // first-available default can claim the slot. Idempotent (seeds only when
+  // the store has nothing), so StrictMode's double-run is harmless.
+  useEffect(() => {
+    hydrateAcpPane(notebookId);
+  }, [notebookId, hydrateAcpPane]);
   const setAgentId = useCallback(
     (id: string | null) => setAcpAgentId(notebookId, id),
     [notebookId, setAcpAgentId],

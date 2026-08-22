@@ -288,8 +288,11 @@ export interface AppState {
   refreshSummary: () => Promise<void>;
   clearChat: () => Promise<void>;
 
-  /** Hosted-agent pane state per notebook; see AcpPaneState. */
+  /** Hosted-agent pane state per notebook; see AcpPaneState. Persisted to
+   *  localStorage so an app restart reopens on the last session's view. */
   acpPanes: Record<string, AcpPaneState>;
+  /** Seed a notebook's pane from localStorage if the store has none yet. */
+  hydrateAcpPane: (notebookId: string) => void;
   setAcpAgentId: (notebookId: string, agentId: string | null) => void;
   setAcpEntries: (
     notebookId: string,

@@ -15,6 +15,7 @@ import { playArrival, playDone, playError } from "./sound";
 import { autoUpdateEnabled, checkForUpdatesQuietly } from "./updates";
 import { DEFAULT_CHAT_CONFIG, DEFAULT_READING_PREFS } from "./types";
 import type {
+  AcpPaneState,
   AppState,
   Migration,
   NavEntry,
@@ -58,6 +59,36 @@ function saveSourceSel(
   if (!notebookId) return;
   if (sel === null) localStorage.removeItem(`sourceSel:${notebookId}`);
   else localStorage.setItem(`sourceSel:${notebookId}`, JSON.stringify(sel));
+}
+
+/** Load a notebook's persisted hosted-agent pane (transcript + agent choice),
+ *  so an app restart reopens on the last session's view. */
+function loadAcpPane(notebookId: string): AcpPaneState | null {
+  try {
+    const raw = localStorage.getItem(`acpPane:${notebookId}`);
+    const pane = raw ? (JSON.parse(raw) as AcpPaneState) : null;
+    return pane && Array.isArray(pane.entries) ? pane : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Entries stream token by token, so writes coalesce behind a short timer
+ *  rather than hitting localStorage on every chunk. */
+const acpSaveTimers = new Map<string, number>();
+function saveAcpPaneSoon(notebookId: string, pane: AcpPaneState) {
+  clearTimeout(acpSaveTimers.get(notebookId));
+  acpSaveTimers.set(
+    notebookId,
+    window.setTimeout(() => {
+      acpSaveTimers.delete(notebookId);
+      try {
+        localStorage.setItem(`acpPane:${notebookId}`, JSON.stringify(pane));
+      } catch {
+        // Quota or private-mode noise; the transcript is a convenience.
+      }
+    }, 300),
+  );
 }
 
 /** Glass chrome: native vibrancy under the window + the html.glass CSS
@@ -1595,36 +1626,36 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     acpPanes: {},
+    hydrateAcpPane: (notebookId) =>
+      set((s) => {
+        if (s.acpPanes[notebookId]) return {};
+        const stored = loadAcpPane(notebookId);
+        if (!stored) return {};
+        return { acpPanes: { ...s.acpPanes, [notebookId]: stored } };
+      }),
     setAcpAgentId: (notebookId, agentId) =>
-      set((s) => ({
-        acpPanes: {
-          ...s.acpPanes,
-          [notebookId]: {
-            entries: s.acpPanes[notebookId]?.entries ?? [],
-            agentId,
-          },
-        },
-      })),
+      set((s) => {
+        const pane: AcpPaneState = {
+          entries: s.acpPanes[notebookId]?.entries ?? [],
+          agentId,
+        };
+        saveAcpPaneSoon(notebookId, pane);
+        return { acpPanes: { ...s.acpPanes, [notebookId]: pane } };
+      }),
     setAcpEntries: (notebookId, update) =>
       set((s) => {
-        const pane = s.acpPanes[notebookId] ?? { agentId: null, entries: [] };
-        return {
-          acpPanes: {
-            ...s.acpPanes,
-            [notebookId]: { ...pane, entries: update(pane.entries) },
-          },
-        };
+        const prev = s.acpPanes[notebookId] ?? { agentId: null, entries: [] };
+        const pane = { ...prev, entries: update(prev.entries) };
+        saveAcpPaneSoon(notebookId, pane);
+        return { acpPanes: { ...s.acpPanes, [notebookId]: pane } };
       }),
     clearAcpPane: (notebookId) =>
       set((s) => {
         const pane = s.acpPanes[notebookId];
         if (!pane || pane.entries.length === 0) return {};
-        return {
-          acpPanes: {
-            ...s.acpPanes,
-            [notebookId]: { ...pane, entries: [] },
-          },
-        };
+        const cleared = { ...pane, entries: [] };
+        saveAcpPaneSoon(notebookId, cleared);
+        return { acpPanes: { ...s.acpPanes, [notebookId]: cleared } };
       }),
 
     generateArtifact: async (kind, prompt) => {
