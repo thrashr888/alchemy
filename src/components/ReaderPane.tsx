@@ -1441,10 +1441,32 @@ function TemplateEditor({ template }: { template: Template }) {
   }
 
   async function remove() {
+    // A hand-written generator prompt is unrecoverable once its file is gone,
+    // and this view closes with the delete — snapshot the saved state so the
+    // toast can restore it (save_template with the same id rewrites the file).
+    const gone = {
+      id: template.id,
+      name: template.name,
+      description: template.description,
+      prompt: template.prompt,
+    };
     try {
-      await api.deleteTemplate(template.id);
+      await api.deleteTemplate(gone.id);
       await refreshTemplates();
-      useStore.getState().closeReader();
+      const s = useStore.getState();
+      s.closeReader();
+      s.pushToast("success", `Deleted “${gone.name}” — click to undo`, () => {
+        void (async () => {
+          try {
+            await api.saveTemplate(gone.id, gone.name, gone.description, gone.prompt);
+            await useStore.getState().refreshTemplates();
+          } catch (e) {
+            useStore
+              .getState()
+              .pushToast("error", e instanceof Error ? e.message : String(e));
+          }
+        })();
+      });
     } catch (e) {
       useStore.getState().pushToast("error", e instanceof Error ? e.message : String(e));
     }

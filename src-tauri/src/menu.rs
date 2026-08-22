@@ -72,8 +72,11 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
     let add_url = MenuItemBuilder::with_id("menu-add-url", "Add URL Source…")
         .accelerator("CmdOrCtrl+Shift+U")
         .build(app)?;
+    // ⌥⌘V, not ⇧⌘V: menu key equivalents win over focused text fields, and
+    // ⇧⌘V is the platform-wide Paste and Match Style — binding it here made
+    // typing users ingest a source instead of pasting.
     let add_clipboard = MenuItemBuilder::with_id("menu-add-clipboard", "Add Clipboard Source…")
-        .accelerator("CmdOrCtrl+Shift+V")
+        .accelerator("CmdOrCtrl+Alt+V")
         .build(app)?;
     // One export verb: the .okf.zip is the notebook's portable form (share
     // it, back it up, unzip it for an OKF folder) — the separate
