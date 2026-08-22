@@ -80,12 +80,19 @@ pub async fn delete_report_schedule(state: State<'_, AppState>, id: String) -> R
     e(state.db.delete_report_schedule(&id).await)
 }
 
+/// Sources re-fetched within this window skip the pre-report refresh — a
+/// burst of due schedules used to re-fetch the same pages back to back
+/// (docs/RFC-source-hygiene.md; `fetched_at` is stamped by every reingest).
+const REPORT_REFRESH_FLOOR_MS: i64 = 60 * 60 * 1000;
+
 async fn refresh_notebook_urls(app: &AppHandle, state: &AppState, notebook_id: &str) {
     let sources = state.db.list_sources(notebook_id).await.unwrap_or_default();
-    for source in sources
-        .iter()
-        .filter(|source| source.source_type == "url" && !source.url.is_empty())
-    {
+    let now = crate::commands::now();
+    for source in sources.iter().filter(|source| {
+        source.source_type == "url"
+            && !source.url.is_empty()
+            && now - source.fetched_at > REPORT_REFRESH_FLOOR_MS
+    }) {
         let _ = app.emit("report://step", format!("Refreshing: {}", source.title));
         if let Ok(Some(existing)) = state.db.get_source(&source.id).await {
             if let Ok(extracted) = crate::capture::extract_url_rescued(&existing.url).await {

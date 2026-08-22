@@ -299,9 +299,13 @@ const SHORTCUTS: { keys: string[]; label: string; context?: string }[] = [
   { keys: ["⌘", "1"], label: "Show or hide Sources", context: "Notebook" },
   { keys: ["⌘", "2"], label: "Show or hide Studio", context: "Notebook" },
   { keys: ["⌘", ","], label: "Open Settings" },
+  { keys: ["⌘", "A"], label: "Select all sources or notes", context: "Notebook" },
+  { keys: ["⇧", "click"], label: "Select a range of rows", context: "Notebook" },
+  { keys: ["⌘", "click"], label: "Add or remove a row from the selection", context: "Notebook" },
+  { keys: ["⌫"], label: "Remove the selected rows", context: "Notebook" },
   { keys: ["↩"], label: "Send message · next find match" },
   { keys: ["⇧", "↩"], label: "New line in the composer" },
-  { keys: ["esc"], label: "Close dialog or menu" },
+  { keys: ["esc"], label: "Close dialog or menu · clear selection" },
 ];
 
 export function ShortcutsTab() {

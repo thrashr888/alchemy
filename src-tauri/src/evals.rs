@@ -230,6 +230,8 @@ pub(crate) async fn seed_docs(
             mtime: 0,
             tags: String::new(),
             note: String::new(),
+            fetched_at: 0,
+            fetch_failures: 0,
         };
         db.insert_source(&source, &tuples, &embeddings)
             .await

@@ -15,6 +15,7 @@ import type {
   FolderScan,
   GrepHit,
   HomeActivity,
+  HygieneIssue,
   KokoroStatus,
   MacCollection,
   MacFileHit,
@@ -202,6 +203,23 @@ export const api = {
     run(ai<Source>("set_source_note", { sourceId, note })),
   refreshSourceUrl: (sourceId: string) =>
     run(ai<Source>("refresh_source_url", { sourceId })),
+  /** Batch refresh (RFC-multi-select): returns immediately; the backend
+   *  refreshes sequentially and emits one sources://changed at the end. */
+  refreshSources: (notebookId: string, sourceIds: string[]) =>
+    run(ai<void>("refresh_sources", { notebookId, sourceIds })),
+  /** Batch delete (RFC-multi-select): one bulk operation; selected
+   *  folder-like parents take their children along. */
+  deleteSources: (notebookId: string, sourceIds: string[]) =>
+    run(cmd<void>("delete_sources", { notebookId, sourceIds })),
+  /** One tag string applied to a whole selection (RFC-multi-select). */
+  setSourcesTags: (sourceIds: string[], tags: string) =>
+    run(cmd<void>("set_sources_tags", { sourceIds, tags })),
+  /** Hygiene classification for a notebook (RFC-source-hygiene). */
+  sourceHygiene: (notebookId: string) =>
+    run(query<HygieneIssue[]>("source_hygiene", { notebookId })),
+  /** "Keep" an unreachable source: clear its strikes, restart the cadence. */
+  hygieneKeep: (sourceId: string) =>
+    run(cmd<void>("hygiene_keep", { sourceId })),
   getSourceContent: (sourceId: string) =>
     run(query<string>("get_source_content", { sourceId })),
   setWindowGlass: (enabled: boolean, dark: boolean, pinned: boolean) =>
@@ -411,6 +429,8 @@ export const api = {
   updateNote: (id: string, title: string, content: string) =>
     run(cmd<void>("update_note", { id, title, content })),
   deleteNote: (id: string) => run(cmd<void>("delete_note", { id })),
+  /** Batch note delete (RFC-multi-select): one bulk operation. */
+  deleteNotes: (ids: string[]) => run(cmd<void>("delete_notes", { ids })),
   /** Fire-and-forget read counter for the note curator (RFC-note-curator). */
   noteOpened: (id: string) => run(cmd<void>("note_opened", { id })),
   /** Version, commit, and dev/release profile for Settings → About. */

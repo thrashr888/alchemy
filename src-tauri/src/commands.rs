@@ -1139,6 +1139,8 @@ async fn store_new_source(
         mtime,
         tags: String::new(),
         note: String::new(),
+        fetched_at: now(),
+        fetch_failures: 0,
     };
     state.db.insert_source(&source, &[], &[]).await?;
     state.db.touch_notebook(notebook_id, now()).await?;
@@ -1359,6 +1361,8 @@ async fn store_failed_url(
         mtime: 0,
         tags: String::new(),
         note: String::new(),
+        fetched_at: now(),
+        fetch_failures: 0,
     };
     state.db.insert_source(&source, &[], &[]).await?;
     state.db.touch_notebook(notebook_id, now()).await?;
@@ -1810,6 +1814,8 @@ pub(crate) async fn ingest_git(
                 mtime: crate::mac::content_stamp(&staged.sha),
                 tags: String::new(),
                 note: String::new(),
+                fetched_at: now(),
+                fetch_failures: 0,
             };
             state.db.insert_source(&parent, &[], &[]).await?;
             crate::git::adopt_cache(&staged.dir, &data_dir, &parent.id)
@@ -1863,6 +1869,8 @@ pub(crate) async fn ingest_notion(
         mtime: stats.max_edited_ms,
         tags: String::new(),
         note: String::new(),
+        fetched_at: now(),
+        fetch_failures: 0,
     };
     state.db.insert_source(&parent, &[], &[]).await?;
     let _guard = state.folder_scan_lock.lock().await;
@@ -2295,6 +2303,10 @@ pub(crate) async fn reingest(
         // describe why the source matters, not what its bytes say.
         tags: existing.tags.clone(),
         note: existing.note.clone(),
+        // A successful ingest IS the freshness signal: stamp it and clear
+        // any probe-failure streak (docs/RFC-source-hygiene.md).
+        fetched_at: now(),
+        fetch_failures: 0,
     };
     if processing {
         // Row first, chunks in the background — the stage's content claim
@@ -2548,8 +2560,30 @@ pub async fn set_source_note(
 }
 
 /// Does this source origin point at the web (vs. a local file path)?
-fn is_web_url(s: &str) -> bool {
+pub(crate) fn is_web_url(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
+}
+
+/// Classify a notebook's sources into hygiene buckets
+/// (docs/RFC-source-hygiene.md) — read-only; the review modal and row
+/// badges render from this, and acting on it goes through the normal
+/// refresh/delete commands.
+#[tauri::command]
+pub async fn source_hygiene(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<Vec<crate::hygiene::HygieneIssue>, String> {
+    let sources = e(state.db.list_sources(&notebook_id).await)?;
+    let cadence = state.ai.read().await.config().hygiene_refresh_days;
+    Ok(crate::hygiene::classify(&sources, cadence, now()))
+}
+
+/// "Keep" from the hygiene review: clear an unreachable source's strike
+/// count and stamp it fresh, so the flag drops and the retry cadence
+/// restarts from today.
+#[tauri::command]
+pub async fn hygiene_keep(state: State<'_, AppState>, source_id: String) -> Result<(), String> {
+    e(state.db.set_source_fetch(&source_id, now(), 0).await)
 }
 
 #[tauri::command]
@@ -2558,10 +2592,25 @@ pub async fn refresh_source_url(
     state: State<'_, AppState>,
     source_id: String,
 ) -> Result<Source, String> {
-    let existing =
-        e(state.db.get_source(&source_id).await)?.ok_or_else(|| "Source not found".to_string())?;
+    e(refresh_source_impl(&app, &state, &source_id).await)
+}
+
+/// The whole refresh dispatch (folder-like rescan, Mac re-fetch, git sync,
+/// web re-extract, file re-read) behind the Refresh menu item — shared by
+/// the single command above, the multi-select batch, and the MCP tool
+/// (docs/RFC-multi-select.md).
+pub(crate) async fn refresh_source_impl(
+    app: &AppHandle,
+    state: &AppState,
+    source_id: &str,
+) -> anyhow::Result<Source> {
+    let existing = state
+        .db
+        .get_source(source_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Source not found"))?;
     if existing.url.is_empty() {
-        return Err("This source has no URL or file path to refresh from".into());
+        anyhow::bail!("This source has no URL or file path to refresh from");
     }
     if matches!(
         existing.source_type.as_str(),
@@ -2572,7 +2621,7 @@ pub async fn refresh_source_url(
             let token = { state.ai.read().await.config().notion_token.clone() };
             let page = crate::notion::detect_page(&existing.url);
             if let (Some(page_id), false) = (page, token.is_empty()) {
-                let dir = crate::notion::cache_dir(&app_data_dir(&state), &existing.id);
+                let dir = crate::notion::cache_dir(&app_data_dir(state), &existing.id);
                 match crate::notion::NotionClient::new(&token)
                     .export_tree(&page_id, &dir)
                     .await
@@ -2583,27 +2632,30 @@ pub async fn refresh_source_url(
                             .set_source_mtime(&existing.id, stats.max_edited_ms)
                             .await;
                     }
-                    Err(err) => return Err(format!("Notion refresh failed: {err:#}")),
+                    Err(err) => anyhow::bail!("Notion refresh failed: {err:#}"),
                 }
             }
         }
         // Git parents force a remote sync first so the rescan sees fresh
         // files; local folders scan the disk as-is.
         if existing.source_type == "git" {
-            let dir = crate::git::cache_dir(&app_data_dir(&state), &existing.id);
+            let dir = crate::git::cache_dir(&app_data_dir(state), &existing.id);
             match crate::git::sync_remote(&dir).await {
                 Ok(Some(sha)) => {
                     let stamp = crate::mac::content_stamp(&sha);
-                    e(state.db.set_source_mtime(&existing.id, stamp).await)?;
+                    state.db.set_source_mtime(&existing.id, stamp).await?;
                 }
                 Ok(None) => {}
-                Err(err) => return Err(format!("git sync failed: {err:#}")),
+                Err(err) => anyhow::bail!("git sync failed: {err:#}"),
             }
         }
         let _guard = state.folder_scan_lock.lock().await;
-        e(rescan_one_folder(Some(&app), &state, &existing, true).await)?;
-        let folder = e(state.db.get_source(&source_id).await)?
-            .ok_or_else(|| "Source not found".to_string())?;
+        rescan_one_folder(Some(app), state, &existing, true).await?;
+        let folder = state
+            .db
+            .get_source(source_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Source not found"))?;
         return Ok(Source {
             content: String::new(),
             ..folder
@@ -2613,7 +2665,7 @@ pub async fn refresh_source_url(
         // Mac item — re-fetch through cider and re-embed. Like files, a
         // failed fetch (permission prompt pending, app closed) must not wipe
         // the working source.
-        let (_, text) = e(crate::mac::fetch(&existing.url).await)?;
+        let (_, text) = crate::mac::fetch(&existing.url).await?;
         let mut existing = existing;
         existing.mtime = crate::mac::content_stamp(&text);
         let extracted = ingest::Extracted {
@@ -2624,26 +2676,26 @@ pub async fn refresh_source_url(
             url: existing.url.clone(),
             text,
         };
-        return e(reingest(&state, &existing, extracted, None, true).await);
+        return reingest(state, &existing, extracted, None, true).await;
     }
     // Git-backed singles (README/blob) refresh from their cache clone — the
     // cache dir is the definitive marker; page captures of github.com URLs
     // parse git-shaped too but have no clone.
-    let git_dir = crate::git::cache_dir(&app_data_dir(&state), &existing.id);
+    let git_dir = crate::git::cache_dir(&app_data_dir(state), &existing.id);
     if git_dir.exists() {
         if let Err(err) = crate::git::sync_remote(&git_dir).await {
-            return Err(format!("git sync failed: {err:#}"));
+            anyhow::bail!("git sync failed: {err:#}");
         }
         let sha = crate::git::detect_repo(&git_dir)
             .await
             .map(|r| r.sha)
             .unwrap_or_default();
-        return e(reextract_git_single(&state, &existing, &sha).await);
+        return reextract_git_single(state, &existing, &sha).await;
     }
     if is_web_url(&existing.url) {
         return match crate::capture::extract_url_rescued(&existing.url).await {
-            Ok(extracted) => e(reingest(&state, &existing, extracted, None, true).await),
-            Err(err) => e(mark_source_failed(&state, &existing, err.to_string()).await),
+            Ok(extracted) => reingest(state, &existing, extracted, None, true).await,
+            Err(err) => mark_source_failed(state, &existing, err.to_string()).await,
         };
     }
     // File-backed source. Unlike a dead URL (where the errored row is the
@@ -2681,19 +2733,14 @@ pub async fn refresh_source_url(
             .await
             .unwrap_or(false);
             if !hydrated {
-                return Err(
-                    "iCloud is still downloading this file — try again in a moment".to_string(),
-                );
+                anyhow::bail!("iCloud is still downloading this file — try again in a moment");
             }
             // Fall through: the file is local now; extract like any refresh.
         } else {
-            return Err(format!(
-                "Original file no longer exists at {}",
-                existing.url
-            ));
+            anyhow::bail!("Original file no longer exists at {}", existing.url);
         }
     }
-    let mut extracted = e(extract_any_file(&state, &existing.url).await)?;
+    let mut extracted = extract_any_file(state, &existing.url).await?;
     let mut existing = existing;
     let mut retitle = false;
     if existing.status == "placeholder" {
@@ -2708,11 +2755,41 @@ pub async fn refresh_source_url(
     // Stamp the on-disk mtime, or the next folder rescan would see a mismatch
     // and re-embed this file a second time.
     existing.mtime = file_mtime(std::path::Path::new(&existing.url));
-    let src = e(reingest(&state, &existing, extracted, None, true).await)?;
+    let src = reingest(state, &existing, extracted, None, true).await?;
     if retitle {
-        spawn_retitle(&state, &src).await;
+        spawn_retitle(state, &src).await;
     }
     Ok(src)
+}
+
+/// Refresh several sources sequentially off the IPC thread
+/// (docs/RFC-multi-select.md): the command returns immediately, each source
+/// runs the same dispatch as a single Refresh, and one `sources://changed`
+/// lands at the end with the tally — one re-list, one toast, however many
+/// rows were selected. A per-item loop from the frontend would be N full
+/// re-lists and N toasts, and a synchronous loop here would trip the IPC
+/// timeout the way per-child folder deletes once did.
+#[tauri::command]
+pub async fn refresh_sources(
+    app: AppHandle,
+    notebook_id: String,
+    source_ids: Vec<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let mut scan = FolderScan::default();
+        for id in &source_ids {
+            match refresh_source_impl(&app, &state, id).await {
+                Ok(_) => scan.updated += 1,
+                Err(err) => {
+                    eprintln!("batch refresh: source {id}: {err:#}");
+                    scan.failed += 1;
+                }
+            }
+        }
+        let _ = app.emit("sources://changed", SourcesChanged { notebook_id, scan });
+    });
+    Ok(())
 }
 
 #[tauri::command]
@@ -2737,31 +2814,83 @@ pub async fn delete_source(state: State<'_, AppState>, source_id: String) -> Res
                 .filter(|c| c.parent_id == source_id)
                 .map(|c| c.id)
                 .collect();
-            let data_dir = app_data_dir(&state);
             // Parent and children can each own a git or notion cache dir; the
             // bulk delete_source_tree drops their rows in one shot.
             for id in child_ids.iter().chain(std::iter::once(&source_id)) {
-                crate::git::remove_cache(&data_dir, id);
-                let nc = crate::notion::cache_dir(&data_dir, id);
-                if nc.exists() {
-                    let _ = std::fs::remove_dir_all(&nc);
-                }
-                let _ = std::fs::remove_file(thumb_path(&state, id));
-                let _ = std::fs::remove_file(og_cache_path(&state, id));
+                cleanup_source_files(&state, id);
             }
             e(state.db.delete_source_tree(&source_id, &child_ids).await)?;
             return Ok(());
         }
     }
     e(state.db.delete_source(&source_id).await)?;
-    // Git and Notion sources leave cache dirs behind — no-ops otherwise.
-    crate::git::remove_cache(&app_data_dir(&state), &source_id);
-    let notion_cache = crate::notion::cache_dir(&app_data_dir(&state), &source_id);
+    cleanup_source_files(&state, &source_id);
+    Ok(())
+}
+
+/// Remove a deleted source's on-disk leavings: git and Notion cache dirs
+/// (no-ops for other types), the gallery thumbnail, and the og:image cache.
+fn cleanup_source_files(state: &AppState, source_id: &str) {
+    let data_dir = app_data_dir(state);
+    crate::git::remove_cache(&data_dir, source_id);
+    let notion_cache = crate::notion::cache_dir(&data_dir, source_id);
     if notion_cache.exists() {
         let _ = std::fs::remove_dir_all(&notion_cache);
     }
-    let _ = std::fs::remove_file(thumb_path(&state, &source_id));
-    let _ = std::fs::remove_file(og_cache_path(&state, &source_id));
+    let _ = std::fs::remove_file(thumb_path(state, source_id));
+    let _ = std::fs::remove_file(og_cache_path(state, source_id));
+}
+
+/// Bulk-delete a selection (docs/RFC-multi-select.md): two Lance predicate
+/// deletes total via `db.delete_sources`, however many rows are selected.
+/// Selected folder-like parents take their children along, exactly like the
+/// single delete. Shared by the Tauri command and the MCP tool.
+pub(crate) async fn delete_sources_impl(
+    state: &AppState,
+    notebook_id: &str,
+    source_ids: &[String],
+) -> anyhow::Result<()> {
+    if source_ids.is_empty() {
+        return Ok(());
+    }
+    let all = state.db.list_sources(notebook_id).await?;
+    let selected: std::collections::HashSet<&str> = source_ids.iter().map(String::as_str).collect();
+    // Children of selected parents whose own row wasn't selected — their
+    // chunks must be enumerated for the bulk delete's owner list.
+    let child_ids: Vec<String> = all
+        .iter()
+        .filter(|s| selected.contains(s.parent_id.as_str()) && !selected.contains(s.id.as_str()))
+        .map(|s| s.id.clone())
+        .collect();
+    for id in source_ids.iter().chain(child_ids.iter()) {
+        cleanup_source_files(state, id);
+    }
+    state.db.delete_sources(source_ids, &child_ids).await?;
+    state.db.touch_notebook(notebook_id, now()).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_sources(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    source_ids: Vec<String>,
+) -> Result<(), String> {
+    e(delete_sources_impl(&state, &notebook_id, &source_ids).await)
+}
+
+/// Apply one tag string to a whole selection (docs/RFC-multi-select.md) —
+/// per-row updates server-side, one IPC call. Tag writes are cheap row
+/// updates (no re-embed), so a loop here is fine where a delete loop wasn't.
+#[tauri::command]
+pub async fn set_sources_tags(
+    state: State<'_, AppState>,
+    source_ids: Vec<String>,
+    tags: String,
+) -> Result<(), String> {
+    for id in &source_ids {
+        e(set_source_tags_impl(&state, id, &tags).await)?;
+    }
     Ok(())
 }
 
@@ -3552,6 +3681,8 @@ async fn store_failed_child(
         mtime,
         tags: String::new(),
         note: String::new(),
+        fetched_at: now(),
+        fetch_failures: 0,
     };
     state.db.insert_source(&source, &[], &[]).await
 }
@@ -3583,6 +3714,8 @@ async fn store_placeholder_child(
         mtime,
         tags: String::new(),
         note: String::new(),
+        fetched_at: now(),
+        fetch_failures: 0,
     };
     state.db.insert_source(&source, &[], &[]).await
 }
@@ -4176,6 +4309,8 @@ pub async fn add_source_folder(
         mtime: 0,
         tags: String::new(),
         note: String::new(),
+        fetched_at: now(),
+        fetch_failures: 0,
     };
     e(state.db.insert_source(&folder, &[], &[]).await)?;
     e(rescan_one_folder(Some(&app), &state, &folder, true).await)?;
@@ -7761,6 +7896,22 @@ pub async fn delete_note(
         let _ = std::fs::remove_file(path);
     }
     e(state.db.delete_note(&id).await)
+}
+
+/// Bulk note delete (docs/RFC-multi-select.md): one IPC call, three Lance
+/// predicate deletes, plus each note's episode audio if it has one.
+#[tauri::command]
+pub async fn delete_notes(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+) -> Result<(), String> {
+    for id in &ids {
+        if let Some(path) = audio_path(&app, id) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    e(state.db.delete_notes(&ids).await)
 }
 
 // ---- Audio overview ---------------------------------------------------------

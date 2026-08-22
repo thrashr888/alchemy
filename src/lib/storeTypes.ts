@@ -1,6 +1,7 @@
 import type {
   AiConfig,
   ChatConfig,
+  HygieneIssue,
   KokoroStatus,
   Message,
   ModelHealth,
@@ -56,11 +57,26 @@ export interface Migration {
   title: string;
 }
 
+/** Finder-style UI selection (RFC-multi-select) — which rows a batch verb
+ *  acts on. Deliberately separate from `selectedSourceIds` (chat scope):
+ *  one is "in my retrieval context", the other is "about to be operated
+ *  on". One selection at a time, app-wide, like Finder windows. */
+export interface Picked {
+  kind: "sources" | "notes";
+  ids: string[];
+  /** Shift-click range endpoint: the row a plain/cmd click last landed on. */
+  anchor: string | null;
+}
+
 export interface AppState {
   notebooks: Notebook[];
   currentId: string | null;
   sources: Source[];
   selectedSourceIds: Record<string, boolean> | null;
+  picked: Picked | null;
+  /** Latest hygiene classification for the current notebook
+   *  (RFC-source-hygiene): drives row badges and the review modal. */
+  hygiene: HygieneIssue[];
   messages: Message[];
   messagesHasMore: boolean;
   messagesLoadingOlder: boolean;
@@ -238,6 +254,31 @@ export interface AppState {
   deleteSource: (id: string) => Promise<void>;
   toggleSourceSelected: (id: string) => void;
   setAllSourcesSelected: (selected: boolean) => void;
+
+  // Finder-style selection (RFC-multi-select). Range order comes from the
+  // caller's visible row order — the store never re-derives list layout.
+  /** Replace the selection with one row (plain click / right-click outside). */
+  pickOne: (kind: Picked["kind"], id: string) => void;
+  /** Toggle one row in/out (cmd-click). */
+  pickToggle: (kind: Picked["kind"], id: string) => void;
+  /** Select anchor→id within the given visible order (shift-click). */
+  pickRange: (kind: Picked["kind"], orderedIds: string[], id: string) => void;
+  /** Marquee result: replace, or union with the existing selection. */
+  pickSet: (kind: Picked["kind"], ids: string[], additive: boolean) => void;
+  /** Select-all within one list (⌘A). */
+  pickAll: (kind: Picked["kind"], ids: string[]) => void;
+  clearPicked: () => void;
+
+  // Batch verbs (RFC-multi-select): one IPC call, one re-list, one toast.
+  refreshSourcesBatch: (sourceIds: string[]) => Promise<void>;
+  deleteSourcesBatch: (sourceIds: string[]) => Promise<void>;
+  setSourcesTagsBatch: (sourceIds: string[], tags: string) => Promise<void>;
+  deleteNotesBatch: (noteIds: string[]) => Promise<void>;
+
+  /** Re-run the hygiene classification for the current notebook. */
+  refreshHygiene: () => Promise<void>;
+  /** "Keep" an unreachable source: clear strikes, restart the cadence. */
+  hygieneKeep: (sourceId: string) => Promise<void>;
   /** "Ask about this source": scope the chat to one source (a folder scopes
    *  to its files), land in the composer ready to type. */
   askAboutSource: (id: string) => void;

@@ -245,6 +245,7 @@ impl Db {
         db.migrate_sources().await?;
         db.migrate_source_image().await?;
         db.migrate_source_tags_note().await?;
+        db.migrate_source_fetch().await?;
         db.backfill_blank_titles().await?;
         db.ensure_table(T_MESSAGES, messages_schema()).await?;
         db.migrate_messages().await?;
@@ -278,6 +279,26 @@ impl Db {
             .transform(lancedb::table::NewColumnTransform::SqlExpressions(vec![(
                 column.to_string(),
                 format!("'{}'", esc(default)),
+            )]))
+            .execute()
+            .await
+            .with_context(|| format!("failed to add {table}.{column}"))?;
+        Ok(())
+    }
+
+    /// Add a missing Int64 column in place, backfilled by a SQL expression
+    /// evaluated per row — a constant (`"0"`) or an existing column
+    /// (`"created_at"`). Same atomic add_columns idiom as
+    /// `add_string_column`.
+    async fn add_i64_column(&self, table: &str, column: &str, expr: &str) -> Result<()> {
+        let tbl = self.conn.open_table(table).execute().await?;
+        if tbl.schema().await?.field_with_name(column).is_ok() {
+            return Ok(());
+        }
+        tbl.add_columns()
+            .transform(lancedb::table::NewColumnTransform::SqlExpressions(vec![(
+                column.to_string(),
+                format!("CAST({expr} AS BIGINT)"),
             )]))
             .execute()
             .await
@@ -575,6 +596,8 @@ impl Db {
                     image_url: String::new(),
                     tags: String::new(),
                     note: String::new(),
+                    fetched_at: ca.value(i),
+                    fetch_failures: 0,
                     id: id.value(i).to_string(),
                     notebook_id: nb.value(i).to_string(),
                     title: title.value(i).to_string(),
@@ -621,6 +644,19 @@ impl Db {
         }
         self.add_string_column(T_SOURCES, "tags", "").await?;
         self.add_string_column(T_SOURCES, "note", "").await
+    }
+
+    /// Add the `fetched_at` / `fetch_failures` columns to pre-existing
+    /// source tables (docs/RFC-source-hygiene.md). `fetched_at` backfills
+    /// from `created_at` — the honest floor: the content is at least that
+    /// fresh, and hygiene ages it from there.
+    async fn migrate_source_fetch(&self) -> Result<()> {
+        if !self.table_exists(T_SOURCES).await? {
+            return Ok(());
+        }
+        self.add_i64_column(T_SOURCES, "fetched_at", "created_at")
+            .await?;
+        self.add_i64_column(T_SOURCES, "fetch_failures", "0").await
     }
 
     async fn table_exists(&self, name: &str) -> Result<bool> {
@@ -922,6 +958,8 @@ impl Db {
             "image_url",
             "tags",
             "note",
+            "fetched_at",
+            "fetch_failures",
         ];
         let batches = if with_content {
             self.collect(T_SOURCES, filter).await?
@@ -953,12 +991,16 @@ impl Db {
             let image = str_col(b, "image_url")?;
             let tags = str_col(b, "tags")?;
             let note = str_col(b, "note")?;
+            let fetched = i64_col(b, "fetched_at")?;
+            let failures = i64_col(b, "fetch_failures")?;
             for i in 0..b.num_rows() {
                 sources.push(Source {
                     author: author.value(i).to_string(),
                     image_url: image.value(i).to_string(),
                     tags: tags.value(i).to_string(),
                     note: note.value(i).to_string(),
+                    fetched_at: fetched.value(i),
+                    fetch_failures: failures.value(i),
                     id: id.value(i).to_string(),
                     notebook_id: nb.value(i).to_string(),
                     title: title.value(i).to_string(),
@@ -1035,6 +1077,32 @@ impl Db {
             false,
         )
         .await
+    }
+
+    /// Stamp a source's freshness pair (docs/RFC-source-hygiene.md) without
+    /// touching content or chunks: a background probe failure keeps the
+    /// last-good `fetched_at` and bumps `fetch_failures`; a "Keep" from the
+    /// hygiene review resets the count.
+    pub async fn set_source_fetch(
+        &self,
+        source_id: &str,
+        fetched_at: i64,
+        fetch_failures: i64,
+    ) -> Result<()> {
+        let tbl = self.conn.open_table(T_SOURCES).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(source_id)))
+            .column("fetched_at", fetched_at.to_string())
+            .column("fetch_failures", fetch_failures.to_string())
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    /// Every web-url source across all notebooks (metadata only) — the
+    /// hygiene sweep's worklist (docs/RFC-source-hygiene.md).
+    pub async fn all_url_sources(&self) -> Result<Vec<Source>> {
+        self.query_sources(Some("source_type = 'url'"), false).await
     }
 
     /// Update a source's recorded file mtime without touching its chunks.
@@ -1517,11 +1585,24 @@ impl Db {
     /// folder was 96+ sequential Lance transactions — slow enough to trip the
     /// IPC timeout; this is two deletes total for the whole tree.
     pub async fn delete_source_tree(&self, folder_id: &str, child_ids: &[String]) -> Result<()> {
-        // Every owner id whose chunks (verbatim + gist rows) must go: the
-        // folder itself plus each child.
-        let mut owners: Vec<String> = Vec::with_capacity(child_ids.len() + 1);
-        owners.push(folder_id.to_string());
-        owners.extend(child_ids.iter().cloned());
+        self.delete_sources(std::slice::from_ref(&folder_id.to_string()), child_ids)
+            .await
+    }
+
+    /// Bulk-delete an arbitrary set of sources (docs/RFC-multi-select.md):
+    /// two predicate deletes total, whatever the selection size — the
+    /// delete_source_tree lesson applied to multi-select. `ids` are the
+    /// selected rows (any of which may be folder-like parents whose children
+    /// go too — one `parent_id IN` arm covers them all); `child_ids` are
+    /// those children, passed separately because their chunk owners must be
+    /// enumerated.
+    pub async fn delete_sources(&self, ids: &[String], child_ids: &[String]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        // Every owner id whose chunks (verbatim + gist + annotation rows)
+        // must go: each selected source plus each child.
+        let owners: Vec<&String> = ids.iter().chain(child_ids.iter()).collect();
         let quoted = |prefix: &str| {
             owners
                 .iter()
@@ -1536,10 +1617,15 @@ impl Db {
             quoted(SNOTE_CHUNK_PREFIX)
         );
         self.delete_where(T_CHUNKS, &pred).await?;
-        // One delete for the folder row and every row parented to it.
+        // One delete for the selected rows and every row parented to one.
+        let id_list = ids
+            .iter()
+            .map(|id| format!("'{}'", esc(id)))
+            .collect::<Vec<_>>()
+            .join(", ");
         self.delete_where(
             T_SOURCES,
-            &format!("id = '{0}' OR parent_id = '{0}'", esc(folder_id)),
+            &format!("id IN ({id_list}) OR parent_id IN ({id_list})"),
         )
         .await?;
         Ok(())
@@ -2479,6 +2565,30 @@ impl Db {
             .await
     }
 
+    /// Bulk-delete notes (docs/RFC-multi-select.md): three predicate deletes
+    /// total — indexed chunks, usage rows, note rows — whatever the
+    /// selection size, mirroring `delete_sources`.
+    pub async fn delete_notes(&self, ids: &[String]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let quoted = |prefix: &str| {
+            ids.iter()
+                .map(|id| format!("'{prefix}{}'", esc(id)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        self.delete_where(
+            T_CHUNKS,
+            &format!("source_id IN ({})", quoted(NOTE_CHUNK_PREFIX)),
+        )
+        .await?;
+        self.delete_where(T_NOTE_USAGE, &format!("note_id IN ({})", quoted("")))
+            .await?;
+        self.delete_where(T_NOTES, &format!("id IN ({})", quoted("")))
+            .await
+    }
+
     /// Drop a note's chunks from the retrieval index (no-op if unindexed).
     pub async fn delete_note_chunks(&self, note_id: &str) -> Result<()> {
         let pred = format!("source_id = '{NOTE_CHUNK_PREFIX}{}'", esc(note_id));
@@ -3337,6 +3447,8 @@ fn source_batch(schema: &SchemaRef, sources: &[Source]) -> Result<RecordBatch> {
             s(|x| x.image_url.clone()),
             s(|x| x.tags.clone()),
             s(|x| x.note.clone()),
+            i(|x| x.fetched_at),
+            i(|x| x.fetch_failures),
         ],
     )?)
 }
@@ -3451,6 +3563,8 @@ fn sources_schema() -> SchemaRef {
         Field::new("image_url", DataType::Utf8, false),
         Field::new("tags", DataType::Utf8, false),
         Field::new("note", DataType::Utf8, false),
+        Field::new("fetched_at", DataType::Int64, false),
+        Field::new("fetch_failures", DataType::Int64, false),
     ]))
 }
 
@@ -3923,6 +4037,8 @@ mod tests {
             image_url: String::new(),
             tags: String::new(),
             note: String::new(),
+            fetched_at: 0,
+            fetch_failures: 0,
         };
         db.insert_source(&src, &[], &[]).await.expect("insert");
 

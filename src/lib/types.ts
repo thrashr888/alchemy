@@ -96,6 +96,23 @@ export interface Source {
   /** The user's one annotation on this source ("why I saved this");
    *  indexed for retrieval as their own judgment. */
   note: string;
+  /** When the content was last successfully ingested from its origin
+   *  (unix millis) — hygiene's freshness signal (RFC-source-hygiene). */
+  fetchedAt: number;
+  /** Consecutive background refresh failures; reset on success. At 3 the
+   *  source is flagged "unreachable" instead of being retried forever. */
+  fetchFailures: number;
+}
+
+/** One flagged source from the hygiene check (RFC-source-hygiene).
+ *  "unreachable" | "missing-file" | "duplicate" | "husk" are proposed
+ *  removals (never automatic); "stale" is informational — the background
+ *  sweep re-fetches those itself. */
+export interface HygieneIssue {
+  sourceId: string;
+  title: string;
+  bucket: "unreachable" | "missing-file" | "duplicate" | "husk" | "stale";
+  detail: string;
 }
 
 /** One pickable Mac-provider item (a calendar range, reminders list, note…). */
@@ -548,6 +565,11 @@ export interface AiConfig {
    *  phase 2): one small-model call per unknown failure. On by default; the
    *  toggle is cost control. */
   selfDiagnose: boolean;
+  /** Source hygiene sweep (RFC-source-hygiene): background re-fetch of
+   *  aging url sources + unreachable flagging. On by default; cost control. */
+  sourceHygiene: boolean;
+  /** Days before a url source counts as stale and gets re-fetched. */
+  hygieneRefreshDays: number;
 }
 
 /** One passage behind a meta-chat answer: what it is and where it lives. */

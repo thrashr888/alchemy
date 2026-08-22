@@ -723,6 +723,8 @@ async fn insert_prepared(db: &Db, notebook_id: &str, ts: i64, p: Prepared) -> an
         author: String::new(),
         tags: String::new(),
         note: String::new(),
+        fetched_at: ts,
+        fetch_failures: 0,
     };
     db.insert_source(&source, &p.chunks, &p.embeddings).await
 }

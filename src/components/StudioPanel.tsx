@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode } from "react";
+import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import {
@@ -10,10 +10,12 @@ import {
   Badge,
   ResizeHandle,
   RowMenu,
+  type RowMenuItem,
   Spinner,
   CardAction,
   useConfirm,
   useHoverCard,
+  useMarquee,
 } from "./ui";
 import { Reports } from "./Reports";
 import { RichEditor } from "./RichEditor";
@@ -218,7 +220,101 @@ export function StudioPanel() {
   const noteReadsBaseline = useStore((s) => s.noteReadsBaseline);
   const markNotesRead = useStore((s) => s.markNotesRead);
   const readerOpen = useStore((s) => s.reader.open);
+  const picked = useStore((s) => s.picked);
+  const pickOne = useStore((s) => s.pickOne);
+  const pickToggle = useStore((s) => s.pickToggle);
+  const pickRange = useStore((s) => s.pickRange);
+  const pickSet = useStore((s) => s.pickSet);
+  const clearPicked = useStore((s) => s.clearPicked);
+  const deleteNotesBatch = useStore((s) => s.deleteNotesBatch);
   const { confirm, dialog: confirmDialog } = useConfirm();
+
+  // ---- Finder-style selection over the notes list (RFC-multi-select) ----
+  const pickedNoteIds = useMemo(
+    () => new Set(picked?.kind === "notes" ? picked.ids : []),
+    [picked],
+  );
+  const visibleNoteIds = notes
+    .filter((n) => n.status !== "archived")
+    .map((n) => n.id);
+  const visibleNoteIdsRef = useRef(visibleNoteIds);
+  visibleNoteIdsRef.current = visibleNoteIds;
+
+  const notesListRef = useRef<HTMLDivElement>(null);
+  // Additive drags union against the pre-drag selection (see SourcesPanel).
+  const marqueeBase = useRef<string[]>([]);
+  const { onPointerDown: marqueeDown, marquee, justEnded } = useMarquee({
+    containerRef: notesListRef,
+    onStart: (additive) => {
+      const p = useStore.getState().picked;
+      marqueeBase.current = additive && p?.kind === "notes" ? p.ids : [];
+    },
+    onSelect: (ids) =>
+      pickSet("notes", [...new Set([...marqueeBase.current, ...ids])], false),
+    onClearBackground: clearPicked,
+  });
+
+  function noteBatchItems(ids: string[]): RowMenuItem[] {
+    const n = ids.length;
+    return [
+      {
+        label: `Copy ${n} notes`,
+        icon: <Copy className="h-3.5 w-3.5" />,
+        onClick: () => {
+          const all = useStore.getState().notes;
+          const text = ids
+            .map((id) => all.find((x) => x.id === id))
+            .filter((x): x is Note => !!x)
+            .map((x) => `# ${x.title}\n\n${x.content}`)
+            .join("\n\n---\n\n");
+          void navigator.clipboard.writeText(text);
+          useStore.getState().pushToast("success", `${n} notes copied`);
+        },
+      },
+      {
+        label: `Delete ${n} notes…`,
+        icon: <Trash2 className="h-3.5 w-3.5" />,
+        danger: true,
+        onClick: () => void confirmDeleteNotes(ids),
+      },
+    ];
+  }
+
+  async function confirmDeleteNotes(ids: string[]) {
+    if (
+      await confirm({
+        title: `Delete ${ids.length} notes?`,
+        message: "The selected notes will be permanently removed.",
+        confirmLabel: "Delete",
+        danger: true,
+      })
+    )
+      void deleteNotesBatch(ids);
+  }
+  const confirmDeleteNotesRef = useRef(confirmDeleteNotes);
+  confirmDeleteNotesRef.current = confirmDeleteNotes;
+
+  // ⌘A / Delete apply to notes only while a notes selection is active —
+  // the sources panel owns the default (see SourcesPanel's handler).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (shortcutBlocked(e)) return;
+      const p = useStore.getState().picked;
+      if (p?.kind !== "notes") return;
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        useStore.getState().pickAll("notes", visibleNoteIdsRef.current);
+      } else if (
+        (e.key === "Backspace" || e.key === "Delete") &&
+        p.ids.length > 0
+      ) {
+        e.preventDefault();
+        void confirmDeleteNotesRef.current(p.ids);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Opening a note is what marks it read — the activity dot means "not
   // opened yet", so it clears here and nowhere else. Notes read in the
@@ -521,7 +617,7 @@ export function StudioPanel() {
           </Button>
         </div>
 
-        <div className="px-2 pb-2">
+        <div ref={notesListRef} onPointerDown={marqueeDown} className="px-2 pb-2">
           {notes.length === 0 ? (
             <EmptyState
               icon={<StickyNote className="h-6 w-6" />}
@@ -533,6 +629,7 @@ export function StudioPanel() {
               {notes.filter((n) => n.status !== "archived").map((n) => (
                 <div
                   key={n.id}
+                  data-pick-id={n.id}
                   onMouseEnter={(e) => showCard(e, noteCard(n))}
                   onMouseLeave={hideCard}
                   className={cn(
@@ -543,11 +640,25 @@ export function StudioPanel() {
                     // carry the card; a hover wash marks the target.
                     "group relative cursor-pointer rounded-md px-3 py-2 transition-colors hover:bg-surface-2",
                     n.status === "stale" && "opacity-60",
+                    pickedNoteIds.has(n.id) &&
+                      "bg-primary/10 hover:bg-primary/15",
                   )}
                 >
                   <CardAction
                     label={`Open note ${n.title}`}
-                    onClick={() => openNoteCard(n)}
+                    onClick={(e) => {
+                      if (justEnded()) return;
+                      if (e.metaKey || e.ctrlKey) {
+                        pickToggle("notes", n.id);
+                        return;
+                      }
+                      if (e.shiftKey) {
+                        pickRange("notes", visibleNoteIds, n.id);
+                        return;
+                      }
+                      pickOne("notes", n.id);
+                      openNoteCard(n);
+                    }}
                   />
                   <div className="pointer-events-none relative z-10 flex items-center gap-2">
                     <span
@@ -573,6 +684,15 @@ export function StudioPanel() {
                       className="pointer-events-auto z-20"
                       onOpen={hideCard}
                       label={`Options for "${n.title}"`}
+                      contextItems={() => {
+                        if (
+                          pickedNoteIds.has(n.id) &&
+                          pickedNoteIds.size > 1
+                        )
+                          return noteBatchItems([...pickedNoteIds]);
+                        pickOne("notes", n.id);
+                        return null;
+                      }}
                       items={[
                         {
                           label: "Copy text",
@@ -741,6 +861,7 @@ export function StudioPanel() {
         </form>
       </Modal>
 
+      {marquee}
       {confirmDialog}
       {hoverCard}
     </div>

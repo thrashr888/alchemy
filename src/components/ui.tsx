@@ -283,7 +283,9 @@ export function CardAction({
   className,
 }: {
   label: string;
-  onClick: () => void;
+  /** Receives the click event so hosts can branch on modifier keys
+   *  (shift/cmd selection, RFC-multi-select). */
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
   className?: string;
 }) {
   return (
@@ -291,12 +293,119 @@ export function CardAction({
       type="button"
       aria-label={label}
       onClick={onClick}
+      // Marks this as the row's own surface, not a control: the marquee
+      // hook lets rubber-band drags start here (Finder-style) while real
+      // controls (menus, checkboxes) still block them.
+      data-card-action
       className={cn(
         "absolute inset-0 z-0 rounded-[inherit] outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
         className,
       )}
     />
   );
+}
+
+/**
+ * Finder-style rubber-band selection over a scrollable list
+ * (RFC-multi-select). Attach the returned handlers to the scroll container
+ * and stamp each selectable row with `data-pick-id`. The drag draws a fixed
+ * overlay rectangle and reports the intersecting ids on every move
+ * (additive when shift/cmd is held). A sub-threshold press on empty space
+ * clears the selection; a drag that actually started suppresses the click
+ * that follows it — check `justEnded()` in row click handlers.
+ */
+export function useMarquee({
+  containerRef,
+  onStart,
+  onSelect,
+  onClearBackground,
+}: {
+  containerRef: React.RefObject<HTMLElement | null>;
+  /** Fires once when a drag passes the threshold — hosts snapshot the
+   *  pre-drag selection here so an additive drag unions against the
+   *  selection as it was, not as the drag mutates it. */
+  onStart?: (additive: boolean) => void;
+  onSelect: (ids: string[], additive: boolean) => void;
+  onClearBackground?: () => void;
+}) {
+  const [rect, setRect] = React.useState<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null>(null);
+  const endedAt = React.useRef(0);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    const t = e.target as HTMLElement;
+    // Real controls keep their gestures; the row surface (CardAction) and
+    // true background both start a marquee.
+    if (
+      t.closest(
+        "button:not([data-card-action]), input, a, textarea, select, [role='menu']",
+      )
+    )
+      return;
+    const container = containerRef.current;
+    if (!container) return;
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+    const onBackground = !t.closest("[data-pick-id]");
+    let started = false;
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - x0;
+      const dy = ev.clientY - y0;
+      if (!started && Math.hypot(dx, dy) < 4) return;
+      if (!started) {
+        started = true;
+        // Kill text selection for the duration of the drag.
+        document.body.style.userSelect = "none";
+        onStart?.(additive);
+      }
+      const x = Math.min(x0, ev.clientX);
+      const y = Math.min(y0, ev.clientY);
+      const w = Math.abs(dx);
+      const h = Math.abs(dy);
+      setRect({ x, y, w, h });
+      const ids: string[] = [];
+      container.querySelectorAll<HTMLElement>("[data-pick-id]").forEach((el) => {
+        const r = el.getBoundingClientRect();
+        if (r.left < x + w && r.right > x && r.top < y + h && r.bottom > y) {
+          const id = el.getAttribute("data-pick-id");
+          if (id) ids.push(id);
+        }
+      });
+      onSelect(ids, additive);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.style.userSelect = "";
+      setRect(null);
+      if (started) endedAt.current = Date.now();
+      else if (onBackground && !additive) onClearBackground?.();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  /** True right after a drag finished — the click that follows it is the
+   *  drag's tail, not an activation. */
+  const justEnded = () => Date.now() - endedAt.current < 200;
+
+  const marquee = rect
+    ? createPortal(
+        <div
+          className="pointer-events-none fixed z-50 rounded-sm border border-primary/50 bg-primary/10"
+          style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
+        />,
+        document.body,
+      )
+    : null;
+
+  return { onPointerDown, marquee, justEnded };
 }
 
 /**
@@ -701,6 +810,7 @@ export function RowMenu({
   label = "Options",
   className,
   onOpen,
+  contextItems,
 }: {
   items: RowMenuItem[];
   label?: string;
@@ -708,6 +818,11 @@ export function RowMenu({
   /** Fires when the menu opens — hosts use it to dismiss hover cards,
    *  which never get their mouseleave once a menu/dialog takes the pointer. */
   onOpen?: () => void;
+  /** Called on right-click, before the menu opens. Return a replacement
+   *  item set (the multi-select batch verbs) to show instead of `items`,
+   *  or null/undefined to open the normal menu — side effects here (like
+   *  collapsing the selection to this row) are welcome (RFC-multi-select). */
+  contextItems?: () => RowMenuItem[] | null | undefined;
 }) {
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef<HTMLDivElement>(null);
@@ -718,14 +833,37 @@ export function RowMenu({
   // borders), so an in-row absolute menu keeps losing paint-order fights.
   // Fixed-in-portal escapes every ancestor context and clip.
   const [pos, setPos] = React.useState<React.CSSProperties | null>(null);
+  // Right-click opens at the cursor (Finder-style) rather than the ⋯
+  // trigger, and may swap in the batch item set for a multi-selection.
+  const [ctxPos, setCtxPos] = React.useState<{ x: number; y: number } | null>(
+    null,
+  );
+  const [swapItems, setSwapItems] = React.useState<RowMenuItem[] | null>(null);
+  // The contextmenu listener is attached once; the callback closes over
+  // per-render state (the current selection), so it rides a ref.
+  const contextItemsRef = React.useRef(contextItems);
+  contextItemsRef.current = contextItems;
 
   React.useLayoutEffect(() => {
-    if (!open || !menuRef.current || !triggerRef.current) {
+    if (!open || !menuRef.current) {
       if (!open) setPos(null);
       return;
     }
-    const t = triggerRef.current.getBoundingClientRect();
     const m = menuRef.current.getBoundingClientRect();
+    if (ctxPos) {
+      // Anchor at the cursor; flip up / clamp right at the viewport edges.
+      const style: React.CSSProperties = {
+        left: Math.max(8, Math.min(ctxPos.x, window.innerWidth - m.width - 8)),
+        top:
+          ctxPos.y + m.height > window.innerHeight - 8
+            ? Math.max(8, ctxPos.y - m.height)
+            : ctxPos.y,
+      };
+      setPos(style);
+      return;
+    }
+    if (!triggerRef.current) return;
+    const t = triggerRef.current.getBoundingClientRect();
     const up = t.bottom + 4 + m.height > window.innerHeight - 8;
     const style: React.CSSProperties = up
       ? { bottom: window.innerHeight - t.top + 4 }
@@ -735,6 +873,15 @@ export function RowMenu({
     style.left =
       left < 8 ? Math.min(t.left, window.innerWidth - m.width - 8) : left;
     setPos(style);
+  }, [open, ctxPos]);
+
+  // Closing forgets the right-click context — the ⋯ trigger reopens the
+  // normal menu at the trigger.
+  React.useEffect(() => {
+    if (!open) {
+      setCtxPos(null);
+      setSwapItems(null);
+    }
   }, [open]);
 
   // A fixed menu detaches from its trigger on scroll — close instead.
@@ -754,6 +901,8 @@ export function RowMenu({
     const onContextMenu = (e: MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
+      setSwapItems(contextItemsRef.current?.() ?? null);
+      setCtxPos({ x: e.clientX, y: e.clientY });
       setOpen(true);
     };
     row.addEventListener("contextmenu", onContextMenu);
@@ -865,7 +1014,7 @@ export function RowMenu({
             style={pos ?? { top: 0, left: 0, visibility: "hidden" }}
             className="menu-glass fixed z-50 w-44 overflow-hidden rounded-md py-1 shadow-[0_0_0_0.5px_var(--border-strong),0_8px_24px_-6px_rgba(0,0,0,0.4)]"
           >
-          {items.map((it) => (
+          {(swapItems ?? items).map((it) => (
             <button
               key={it.label}
               role="menuitem"
@@ -900,12 +1049,15 @@ export function RowMenu({
 export function Badge({
   children,
   className,
+  title,
 }: {
   children: React.ReactNode;
   className?: string;
+  title?: string;
 }) {
   return (
     <span
+      title={title}
       className={cn(
         "inline-flex items-center rounded px-1.5 h-[18px] text-micro font-medium",
         "bg-surface-2 text-muted-foreground border border-border",

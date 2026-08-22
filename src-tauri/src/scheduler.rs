@@ -184,6 +184,11 @@ async fn run_pass(app: &AppHandle) {
     // no-op pass.
     crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
 
+    // Source hygiene (docs/RFC-source-hygiene.md): re-fetch aging urls,
+    // count strikes on unreachable ones. Single-flight and budgeted like the
+    // gist sweep; its own config gate lives inside.
+    crate::hygiene::spawn_sweep(app);
+
     // Reports now run off-tick (below), so this pass never counts them —
     // the spawned batch stamps the tray itself when it lands.
     let ran = 0u32;
