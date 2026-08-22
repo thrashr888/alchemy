@@ -3,6 +3,7 @@ import { Cause, Duration, Effect, Schedule } from "effect";
 import { describe, IpcError, TimeoutError, type AppError } from "./errors";
 import type {
   ProviderModels,
+  AcpAgentInfo,
   ActivityStats,
   Citation,
   AiConfig,
@@ -602,6 +603,26 @@ export const api = {
   checkOllama: () => run(query<boolean>("check_ollama")),
   checkModels: () => run(query<ModelHealth>("check_models")),
   getModelStats: () => run(query<ModelStat[]>("get_model_stats")),
+
+  // Hosted agents (ACP)
+  acpAgents: () => run(query<AcpAgentInfo[]>("acp_agents")),
+  /** The running session's agent id for a notebook, or null. */
+  acpStatus: (notebookId: string) =>
+    run(query<string | null>("acp_status", { notebookId })),
+  /** Spawns the agent subprocess — npx-backed adapters can take a while on
+   *  first run, so this gets the long AI timeout, not the 30s command one. */
+  acpStart: (notebookId: string, agentId: string) =>
+    run(ai<void>("acp_start", { notebookId, agentId })),
+  acpPrompt: (notebookId: string, text: string) =>
+    run(cmd<void>("acp_prompt", { notebookId, text })),
+  acpCancel: (notebookId: string) =>
+    run(cmd<void>("acp_cancel", { notebookId })),
+  acpStop: (notebookId: string) => run(cmd<void>("acp_stop", { notebookId })),
+  acpPermission: (
+    notebookId: string,
+    requestId: string,
+    optionId: string | null,
+  ) => run(cmd<void>("acp_permission", { notebookId, requestId, optionId })),
 
   // Agent access (MCP)
   mcpStatus: () => run(query<McpStatus>("mcp_status")),
