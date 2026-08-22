@@ -10,6 +10,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useStore } from "@/lib/store";
 import { Button, Textarea } from "./ui";
 import { Markdown } from "./Markdown";
 import { cn } from "@/lib/utils";
@@ -19,26 +20,47 @@ import type {
   AcpStateEvent,
   AcpUpdateEvent,
 } from "@/lib/types";
+import type { AcpEntry as Entry } from "@/lib/storeTypes";
 
 /** Hosted-agent transcript (docs/RFC-acp-agents.md): the user's own coding
  *  agent, run over ACP with Alchemy's MCP server attached, rendered as turns.
  *  Separate from the RAG chat transcript — this one is the agent's stream,
- *  not our retrieval pipeline. */
-
-type Entry =
-  | { kind: "user"; text: string }
-  | { kind: "agent"; text: string }
-  | { kind: "thought"; text: string }
-  | { kind: "tool"; id: string; title: string; status: string };
+ *  not our retrieval pipeline. The transcript and agent choice live in the
+ *  store (per notebook), so the pane can unmount and come back without
+ *  presenting an amnesiac view. */
 
 const COMPOSER_MAX_H = 200;
+const NO_ENTRIES: Entry[] = [];
 
-export function AgentPane({ notebookId }: { notebookId: string }) {
+export function AgentPane({
+  notebookId,
+  visible = true,
+}: {
+  notebookId: string;
+  visible?: boolean;
+}) {
   const [agents, setAgents] = useState<AcpAgentInfo[] | null>(null);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
-  const [agentId, setAgentId] = useState<string | null>(null);
   const [state, setState] = useState<AcpStateEvent["state"] | null>(null);
-  const [entries, setEntries] = useState<Entry[]>([]);
+  const agentId = useStore(
+    (s) => s.acpPanes[notebookId]?.agentId ?? null,
+  );
+  const entries = useStore(
+    (s) => s.acpPanes[notebookId]?.entries ?? NO_ENTRIES,
+  );
+  const setAcpAgentId = useStore((s) => s.setAcpAgentId);
+  const setAcpEntries = useStore((s) => s.setAcpEntries);
+  const setAgentId = useCallback(
+    (id: string | null) => setAcpAgentId(notebookId, id),
+    [notebookId, setAcpAgentId],
+  );
+  const setEntries = useCallback(
+    (update: Entry[] | ((prev: Entry[]) => Entry[])) =>
+      setAcpEntries(notebookId, (prev) =>
+        typeof update === "function" ? update(prev) : update,
+      ),
+    [notebookId, setAcpEntries],
+  );
   const [permission, setPermission] = useState<AcpPermissionEvent | null>(null);
   const [draft, setDraft] = useState("");
   const [starting, setStarting] = useState(false);
@@ -142,10 +164,13 @@ export function AgentPane({ notebookId }: { notebookId: string }) {
     };
   }, [notebookId]);
 
+  // Also re-run on becoming visible: while the pane is hidden (Chat view in
+  // front) the scroll area has no height, so any pinning done then is lost.
   useEffect(() => {
+    if (!visible) return;
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [entries, permission]);
+  }, [entries, permission, visible]);
 
   /// Returns whether the session came up — a failed start must not fall
   /// through to a prompt, or the real error is buried under a second,

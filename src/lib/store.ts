@@ -1568,6 +1568,39 @@ export const useStore = create<AppState>((set, get) => {
       set({ messages: [], messagesHasMore: false });
     },
 
+    acpPanes: {},
+    setAcpAgentId: (notebookId, agentId) =>
+      set((s) => ({
+        acpPanes: {
+          ...s.acpPanes,
+          [notebookId]: {
+            entries: s.acpPanes[notebookId]?.entries ?? [],
+            agentId,
+          },
+        },
+      })),
+    setAcpEntries: (notebookId, update) =>
+      set((s) => {
+        const pane = s.acpPanes[notebookId] ?? { agentId: null, entries: [] };
+        return {
+          acpPanes: {
+            ...s.acpPanes,
+            [notebookId]: { ...pane, entries: update(pane.entries) },
+          },
+        };
+      }),
+    clearAcpPane: (notebookId) =>
+      set((s) => {
+        const pane = s.acpPanes[notebookId];
+        if (!pane || pane.entries.length === 0) return {};
+        return {
+          acpPanes: {
+            ...s.acpPanes,
+            [notebookId]: { ...pane, entries: [] },
+          },
+        };
+      }),
+
     generateArtifact: async (kind, prompt) => {
       const id = get().currentId;
       if (!id || get().generatingKind) return;

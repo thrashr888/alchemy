@@ -56,6 +56,22 @@ export interface Migration {
   title: string;
 }
 
+/** One row of a hosted-agent transcript (docs/RFC-acp-agents.md). */
+export type AcpEntry =
+  | { kind: "user"; text: string }
+  | { kind: "agent"; text: string }
+  | { kind: "thought"; text: string }
+  | { kind: "tool"; id: string; title: string; status: string };
+
+/** Hosted-agent pane state that must outlive the pane: the transcript and
+ *  agent choice, kept per notebook so toggling Chat ↔ Agent (or remounting
+ *  the panel) restores the last session's view instead of resetting to the
+ *  first agent with an empty transcript. */
+export interface AcpPaneState {
+  agentId: string | null;
+  entries: AcpEntry[];
+}
+
 export interface AppState {
   notebooks: Notebook[];
   currentId: string | null;
@@ -271,6 +287,15 @@ export interface AppState {
   loadFollowups: () => Promise<void>;
   refreshSummary: () => Promise<void>;
   clearChat: () => Promise<void>;
+
+  /** Hosted-agent pane state per notebook; see AcpPaneState. */
+  acpPanes: Record<string, AcpPaneState>;
+  setAcpAgentId: (notebookId: string, agentId: string | null) => void;
+  setAcpEntries: (
+    notebookId: string,
+    update: (prev: AcpEntry[]) => AcpEntry[],
+  ) => void;
+  clearAcpPane: (notebookId: string) => void;
 
   generateArtifact: (kind: NoteKind, prompt?: string) => Promise<void>;
   generateFromTemplate: (template: Template) => Promise<void>;

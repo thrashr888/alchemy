@@ -127,7 +127,14 @@ detected agents, pick default, per-agent auth status.
   LanceDB dir: the agent's own file tools operate there, and notebook
   content stays reachable only through our MCP tools.
 - The pane stops its session on unmount, so no agent subprocess outlives the
-  UI driving it; the SDK's `ChildGuard` reaps the process group.
+  UI driving it; the SDK's `ChildGuard` reaps the process group. Unmount
+  means the notebook went away, not a view flip: the pane stays mounted
+  (hidden) behind the Chat view, because toggling Chat ↔ Agent used to kill
+  the live session and reset the picker to the first agent with an empty
+  transcript. The transcript and agent choice also persist per notebook in
+  the store (`acpPanes`), and the header gains a Clear button in agent view —
+  clearing ends the session too, since a live agent quietly keeping the
+  cleared context would belie the empty pane.
 - **A session can open with no notebook access, and used to do it silently.**
   If the MCP server isn't running, `session/new` simply carries no
   `mcpServers` — the agent works but can't see a single source, which is the
