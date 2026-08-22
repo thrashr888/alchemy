@@ -169,17 +169,23 @@ Exercised live against the dev app, opencode 1.18.15:
   a running session.
 - No orphaned agent subprocesses after stop.
 
-**Not yet covered, and worth knowing:**
+**Closed 2026-08-21, live against the dev app (Claude Code adapter 0.16.2):**
 
-- **The permission path has never fired.** opencode auto-allows tool use in
-  ACP mode, so `acp://permission` and `PermissionPrompt` are written but
-  unexercised — asking it to write a file produced no prompt. An agent with
-  stricter defaults (Claude Code) is needed to validate that flow.
-- **Claude Code end-to-end is unverified.** The adapter reaches `session/new`
-  but this machine's `claude` OAuth is expired ("OAuth session expired and
-  could not be refreshed"), which is environmental rather than an Alchemy
-  bug. Its *failure* path is now well covered — the notice, the sign-in hint,
-  Open Terminal, and Retry were all exercised against this exact failure —
-  but a successful Claude Code turn has never run. Re-test after signing in;
-  that run also validates permissions.
+- **The permission path works.** Claude Code's stricter defaults fired
+  `session/request_permission` for both an MCP tool (`list_notebooks`) and a
+  file `Write`; the in-pane prompt rendered Always Allow / Allow / Reject /
+  Cancel, Allow resumed the turn, and the tool chips transitioned to done.
+- **Claude Code end-to-end works.** After a fresh `claude` login: full turn
+  with parallel tool calls, the notebook list streamed back through the MCP
+  hand-off, and the file landed in the per-notebook scratch cwd.
+- **New scar: the CLAUDECODE env leak.** The SDK spawns agents with the
+  app's own env underneath the login-shell env and has no `env_clear`, so a
+  dev build launched from a Claude Code terminal passes `CLAUDECODE` down to
+  the adapter's `claude`, which refuses to nest and dies at `session/new`
+  with the same generic wire error as an auth failure. `launch()` now
+  overrides it to the empty string (reads as unset to the guard). Any
+  agent-driven dev run hits this; a Finder-launched app never does.
+
+**Still not covered:**
+
 - Gemini and Codex are detected but never launched.

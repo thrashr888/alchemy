@@ -115,8 +115,16 @@ impl AcpAgentKind {
     /// don't get dotfile PATH/auth), with provider API keys stripped so the
     /// CLI's own login is the credential — same scar as the headless
     /// providers. Blocking: callers run it off the async runtime.
+    ///
+    /// The SDK spawns with the app's own env underneath these additions and
+    /// offers no env_clear, so vars the app itself inherited leak through.
+    /// The one that bites: a dev build launched from a Claude Code terminal
+    /// carries CLAUDECODE, and the claude CLI refuses to nest ("cannot be
+    /// launched inside another Claude Code session") — the adapter then dies
+    /// at session/new with a generic wire error. Empty string reads as unset
+    /// to that guard.
     fn launch(self) -> Option<AcpAgentConfig> {
-        Some(self.command()?.envs(load_shell_env()))
+        Some(self.command()?.envs(load_shell_env()).env("CLAUDECODE", ""))
     }
 }
 
