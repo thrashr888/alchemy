@@ -903,6 +903,7 @@ export function RowMenu({
   className,
   onOpen,
   contextItems,
+  alwaysVisible = false,
 }: {
   items: RowMenuItem[];
   label?: string;
@@ -910,6 +911,10 @@ export function RowMenu({
   /** Fires when the menu opens — hosts use it to dismiss hover cards,
    *  which never get their mouseleave once a menu/dialog takes the pointer. */
   onOpen?: () => void;
+  /** Keep the trigger visible at rest instead of revealing it on hover.
+   *  For a menu that sits inline in a row (rather than floating over one),
+   *  appearing on hover reflows everything beside it. */
+  alwaysVisible?: boolean;
   /** Called on right-click, before the menu opens. Return a replacement
    *  item set (the multi-select batch verbs) to show instead of `items`,
    *  or null/undefined to open the normal menu — side effects here (like
@@ -1052,7 +1057,9 @@ export function RowMenu({
       className={cn(
         "relative shrink-0",
         className,
-        open ? "flex" : "hidden group-hover:flex group-focus-within:flex",
+        open || alwaysVisible
+          ? "flex"
+          : "hidden group-hover:flex group-focus-within:flex",
       )}
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => {

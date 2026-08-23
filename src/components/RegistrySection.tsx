@@ -1335,36 +1335,26 @@ function CardDetail({
       <div
         key={a.sourceId}
         data-pick-id={a.sourceId}
+        // Click selects, double-click opens — Finder's split. Opening on a
+        // single click made the row impossible to select by clicking, and a
+        // title button spanning the row left nowhere to begin a drag.
         onClick={(e) => {
           if (docJustEnded()) return;
           docPick.handleClick(e, a.sourceId);
         }}
+        onDoubleClick={() => openDoc(a)}
         className={cn(
-          // `group` is load-bearing: the unfile button below reveals on
-          // group-hover, and without this class it sat at opacity-0 forever
-          // — the control existed but could never be clicked.
-          "group flex items-center gap-2 border-b border-border py-2 last:border-b-0",
+          "group flex cursor-pointer items-center gap-2 border-b border-border py-2 last:border-b-0",
           docPick.pickedIds.has(a.sourceId) && "bg-primary/10",
         )}
       >
         <FileText className="h-3.5 w-3.5 shrink-0 text-subtle-foreground" />
-        <button
-          // data-card-action marks this as the row's own surface rather
-          // than a control: it spans most of the row, and the marquee skips
-          // buttons, so without it a drag could only ever start in the thin
-          // gaps around the title and selection looked broken here.
-          data-card-action
-          className="min-w-0 flex-1 truncate text-left text-body hover:text-primary"
-          onClick={(e) => {
-            // Modifier clicks and the tail of a drag are selection, not
-            // navigation — the row handler above owns them.
-            if (e.metaKey || e.ctrlKey || e.shiftKey || docJustEnded()) return;
-            openDoc(a);
-          }}
+        <span
+          className="min-w-0 flex-1 truncate text-left text-body"
           title={s?.title}
         >
           {s?.title ?? "Untitled document"}
-        </button>
+        </span>
         <span className="shrink-0 text-micro text-subtle-foreground">
           {notebooks.find((n) => n.id === a.notebookId)?.title}
         </span>
@@ -1395,15 +1385,24 @@ function CardDetail({
           </span>
         ) : (
           <span
-            className="shrink-0 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100"
+            // Always rendered, never revealed: this menu sits inline in the
+            // row, so fading it in on hover reflowed the metadata beside it
+            // every time the pointer crossed a row.
+            className="shrink-0"
             onClick={(e) => e.stopPropagation()}
           >
             <RowMenu
+              alwaysVisible
               label={`Filing options for "${s?.title ?? "this document"}"`}
               contextItems={() =>
                 docPick.contextItems(a.sourceId, docBatchItems)
               }
               items={[
+                {
+                  label: "Open document",
+                  icon: <FileText className="h-3.5 w-3.5" />,
+                  onClick: () => openDoc(a),
+                },
                 {
                   label: "Unfile — don't re-attach",
                   icon: <Trash2 className="h-3.5 w-3.5" />,
@@ -1476,6 +1475,9 @@ function CardDetail({
 
         <CardFacts card={card} onChanged={onChanged} />
 
+        {/* One marquee container over both document lists: a drag that
+            begins among the waiting rows should select there too. */}
+        <div ref={docsRef} onPointerDown={docMarqueeDown} className="select-none">
         {pending.length > 0 && (
           <section className="mt-6">
             <h2 className="text-badge font-medium uppercase tracking-wider text-subtle-foreground">
@@ -1501,15 +1503,10 @@ function CardDetail({
               hint="Attach a source from its ⋯ menu in the gallery or sources list."
             />
           ) : (
-            <div
-              ref={docsRef}
-              onPointerDown={docMarqueeDown}
-              className="mt-2 select-none"
-            >
-              {docs.map((a) => row(a, false))}
-            </div>
+            <div className="mt-2">{docs.map((a) => row(a, false))}</div>
           )}
         </section>
+        </div>
       </div>
       {docMarquee}
       {dialog}
