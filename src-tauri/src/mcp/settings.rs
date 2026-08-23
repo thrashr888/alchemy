@@ -173,20 +173,23 @@ impl AlchemyMcp {
         let messages = state.db.message_activity().await.map_err(internal)?;
         let notes = state.db.note_activity().await.map_err(internal)?;
         let sources = state.db.source_activity().await.map_err(internal)?;
-        let titles: std::collections::HashMap<String, String> = state
-            .db
-            .list_notebooks()
-            .await
-            .map_err(internal)?
-            .into_iter()
-            .map(|n| (n.id, n.title))
+        let all_notebooks = state.db.list_notebooks().await.map_err(internal)?;
+        // Same ranking rule the Activity pane uses — an agent asking "what am
+        // I most active in" should not be told about shelved notebooks.
+        let ranked_out: std::collections::HashSet<String> = all_notebooks
+            .iter()
+            .filter(|n| n.status == "archived" || n.status == "system")
+            .map(|n| n.id.clone())
             .collect();
+        let titles: std::collections::HashMap<String, String> =
+            all_notebooks.into_iter().map(|n| (n.id, n.title)).collect();
         let retrievals = crate::activity::trace_times(&state.trace_dir);
         json_result(&crate::activity::aggregate(
             &messages,
             &notes,
             &sources,
             &titles,
+            &ranked_out,
             &retrievals,
             chrono::Local::now().date_naive(),
         ))

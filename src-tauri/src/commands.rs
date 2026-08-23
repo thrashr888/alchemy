@@ -9721,16 +9721,25 @@ pub async fn activity_stats(
     let messages = e(state.db.message_activity().await)?;
     let notes = e(state.db.note_activity().await)?;
     let sources = e(state.db.source_activity().await)?;
-    let titles: std::collections::HashMap<String, String> = e(state.db.list_notebooks().await)?
-        .into_iter()
-        .map(|n| (n.id, n.title))
+    let all_notebooks = e(state.db.list_notebooks().await)?;
+    // Archived and system notebooks stay out of the "most active" ranking:
+    // both are already absent from the shelf, and neither is where the
+    // user's attention currently goes. Their turns still count everywhere
+    // else — totals, heatmap, peak hour — because they really happened.
+    let ranked_out: std::collections::HashSet<String> = all_notebooks
+        .iter()
+        .filter(|n| n.status == "archived" || n.status == "system")
+        .map(|n| n.id.clone())
         .collect();
+    let titles: std::collections::HashMap<String, String> =
+        all_notebooks.into_iter().map(|n| (n.id, n.title)).collect();
     let retrievals = crate::activity::trace_times(&state.trace_dir);
     Ok(crate::activity::aggregate(
         &messages,
         &notes,
         &sources,
         &titles,
+        &ranked_out,
         &retrievals,
         chrono::Local::now().date_naive(),
     ))

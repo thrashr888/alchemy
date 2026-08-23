@@ -66,6 +66,12 @@ pub fn aggregate(
     note_times: &[i64],
     sources: &[(String, i64, i64)],
     notebook_titles: &HashMap<String, String>,
+    // Notebooks to leave out of the "most active" ranking. Archiving a
+    // notebook means "stop showing me this" — it already leaves the shelf,
+    // and a set-aside notebook topping a list of where your attention goes
+    // is noise. Their turns still count toward totals, the heatmap, and
+    // peak hour: the work genuinely happened.
+    rank_excluded: &std::collections::HashSet<String>,
     retrieval_times: &[i64],
     today: NaiveDate,
 ) -> ActivityStats {
@@ -182,6 +188,9 @@ pub fn aggregate(
     // under one label and sink below every living one.
     let mut nb_label_counts: HashMap<String, i64> = HashMap::new();
     for (id, count) in notebook_counts {
+        if rank_excluded.contains(&id) {
+            continue;
+        }
         let label = notebook_titles
             .get(&id)
             .cloned()
@@ -249,7 +258,15 @@ mod tests {
 
     #[test]
     fn empty_inputs_are_a_fresh_install() {
-        let s = aggregate(&[], &[], &[], &HashMap::new(), &[], date(2026, 8, 20));
+        let s = aggregate(
+            &[],
+            &[],
+            &[],
+            &HashMap::new(),
+            &Default::default(),
+            &[],
+            date(2026, 8, 20),
+        );
         assert_eq!(s.total_messages, 0);
         assert_eq!(s.peak_hour, -1);
         assert_eq!(s.current_streak, 0);
@@ -273,6 +290,7 @@ mod tests {
             &notes,
             &[],
             &HashMap::new(),
+            &Default::default(),
             &[],
             date(2026, 8, 20),
         );
@@ -287,7 +305,15 @@ mod tests {
     #[test]
     fn current_streak_breaks_after_a_quiet_day() {
         let messages = vec![msg("nb1", "user", "", noon(2026, 8, 17), 1)];
-        let s = aggregate(&messages, &[], &[], &HashMap::new(), &[], date(2026, 8, 20));
+        let s = aggregate(
+            &messages,
+            &[],
+            &[],
+            &HashMap::new(),
+            &Default::default(),
+            &[],
+            date(2026, 8, 20),
+        );
         assert_eq!(s.longest_streak, 1);
         assert_eq!(s.current_streak, 0, "two days quiet = no live streak");
     }
@@ -312,12 +338,48 @@ mod tests {
             msg("nb1", "assistant", "Ollama", noon(2026, 8, 3), 10),
             msg("nb1", "assistant", "Ollama", noon(2026, 8, 4), 10),
         ];
-        let s = aggregate(&messages, &[], &[], &HashMap::new(), &[], date(2026, 8, 20));
+        let s = aggregate(
+            &messages,
+            &[],
+            &[],
+            &HashMap::new(),
+            &Default::default(),
+            &[],
+            date(2026, 8, 20),
+        );
         assert_eq!(s.favorite_model, "Ollama", "tie breaks to more recent");
         assert_eq!(s.models.len(), 2);
         assert_eq!(s.models[0].count, 2);
         assert_eq!(s.assistant_words, 40);
         assert_eq!(s.total_user_messages, 0);
+    }
+
+    #[test]
+    fn archived_notebooks_leave_the_ranking_but_keep_their_totals() {
+        let messages = vec![
+            msg("live", "user", "", noon(2026, 8, 1), 1),
+            msg("shelved", "user", "", noon(2026, 8, 1), 1),
+            msg("shelved", "user", "", noon(2026, 8, 1), 1),
+        ];
+        let titles = HashMap::from([
+            ("live".to_string(), "Research".to_string()),
+            ("shelved".to_string(), "QA fixtures".to_string()),
+        ]);
+        let excluded = std::collections::HashSet::from(["shelved".to_string()]);
+        let s = aggregate(
+            &messages,
+            &[],
+            &[],
+            &titles,
+            &excluded,
+            &[],
+            date(2026, 8, 20),
+        );
+        // Ranked out even though it has the most turns...
+        assert_eq!(s.notebooks.len(), 1);
+        assert_eq!(s.notebooks[0].label, "Research");
+        // ...but the work still counts toward the totals.
+        assert_eq!(s.total_messages, 3);
     }
 
     #[test]
@@ -328,7 +390,15 @@ mod tests {
             msg("kept", "user", "", noon(2026, 8, 1), 1),
         ];
         let titles = HashMap::from([("kept".to_string(), "Research".to_string())]);
-        let s = aggregate(&messages, &[], &[], &titles, &[], date(2026, 8, 20));
+        let s = aggregate(
+            &messages,
+            &[],
+            &[],
+            &titles,
+            &Default::default(),
+            &[],
+            date(2026, 8, 20),
+        );
         assert_eq!(s.notebooks.len(), 2);
         assert_eq!(s.notebooks[0].label, "Research");
         assert_eq!(s.notebooks[1].label, "(deleted)");
