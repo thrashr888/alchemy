@@ -88,6 +88,11 @@ impl TtftClock {
     }
 }
 
+/// Chat surfaces whose time-to-first-token is a fair measure of the model's
+/// own responsiveness, and so feed Activity's fastest-models ranking.
+/// "deep-research" is deliberately absent — see `AppState::record_ttft`.
+const RANKED_TTFT_PATHS: [&str; 3] = ["chat", "ask-everything", "agent-pane"];
+
 /// Where a deep-research turn spent its time before the answer streamed.
 /// Filled by `agent::run` as it works; read once for the timing trace.
 /// Atomics rather than a lock: the loop touches these on every step and the
@@ -229,10 +234,13 @@ impl AppState {
 
     /// Fold one answer's time-to-first-token into the running stats and
     /// leave a timing trace line. `path` names which chat surface produced
-    /// it (direct chat, deep research, ask-everything) so the trace can tell
-    /// them apart later; the per-model average deliberately pools them,
-    /// because "how long until this model starts answering me" is one
-    /// question regardless of which surface asked it.
+    /// it.
+    ///
+    /// Only surfaces whose wait reflects how fast the MODEL answers feed the
+    /// per-model ranking. Deep research is traced but not ranked: its time is
+    /// dominated by up to MAX_STEPS planner round trips before a single
+    /// answer token, so averaging it in would rank the mode rather than the
+    /// model, and one research turn would bury a model's real chat latency.
     ///
     /// A clock that never saw a token records nothing: a failed or stopped
     /// turn has no first token to time.
@@ -248,7 +256,8 @@ impl AppState {
         if ttft_ms == 0 {
             return;
         }
-        {
+        // Traced always; ranked only where the number means "model speed".
+        if RANKED_TTFT_PATHS.contains(&path) {
             let mut map = self.model_stats.lock().unwrap();
             let entry = map.entry(model.to_string()).or_default();
             entry.ttft_samples += 1;
