@@ -51,6 +51,43 @@ pub struct ModelStatAcc {
     pub last_ttft_ms: u64,
 }
 
+/// Wall-clock time to first token for one streamed answer: started when the
+/// user's turn is accepted (retrieval included, because that is the wait the
+/// user actually feels) and stopped by the first token the engine emits.
+///
+/// Cloneable so a streaming callback can hold one — every path that emits a
+/// token calls `mark`, and only the first call sticks.
+#[derive(Clone)]
+pub struct TtftClock {
+    start: std::time::Instant,
+    first_ms: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl TtftClock {
+    pub fn start() -> Self {
+        Self {
+            start: std::time::Instant::now(),
+            first_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
+
+    /// Record this instant if no token has arrived yet. Clamped to 1ms so an
+    /// instant first token still reads as measured rather than as "never".
+    pub fn mark(&self) {
+        let _ = self.first_ms.compare_exchange(
+            0,
+            (self.start.elapsed().as_millis() as u64).max(1),
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    /// Milliseconds to the first token; 0 when none ever arrived.
+    pub fn ttft_ms(&self) -> u64 {
+        self.first_ms.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
 pub struct AppState {
     pub db: Arc<Db>,
     pub ai: tokio::sync::RwLock<Ai>,
@@ -145,16 +182,50 @@ impl AppState {
         }
     }
 
-    /// Fold one chat's time-to-first-token into the running stats.
-    pub fn record_chat_ttft(&self, model: &str, ttft_ms: u64) {
-        let mut map = self.model_stats.lock().unwrap();
-        let entry = map.entry(model.to_string()).or_default();
-        entry.ttft_samples += 1;
-        entry.total_ttft_ms += ttft_ms;
-        entry.last_ttft_ms = ttft_ms;
-        if let Ok(json) = serde_json::to_string_pretty(&*map) {
-            let _ = std::fs::write(&self.stats_path, json);
+    /// Fold one answer's time-to-first-token into the running stats and
+    /// leave a timing trace line. `path` names which chat surface produced
+    /// it (direct chat, deep research, ask-everything) so the trace can tell
+    /// them apart later; the per-model average deliberately pools them,
+    /// because "how long until this model starts answering me" is one
+    /// question regardless of which surface asked it.
+    ///
+    /// A clock that never saw a token records nothing: a failed or stopped
+    /// turn has no first token to time.
+    pub fn record_ttft(
+        &self,
+        model: &str,
+        path: &str,
+        notebook_id: &str,
+        clock: &TtftClock,
+        phases: Option<(u64, u64)>,
+    ) {
+        let ttft_ms = clock.ttft_ms();
+        if ttft_ms == 0 {
+            return;
         }
+        {
+            let mut map = self.model_stats.lock().unwrap();
+            let entry = map.entry(model.to_string()).or_default();
+            entry.ttft_samples += 1;
+            entry.total_ttft_ms += ttft_ms;
+            entry.last_ttft_ms = ttft_ms;
+            if let Ok(json) = serde_json::to_string_pretty(&*map) {
+                let _ = std::fs::write(&self.stats_path, json);
+            }
+        }
+        let mut record = serde_json::json!({
+            "ts": now(),
+            "surface": "chat-timing",
+            "path": path,
+            "notebookId": notebook_id,
+            "model": model,
+            "ttftMs": ttft_ms,
+        });
+        if let Some((embed_ms, retrieval_ms)) = phases {
+            record["embedMs"] = embed_ms.into();
+            record["retrievalMs"] = retrieval_ms.into();
+        }
+        crate::trace::log(&self.trace_dir, record);
     }
 
     pub fn model_stats_snapshot(&self) -> Vec<ModelStat> {
@@ -7081,6 +7152,7 @@ pub async fn send_message(
     let extra = chat_style_instruction(&config.unwrap_or_default());
     // Time-to-first-token clock: from the send to the first chat://token
     // emit. Phase marks land in the chat-timing trace line below.
+    let ttft = TtftClock::start();
     let t0 = std::time::Instant::now();
 
     // Persist the user's turn first.
@@ -7269,8 +7341,7 @@ pub async fn send_message(
     let partial = Arc::new(Mutex::new(String::new()));
     let partial_cb = partial.clone();
     // 0 = no token yet; the first token stores max(elapsed, 1).
-    let first_tok = Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let first_tok_cb = first_tok.clone();
+    let ttft_cb = ttft.clone();
     let (answer, kind, stats, cost_usd, model) = {
         let ai = state.ai.read().await.clone();
         let engine = override_engine
@@ -7282,12 +7353,7 @@ pub async fn send_message(
         let app_for_steps = app.clone();
         let streamed = tokio::select! {
             out = engine.chat_stream_steps(&messages, |tok| {
-                let _ = first_tok_cb.compare_exchange(
-                    0,
-                    (t0.elapsed().as_millis() as u64).max(1),
-                    std::sync::atomic::Ordering::Relaxed,
-                    std::sync::atomic::Ordering::Relaxed,
-                );
+                ttft_cb.mark();
                 partial_cb.lock().unwrap().push_str(tok);
                 let _ = app_for_cb.emit(
                     "chat://token",
@@ -7326,20 +7392,13 @@ pub async fn send_message(
         }
     };
     state.record_chat_stats(&model, stats);
-    let ttft_ms = first_tok.load(std::sync::atomic::Ordering::Relaxed);
-    if kind == "chat" && ttft_ms > 0 {
-        state.record_chat_ttft(&model, ttft_ms);
-        crate::trace::log(
-            &state.trace_dir,
-            serde_json::json!({
-                "ts": now(),
-                "surface": "chat-timing",
-                "notebookId": notebook_id,
-                "model": model,
-                "ttftMs": ttft_ms,
-                "embedMs": embed_ms,
-                "retrievalMs": retrieval_ms,
-            }),
+    if kind == "chat" {
+        state.record_ttft(
+            &model,
+            "chat",
+            &notebook_id,
+            &ttft,
+            Some((embed_ms, retrieval_ms)),
         );
     }
 
@@ -7424,6 +7483,7 @@ pub async fn send_message_agentic(
         .collect();
 
     let cancel = state.begin_generation(&format!("chat:{}", window.label()));
+    let ttft = TtftClock::start();
     let (answer, kind, citations, stats, model) = {
         let ai = state.ai.read().await.clone();
         let model = ai.active_chat_model();
@@ -7437,6 +7497,7 @@ pub async fn send_message_agentic(
                 &history_turns,
                 &extra,
                 source_ids.as_deref(),
+                &ttft,
             ) => Some(r),
             _ = cancel.cancelled() => None,
         };
@@ -7457,6 +7518,9 @@ pub async fn send_message_agentic(
         }
     };
     state.record_chat_stats(&model, stats);
+    if kind == "chat" {
+        state.record_ttft(&model, "deep-research", &notebook_id, &ttft, None);
+    }
 
     let assistant_msg = Message {
         id: new_id(),
@@ -10941,11 +11005,14 @@ pub async fn ask_everything(
     let cancel = state.begin_generation(&format!("meta:{}", window.label()));
     let partial = Arc::new(Mutex::new(String::new()));
     let partial_cb = partial.clone();
+    let ttft = TtftClock::start();
+    let ttft_cb = ttft.clone();
     let (answer, stats, model) = {
         let ai = state.ai.read().await.clone();
         let model = ai.active_chat_model();
         let streamed = tokio::select! {
             out = ai.chat_stream(&messages, |tok| {
+                ttft_cb.mark();
                 partial_cb.lock().unwrap().push_str(tok);
                 let _ = app_for_cb.emit(
                     "meta://token",
@@ -10960,6 +11027,7 @@ pub async fn ask_everything(
         }
     };
     state.record_chat_stats(&model, stats);
+    state.record_ttft(&model, "ask-everything", "", &ttft, None);
 
     Ok(MetaAnswer { answer, citations })
 }

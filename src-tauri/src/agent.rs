@@ -71,6 +71,10 @@ pub async fn run(
     history: &[ChatTurn],
     extra_system: &str,
     source_ids: Option<&[String]>,
+    // Timed by the caller so deep research reports the same
+    // send-to-first-token wait the direct chat path does — the loop's tool
+    // rounds run before this stream, and that delay is part of it.
+    ttft: &crate::commands::TtftClock,
 ) -> Result<(String, Vec<Citation>, Option<crate::ai::GenStats>)> {
     let mut read_remaining = if ollama.config().is_gateway() {
         READ_CHARS_GATEWAY
@@ -223,8 +227,10 @@ pub async fn run(
         &crate::inference::ContextProfile::default(),
     );
     let app_cb = app.clone();
+    let ttft_cb = ttft.clone();
     let outcome = ollama
         .chat_stream(&messages, |tok| {
+            ttft_cb.mark();
             let _ = app_cb.emit(
                 "chat://token",
                 TokenEvent {
