@@ -7302,16 +7302,20 @@ pub async fn send_message(
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    let (override_engine, model) = {
+    // `model` captions the transcript row; `metrics_key` additionally carries
+    // the model and reasoning effort behind it, because those move latency and
+    // a speed ranking that pools them measures nothing.
+    let (override_engine, model, metrics_key) = {
         let ai = state.ai.read().await.clone();
         match override_id {
             Some(id) => {
                 let (engine, model) = ai
                     .engine_for_provider(id)
                     .map_err(|err| friendly_error(&format!("{err:#}")))?;
-                (Some(engine), model)
+                let key = ai.chat_metrics_key(Some(id));
+                (Some(engine), model, key)
             }
-            None => (None, ai.active_chat_model()),
+            None => (None, ai.active_chat_model(), ai.chat_metrics_key(None)),
         }
     };
     // On-device model only: cap the prompt to its 8192-token window before
@@ -7391,10 +7395,10 @@ pub async fn send_message(
             None => (partial.lock().unwrap().clone(), "chat", None, None, model),
         }
     };
-    state.record_chat_stats(&model, stats);
+    state.record_chat_stats(&metrics_key, stats);
     if kind == "chat" {
         state.record_ttft(
-            &model,
+            &metrics_key,
             "chat",
             &notebook_id,
             &ttft,
@@ -7484,9 +7488,10 @@ pub async fn send_message_agentic(
 
     let cancel = state.begin_generation(&format!("chat:{}", window.label()));
     let ttft = TtftClock::start();
-    let (answer, kind, citations, stats, model) = {
+    let (answer, kind, citations, stats, model, metrics_key) = {
         let ai = state.ai.read().await.clone();
         let model = ai.active_chat_model();
+        let metrics_key = ai.chat_metrics_key(None);
         let out = tokio::select! {
             r = crate::agent::run(
                 &app,
@@ -7502,7 +7507,9 @@ pub async fn send_message_agentic(
             _ = cancel.cancelled() => None,
         };
         match out {
-            Some(Ok((answer, citations, stats))) => (answer, "chat", citations, stats, model),
+            Some(Ok((answer, citations, stats))) => {
+                (answer, "chat", citations, stats, model, metrics_key)
+            }
             // Durable transcript row for a failed run — same contract as the
             // direct chat path: fix-classified (phase 1), then one capped
             // diagnosis call for unclassified shapes (phase 2).
@@ -7512,14 +7519,21 @@ pub async fn send_message_agentic(
                 if let Some(extra) = crate::selfheal::diagnose(&ai, &raw).await {
                     text.push_str(&extra);
                 }
-                (text, "error", vec![], None, model)
+                (text, "error", vec![], None, model, metrics_key)
             }
-            None => ("_(Stopped.)_".to_string(), "chat", vec![], None, model),
+            None => (
+                "_(Stopped.)_".to_string(),
+                "chat",
+                vec![],
+                None,
+                model,
+                metrics_key,
+            ),
         }
     };
-    state.record_chat_stats(&model, stats);
+    state.record_chat_stats(&metrics_key, stats);
     if kind == "chat" {
-        state.record_ttft(&model, "deep-research", &notebook_id, &ttft, None);
+        state.record_ttft(&metrics_key, "deep-research", &notebook_id, &ttft, None);
     }
 
     let assistant_msg = Message {
@@ -11009,7 +11023,7 @@ pub async fn ask_everything(
     let ttft_cb = ttft.clone();
     let (answer, stats, model) = {
         let ai = state.ai.read().await.clone();
-        let model = ai.active_chat_model();
+        let model = ai.chat_metrics_key(None);
         let streamed = tokio::select! {
             out = ai.chat_stream(&messages, |tok| {
                 ttft_cb.mark();
