@@ -205,6 +205,16 @@ pub fn run() {
                 mcp::apply_config(&handle, mcp_enabled, mcp_port).await;
             });
 
+            // Skills the user connected to their agent clients are ours to
+            // keep current — Connect writes them once, and a release that
+            // changes the skill would otherwise leave every agent on the
+            // machine reading last year's copy. Blocking pool: a dozen small
+            // file comparisons that must not sit on the setup thread.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                connectors::refresh_installed_skills(&handle);
+            });
+
             // Browser-extension clip receiver (docs/RFC-page-capture.md §8).
             app.manage(clip::ClipState::default());
             let handle = app.handle().clone();
