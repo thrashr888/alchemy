@@ -2154,8 +2154,8 @@ export const useStore = create<AppState>((set, get) => {
 
     // The one export verb: a .okf.zip is the notebook's portable form —
     // share it, back it up, or unzip it into an OKF folder for OK tooling.
-    exportNotebookOkf: async () => {
-      const id = get().currentId;
+    exportNotebookOkf: async (notebookId) => {
+      const id = notebookId ?? get().currentId;
       if (!id) {
         get().pushToast("info", "Open a notebook to export it");
         return;

@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api } from "@/lib/api";
 import { removeSourcesGuarded, useStore } from "@/lib/store";
 import type { Source } from "@/lib/types";
@@ -17,14 +16,16 @@ import { cn, isWebUrl, relativeTime, urlHost } from "@/lib/utils";
 import { FilterBar } from "./FilterBar";
 import { AttachToCardModal } from "./RegistrySection";
 import { Favicon, sourceHoverData } from "./SourcesPanel";
+import {
+  sourceMetaItems,
+  sourceOriginItems,
+  useSourceMetaModals,
+} from "./SourceMetaModals";
 import { sourceIcon } from "@/lib/sourceIcon";
 import { GraphView } from "./GraphView";
 import {
   ArrowLeft,
-  ExternalLink,
-  FolderOpen,
   LayoutGrid,
-  Link2,
   MessageSquare,
   Package,
   Pencil,
@@ -139,6 +140,8 @@ export function GalleryPane() {
   const currentId = useStore((s) => s.currentId);
   const sources = useStore((s) => s.sources);
   const { confirm, dialog: confirmDialog } = useConfirm();
+  // Shared tag/note editors (SourceMetaModals) for the card menu entries.
+  const meta = useSourceMetaModals();
   const [attaching, setAttaching] = useState<Source | null>(null);
   /** Find-in-gallery (Cmd/Ctrl+F). A grid's analogue of find-in-source is
    *  filtering, not stepping through ranges — same bar, same Escape/Done,
@@ -383,7 +386,6 @@ export function GalleryPane() {
   // and on plain right-click (RowMenu opens from the nearest .group).
   const cardMenuItems = (s: Source) => {
     const st = useStore.getState();
-    const web = isWebUrl(s.url);
     const editable =
       !["url", "mac", "folder", "git", "notion", "obsidian"].includes(
         s.sourceType,
@@ -421,39 +423,9 @@ export function GalleryPane() {
             },
           ]
         : []),
-      ...(s.url && web
-        ? [
-            {
-              label: "Open original",
-              icon: <ExternalLink className="h-3.5 w-3.5" />,
-              onClick: () => void openUrl(s.url),
-            },
-          ]
-        : []),
-      ...(s.url && !web && s.sourceType !== "mac"
-        ? [
-            {
-              label: "Show in Finder",
-              icon: <FolderOpen className="h-3.5 w-3.5" />,
-              onClick: () => void revealItemInDir(s.url),
-            },
-          ]
-        : []),
-      ...(s.url && s.sourceType !== "mac"
-        ? [
-            {
-              label: web ? "Copy URL" : "Copy file path",
-              icon: <Link2 className="h-3.5 w-3.5" />,
-              onClick: () => {
-                void navigator.clipboard
-                  .writeText(s.url)
-                  .then(() =>
-                    useStore.getState().pushToast("success", "Copied"),
-                  );
-              },
-            },
-          ]
-        : []),
+      // Shared with the sources panel and reader — one menu per object.
+      ...sourceOriginItems(s),
+      ...sourceMetaItems(s, meta.setTagEdit, meta.setNoteEdit),
       {
         label: "File under a card…",
         icon: <Package className="h-3.5 w-3.5" />,
@@ -653,6 +625,7 @@ export function GalleryPane() {
         onClose={() => setAttaching(null)}
       />
       {confirmDialog}
+      {meta.modals}
       {hoverCard}
     </div>
   );

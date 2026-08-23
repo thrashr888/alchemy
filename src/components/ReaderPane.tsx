@@ -710,7 +710,9 @@ export function ReaderPane() {
   ];
   return (
     <div ref={rootRef} className="relative flex h-full flex-1 flex-col min-w-0">
-      <div className="relative z-10 flex h-12 shrink-0 items-center gap-0.5 border-b border-border px-3">
+      {/* `group`: the toolbar RowMenu binds right-click to its nearest .group
+          ancestor — without one, right-clicking the title bar did nothing. */}
+      <div className="group relative z-10 flex h-12 shrink-0 items-center gap-0.5 border-b border-border px-3">
         <Button
           variant="ghost"
           size="icon"

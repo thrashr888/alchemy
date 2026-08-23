@@ -31,6 +31,7 @@ import {
   Archive,
   ArchiveRestore,
   BookOpen,
+  FileDown,
   ChevronRight,
   PanelRight,
   Plus,
@@ -76,6 +77,7 @@ function NotebookTable({
   pickedIds,
   onRowClick,
   onRowOpen,
+  colorPop,
 }: {
   notebooks: Notebook[];
   onNew: () => void;
@@ -88,6 +90,9 @@ function NotebookTable({
   /** Keyboard path: Tab reaches each row, Enter opens it (bypassing the
    *  pointer-only selection logic in onRowClick). */
   onRowOpen: (nb: Notebook) => void;
+  /** The color palette pop-over ("Change color…" in the row menu) — rendered
+   *  by the host so the table shares the grid's dismissal wiring. */
+  colorPop: (nb: Notebook) => React.ReactNode;
 }) {
   return (
     <>
@@ -118,7 +123,8 @@ function NotebookTable({
               pickedIds.has(nb.id) && "bg-primary/10 hover:bg-primary/15",
             )}
           >
-            <td className="px-3 py-2">
+            <td className="relative px-3 py-2">
+              {colorPop(nb)}
               <span className="flex items-center gap-2">
                 {(() => {
                   const Icon = notebookIcon(nb.icon);
@@ -367,6 +373,23 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           icon: nb.icon,
         }),
     },
+    // Right-click parity: color was hover-swatch-only (cards) and export was
+    // palette-only — both belong on the object's one menu.
+    {
+      label: "Change color…",
+      icon: (
+        <span
+          className="block h-3.5 w-3.5 rounded-full border border-border"
+          style={{ backgroundColor: nb.color || NOTEBOOK_PALETTE[0] }}
+        />
+      ),
+      onClick: () => setColorPickerFor(nb.id),
+    },
+    {
+      label: "Export notebook…",
+      icon: <FileDown className="h-3.5 w-3.5" />,
+      onClick: () => void useStore.getState().exportNotebookOkf(nb.id),
+    },
     {
       label: "Archive",
       icon: <Archive className="h-3.5 w-3.5" />,
@@ -507,6 +530,39 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     setColorPickerFor(null);
     setColor(notebookId, color);
   };
+
+  /** The color palette pop-over, positioned by the host (card corner or
+   *  table row). One markup: the outside-click/Escape dismissal keys off
+   *  its data attribute, so it works wherever it renders. */
+  const colorPalettePop = (nb: Notebook, className: string) =>
+    colorPickerFor === nb.id ? (
+      <div
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        data-notebook-color-palette
+        className={cn(
+          "menu-glass absolute z-30 flex rounded-md border border-border px-2 py-1.5 shadow-sm",
+          className,
+        )}
+      >
+        {NOTEBOOK_PALETTE.map((c) => (
+          <button
+            key={c}
+            type="button"
+            onClick={() => onPickColor(nb.id, c)}
+            onPointerDown={(e) => e.stopPropagation()}
+            aria-label={`Set ${nb.title} color to ${c}`}
+            className={cn(
+              "m-0.5 h-5 w-5 rounded-full border border-border",
+              c === (nb.color || NOTEBOOK_PALETTE[0])
+                ? "ring-2 ring-foreground ring-offset-1 ring-offset-surface"
+                : "",
+            )}
+            style={{ backgroundColor: c }}
+          />
+        ))}
+      </div>
+    ) : null;
 
   function openNote(note: Note) {
     // StudioPanel auto-opens this id once the notebook's notes load.
@@ -836,6 +892,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                     if (!pick.handleClick(e, nb.id)) open(nb.id);
                   }}
                   onRowOpen={(nb) => open(nb.id)}
+                  colorPop={(nb) => colorPalettePop(nb, "left-8 top-8")}
                   rowMenu={(nb) => (
                     <RowMenu
                       label={`Options for ${nb.title}`}
@@ -934,31 +991,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                         items={notebookRowItems(nb)}
                       />
                     </div>
-                    {colorPickerFor === nb.id && (
-                      <div
-                        onClick={(e) => e.stopPropagation()}
-                        onPointerDown={(e) => e.stopPropagation()}
-                        data-notebook-color-palette
-                        className="menu-glass absolute right-2 top-10 z-30 flex rounded-md border border-border px-2 py-1.5 shadow-sm"
-                      >
-                        {NOTEBOOK_PALETTE.map((c) => (
-                          <button
-                            key={c}
-                            type="button"
-                            onClick={() => onPickColor(nb.id, c)}
-                            onPointerDown={(e) => e.stopPropagation()}
-                            aria-label={`Set ${nb.title} color to ${c}`}
-                            className={cn(
-                              "m-0.5 h-5 w-5 rounded-full border border-border",
-                              c === (nb.color || NOTEBOOK_PALETTE[0])
-                                ? "ring-2 ring-foreground ring-offset-1 ring-offset-surface"
-                                : "",
-                            )}
-                            style={{ backgroundColor: c }}
-                          />
-                        ))}
-                      </div>
-                    )}
+                    {colorPalettePop(nb, "right-2 top-10")}
                   </div>
                 ))}
               </div>

@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import { Button, CardAction, Textarea, useConfirm } from "./ui";
+import { Button, CardAction, RowMenu, Textarea, useConfirm } from "./ui";
 import { Markdown } from "./Markdown";
 import { cn, chatReadingClass, fmtDateTime, isWebUrl, relativeTime } from "@/lib/utils";
 import { DitherBackground } from "./DitherBackground";
@@ -1596,6 +1596,18 @@ function UserMessageActions({ message }: { message: Message }) {
         <RefreshCw className="h-3.5 w-3.5" />
         Re-run
       </button>
+      {/* Right-click parity: the same verbs from anywhere on the question. */}
+      <RowMenu
+        label="Question options"
+        items={[
+          { label: "Copy", icon: <Copy className="h-3.5 w-3.5" />, onClick: () => void copy() },
+          {
+            label: "Re-run",
+            icon: <RefreshCw className="h-3.5 w-3.5" />,
+            onClick: rerun,
+          },
+        ]}
+      />
     </div>
   );
 }
@@ -1645,6 +1657,19 @@ function MessageActions({
         {saved ? <Check className="h-3.5 w-3.5 text-success" /> : <NotebookPen className="h-3.5 w-3.5" />}
         {saved ? "Saved" : "Save as note"}
       </button>
+      {/* Right-click parity (DESIGN.md "objects are direct"): the same verbs
+          as the hover row, reachable from anywhere on the message. */}
+      <RowMenu
+        label="Message options"
+        items={[
+          { label: "Copy", icon: <Copy className="h-3.5 w-3.5" />, onClick: () => void copy() },
+          {
+            label: "Save as note",
+            icon: <NotebookPen className="h-3.5 w-3.5" />,
+            onClick: () => void save(),
+          },
+        ]}
+      />
     </div>
   );
 }

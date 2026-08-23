@@ -249,7 +249,8 @@ export interface AppState {
   openAddSource: (step?: "url" | "text") => void;
   closeAddSource: () => void;
 
-  exportNotebookOkf: () => Promise<void>;
+  /** Omit the id to export the currently open notebook (palette/menu). */
+  exportNotebookOkf: (notebookId?: string) => Promise<void>;
   importOkfOpen: boolean;
   pendingImportPath: string | null;
   importOkf: (path: string, notebookId?: string | null) => Promise<void>;
