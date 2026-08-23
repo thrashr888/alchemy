@@ -105,9 +105,13 @@ export function ChatPanel() {
   // in the store); only which view fronts is local, so reopening a notebook
   // starts in chat.
   const [hostedAgent, setHostedAgent] = useState(false);
-  const agentHistory = useStore((s) =>
-    s.currentId ? (s.acpPanes[s.currentId]?.entries.length ?? 0) > 0 : false,
-  );
+  // Clear acts on the agent the picker is showing, so it only offers itself
+  // when that agent has something of its own to clear.
+  const agentHistory = useStore((s) => {
+    const pane = s.currentId ? s.acpPanes[s.currentId] : null;
+    const mine = pane?.agentId ? pane.agents[pane.agentId] : null;
+    return (mine?.entries.length ?? 0) > 0;
+  });
   const send = useStore((s) => s.sendMessage);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
   const reading = useStore((s) => s.reading);
@@ -696,7 +700,10 @@ export function ChatPanel() {
                 // keeping the cleared context would belie the empty pane.
                 if (await confirm({ title: "Clear this session?", confirmLabel: "Clear", danger: true })) {
                   void api.acpStop(currentId).catch(() => {});
-                  useStore.getState().clearAcpPane(currentId);
+                  const showing =
+                    useStore.getState().acpPanes[currentId]?.agentId;
+                  if (showing)
+                    useStore.getState().clearAcpPane(currentId, showing);
                 }
               }}
             >

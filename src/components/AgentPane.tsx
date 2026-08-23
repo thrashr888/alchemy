@@ -4,6 +4,7 @@ import {
   ArrowUp,
   Bot,
   ChevronDown,
+  Copy,
   ExternalLink,
   RotateCw,
   Square,
@@ -11,7 +12,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
-import { Button, Textarea } from "./ui";
+import { Button, EmptyState, Textarea } from "./ui";
 import { Markdown } from "./Markdown";
 import { cn } from "@/lib/utils";
 import type {
@@ -45,12 +46,19 @@ export function AgentPane({
   const agentId = useStore(
     (s) => s.acpPanes[notebookId]?.agentId ?? null,
   );
-  const entries = useStore(
-    (s) => s.acpPanes[notebookId]?.entries ?? NO_ENTRIES,
+  const entries = useStore((s) =>
+    agentId
+      ? (s.acpPanes[notebookId]?.agents[agentId]?.entries ?? NO_ENTRIES)
+      : NO_ENTRIES,
+  );
+  const draft = useStore((s) =>
+    agentId ? (s.acpPanes[notebookId]?.agents[agentId]?.draft ?? "") : "",
   );
   const setAcpAgentId = useStore((s) => s.setAcpAgentId);
   const setAcpEntries = useStore((s) => s.setAcpEntries);
+  const setAcpDraft = useStore((s) => s.setAcpDraft);
   const hydrateAcpPane = useStore((s) => s.hydrateAcpPane);
+  const hostedAgent = useStore((s) => s.aiConfig?.hostedAgent ?? "");
 
   // Restore the persisted transcript + agent choice before the picker's
   // first-available default can claim the slot. Idempotent (seeds only when
@@ -62,15 +70,26 @@ export function AgentPane({
     (id: string | null) => setAcpAgentId(notebookId, id),
     [notebookId, setAcpAgentId],
   );
+  // Every write names the agent it belongs to. Sessions can't outlive a
+  // picker change (the picker locks while one runs), so "the selected agent"
+  // is always the one this stream is for.
   const setEntries = useCallback(
-    (update: Entry[] | ((prev: Entry[]) => Entry[])) =>
-      setAcpEntries(notebookId, (prev) =>
+    (update: Entry[] | ((prev: Entry[]) => Entry[])) => {
+      if (!agentId) return;
+      setAcpEntries(notebookId, agentId, (prev) =>
         typeof update === "function" ? update(prev) : update,
-      ),
-    [notebookId, setAcpEntries],
+      );
+    },
+    [notebookId, agentId, setAcpEntries],
+  );
+  const setDraft = useCallback(
+    (text: string) => {
+      if (!agentId) return;
+      setAcpDraft(notebookId, agentId, text);
+    },
+    [notebookId, agentId, setAcpDraft],
   );
   const [permission, setPermission] = useState<AcpPermissionEvent | null>(null);
-  const [draft, setDraft] = useState("");
   const [starting, setStarting] = useState(false);
   // A session can open fine and still have no notebook tools, when Alchemy's
   // MCP server isn't running. That's the whole reason to host the agent here,
@@ -122,12 +141,16 @@ export function AgentPane({
     };
   }, [notebookId]);
 
-  // Default the picker to the first available agent.
+  // Default the picker: the agent chosen in Settings when it's installed,
+  // otherwise the first one that is. A stale preference (agent uninstalled,
+  // or a build that dropped it) falls through rather than pinning the picker
+  // to something that can't run.
   useEffect(() => {
     if (agentId) return;
-    const first = agents?.find((a) => a.available);
+    const preferred = agents?.find((a) => a.id === hostedAgent && a.available);
+    const first = preferred ?? agents?.find((a) => a.available);
     if (first) setAgentId(first.id);
-  }, [agents, agentId]);
+  }, [agents, agentId, hostedAgent, setAgentId]);
 
   // Backend events are broadcast to every window; self-filter by notebook.
   useEffect(() => {
@@ -171,6 +194,17 @@ export function AgentPane({
       void api.acpStop(notebookId).catch(() => {});
     };
   }, [notebookId]);
+
+  // A draft restored from the store (agent switch, remount, app restart)
+  // never passed through onChange, so the textarea would sit at one row with
+  // the rest of the question scrolled out of sight. Size it to its content
+  // whenever the text arrives from outside.
+  useEffect(() => {
+    const el = composerRef.current;
+    if (!el || !visible) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_H)}px`;
+  }, [draft, visible]);
 
   // Also re-run on becoming visible: while the pane is hidden (Chat view in
   // front) the scroll area has no height, so any pinning done then is lost.
@@ -257,7 +291,6 @@ export function AgentPane({
     }
   }
 
-  const loading = agents === null;
   const available = (agents ?? []).filter((a) => a.available);
 
   return (
@@ -265,26 +298,7 @@ export function AgentPane({
       <div ref={scrollRef} className="relative z-10 flex-1 overflow-y-auto">
         <div className="mx-auto flex max-w-[720px] flex-col gap-4 px-5 py-6">
           {entries.length === 0 && !running && (
-            <div className="flex flex-col items-center gap-3 py-16 text-center">
-              <Bot className="h-6 w-6 text-subtle-foreground" />
-              <p className="text-body text-muted-foreground">
-                Run your own coding agent here, with this notebook's sources
-                available to it.
-              </p>
-              {discoveryError ? (
-                <p className="max-w-sm text-caption text-destructive">
-                  Couldn't check which agents are installed: {discoveryError}
-                </p>
-              ) : (
-                !loading &&
-                available.length === 0 && (
-                  <p className="max-w-sm text-caption text-subtle-foreground">
-                    No compatible agents found. Install opencode, Claude Code,
-                    Gemini CLI, or Codex to use this.
-                  </p>
-                )
-              )}
-            </div>
+            <AgentBlankSlate agents={agents} discoveryError={discoveryError} />
           )}
           {entries.map((entry, i) => (
             <EntryRow key={i} entry={entry} />
@@ -392,6 +406,76 @@ export function AgentPane({
         </div>
       </div>
     </>
+  );
+}
+
+/** The Agent view before its first turn. The state worth designing for is
+ *  the empty machine: an agent picker with nothing in it explains nothing, so
+ *  name the three agents that work here and hand over the command that
+ *  installs each. Install hints come from the backend so they stay next to
+ *  the binary names discovery actually probes for. */
+function AgentBlankSlate({
+  agents,
+  discoveryError,
+}: {
+  agents: AcpAgentInfo[] | null;
+  discoveryError: string | null;
+}) {
+  const pushToast = useStore((s) => s.pushToast);
+  const icon = <Bot className="h-6 w-6" />;
+
+  if (discoveryError) {
+    return (
+      <EmptyState
+        icon={icon}
+        title="Couldn't check for agents"
+        hint={discoveryError}
+      />
+    );
+  }
+  if (agents === null) {
+    return <EmptyState icon={icon} title="Looking for agents…" />;
+  }
+  if (agents.some((a) => a.available)) {
+    return (
+      <EmptyState
+        icon={icon}
+        title="Run your own coding agent"
+        hint="It can search this notebook's sources while it works."
+      />
+    );
+  }
+  return (
+    <EmptyState
+      icon={icon}
+      title="No coding agents installed"
+      hint="Install one and it appears here."
+    >
+      <div className="mt-2 flex w-full max-w-sm flex-col divide-y divide-border rounded-md border border-border text-left">
+        {agents.map((a) => (
+          <div key={a.id} className="flex items-center gap-2 px-2.5 py-2">
+            <span className="shrink-0 text-caption text-foreground">
+              {a.label}
+            </span>
+            <code className="ml-auto truncate font-mono text-micro text-subtle-foreground">
+              {a.installHint}
+            </code>
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard.writeText(a.installHint);
+                pushToast("success", `Install command for ${a.label} copied`);
+              }}
+              title={`Copy: ${a.installHint}`}
+              aria-label={`Copy the install command for ${a.label}`}
+              className="shrink-0 rounded p-1 text-subtle-foreground transition-colors hover:text-foreground"
+            >
+              <Copy className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+    </EmptyState>
   );
 }
 

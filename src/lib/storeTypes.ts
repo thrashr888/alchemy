@@ -63,13 +63,25 @@ export type AcpEntry =
   | { kind: "thought"; text: string }
   | { kind: "tool"; id: string; title: string; status: string };
 
-/** Hosted-agent pane state that must outlive the pane: the transcript and
- *  agent choice, kept per notebook so toggling Chat ↔ Agent (or remounting
- *  the panel) restores the last session's view instead of resetting to the
- *  first agent with an empty transcript. */
+/** One agent's side of a notebook: what it has said, and what the user was
+ *  partway through asking it. Kept apart per agent because two agents in one
+ *  notebook are two conversations — switching the picker should not show
+ *  Codex the transcript of a Claude Code session, or hand it a half-typed
+ *  question meant for someone else. */
+export interface AcpAgentPane {
+  entries: AcpEntry[];
+  /** Composer text that was never sent. Restored verbatim on return. */
+  draft: string;
+}
+
+/** Hosted-agent state that must outlive the pane: which agent is selected,
+ *  and every agent's transcript and draft, kept per notebook so toggling
+ *  Chat ↔ Agent (or remounting the panel, or relaunching the app) restores
+ *  the view instead of resetting to the first agent with an empty one. */
 export interface AcpPaneState {
   agentId: string | null;
-  entries: AcpEntry[];
+  /** Keyed by agent id. Absent until that agent has something to remember. */
+  agents: Record<string, AcpAgentPane>;
 }
 
 export interface AppState {
@@ -296,9 +308,12 @@ export interface AppState {
   setAcpAgentId: (notebookId: string, agentId: string | null) => void;
   setAcpEntries: (
     notebookId: string,
+    agentId: string,
     update: (prev: AcpEntry[]) => AcpEntry[],
   ) => void;
-  clearAcpPane: (notebookId: string) => void;
+  setAcpDraft: (notebookId: string, agentId: string, draft: string) => void;
+  /** Wipe one agent's transcript and draft; the others keep theirs. */
+  clearAcpPane: (notebookId: string, agentId: string) => void;
 
   generateArtifact: (kind: NoteKind, prompt?: string) => Promise<void>;
   generateFromTemplate: (template: Template) => Promise<void>;

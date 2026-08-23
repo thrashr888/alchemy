@@ -108,8 +108,63 @@ detected agents, pick default, per-agent auth status.
 1. ~~Backend module + discovery + session round-trip.~~ Done.
 2. ~~Chat agent mode: streaming render, permission prompts, stop button.~~
    Done.
-3. Settings row, default-agent choice, auth-status surfacing.
+3. ~~Settings row, default-agent choice, auth-status surfacing.~~ Done
+   (2026-08-22). Settings → Agents grows a **Hosted agents** section: the
+   default-agent select (`AiConfig.hosted_agent`, empty = first installed,
+   which the picker also falls back to when a saved choice is uninstalled),
+   the detected agents, and a per-agent **Check**. In-app login stays out:
+   every one of these CLIs authenticates through its own device flow, so the
+   honest affordance is the Sign in button that opens their terminal command,
+   not a login form of ours that would only proxy theirs.
 4. Later: `session/load` resume, plans panel, terminal.
+
+## Which agents (2026-08-22)
+
+opencode, Claude Code, Codex. What determines membership is a native ACP
+entrypoint, not popularity — and that pruned Gemini:
+
+- **Gemini CLI is out.** Google retired it for individual accounts on
+  2026-06-18; the binary and its `--acp` flag survive, but `session/new` dies
+  with "This client is no longer supported for Gemini Code Assist for
+  individuals" (verified on this machine, gemini 0.56.0). Enterprise Code
+  Assist and API-key users are unaffected, which is why it stays a *headless*
+  provider and keeps its MCP connector — but the ACP picker offering an agent
+  that can never answer was the actual bug.
+- **Antigravity doesn't replace it yet.** `agy` (1.1.19) is the named
+  successor and has no ACP mode of its own — no flag, no subcommand
+  (google-antigravity/antigravity-cli#31, open and unscheduled). Google does
+  ship a standalone `agy_acp_server` binary, and the ACP registry lists it, so
+  the blocker is not "impossible" but "we have no way to install it": every
+  agent we launch today is a binary already on the user's PATH or an `npx`
+  package, and this one is a platform-matrixed download to fetch, unpack, and
+  verify. That is the registry-driven picker below, not a one-line entry.
+  Meanwhile Alchemy reaches Antigravity over MCP, via the `antigravity`
+  connector in `connectors.rs`.
+
+## The registry (deferred, 2026-08-23)
+
+ACP publishes a machine-readable registry at
+`cdn.agentclientprotocol.com/registry/v1/latest/registry.json` — 39 agents,
+each with a versioned launch spec (`npx` package or a per-platform binary with
+a sha256), an icon, and a description. It already carries every agent we
+hardcode, pinned to the exact packages this RFC settled on independently
+(`claude-agent-acp@0.70.0`, `codex-acp@1.6.2`), plus Cursor (`cursor-agent
+acp`), GitHub Copilot, Factory Droid, Pi, Amp, and Antigravity.
+
+A hardcoded `AGENTS` array is exactly what churned in August: Gemini was
+retired, Codex's assumed entrypoint turned out never to have existed, and two
+adapters renamed their npm scope. A registry-driven picker fixes that class of
+bug and multiplies the roster. Two shapes, and the choice is not obvious:
+
+1. **Read-only.** Consume the registry for names, icons, and launch specs, but
+   only offer agents whose binary or `npx` package is already resolvable.
+   Nothing is downloaded; "the agent you already have" stays true.
+2. **Installing.** Fetch and sha256-verify binaries on demand. More agents work
+   out of the box, at the cost of Alchemy becoming something that downloads and
+   runs executables.
+
+Deferred by Paul on 2026-08-23; the three-agent list stands. Read-only is the
+better fit for a local-first app, and it is the smaller change.
 
 ## Implementation notes (things the build taught us)
 
