@@ -75,6 +75,8 @@ pub async fn run(
     // send-to-first-token wait the direct chat path does — the loop's tool
     // rounds run before this stream, and that delay is part of it.
     ttft: &crate::commands::TtftClock,
+    // Where the pre-answer time went, for the timing trace.
+    phases: &crate::commands::AgentPhases,
 ) -> Result<(String, Vec<Citation>, Option<crate::ai::GenStats>)> {
     let mut read_remaining = if ollama.config().is_gateway() {
         READ_CHARS_GATEWAY
@@ -100,9 +102,12 @@ pub async fn run(
     for _ in 0..MAX_STEPS {
         let messages =
             rag::build_agent_decision(question, &source_list, &transcript, gathered.len());
+        let planned = std::time::Instant::now();
         let raw = ollama.chat(&messages).await?.text;
+        phases.planner(planned.elapsed().as_millis() as u64);
         match parse_action(&raw) {
             Some(Action::Search(query)) => {
+                let searched = std::time::Instant::now();
                 emit_step(app, format!("Searching: {query}"));
                 let qvec = ollama.embed_one(&query).await?;
                 let mut hits = db
@@ -127,8 +132,10 @@ pub async fn run(
                     ));
                 }
                 transcript.push('\n');
+                phases.search(searched.elapsed().as_millis() as u64);
             }
             Some(Action::Read(source_ids)) => {
+                let readed = std::time::Instant::now();
                 // Fetches stay sequential (DB reads are cheap and the char
                 // budget is a running total), then every distill — the model
                 // call that dominates a read's wall-clock — runs concurrently.
@@ -188,6 +195,7 @@ pub async fn run(
                         });
                     }
                 }
+                phases.read(readed.elapsed().as_millis() as u64);
             }
             Some(Action::Stop) | None => break,
         }

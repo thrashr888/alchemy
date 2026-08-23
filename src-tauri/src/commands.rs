@@ -88,6 +88,51 @@ impl TtftClock {
     }
 }
 
+/// Where a deep-research turn spent its time before the answer streamed.
+/// Filled by `agent::run` as it works; read once for the timing trace.
+/// Atomics rather than a lock: the loop touches these on every step and the
+/// numbers are independent counters, never a consistent snapshot.
+#[derive(Clone, Default)]
+pub struct AgentPhases {
+    inner: Arc<AgentPhasesInner>,
+}
+
+#[derive(Default)]
+struct AgentPhasesInner {
+    planner_ms: std::sync::atomic::AtomicU64,
+    search_ms: std::sync::atomic::AtomicU64,
+    read_ms: std::sync::atomic::AtomicU64,
+    steps: std::sync::atomic::AtomicU64,
+}
+
+impl AgentPhases {
+    fn add(slot: &std::sync::atomic::AtomicU64, ms: u64) {
+        slot.fetch_add(ms, std::sync::atomic::Ordering::Relaxed);
+    }
+    /// One planner decision call — the model choosing the next action.
+    pub fn planner(&self, ms: u64) {
+        Self::add(&self.inner.planner_ms, ms);
+        Self::add(&self.inner.steps, 1);
+    }
+    /// One search action: embed + hybrid search + any rerank.
+    pub fn search(&self, ms: u64) {
+        Self::add(&self.inner.search_ms, ms);
+    }
+    /// One read action: fetches plus the distill calls.
+    pub fn read(&self, ms: u64) {
+        Self::add(&self.inner.read_ms, ms);
+    }
+    pub fn as_json(&self) -> serde_json::Value {
+        use std::sync::atomic::Ordering::Relaxed;
+        serde_json::json!({
+            "plannerMs": self.inner.planner_ms.load(Relaxed),
+            "searchMs": self.inner.search_ms.load(Relaxed),
+            "readMs": self.inner.read_ms.load(Relaxed),
+            "steps": self.inner.steps.load(Relaxed),
+        })
+    }
+}
+
 pub struct AppState {
     pub db: Arc<Db>,
     pub ai: tokio::sync::RwLock<Ai>,
@@ -197,7 +242,7 @@ impl AppState {
         path: &str,
         notebook_id: &str,
         clock: &TtftClock,
-        phases: Option<(u64, u64)>,
+        phases: Option<serde_json::Value>,
     ) {
         let ttft_ms = clock.ttft_ms();
         if ttft_ms == 0 {
@@ -221,9 +266,11 @@ impl AppState {
             "model": model,
             "ttftMs": ttft_ms,
         });
-        if let Some((embed_ms, retrieval_ms)) = phases {
-            record["embedMs"] = embed_ms.into();
-            record["retrievalMs"] = retrieval_ms.into();
+        // Whatever split the surface can account for, merged in as-is.
+        if let Some(serde_json::Value::Object(extra)) = phases {
+            for (k, v) in extra {
+                record[k] = v;
+            }
         }
         crate::trace::log(&self.trace_dir, record);
     }
@@ -7402,7 +7449,10 @@ pub async fn send_message(
             "chat",
             &notebook_id,
             &ttft,
-            Some((embed_ms, retrieval_ms)),
+            Some(serde_json::json!({
+                "embedMs": embed_ms,
+                "retrievalMs": retrieval_ms,
+            })),
         );
     }
 
@@ -7488,6 +7538,7 @@ pub async fn send_message_agentic(
 
     let cancel = state.begin_generation(&format!("chat:{}", window.label()));
     let ttft = TtftClock::start();
+    let phases = AgentPhases::default();
     let (answer, kind, citations, stats, model, metrics_key) = {
         let ai = state.ai.read().await.clone();
         let model = ai.active_chat_model();
@@ -7503,6 +7554,7 @@ pub async fn send_message_agentic(
                 &extra,
                 source_ids.as_deref(),
                 &ttft,
+                &phases,
             ) => Some(r),
             _ = cancel.cancelled() => None,
         };
@@ -7533,7 +7585,13 @@ pub async fn send_message_agentic(
     };
     state.record_chat_stats(&metrics_key, stats);
     if kind == "chat" {
-        state.record_ttft(&metrics_key, "deep-research", &notebook_id, &ttft, None);
+        state.record_ttft(
+            &metrics_key,
+            "deep-research",
+            &notebook_id,
+            &ttft,
+            Some(phases.as_json()),
+        );
     }
 
     let assistant_msg = Message {
