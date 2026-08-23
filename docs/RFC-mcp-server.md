@@ -121,6 +121,23 @@ primary action:
   (YAML), the row copies their own CLI registration one-liner instead.
 - Every row also has a copy icon with the manual snippet as an escape hatch.
 
+**Installed skills refresh themselves at launch** (`refresh_installed_skills`,
+added 2026-08-23). Connect was once the only writer, so a skill froze at
+whichever build was running the day it was clicked — the row went on saying
+"Connected + skill" while the file taught agents tool names and flows that had
+since changed. A real install was found describing `cider://` origins from an
+unmerged branch *and* missing `ask_everything` and OKF sharing, which had been
+on main for months. Launch now compares each installed skill against the one
+this build ships and rewrites what drifted.
+
+Content comparison, not a version stamp: the files are a few KB, and bytes
+also catch a downgrade, a half-written file, and every skill shipped before
+any stamp existed. It only touches directories that already hold an alchemy
+skill, so it never installs into a client the user didn't connect, never
+resurrects one they deleted, and stays silent — a read-only skills dir is the
+client's business. The config half is deliberately *not* refreshed: that file
+is the user's, and their port or transport choice is theirs to keep.
+
 The dialects, as researched July 2026 (they genuinely all differ):
 
 | Client | Config (user scope) | HTTP entry shape | Skills dir |
