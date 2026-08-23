@@ -1683,6 +1683,135 @@ function DocProperties({
   );
 }
 
+/** One open reminder parsed out of a Reminders source body. The id rides the
+ *  text as a trailing code span (mac.rs carries it for exactly this); rows
+ *  without one render inert — there is no way to name them to cider. */
+type ReminderRow = {
+  title: string;
+  id: string | null;
+  due: string | null;
+  notes: string | null;
+};
+
+function parseReminders(text: string): { heading: string; items: ReminderRow[] } {
+  const items: ReminderRow[] = [];
+  let heading = "";
+  for (const line of text.split("\n")) {
+    const h = /^# (.*)$/.exec(line);
+    if (h) {
+      heading = h[1];
+      continue;
+    }
+    const m = /^- \[ \] (.*)$/.exec(line);
+    if (m) {
+      let rest = m[1];
+      let due: string | null = null;
+      const dm = / — due (\d{4}-\d{2}-\d{2})$/.exec(rest);
+      if (dm) {
+        due = dm[1];
+        rest = rest.slice(0, -dm[0].length);
+      }
+      let id: string | null = null;
+      const im = / `([^`]+)`$/.exec(rest);
+      if (im) {
+        id = im[1];
+        rest = rest.slice(0, -im[0].length);
+      }
+      items.push({ title: rest, id, due, notes: null });
+      continue;
+    }
+    const n = /^ {2}- (.*)$/.exec(line);
+    if (n && items.length > 0) items[items.length - 1].notes = n[1];
+  }
+  return { heading, items };
+}
+
+/** A Reminders-list source rendered live: each reminder is a real checkbox
+ *  wired to complete_mac_reminder — the same call agents already have — not
+ *  inert markdown. Checking one completes it in Apple Reminders and resyncs
+ *  the source; the row holds its checked state until the refetched body
+ *  (open reminders only) drops it. */
+function RemindersView({
+  content,
+  sourceId,
+  onCompleted,
+}: {
+  content: string;
+  sourceId: string;
+  onCompleted: () => void;
+}) {
+  const parsed = useMemo(() => parseReminders(content), [content]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [done, setDone] = useState<Set<string>>(new Set());
+
+  async function complete(row: ReminderRow) {
+    if (!row.id || busy) return;
+    setBusy(row.id);
+    try {
+      await api.completeMacReminder(sourceId, row.id);
+      setDone((d) => new Set(d).add(row.id!));
+      onCompleted();
+    } catch (err) {
+      useStore.getState().pushToast("error", String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="selectable">
+      {parsed.heading && (
+        <h1 className="mb-4 text-title font-semibold text-foreground">
+          {parsed.heading}
+        </h1>
+      )}
+      <ul className="flex flex-col gap-1.5">
+        {parsed.items.map((row, i) => {
+          const checked = !!row.id && done.has(row.id);
+          return (
+            <li key={row.id ?? `row-${i}`} className="flex items-start gap-2.5">
+              <input
+                type="checkbox"
+                className="select-quiet mt-1"
+                checked={checked}
+                disabled={!row.id || checked || busy === row.id}
+                onChange={() => void complete(row)}
+                aria-label={`Complete “${row.title}”`}
+                title={row.id ? "Check off in Apple Reminders" : undefined}
+              />
+              <div className="min-w-0">
+                <div
+                  className={cn(
+                    "text-body leading-relaxed text-foreground/90",
+                    checked && "text-muted-foreground line-through",
+                  )}
+                >
+                  {row.title}
+                  {row.due && (
+                    <span className="ml-2 text-caption text-subtle-foreground">
+                      due {row.due}
+                    </span>
+                  )}
+                </div>
+                {row.notes && (
+                  <div className="text-caption text-muted-foreground">
+                    {row.notes}
+                  </div>
+                )}
+              </div>
+            </li>
+          );
+        })}
+        {parsed.items.length === 0 && (
+          <li className="text-body text-muted-foreground">
+            Nothing left on this list.
+          </li>
+        )}
+      </ul>
+    </div>
+  );
+}
+
 function SourceReader({
   source,
   highlight,
@@ -1908,6 +2037,14 @@ function SourceReader({
   // syntax colors; find-in-source over the colored view re-anchors on the
   // rendered DOM each keystroke.
   const codeMode = source.sourceType === "code" && !highlight;
+  // A Reminders list renders as live checkboxes (complete-in-place) instead
+  // of inert markdown — except during find or a citation anchor, which need
+  // the text views' highlight machinery.
+  const remindersMode =
+    source.sourceType === "mac" &&
+    source.url.startsWith("cider://reminders/list/") &&
+    !query.trim() &&
+    !highlight;
   // "DOM-rendered": find walks text nodes instead of painting the plain
   // <mark> segments. True for both the markdown and code (shiki) views.
   const domMode = richMode || codeMode;
@@ -2320,6 +2457,12 @@ function SourceReader({
                 </span>
               )}
             </div>
+          ) : remindersMode ? (
+            <RemindersView
+              content={content}
+              sourceId={source.id}
+              onCompleted={() => setHydrateTick((t) => t + 1)}
+            />
           ) : codeMode ? (
             <CodeView path={source.title} code={content} lineNums />
           ) : richMode ? (
