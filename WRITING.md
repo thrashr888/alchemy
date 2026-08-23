@@ -93,6 +93,43 @@ Banned outright in public copy: "vibes", "honest/honestly" as framing,
 - Round to the precision the sample size supports. 25-question runs don't
   get decimal points of swagger.
 
+## Search (the website)
+
+The website (`docs/index.html`) is the app's only web page, so it carries
+the whole search burden. The governing rule: **SEO lives in metadata and
+structure, never in the voice.** No sentence gets longer to fit a keyword,
+and keyword-stuffed prose is itself a tell.
+
+The query vocabulary — the phrases a searcher actually types, each of
+which appears at least once on the page in prose that would survive
+review anyway:
+
+- "local-first research notebook" (the category)
+- "research notebook for macOS" / "macOS" (the platform)
+- "NotebookLM" (the incumbent; factual mention only)
+- "private" / "on-device" (the differentiator)
+
+Mechanics:
+
+- **One H1 per page.** The hero H1 stays brand-terse ("Your sources, your
+  machine, your models.") only because the title tag, meta description,
+  and lede carry the category phrase. Lose those and the H1 must become
+  descriptive.
+- **Title tag**: name + category phrase, under ~60 characters ("Alchemy —
+  a local-first research notebook for macOS"). **Meta description**: one
+  body-register sentence, ~155 characters, phrase up front. Both are copy
+  surfaces; the register table and em-dash budget apply.
+- Every page gets a **canonical URL** (we're on github.io, where duplicate
+  paths resolve), **OG/Twitter tags** with a real image and alt text, and
+  **JSON-LD** (`SoftwareApplication` on the product page). The claims
+  rules apply inside structured data: no aggregate ratings or review
+  counts we don't have.
+- **Competitors by factual mention, once.** "Inspired by NotebookLM,
+  built to stay private" is fine; "the best NotebookLM alternative" is a
+  banned superlative.
+- Sections keep **anchored ids** (#features, #models) so deep links land;
+  every image gets alt text in the house voice.
+
 ## The tell check
 
 Before publishing, scan for the patterns that read machine-written:
