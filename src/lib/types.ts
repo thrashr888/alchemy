@@ -585,6 +585,8 @@ export interface AcpAgentInfo {
   available: boolean;
   /** Terminal command that signs this agent in, offered as an auth-failure fix. */
   loginCommand: string;
+  /** Shell one-liner that installs it, shown when nothing is installed. */
+  installHint: string;
 }
 
 /** Lifecycle of a hosted agent session, from the `acp://state` event. */

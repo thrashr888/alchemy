@@ -4,6 +4,7 @@ import {
   ArrowUp,
   Bot,
   ChevronDown,
+  Copy,
   ExternalLink,
   RotateCw,
   Square,
@@ -11,7 +12,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
-import { Button, Textarea } from "./ui";
+import { Button, EmptyState, Textarea } from "./ui";
 import { Markdown } from "./Markdown";
 import { cn } from "@/lib/utils";
 import type {
@@ -262,7 +263,6 @@ export function AgentPane({
     }
   }
 
-  const loading = agents === null;
   const available = (agents ?? []).filter((a) => a.available);
 
   return (
@@ -270,26 +270,7 @@ export function AgentPane({
       <div ref={scrollRef} className="relative z-10 flex-1 overflow-y-auto">
         <div className="mx-auto flex max-w-[720px] flex-col gap-4 px-5 py-6">
           {entries.length === 0 && !running && (
-            <div className="flex flex-col items-center gap-3 py-16 text-center">
-              <Bot className="h-6 w-6 text-subtle-foreground" />
-              <p className="text-body text-muted-foreground">
-                Run your own coding agent here, with this notebook's sources
-                available to it.
-              </p>
-              {discoveryError ? (
-                <p className="max-w-sm text-caption text-destructive">
-                  Couldn't check which agents are installed: {discoveryError}
-                </p>
-              ) : (
-                !loading &&
-                available.length === 0 && (
-                  <p className="max-w-sm text-caption text-subtle-foreground">
-                    No compatible agents found. Install opencode, Claude Code,
-                    Gemini CLI, or Codex to use this.
-                  </p>
-                )
-              )}
-            </div>
+            <AgentBlankSlate agents={agents} discoveryError={discoveryError} />
           )}
           {entries.map((entry, i) => (
             <EntryRow key={i} entry={entry} />
@@ -397,6 +378,76 @@ export function AgentPane({
         </div>
       </div>
     </>
+  );
+}
+
+/** The Agent view before its first turn. The state worth designing for is
+ *  the empty machine: an agent picker with nothing in it explains nothing, so
+ *  name the three agents that work here and hand over the command that
+ *  installs each. Install hints come from the backend so they stay next to
+ *  the binary names discovery actually probes for. */
+function AgentBlankSlate({
+  agents,
+  discoveryError,
+}: {
+  agents: AcpAgentInfo[] | null;
+  discoveryError: string | null;
+}) {
+  const pushToast = useStore((s) => s.pushToast);
+  const icon = <Bot className="h-6 w-6" />;
+
+  if (discoveryError) {
+    return (
+      <EmptyState
+        icon={icon}
+        title="Couldn't check for agents"
+        hint={discoveryError}
+      />
+    );
+  }
+  if (agents === null) {
+    return <EmptyState icon={icon} title="Looking for agents…" />;
+  }
+  if (agents.some((a) => a.available)) {
+    return (
+      <EmptyState
+        icon={icon}
+        title="Run your own coding agent"
+        hint="It can search this notebook's sources while it works."
+      />
+    );
+  }
+  return (
+    <EmptyState
+      icon={icon}
+      title="No coding agents installed"
+      hint="Install one and it appears here."
+    >
+      <div className="mt-2 flex w-full max-w-sm flex-col divide-y divide-border rounded-md border border-border text-left">
+        {agents.map((a) => (
+          <div key={a.id} className="flex items-center gap-2 px-2.5 py-2">
+            <span className="shrink-0 text-caption text-foreground">
+              {a.label}
+            </span>
+            <code className="ml-auto truncate font-mono text-micro text-subtle-foreground">
+              {a.installHint}
+            </code>
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard.writeText(a.installHint);
+                pushToast("success", `Install command for ${a.label} copied`);
+              }}
+              title={`Copy: ${a.installHint}`}
+              aria-label={`Copy the install command for ${a.label}`}
+              className="shrink-0 rounded p-1 text-subtle-foreground transition-colors hover:text-foreground"
+            >
+              <Copy className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+    </EmptyState>
   );
 }
 

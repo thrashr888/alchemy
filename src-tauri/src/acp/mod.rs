@@ -37,10 +37,12 @@ use crate::inference::{find_binary_cached, load_shell_env};
 /// accounts on 2026-06-18 — it still starts and still has `--acp`, but
 /// `session/new` dies with "This client is no longer supported for Gemini
 /// Code Assist for individuals", so offering it only produced an agent that
-/// could never answer. Its successor, Antigravity (`agy`), has no ACP mode at
-/// all (google-antigravity/antigravity-cli#31 is open, unscheduled), so it
-/// can't take the slot: Alchemy reaches Antigravity over MCP instead, via the
-/// connector in connectors.rs. Re-add here the day `agy` speaks ACP.
+/// could never answer. Its successor, Antigravity, is absent for a different
+/// reason: the `agy` CLI has no ACP mode (google-antigravity/antigravity-cli#31
+/// is open), and Google's separate `agy_acp_server` binary — the one the ACP
+/// registry lists — is a download we'd have to fetch and verify ourselves,
+/// which is the registry-driven picker we haven't built. Until then Alchemy
+/// reaches Antigravity over MCP, via the connector in connectors.rs.
 const AGENTS: [AcpAgentKind; 3] = [
     AcpAgentKind::Opencode,
     AcpAgentKind::ClaudeCode,
@@ -85,6 +87,17 @@ impl AcpAgentKind {
             AcpAgentKind::ClaudeCode => "claude",
             AcpAgentKind::Opencode => "opencode auth login",
             AcpAgentKind::Codex => "codex login",
+        }
+    }
+
+    /// How to install this agent, for the blank slate when none is present.
+    /// Lives here rather than the UI so it stays next to the binary name it
+    /// has to match.
+    fn install_hint(self) -> &'static str {
+        match self {
+            AcpAgentKind::Opencode => "brew install sst/tap/opencode",
+            AcpAgentKind::ClaudeCode => "npm install -g @anthropic-ai/claude-code",
+            AcpAgentKind::Codex => "npm install -g @openai/codex",
         }
     }
 
@@ -230,6 +243,8 @@ pub struct AcpAgentInfo {
     /// Terminal command that signs this agent in — offered as a fix when a
     /// session dies on open because the agent isn't authenticated.
     pub login_command: String,
+    /// Shell one-liner that installs it, shown when nothing is installed.
+    pub install_hint: String,
 }
 
 /// Detected ACP agents for the picker. The binary probe falls back to a login
@@ -245,6 +260,7 @@ pub async fn acp_agents() -> Vec<AcpAgentInfo> {
                 label: kind.label().to_string(),
                 available: kind.command().is_some(),
                 login_command: kind.login_command().to_string(),
+                install_hint: kind.install_hint().to_string(),
             })
             .collect()
     })
