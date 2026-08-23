@@ -108,8 +108,36 @@ detected agents, pick default, per-agent auth status.
 1. ~~Backend module + discovery + session round-trip.~~ Done.
 2. ~~Chat agent mode: streaming render, permission prompts, stop button.~~
    Done.
-3. Settings row, default-agent choice, auth-status surfacing.
+3. ~~Settings row, default-agent choice, auth-status surfacing.~~ Done
+   (2026-08-22). Settings → Agents grows a **Hosted agents** section: the
+   default-agent select (`AiConfig.hosted_agent`, empty = first installed,
+   which the picker also falls back to when a saved choice is uninstalled),
+   the detected agents, and a per-agent **Check**. In-app login stays out:
+   every one of these CLIs authenticates through its own device flow, so the
+   honest affordance is the Sign in button that opens their terminal command,
+   not a login form of ours that would only proxy theirs.
 4. Later: `session/load` resume, plans panel, terminal.
+
+## Which agents (2026-08-22)
+
+opencode, Claude Code, Codex. What determines membership is a native ACP
+entrypoint, not popularity — and that pruned Gemini:
+
+- **Gemini CLI is out.** Google retired it for individual accounts on
+  2026-06-18; the binary and its `--acp` flag survive, but `session/new` dies
+  with "This client is no longer supported for Gemini Code Assist for
+  individuals" (verified on this machine, gemini 0.56.0). Enterprise Code
+  Assist and API-key users are unaffected, which is why it stays a *headless*
+  provider and keeps its MCP connector — but the ACP picker offering an agent
+  that can never answer was the actual bug.
+- **Antigravity can't replace it here.** `agy` (1.1.19) is the named
+  successor and is genuinely good, but it has no ACP mode — no flag, no
+  subcommand (google-antigravity/antigravity-cli#31, open and unscheduled).
+  It does speak MCP, so Alchemy already reaches it the other way: the
+  `antigravity` connector in `connectors.rs`. Third-party `agy`→ACP bridges
+  exist; none is official, and spawning someone's npm package to hold the
+  user's Google session is not a trade we should make for them. Re-add to
+  `AGENTS` the day `agy --acp` ships.
 
 ## Implementation notes (things the build taught us)
 

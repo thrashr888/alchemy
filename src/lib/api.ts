@@ -606,6 +606,9 @@ export const api = {
 
   // Hosted agents (ACP)
   acpAgents: () => run(query<AcpAgentInfo[]>("acp_agents")),
+  /** Opens a throwaway session to prove the agent is signed in and working.
+   *  Spawns a subprocess like acpStart, so it takes the long AI timeout. */
+  acpCheck: (agentId: string) => run(ai<void>("acp_check", { agentId })),
   /** The running session's agent id for a notebook, or null. */
   acpStatus: (notebookId: string) =>
     run(query<string | null>("acp_status", { notebookId })),

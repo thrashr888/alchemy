@@ -1,7 +1,7 @@
 //! Hosted agents over the Agent Client Protocol (docs/RFC-acp-agents.md).
 //!
-//! Spawns the user's installed coding agent (opencode, Claude Code, Gemini,
-//! Codex) as an ACP subprocess, hands it Alchemy's own MCP endpoint at
+//! Spawns the user's installed coding agent (opencode, Claude Code, Codex)
+//! as an ACP subprocess, hands it Alchemy's own MCP endpoint at
 //! session/new, and streams its turns to the UI as Tauri events. One hosted
 //! session per notebook at a time; the agent's own login is the credential,
 //! same as the headless CLI providers.
@@ -32,10 +32,18 @@ use crate::inference::{find_binary_cached, load_shell_env};
 /// The ACP-capable subset of the agent CLIs we know how to launch. Claude Code
 /// speaks ACP through Zed's adapter (run via npx so nothing is installed);
 /// the rest ship a native entrypoint.
-const AGENTS: [AcpAgentKind; 4] = [
+///
+/// Gemini CLI was here until 2026-08-22. Google retired it for individual
+/// accounts on 2026-06-18 — it still starts and still has `--acp`, but
+/// `session/new` dies with "This client is no longer supported for Gemini
+/// Code Assist for individuals", so offering it only produced an agent that
+/// could never answer. Its successor, Antigravity (`agy`), has no ACP mode at
+/// all (google-antigravity/antigravity-cli#31 is open, unscheduled), so it
+/// can't take the slot: Alchemy reaches Antigravity over MCP instead, via the
+/// connector in connectors.rs. Re-add here the day `agy` speaks ACP.
+const AGENTS: [AcpAgentKind; 3] = [
     AcpAgentKind::Opencode,
     AcpAgentKind::ClaudeCode,
-    AcpAgentKind::Gemini,
     AcpAgentKind::Codex,
 ];
 
@@ -43,7 +51,6 @@ const AGENTS: [AcpAgentKind; 4] = [
 enum AcpAgentKind {
     Opencode,
     ClaudeCode,
-    Gemini,
     Codex,
 }
 
@@ -52,7 +59,6 @@ impl AcpAgentKind {
         match self {
             AcpAgentKind::Opencode => "opencode",
             AcpAgentKind::ClaudeCode => "claude-code",
-            AcpAgentKind::Gemini => "gemini-cli",
             AcpAgentKind::Codex => "codex",
         }
     }
@@ -61,7 +67,6 @@ impl AcpAgentKind {
         match self {
             AcpAgentKind::Opencode => "opencode",
             AcpAgentKind::ClaudeCode => "Claude Code",
-            AcpAgentKind::Gemini => "Gemini CLI",
             AcpAgentKind::Codex => "Codex",
         }
     }
@@ -80,8 +85,6 @@ impl AcpAgentKind {
             AcpAgentKind::ClaudeCode => "claude",
             AcpAgentKind::Opencode => "opencode auth login",
             AcpAgentKind::Codex => "codex login",
-            // Gemini authenticates on first interactive run.
-            AcpAgentKind::Gemini => "gemini",
         }
     }
 
@@ -96,18 +99,27 @@ impl AcpAgentKind {
             AcpAgentKind::Opencode => {
                 AcpAgentConfig::new(find_binary_cached("opencode")?).arg("acp")
             }
+            // Both adapters moved out of the @zed-industries scope in 2026 and
+            // the old names are deprecated — pinned to the scope, not the
+            // vendor, because that is where updates land now.
             AcpAgentKind::ClaudeCode => {
                 // The adapter drives the user's `claude` install; require it so
                 // we don't offer an agent that can't authenticate.
                 find_binary_cached("claude")?;
                 AcpAgentConfig::new(find_binary_cached("npx")?)
                     .arg("-y")
-                    .arg("@zed-industries/claude-code-acp")
+                    .arg("@agentclientprotocol/claude-agent-acp")
             }
-            AcpAgentKind::Gemini => {
-                AcpAgentConfig::new(find_binary_cached("gemini")?).arg("--experimental-acp")
+            AcpAgentKind::Codex => {
+                // Codex has no ACP entrypoint of its own: `codex acp` was never
+                // a subcommand in 0.149, so it fell through to the interactive
+                // TUI and died on "stdin is not a terminal". The adapter drives
+                // Codex's app-server protocol instead.
+                find_binary_cached("codex")?;
+                AcpAgentConfig::new(find_binary_cached("npx")?)
+                    .arg("-y")
+                    .arg("@agentclientprotocol/codex-acp")
             }
-            AcpAgentKind::Codex => AcpAgentConfig::new(find_binary_cached("codex")?).arg("acp"),
         })
     }
 
@@ -238,6 +250,62 @@ pub async fn acp_agents() -> Vec<AcpAgentInfo> {
     })
     .await
     .unwrap_or_default()
+}
+
+/// Can this agent actually open a session right now? An installed binary says
+/// nothing about being signed in, and the wire error for "not signed in" is
+/// generic enough to look like a crash — so the only honest check is a real
+/// `initialize` + `session/new`. Runs with no MCP server and a throwaway cwd,
+/// then drops the connection; the SDK's `ChildGuard` reaps the process group.
+/// Seconds, and it can prompt the agent's own device flow, so Settings asks
+/// for it per agent on click rather than probing every agent on open.
+#[tauri::command]
+pub async fn acp_check(agent_id: String) -> Result<(), String> {
+    let kind =
+        AcpAgentKind::from_id(&agent_id).ok_or_else(|| format!("unknown agent: {agent_id}"))?;
+    let config = tauri::async_runtime::spawn_blocking(move || kind.launch())
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("{} is not installed", kind.label()))?;
+    let label = kind.label();
+    let cwd = std::env::temp_dir();
+
+    // The closure's Ok type carries the verdict: returning `Ok(Err(msg))`
+    // rather than `Err(..)` lets the connection close cleanly while still
+    // handing back wording the user can act on.
+    let probe = agent_client_protocol::Client
+        .builder()
+        .connect_with(
+            AcpAgent::new(config),
+            |connection: ConnectionTo<Agent>| async move {
+                let init = match connection
+                    .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                    .block_task()
+                    .await
+                {
+                    Ok(init) => init,
+                    Err(err) => return Ok(Err(format!("{label} didn't start. {err}"))),
+                };
+                match connection
+                    .send_request(NewSessionRequest::new(cwd))
+                    .block_task()
+                    .await
+                {
+                    Ok(_) => Ok(Ok(())),
+                    Err(err) => Ok(Err(session_open_error(
+                        label,
+                        &init.auth_methods,
+                        &err.to_string(),
+                    ))),
+                }
+            },
+        )
+        .await;
+
+    match probe {
+        Ok(verdict) => verdict,
+        Err(err) => Err(format!("{label} didn't start. {err}")),
+    }
 }
 
 /// The active session's agent id for a notebook, if one is running — lets a

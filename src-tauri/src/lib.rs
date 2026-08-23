@@ -397,6 +397,7 @@ pub fn run() {
             templates::delete_template,
             mcp::mcp_status,
             acp::acp_agents,
+            acp::acp_check,
             acp::acp_status,
             acp::acp_start,
             acp::acp_prompt,

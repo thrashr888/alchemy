@@ -519,6 +519,9 @@ export interface AiConfig {
   /** Embedded MCP server for agent access (localhost streamable HTTP). */
   mcpEnabled: boolean;
   mcpPort: number;
+  /** Hosted coding agent the Agent view opens with — an `acpAgents` id, or
+   *  empty for "whichever is installed". */
+  hostedAgent: string;
   /** Browser-extension clip receiver (localhost; accepts a rendered DOM from
    *  the user's logged-in tab, see docs/RFC-page-capture.md §8). */
   clipEnabled: boolean;

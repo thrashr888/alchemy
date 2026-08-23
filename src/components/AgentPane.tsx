@@ -51,6 +51,7 @@ export function AgentPane({
   const setAcpAgentId = useStore((s) => s.setAcpAgentId);
   const setAcpEntries = useStore((s) => s.setAcpEntries);
   const hydrateAcpPane = useStore((s) => s.hydrateAcpPane);
+  const hostedAgent = useStore((s) => s.aiConfig?.hostedAgent ?? "");
 
   // Restore the persisted transcript + agent choice before the picker's
   // first-available default can claim the slot. Idempotent (seeds only when
@@ -122,12 +123,16 @@ export function AgentPane({
     };
   }, [notebookId]);
 
-  // Default the picker to the first available agent.
+  // Default the picker: the agent chosen in Settings when it's installed,
+  // otherwise the first one that is. A stale preference (agent uninstalled,
+  // or a build that dropped it) falls through rather than pinning the picker
+  // to something that can't run.
   useEffect(() => {
     if (agentId) return;
-    const first = agents?.find((a) => a.available);
+    const preferred = agents?.find((a) => a.id === hostedAgent && a.available);
+    const first = preferred ?? agents?.find((a) => a.available);
     if (first) setAgentId(first.id);
-  }, [agents, agentId]);
+  }, [agents, agentId, hostedAgent, setAgentId]);
 
   // Backend events are broadcast to every window; self-filter by notebook.
   useEffect(() => {

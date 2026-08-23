@@ -86,6 +86,11 @@ pub struct AiConfig {
     pub mcp_enabled: bool,
     #[serde(default = "default_mcp_port")]
     pub mcp_port: u16,
+    /// Which hosted coding agent the notebook Agent view opens with
+    /// (docs/RFC-acp-agents.md); an `acp_agents` id. Empty means "whichever
+    /// is installed", so a fresh machine needs no choice made for it.
+    #[serde(default)]
+    pub hosted_agent: String,
     /// Browser-extension clip receiver (localhost-only; accepts a rendered
     /// DOM from the user's logged-in tab, see docs/RFC-page-capture.md §8).
     /// Default-on, same as MCP — the toggle exists for anyone who wants no
@@ -350,6 +355,7 @@ impl Default for AiConfig {
             profile: UserProfile::default(),
             mcp_enabled: default_true(),
             mcp_port: default_mcp_port(),
+            hosted_agent: String::new(),
             clip_enabled: default_true(),
             clip_port: default_clip_port(),
             tray_enabled: default_true(),

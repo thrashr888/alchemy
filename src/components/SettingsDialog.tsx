@@ -16,7 +16,12 @@ import {
   ShortcutsTab,
 } from "./settings/SettingsTabs";
 import { ModelsTab } from "./settings/ModelsTab";
-import type { AiConfig, ConnectorStatus, McpStatus } from "@/lib/types";
+import type {
+  AcpAgentInfo,
+  AiConfig,
+  ConnectorStatus,
+  McpStatus,
+} from "@/lib/types";
 import { ActivityTab } from "./settings/ActivityTab";
 import {
   ChartNoAxesColumn,
@@ -960,7 +965,142 @@ function AgentsTab() {
           )}
         </div>
       </Field>
+
+      <HostedAgents />
     </div>
+  );
+}
+
+/** The other direction from Clients: agents Alchemy runs itself, in a
+ *  notebook's Agent view (docs/RFC-acp-agents.md). "Installed" and "signed in"
+ *  are different things and only the second one matters, so each row can prove
+ *  itself by opening a throwaway session — the same check the Agent view does
+ *  on first prompt, minus the wait until you need it. */
+function HostedAgents() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  const [agents, setAgents] = useState<AcpAgentInfo[] | null>(null);
+  const [checking, setChecking] = useState<string | null>(null);
+  const [results, setResults] = useState<Record<string, string | null>>({});
+
+  useEffect(() => {
+    api
+      .acpAgents()
+      .then(setAgents)
+      .catch(() => setAgents([]));
+  }, []);
+
+  if (!aiConfig) return null;
+  const list = agents ?? [];
+  const available = list.filter((a) => a.available);
+
+  function check(agent: AcpAgentInfo) {
+    setChecking(agent.id);
+    api
+      .acpCheck(agent.id)
+      .then(() => setResults((r) => ({ ...r, [agent.id]: null })))
+      .catch((e: unknown) =>
+        setResults((r) => ({
+          ...r,
+          [agent.id]: e instanceof Error ? e.message : String(e),
+        })),
+      )
+      .finally(() => setChecking(null));
+  }
+
+  return (
+    <Field
+      label="Hosted agents"
+      hint="Run your own coding agent inside a notebook, with that notebook's sources available to it. Check proves it can open a session — installed is not the same as signed in."
+    >
+      <div className="flex flex-col gap-3">
+        <label className="flex items-center justify-between gap-3">
+          <span className="text-body text-foreground">Open the Agent view with</span>
+          <select
+            value={aiConfig.hostedAgent}
+            onChange={(e) =>
+              void saveAiConfig({ ...aiConfig, hostedAgent: e.target.value })
+            }
+            className="h-8 rounded-md border border-input bg-surface-2 px-2 text-body text-foreground focus:outline-none"
+          >
+            <option value="">First one installed</option>
+            {list.map((a) => (
+              <option key={a.id} value={a.id} disabled={!a.available}>
+                {a.label}
+                {a.available ? "" : " (not installed)"}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className="flex flex-col divide-y divide-border rounded-md border border-border">
+          {list.map((a) => {
+            const failure = results[a.id];
+            const passed = a.id in results && failure === null;
+            return (
+              <div
+                key={a.id}
+                className={cn(
+                  "flex items-start gap-2 px-2.5 py-2",
+                  !a.available && "opacity-50",
+                )}
+              >
+                <div className="flex min-w-0 flex-1 flex-col">
+                  <span className="text-[0.78125rem] text-foreground">
+                    {a.label}
+                  </span>
+                  {failure && (
+                    <span className="text-[0.65625rem] text-destructive [overflow-wrap:anywhere]">
+                      {failure}
+                    </span>
+                  )}
+                </div>
+
+                {passed && (
+                  <span className="flex shrink-0 items-center gap-1 text-micro text-success">
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    Ready
+                  </span>
+                )}
+                {failure && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => void api.openInTerminal(a.loginCommand)}
+                  >
+                    Sign in
+                  </Button>
+                )}
+                {a.available ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    loading={checking === a.id}
+                    onClick={() => check(a)}
+                  >
+                    Check
+                  </Button>
+                ) : (
+                  <span className="shrink-0 text-micro text-subtle-foreground">
+                    Not installed
+                  </span>
+                )}
+              </div>
+            );
+          })}
+          {agents === null && (
+            <div className="px-2.5 py-3 text-[0.71875rem] text-subtle-foreground">
+              Looking for agents…
+            </div>
+          )}
+          {agents !== null && available.length === 0 && (
+            <div className="px-2.5 py-3 text-[0.71875rem] text-subtle-foreground">
+              None installed. opencode, Claude Code, and Codex work here.
+            </div>
+          )}
+        </div>
+      </div>
+    </Field>
   );
 }
 
