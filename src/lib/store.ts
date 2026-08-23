@@ -285,6 +285,8 @@ export const useStore = create<AppState>((set, get) => {
     currentId: null,
     sources: [],
     selectedSourceIds: null,
+    picked: null,
+    hygiene: [],
     messages: [],
     messagesHasMore: false,
     messagesLoadingOlder: false,
@@ -571,6 +573,7 @@ export const useStore = create<AppState>((set, get) => {
         const p = e.payload;
         if (get().currentId !== p.notebookId) return;
         void api.listSources(p.notebookId).then((sources) => set({ sources }));
+        void get().refreshHygiene();
         const parts = [
           p.added && `${p.added} added`,
           p.updated && `${p.updated} updated`,
@@ -883,6 +886,8 @@ export const useStore = create<AppState>((set, get) => {
         currentId: id,
         sources: [],
         selectedSourceIds: loadSourceSel(id),
+        picked: null,
+        hygiene: [],
         messages: [],
         messagesHasMore: false,
         messagesLoadingOlder: false,
@@ -1160,6 +1165,8 @@ export const useStore = create<AppState>((set, get) => {
         mtime: 0,
         tags: "",
         note: "",
+        fetchedAt: Date.now(),
+        fetchFailures: 0,
       };
       set({
         ingestQueue: [...get().ingestQueue, item],
@@ -1337,6 +1344,146 @@ export const useStore = create<AppState>((set, get) => {
         if (nb) set({ sources: await api.listSources(nb) });
         get().pushToast("success", "Source removed");
       }),
+
+    // ---- Finder-style selection (RFC-multi-select) ----------------------
+
+    pickOne: (kind, id) => set({ picked: { kind, ids: [id], anchor: id } }),
+
+    pickToggle: (kind, id) => {
+      const p = get().picked;
+      const ids =
+        p?.kind === kind
+          ? p.ids.includes(id)
+            ? p.ids.filter((x) => x !== id)
+            : [...p.ids, id]
+          : [id];
+      set({ picked: ids.length ? { kind, ids, anchor: id } : null });
+    },
+
+    pickRange: (kind, orderedIds, id) => {
+      const p = get().picked;
+      const anchor = p?.kind === kind ? p.anchor : null;
+      const a = anchor ? orderedIds.indexOf(anchor) : -1;
+      const b = orderedIds.indexOf(id);
+      if (a === -1 || b === -1) {
+        set({ picked: { kind, ids: [id], anchor: id } });
+        return;
+      }
+      const ids = orderedIds.slice(Math.min(a, b), Math.max(a, b) + 1);
+      // The anchor survives the range — the next shift-click re-ranges from
+      // the same fixed point, like Finder.
+      set({ picked: { kind, ids, anchor } });
+    },
+
+    pickSet: (kind, ids, additive) => {
+      const p = get().picked;
+      const merged =
+        additive && p?.kind === kind
+          ? [...new Set([...p.ids, ...ids])]
+          : [...ids];
+      set({
+        picked: merged.length
+          ? { kind, ids: merged, anchor: p?.kind === kind ? p.anchor : null }
+          : null,
+      });
+    },
+
+    pickAll: (kind, ids) =>
+      set({
+        picked: ids.length ? { kind, ids: [...ids], anchor: ids[0] } : null,
+      }),
+
+    clearPicked: () => {
+      if (get().picked) set({ picked: null });
+    },
+
+    // ---- Batch verbs (RFC-multi-select) ---------------------------------
+
+    refreshSourcesBatch: async (sourceIds) => {
+      const id = get().currentId;
+      if (!id || sourceIds.length === 0) return;
+      // Fire-and-return: the backend refreshes sequentially off the IPC
+      // thread and emits one sources://changed with the tally at the end —
+      // the standing listener re-lists and toasts.
+      await api.refreshSources(id, sourceIds);
+      set({ picked: null });
+      get().pushToast(
+        "info",
+        sourceIds.length === 1
+          ? "Refreshing 1 source…"
+          : `Refreshing ${sourceIds.length} sources…`,
+      );
+    },
+
+    deleteSourcesBatch: (sourceIds) =>
+      guard(async () => {
+        if (sourceIds.length === 0) return;
+        await api.deleteSources(get().currentId ?? "", sourceIds);
+        const nb = get().currentId;
+        if (nb) set({ sources: await api.listSources(nb) });
+        set({ picked: null });
+        get().pushToast(
+          "success",
+          sourceIds.length === 1
+            ? "Source removed"
+            : `${sourceIds.length} sources removed`,
+        );
+        void get().refreshHygiene();
+      }),
+
+    setSourcesTagsBatch: (sourceIds, tags) =>
+      guard(async () => {
+        if (sourceIds.length === 0) return;
+        await api.setSourcesTags(sourceIds, tags);
+        const nb = get().currentId;
+        if (nb) set({ sources: await api.listSources(nb) });
+        get().pushToast(
+          "success",
+          sourceIds.length === 1
+            ? "Tags saved"
+            : `Tagged ${sourceIds.length} sources`,
+        );
+      }),
+
+    deleteNotesBatch: (noteIds) =>
+      guard(async () => {
+        if (noteIds.length === 0) return;
+        await api.deleteNotes(noteIds);
+        set({
+          notes: get().notes.filter((n) => !noteIds.includes(n.id)),
+          picked: null,
+        });
+        get().pushToast(
+          "success",
+          noteIds.length === 1
+            ? "Note deleted"
+            : `${noteIds.length} notes deleted`,
+        );
+      }),
+
+    // ---- Source hygiene (RFC-source-hygiene) ----------------------------
+
+    refreshHygiene: async () => {
+      const id = get().currentId;
+      if (!id) return;
+      try {
+        const hygiene = await api.sourceHygiene(id);
+        if (get().currentId === id) set({ hygiene });
+      } catch {
+        // Classification is best-effort chrome — never surface a failure.
+      }
+    },
+
+    hygieneKeep: async (sourceId) => {
+      try {
+        await api.hygieneKeep(sourceId);
+      } catch {
+        /* strike reset is best-effort */
+      }
+      set({
+        hygiene: get().hygiene.filter((h) => h.sourceId !== sourceId),
+      });
+    },
 
     toggleSourceSelected: (id) => {
       const next = { ...(get().selectedSourceIds ?? {}) };

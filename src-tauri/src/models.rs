@@ -87,6 +87,16 @@ pub struct Source {
     /// can surface it (docs/RFC-source-tags.md).
     #[serde(default)]
     pub note: String,
+    /// When the content was last successfully ingested from its origin
+    /// (unix millis) — the freshness signal hygiene sweeps on
+    /// (docs/RFC-source-hygiene.md). Backfilled from `created_at`.
+    #[serde(default)]
+    pub fetched_at: i64,
+    /// Consecutive background refresh failures; reset on any successful
+    /// ingest. At `hygiene::UNREACHABLE_AFTER` the source is proposed for
+    /// removal instead of being retried forever.
+    #[serde(default)]
+    pub fetch_failures: i64,
 }
 
 /// Tally of what a folder rescan changed across the scanned folder sources.

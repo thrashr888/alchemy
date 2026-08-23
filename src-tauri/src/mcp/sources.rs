@@ -90,12 +90,38 @@ struct UpdateSourceReq {
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 struct SetTagsReq {
-    /// Source id (from list_sources).
-    source_id: String,
+    /// Source id (provide this or source_ids).
+    #[serde(default)]
+    source_id: Option<String>,
+    /// Several source ids to tag identically in one call — the
+    /// multi-select batch shape (docs/RFC-multi-select.md).
+    #[serde(default)]
+    source_ids: Option<Vec<String>>,
     /// Tags as free text — `#` prefixes, commas, and mixed case are all
     /// accepted; stored normalized (lowercase, deduped, space-separated).
     /// Empty clears all tags.
     tags: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct SourceSelectionReq {
+    /// Source id (provide this or source_ids).
+    #[serde(default)]
+    source_id: Option<String>,
+    /// Several source ids from one notebook, acted on as a batch — the
+    /// multi-select shape (docs/RFC-multi-select.md).
+    #[serde(default)]
+    source_ids: Option<Vec<String>>,
+}
+
+impl SourceSelectionReq {
+    fn ids(self) -> Result<Vec<String>, McpError> {
+        match (self.source_ids, self.source_id) {
+            (Some(ids), _) if !ids.is_empty() => Ok(ids),
+            (_, Some(id)) => Ok(vec![id]),
+            _ => Err(invalid("provide source_id or source_ids")),
+        }
+    }
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -286,18 +312,37 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Set a source's tags (user organization that retrieval also uses: tags join the source's route summary and the chat manifest). Free-form input — '#' prefixes, commas, mixed case all accepted; stored normalized (lowercase, deduped, space-separated). Empty tags clears them. Returns the updated source."
+        description = "Set a source's tags (user organization that retrieval also uses: tags join the source's route summary and the chat manifest). Free-form input — '#' prefixes, commas, mixed case all accepted; stored normalized (lowercase, deduped, space-separated). Empty tags clears them. Returns the updated source for a single source_id, or {ok, updated} for a source_ids batch."
     )]
     async fn set_source_tags(
         &self,
-        Parameters(SetTagsReq { source_id, tags }): Parameters<SetTagsReq>,
+        Parameters(SetTagsReq {
+            source_id,
+            source_ids,
+            tags,
+        }): Parameters<SetTagsReq>,
     ) -> Result<CallToolResult, McpError> {
+        let ids = SourceSelectionReq {
+            source_id,
+            source_ids,
+        }
+        .ids()?;
         let state = self.state();
-        let source = commands::set_source_tags_impl(&state, &source_id, &tags)
-            .await
-            .map_err(internal)?;
-        self.changed("sources", Some(&source.notebook_id));
-        json_result(&source)
+        let mut last: Option<Source> = None;
+        for id in &ids {
+            last = Some(
+                commands::set_source_tags_impl(&state, id, &tags)
+                    .await
+                    .map_err(internal)?,
+            );
+        }
+        let last = last.expect("ids is non-empty");
+        self.changed("sources", Some(&last.notebook_id));
+        if ids.len() == 1 {
+            json_result(&last)
+        } else {
+            json_result(&serde_json::json!({ "ok": true, "updated": ids.len() }))
+        }
     }
 
     #[tool(
@@ -315,20 +360,94 @@ impl AlchemyMcp {
         json_result(&source)
     }
 
-    #[tool(description = "Delete a source and its chunks from a notebook.")]
+    #[tool(
+        description = "Delete sources and their chunks from a notebook. Accepts one source_id or a source_ids batch (same notebook) — the batch runs as one bulk operation, and deleting a folder/repo parent takes its children along either way."
+    )]
     async fn delete_source(
         &self,
-        Parameters(SourceIdReq { source_id }): Parameters<SourceIdReq>,
+        Parameters(req): Parameters<SourceSelectionReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let ids = req.ids()?;
+        let state = self.state();
+        // Every id is resolved before anything is deleted, not just the
+        // first: the bulk delete works by id alone, so a batch that
+        // accidentally spans notebooks would take rows from a notebook the
+        // caller never named (and emit `sources://changed` for the wrong
+        // one). A mixed batch is a caller mistake, so it is refused whole.
+        let mut notebook_id: Option<String> = None;
+        for id in &ids {
+            let source = state
+                .db
+                .get_source(id)
+                .await
+                .map_err(internal)?
+                .ok_or_else(|| invalid(format!("no source with id {id}")))?;
+            match &notebook_id {
+                None => notebook_id = Some(source.notebook_id),
+                Some(first) if *first != source.notebook_id => {
+                    return Err(invalid(
+                        "source_ids span more than one notebook — delete them one notebook at a time",
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+        let notebook_id = notebook_id.expect("ids is non-empty");
+        commands::delete_sources_impl(&state, &notebook_id, &ids)
+            .await
+            .map_err(internal)?;
+        self.changed("sources", Some(&notebook_id));
+        json_result(&serde_json::json!({ "ok": true, "deleted": ids.len() }))
+    }
+
+    #[tool(
+        description = "Refresh sources from their origins — re-fetch a web page, re-sync a git repo or Mac item, rescan a folder, re-read a local file — re-chunking and re-embedding changed content. Accepts one source_id or a source_ids batch, refreshed sequentially. Returns the tally plus per-source failures."
+    )]
+    async fn refresh_source(
+        &self,
+        Parameters(req): Parameters<SourceSelectionReq>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let ids = req.ids()?;
+        let _heartbeat = Heartbeat::start(&ctx, format!("refreshing {} source(s)", ids.len()));
+        let state = self.state();
+        let mut refreshed = 0u32;
+        let mut failures = Vec::new();
+        let mut notebook_id = None;
+        for id in &ids {
+            match commands::refresh_source_impl(&self.app, &state, id).await {
+                Ok(source) => {
+                    refreshed += 1;
+                    notebook_id = Some(source.notebook_id);
+                }
+                Err(err) => failures.push(serde_json::json!({
+                    "sourceId": id,
+                    "error": format!("{err:#}"),
+                })),
+            }
+        }
+        self.changed("sources", notebook_id.as_deref());
+        json_result(&serde_json::json!({ "refreshed": refreshed, "failures": failures }))
+    }
+
+    #[tool(
+        description = "Hygiene report for a notebook's sources (docs/RFC-source-hygiene.md): buckets \"unreachable\" (repeated refresh failures), \"missing-file\" (local file gone), \"duplicate\" (same URL added twice; the older copy is kept), and \"husk\" (old failed import with no content) are proposed removals — nothing is deleted automatically — plus informational \"stale\" (due for re-fetch; the background sweep handles those). Act on proposals with delete_source or refresh_source."
+    )]
+    async fn source_hygiene(
+        &self,
+        Parameters(NotebookIdReq { notebook_id }): Parameters<NotebookIdReq>,
     ) -> Result<CallToolResult, McpError> {
         let state = self.state();
-        let notebook_id = state
+        let sources = state
             .db
-            .get_source(&source_id)
+            .list_sources(&notebook_id)
             .await
-            .map_err(internal)?
-            .map(|s| s.notebook_id);
-        state.db.delete_source(&source_id).await.map_err(internal)?;
-        self.changed("sources", notebook_id.as_deref());
-        json_result(&serde_json::json!({ "ok": true }))
+            .map_err(internal)?;
+        let cadence = state.ai.read().await.config().hygiene_refresh_days;
+        json_result(&crate::hygiene::classify(
+            &sources,
+            cadence,
+            commands::now(),
+        ))
     }
 }

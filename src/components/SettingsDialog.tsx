@@ -470,6 +470,10 @@ function SourcesTab() {
 
       <div className="h-px bg-border" />
 
+      <HygieneSelect />
+
+      <div className="h-px bg-border" />
+
       <NotionTokenField />
 
       <div className="h-px bg-border" />
@@ -707,6 +711,52 @@ function GitSyncSelect() {
       <span className="text-micro leading-relaxed text-subtle-foreground">
         Re-fetches when the branch moves, using your own git credentials.
         Alchemy stores no tokens.
+      </span>
+    </div>
+  );
+}
+
+/** Source hygiene cadence (docs/RFC-source-hygiene.md): how old a web
+ *  source may get before the background sweep re-fetches it. Refreshing is
+ *  automatic because it's reversible; removals (dead links, duplicates) are
+ *  only ever proposed in the sources panel. Off disables the sweep — the
+ *  "needs attention" flags still show. */
+function HygieneSelect() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  if (!aiConfig) return null;
+  const value = aiConfig.sourceHygiene ? String(aiConfig.hygieneRefreshDays) : "off";
+  return (
+    <div className="flex flex-col gap-1">
+      <label className="flex items-center justify-between gap-3">
+        <span className="text-body text-foreground">
+          Refresh aging web sources
+        </span>
+        <select
+          value={value}
+          onChange={(e) =>
+            void saveAiConfig(
+              e.target.value === "off"
+                ? { ...aiConfig, sourceHygiene: false }
+                : {
+                    ...aiConfig,
+                    sourceHygiene: true,
+                    hygieneRefreshDays: Number(e.target.value),
+                  },
+            )
+          }
+          className="h-8 rounded-md border border-input bg-surface-2 px-2 text-body text-foreground focus:outline-none"
+        >
+          <option value="7">After a week</option>
+          <option value="30">After a month</option>
+          <option value="90">After 3 months</option>
+          <option value="off">Off</option>
+        </select>
+      </label>
+      <span className="text-micro leading-relaxed text-subtle-foreground">
+        Re-fetches a few pages per pass, keeping the last good copy if a site
+        is down. Dead links and duplicates are flagged in the sources panel —
+        never removed automatically.
       </span>
     </div>
   );

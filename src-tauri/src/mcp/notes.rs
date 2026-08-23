@@ -33,6 +33,17 @@ struct UpdateNoteReq {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+struct DeleteNoteReq {
+    /// Note id (provide this or note_ids).
+    #[serde(default)]
+    note_id: Option<String>,
+    /// Several note ids to delete as one bulk operation — the multi-select
+    /// batch shape (docs/RFC-multi-select.md).
+    #[serde(default)]
+    note_ids: Option<Vec<String>>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 struct ExportNoteReq {
     /// Note id.
     note_id: String,
@@ -184,24 +195,49 @@ impl AlchemyMcp {
         json_result(&serde_json::json!({ "path": written }))
     }
 
-    #[tool(description = "Delete a note.")]
+    #[tool(
+        description = "Delete notes. Accepts one note_id or a note_ids batch, removed in one bulk operation (docs/RFC-multi-select.md)."
+    )]
     async fn delete_note(
         &self,
-        Parameters(NoteIdReq { note_id }): Parameters<NoteIdReq>,
+        Parameters(DeleteNoteReq { note_id, note_ids }): Parameters<DeleteNoteReq>,
     ) -> Result<CallToolResult, McpError> {
+        let ids = match (note_ids, note_id) {
+            (Some(ids), _) if !ids.is_empty() => ids,
+            (_, Some(id)) => vec![id],
+            _ => return Err(invalid("provide note_id or note_ids")),
+        };
         let state = self.state();
-        let notebook_id = state
-            .db
-            .get_note(&note_id)
-            .await
-            .map_err(internal)?
-            .map(|n| n.notebook_id);
-        // An Audio Overview's episode file lives outside the DB — remove it too.
-        if let Some(path) = commands::audio_path(&self.app, &note_id) {
-            let _ = std::fs::remove_file(path);
+        // Resolve every id first: a missing id used to slip through and
+        // report success while deleting nothing, and a batch spanning
+        // notebooks would emit `notes://changed` for whichever notebook the
+        // first id happened to live in.
+        let mut notebook_id: Option<String> = None;
+        for id in &ids {
+            let note = state
+                .db
+                .get_note(id)
+                .await
+                .map_err(internal)?
+                .ok_or_else(|| invalid(format!("no note with id {id}")))?;
+            match &notebook_id {
+                None => notebook_id = Some(note.notebook_id),
+                Some(first) if *first != note.notebook_id => {
+                    return Err(invalid(
+                        "note_ids span more than one notebook — delete them one notebook at a time",
+                    ));
+                }
+                Some(_) => {}
+            }
         }
-        state.db.delete_note(&note_id).await.map_err(internal)?;
+        // An Audio Overview's episode file lives outside the DB — remove it too.
+        for id in &ids {
+            if let Some(path) = commands::audio_path(&self.app, id) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+        state.db.delete_notes(&ids).await.map_err(internal)?;
         self.changed("notes", notebook_id.as_deref());
-        json_result(&serde_json::json!({ "ok": true }))
+        json_result(&serde_json::json!({ "ok": true, "deleted": ids.len() }))
     }
 }

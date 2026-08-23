@@ -94,6 +94,8 @@ async fn rag_round_trip() {
         mtime: 0,
         tags: String::new(),
         note: String::new(),
+        fetched_at: 0,
+        fetch_failures: 0,
     };
     db.insert_source(&source, &chunk_tuples, &embeddings)
         .await

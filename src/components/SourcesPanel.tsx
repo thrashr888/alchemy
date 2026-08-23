@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import {
+  Badge,
   Button,
   Input,
   Textarea,
@@ -9,10 +10,12 @@ import {
   EmptyState,
   ResizeHandle,
   RowMenu,
+  type RowMenuItem,
   Spinner,
   CardAction,
   useConfirm,
   useHoverCard,
+  useMarquee,
 } from "./ui";
 import {
   cn,
@@ -20,6 +23,7 @@ import {
   folderProvider,
   isWebUrl,
   relativeTime,
+  shortcutBlocked,
   visibleTitle,
 } from "@/lib/utils";
 import { sourceIcon } from "@/lib/sourceIcon";
@@ -74,6 +78,38 @@ function saveFoldersCollapsed(state: Record<string, boolean>) {
     /* storage full or unavailable — collapse state is best-effort */
   }
 }
+
+// "Keep" decisions from the hygiene review (RFC-source-hygiene), keyed
+// `${sourceId}:${bucket}` per notebook. Local suppression on purpose:
+// unreachable keeps reset real backend state, but a kept duplicate or
+// missing file is a viewing preference — the signal itself stays true and
+// agents still see it in the MCP report.
+function loadHygieneKept(notebookId: string | null): Record<string, boolean> {
+  if (!notebookId) return {};
+  try {
+    const raw = localStorage.getItem(`hygieneKept:${notebookId}`);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveHygieneKept(notebookId: string | null, kept: Record<string, boolean>) {
+  if (!notebookId) return;
+  try {
+    localStorage.setItem(`hygieneKept:${notebookId}`, JSON.stringify(kept));
+  } catch {
+    /* best-effort */
+  }
+}
+
+const HYGIENE_LABEL: Record<string, string> = {
+  unreachable: "unreachable",
+  "missing-file": "missing",
+  duplicate: "duplicate",
+  husk: "failed import",
+  stale: "stale",
+};
 
 /** Source-domain favicon with a Globe fallback (kept local — no third party). */
 /** The hover card: type, size, freshness, status — rows and gallery cards
@@ -195,6 +231,17 @@ export function SourcesPanel() {
   const toggleSourceSelected = useStore((s) => s.toggleSourceSelected);
   const setAllSourcesSelected = useStore((s) => s.setAllSourcesSelected);
   const askAboutSource = useStore((s) => s.askAboutSource);
+  const picked = useStore((s) => s.picked);
+  const pickOne = useStore((s) => s.pickOne);
+  const pickToggle = useStore((s) => s.pickToggle);
+  const pickRange = useStore((s) => s.pickRange);
+  const pickSet = useStore((s) => s.pickSet);
+  const clearPicked = useStore((s) => s.clearPicked);
+  const refreshSourcesBatch = useStore((s) => s.refreshSourcesBatch);
+  const deleteSourcesBatch = useStore((s) => s.deleteSourcesBatch);
+  const hygiene = useStore((s) => s.hygiene);
+  const refreshHygiene = useStore((s) => s.refreshHygiene);
+  const hygieneKeep = useStore((s) => s.hygieneKeep);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [editing, setEditing] = useState<{
@@ -210,8 +257,10 @@ export function SourcesPanel() {
   } | null>(null);
   // Inline metadata editors (RFC-source-tags): tags as one input line,
   // the annotation as a small textarea — same modal idiom as Edit source.
+  // `ids` carries one id for the row menu, several for the multi-select
+  // batch verb (RFC-multi-select).
   const [tagEdit, setTagEdit] = useState<{
-    id: string;
+    ids: string[];
     title: string;
     value: string;
   } | null>(null);
@@ -316,6 +365,172 @@ export function SourcesPanel() {
   const width = useStore((s) => s.sourcesWidth);
   const setPanelWidth = useStore((s) => s.setPanelWidth);
 
+  // ---- Finder-style selection (RFC-multi-select) ------------------------
+  const pickedIds = useMemo(
+    () => new Set(picked?.kind === "sources" ? picked.ids : []),
+    [picked],
+  );
+  const rowIds = rows.map((r) => r.s.id);
+  const rowIdsRef = useRef(rowIds);
+  rowIdsRef.current = rowIds;
+  const setSourcesTagsBatch = useStore((s) => s.setSourcesTagsBatch);
+
+  const listRef = useRef<HTMLDivElement>(null);
+  // An additive drag unions against the selection as it stood when the drag
+  // began — unioning against the live selection would ratchet (rows swept
+  // over once could never leave).
+  const marqueeBase = useRef<string[]>([]);
+  const { onPointerDown: marqueeDown, marquee, justEnded } = useMarquee({
+    containerRef: listRef,
+    onStart: (additive) => {
+      const p = useStore.getState().picked;
+      marqueeBase.current = additive && p?.kind === "sources" ? p.ids : [];
+    },
+    onSelect: (ids) =>
+      pickSet(
+        "sources",
+        [...new Set([...marqueeBase.current, ...ids])],
+        false,
+      ),
+    onClearBackground: clearPicked,
+  });
+
+  /** The right-click menu for a row inside a multi-selection: batch
+   *  variants of the single-row verbs, with counts in the labels. */
+  function batchMenuItems(ids: string[]): RowMenuItem[] {
+    const n = ids.length;
+    const refreshable = ids.filter(
+      (id) => !!sources.find((x) => x.id === id)?.url,
+    );
+    return [
+      ...(refreshable.length
+        ? [
+            {
+              label: `Refresh ${refreshable.length} sources`,
+              icon: <RefreshCw className="h-3.5 w-3.5" />,
+              onClick: () => void refreshSourcesBatch(refreshable),
+            },
+          ]
+        : []),
+      {
+        label: `Tag ${n} sources…`,
+        icon: <Tag className="h-3.5 w-3.5" />,
+        onClick: () =>
+          setTagEdit({ ids, title: `${n} sources`, value: "" }),
+      },
+      {
+        label: `Remove ${n} sources…`,
+        icon: <Trash2 className="h-3.5 w-3.5" />,
+        danger: true,
+        onClick: () => void confirmRemoveBatch(ids),
+      },
+    ];
+  }
+
+  async function confirmRemoveBatch(ids: string[]) {
+    if (
+      await confirm({
+        title: `Remove ${ids.length} sources?`,
+        message:
+          "This deletes the selected sources and their embedded chunks from the notebook (folders take their files along). Nothing on disk is touched.",
+        confirmLabel: "Remove",
+        danger: true,
+      })
+    )
+      void deleteSourcesBatch(ids);
+  }
+  const confirmRemoveBatchRef = useRef(confirmRemoveBatch);
+  confirmRemoveBatchRef.current = confirmRemoveBatch;
+
+  // ⌘A selects every visible row, Escape clears, Delete removes the
+  // selection (after the app confirm). Guarded by shortcutBlocked; ⌘A also
+  // steps aside while the reader is open (select-all there means text) or
+  // while a notes selection is active (Studio owns it then).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (shortcutBlocked(e)) return;
+      // An open row menu owns the keyboard while it's up — Escape closes it
+      // without also dropping the selection. Its own handler can't stop us:
+      // the menu renders in a body portal, so the native event never passes
+      // through React's root container where stopPropagation would land.
+      // Hence the capture phase below: by the bubble phase React has already
+      // flushed the close synchronously and the menu is gone from the DOM.
+      if (document.querySelector('[role="menu"]')) return;
+      const st = useStore.getState();
+      const p = st.picked;
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
+        if (p?.kind === "notes" || st.reader.open || !st.currentId) return;
+        e.preventDefault();
+        st.pickAll("sources", rowIdsRef.current);
+      } else if (e.key === "Escape") {
+        if (p) st.clearPicked();
+      } else if (
+        (e.key === "Backspace" || e.key === "Delete") &&
+        p?.kind === "sources" &&
+        p.ids.length > 0
+      ) {
+        e.preventDefault();
+        void confirmRemoveBatchRef.current(p.ids);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+
+  // ---- Source hygiene (RFC-source-hygiene) ------------------------------
+  // Re-classify shortly after the list settles; the check is a cheap
+  // metadata read.
+  useEffect(() => {
+    if (!currentId) return;
+    const t = setTimeout(() => void refreshHygiene(), 800);
+    return () => clearTimeout(t);
+  }, [currentId, sources, refreshHygiene]);
+
+  const [reviewOpen, setReviewOpen] = useState(false);
+  /** Source id currently being re-fetched from the review modal. */
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const [keptVersion, setKeptVersion] = useState(0);
+  const issueBySource = useMemo(() => {
+    const kept = loadHygieneKept(currentId);
+    const m = new Map<string, (typeof hygiene)[number]>();
+    for (const h of hygiene) {
+      if (h.bucket === "stale") continue; // the sweep's job, not the user's
+      if (kept[`${h.sourceId}:${h.bucket}`]) continue;
+      if (!m.has(h.sourceId)) m.set(h.sourceId, h);
+    }
+    return m;
+    // keptVersion invalidates after a "Keep" writes localStorage.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hygiene, currentId, keptVersion]);
+  const proposals = [...issueBySource.values()];
+
+  /** Fetch a flagged source again, right now. This is the user-initiated
+   *  path on purpose — someone is watching, so it keeps the hard-fail
+   *  semantics the background sweep deliberately avoids, and a success
+   *  clears the strike count (reingest stamps it), dropping the flag.
+   *  Duplicates get no Retry: re-fetching says nothing about them. */
+  async function retryIssue(h: { sourceId: string; bucket: string }) {
+    setRetrying(h.sourceId);
+    try {
+      await refreshSource(h.sourceId);
+    } finally {
+      setRetrying(null);
+    }
+    await refreshHygiene();
+  }
+
+  function keepIssue(h: { sourceId: string; bucket: string }) {
+    if (h.bucket === "unreachable") {
+      // Real backend state: clear the strike count, restart the cadence.
+      void hygieneKeep(h.sourceId);
+      return;
+    }
+    const kept = loadHygieneKept(currentId);
+    kept[`${h.sourceId}:${h.bucket}`] = true;
+    saveHygieneKept(currentId, kept);
+    setKeptVersion((v) => v + 1);
+  }
+
   return (
     <div
       style={{ width }}
@@ -414,7 +629,15 @@ export function SourcesPanel() {
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto p-2">
+      <div
+        ref={listRef}
+        onPointerDown={marqueeDown}
+        // select-none: these rows are chrome, not prose. Without it a
+        // rubber-band drag paints a native text highlight across every
+        // title it crosses (the "Copy text" menu items are how text
+        // leaves this app, not selection).
+        className="flex-1 select-none overflow-y-auto p-2"
+      >
         {/* Active upload queue */}
         {queue.length > 0 && (
           <div className="mb-2 flex flex-col gap-1">
@@ -517,6 +740,25 @@ export function SourcesPanel() {
                 />
               </div>
             </div>
+            {/* Hygiene proposals (RFC-source-hygiene): flagged, never
+                auto-removed — the review modal decides. */}
+            {proposals.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setReviewOpen(true)}
+                className="mb-1 flex w-full items-center gap-2 rounded-md border border-border bg-surface-2/60 px-2 py-1.5 text-left hover:bg-surface-2"
+              >
+                <AlertCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate text-caption text-foreground">
+                  {proposals.length === 1
+                    ? "1 source needs attention"
+                    : `${proposals.length} sources need attention`}
+                </span>
+                <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
+                  Review
+                </span>
+              </button>
+            )}
             <div className="flex flex-col gap-0.5">
               {rows.map(({ s, indent }) => {
                 const isFolder = [
@@ -544,9 +786,11 @@ export function SourcesPanel() {
                     (s.status === "error" && isWebUrl(s.url)));
                 const kids = isFolder ? (childrenOf.get(s.id) ?? []) : [];
                 const kidsOn = kids.filter((k) => isSelected(k.id)).length;
+                const isPicked = pickedIds.has(s.id);
                 return (
                   <div
                     key={s.id}
+                    data-pick-id={s.id}
                     // Row content is pointer-events-none (clicks go to the
                     // CardAction), so the row carries the hover detail the
                     // truncated children can no longer show — as the floating
@@ -558,14 +802,37 @@ export function SourcesPanel() {
                       // dropdown otherwise — later DOM order wins at equal z).
                       "group relative flex items-start gap-2 rounded-md px-2 py-2 hover:bg-surface-2 [content-visibility:auto] [contain-intrinsic-size:auto_44px]",
                       s.status === "error" && "bg-destructive/5",
+                      // Selection is a quiet tinted wash (DESIGN §2 — color
+                      // only when it means something; never a left border).
+                      isPicked && "bg-primary/10 hover:bg-primary/15",
                       readable && "cursor-pointer",
                       indent && "ml-5",
                     )}
                   >
-                    {readable && (
+                    {!importing && (
                       <CardAction
-                        label={`Read source ${s.title}`}
-                        onClick={() => openSourceViewer(s.id, s.title)}
+                        label={
+                          readable
+                            ? `Read source ${s.title}`
+                            : `Select source ${s.title}`
+                        }
+                        onClick={(e) => {
+                          // A rubber-band drag that started on this row ends
+                          // in a click — that click is the drag's tail.
+                          if (justEnded()) return;
+                          if (e.metaKey || e.ctrlKey) {
+                            pickToggle("sources", s.id);
+                            return;
+                          }
+                          if (e.shiftKey) {
+                            pickRange("sources", rowIds, s.id);
+                            return;
+                          }
+                          // Plain click: collapse the selection to this row
+                          // (the shift anchor) and open as before.
+                          pickOne("sources", s.id);
+                          if (readable) openSourceViewer(s.id, s.title);
+                        }}
                       />
                     )}
                     {isFolder && kids.length > 0 ? (
@@ -634,11 +901,30 @@ export function SourcesPanel() {
                             (s.url && hostname(s.url)) ||
                             "Untitled"}
                         </span>
+                        {issueBySource.has(s.id) && (
+                          <Badge
+                            className="shrink-0"
+                            title={issueBySource.get(s.id)?.detail}
+                          >
+                            {HYGIENE_LABEL[issueBySource.get(s.id)!.bucket] ??
+                              issueBySource.get(s.id)!.bucket}
+                          </Badge>
+                        )}
                         {!importing && (
                           <RowMenu
                             className="pointer-events-auto z-20"
                             onOpen={hideCard}
                             label={`Options for "${s.title}"`}
+                            contextItems={() => {
+                              // Right-click inside a multi-selection shows
+                              // the batch verbs; outside it collapses the
+                              // selection to this row (Finder behavior) and
+                              // opens the normal menu.
+                              if (pickedIds.has(s.id) && pickedIds.size > 1)
+                                return batchMenuItems([...pickedIds]);
+                              pickOne("sources", s.id);
+                              return null;
+                            }}
                             items={[
                               // Chat scoped to this one source (a folder
                               // scopes to its files); placeholders have no
@@ -719,7 +1005,7 @@ export function SourcesPanel() {
                                 icon: <Tag className="h-3.5 w-3.5" />,
                                 onClick: () =>
                                   setTagEdit({
-                                    id: s.id,
+                                    ids: [s.id],
                                     title: s.title,
                                     value: s.tags,
                                   }),
@@ -942,9 +1228,10 @@ export function SourcesPanel() {
           onSubmit={async (e) => {
             e.preventDefault();
             if (!tagEdit) return;
-            const { id, value } = tagEdit;
+            const { ids, value } = tagEdit;
             setTagEdit(null);
-            await setSourceTags(id, value);
+            if (ids.length === 1) await setSourceTags(ids[0], value);
+            else await setSourcesTagsBatch(ids, value);
           }}
           className="flex flex-col gap-3"
         >
@@ -1011,6 +1298,73 @@ export function SourcesPanel() {
         </form>
       </Modal>
 
+      {/* Hygiene review (RFC-source-hygiene): every removal is a human
+          decision — per-item Keep / Remove, nothing automatic. */}
+      <Modal
+        open={reviewOpen}
+        onClose={() => setReviewOpen(false)}
+        title="Needs attention"
+        width="max-w-md"
+      >
+        <div className="flex flex-col gap-2">
+          <p className="text-micro leading-relaxed text-subtle-foreground">
+            These sources look broken or outdated. Nothing is removed unless
+            you say so — Keep dismisses the flag.
+          </p>
+          {proposals.length === 0 ? (
+            <EmptyState title="All clean" />
+          ) : (
+            proposals.map((h) => (
+              <div
+                key={`${h.sourceId}:${h.bucket}`}
+                className="flex items-center gap-2 rounded-md border border-border px-2.5 py-2"
+              >
+                <div className="min-w-0 flex-1">
+                  <div
+                    className="truncate text-body text-foreground"
+                    title={h.title}
+                  >
+                    {visibleTitle(h.title) || "Untitled"}
+                  </div>
+                  <div
+                    className="truncate text-micro text-muted-foreground"
+                    title={h.detail}
+                  >
+                    {HYGIENE_LABEL[h.bucket] ?? h.bucket} · {h.detail}
+                  </div>
+                </div>
+                {h.bucket !== "duplicate" && (
+                  <Button
+                    variant="ghost"
+                    disabled={retrying === h.sourceId}
+                    onClick={() => void retryIssue(h)}
+                    title="Fetch it again now"
+                  >
+                    {retrying === h.sourceId ? "Retrying…" : "Retry"}
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  onClick={() => keepIssue(h)}
+                  title="Dismiss this flag and keep the source"
+                >
+                  Keep
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="text-destructive hover:bg-destructive/10"
+                  onClick={() => void deleteSourcesBatch([h.sourceId])}
+                  title="Remove the source and its chunks"
+                >
+                  Remove
+                </Button>
+              </div>
+            ))
+          )}
+        </div>
+      </Modal>
+
+      {marquee}
       {confirmDialog}
       {hoverCard}
     </div>

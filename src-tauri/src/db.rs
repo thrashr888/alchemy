@@ -245,6 +245,7 @@ impl Db {
         db.migrate_sources().await?;
         db.migrate_source_image().await?;
         db.migrate_source_tags_note().await?;
+        db.migrate_source_fetch().await?;
         db.backfill_blank_titles().await?;
         db.ensure_table(T_MESSAGES, messages_schema()).await?;
         db.migrate_messages().await?;
@@ -278,6 +279,26 @@ impl Db {
             .transform(lancedb::table::NewColumnTransform::SqlExpressions(vec![(
                 column.to_string(),
                 format!("'{}'", esc(default)),
+            )]))
+            .execute()
+            .await
+            .with_context(|| format!("failed to add {table}.{column}"))?;
+        Ok(())
+    }
+
+    /// Add a missing Int64 column in place, backfilled by a SQL expression
+    /// evaluated per row — a constant (`"0"`) or an existing column
+    /// (`"created_at"`). Same atomic add_columns idiom as
+    /// `add_string_column`.
+    async fn add_i64_column(&self, table: &str, column: &str, expr: &str) -> Result<()> {
+        let tbl = self.conn.open_table(table).execute().await?;
+        if tbl.schema().await?.field_with_name(column).is_ok() {
+            return Ok(());
+        }
+        tbl.add_columns()
+            .transform(lancedb::table::NewColumnTransform::SqlExpressions(vec![(
+                column.to_string(),
+                format!("CAST({expr} AS BIGINT)"),
             )]))
             .execute()
             .await
@@ -575,6 +596,8 @@ impl Db {
                     image_url: String::new(),
                     tags: String::new(),
                     note: String::new(),
+                    fetched_at: ca.value(i),
+                    fetch_failures: 0,
                     id: id.value(i).to_string(),
                     notebook_id: nb.value(i).to_string(),
                     title: title.value(i).to_string(),
@@ -621,6 +644,19 @@ impl Db {
         }
         self.add_string_column(T_SOURCES, "tags", "").await?;
         self.add_string_column(T_SOURCES, "note", "").await
+    }
+
+    /// Add the `fetched_at` / `fetch_failures` columns to pre-existing
+    /// source tables (docs/RFC-source-hygiene.md). `fetched_at` backfills
+    /// from `created_at` — the honest floor: the content is at least that
+    /// fresh, and hygiene ages it from there.
+    async fn migrate_source_fetch(&self) -> Result<()> {
+        if !self.table_exists(T_SOURCES).await? {
+            return Ok(());
+        }
+        self.add_i64_column(T_SOURCES, "fetched_at", "created_at")
+            .await?;
+        self.add_i64_column(T_SOURCES, "fetch_failures", "0").await
     }
 
     async fn table_exists(&self, name: &str) -> Result<bool> {
@@ -922,6 +958,8 @@ impl Db {
             "image_url",
             "tags",
             "note",
+            "fetched_at",
+            "fetch_failures",
         ];
         let batches = if with_content {
             self.collect(T_SOURCES, filter).await?
@@ -953,12 +991,16 @@ impl Db {
             let image = str_col(b, "image_url")?;
             let tags = str_col(b, "tags")?;
             let note = str_col(b, "note")?;
+            let fetched = i64_col(b, "fetched_at")?;
+            let failures = i64_col(b, "fetch_failures")?;
             for i in 0..b.num_rows() {
                 sources.push(Source {
                     author: author.value(i).to_string(),
                     image_url: image.value(i).to_string(),
                     tags: tags.value(i).to_string(),
                     note: note.value(i).to_string(),
+                    fetched_at: fetched.value(i),
+                    fetch_failures: failures.value(i),
                     id: id.value(i).to_string(),
                     notebook_id: nb.value(i).to_string(),
                     title: title.value(i).to_string(),
@@ -1035,6 +1077,32 @@ impl Db {
             false,
         )
         .await
+    }
+
+    /// Stamp a source's freshness pair (docs/RFC-source-hygiene.md) without
+    /// touching content or chunks: a background probe failure keeps the
+    /// last-good `fetched_at` and bumps `fetch_failures`; a "Keep" from the
+    /// hygiene review resets the count.
+    pub async fn set_source_fetch(
+        &self,
+        source_id: &str,
+        fetched_at: i64,
+        fetch_failures: i64,
+    ) -> Result<()> {
+        let tbl = self.conn.open_table(T_SOURCES).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(source_id)))
+            .column("fetched_at", fetched_at.to_string())
+            .column("fetch_failures", fetch_failures.to_string())
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    /// Every web-url source across all notebooks (metadata only) — the
+    /// hygiene sweep's worklist (docs/RFC-source-hygiene.md).
+    pub async fn all_url_sources(&self) -> Result<Vec<Source>> {
+        self.query_sources(Some("source_type = 'url'"), false).await
     }
 
     /// Update a source's recorded file mtime without touching its chunks.
@@ -1517,11 +1585,24 @@ impl Db {
     /// folder was 96+ sequential Lance transactions — slow enough to trip the
     /// IPC timeout; this is two deletes total for the whole tree.
     pub async fn delete_source_tree(&self, folder_id: &str, child_ids: &[String]) -> Result<()> {
-        // Every owner id whose chunks (verbatim + gist rows) must go: the
-        // folder itself plus each child.
-        let mut owners: Vec<String> = Vec::with_capacity(child_ids.len() + 1);
-        owners.push(folder_id.to_string());
-        owners.extend(child_ids.iter().cloned());
+        self.delete_sources(std::slice::from_ref(&folder_id.to_string()), child_ids)
+            .await
+    }
+
+    /// Bulk-delete an arbitrary set of sources (docs/RFC-multi-select.md):
+    /// two predicate deletes total, whatever the selection size — the
+    /// delete_source_tree lesson applied to multi-select. `ids` are the
+    /// selected rows (any of which may be folder-like parents whose children
+    /// go too — one `parent_id IN` arm covers them all); `child_ids` are
+    /// those children, passed separately because their chunk owners must be
+    /// enumerated.
+    pub async fn delete_sources(&self, ids: &[String], child_ids: &[String]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        // Every owner id whose chunks (verbatim + gist + annotation rows)
+        // must go: each selected source plus each child.
+        let owners: Vec<&String> = ids.iter().chain(child_ids.iter()).collect();
         let quoted = |prefix: &str| {
             owners
                 .iter()
@@ -1536,10 +1617,15 @@ impl Db {
             quoted(SNOTE_CHUNK_PREFIX)
         );
         self.delete_where(T_CHUNKS, &pred).await?;
-        // One delete for the folder row and every row parented to it.
+        // One delete for the selected rows and every row parented to one.
+        let id_list = ids
+            .iter()
+            .map(|id| format!("'{}'", esc(id)))
+            .collect::<Vec<_>>()
+            .join(", ");
         self.delete_where(
             T_SOURCES,
-            &format!("id = '{0}' OR parent_id = '{0}'", esc(folder_id)),
+            &format!("id IN ({id_list}) OR parent_id IN ({id_list})"),
         )
         .await?;
         Ok(())
@@ -2479,6 +2565,30 @@ impl Db {
             .await
     }
 
+    /// Bulk-delete notes (docs/RFC-multi-select.md): three predicate deletes
+    /// total — indexed chunks, usage rows, note rows — whatever the
+    /// selection size, mirroring `delete_sources`.
+    pub async fn delete_notes(&self, ids: &[String]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let quoted = |prefix: &str| {
+            ids.iter()
+                .map(|id| format!("'{prefix}{}'", esc(id)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        self.delete_where(
+            T_CHUNKS,
+            &format!("source_id IN ({})", quoted(NOTE_CHUNK_PREFIX)),
+        )
+        .await?;
+        self.delete_where(T_NOTE_USAGE, &format!("note_id IN ({})", quoted("")))
+            .await?;
+        self.delete_where(T_NOTES, &format!("id IN ({})", quoted("")))
+            .await
+    }
+
     /// Drop a note's chunks from the retrieval index (no-op if unindexed).
     pub async fn delete_note_chunks(&self, note_id: &str) -> Result<()> {
         let pred = format!("source_id = '{NOTE_CHUNK_PREFIX}{}'", esc(note_id));
@@ -3337,6 +3447,8 @@ fn source_batch(schema: &SchemaRef, sources: &[Source]) -> Result<RecordBatch> {
             s(|x| x.image_url.clone()),
             s(|x| x.tags.clone()),
             s(|x| x.note.clone()),
+            i(|x| x.fetched_at),
+            i(|x| x.fetch_failures),
         ],
     )?)
 }
@@ -3451,6 +3563,8 @@ fn sources_schema() -> SchemaRef {
         Field::new("image_url", DataType::Utf8, false),
         Field::new("tags", DataType::Utf8, false),
         Field::new("note", DataType::Utf8, false),
+        Field::new("fetched_at", DataType::Int64, false),
+        Field::new("fetch_failures", DataType::Int64, false),
     ]))
 }
 
@@ -3899,6 +4013,178 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The same guarantee on a table that was MIGRATED into those columns
+    /// rather than created with them — which is every existing install.
+    /// Lance keeps `add_columns` columns in their own fragment, so an append
+    /// carrying our own schema can land the row while leaving the evolved
+    /// columns at their defaults. That silently zeroed `fetched_at` on every
+    /// newly added source in a migrated store, making the hygiene sweep
+    /// treat brand-new sources as ancient and re-fetch them immediately.
+    #[tokio::test]
+    async fn insert_keeps_fetch_stamp_on_a_migrated_table() {
+        let dir = std::env::temp_dir().join(format!("nbl-migrated-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+
+        // Recreate the pre-hygiene table shape, then migrate it exactly the
+        // way a real install upgrades.
+        db.conn.drop_table(T_SOURCES, &[]).await.expect("drop");
+        let old: SchemaRef = Arc::new(Schema::new(
+            sources_schema()
+                .fields()
+                .iter()
+                .filter(|f| f.name() != "fetched_at" && f.name() != "fetch_failures")
+                .map(|f| f.as_ref().clone())
+                .collect::<Vec<_>>(),
+        ));
+        db.conn
+            .create_empty_table(T_SOURCES, old)
+            .execute()
+            .await
+            .expect("create pre-hygiene table");
+        db.migrate_source_fetch().await.expect("migrate");
+
+        let src = Source {
+            id: "mig-1".into(),
+            notebook_id: "nb-1".into(),
+            title: "Fresh on a migrated table".into(),
+            source_type: "url".into(),
+            url: "https://example.com/fresh".into(),
+            content: "body".into(),
+            char_count: 4,
+            chunk_count: 0,
+            created_at: 111,
+            status: "ready".into(),
+            error: String::new(),
+            parent_id: String::new(),
+            mtime: 0,
+            author: String::new(),
+            image_url: String::new(),
+            tags: String::new(),
+            note: String::new(),
+            fetched_at: 1_700_000_000_000,
+            fetch_failures: 2,
+        };
+        db.insert_source(&src, &[], &[]).await.expect("insert");
+
+        let got = db.get_source("mig-1").await.expect("get").expect("row");
+        assert_eq!(
+            got.fetched_at, 1_700_000_000_000,
+            "fetched_at must survive an append to a migrated table"
+        );
+        assert_eq!(got.fetch_failures, 2, "fetch_failures must survive");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A narrow column update must not disturb the columns it doesn't name —
+    /// on a MIGRATED table, where the hygiene columns live in their own
+    /// fragment. Every status flip, retitle, and mtime bump goes through one
+    /// of these updates, so if they reset `fetched_at` the sweep would treat
+    /// every touched source as ancient and re-fetch it forever.
+    #[tokio::test]
+    async fn column_updates_leave_the_fetch_stamp_alone() {
+        let dir = std::env::temp_dir().join(format!("nbl-updstamp-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+        db.conn.drop_table(T_SOURCES, &[]).await.expect("drop");
+        let old: SchemaRef = Arc::new(Schema::new(
+            sources_schema()
+                .fields()
+                .iter()
+                .filter(|f| f.name() != "fetched_at" && f.name() != "fetch_failures")
+                .map(|f| f.as_ref().clone())
+                .collect::<Vec<_>>(),
+        ));
+        db.conn
+            .create_empty_table(T_SOURCES, old)
+            .execute()
+            .await
+            .expect("create pre-hygiene table");
+        db.migrate_source_fetch().await.expect("migrate");
+
+        let src = Source {
+            id: "upd-1".into(),
+            notebook_id: "nb-1".into(),
+            title: "Touched".into(),
+            source_type: "url".into(),
+            url: "https://example.com/touched".into(),
+            content: "body".into(),
+            char_count: 4,
+            chunk_count: 0,
+            created_at: 111,
+            status: "processing".into(),
+            error: String::new(),
+            parent_id: String::new(),
+            mtime: 0,
+            author: String::new(),
+            image_url: String::new(),
+            tags: String::new(),
+            note: String::new(),
+            fetched_at: 1_700_000_000_000,
+            fetch_failures: 0,
+        };
+        db.insert_source(&src, &[], &[]).await.expect("insert");
+
+        db.finish_processing("upd-1", 3, "ready", "")
+            .await
+            .expect("finish");
+        let got = db.get_source("upd-1").await.expect("get").expect("row");
+        assert_eq!(got.status, "ready");
+        assert_eq!(
+            got.fetched_at, 1_700_000_000_000,
+            "finish_processing must not reset fetched_at"
+        );
+
+        db.set_source_mtime("upd-1", 42).await.expect("mtime");
+        db.set_source_title("upd-1", "Retitled")
+            .await
+            .expect("title");
+        let got = db.get_source("upd-1").await.expect("get").expect("row");
+        assert_eq!(got.mtime, 42);
+        assert_eq!(got.title, "Retitled");
+        assert_eq!(
+            got.fetched_at, 1_700_000_000_000,
+            "narrow updates must not reset fetched_at"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A freshly inserted source keeps its freshness stamp
+    /// (docs/RFC-source-hygiene.md). The insert path goes through
+    /// `source_batch` + `add_batch`, which rebuilds batches to match the live
+    /// table — a column dropped there would silently zero every new source's
+    /// `fetched_at` and make the hygiene sweep treat it as ancient.
+    #[tokio::test]
+    async fn insert_source_keeps_its_fetch_stamp() {
+        let dir = std::env::temp_dir().join(format!("nbl-fetchstamp-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+        let src = Source {
+            id: "fs-1".into(),
+            notebook_id: "nb-1".into(),
+            title: "Fresh".into(),
+            source_type: "url".into(),
+            url: "https://example.com/fresh".into(),
+            content: "body".into(),
+            char_count: 4,
+            chunk_count: 0,
+            created_at: 111,
+            status: "ready".into(),
+            error: String::new(),
+            parent_id: String::new(),
+            mtime: 0,
+            author: String::new(),
+            image_url: String::new(),
+            tags: String::new(),
+            note: String::new(),
+            fetched_at: 1_700_000_000_000,
+            fetch_failures: 2,
+        };
+        db.insert_source(&src, &[], &[]).await.expect("insert");
+
+        let got = db.get_source("fs-1").await.expect("get").expect("row");
+        assert_eq!(got.fetched_at, 1_700_000_000_000, "fetched_at must survive");
+        assert_eq!(got.fetch_failures, 2, "fetch_failures must survive");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Tags and notes round-trip through their update helpers, and clearing
     /// the annotation deletes its `snote:` chunk rows.
     #[tokio::test]
@@ -3923,6 +4209,8 @@ mod tests {
             image_url: String::new(),
             tags: String::new(),
             note: String::new(),
+            fetched_at: 0,
+            fetch_failures: 0,
         };
         db.insert_source(&src, &[], &[]).await.expect("insert");
 

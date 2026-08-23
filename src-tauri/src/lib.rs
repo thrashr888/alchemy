@@ -15,6 +15,7 @@ mod gist;
 mod git;
 mod graph;
 mod grepsearch;
+mod hygiene;
 mod inference;
 mod ingest;
 mod integrations;
@@ -320,8 +321,14 @@ pub fn run() {
             commands::set_source_tags,
             commands::set_source_note,
             commands::refresh_source_url,
+            commands::refresh_sources,
             commands::get_source_content,
             commands::delete_source,
+            commands::delete_sources,
+            commands::set_sources_tags,
+            commands::delete_notes,
+            commands::source_hygiene,
+            commands::hygiene_keep,
             commands::set_child_embedded,
             commands::reembed_all,
             commands::list_messages,

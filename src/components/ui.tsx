@@ -283,7 +283,9 @@ export function CardAction({
   className,
 }: {
   label: string;
-  onClick: () => void;
+  /** Receives the click event so hosts can branch on modifier keys
+   *  (shift/cmd selection, RFC-multi-select). */
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
   className?: string;
 }) {
   return (
@@ -291,12 +293,181 @@ export function CardAction({
       type="button"
       aria-label={label}
       onClick={onClick}
+      // Marks this as the row's own surface, not a control: the marquee
+      // hook lets rubber-band drags start here (Finder-style) while real
+      // controls (menus, checkboxes) still block them.
+      data-card-action
       className={cn(
         "absolute inset-0 z-0 rounded-[inherit] outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
         className,
       )}
     />
   );
+}
+
+/**
+ * Finder-style rubber-band selection over a scrollable list
+ * (RFC-multi-select). Attach the returned handlers to the scroll container
+ * and stamp each selectable row with `data-pick-id`. The drag draws a fixed
+ * overlay rectangle and reports the intersecting ids on every move
+ * (additive when shift/cmd is held). A sub-threshold press on empty space
+ * clears the selection; a drag that actually started suppresses the click
+ * that follows it — check `justEnded()` in row click handlers.
+ */
+/** The element that actually scrolls for a given container — itself, or
+ *  the nearest ancestor that overflows. The notes list is a plain div inside
+ *  Studio's scrolling column, so auto-scroll has to walk up to find the
+ *  thing with a scrollbar rather than assume the container has one. */
+function scrollParent(el: HTMLElement): HTMLElement {
+  for (let node: HTMLElement | null = el; node; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    if (
+      /(auto|scroll|overlay)/.test(style.overflowY) &&
+      node.scrollHeight > node.clientHeight
+    )
+      return node;
+  }
+  return el;
+}
+
+export function useMarquee({
+  containerRef,
+  onStart,
+  onSelect,
+  onClearBackground,
+}: {
+  containerRef: React.RefObject<HTMLElement | null>;
+  /** Fires once when a drag passes the threshold — hosts snapshot the
+   *  pre-drag selection here so an additive drag unions against the
+   *  selection as it was, not as the drag mutates it. */
+  onStart?: (additive: boolean) => void;
+  onSelect: (ids: string[], additive: boolean) => void;
+  onClearBackground?: () => void;
+}) {
+  const [rect, setRect] = React.useState<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null>(null);
+  const endedAt = React.useRef(0);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    const t = e.target as HTMLElement;
+    // Real controls keep their gestures; the row surface (CardAction) and
+    // true background both start a marquee.
+    if (
+      t.closest(
+        "button:not([data-card-action]), input, a, textarea, select, [role='menu']",
+      )
+    )
+      return;
+    const container = containerRef.current;
+    if (!container) return;
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    // The band is anchored to the CONTENT, not the viewport: when
+    // auto-scroll moves the list under the cursor, the rectangle has to keep
+    // growing from the row it started on, the way Finder does.
+    const scroller = scrollParent(container);
+    const scroll0 = scroller.scrollTop;
+    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+    const onBackground = !t.closest("[data-pick-id]");
+    let started = false;
+    let px = x0;
+    let py = y0;
+    let ticker: ReturnType<typeof setInterval> | undefined;
+
+    const paint = () => {
+      const anchorY = y0 - (scroller.scrollTop - scroll0);
+      const x = Math.min(x0, px);
+      const y = Math.min(anchorY, py);
+      const w = Math.abs(px - x0);
+      const h = Math.abs(py - anchorY);
+      setRect({ x, y, w, h });
+      const ids: string[] = [];
+      container.querySelectorAll<HTMLElement>("[data-pick-id]").forEach((el) => {
+        const r = el.getBoundingClientRect();
+        if (r.left < x + w && r.right > x && r.top < y + h && r.bottom > y) {
+          const id = el.getAttribute("data-pick-id");
+          if (id) ids.push(id);
+        }
+      });
+      onSelect(ids, additive);
+    };
+
+    // Drag past either edge and the list scrolls itself, faster the further
+    // past you go — without it a selection can only ever be as tall as the
+    // panel, which is the case a long source list most needs.
+    const EDGE = 36;
+    const MAX_SPEED = 18;
+    const autoScroll = () => {
+      if (!started) return;
+      const box = scroller.getBoundingClientRect();
+      let dy = 0;
+      if (py < box.top + EDGE) {
+        dy = -Math.ceil(((box.top + EDGE - py) / EDGE) * MAX_SPEED);
+      } else if (py > box.bottom - EDGE) {
+        dy = Math.ceil(((py - (box.bottom - EDGE)) / EDGE) * MAX_SPEED);
+      }
+      if (dy !== 0) {
+        const before = scroller.scrollTop;
+        scroller.scrollTop += dy;
+        if (scroller.scrollTop !== before) paint();
+      }
+    };
+
+    const move = (ev: PointerEvent) => {
+      px = ev.clientX;
+      py = ev.clientY;
+      if (!started && Math.hypot(px - x0, py - y0) < 4) return;
+      if (!started) {
+        started = true;
+        // Belt and braces against a native text selection: the rows are
+        // already `select-none`, but a drag that begins over selectable
+        // chrome would otherwise paint a text highlight under the band.
+        document.body.style.userSelect = "none";
+        window.getSelection()?.removeAllRanges();
+        onStart?.(additive);
+        // A timer rather than requestAnimationFrame: WKWebView suspends rAF
+        // whenever the window isn't frontmost, and a drag that stops
+        // scrolling because the app lost focus mid-gesture would be a
+        // mystery to debug.
+        ticker = setInterval(autoScroll, 16);
+      }
+      paint();
+    };
+
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (ticker) clearInterval(ticker);
+      document.body.style.userSelect = "";
+      setRect(null);
+      if (started) endedAt.current = Date.now();
+      else if (onBackground && !additive) onClearBackground?.();
+    };
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  /** True right after a drag finished — the click that follows it is the
+   *  drag's tail, not an activation. */
+  const justEnded = () => Date.now() - endedAt.current < 200;
+
+  const marquee = rect
+    ? createPortal(
+        <div
+          className="pointer-events-none fixed z-50 rounded-sm border border-primary/50 bg-primary/10"
+          style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
+        />,
+        document.body,
+      )
+    : null;
+
+  return { onPointerDown, marquee, justEnded };
 }
 
 /**
@@ -566,6 +737,7 @@ export function useConfirm() {
   const [state, setState] = React.useState<{
     title: string;
     message: string;
+    items: string[];
     confirmLabel: string;
     danger: boolean;
     resolve: (ok: boolean) => void;
@@ -575,6 +747,11 @@ export function useConfirm() {
     (opts: {
       title: string;
       message?: string;
+      /** The things this will actually affect, listed by name. A count in
+       *  the title says how many; only the list says which — and for a
+       *  destructive action that is the difference between confirming and
+       *  guessing. */
+      items?: string[];
       confirmLabel?: string;
       danger?: boolean;
     }) =>
@@ -582,6 +759,7 @@ export function useConfirm() {
         setState({
           title: opts.title,
           message: opts.message ?? "",
+          items: opts.items ?? [],
           confirmLabel: opts.confirmLabel ?? "Confirm",
           danger: opts.danger ?? false,
           resolve,
@@ -619,6 +797,19 @@ export function useConfirm() {
         <p className="text-body leading-relaxed text-muted-foreground">
           {state.message}
         </p>
+      )}
+      {state.items.length > 0 && (
+        <ul className="mt-2.5 max-h-52 overflow-y-auto rounded-md border border-border">
+          {state.items.map((item, i) => (
+            <li
+              key={`${item}-${i}`}
+              className="truncate border-b border-border px-2.5 py-1.5 text-caption text-foreground/90 last:border-b-0"
+              title={item}
+            >
+              {item}
+            </li>
+          ))}
+        </ul>
       )}
     </Modal>
   ) : null;
@@ -711,6 +902,8 @@ export function RowMenu({
   label = "Options",
   className,
   onOpen,
+  contextItems,
+  alwaysVisible = false,
 }: {
   items: RowMenuItem[];
   label?: string;
@@ -718,6 +911,15 @@ export function RowMenu({
   /** Fires when the menu opens — hosts use it to dismiss hover cards,
    *  which never get their mouseleave once a menu/dialog takes the pointer. */
   onOpen?: () => void;
+  /** Keep the trigger visible at rest instead of revealing it on hover.
+   *  For a menu that sits inline in a row (rather than floating over one),
+   *  appearing on hover reflows everything beside it. */
+  alwaysVisible?: boolean;
+  /** Called on right-click, before the menu opens. Return a replacement
+   *  item set (the multi-select batch verbs) to show instead of `items`,
+   *  or null/undefined to open the normal menu — side effects here (like
+   *  collapsing the selection to this row) are welcome (RFC-multi-select). */
+  contextItems?: () => RowMenuItem[] | null | undefined;
 }) {
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef<HTMLDivElement>(null);
@@ -728,14 +930,37 @@ export function RowMenu({
   // borders), so an in-row absolute menu keeps losing paint-order fights.
   // Fixed-in-portal escapes every ancestor context and clip.
   const [pos, setPos] = React.useState<React.CSSProperties | null>(null);
+  // Right-click opens at the cursor (Finder-style) rather than the ⋯
+  // trigger, and may swap in the batch item set for a multi-selection.
+  const [ctxPos, setCtxPos] = React.useState<{ x: number; y: number } | null>(
+    null,
+  );
+  const [swapItems, setSwapItems] = React.useState<RowMenuItem[] | null>(null);
+  // The contextmenu listener is attached once; the callback closes over
+  // per-render state (the current selection), so it rides a ref.
+  const contextItemsRef = React.useRef(contextItems);
+  contextItemsRef.current = contextItems;
 
   React.useLayoutEffect(() => {
-    if (!open || !menuRef.current || !triggerRef.current) {
+    if (!open || !menuRef.current) {
       if (!open) setPos(null);
       return;
     }
-    const t = triggerRef.current.getBoundingClientRect();
     const m = menuRef.current.getBoundingClientRect();
+    if (ctxPos) {
+      // Anchor at the cursor; flip up / clamp right at the viewport edges.
+      const style: React.CSSProperties = {
+        left: Math.max(8, Math.min(ctxPos.x, window.innerWidth - m.width - 8)),
+        top:
+          ctxPos.y + m.height > window.innerHeight - 8
+            ? Math.max(8, ctxPos.y - m.height)
+            : ctxPos.y,
+      };
+      setPos(style);
+      return;
+    }
+    if (!triggerRef.current) return;
+    const t = triggerRef.current.getBoundingClientRect();
     const up = t.bottom + 4 + m.height > window.innerHeight - 8;
     const style: React.CSSProperties = up
       ? { bottom: window.innerHeight - t.top + 4 }
@@ -745,6 +970,15 @@ export function RowMenu({
     style.left =
       left < 8 ? Math.min(t.left, window.innerWidth - m.width - 8) : left;
     setPos(style);
+  }, [open, ctxPos]);
+
+  // Closing forgets the right-click context — the ⋯ trigger reopens the
+  // normal menu at the trigger.
+  React.useEffect(() => {
+    if (!open) {
+      setCtxPos(null);
+      setSwapItems(null);
+    }
   }, [open]);
 
   // A fixed menu detaches from its trigger on scroll — close instead.
@@ -764,6 +998,8 @@ export function RowMenu({
     const onContextMenu = (e: MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
+      setSwapItems(contextItemsRef.current?.() ?? null);
+      setCtxPos({ x: e.clientX, y: e.clientY });
       setOpen(true);
     };
     row.addEventListener("contextmenu", onContextMenu);
@@ -821,7 +1057,9 @@ export function RowMenu({
       className={cn(
         "relative shrink-0",
         className,
-        open ? "flex" : "hidden group-hover:flex group-focus-within:flex",
+        open || alwaysVisible
+          ? "flex"
+          : "hidden group-hover:flex group-focus-within:flex",
       )}
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
@@ -875,7 +1113,7 @@ export function RowMenu({
             style={pos ?? { top: 0, left: 0, visibility: "hidden" }}
             className="menu-glass fixed z-50 w-44 overflow-hidden rounded-md py-1 shadow-[0_0_0_0.5px_var(--border-strong),0_8px_24px_-6px_rgba(0,0,0,0.4)]"
           >
-          {items.map((it) => (
+          {(swapItems ?? items).map((it) => (
             <button
               key={it.label}
               role="menuitem"
@@ -910,12 +1148,15 @@ export function RowMenu({
 export function Badge({
   children,
   className,
+  title,
 }: {
   children: React.ReactNode;
   className?: string;
+  title?: string;
 }) {
   return (
     <span
+      title={title}
       className={cn(
         "inline-flex items-center rounded px-1.5 h-[18px] text-micro font-medium",
         "bg-surface-2 text-muted-foreground border border-border",

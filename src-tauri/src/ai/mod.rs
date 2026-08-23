@@ -159,10 +159,24 @@ pub struct AiConfig {
     /// deterministic classifier keeps working either way.
     #[serde(default = "default_true")]
     pub self_diagnose: bool,
+    /// Source hygiene (docs/RFC-source-hygiene.md): the budgeted background
+    /// sweep that re-fetches aging url sources and flags unreachable ones.
+    /// On by default — the toggle is cost control, not opt-in; removals are
+    /// only ever proposed, never automatic.
+    #[serde(default = "default_true")]
+    pub source_hygiene: bool,
+    /// Days before a url source counts as stale and the hygiene sweep
+    /// re-fetches it from its origin.
+    #[serde(default = "default_hygiene_days")]
+    pub hygiene_refresh_days: u32,
 }
 
 fn default_git_sync_minutes() -> u32 {
     60
+}
+
+fn default_hygiene_days() -> u32 {
+    30
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -368,6 +382,8 @@ impl Default for AiConfig {
             setup_seen: false,
             git_sync_minutes: default_git_sync_minutes(),
             self_diagnose: default_true(),
+            source_hygiene: default_true(),
+            hygiene_refresh_days: default_hygiene_days(),
         }
     }
 }
