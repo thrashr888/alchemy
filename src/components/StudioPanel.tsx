@@ -299,6 +299,9 @@ export function StudioPanel() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (shortcutBlocked(e)) return;
+      // An open row menu owns the keyboard (see SourcesPanel for why this
+      // rides the capture phase and its stopPropagation can't reach us).
+      if (document.querySelector('[role="menu"]')) return;
       const p = useStore.getState().picked;
       if (p?.kind !== "notes") return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
@@ -312,8 +315,8 @@ export function StudioPanel() {
         void confirmDeleteNotesRef.current(p.ids);
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, []);
 
   // Opening a note is what marks it read — the activity dot means "not

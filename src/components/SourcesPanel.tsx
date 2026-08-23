@@ -449,6 +449,13 @@ export function SourcesPanel() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (shortcutBlocked(e)) return;
+      // An open row menu owns the keyboard while it's up — Escape closes it
+      // without also dropping the selection. Its own handler can't stop us:
+      // the menu renders in a body portal, so the native event never passes
+      // through React's root container where stopPropagation would land.
+      // Hence the capture phase below: by the bubble phase React has already
+      // flushed the close synchronously and the menu is gone from the DOM.
+      if (document.querySelector('[role="menu"]')) return;
       const st = useStore.getState();
       const p = st.picked;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
@@ -466,8 +473,8 @@ export function SourcesPanel() {
         void confirmRemoveBatchRef.current(p.ids);
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, []);
 
   // ---- Source hygiene (RFC-source-hygiene) ------------------------------

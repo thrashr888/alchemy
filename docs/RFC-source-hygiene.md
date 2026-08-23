@@ -48,6 +48,10 @@ Two columns on `sources`: `fetched_at` (i64 ms, set by `reingest` on every succe
 **Automatic half** — a `hygiene::spawn_sweep` sibling of the gist sweep, called from the scheduler pass: budget of 3 refreshes per pass, single-flight, skips archived notebooks, honors `background_enabled`. Two behavior changes to the refresh path it reuses:
 
 1. **Non-destructive failure.** Background refresh keeps last-good content on error, increments `fetch_failures`, and does *not* flip `status`. Only user-initiated refresh keeps today's hard-fail semantics.
+
+   **A successful fetch can also be a failure.** A moved page serving a soft-404, a paywall, or a consent wall returns HTTP 200 and a few hundred characters of nothing — and an unattended overwrite destroys the real copy, since the old text leaves the row the moment `reingest` lands. So the sweep refuses a *content collapse*: a previous body of 500+ chars coming back under half its size keeps the stored copy and counts a strike instead. Refusing costs a delayed update and a dismissible flag; accepting costs the source. Mechanical thresholds, no model — the point is that the rule never itself needs judgment.
+
+   This is not hypothetical: during verification the sweep re-fetched a live listings page into a 226-char "page has been moved or removed" notice, taking 254 lines of listings with it. The guard is what makes "refreshing is reversible" actually true.
 2. Unchanged content (same extract hash) updates `fetched_at` without re-embedding — `reingest` already diffs; this just short-circuits earlier.
 
 **Proposed half** — surfaced, never executed:

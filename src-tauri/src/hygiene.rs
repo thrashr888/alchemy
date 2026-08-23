@@ -71,11 +71,17 @@ pub struct HygieneIssue {
     pub detail: String,
 }
 
-/// Does this url point at a local file on disk (vs. web or cider://)?
+/// Does this source's origin point at a local file on disk (vs. web or
+/// cider://)? The type is asked first and the string second: a `url` source
+/// whose stored origin doesn't parse as http (stray whitespace, a bare
+/// domain) is still a web page, and calling it a missing file would flag a
+/// perfectly live source for removal.
 fn is_file_path(source: &Source) -> bool {
-    !source.url.is_empty()
-        && !commands::is_web_url(&source.url)
-        && !crate::mac::is_mac_uri(&source.url)
+    let url = source.url.trim();
+    !url.is_empty()
+        && !matches!(source.source_type.as_str(), "url" | "mac")
+        && !commands::is_web_url(url)
+        && !crate::mac::is_mac_uri(url)
 }
 
 fn is_folder_like(source: &Source) -> bool {
@@ -229,11 +235,39 @@ async fn run_sweep(app: &AppHandle) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Previous content large enough to be worth protecting from a collapse.
+const COLLAPSE_FLOOR: usize = 500;
+/// A re-fetch keeping less than this share of the previous content is
+/// treated as a bad page rather than an edit.
+const COLLAPSE_KEEP_RATIO: f64 = 0.5;
+
+/// Did this re-fetch collapse the source's content?
+///
+/// A fetch can succeed and still be worthless: a moved page serving a
+/// soft-404 ("this page has been moved or removed"), a paywall interstitial,
+/// a consent wall. HTTP says 200, the extractor says a couple hundred
+/// characters, and an unattended overwrite destroys the real copy — which is
+/// the one thing this sweep must never do, because the old text is gone from
+/// the row the moment reingest lands. Refusing costs a delayed update and a
+/// flag the user can dismiss; accepting costs the source.
+///
+/// Mechanical on purpose (no model, no heuristics about wording): only a
+/// substantial previous body is protected, and only a drastic shrink counts.
+fn content_collapsed(before: &str, after: &str) -> bool {
+    let before_len = before.chars().count();
+    if before_len < COLLAPSE_FLOOR {
+        return false;
+    }
+    let kept = after.chars().count() as f64 / before_len as f64;
+    kept < COLLAPSE_KEEP_RATIO
+}
+
 /// Re-fetch one aging url source, non-destructively. Returns true when the
 /// content changed and was reingested; false when the page is unchanged (the
 /// freshness stamp still advances, without paying the re-embed). A fetch
-/// failure keeps the last-good content and counts a strike — the opposite of
-/// the user-initiated path's hard fail, because nobody is watching to retry.
+/// failure — or a fetch that succeeds but comes back gutted — keeps the
+/// last-good content and counts a strike, the opposite of the user-initiated
+/// path's hard fail, because nobody is watching to retry.
 async fn refresh_stale_url(state: &AppState, src: &Source) -> anyhow::Result<bool> {
     let existing = state
         .db
@@ -248,6 +282,16 @@ async fn refresh_stale_url(state: &AppState, src: &Source) -> anyhow::Result<boo
                     .set_source_fetch(&src.id, commands::now(), 0)
                     .await?;
                 Ok(false)
+            } else if content_collapsed(&existing.content, &extracted.text) {
+                state
+                    .db
+                    .set_source_fetch(&src.id, existing.fetched_at, existing.fetch_failures + 1)
+                    .await?;
+                anyhow::bail!(
+                    "page came back gutted ({} chars, was {}) — keeping the stored copy",
+                    extracted.text.chars().count(),
+                    existing.content.chars().count()
+                )
             } else {
                 commands::reingest(state, &existing, extracted, None, true).await?;
                 Ok(true)
@@ -260,5 +304,193 @@ async fn refresh_stale_url(state: &AppState, src: &Source) -> anyhow::Result<boo
                 .await?;
             Err(err)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DAY: i64 = 86_400_000;
+
+    fn src(id: &str, source_type: &str) -> Source {
+        Source {
+            id: id.into(),
+            notebook_id: "nb".into(),
+            title: id.into(),
+            source_type: source_type.into(),
+            url: String::new(),
+            content: String::new(),
+            char_count: 100,
+            chunk_count: 1,
+            created_at: 0,
+            status: "ready".into(),
+            error: String::new(),
+            parent_id: String::new(),
+            mtime: 0,
+            author: String::new(),
+            image_url: String::new(),
+            tags: String::new(),
+            note: String::new(),
+            fetched_at: 0,
+            fetch_failures: 0,
+        }
+    }
+
+    fn buckets(issues: &[HygieneIssue]) -> Vec<(&str, &str)> {
+        issues
+            .iter()
+            .map(|i| (i.source_id.as_str(), i.bucket.as_str()))
+            .collect()
+    }
+
+    /// A url past its cadence is "stale" (the sweep's own work); one still
+    /// inside it is not flagged at all.
+    #[test]
+    fn stale_urls_flag_only_past_the_cadence() {
+        let now = 100 * DAY;
+        let mut fresh = src("fresh", "url");
+        fresh.url = "https://example.com/a".into();
+        fresh.fetched_at = now - 3 * DAY;
+        let mut old = src("old", "url");
+        old.url = "https://example.com/b".into();
+        old.fetched_at = now - 45 * DAY;
+
+        let issues = classify(&[fresh, old], 30, now);
+        assert_eq!(buckets(&issues), vec![("old", "stale")]);
+        assert!(issues[0].detail.contains("45 days"), "{}", issues[0].detail);
+    }
+
+    /// Repeated background failures outrank staleness — the source stops
+    /// being retried and is proposed for removal instead.
+    #[test]
+    fn repeated_failures_flag_unreachable() {
+        let now = 100 * DAY;
+        let mut dead = src("dead", "url");
+        dead.url = "https://example.com/gone".into();
+        dead.fetched_at = now - 90 * DAY;
+        dead.fetch_failures = UNREACHABLE_AFTER;
+
+        let issues = classify(&[dead], 30, now);
+        assert_eq!(buckets(&issues), vec![("dead", "unreachable")]);
+    }
+
+    /// The same URL added twice keeps the oldest and flags the newcomer.
+    #[test]
+    fn duplicate_urls_flag_the_newer_copy() {
+        let now = 100 * DAY;
+        let mut first = src("first", "url");
+        first.url = "https://example.com/page/".into();
+        first.created_at = 1;
+        first.fetched_at = now;
+        let mut second = src("second", "url");
+        // Trailing slash and whitespace normalize to the same key.
+        second.url = " https://example.com/page ".into();
+        second.created_at = 2;
+        second.fetched_at = now;
+
+        let issues = classify(&[second, first], 30, now);
+        assert_eq!(buckets(&issues), vec![("second", "duplicate")]);
+        assert!(issues[0].detail.contains("first"), "{}", issues[0].detail);
+    }
+
+    /// A url source whose origin doesn't parse as http — stray whitespace, a
+    /// bare domain — is still a web page, not a vanished local file. (Caught
+    /// live: such a source was flagged "missing-file" and proposed for
+    /// removal while the page was perfectly reachable.)
+    #[test]
+    fn odd_url_strings_are_never_missing_files() {
+        let now = 100 * DAY;
+        for origin in [" https://example.com/page ", "www.example.com/page"] {
+            let mut s = src("odd", "url");
+            s.url = origin.into();
+            s.fetched_at = now;
+            assert!(
+                classify(&[s], 30, now).is_empty(),
+                "{origin} must not be flagged"
+            );
+        }
+    }
+
+    /// An old errored import with no content is a husk; a recent one is not
+    /// (the user may still be looking at the error).
+    #[test]
+    fn husks_need_age_and_emptiness() {
+        let now = 100 * DAY;
+        let mut old_husk = src("old-husk", "url");
+        old_husk.status = "error".into();
+        old_husk.char_count = 0;
+        old_husk.created_at = now - 30 * DAY;
+        old_husk.fetched_at = now;
+        let mut fresh_error = src("fresh-error", "url");
+        fresh_error.status = "error".into();
+        fresh_error.char_count = 0;
+        fresh_error.created_at = now - DAY;
+        fresh_error.fetched_at = now;
+
+        let issues = classify(&[old_husk, fresh_error], 30, now);
+        assert_eq!(buckets(&issues), vec![("old-husk", "husk")]);
+    }
+
+    /// Folder-like parents are the rescan's business, never hygiene's.
+    #[test]
+    fn folder_parents_are_never_flagged() {
+        let now = 100 * DAY;
+        for kind in ["folder", "git", "notion", "obsidian"] {
+            let mut parent = src(kind, kind);
+            parent.url = "/some/path".into();
+            parent.fetched_at = now - 400 * DAY;
+            parent.fetch_failures = 99;
+            assert!(
+                classify(&[parent], 30, now).is_empty(),
+                "{kind} parent must not be flagged"
+            );
+        }
+    }
+
+    /// Cadence 0 (the "off" setting) silences staleness without silencing
+    /// the broken-source buckets.
+    #[test]
+    fn cadence_off_keeps_breakage_flags() {
+        let now = 100 * DAY;
+        let mut ancient = src("ancient", "url");
+        ancient.url = "https://example.com/x".into();
+        ancient.fetched_at = now - 900 * DAY;
+        assert!(classify(&[ancient.clone()], 0, now).is_empty());
+
+        ancient.fetch_failures = UNREACHABLE_AFTER;
+        assert_eq!(
+            buckets(&classify(&[ancient], 0, now)),
+            vec![("ancient", "unreachable")]
+        );
+    }
+
+    /// The soft-404 guard: a real page replaced by a "moved or removed"
+    /// notice must not overwrite the stored copy. Observed live — a listings
+    /// page re-fetched to a 226-char notice and took 254 lines with it.
+    #[test]
+    fn collapse_guard_rejects_soft_404s() {
+        let listings = "Ferrari 328 GTS, $144,900, Naples FL\n".repeat(40);
+        let soft_404 = "Sorry! The page you are looking for has either been \
+                        moved or removed from the website.";
+        assert!(content_collapsed(&listings, soft_404));
+    }
+
+    /// …while ordinary editing churn passes through. A page that loses a
+    /// listing or reorders its sections is a legitimate update.
+    #[test]
+    fn collapse_guard_allows_ordinary_churn() {
+        let before = "Ferrari 328 GTS, $144,900, Naples FL\n".repeat(40);
+        let after = "Ferrari 328 GTS, $144,900, Naples FL\n".repeat(32);
+        assert!(!content_collapsed(&before, &after));
+        // Growth is never a collapse.
+        assert!(!content_collapsed(&before, &before.repeat(2)));
+    }
+
+    /// Short sources aren't protected: a stub shrinking proves nothing, and
+    /// guarding them would freeze every one-line page.
+    #[test]
+    fn collapse_guard_ignores_short_sources() {
+        assert!(!content_collapsed("a short stub of a page", ""));
     }
 }
