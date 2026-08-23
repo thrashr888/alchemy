@@ -129,8 +129,7 @@ function fmtMs(ms: number): string {
  *  each row shows how many runs it averages: a model measured once has no
  *  business silently outranking one measured fifty times. */
 function SpeedRanking({ rows }: { rows: ModelStat[] }) {
-  if (rows.length === 0) return null;
-  const slowest = Math.max(...rows.map((r) => r.avgTtftMs));
+  const slowest = Math.max(...rows.map((r) => r.avgTtftMs), 0);
   return (
     <div className="min-w-0">
       <div className="flex items-baseline justify-between gap-3 pb-1.5">
@@ -141,6 +140,15 @@ function SpeedRanking({ rows }: { rows: ModelStat[] }) {
           average time to first token
         </span>
       </div>
+      {/* Says why it is empty rather than vanishing: a section that hides
+          itself is indistinguishable from one that failed to load. */}
+      {rows.length === 0 && (
+        <p className="text-caption leading-relaxed text-subtle-foreground">
+          No timings yet. Each chat records how long its model took to start
+          answering; models you have already used appear here after their
+          next reply.
+        </p>
+      )}
       <div className="flex flex-col gap-1">
         {rows.map((r, i) => {
           const lead = i === 0;
