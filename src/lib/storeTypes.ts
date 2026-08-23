@@ -72,6 +72,10 @@ export interface AcpAgentPane {
   entries: AcpEntry[];
   /** Composer text that was never sent. Restored verbatim on return. */
   draft: string;
+  /** The agent's own id for this conversation, kept so the next session can
+   *  resume it instead of starting cold. Null until one has been opened, and
+   *  meaningless to anyone but that agent. */
+  sessionId: string | null;
 }
 
 /** Hosted-agent state that must outlive the pane: which agent is selected,
@@ -312,6 +316,11 @@ export interface AppState {
     update: (prev: AcpEntry[]) => AcpEntry[],
   ) => void;
   setAcpDraft: (notebookId: string, agentId: string, draft: string) => void;
+  setAcpSessionId: (
+    notebookId: string,
+    agentId: string,
+    sessionId: string | null,
+  ) => void;
   /** Wipe one agent's transcript and draft; the others keep theirs. */
   clearAcpPane: (notebookId: string, agentId: string) => void;
 

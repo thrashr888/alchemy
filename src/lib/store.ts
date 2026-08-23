@@ -80,7 +80,13 @@ function loadAcpPane(notebookId: string): AcpPaneState | null {
       return {
         agentId,
         agents: agentId
-          ? { [agentId]: { entries: stored.entries, draft: "" } }
+          ? {
+              [agentId]: {
+                entries: stored.entries,
+                draft: "",
+                sessionId: null,
+              },
+            }
           : {},
       };
     }
@@ -97,7 +103,7 @@ function acpAgentPane(
   agentId: string,
 ): AcpAgentPane {
   return (
-    panes[notebookId]?.agents[agentId] ?? { entries: [], draft: "" }
+    panes[notebookId]?.agents[agentId] ?? { entries: [], draft: "", sessionId: null }
   );
 }
 
@@ -1697,6 +1703,20 @@ export const useStore = create<AppState>((set, get) => {
         saveAcpPaneSoon(notebookId, pane);
         return { acpPanes: { ...s.acpPanes, [notebookId]: pane } };
       }),
+    setAcpSessionId: (notebookId, agentId, sessionId) =>
+      set((s) => {
+        const mine = acpAgentPane(s.acpPanes, notebookId, agentId);
+        if (mine.sessionId === sessionId) return {};
+        const pane: AcpPaneState = {
+          agentId: s.acpPanes[notebookId]?.agentId ?? agentId,
+          agents: {
+            ...s.acpPanes[notebookId]?.agents,
+            [agentId]: { ...mine, sessionId },
+          },
+        };
+        saveAcpPaneSoon(notebookId, pane);
+        return { acpPanes: { ...s.acpPanes, [notebookId]: pane } };
+      }),
     clearAcpPane: (notebookId, agentId) =>
       set((s) => {
         const mine = s.acpPanes[notebookId]?.agents[agentId];
@@ -1705,7 +1725,7 @@ export const useStore = create<AppState>((set, get) => {
           agentId: s.acpPanes[notebookId]?.agentId ?? agentId,
           agents: {
             ...s.acpPanes[notebookId]?.agents,
-            [agentId]: { entries: [], draft: "" },
+            [agentId]: { entries: [], draft: "", sessionId: null },
           },
         };
         saveAcpPaneSoon(notebookId, pane);

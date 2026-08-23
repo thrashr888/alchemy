@@ -15,9 +15,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, InitializeRequest, McpServer, McpServerHttp,
-    NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionNotification, TextContent,
+    CancelNotification, ContentBlock, InitializeRequest, LoadSessionRequest, McpServer,
+    McpServerHttp, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
+    RequestPermissionResponse, SelectedPermissionOutcome, SessionId, SessionNotification,
+    TextContent,
 };
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, ConnectionTo, Responder};
@@ -341,6 +342,7 @@ pub async fn acp_start(
     app: AppHandle,
     notebook_id: String,
     agent_id: String,
+    resume: Option<String>,
 ) -> Result<(), String> {
     let kind =
         AcpAgentKind::from_id(&agent_id).ok_or_else(|| format!("unknown agent: {agent_id}"))?;
@@ -393,6 +395,7 @@ pub async fn acp_start(
             notebook_title,
             task_agent.clone(),
             config,
+            resume,
             rx,
             ready_tx,
             permissions,
@@ -571,6 +574,7 @@ async fn run_session(
     notebook_title: String,
     agent_id: String,
     config: AcpAgentConfig,
+    resume: Option<String>,
     mut rx: mpsc::UnboundedReceiver<HostCmd>,
     ready_tx: oneshot::Sender<Result<(), String>>,
     permissions: Arc<Mutex<HashMap<String, PendingPermission>>>,
@@ -662,7 +666,7 @@ async fn run_session(
                 }
             };
 
-            let mut session_req = NewSessionRequest::new(cwd);
+            let mut session_req = NewSessionRequest::new(cwd.clone());
             // Notebook access is the entire point of hosting the agent here,
             // so a session that opens without it is worth saying out loud
             // rather than leaving the user to wonder why the agent can't find
@@ -677,26 +681,54 @@ async fn run_session(
                     mcp.url.clone(),
                 ))]);
             }
-            let session = match connection.send_request(session_req).block_task().await {
-                Ok(s) => s,
-                Err(err) => {
-                    if let Some(tx) = ready_tx.take() {
-                        // A session that dies on open is usually the agent not
-                        // being signed in, and the wire error for that is
-                        // unhelpfully generic ("Query closed before response
-                        // received"). Lead with what the user can act on — the
-                        // agent told us at initialize how it wants to be
-                        // authenticated — and keep the wire text behind it.
-                        let _ = tx.send(Err(session_open_error(
-                            agent_label,
-                            &init.auth_methods,
-                            &err.to_string(),
-                        )));
-                    }
-                    return Err(err);
+            // Resume first when we have a session to resume and the agent can
+            // do it. `session/load` replays the whole conversation back as
+            // session/update notifications, so the transcript is rebuilt from
+            // the agent's own memory rather than from ours — and, unlike our
+            // stored copy, the resumed session can actually be prompted again.
+            //
+            // A stale id is ordinary, not exceptional: agents expire their own
+            // sessions, and a machine can lose them entirely. Falling through
+            // to a fresh session is the right answer, silently.
+            let mut resumed = None;
+            if let Some(id) = resume.filter(|_| init.agent_capabilities.load_session) {
+                let mut load_req = LoadSessionRequest::new(id.clone(), cwd.clone());
+                if mcp_attached {
+                    load_req = load_req.mcp_servers(vec![McpServer::Http(McpServerHttp::new(
+                        "alchemy",
+                        mcp.url.clone(),
+                    ))]);
                 }
+                match connection.send_request(load_req).block_task().await {
+                    Ok(_) => resumed = Some(SessionId::from(id)),
+                    Err(err) => eprintln!("acp: could not resume {agent_label} session: {err}"),
+                }
+            }
+
+            let was_resumed = resumed.is_some();
+            let session_id = match resumed {
+                Some(id) => id,
+                None => match connection.send_request(session_req).block_task().await {
+                    Ok(s) => s.session_id,
+                    Err(err) => {
+                        if let Some(tx) = ready_tx.take() {
+                            // A session that dies on open is usually the agent
+                            // not being signed in, and the wire error for that
+                            // is unhelpfully generic ("Query closed before
+                            // response received"). Lead with what the user can
+                            // act on — the agent told us at initialize how it
+                            // wants to be authenticated — and keep the wire
+                            // text behind it.
+                            let _ = tx.send(Err(session_open_error(
+                                agent_label,
+                                &init.auth_methods,
+                                &err.to_string(),
+                            )));
+                        }
+                        return Err(err);
+                    }
+                },
             };
-            let session_id = session.session_id.clone();
 
             if let Some(tx) = ready_tx.take() {
                 let _ = tx.send(Ok(()));
@@ -709,6 +741,11 @@ async fn run_session(
                 Some(serde_json::json!({
                     "mcpAttached": mcp_attached,
                     "agent": serde_json::to_value(&init).ok(),
+                    // Kept by the UI so this conversation can be resumed after
+                    // a restart; `resumed` says whether the transcript on
+                    // screen is about to be replaced by the agent's replay.
+                    "sessionId": session_id.0.to_string(),
+                    "resumed": was_resumed,
                 })),
             );
 
