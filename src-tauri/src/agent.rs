@@ -15,6 +15,29 @@ use crate::models::Citation;
 use crate::rag;
 
 const MAX_STEPS: usize = 5;
+
+/// Which model role runs the loop's internal calls — planning, reranking,
+/// and per-source distillation.
+///
+/// Small by default. Every one of these produces short structured output
+/// (`SEARCH "..."`, a list of passage numbers, a ~500-word evidence note),
+/// which is what the Small role exists for; paying full chat-model latency
+/// up to MAX_STEPS times before the user sees a single answer token is the
+/// waste that dominates deep research's time to first token. `chat_role`
+/// falls through to the chat engine when no small model is configured, so
+/// this is a no-op for anyone who has not opted into a small tier.
+///
+/// The final answer always streams from the chat model — the quality that
+/// matters most is the one the user reads.
+///
+/// `ALCHEMY_PLANNER_ROLE=chat` restores the old behaviour; the eval
+/// (`eval_agent_planner_roles`) A/Bs the two.
+pub(crate) fn loop_role() -> crate::inference::Role {
+    match std::env::var("ALCHEMY_PLANNER_ROLE").as_deref() {
+        Ok("chat") => crate::inference::Role::Chat,
+        _ => crate::inference::Role::Small,
+    }
+}
 /// Results kept per search step, after reranking.
 const SEARCH_K: usize = 5;
 /// Hybrid-retrieval pool handed to the reranker.
@@ -44,7 +67,8 @@ struct TokenEvent {
     content: String,
 }
 
-enum Action {
+#[derive(Debug)]
+pub(crate) enum Action {
     Search(String),
     /// One planner step can read several sources; they distill in parallel.
     Read(Vec<String>),
@@ -103,7 +127,7 @@ pub async fn run(
         let messages =
             rag::build_agent_decision(question, &source_list, &transcript, gathered.len());
         let planned = std::time::Instant::now();
-        let raw = ollama.chat(&messages).await?.text;
+        let raw = ollama.chat_role(loop_role(), &messages).await?.text;
         phases.planner(planned.elapsed().as_millis() as u64);
         match parse_action(&raw) {
             Some(Action::Search(query)) => {
@@ -263,7 +287,7 @@ pub(crate) async fn rerank_indices(
     keep: usize,
 ) -> Option<Vec<usize>> {
     let messages = rag::build_rerank_messages(question, snippets, keep);
-    let raw = ai.chat(&messages).await.ok()?.text;
+    let raw = ai.chat_role(loop_role(), &messages).await.ok()?.text;
     let json = extract_json(&raw)?;
     let value: serde_json::Value = serde_json::from_str(&json).ok()?;
     let indices: Vec<usize> = value
@@ -309,7 +333,7 @@ pub(crate) async fn rerank(ai: &Ai, question: &str, hits: Vec<Citation>) -> Vec<
 /// generation, which distills content that won't fit its corpus budget.
 pub(crate) async fn distill(ai: &Ai, question: &str, title: &str, content: &str) -> String {
     let messages = rag::build_distill_messages(question, title, content);
-    match ai.chat(&messages).await {
+    match ai.chat_role(loop_role(), &messages).await {
         Ok(out) if !out.text.trim().is_empty() => truncate(out.text.trim(), DISTILL_MAX_CHARS),
         _ => truncate(content, READ_GIST_CHARS),
     }
@@ -320,7 +344,7 @@ fn emit_step(app: &AppHandle, label: String) {
 }
 
 /// Parse the planner's JSON action, tolerating surrounding prose/code fences.
-fn parse_action(raw: &str) -> Option<Action> {
+pub(crate) fn parse_action(raw: &str) -> Option<Action> {
     let json = extract_json(raw)?;
     let value: serde_json::Value = serde_json::from_str(&json).ok()?;
     match value.get("action").and_then(|a| a.as_str())? {

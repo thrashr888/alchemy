@@ -2077,3 +2077,145 @@ async fn eval_retrieval_latency() {
     report("joined (now)   ", &mut joined_ms);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- Deep-research planner: role A/B (RFC-agentic-chat) --------------------
+//
+// The loop's planner, rerank, and distill calls run on the Small role by
+// default (agent::loop_role), because paying chat-model latency up to
+// MAX_STEPS times before the user sees one answer token is what dominates
+// deep research's time to first token. Small is only worth it if it still
+// plans sensibly — that is what this measures, on the two things that can
+// actually go wrong: the action fails to parse, or it aims at the wrong
+// place.
+//
+// Model-dependent, so it prints rather than fences (house rule: assert only
+// where the inputs are deterministic). The number IS the product; read the
+// table and decide.
+
+/// One planner probe: a question, and the distinctive terms a good first
+/// action should aim at — either in the search query or via reading the
+/// source whose title contains the gold marker.
+const PLANNER_PROBES: &[(&str, &str)] = &[
+    (
+        "What retention window does the backup policy specify?",
+        "backup",
+    ),
+    (
+        "Which model does the ranking service use for reranking?",
+        "rank",
+    ),
+    (
+        "What is the escalation path for a Sev-1 incident?",
+        "incident",
+    ),
+    (
+        "How is the vector index rebuilt after a schema change?",
+        "index",
+    ),
+];
+
+/// Does this first action aim at the gold area — searching with the marker
+/// term, or reading a source whose title carries it?
+fn planner_on_target(
+    action: &crate::agent::Action,
+    marker: &str,
+    titles: &[(String, String)],
+) -> bool {
+    match action {
+        crate::agent::Action::Search(q) => q.to_lowercase().contains(marker),
+        crate::agent::Action::Read(ids) => ids.iter().any(|id| {
+            titles
+                .iter()
+                .find(|(sid, _)| sid == id)
+                .is_some_and(|(_, t)| t.to_lowercase().contains(marker))
+        }),
+        // Stopping before gathering anything is never the right opening move.
+        crate::agent::Action::Stop => false,
+    }
+}
+
+#[tokio::test]
+#[ignore = "live models: one planner call per probe per role — run with --ignored --nocapture"]
+async fn eval_agent_planner_roles() {
+    // Two engines on purpose: the built-in embedder seeds the corpus, and a
+    // chat-capable tier answers the planner probes. `builtin_ai` has no chat
+    // model at all, so planning through it would measure nothing.
+    let Some(embedder) = builtin_ai().await else {
+        return;
+    };
+    let Some(ai) = crate::beir_eval::rerank_ai().await else {
+        eprintln!("SKIP: no local chat tier for planner probes");
+        return;
+    };
+    assert!(
+        ai.list_models().await.is_ok(),
+        "Ollama not reachable on localhost:11434 — start it, then rerun"
+    );
+    // An A/B is only an A/B if the roles resolve to different engines. With
+    // no small model configured, chat_role(Small) falls through to Chat and
+    // both columns would measure the same thing under two names — the
+    // mistake judged_eval's resolution guard exists to prevent.
+    if !ai.has_small_role() {
+        eprintln!(
+            "SKIP: no small model configured — Small would fall through to \
+             Chat and the comparison would be two names for one engine"
+        );
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("nbl-planner-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb = "planner-nb";
+    seed_corpus(&embedder, &db, nb).await;
+
+    let sources = db.list_sources(nb).await.expect("sources");
+    let titles: Vec<(String, String)> = sources
+        .iter()
+        .map(|s| (s.id.clone(), s.title.clone()))
+        .collect();
+    let source_list = sources
+        .iter()
+        .map(|s| format!("- {} (id: {}, {} chunks)", s.title, s.id, s.chunk_count))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    eprintln!("\ndeep-research planner, first action by role:");
+    for role in [crate::inference::Role::Small, crate::inference::Role::Chat] {
+        let (mut parsed, mut on_target, mut total_ms) = (0usize, 0usize, 0u128);
+        for (question, marker) in PLANNER_PROBES {
+            let messages = crate::rag::build_agent_decision(question, &source_list, "", 0);
+            let t = std::time::Instant::now();
+            let raw = match ai.chat_role(role, &messages).await {
+                Ok(out) => out.text,
+                Err(err) => {
+                    eprintln!("  MISS ({role:?}): {question} — call failed: {err:#}");
+                    continue;
+                }
+            };
+            total_ms += t.elapsed().as_millis();
+            match crate::agent::parse_action(&raw) {
+                Some(action) => {
+                    parsed += 1;
+                    if planner_on_target(&action, marker, &titles) {
+                        on_target += 1;
+                    } else {
+                        eprintln!("  MISS ({role:?}): {question} — aimed elsewhere: {action:?}");
+                    }
+                }
+                None => eprintln!(
+                    "  MISS ({role:?}): {question} — unparseable: {}",
+                    raw.trim().chars().take(80).collect::<String>()
+                ),
+            }
+        }
+        let n = PLANNER_PROBES.len();
+        eprintln!(
+            "  {:<8}  parsed {parsed}/{n}   on-target {on_target}/{n}   avg {}ms",
+            format!("{role:?}"),
+            total_ms / n as u128
+        );
+    }
+    eprintln!(
+        "  (Small is the shipping default — agent::loop_role; \
+         ALCHEMY_PLANNER_ROLE=chat restores the old behaviour.)"
+    );
+}
