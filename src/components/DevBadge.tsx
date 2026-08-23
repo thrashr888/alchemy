@@ -16,7 +16,7 @@ export function DevBadge() {
   if (build?.profile !== "dev") return null;
   return (
     <span
-      className="mr-1 select-none rounded-full border border-[#e8a33d]/40 bg-[#e8a33d]/15 px-2 py-0.5 text-badge font-semibold tracking-wide text-[#e8a33d] [[data-scheme=light]_&]:text-[#7a5200]"
+      className="mr-1 select-none rounded-full border border-warning/40 bg-warning/15 px-2 py-0.5 text-badge font-semibold tracking-wide text-warning"
       title={`Dev build · ${build.commit}`}
     >
       DEV

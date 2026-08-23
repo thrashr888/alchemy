@@ -79,7 +79,7 @@ export function FdaHint({ message }: { message: string }) {
   return (
     <div className="flex flex-col gap-2 rounded-md border border-border bg-surface-2/40 px-3 py-2.5">
       <div className="flex items-start gap-2 text-caption leading-relaxed text-foreground/90">
-        <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#e8a33d]" />
+        <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
         <span>{message}</span>
       </div>
       <div>

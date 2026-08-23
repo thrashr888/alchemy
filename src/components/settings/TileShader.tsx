@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useReducedMotion } from "../DitherBackground";
 
 /**
  * Tiny per-tile WebGL fields for the Activity stat tiles — same family as
@@ -27,6 +28,7 @@ export function TileShader({
   tintVar: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const reducedMotion = useReducedMotion();
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -90,9 +92,7 @@ export function TileShader({
     let raf = 0;
     let last = 0;
     const startT = performance.now();
-    const isStatic = window.matchMedia(
-      "(prefers-reduced-motion: reduce)",
-    ).matches;
+    const isStatic = reducedMotion;
     const render = (now: number) => {
       if (!isStatic) raf = requestAnimationFrame(render);
       if (now - last < 33) return;
@@ -118,7 +118,7 @@ export function TileShader({
       gl.deleteBuffer(buf);
       gl.deleteProgram(program);
     };
-  }, [mode, hour, intensity, tintVar]);
+  }, [mode, hour, intensity, tintVar, reducedMotion]);
 
   return (
     <canvas

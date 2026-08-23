@@ -32,6 +32,7 @@
 
   --destructive: #eb5757;
   --success: #4cb782;
+  --warning: #e8a33d;
 
   --citation: #8b95f5;
 
@@ -65,6 +66,7 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-success: var(--success);
+  --color-warning: var(--warning);
   --color-citation: var(--citation);
   --color-artifact-generate: var(--artifact-generate);
   --color-artifact-learning: var(--artifact-learning);

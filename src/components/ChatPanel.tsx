@@ -1837,13 +1837,13 @@ function ChatHero({
   return (
     <div
       className={cn(
-        "flex flex-col items-center gap-4 text-center transition-all duration-700",
+        "flex flex-col items-center gap-4 text-center transition-all duration-200",
         compact ? "pt-1" : "min-h-[62vh] justify-center",
       )}
     >
       <AlchemySymbol
         className={cn(
-          "transition-all duration-700",
+          "transition-all duration-200",
           notebookColor ? "opacity-85" : "text-citation/60",
           compact ? "h-9 w-9" : "h-16 w-16",
         )}
