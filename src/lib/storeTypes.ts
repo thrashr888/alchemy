@@ -62,7 +62,7 @@ export interface Migration {
  *  one is "in my retrieval context", the other is "about to be operated
  *  on". One selection at a time, app-wide, like Finder windows. */
 export interface Picked {
-  kind: "sources" | "notes";
+  kind: "sources" | "notes" | "notebooks" | "cards" | "attachments";
   ids: string[];
   /** Shift-click range endpoint: the row a plain/cmd click last landed on. */
   anchor: string | null;

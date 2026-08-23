@@ -8,9 +8,10 @@
    identifier that matched, "name", or "manual" — because a machine that
    files without showing its reason is one you stop trusting on the first
    mistake. */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
+import { usePickList } from "@/lib/pick";
 import type {
   CardAttachment,
   CardFact,
@@ -26,6 +27,8 @@ import {
   Input,
   Modal,
   RowMenu,
+  type RowMenuItem,
+  useMarquee,
   useConfirm,
 } from "./ui";
 import { FilterBar, rankByCount } from "./FilterBar";
@@ -234,6 +237,54 @@ export function RegistrySection() {
     [mine, kind, notebook, nbTitle, query, sort],
   );
 
+  // ---- Index selection (docs/RFC-multi-select.md) ----------------------
+  const pick = usePickList("cards", shown.map((c) => c.id));
+  const indexRef = useRef<HTMLDivElement>(null);
+  const indexBase = useRef<string[]>([]);
+  const {
+    onPointerDown: indexMarqueeDown,
+    marquee: indexMarquee,
+    justEnded,
+  } = useMarquee({
+    containerRef: indexRef,
+    onStart: (additive) => {
+      const p = useStore.getState().picked;
+      indexBase.current = additive && p?.kind === "cards" ? p.ids : [];
+    },
+    onSelect: (ids) =>
+      pick.pickSet("cards", [...new Set([...indexBase.current, ...ids])], false),
+    onClearBackground: pick.clearPicked,
+  });
+
+  /** Deleting cards never touches the documents filed under them, so the
+   *  confirm says so — and names every card, since a count can't be
+   *  checked against. */
+  const cardBatchItems = (ids: string[]): RowMenuItem[] => [
+    {
+      label: `Delete ${ids.length} cards…`,
+      icon: <Trash2 className="h-3.5 w-3.5" />,
+      danger: true,
+      onClick: () =>
+        void (async () => {
+          const names = ids.map(
+            (id) => mine.find((c) => c.id === id)?.name ?? "Untitled",
+          );
+          const ok = await confirm({
+            title: `Delete ${ids.length} cards?`,
+            message:
+              "The documents filed under them are untouched — only the cards and their filings go away.",
+            items: names,
+            confirmLabel: "Delete",
+            danger: true,
+          });
+          if (!ok) return;
+          for (const id of ids) await api.deleteRegistryCard(id);
+          useStore.getState().clearPicked();
+          void load();
+        })(),
+    },
+  ];
+
   // User-owned orphans (see isOrphan): badged in the list, removed only by
   // this explicit bulk action — one confirm, then they go together.
   const orphans = useMemo(() => mine.filter(isOrphan), [mine]);
@@ -243,6 +294,9 @@ export function RegistrySection() {
       message:
         "These cards have no documents left — their sources were deleted and " +
         "rematching found nothing. Identifiers and facts on them go too.",
+      // Named, not just counted: "4 orphaned cards" is impossible to check
+      // against, and this is the one screen where the user can still say no.
+      items: orphans.map((c) => `${c.name} \u00b7 ${kindLabel(c.kind)}`),
       confirmLabel: "Remove",
       danger: true,
     });
@@ -298,7 +352,11 @@ export function RegistrySection() {
           border — which is why the toggle alone went invisible, and only
           when a collapsed sidebar shortened the header enough to slide the
           row up into the banner. */}
-      <div className="relative z-10 min-h-0 flex-1 overflow-y-auto">
+      <div
+        ref={indexRef}
+        onPointerDown={indexMarqueeDown}
+        className="relative z-10 min-h-0 flex-1 select-none overflow-y-auto"
+      >
         <div className="mx-auto w-full max-w-[960px] px-6 pb-10">
           <SuggestionStrip cards={suggested} onChanged={load} />
           {/* Unconditional, like the notebook shelf's: gating this on
@@ -365,7 +423,19 @@ export function RegistrySection() {
               </Button>
             </EmptyState>
           ) : view === "table" ? (
-            <CardTable cards={shown} nbTitle={nbTitle} onChanged={load} />
+            <CardTable
+              cards={shown}
+              nbTitle={nbTitle}
+              onChanged={load}
+              pickedIds={pick.pickedIds}
+              onRowClick={(e, id) => {
+                if (justEnded()) return;
+                if (!pick.handleClick(e, id))
+                  useStore.setState({ openCardId: id });
+              }}
+              onContextItems={(id) => () =>
+                pick.contextItems(id, cardBatchItems)}
+            />
           ) : (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
               <button
@@ -381,6 +451,12 @@ export function RegistrySection() {
                   card={c}
                   onOpen={() => useStore.setState({ openCardId: c.id })}
                   onChanged={load}
+                  picked={pick.pickedIds}
+                  onActivate={(e) => {
+                    if (justEnded()) return true;
+                    return pick.handleClick(e, c.id) || undefined;
+                  }}
+                  onContextItems={() => pick.contextItems(c.id, cardBatchItems)}
                 />
               ))}
             </div>
@@ -394,6 +470,7 @@ export function RegistrySection() {
           )}
         </div>
       </div>
+      {indexMarquee}
       <NewCardModal
         open={creating}
         onClose={() => setCreating(false)}
@@ -678,10 +755,17 @@ function CardTable({
   cards,
   nbTitle,
   onChanged,
+  pickedIds,
+  onRowClick,
+  onContextItems,
 }: {
   cards: RegistryCard[];
   nbTitle: (id: string) => string;
   onChanged: () => void;
+  /** Index selection, shared with the grid so switching view keeps it. */
+  pickedIds: Set<string>;
+  onRowClick: (e: React.MouseEvent, id: string) => void;
+  onContextItems: (id: string) => () => RowMenuItem[] | null;
 }) {
   const { confirm, dialog } = useConfirm();
   return (
@@ -711,8 +795,12 @@ function CardTable({
           return (
             <tr
               key={c.id}
-              onClick={() => useStore.setState({ openCardId: c.id })}
-              className="group cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2"
+              data-pick-id={c.id}
+              onClick={(e) => onRowClick(e, c.id)}
+              className={cn(
+                "group cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2",
+                pickedIds.has(c.id) && "bg-primary/10 hover:bg-primary/15",
+              )}
             >
               <td className="px-3 py-2">
                 <span className="flex items-center gap-2">
@@ -748,8 +836,9 @@ function CardTable({
               <td className="px-3 py-2 text-caption text-subtle-foreground">
                 {c.identifiers}
               </td>
-              <td className="w-8 px-2 py-2">
+              <td className="w-8 px-2 py-2" onClick={(e) => e.stopPropagation()}>
                 <RowMenu
+                  contextItems={onContextItems(c.id)}
                   items={[
                     {
                       label: "Open",
@@ -926,10 +1015,19 @@ function CardTile({
   card,
   onOpen,
   onChanged,
+  picked,
+  onActivate,
+  onContextItems,
 }: {
   card: RegistryCard;
   onOpen: () => void;
   onChanged: () => void;
+  /** Ids currently selected on the index, for the row wash. */
+  picked?: Set<string>;
+  /** Click handler that may consume the click as a selection gesture;
+   *  returning undefined falls through to opening the card. */
+  onActivate?: (e: React.MouseEvent) => true | undefined;
+  onContextItems?: () => RowMenuItem[] | null;
 }) {
   const { confirm, dialog } = useConfirm();
   const docs = confirmed(card).length;
@@ -937,12 +1035,17 @@ function CardTile({
   return (
     <div
       title={card.name}
+      data-pick-id={card.id}
       className={cn(
         "group relative flex min-h-[132px] cursor-pointer flex-col rounded-lg border border-border bg-surface p-4 transition-colors hover:border-border-strong hover:bg-surface-2",
         "has-[[aria-expanded=true]]:z-30",
+        picked?.has(card.id) && "bg-primary/10 hover:bg-primary/15",
       )}
     >
-      <CardAction label={`Open card ${card.name}`} onClick={onOpen} />
+      <CardAction
+        label={`Open card ${card.name}`}
+        onClick={(e) => onActivate?.(e) ?? onOpen()}
+      />
       <div className="pointer-events-none relative z-10 mb-auto flex h-8 w-8 items-center justify-center rounded-lg bg-surface-2 text-muted-foreground">
         {kindIcon(card.kind)}
       </div>
@@ -976,6 +1079,7 @@ function CardTile({
       </div>
       <div className="absolute right-2 top-2 z-20 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
         <RowMenu
+          contextItems={onContextItems}
           items={[
             { label: "Open", onClick: onOpen },
             {
@@ -1159,6 +1263,55 @@ function CardDetail({
     onChanged();
   };
 
+  // ---- Selection over the filed documents (docs/RFC-multi-select.md) ----
+  const docIds = [...pending, ...docs].map((a) => a.sourceId);
+  const docPick = usePickList("attachments", docIds);
+  const docsRef = useRef<HTMLDivElement>(null);
+  const docBase = useRef<string[]>([]);
+  const {
+    onPointerDown: docMarqueeDown,
+    marquee: docMarquee,
+    justEnded: docJustEnded,
+  } = useMarquee({
+    containerRef: docsRef,
+    onStart: (additive) => {
+      const p = useStore.getState().picked;
+      docBase.current = additive && p?.kind === "attachments" ? p.ids : [];
+    },
+    onSelect: (ids) =>
+      docPick.pickSet(
+        "attachments",
+        [...new Set([...docBase.current, ...ids])],
+        false,
+      ),
+    onClearBackground: docPick.clearPicked,
+  });
+
+  const docBatchItems = (ids: string[]): RowMenuItem[] => [
+    {
+      label: `Unfile ${ids.length} documents`,
+      icon: <Trash2 className="h-3.5 w-3.5" />,
+      onClick: () =>
+        void (async () => {
+          for (const id of ids)
+            await api.setAttachmentStatus(card.id, id, "rejected");
+          useStore.getState().clearPicked();
+          onChanged();
+        })(),
+    },
+    {
+      label: `Unlink ${ids.length} only`,
+      icon: <X className="h-3.5 w-3.5" />,
+      onClick: () =>
+        void (async () => {
+          for (const id of ids)
+            await api.setAttachmentStatus(card.id, id, "remove");
+          useStore.getState().clearPicked();
+          onChanged();
+        })(),
+    },
+  ];
+
   const openDoc = (a: CardAttachment) => {
     const s = titles.get(a.sourceId);
     // A card spans notebooks, so opening its document means switching to
@@ -1176,7 +1329,18 @@ function CardDetail({
     return (
       <div
         key={a.sourceId}
-        className="flex items-center gap-2 border-b border-border py-2 last:border-b-0"
+        data-pick-id={a.sourceId}
+        onClick={(e) => {
+          if (docJustEnded()) return;
+          docPick.handleClick(e, a.sourceId);
+        }}
+        className={cn(
+          // `group` is load-bearing: the unfile button below reveals on
+          // group-hover, and without this class it sat at opacity-0 forever
+          // — the control existed but could never be clicked.
+          "group flex items-center gap-2 border-b border-border py-2 last:border-b-0",
+          docPick.pickedIds.has(a.sourceId) && "bg-primary/10",
+        )}
       >
         <FileText className="h-3.5 w-3.5 shrink-0 text-subtle-foreground" />
         <button
@@ -1215,16 +1379,34 @@ function CardDetail({
             </Button>
           </span>
         ) : (
-          <button
-            className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition hover:bg-elevated group-hover:opacity-100"
-            // Rejection, not deletion: the pair is remembered, so the sweep
-            // never re-attaches this document to this card — removal after
-            // the fact IS the control now that matches auto-attach.
-            title="Unfile this document — remembered, so it won't re-attach"
-            onClick={() => void setStatus(a.sourceId, "rejected")}
+          <span
+            className="shrink-0 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100"
+            onClick={(e) => e.stopPropagation()}
           >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+            <RowMenu
+              label={`Filing options for "${s?.title ?? "this document"}"`}
+              contextItems={() =>
+                docPick.contextItems(a.sourceId, docBatchItems)
+              }
+              items={[
+                {
+                  label: "Unfile — don't re-attach",
+                  icon: <Trash2 className="h-3.5 w-3.5" />,
+                  // Rejection, not deletion: the pair is remembered, so the
+                  // sweep never re-attaches this document to this card.
+                  onClick: () => void setStatus(a.sourceId, "rejected"),
+                },
+                {
+                  label: "Unlink only",
+                  icon: <X className="h-3.5 w-3.5" />,
+                  // Forgets the pair entirely, so auto-filing may propose it
+                  // again — the right choice when the filing was a mistake
+                  // rather than a judgement about this document.
+                  onClick: () => void setStatus(a.sourceId, "remove"),
+                },
+              ]}
+            />
+          </span>
         )}
       </div>
     );
@@ -1304,10 +1486,17 @@ function CardDetail({
               hint="Attach a source from its ⋯ menu in the gallery or sources list."
             />
           ) : (
-            <div className="mt-2">{docs.map((a) => row(a, false))}</div>
+            <div
+              ref={docsRef}
+              onPointerDown={docMarqueeDown}
+              className="mt-2 select-none"
+            >
+              {docs.map((a) => row(a, false))}
+            </div>
           )}
         </section>
       </div>
+      {docMarquee}
       {dialog}
     </div>
   );

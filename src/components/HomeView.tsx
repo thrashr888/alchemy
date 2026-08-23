@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
+import { usePickList } from "@/lib/pick";
 import { DevBadge } from "./DevBadge";
 import {
   Badge,
@@ -10,6 +11,8 @@ import {
   Modal,
   ResizeHandle,
   RowMenu,
+  type RowMenuItem,
+  useMarquee,
   useConfirm,
 } from "./ui";
 import { AlchemyHero } from "./AlchemyHero";
@@ -67,14 +70,20 @@ const NOTEBOOK_PALETTE = [
  *  down columns instead of across cards. */
 function NotebookTable({
   notebooks,
-  onOpen,
   onNew,
   unreadByNb,
+  rowMenu,
+  pickedIds,
+  onRowClick,
 }: {
   notebooks: Notebook[];
-  onOpen: (id: string) => void;
   onNew: () => void;
   unreadByNb: Map<string, number>;
+  /** Per-row menu, so the table has the same verbs (and the same
+   *  right-click) as the cards — it had neither. */
+  rowMenu: (nb: Notebook) => React.ReactNode;
+  pickedIds: Set<string>;
+  onRowClick: (e: React.MouseEvent, nb: Notebook) => void;
 }) {
   return (
     <>
@@ -85,13 +94,18 @@ function NotebookTable({
           { key: "notes", label: "Notes", className: "text-right" },
           { key: "reports", label: "Reports", className: "text-right" },
           { key: "updated", label: "Updated" },
+          { key: "menu", label: "", className: "w-8" },
         ]}
       >
         {notebooks.map((nb) => (
           <tr
             key={nb.id}
-            onClick={() => onOpen(nb.id)}
-            className="cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2"
+            data-pick-id={nb.id}
+            onClick={(e) => onRowClick(e, nb)}
+            className={cn(
+              "group cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2",
+              pickedIds.has(nb.id) && "bg-primary/10 hover:bg-primary/15",
+            )}
           >
             <td className="px-3 py-2">
               <span className="flex items-center gap-2">
@@ -127,6 +141,12 @@ function NotebookTable({
             </td>
             <td className="px-3 py-2 text-caption text-muted-foreground">
               {relativeTime(nb.updatedAt)}
+            </td>
+            {/* The menu column: right-clicking the row opens the same menu
+                (RowMenu binds to the nearest .group), which the table had no
+                way to offer before. */}
+            <td className="w-8 px-1 py-2 text-right" onClick={(e) => e.stopPropagation()}>
+              {rowMenu(nb)}
             </td>
           </tr>
         ))}
@@ -196,6 +216,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   // Shader must not mount under glass (rAF keeps running when display:none).
   const glassOn = useStore((s) => s.reading.glass);
 
+  // Finder-style selection over the shelf (docs/RFC-multi-select.md), the
+  // same grammar the sources and notes lists use.
+  const shownIdsRef = useRef<string[]>([]);
   const [creating, setCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [renaming, setRenaming] = useState<{
@@ -291,6 +314,111 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     });
   };
   const { confirm, dialog: confirmDialog } = useConfirm();
+
+  // ---- Shelf selection (docs/RFC-multi-select.md) ----------------------
+  const pick = usePickList("notebooks", shownNotebooks.map((n) => n.id));
+  shownIdsRef.current = shownNotebooks.map((n) => n.id);
+  const titleOf = (id: string) =>
+    notebooks.find((n) => n.id === id)?.title ?? "Untitled";
+
+  const shelfRef = useRef<HTMLDivElement>(null);
+  const marqueeBase = useRef<string[]>([]);
+  const {
+    onPointerDown: marqueeDown,
+    marquee,
+    justEnded,
+  } = useMarquee({
+    containerRef: shelfRef,
+    onStart: (additive) => {
+      const p = useStore.getState().picked;
+      marqueeBase.current = additive && p?.kind === "notebooks" ? p.ids : [];
+    },
+    onSelect: (ids) =>
+      pick.pickSet(
+        "notebooks",
+        [...new Set([...marqueeBase.current, ...ids])],
+        false,
+      ),
+    onClearBackground: pick.clearPicked,
+  });
+
+  /** The single-notebook verbs, shared by the cards and the table so both
+   *  surfaces offer the same menu (and the same right-click). */
+  const notebookRowItems = (nb: Notebook): RowMenuItem[] => [
+
+    {
+      label: "Rename",
+      icon: <Pencil className="h-3.5 w-3.5" />,
+      onClick: () =>
+        setRenaming({
+          id: nb.id,
+          title: nb.title,
+          icon: nb.icon,
+        }),
+    },
+    {
+      label: "Archive",
+      icon: <Archive className="h-3.5 w-3.5" />,
+      onClick: () => void setStatus(nb.id, "archived"),
+    },
+    {
+      label: "Delete…",
+      icon: <Trash2 className="h-3.5 w-3.5" />,
+      danger: true,
+      onClick: async () => {
+        if (
+          await confirm({
+            title: `Delete "${nb.title}"?`,
+            message:
+              "This permanently deletes the notebook and all of its sources.",
+            confirmLabel: "Delete",
+            danger: true,
+          })
+        )
+          remove(nb.id);
+      },
+    },
+  ];
+
+  /** Batch verbs for a right-click inside a multi-selection. Archiving is
+   *  reversible and needs no confirm; deleting names every notebook it will
+   *  take, because the count alone can't be checked against. */
+  const notebookBatchItems = (ids: string[]): RowMenuItem[] => [
+    {
+      label: `Archive ${ids.length} notebooks`,
+      icon: <Archive className="h-3.5 w-3.5" />,
+      onClick: () =>
+        void (async () => {
+          for (const id of ids) await setStatus(id, "archived");
+          useStore.getState().clearPicked();
+          useStore
+            .getState()
+            .pushToast("success", `Archived ${ids.length} notebooks`);
+        })(),
+    },
+    {
+      label: `Delete ${ids.length} notebooks…`,
+      icon: <Trash2 className="h-3.5 w-3.5" />,
+      danger: true,
+      onClick: () =>
+        void (async () => {
+          const ok = await confirm({
+            title: `Delete ${ids.length} notebooks?`,
+            message:
+              "This permanently deletes each notebook and all of its sources.",
+            items: ids.map(titleOf),
+            confirmLabel: "Delete",
+            danger: true,
+          });
+          if (!ok) return;
+          for (const id of ids) await remove(id);
+          useStore.getState().clearPicked();
+          useStore
+            .getState()
+            .pushToast("success", `Deleted ${ids.length} notebooks`);
+        })(),
+    },
+  ];
 
   // The unified ask box: one input over the WHOLE corpus. Enter hands the
   // question to the palette's ask mode (meta-chat, docs/RFC-meta-chat.md) —
@@ -676,18 +804,35 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             {homeSection === "registry" ? (
               <RegistrySection />
             ) : (
-            <div className="relative min-h-0 flex-1 overflow-y-auto">
+            <div
+              ref={shelfRef}
+              onPointerDown={marqueeDown}
+              className="relative min-h-0 flex-1 select-none overflow-y-auto"
+            >
               <div className="mx-auto w-full max-w-[960px] px-6 pb-10">
               <HomeViewControls placeholder="Filter notebooks by title…" />
               {homeView === "table" ? (
                 <NotebookTable
                   notebooks={shownNotebooks}
-                  onOpen={open}
                   onNew={() => {
                     setNewTitle("");
                     setCreating(true);
                   }}
                   unreadByNb={unreadByNb}
+                  pickedIds={pick.pickedIds}
+                  onRowClick={(e, nb) => {
+                    if (justEnded()) return;
+                    if (!pick.handleClick(e, nb.id)) open(nb.id);
+                  }}
+                  rowMenu={(nb) => (
+                    <RowMenu
+                      label={`Options for ${nb.title}`}
+                      contextItems={() =>
+                        pick.contextItems(nb.id, notebookBatchItems)
+                      }
+                      items={notebookRowItems(nb)}
+                    />
+                  )}
                 />
               ) : (
               <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
@@ -706,17 +851,23 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 {shownNotebooks.map((nb) => (
                   <div
                     key={nb.id}
+                    data-pick-id={nb.id}
                     // Card content is pointer-events-none, so the hover
                     // tooltip for the truncated title lives on the card.
                     title={nb.title}
                     className={cn(
                       "group relative flex min-h-[132px] cursor-pointer flex-col rounded-lg border border-border bg-surface p-4 transition-colors hover:border-border-strong hover:bg-surface-2",
                       "has-[[aria-expanded=true]]:z-30",
+                      pick.pickedIds.has(nb.id) &&
+                        "bg-primary/10 hover:bg-primary/15",
                     )}
                   >
                     <CardAction
                       label={`Open notebook ${nb.title}`}
-                      onClick={() => open(nb.id)}
+                      onClick={(e) => {
+                        if (justEnded()) return;
+                        if (!pick.handleClick(e, nb.id)) open(nb.id);
+                      }}
                     />
                     <div
                       className="pointer-events-none relative z-10 mb-auto flex h-8 w-8 items-center justify-center rounded-lg"
@@ -777,40 +928,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                       </button>
                       <RowMenu
                         label={`Options for ${nb.title}`}
-                        items={[
-                          {
-                            label: "Rename",
-                            icon: <Pencil className="h-3.5 w-3.5" />,
-                            onClick: () =>
-                              setRenaming({
-                                id: nb.id,
-                                title: nb.title,
-                                icon: nb.icon,
-                              }),
-                          },
-                          {
-                            label: "Archive",
-                            icon: <Archive className="h-3.5 w-3.5" />,
-                            onClick: () => void setStatus(nb.id, "archived"),
-                          },
-                          {
-                            label: "Delete…",
-                            icon: <Trash2 className="h-3.5 w-3.5" />,
-                            danger: true,
-                            onClick: async () => {
-                              if (
-                                await confirm({
-                                  title: `Delete "${nb.title}"?`,
-                                  message:
-                                    "This permanently deletes the notebook and all of its sources.",
-                                  confirmLabel: "Delete",
-                                  danger: true,
-                                })
-                              )
-                                remove(nb.id);
-                            },
-                          },
-                        ]}
+                        contextItems={() =>
+                          pick.contextItems(nb.id, notebookBatchItems)
+                        }
+                        items={notebookRowItems(nb)}
                       />
                     </div>
                     {colorPickerFor === nb.id && (
@@ -1110,6 +1231,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         </form>
       </Modal>
 
+      {marquee}
       {confirmDialog}
 
       <Modal

@@ -737,6 +737,7 @@ export function useConfirm() {
   const [state, setState] = React.useState<{
     title: string;
     message: string;
+    items: string[];
     confirmLabel: string;
     danger: boolean;
     resolve: (ok: boolean) => void;
@@ -746,6 +747,11 @@ export function useConfirm() {
     (opts: {
       title: string;
       message?: string;
+      /** The things this will actually affect, listed by name. A count in
+       *  the title says how many; only the list says which — and for a
+       *  destructive action that is the difference between confirming and
+       *  guessing. */
+      items?: string[];
       confirmLabel?: string;
       danger?: boolean;
     }) =>
@@ -753,6 +759,7 @@ export function useConfirm() {
         setState({
           title: opts.title,
           message: opts.message ?? "",
+          items: opts.items ?? [],
           confirmLabel: opts.confirmLabel ?? "Confirm",
           danger: opts.danger ?? false,
           resolve,
@@ -790,6 +797,19 @@ export function useConfirm() {
         <p className="text-body leading-relaxed text-muted-foreground">
           {state.message}
         </p>
+      )}
+      {state.items.length > 0 && (
+        <ul className="mt-2.5 max-h-52 overflow-y-auto rounded-md border border-border">
+          {state.items.map((item, i) => (
+            <li
+              key={`${item}-${i}`}
+              className="truncate border-b border-border px-2.5 py-1.5 text-caption text-foreground/90 last:border-b-0"
+              title={item}
+            >
+              {item}
+            </li>
+          ))}
+        </ul>
       )}
     </Modal>
   ) : null;
