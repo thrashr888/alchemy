@@ -610,6 +610,10 @@ export function StudioPanel() {
 
         {currentId && <Reports />}
 
+        {/* Header and list share one marquee container: the sources panel
+            lets a drag start on its "All selected" strip, and starting a
+            notes selection was harder for want of the same run-up. */}
+        <div ref={notesListRef} onPointerDown={marqueeDown} className="select-none">
         <div className="flex items-center justify-between px-4 pt-3 pb-1">
           <span className="text-micro font-medium uppercase tracking-wide text-subtle-foreground">
             Notes
@@ -630,7 +634,7 @@ export function StudioPanel() {
           </Button>
         </div>
 
-        <div ref={notesListRef} onPointerDown={marqueeDown} className="px-2 pb-2">
+        <div className="px-2 pb-2">
           {notes.length === 0 ? (
             <EmptyState
               icon={<StickyNote className="h-6 w-6" />}
@@ -796,6 +800,7 @@ export function StudioPanel() {
             notes={notes.filter((n) => n.status === "archived")}
             onOpen={openNoteCard}
           />
+        </div>
         </div>
       </div>
 

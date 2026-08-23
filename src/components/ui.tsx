@@ -314,6 +314,22 @@ export function CardAction({
  * clears the selection; a drag that actually started suppresses the click
  * that follows it — check `justEnded()` in row click handlers.
  */
+/** The element that actually scrolls for a given container — itself, or
+ *  the nearest ancestor that overflows. The notes list is a plain div inside
+ *  Studio's scrolling column, so auto-scroll has to walk up to find the
+ *  thing with a scrollbar rather than assume the container has one. */
+function scrollParent(el: HTMLElement): HTMLElement {
+  for (let node: HTMLElement | null = el; node; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    if (
+      /(auto|scroll|overlay)/.test(style.overflowY) &&
+      node.scrollHeight > node.clientHeight
+    )
+      return node;
+  }
+  return el;
+}
+
 export function useMarquee({
   containerRef,
   onStart,
@@ -351,23 +367,24 @@ export function useMarquee({
     if (!container) return;
     const x0 = e.clientX;
     const y0 = e.clientY;
+    // The band is anchored to the CONTENT, not the viewport: when
+    // auto-scroll moves the list under the cursor, the rectangle has to keep
+    // growing from the row it started on, the way Finder does.
+    const scroller = scrollParent(container);
+    const scroll0 = scroller.scrollTop;
     const additive = e.shiftKey || e.metaKey || e.ctrlKey;
     const onBackground = !t.closest("[data-pick-id]");
     let started = false;
-    const move = (ev: PointerEvent) => {
-      const dx = ev.clientX - x0;
-      const dy = ev.clientY - y0;
-      if (!started && Math.hypot(dx, dy) < 4) return;
-      if (!started) {
-        started = true;
-        // Kill text selection for the duration of the drag.
-        document.body.style.userSelect = "none";
-        onStart?.(additive);
-      }
-      const x = Math.min(x0, ev.clientX);
-      const y = Math.min(y0, ev.clientY);
-      const w = Math.abs(dx);
-      const h = Math.abs(dy);
+    let px = x0;
+    let py = y0;
+    let ticker: ReturnType<typeof setInterval> | undefined;
+
+    const paint = () => {
+      const anchorY = y0 - (scroller.scrollTop - scroll0);
+      const x = Math.min(x0, px);
+      const y = Math.min(anchorY, py);
+      const w = Math.abs(px - x0);
+      const h = Math.abs(py - anchorY);
       setRect({ x, y, w, h });
       const ids: string[] = [];
       container.querySelectorAll<HTMLElement>("[data-pick-id]").forEach((el) => {
@@ -379,14 +396,59 @@ export function useMarquee({
       });
       onSelect(ids, additive);
     };
+
+    // Drag past either edge and the list scrolls itself, faster the further
+    // past you go — without it a selection can only ever be as tall as the
+    // panel, which is the case a long source list most needs.
+    const EDGE = 36;
+    const MAX_SPEED = 18;
+    const autoScroll = () => {
+      if (!started) return;
+      const box = scroller.getBoundingClientRect();
+      let dy = 0;
+      if (py < box.top + EDGE) {
+        dy = -Math.ceil(((box.top + EDGE - py) / EDGE) * MAX_SPEED);
+      } else if (py > box.bottom - EDGE) {
+        dy = Math.ceil(((py - (box.bottom - EDGE)) / EDGE) * MAX_SPEED);
+      }
+      if (dy !== 0) {
+        const before = scroller.scrollTop;
+        scroller.scrollTop += dy;
+        if (scroller.scrollTop !== before) paint();
+      }
+    };
+
+    const move = (ev: PointerEvent) => {
+      px = ev.clientX;
+      py = ev.clientY;
+      if (!started && Math.hypot(px - x0, py - y0) < 4) return;
+      if (!started) {
+        started = true;
+        // Belt and braces against a native text selection: the rows are
+        // already `select-none`, but a drag that begins over selectable
+        // chrome would otherwise paint a text highlight under the band.
+        document.body.style.userSelect = "none";
+        window.getSelection()?.removeAllRanges();
+        onStart?.(additive);
+        // A timer rather than requestAnimationFrame: WKWebView suspends rAF
+        // whenever the window isn't frontmost, and a drag that stops
+        // scrolling because the app lost focus mid-gesture would be a
+        // mystery to debug.
+        ticker = setInterval(autoScroll, 16);
+      }
+      paint();
+    };
+
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      if (ticker) clearInterval(ticker);
       document.body.style.userSelect = "";
       setRect(null);
       if (started) endedAt.current = Date.now();
       else if (onBackground && !additive) onClearBackground?.();
     };
+
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };

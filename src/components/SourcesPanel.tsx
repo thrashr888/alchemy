@@ -632,7 +632,11 @@ export function SourcesPanel() {
       <div
         ref={listRef}
         onPointerDown={marqueeDown}
-        className="flex-1 overflow-y-auto p-2"
+        // select-none: these rows are chrome, not prose. Without it a
+        // rubber-band drag paints a native text highlight across every
+        // title it crosses (the "Copy text" menu items are how text
+        // leaves this app, not selection).
+        className="flex-1 select-none overflow-y-auto p-2"
       >
         {/* Active upload queue */}
         {queue.length > 0 && (
