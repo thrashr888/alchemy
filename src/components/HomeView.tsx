@@ -836,18 +836,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 />
               ) : (
               <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
-                {/* New-notebook tile */}
-                <button
-                  onClick={() => {
-                    setNewTitle("");
-                    setCreating(true);
-                  }}
-                  className="flex min-h-[132px] flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border-strong bg-surface/40 text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
-                >
-                  <Plus className="h-6 w-6" />
-                  <span className="text-body font-medium">New notebook</span>
-                </button>
-
                 {shownNotebooks.map((nb) => (
                   <div
                     key={nb.id}

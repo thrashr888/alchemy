@@ -334,11 +334,24 @@ export function RegistrySection() {
   const open = cards.find((c) => c.id === openCardId) ?? null;
   if (openCardId && open) {
     return (
-      <CardDetail
-        card={open}
-        onBack={() => useStore.setState({ openCardId: null })}
-        onChanged={load}
-      />
+      <>
+        <CardDetail
+          card={open}
+          onBack={() => useStore.setState({ openCardId: null })}
+          onChanged={load}
+        />
+        {/* The header's "New card" button lives in HomeView and flips a
+            store flag; this branch used to return before the modal that
+            listens for it, so on a detail page the button did nothing. */}
+        <NewCardModal
+          open={creating}
+          onClose={() => setCreating(false)}
+          onCreated={(c) => {
+            void load();
+            useStore.setState({ openCardId: c.id });
+          }}
+        />
+      </>
     );
   }
 
@@ -438,13 +451,6 @@ export function RegistrySection() {
             />
           ) : (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
-              <button
-                onClick={() => setCreating(true)}
-                className="flex min-h-[132px] flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border-strong bg-surface/40 text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
-              >
-                <Plus className="h-6 w-6" />
-                <span className="text-body font-medium">New card</span>
-              </button>
               {shown.map((c) => (
                 <CardTile
                   key={c.id}
@@ -770,8 +776,7 @@ function CardTable({
   const { confirm, dialog } = useConfirm();
   return (
     <>
-      {/* No "New card" button here — the Home hero's covers it, and the
-          grid keeps its dashed tile. */}
+      {/* No "New card" button here — the header's covers both views. */}
       <HomeTable
         columns={[
           { key: "name", label: "Name" },
@@ -1344,8 +1349,18 @@ function CardDetail({
       >
         <FileText className="h-3.5 w-3.5 shrink-0 text-subtle-foreground" />
         <button
+          // data-card-action marks this as the row's own surface rather
+          // than a control: it spans most of the row, and the marquee skips
+          // buttons, so without it a drag could only ever start in the thin
+          // gaps around the title and selection looked broken here.
+          data-card-action
           className="min-w-0 flex-1 truncate text-left text-body hover:text-primary"
-          onClick={() => openDoc(a)}
+          onClick={(e) => {
+            // Modifier clicks and the tail of a drag are selection, not
+            // navigation — the row handler above owns them.
+            if (e.metaKey || e.ctrlKey || e.shiftKey || docJustEnded()) return;
+            openDoc(a);
+          }}
           title={s?.title}
         >
           {s?.title ?? "Untitled document"}
