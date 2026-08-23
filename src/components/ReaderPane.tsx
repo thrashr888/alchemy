@@ -33,6 +33,7 @@ import {
   fmtDay,
   folderProvider,
   isWebUrl,
+  scrollMemory,
   shortcutBlocked,
   urlHost,
 } from "@/lib/utils";
@@ -364,8 +365,8 @@ function applyFindHighlights(ranges: Range[], active: number): boolean {
   return true;
 }
 
-/** Per-document scroll positions, remembered for the session. */
-const scrollMemory = new Map<string, number>();
+// Per-document scroll positions ride the persistent scrollMemory in
+// lib/utils, so reading position survives relaunch, not just the session.
 
 /** Restore (once content is ready) and record a container's scroll position.
  *  `restore` false records without jumping (e.g. a citation anchor wins). */
@@ -1965,6 +1966,9 @@ function SourceReader({
   // exists only while finding).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Not while a modal owns the keyboard or the user is typing in a
+      // field — find used to open behind dialogs and steal focus mid-word.
+      if (shortcutBlocked(e)) return;
       if ((e.metaKey || e.ctrlKey) && e.key === "f") {
         e.preventDefault();
         onFindOpen();
@@ -2860,9 +2864,14 @@ function InlineNote({ note }: { note: Note }) {
     timer.current = window.setTimeout(() => flushRef.current(), 1200);
   };
 
-  // Doc switch or leaving the reader saves whatever is pending.
+  // Doc switch or leaving the reader saves whatever is pending — and so
+  // does quitting: pagehide is the last synchronous moment the webview
+  // gives us, and a 1200ms debounce otherwise loses the final keystrokes.
   useEffect(() => {
+    const onPageHide = () => flushRef.current();
+    window.addEventListener("pagehide", onPageHide);
     return () => {
+      window.removeEventListener("pagehide", onPageHide);
       if (timer.current) window.clearTimeout(timer.current);
       flushRef.current();
     };

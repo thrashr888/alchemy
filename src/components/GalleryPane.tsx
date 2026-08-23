@@ -12,7 +12,7 @@ import {
   useConfirm,
   useHoverCard,
 } from "./ui";
-import { cn, isWebUrl, relativeTime, urlHost } from "@/lib/utils";
+import { cn, isWebUrl, relativeTime, scrollMemory, shortcutBlocked, urlHost } from "@/lib/utils";
 import { FilterBar } from "./FilterBar";
 import { AttachToCardModal } from "./RegistrySection";
 import { Favicon, sourceHoverData } from "./SourcesPanel";
@@ -44,9 +44,8 @@ import {
  *  guards across runs, this guards within one. */
 const sweptNotebooks = new Set<string>();
 
-/** Scroll positions per notebook+level, so Reader round-trips and folder
- *  drill-ins come back to the same place. App-run lifetime is the point. */
-const scrollMemory = new Map<string, number>();
+/* Scroll positions per notebook+level ride the persistent scrollMemory in
+ * lib/utils — Reader round-trips AND relaunches come back to the same place. */
 
 /** Resolved card visuals (data URIs) per source id, so reopening the
  *  gallery paints instantly instead of re-running IPC + image fetches.
@@ -202,6 +201,9 @@ export function GalleryPane() {
   // column is a ternary), so neither listener can shadow the other.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Not while a modal owns the keyboard or the user is typing in a
+      // field — find used to open behind dialogs and steal focus mid-word.
+      if (shortcutBlocked(e)) return;
       if ((e.metaKey || e.ctrlKey) && e.key === "f") {
         e.preventDefault();
         setFindOpen(true);

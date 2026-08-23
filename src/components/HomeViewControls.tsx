@@ -8,7 +8,7 @@
    doesn't search inside anything. ⌘K is still the way to search content. */
 import { useEffect, useRef } from "react";
 import { useStore } from "@/lib/store";
-import { cn } from "@/lib/utils";
+import { cn, shortcutBlocked } from "@/lib/utils";
 import { LayoutGrid, List, Search, X } from "lucide-react";
 
 /** Case-insensitive substring over whatever the row shows as its name. */
@@ -44,6 +44,9 @@ export function HomeViewControls({
   // the same key means "find within what I'm looking at" everywhere.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Not while a modal owns the keyboard or the user is typing in a
+      // field — find used to open behind dialogs and steal focus mid-word.
+      if (shortcutBlocked(e)) return;
       if ((e.metaKey || e.ctrlKey) && e.key === "f") {
         e.preventDefault();
         inputRef.current?.focus();

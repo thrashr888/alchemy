@@ -86,6 +86,19 @@ function fuzzyScore(query: string, title: string): number | null {
   return score;
 }
 
+/** Draft @mentions saved beside the draft text (chatDraftMentions:<nb>). */
+function loadDraftMentions(
+  notebookId: string | null,
+): { id: string; kind: "source" | "note"; title: string }[] {
+  if (!notebookId) return [];
+  try {
+    const raw = localStorage.getItem(`chatDraftMentions:${notebookId}`);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
 export function ChatPanel() {
   const currentId = useStore((s) => s.currentId);
   const messages = useStore((s) => s.messages);
@@ -144,10 +157,12 @@ export function ChatPanel() {
   // @ mentions: picked source/note handles for THIS message. The text keeps
   // reading naturally ("what does @Q3 Report say?") while the recorded ids
   // narrow retrieval for the one send. A mention whose "@Title" text is
-  // edited out of the draft is dropped at send time.
+  // edited out of the draft is dropped at send time. Mirrored beside the
+  // draft text — a restored draft with its @Titles but no ids would silently
+  // lose the narrowing on send.
   const [mentions, setMentions] = useState<
     { id: string; kind: "source" | "note"; title: string }[]
-  >([]);
+  >(() => loadDraftMentions(currentId));
   const [mentionSel, setMentionSel] = useState(0);
   const [mentionDismissed, setMentionDismissed] = useState(false);
   const notes = useStore((s) => s.notes);
@@ -169,12 +184,19 @@ export function ChatPanel() {
     setDraft(
       currentId ? (localStorage.getItem(`chatDraft:${currentId}`) ?? "") : "",
     );
+    setMentions(loadDraftMentions(currentId));
   }, [currentId]);
   useEffect(() => {
     if (!currentId || draftNb.current !== currentId) return;
     if (draft) localStorage.setItem(`chatDraft:${currentId}`, draft);
     else localStorage.removeItem(`chatDraft:${currentId}`);
-  }, [draft, currentId]);
+    if (draft && mentions.length > 0)
+      localStorage.setItem(
+        `chatDraftMentions:${currentId}`,
+        JSON.stringify(mentions),
+      );
+    else localStorage.removeItem(`chatDraftMentions:${currentId}`);
+  }, [draft, mentions, currentId]);
 
   // A failed send hands its text back — restore it into the composer so the
   // user can retry without retyping.

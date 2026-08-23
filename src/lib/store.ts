@@ -534,6 +534,8 @@ export const useStore = create<AppState>((set, get) => {
           nb: string | null;
           mode: "chat" | "reader" | "ledger" | "gallery";
           doc?: ReaderDoc;
+          readerHistory?: ReaderDoc[];
+          readerIndex?: number;
           section?: "notebooks" | "registry";
           card?: string | null;
         } | null = null;
@@ -551,9 +553,21 @@ export const useStore = create<AppState>((set, get) => {
           view === null ? localStorage.getItem("lastNotebookId") : view.nb;
         if (last && notebooks.some((n) => n.id === last)) {
           await get().selectNotebook(last);
+          // Restore the reader's whole back/forward stack, not just the
+          // open page — ⌘[ works across a relaunch.
+          const hist = (view?.readerHistory ?? []).filter(
+            (d) => !!d?.type && !!d?.id,
+          );
+          if (hist.length > 0) {
+            const index = Math.min(
+              Math.max(view?.readerIndex ?? hist.length - 1, 0),
+              hist.length - 1,
+            );
+            set({ reader: { open: view?.mode === "reader", history: hist, index } });
+          }
           if (view?.mode === "ledger") set({ ledgerOpen: true });
           else if (view?.mode === "gallery") set({ galleryOpen: true });
-          else if (view?.mode === "reader" && view.doc)
+          else if (view?.mode === "reader" && hist.length === 0 && view.doc)
             get().openInReader(view.doc);
         }
       }
@@ -2456,6 +2470,13 @@ if (getCurrentWebview().label === "main") {
               : "chat",
         // Highlight is a one-time citation jump, not a place — drop it.
         doc: doc && { type: doc.type, id: doc.id },
+        // The whole back/forward stack (doc refs only), so ⌘[ still works
+        // after a relaunch — not just the page you were on.
+        readerHistory: s.reader.history.map((d) => ({
+          type: d.type,
+          id: d.id,
+        })),
+        readerIndex: s.reader.index,
         // Home is a place too: the Registry and the card you had open are
         // as much "where you were" as a notebook's center mode.
         section: s.homeSection,

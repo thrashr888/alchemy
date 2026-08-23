@@ -212,3 +212,54 @@ export function activeParagraph(prev: string, next: string): string {
   }
   return "";
 }
+
+// ---- Persistent scroll memory ("state survives", DESIGN.md) ----------------
+
+type ScrollEntry = { v: number; at: number };
+const SCROLL_LS_KEY = "scrollMemory:v1";
+/** Most-recent keys kept on disk; older reading positions age out. */
+const SCROLL_CAP = 200;
+
+function loadScrollMemory(): Map<string, ScrollEntry> {
+  try {
+    const raw = localStorage.getItem(SCROLL_LS_KEY);
+    return raw
+      ? new Map(Object.entries(JSON.parse(raw) as Record<string, ScrollEntry>))
+      : new Map();
+  } catch {
+    return new Map();
+  }
+}
+
+const scrollMap = loadScrollMemory();
+let scrollFlush: number | null = null;
+
+function persistScrollMemory() {
+  if (scrollFlush !== null) return;
+  scrollFlush = window.setTimeout(() => {
+    scrollFlush = null;
+    try {
+      const entries = [...scrollMap.entries()]
+        .sort((a, b) => a[1].at - b[1].at)
+        .slice(-SCROLL_CAP);
+      localStorage.setItem(
+        SCROLL_LS_KEY,
+        JSON.stringify(Object.fromEntries(entries)),
+      );
+    } catch {
+      /* storage full or unavailable — scroll memory is best-effort */
+    }
+  }, 500);
+}
+
+/** Reader/gallery scroll positions, persisted across relaunch (they used to
+ *  live in per-module in-memory Maps and reset with the app). */
+export const scrollMemory = {
+  get(key: string): number | undefined {
+    return scrollMap.get(key)?.v;
+  },
+  set(key: string, v: number): void {
+    scrollMap.set(key, { v, at: Date.now() });
+    persistScrollMemory();
+  },
+};
