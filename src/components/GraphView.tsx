@@ -622,6 +622,18 @@ export function GraphView() {
               const isNote = node.kind === "note";
               const labelled =
                 lit && (visibleLabels.has(p.id) || hovered === p.id);
+              const openNode = () => {
+                openedFromGraph = {
+                  notebook: currentId ?? "",
+                  id: p.id,
+                  focus,
+                  hops,
+                };
+                openInReader({
+                  type: isNote ? "note" : "source",
+                  id: p.id,
+                });
+              };
               return (
                 <g
                   key={p.id}
@@ -629,6 +641,19 @@ export function GraphView() {
                   transform={`translate(${p.x} ${p.y})`}
                   opacity={lit ? 1 : 0.22}
                   className="cursor-pointer"
+                  // Keyboard path: Tab walks the lit nodes (focus lights the
+                  // label like hover), Enter opens the document.
+                  tabIndex={lit ? 0 : -1}
+                  role="button"
+                  aria-label={`Open ${node.title}`}
+                  onFocus={() => setHovered(p.id)}
+                  onBlur={() => setHovered(null)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      openNode();
+                    }
+                  }}
                   onMouseEnter={(e) => {
                     setHovered(p.id);
                     const data = cardFor(p.id, node.kind);
@@ -647,16 +672,7 @@ export function GraphView() {
                       setFocus(p.id === focus ? null : p.id);
                       return;
                     }
-                    openedFromGraph = {
-                      notebook: currentId ?? "",
-                      id: p.id,
-                      focus,
-                      hops,
-                    };
-                    openInReader({
-                      type: isNote ? "note" : "source",
-                      id: p.id,
-                    });
+                    openNode();
                   }}
                 >
                   {/* Notes are hollow, sources solid — the same distinction

@@ -2166,11 +2166,23 @@ function SourceReader({
 
   // Selection → ask toolbar (window-level mouseup so releasing outside the
   // container still raises it; the handler validates the selection home).
+  // selectionchange rides along, debounced, for keyboard selection —
+  // shift+arrows never fires a mouseup.
   const updateSelectionRef = useRef<() => void>(() => {});
   useEffect(() => {
     const onUp = () => updateSelectionRef.current();
+    let timer: number | null = null;
+    const onChange = () => {
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => updateSelectionRef.current(), 200);
+    };
     window.addEventListener("mouseup", onUp);
-    return () => window.removeEventListener("mouseup", onUp);
+    document.addEventListener("selectionchange", onChange);
+    return () => {
+      if (timer) window.clearTimeout(timer);
+      window.removeEventListener("mouseup", onUp);
+      document.removeEventListener("selectionchange", onChange);
+    };
   }, []);
 
   function updateSelection() {
@@ -3344,6 +3356,23 @@ function RepoView({ source, map }: { source: Source; map: string | null }) {
       setTierBusy(false);
     }
   }
+
+  // Keyboard selection (shift+arrows) never fires the pane's onMouseUp —
+  // follow selectionchange too, debounced so drags don't churn the toolbar.
+  const captureSelectionRef = useRef<() => void>(() => {});
+  captureSelectionRef.current = captureSelection;
+  useEffect(() => {
+    let timer: number | null = null;
+    const onChange = () => {
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => captureSelectionRef.current(), 200);
+    };
+    document.addEventListener("selectionchange", onChange);
+    return () => {
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("selectionchange", onChange);
+    };
+  }, []);
 
   function captureSelection() {
     const container = paneRef.current;

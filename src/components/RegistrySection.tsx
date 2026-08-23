@@ -828,7 +828,15 @@ function CardTable({
             <tr
               key={c.id}
               data-pick-id={c.id}
+              tabIndex={0}
               onClick={(e) => onRowClick(e, c.id)}
+              onKeyDown={(e) => {
+                // Keyboard path: Tab reaches the row, Enter opens the card.
+                if (e.key === "Enter" && e.target === e.currentTarget) {
+                  e.preventDefault();
+                  useStore.setState({ openCardId: c.id });
+                }
+              }}
               className={cn(
                 "group cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2",
                 pickedIds.has(c.id) && "bg-primary/10 hover:bg-primary/15",
@@ -1611,7 +1619,7 @@ function FactRow({
       <span className="group flex items-center gap-2 text-foreground">
         <span className="min-w-0 flex-1">{fact.value}</span>
         <button
-          className="shrink-0 text-subtle-foreground opacity-0 transition hover:text-destructive group-hover:opacity-100"
+          className="shrink-0 text-subtle-foreground opacity-0 transition hover:text-destructive group-hover:opacity-100 group-focus-within:opacity-100"
           onClick={onRemove}
           title="Remove this fact"
         >

@@ -75,6 +75,7 @@ function NotebookTable({
   rowMenu,
   pickedIds,
   onRowClick,
+  onRowOpen,
 }: {
   notebooks: Notebook[];
   onNew: () => void;
@@ -84,6 +85,9 @@ function NotebookTable({
   rowMenu: (nb: Notebook) => React.ReactNode;
   pickedIds: Set<string>;
   onRowClick: (e: React.MouseEvent, nb: Notebook) => void;
+  /** Keyboard path: Tab reaches each row, Enter opens it (bypassing the
+   *  pointer-only selection logic in onRowClick). */
+  onRowOpen: (nb: Notebook) => void;
 }) {
   return (
     <>
@@ -101,7 +105,14 @@ function NotebookTable({
           <tr
             key={nb.id}
             data-pick-id={nb.id}
+            tabIndex={0}
             onClick={(e) => onRowClick(e, nb)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && e.target === e.currentTarget) {
+                e.preventDefault();
+                onRowOpen(nb);
+              }
+            }}
             className={cn(
               "group cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2",
               pickedIds.has(nb.id) && "bg-primary/10 hover:bg-primary/15",
@@ -824,6 +835,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                     if (justEnded()) return;
                     if (!pick.handleClick(e, nb.id)) open(nb.id);
                   }}
+                  onRowOpen={(nb) => open(nb.id)}
                   rowMenu={(nb) => (
                     <RowMenu
                       label={`Options for ${nb.title}`}
@@ -1086,16 +1098,31 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                     role="separator"
                     aria-orientation="horizontal"
                     aria-label="Resize the brief"
+                    tabIndex={0}
                     onPointerDown={onSplitDrag}
                     onDoubleClick={() => {
                       setBriefSplit(40);
                       localStorage.setItem("homeBriefSplit", "40");
                     }}
-                    className="group/resize relative h-2 shrink-0 cursor-row-resize rounded transition-colors hover:bg-ring/30 active:bg-ring/40"
+                    onKeyDown={(e) => {
+                      // Arrow keys nudge the split — the same keyboard
+                      // affordance ResizeHandle gives the vertical edges.
+                      const delta =
+                        e.key === "ArrowDown" ? 2 : e.key === "ArrowUp" ? -2 : 0;
+                      if (!delta) return;
+                      e.preventDefault();
+                      const pct = clampSplit(briefSplit + delta);
+                      setBriefSplit(pct);
+                      localStorage.setItem(
+                        "homeBriefSplit",
+                        String(Math.round(pct)),
+                      );
+                    }}
+                    className="group/resize relative h-2 shrink-0 cursor-row-resize rounded transition-colors hover:bg-ring/30 active:bg-ring/40 focus-visible:bg-ring/30"
                   >
                     <span
                       aria-hidden
-                      className="absolute top-1/2 left-1/2 flex -translate-x-1/2 -translate-y-1/2 gap-0.5 opacity-40 transition-opacity group-hover/resize:opacity-100"
+                      className="absolute top-1/2 left-1/2 flex -translate-x-1/2 -translate-y-1/2 gap-0.5 opacity-40 transition-opacity group-hover/resize:opacity-100 group-focus-visible/resize:opacity-100"
                     >
                       <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
                       <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
