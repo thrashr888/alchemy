@@ -4013,6 +4013,178 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The same guarantee on a table that was MIGRATED into those columns
+    /// rather than created with them — which is every existing install.
+    /// Lance keeps `add_columns` columns in their own fragment, so an append
+    /// carrying our own schema can land the row while leaving the evolved
+    /// columns at their defaults. That silently zeroed `fetched_at` on every
+    /// newly added source in a migrated store, making the hygiene sweep
+    /// treat brand-new sources as ancient and re-fetch them immediately.
+    #[tokio::test]
+    async fn insert_keeps_fetch_stamp_on_a_migrated_table() {
+        let dir = std::env::temp_dir().join(format!("nbl-migrated-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+
+        // Recreate the pre-hygiene table shape, then migrate it exactly the
+        // way a real install upgrades.
+        db.conn.drop_table(T_SOURCES, &[]).await.expect("drop");
+        let old: SchemaRef = Arc::new(Schema::new(
+            sources_schema()
+                .fields()
+                .iter()
+                .filter(|f| f.name() != "fetched_at" && f.name() != "fetch_failures")
+                .map(|f| f.as_ref().clone())
+                .collect::<Vec<_>>(),
+        ));
+        db.conn
+            .create_empty_table(T_SOURCES, old)
+            .execute()
+            .await
+            .expect("create pre-hygiene table");
+        db.migrate_source_fetch().await.expect("migrate");
+
+        let src = Source {
+            id: "mig-1".into(),
+            notebook_id: "nb-1".into(),
+            title: "Fresh on a migrated table".into(),
+            source_type: "url".into(),
+            url: "https://example.com/fresh".into(),
+            content: "body".into(),
+            char_count: 4,
+            chunk_count: 0,
+            created_at: 111,
+            status: "ready".into(),
+            error: String::new(),
+            parent_id: String::new(),
+            mtime: 0,
+            author: String::new(),
+            image_url: String::new(),
+            tags: String::new(),
+            note: String::new(),
+            fetched_at: 1_700_000_000_000,
+            fetch_failures: 2,
+        };
+        db.insert_source(&src, &[], &[]).await.expect("insert");
+
+        let got = db.get_source("mig-1").await.expect("get").expect("row");
+        assert_eq!(
+            got.fetched_at, 1_700_000_000_000,
+            "fetched_at must survive an append to a migrated table"
+        );
+        assert_eq!(got.fetch_failures, 2, "fetch_failures must survive");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A narrow column update must not disturb the columns it doesn't name —
+    /// on a MIGRATED table, where the hygiene columns live in their own
+    /// fragment. Every status flip, retitle, and mtime bump goes through one
+    /// of these updates, so if they reset `fetched_at` the sweep would treat
+    /// every touched source as ancient and re-fetch it forever.
+    #[tokio::test]
+    async fn column_updates_leave_the_fetch_stamp_alone() {
+        let dir = std::env::temp_dir().join(format!("nbl-updstamp-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+        db.conn.drop_table(T_SOURCES, &[]).await.expect("drop");
+        let old: SchemaRef = Arc::new(Schema::new(
+            sources_schema()
+                .fields()
+                .iter()
+                .filter(|f| f.name() != "fetched_at" && f.name() != "fetch_failures")
+                .map(|f| f.as_ref().clone())
+                .collect::<Vec<_>>(),
+        ));
+        db.conn
+            .create_empty_table(T_SOURCES, old)
+            .execute()
+            .await
+            .expect("create pre-hygiene table");
+        db.migrate_source_fetch().await.expect("migrate");
+
+        let src = Source {
+            id: "upd-1".into(),
+            notebook_id: "nb-1".into(),
+            title: "Touched".into(),
+            source_type: "url".into(),
+            url: "https://example.com/touched".into(),
+            content: "body".into(),
+            char_count: 4,
+            chunk_count: 0,
+            created_at: 111,
+            status: "processing".into(),
+            error: String::new(),
+            parent_id: String::new(),
+            mtime: 0,
+            author: String::new(),
+            image_url: String::new(),
+            tags: String::new(),
+            note: String::new(),
+            fetched_at: 1_700_000_000_000,
+            fetch_failures: 0,
+        };
+        db.insert_source(&src, &[], &[]).await.expect("insert");
+
+        db.finish_processing("upd-1", 3, "ready", "")
+            .await
+            .expect("finish");
+        let got = db.get_source("upd-1").await.expect("get").expect("row");
+        assert_eq!(got.status, "ready");
+        assert_eq!(
+            got.fetched_at, 1_700_000_000_000,
+            "finish_processing must not reset fetched_at"
+        );
+
+        db.set_source_mtime("upd-1", 42).await.expect("mtime");
+        db.set_source_title("upd-1", "Retitled")
+            .await
+            .expect("title");
+        let got = db.get_source("upd-1").await.expect("get").expect("row");
+        assert_eq!(got.mtime, 42);
+        assert_eq!(got.title, "Retitled");
+        assert_eq!(
+            got.fetched_at, 1_700_000_000_000,
+            "narrow updates must not reset fetched_at"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A freshly inserted source keeps its freshness stamp
+    /// (docs/RFC-source-hygiene.md). The insert path goes through
+    /// `source_batch` + `add_batch`, which rebuilds batches to match the live
+    /// table — a column dropped there would silently zero every new source's
+    /// `fetched_at` and make the hygiene sweep treat it as ancient.
+    #[tokio::test]
+    async fn insert_source_keeps_its_fetch_stamp() {
+        let dir = std::env::temp_dir().join(format!("nbl-fetchstamp-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+        let src = Source {
+            id: "fs-1".into(),
+            notebook_id: "nb-1".into(),
+            title: "Fresh".into(),
+            source_type: "url".into(),
+            url: "https://example.com/fresh".into(),
+            content: "body".into(),
+            char_count: 4,
+            chunk_count: 0,
+            created_at: 111,
+            status: "ready".into(),
+            error: String::new(),
+            parent_id: String::new(),
+            mtime: 0,
+            author: String::new(),
+            image_url: String::new(),
+            tags: String::new(),
+            note: String::new(),
+            fetched_at: 1_700_000_000_000,
+            fetch_failures: 2,
+        };
+        db.insert_source(&src, &[], &[]).await.expect("insert");
+
+        let got = db.get_source("fs-1").await.expect("get").expect("row");
+        assert_eq!(got.fetched_at, 1_700_000_000_000, "fetched_at must survive");
+        assert_eq!(got.fetch_failures, 2, "fetch_failures must survive");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Tags and notes round-trip through their update helpers, and clearing
     /// the annotation deletes its `snote:` chunk rows.
     #[tokio::test]

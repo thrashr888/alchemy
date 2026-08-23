@@ -91,6 +91,22 @@ fn is_folder_like(source: &Source) -> bool {
     )
 }
 
+/// When this source was last known-fresh. A zero stamp means "nobody
+/// recorded one", not "the epoch": rows written by a binary that predates
+/// these columns come back zeroed (the shared store fills unknown columns
+/// with defaults — see `Db::add_batch`), and any future writer that misses
+/// the field would do the same. Reading that as maximally stale would make
+/// the sweep re-fetch a source added minutes ago and show "20688 days ago"
+/// in the review. Fall back to the import time, which is the same floor the
+/// migration backfills with.
+fn effective_fetched_at(source: &Source) -> i64 {
+    if source.fetched_at > 0 {
+        source.fetched_at
+    } else {
+        source.created_at
+    }
+}
+
 /// Bucket a notebook's sources. Pure classification over the rows (plus
 /// cheap fs stats for loose files) — no network, no mutation; callers decide
 /// what to do with the result. One issue per source, most actionable bucket
@@ -153,8 +169,9 @@ pub fn classify(sources: &[Source], cadence_days: u32, now: i64) -> Vec<HygieneI
             issues.push(issue("husk", "failed import with no content".into()));
             continue;
         }
-        if s.source_type == "url" && cadence_ms > 0 && now - s.fetched_at > cadence_ms {
-            let days = (now - s.fetched_at) / 86_400_000;
+        let fetched_at = effective_fetched_at(s);
+        if s.source_type == "url" && cadence_ms > 0 && now - fetched_at > cadence_ms {
+            let days = (now - fetched_at) / 86_400_000;
             issues.push(issue("stale", format!("last fetched {days} days ago")));
         }
     }
@@ -195,7 +212,7 @@ async fn run_sweep(app: &AppHandle) -> anyhow::Result<()> {
     let archived = state.db.archived_notebook_ids().await.unwrap_or_default();
     let mut urls = state.db.all_url_sources().await?;
     // Oldest fetch first: the budget goes to whatever has waited longest.
-    urls.sort_by_key(|s| s.fetched_at);
+    urls.sort_by_key(effective_fetched_at);
 
     let mut refreshed: HashMap<String, u32> = HashMap::new();
     let mut budget = SWEEP_BUDGET;
@@ -206,7 +223,7 @@ async fn run_sweep(app: &AppHandle) -> anyhow::Result<()> {
         if archived.contains(&src.notebook_id)
             || src.status == "processing"
             || src.fetch_failures >= UNREACHABLE_AFTER
-            || now - src.fetched_at < cadence_ms
+            || now - effective_fetched_at(src) < cadence_ms
             || !attempt_due(&src.id)
         {
             continue;
@@ -288,7 +305,11 @@ async fn refresh_stale_url(state: &AppState, src: &Source) -> anyhow::Result<boo
             } else if content_collapsed(&existing.content, &extracted.text) {
                 state
                     .db
-                    .set_source_fetch(&src.id, existing.fetched_at, existing.fetch_failures + 1)
+                    .set_source_fetch(
+                        &src.id,
+                        effective_fetched_at(&existing),
+                        existing.fetch_failures + 1,
+                    )
                     .await?;
                 anyhow::bail!(
                     "page came back gutted ({} chars, was {}) — keeping the stored copy",
@@ -303,7 +324,11 @@ async fn refresh_stale_url(state: &AppState, src: &Source) -> anyhow::Result<boo
         Err(err) => {
             state
                 .db
-                .set_source_fetch(&src.id, existing.fetched_at, existing.fetch_failures + 1)
+                .set_source_fetch(
+                    &src.id,
+                    effective_fetched_at(&existing),
+                    existing.fetch_failures + 1,
+                )
                 .await?;
             Err(err)
         }
@@ -362,6 +387,28 @@ mod tests {
         let issues = classify(&[fresh, old], 30, now);
         assert_eq!(buckets(&issues), vec![("old", "stale")]);
         assert!(issues[0].detail.contains("45 days"), "{}", issues[0].detail);
+    }
+
+    /// A zero stamp means "unrecorded", not "1970". Rows written by a binary
+    /// that predates these columns come back zeroed, and calling such a
+    /// source 20,000 days stale would re-fetch it the moment it was added.
+    #[test]
+    fn a_zero_stamp_falls_back_to_the_import_time() {
+        let now = 100 * DAY;
+        let mut just_added = src("just-added", "url");
+        just_added.url = "https://example.com/new".into();
+        just_added.created_at = now - DAY; // imported yesterday
+        just_added.fetched_at = 0; // written by an older binary
+        assert!(
+            classify(&[just_added.clone()], 30, now).is_empty(),
+            "a source imported yesterday is not stale"
+        );
+
+        // Old enough by its import time, though, and it does flag.
+        just_added.created_at = now - 90 * DAY;
+        let issues = classify(&[just_added], 30, now);
+        assert_eq!(buckets(&issues), vec![("just-added", "stale")]);
+        assert!(issues[0].detail.contains("90 days"), "{}", issues[0].detail);
     }
 
     /// Repeated background failures outrank staleness — the source stops
