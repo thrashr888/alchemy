@@ -169,6 +169,7 @@ impl AppState {
                     0.0
                 },
                 samples: a.samples,
+                ttft_samples: a.ttft_samples,
                 last_ttft_ms: a.last_ttft_ms,
                 avg_ttft_ms: if a.ttft_samples > 0 {
                     a.total_ttft_ms as f64 / a.ttft_samples as f64

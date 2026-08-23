@@ -120,45 +120,73 @@ function fmtMs(ms: number): string {
   return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
-/** Chat responsiveness per model, quickest first — average time to first
- *  token plus throughput, from the running stats send_message records. */
-function SpeedList({
-  rows,
-}: {
-  rows: { name: string; avgTtftMs: number; avgTokensPerSec: number }[];
-}) {
+/** The fastest-models ranking: which model answers soonest, ordered.
+ *
+ *  Time to first token is the metric because it is the wait the user
+ *  actually feels — throughput rides along as a secondary number, since a
+ *  model can be quick to start and slow to finish. Bars are wait time
+ *  (shorter = faster), so the ranking reads as a descending staircase, and
+ *  each row shows how many runs it averages: a model measured once has no
+ *  business silently outranking one measured fifty times. */
+function SpeedRanking({ rows }: { rows: ModelStat[] }) {
   if (rows.length === 0) return null;
+  const slowest = Math.max(...rows.map((r) => r.avgTtftMs));
   return (
     <div className="min-w-0">
-      <div className="pb-1.5 text-caption font-medium text-muted-foreground">
-        Time to first token
+      <div className="flex items-baseline justify-between gap-3 pb-1.5">
+        <span className="text-caption font-medium text-muted-foreground">
+          Fastest models
+        </span>
+        <span className="text-micro text-subtle-foreground">
+          average time to first token
+        </span>
       </div>
       <div className="flex flex-col gap-1">
-        {rows.map((r, i) => (
-          <div
-            key={r.name}
-            className="flex items-baseline justify-between gap-3 text-body"
-          >
-            <span className="flex min-w-0 items-baseline gap-1.5 truncate">
-              {i === 0 && (
-                <Zap
-                  className="h-3 w-3 shrink-0 self-center text-success"
-                  aria-label="Fastest"
+        {rows.map((r, i) => {
+          const lead = i === 0;
+          return (
+            <div
+              key={r.name}
+              className="grid grid-cols-[1rem_minmax(0,1fr)_5rem_auto] items-center gap-2.5 text-body"
+            >
+              <span className="text-caption tabular-nums text-subtle-foreground">
+                {i + 1}
+              </span>
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate">{r.name}</span>
+                {lead && (
+                  <Zap
+                    className="h-3 w-3 shrink-0 text-success"
+                    aria-label="Fastest"
+                  />
+                )}
+              </span>
+              {/* Wait-time bar, scaled to the slowest model in the list. */}
+              <span
+                className="h-1 overflow-hidden rounded-full bg-muted-foreground/15"
+                aria-hidden
+              >
+                <span
+                  className={cn(
+                    "block h-full rounded-full",
+                    lead ? "bg-success" : "bg-muted-foreground/50",
+                  )}
+                  style={{
+                    width: `${slowest > 0 ? Math.max((r.avgTtftMs / slowest) * 100, 4) : 100}%`,
+                  }}
                 />
-              )}
-              <span className="truncate">{r.name}</span>
-            </span>
-            <span className="shrink-0 tabular-nums text-muted-foreground">
-              {fmtMs(r.avgTtftMs)}
-              {r.avgTokensPerSec > 0 && (
+              </span>
+              <span className="shrink-0 tabular-nums text-caption text-muted-foreground">
+                {fmtMs(r.avgTtftMs)}
                 <span className="text-subtle-foreground">
-                  {" "}
-                  · {Math.round(r.avgTokensPerSec)} tok/s
+                  {r.avgTokensPerSec > 0 &&
+                    ` \u00b7 ${Math.round(r.avgTokensPerSec)} tok/s`}
+                  {` \u00b7 ${r.ttftSamples} run${r.ttftSamples === 1 ? "" : "s"}`}
                 </span>
-              )}
-            </span>
-          </div>
-        ))}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -482,8 +510,9 @@ export function ActivityTab() {
       <div className="grid grid-cols-2 gap-5">
         <CountList title="Most used models" rows={stats.models} />
         <CountList title="Most active notebooks" rows={stats.notebooks} />
-        <SpeedList rows={speed} />
       </div>
+
+      <SpeedRanking rows={speed} />
 
       {stats.sourceTypes.length > 0 && (
         <div>

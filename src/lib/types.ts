@@ -362,6 +362,9 @@ export interface ModelStat {
   lastTokensPerSec: number;
   avgTokensPerSec: number;
   samples: number;
+  /** How many chats contributed a TTFT measurement (its own count —
+   *  throughput and TTFT are recorded separately). */
+  ttftSamples: number;
   /** Chat time-to-first-token, wall-clock ms (0 = never measured). */
   lastTtftMs: number;
   avgTtftMs: number;
