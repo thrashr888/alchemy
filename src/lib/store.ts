@@ -370,6 +370,7 @@ export const useStore = create<AppState>((set, get) => {
     reading: loadReadingPrefs(),
 
     sending: false,
+    sendingFor: null,
     streamingText: "",
     steps: [],
     waiting: "",
@@ -379,6 +380,7 @@ export const useStore = create<AppState>((set, get) => {
     summary: "",
     summaryLoading: false,
     generatingKind: null,
+    generatingFor: null,
     generatingTemplateId: null,
     ingestQueue: [],
     migration: null,
@@ -595,6 +597,30 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     bindGlobalListeners: () => {
+      // Chat streaming tokens + agent progress steps. Store-level, not in
+      // ChatPanel: the stream keeps running when the user navigates to Home
+      // or another notebook (where ChatPanel is unmounted), and returning
+      // mid-stream must show the whole accumulated text, not a gap. Events
+      // broadcast to every window — only the one with a send in flight
+      // accumulates them.
+      void listen<{ content: string }>("chat://token", (e) => {
+        if (get().sending) get().appendToken(e.payload.content);
+      });
+      void listen<{ label: string; transient: boolean }>("chat://step", (e) => {
+        if (get().sending) get().appendStep(e.payload.label, e.payload.transient);
+      });
+      // Verify-and-repair swaps a revised answer under the same message id
+      // (backend spawn_answer_verify) — apply only when the message is in
+      // this window's transcript.
+      void listen<{ id: string; content: string }>("chat://revised", (e) => {
+        const { messages } = get();
+        if (!messages.some((m) => m.id === e.payload.id)) return;
+        set({
+          messages: messages.map((m) =>
+            m.id === e.payload.id ? { ...m, content: e.payload.content } : m,
+          ),
+        });
+      });
       // Built-in embedder first-use download progress (one-time ~30 MB).
       void listen<{ label: string; done: number; total: number }>(
         "embedder://progress",
@@ -1055,9 +1081,6 @@ export const useStore = create<AppState>((set, get) => {
         messagesLoadingOlder: false,
         notes: [],
         reportSchedules: [],
-        streamingText: "",
-        steps: [],
-        waiting: "",
         followups: [],
         chatConfig,
         summary: localStorage.getItem(`summary:${id}`) ?? "",
@@ -1742,6 +1765,7 @@ export const useStore = create<AppState>((set, get) => {
       set({
         messages: [...get().messages, optimistic],
         sending: true,
+        sendingFor: id,
         streamingText: "",
         steps: [],
         waiting: "",
@@ -1797,6 +1821,16 @@ export const useStore = create<AppState>((set, get) => {
           });
           playDone();
           void get().loadFollowups();
+        } else {
+          // Finished while the user was elsewhere — the answer is persisted;
+          // the toast is the way back (selectNotebook re-lists on arrival).
+          const title = get().notebooks.find((n) => n.id === id)?.title ?? "notebook";
+          playDone();
+          get().pushToast(
+            "success",
+            `Answer ready in “${title}” — click to open`,
+            () => void get().selectNotebook(id),
+          );
         }
         await get().refreshNotebooks();
       } catch (e) {
@@ -1812,7 +1846,13 @@ export const useStore = create<AppState>((set, get) => {
       } finally {
         // sending/steps are global in-flight flags — always clear them, even if
         // the user switched notebooks while the request ran.
-        set({ sending: false, streamingText: "", steps: [], waiting: "" });
+        set({
+          sending: false,
+          sendingFor: null,
+          streamingText: "",
+          steps: [],
+          waiting: "",
+        });
         void get().refreshModelStats();
       }
     },
@@ -2069,7 +2109,12 @@ export const useStore = create<AppState>((set, get) => {
     generateArtifact: async (kind, prompt) => {
       const id = get().currentId;
       if (!id || get().generatingKind) return;
-      set({ generatingKind: kind, artifactStreamText: "", error: null });
+      set({
+        generatingKind: kind,
+        generatingFor: id,
+        artifactStreamText: "",
+        error: null,
+      });
       try {
         const note = await api.generateArtifact(
           id,
@@ -2083,12 +2128,26 @@ export const useStore = create<AppState>((set, get) => {
         // upserted this note already, and an unfiltered prepend rendered the
         // same note twice (deleting "one" then removed both cards — they were
         // one row shown twice).
-        set({
-          notes: [note, ...get().notes.filter((n) => n.id !== note.id)],
-          justCreatedNoteId: note.id,
-        });
+        // The user may have navigated away while it generated — never write
+        // another notebook's note into the open one. The note is persisted;
+        // the toast is the way back.
+        if (get().currentId === id) {
+          set({
+            notes: [note, ...get().notes.filter((n) => n.id !== note.id)],
+            justCreatedNoteId: note.id,
+          });
+          get().pushToast("success", `${note.title} ready`);
+        } else {
+          get().pushToast(
+            "success",
+            `${note.title} ready — click to open`,
+            () =>
+              void get()
+                .selectNotebook(id)
+                .then(() => set({ justCreatedNoteId: note.id })),
+          );
+        }
         void get().refreshModelStats();
-        get().pushToast("success", `${note.title} ready`);
         playDone();
         void notify("Document ready", `“${note.title}” finished generating.`);
       } catch (e) {
@@ -2100,6 +2159,7 @@ export const useStore = create<AppState>((set, get) => {
       } finally {
         set({
           generatingKind: null,
+          generatingFor: null,
           artifactStreamText: "",
           audioProgress: null,
         });
@@ -2111,6 +2171,7 @@ export const useStore = create<AppState>((set, get) => {
       if (!id || get().generatingKind) return;
       set({
         generatingKind: "template",
+        generatingFor: id,
         generatingTemplateId: t.id,
         artifactStreamText: "",
         error: null,
@@ -2120,12 +2181,23 @@ export const useStore = create<AppState>((set, get) => {
         // The backend titles unknown kinds "Report" — rename to the template's name.
         await api.updateNote(note.id, t.name, note.content);
         const titled = { ...note, title: t.name };
-        set({
-          notes: [titled, ...get().notes.filter((n) => n.id !== note.id)],
-          justCreatedNoteId: note.id,
-        });
+        if (get().currentId === id) {
+          set({
+            notes: [titled, ...get().notes.filter((n) => n.id !== note.id)],
+            justCreatedNoteId: note.id,
+          });
+          get().pushToast("success", `${t.name} ready`);
+        } else {
+          get().pushToast(
+            "success",
+            `${t.name} ready — click to open`,
+            () =>
+              void get()
+                .selectNotebook(id)
+                .then(() => set({ justCreatedNoteId: note.id })),
+          );
+        }
         void get().refreshModelStats();
-        get().pushToast("success", `${t.name} ready`);
         playDone();
         void notify("Document ready", `“${t.name}” finished generating.`);
       } catch (e) {
@@ -2136,6 +2208,7 @@ export const useStore = create<AppState>((set, get) => {
       } finally {
         set({
           generatingKind: null,
+          generatingFor: null,
           generatingTemplateId: null,
           artifactStreamText: "",
           audioProgress: null,

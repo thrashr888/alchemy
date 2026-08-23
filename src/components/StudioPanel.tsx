@@ -130,8 +130,16 @@ export function StudioPanel() {
   const currentId = useStore((s) => s.currentId);
   const sources = useStore((s) => s.sources);
   const notes = useStore((s) => s.notes);
+  // A generation keeps running when the user navigates elsewhere; its live
+  // preview belongs to ONE notebook. Other notebooks keep the tiles disabled
+  // (the backend runs one generation per window) but paint no stream.
   const generatingKind = useStore((s) => s.generatingKind);
-  const artifactStreamText = useStore((s) => s.artifactStreamText);
+  const generatingHere = useStore(
+    (s) => s.generatingFor === null || s.generatingFor === s.currentId,
+  );
+  const artifactStreamText = useStore((s) =>
+    s.generatingFor === s.currentId ? s.artifactStreamText : "",
+  );
   const audioProgress = useStore((s) => s.audioProgress);
   const kokoroReady = useStore((s) => !!s.kokoroStatus?.verified);
   const generate = useStore((s) => s.generateArtifact);
@@ -367,7 +375,12 @@ export function StudioPanel() {
         <div className="p-3">
           <div className="flex items-center gap-2 text-micro font-medium uppercase tracking-wide text-subtle-foreground">
             <span>Generate</span>
-            {generatingKind && (
+            {generatingKind && !generatingHere && (
+              <span className="text-badge normal-case text-subtle-foreground">
+                generating in another notebook…
+              </span>
+            )}
+            {generatingKind && generatingHere && (
               <button
                 onClick={() => cancelGeneration("artifact")}
                 className="flex items-center gap-1 rounded px-1.5 py-0.5 text-destructive hover:bg-destructive/10"
@@ -377,7 +390,7 @@ export function StudioPanel() {
                 Stop
               </button>
             )}
-            {audioProgress && (
+            {audioProgress && generatingHere && (
               <span className="text-badge normal-case tabular-nums text-subtle-foreground">
                 voicing {audioProgress.done}/{audioProgress.total}
               </span>
@@ -426,7 +439,7 @@ export function StudioPanel() {
                     <GenTile
                       key={a.kind}
                       icon={
-                        generatingKind === a.kind ? (
+                        generatingKind === a.kind && generatingHere ? (
                           <Spinner className="h-3.5 w-3.5" />
                         ) : (
                           a.icon

@@ -125,6 +125,10 @@ export interface AppState {
   reading: ReadingPrefs;
 
   sending: boolean;
+  /** Notebook the in-flight send belongs to. Streams keep running when the
+   *  user navigates away — this is what stops their tokens painting into
+   *  whichever notebook is open instead. */
+  sendingFor: string | null;
   streamingText: string;
   steps: string[];
   /** The live "still waiting" line, if the backend is counting down toward a
@@ -137,6 +141,8 @@ export interface AppState {
   summary: string;
   summaryLoading: boolean;
   generatingKind: NoteKind | null;
+  /** Notebook the in-flight generation belongs to (see sendingFor). */
+  generatingFor: string | null;
   generatingTemplateId: string | null;
   ingestQueue: QueueItem[];
   migration: Migration | null;
