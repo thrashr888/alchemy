@@ -54,6 +54,44 @@ import {
   X,
 } from "lucide-react";
 
+/** The one card-delete path (DESIGN.md §9: undo beats confirm). Deletes
+ *  immediately; the toast's undo recreates each card — identifiers, note,
+ *  facts — and re-files its attachments. Ruling metadata (origin/triage)
+ *  doesn't survive, which only matters for suggested cards, and those are
+ *  dismissed rather than deleted. */
+async function deleteCardsUndoable(cards: RegistryCard[], after: () => void) {
+  if (cards.length === 0) return;
+  for (const c of cards) await api.deleteRegistryCard(c.id);
+  after();
+  const label =
+    cards.length === 1
+      ? `Deleted “${cards[0].name}” — click to undo`
+      : `Deleted ${cards.length} cards — click to undo`;
+  useStore.getState().pushToast("success", label, () =>
+    void (async () => {
+      try {
+        for (const c of cards) {
+          const restored = await api.addRegistryCard(
+            c.kind,
+            c.name,
+            c.identifiers,
+            c.note,
+            c.facts,
+          );
+          for (const a of c.attachments) {
+            await api.attachSourceToCard(restored.id, a.sourceId, a.status);
+          }
+        }
+      } catch (e) {
+        useStore
+          .getState()
+          .pushToast("error", e instanceof Error ? e.message : String(e));
+      }
+      after();
+    })(),
+  );
+}
+
 const KINDS: { id: CardKind; label: string; icon: React.ReactNode }[] = [
   { id: "asset", label: "Assets", icon: <Package className="h-4 w-4" /> },
   { id: "person", label: "People", icon: <User className="h-4 w-4" /> },
@@ -266,21 +304,11 @@ export function RegistrySection() {
       danger: true,
       onClick: () =>
         void (async () => {
-          const names = ids.map(
-            (id) => mine.find((c) => c.id === id)?.name ?? "Untitled",
-          );
-          const ok = await confirm({
-            title: `Delete ${ids.length} cards?`,
-            message:
-              "The documents filed under them are untouched — only the cards and their filings go away.",
-            items: names,
-            confirmLabel: "Delete",
-            danger: true,
+          const cards = mine.filter((c) => ids.includes(c.id));
+          await deleteCardsUndoable(cards, () => {
+            useStore.getState().clearPicked();
+            void load();
           });
-          if (!ok) return;
-          for (const id of ids) await api.deleteRegistryCard(id);
-          useStore.getState().clearPicked();
-          void load();
         })(),
     },
   ];
@@ -773,7 +801,6 @@ function CardTable({
   onRowClick: (e: React.MouseEvent, id: string) => void;
   onContextItems: (id: string) => () => RowMenuItem[] | null;
 }) {
-  const { confirm, dialog } = useConfirm();
   return (
     <>
       {/* No "New card" button here — the header's covers both views. */}
@@ -801,7 +828,15 @@ function CardTable({
             <tr
               key={c.id}
               data-pick-id={c.id}
+              tabIndex={0}
               onClick={(e) => onRowClick(e, c.id)}
+              onKeyDown={(e) => {
+                // Keyboard path: Tab reaches the row, Enter opens the card.
+                if (e.key === "Enter" && e.target === e.currentTarget) {
+                  e.preventDefault();
+                  useStore.setState({ openCardId: c.id });
+                }
+              }}
               className={cn(
                 "group cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2",
                 pickedIds.has(c.id) && "bg-primary/10 hover:bg-primary/15",
@@ -850,20 +885,9 @@ function CardTable({
                       onClick: () => useStore.setState({ openCardId: c.id }),
                     },
                     {
-                      label: "Delete card…",
+                      label: "Delete card",
                       danger: true,
-                      onClick: () => void (async () => {
-                        const ok = await confirm({
-                          title: `Delete “${c.name}”?`,
-                          message:
-                            "The documents filed under it are untouched — only the card and its filing go away.",
-                          confirmLabel: "Delete",
-                          danger: true,
-                        });
-                        if (!ok) return;
-                        await api.deleteRegistryCard(c.id);
-                        onChanged();
-                      })(),
+                      onClick: () => void deleteCardsUndoable([c], onChanged),
                     },
                   ]}
                 />
@@ -872,7 +896,6 @@ function CardTable({
           );
         })}
       </HomeTable>
-      {dialog}
     </>
   );
 }
@@ -900,10 +923,28 @@ function SuggestionStrip({
   );
   const recommended = cards.filter((c) => c.triage === "recommended").length;
 
+  // Dismissing is sticky ("won't be suggested again"), so the toast carries
+  // the undo: put the dismissed cards back in the queue as suggestions. The
+  // triage highlight is queue metadata and doesn't survive the round trip.
+  const undoDismiss = (dismissed: RegistryCard[]) => {
+    const label =
+      dismissed.length === 1
+        ? `Dismissed “${dismissed[0].name}” — click to undo`
+        : `Dismissed ${dismissed.length} suggestions — click to undo`;
+    useStore.getState().pushToast("success", label, () =>
+      void (async () => {
+        for (const c of dismissed) await api.setCardOrigin(c.id, "auto");
+        onChanged();
+      })(),
+    );
+  };
+
   const rule = async (id: string, origin: string) => {
     setBusy(id);
     try {
+      const card = cards.find((c) => c.id === id);
       await api.setCardOrigin(id, origin);
+      if (origin === "dismissed" && card) undoDismiss([card]);
       onChanged();
     } finally {
       setBusy(null);
@@ -913,7 +954,11 @@ function SuggestionStrip({
   const ruleAll = async (key: string, origin: string, onlyRec?: boolean) => {
     setBusy(key);
     try {
+      const affected = onlyRec
+        ? cards.filter((c) => c.triage === "recommended")
+        : cards;
       await api.ruleAllSuggested(origin, onlyRec);
+      if (origin === "dismissed" && affected.length > 0) undoDismiss(affected);
       onChanged();
     } finally {
       setBusy(null);
@@ -1034,7 +1079,6 @@ function CardTile({
   onActivate?: (e: React.MouseEvent) => true | undefined;
   onContextItems?: () => RowMenuItem[] | null;
 }) {
-  const { confirm, dialog } = useConfirm();
   const docs = confirmed(card).length;
   const pending = proposed(card).length;
   return (
@@ -1088,25 +1132,13 @@ function CardTile({
           items={[
             { label: "Open", onClick: onOpen },
             {
-              label: "Delete card…",
+              label: "Delete card",
               danger: true,
-              onClick: () => void (async () => {
-                const ok = await confirm({
-                  title: `Delete “${card.name}”?`,
-                  message:
-                    "The documents filed under it are untouched — only the card and its filing go away.",
-                  confirmLabel: "Delete",
-                  danger: true,
-                });
-                if (!ok) return;
-                await api.deleteRegistryCard(card.id);
-                onChanged();
-              })(),
+              onClick: () => void deleteCardsUndoable([card], onChanged),
             },
           ]}
         />
       </div>
-      {dialog}
     </div>
   );
 }
@@ -1220,7 +1252,6 @@ function CardDetail({
   onChanged: () => void;
 }) {
   const notebooks = useStore((s) => s.notebooks);
-  const { confirm, dialog } = useConfirm();
   const [titles, setTitles] = useState<Map<string, Source>>(new Map());
 
   // Escape backs out, the way it leaves the reader — a detail view you can
@@ -1455,19 +1486,12 @@ function CardDetail({
           <Button
             variant="ghost"
             size="sm"
-            onClick={async () => {
-              const ok = await confirm({
-                title: `Delete “${card.name}”?`,
-                message:
-                  "The documents filed under it are untouched — only the card and its filing go away.",
-                confirmLabel: "Delete",
-                danger: true,
-              });
-              if (!ok) return;
-              await api.deleteRegistryCard(card.id);
-              onBack();
-              onChanged();
-            }}
+            onClick={() =>
+              void deleteCardsUndoable([card], () => {
+                onBack();
+                onChanged();
+              })
+            }
           >
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
@@ -1509,7 +1533,6 @@ function CardDetail({
         </div>
       </div>
       {docMarquee}
-      {dialog}
     </div>
   );
 }
@@ -1596,7 +1619,7 @@ function FactRow({
       <span className="group flex items-center gap-2 text-foreground">
         <span className="min-w-0 flex-1">{fact.value}</span>
         <button
-          className="shrink-0 text-subtle-foreground opacity-0 transition hover:text-destructive group-hover:opacity-100"
+          className="shrink-0 text-subtle-foreground opacity-0 transition hover:text-destructive group-hover:opacity-100 group-focus-within:opacity-100"
           onClick={onRemove}
           title="Remove this fact"
         >

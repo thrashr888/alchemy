@@ -483,6 +483,12 @@ export function applyTheme(name: string) {
   for (const [key, value] of Object.entries(theme.vars)) {
     root.style.setProperty(`--${key}`, value);
   }
+  // Semantic warning amber. Themes may override with a `warning` var; the
+  // default darkens in light schemes so amber text keeps contrast. Set
+  // unconditionally — applyTheme only writes the vars a theme declares, so
+  // a per-theme value would otherwise leak across switches.
+  if (!theme.vars.warning)
+    root.style.setProperty("--warning", theme.dark ? "#e8a33d" : "#9a6700");
   root.dataset.theme = theme.id;
   root.dataset.scheme = theme.dark ? "dark" : "light";
   root.style.colorScheme = theme.dark ? "dark" : "light";

@@ -7875,6 +7875,41 @@ pub async fn create_note(
     Ok(note)
 }
 
+/// The fields of a deleted note the undo toast carries back.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoredNote {
+    pub notebook_id: String,
+    pub title: String,
+    pub content: String,
+    pub kind: String,
+    pub prompt: String,
+    pub origin: String,
+    pub status: String,
+}
+
+/// Re-insert a note deleted moments ago — the undo half of the note-delete
+/// toast. Fresh id (the old row and its index entry are gone), everything
+/// else verbatim, so studio artifacts keep their kind and viewer.
+#[tauri::command]
+pub async fn restore_note(state: State<'_, AppState>, note: RestoredNote) -> Result<Note, String> {
+    let ts = now();
+    let note = Note {
+        id: new_id(),
+        notebook_id: note.notebook_id,
+        title: note.title,
+        content: note.content,
+        kind: note.kind,
+        prompt: note.prompt,
+        origin: note.origin,
+        status: note.status,
+        created_at: ts,
+        updated_at: ts,
+    };
+    e(add_note_indexed(&state, &note).await)?;
+    Ok(note)
+}
+
 #[tauri::command]
 pub async fn update_note(
     state: State<'_, AppState>,
@@ -9341,7 +9376,13 @@ pub async fn new_window(
     notebook_id: Option<String>,
     note_id: Option<String>,
 ) -> Result<(), String> {
-    let label = format!("win-{}", new_id());
+    // Note readers get their own label prefix so window-state restores them
+    // at reader size, not workspace size (both still match the win-* capability).
+    let label = if note_id.is_some() {
+        format!("win-note-{}", new_id())
+    } else {
+        format!("win-{}", new_id())
+    };
     let mut boot = match notebook_id {
         Some(id) => format!("window.__ALCHEMY_NOTEBOOK__ = '{}';", id.replace('\'', "")),
         None => "window.__ALCHEMY_FRESH__ = true;".to_string(),

@@ -32,9 +32,13 @@ translucent, the center goes fully transparent, and content cards carry
 their own opaque surfaces.
 
 Empty chat may use the animated dithered "aetheric mist" WebGL background
-(`DitherBackground`) — the app's only decorative element: behind content,
+(`DitherBackground`) — the app's primary decorative element: behind content,
 tinted from theme tokens, static under `prefers-reduced-motion`, and hidden
-entirely under glass (the material is the ambience there).
+entirely under glass (the material is the ambience there). The hero's
+transmutation sigil (`AlchemySymbol`) is the one other sanctioned ambient
+element: its slow cross-fade and rotation are deliberately outside the 250ms
+cap (they are its whole character) and go static under
+`prefers-reduced-motion` like everything else.
 
 The app is themeable (23 schemes, dark and light) — never hardcode a hex in a
 component; always go through the semantic tokens below.

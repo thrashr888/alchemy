@@ -439,6 +439,21 @@ export const api = {
   ) => run(ai<MetaAnswer>("ask_everything", { question, history, deep: deep ?? null })),
   createNote: (notebookId: string, title: string, content: string) =>
     run(cmd<Note>("create_note", { notebookId, title, content })),
+  /** Undo half of the note-delete toast: re-insert with kind/prompt intact. */
+  restoreNote: (n: Note) =>
+    run(
+      cmd<Note>("restore_note", {
+        note: {
+          notebookId: n.notebookId,
+          title: n.title,
+          content: n.content,
+          kind: n.kind,
+          prompt: n.prompt,
+          origin: n.origin,
+          status: n.status,
+        },
+      }),
+    ),
   updateNote: (id: string, title: string, content: string) =>
     run(cmd<void>("update_note", { id, title, content })),
   deleteNote: (id: string) => run(cmd<void>("delete_note", { id })),

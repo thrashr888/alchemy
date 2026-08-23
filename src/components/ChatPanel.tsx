@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import { Button, CardAction, Textarea, useConfirm } from "./ui";
+import { Button, CardAction, RowMenu, Textarea, useConfirm } from "./ui";
 import { Markdown } from "./Markdown";
 import { cn, chatReadingClass, fmtDateTime, isWebUrl, relativeTime } from "@/lib/utils";
 import { DitherBackground } from "./DitherBackground";
@@ -86,6 +86,19 @@ function fuzzyScore(query: string, title: string): number | null {
   return score;
 }
 
+/** Draft @mentions saved beside the draft text (chatDraftMentions:<nb>). */
+function loadDraftMentions(
+  notebookId: string | null,
+): { id: string; kind: "source" | "note"; title: string }[] {
+  if (!notebookId) return [];
+  try {
+    const raw = localStorage.getItem(`chatDraftMentions:${notebookId}`);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
 export function ChatPanel() {
   const currentId = useStore((s) => s.currentId);
   const messages = useStore((s) => s.messages);
@@ -144,10 +157,12 @@ export function ChatPanel() {
   // @ mentions: picked source/note handles for THIS message. The text keeps
   // reading naturally ("what does @Q3 Report say?") while the recorded ids
   // narrow retrieval for the one send. A mention whose "@Title" text is
-  // edited out of the draft is dropped at send time.
+  // edited out of the draft is dropped at send time. Mirrored beside the
+  // draft text — a restored draft with its @Titles but no ids would silently
+  // lose the narrowing on send.
   const [mentions, setMentions] = useState<
     { id: string; kind: "source" | "note"; title: string }[]
-  >([]);
+  >(() => loadDraftMentions(currentId));
   const [mentionSel, setMentionSel] = useState(0);
   const [mentionDismissed, setMentionDismissed] = useState(false);
   const notes = useStore((s) => s.notes);
@@ -169,12 +184,19 @@ export function ChatPanel() {
     setDraft(
       currentId ? (localStorage.getItem(`chatDraft:${currentId}`) ?? "") : "",
     );
+    setMentions(loadDraftMentions(currentId));
   }, [currentId]);
   useEffect(() => {
     if (!currentId || draftNb.current !== currentId) return;
     if (draft) localStorage.setItem(`chatDraft:${currentId}`, draft);
     else localStorage.removeItem(`chatDraft:${currentId}`);
-  }, [draft, currentId]);
+    if (draft && mentions.length > 0)
+      localStorage.setItem(
+        `chatDraftMentions:${currentId}`,
+        JSON.stringify(mentions),
+      );
+    else localStorage.removeItem(`chatDraftMentions:${currentId}`);
+  }, [draft, mentions, currentId]);
 
   // A failed send hands its text back — restore it into the composer so the
   // user can retry without retyping.
@@ -1543,18 +1565,12 @@ function SlashPicker({
   );
 }
 
-/** Hover row under a user turn: copy, re-run, and when it happened. Re-run is
- *  a rewind — it drops this question and everything after it, then resends —
- *  so it only appears on the last question; re-running an older one would
- *  silently discard the exchanges below it. */
+/** Hover row under a user turn: copy, re-run, and when it happened. Re-run
+ *  asks the question again as a fresh turn at the end of the chat — the
+ *  earlier exchange stays put, so nothing is destroyed and any question in
+ *  the transcript can be re-asked. */
 function UserMessageActions({ message }: { message: Message }) {
   const [copied, setCopied] = useState(false);
-  const isLastUser = useStore((s) => {
-    for (let i = s.messages.length - 1; i >= 0; i--) {
-      if (s.messages[i].role === "user") return s.messages[i].id === message.id;
-    }
-    return false;
-  });
   const sending = useStore((s) => s.sending);
 
   async function copy() {
@@ -1566,14 +1582,9 @@ function UserMessageActions({ message }: { message: Message }) {
       /* clipboard unavailable */
     }
   }
-  async function rerun() {
+  function rerun() {
     const st = useStore.getState();
     if (st.sending) return;
-    const msgs = st.messages;
-    const i = msgs.findIndex((m) => m.id === message.id);
-    if (i < 0) return;
-    for (const m of msgs.slice(i)) await api.deleteMessage(m.id);
-    useStore.setState({ messages: msgs.slice(0, i) });
     void st.sendMessage(message.content);
   }
 
@@ -1598,17 +1609,27 @@ function UserMessageActions({ message }: { message: Message }) {
         )}
         {copied ? "Copied" : "Copy"}
       </button>
-      {isLastUser && (
-        <button
-          onClick={() => void rerun()}
-          disabled={sending}
-          className={btn}
-          title="Ask this again — replaces the answer below"
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-          Re-run
-        </button>
-      )}
+      <button
+        onClick={rerun}
+        disabled={sending}
+        className={btn}
+        title="Ask this again as a new turn"
+      >
+        <RefreshCw className="h-3.5 w-3.5" />
+        Re-run
+      </button>
+      {/* Right-click parity: the same verbs from anywhere on the question. */}
+      <RowMenu
+        label="Question options"
+        items={[
+          { label: "Copy", icon: <Copy className="h-3.5 w-3.5" />, onClick: () => void copy() },
+          {
+            label: "Re-run",
+            icon: <RefreshCw className="h-3.5 w-3.5" />,
+            onClick: rerun,
+          },
+        ]}
+      />
     </div>
   );
 }
@@ -1658,6 +1679,19 @@ function MessageActions({
         {saved ? <Check className="h-3.5 w-3.5 text-success" /> : <NotebookPen className="h-3.5 w-3.5" />}
         {saved ? "Saved" : "Save as note"}
       </button>
+      {/* Right-click parity (DESIGN.md "objects are direct"): the same verbs
+          as the hover row, reachable from anywhere on the message. */}
+      <RowMenu
+        label="Message options"
+        items={[
+          { label: "Copy", icon: <Copy className="h-3.5 w-3.5" />, onClick: () => void copy() },
+          {
+            label: "Save as note",
+            icon: <NotebookPen className="h-3.5 w-3.5" />,
+            onClick: () => void save(),
+          },
+        ]}
+      />
     </div>
   );
 }
@@ -1850,13 +1884,13 @@ function ChatHero({
   return (
     <div
       className={cn(
-        "flex flex-col items-center gap-4 text-center transition-all duration-700",
+        "flex flex-col items-center gap-4 text-center transition-all duration-200",
         compact ? "pt-1" : "min-h-[62vh] justify-center",
       )}
     >
       <AlchemySymbol
         className={cn(
-          "transition-all duration-700",
+          "transition-all duration-200",
           notebookColor ? "opacity-85" : "text-citation/60",
           compact ? "h-9 w-9" : "h-16 w-16",
         )}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useStore } from "@/lib/store";
+import { removeSourcesGuarded, useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import {
   Badge,
@@ -28,6 +28,11 @@ import {
 } from "@/lib/utils";
 import { sourceIcon } from "@/lib/sourceIcon";
 import { AttachToCardModal } from "./RegistrySection";
+import {
+  SourceMetaModals,
+  sourceMetaItems,
+  sourceOriginItems,
+} from "./SourceMetaModals";
 import type { Source } from "@/lib/types";
 import {
   ChevronRight,
@@ -46,7 +51,6 @@ import {
   Cloud,
   MessageSquare,
   Package,
-  StickyNote,
   Tag,
 } from "lucide-react";
 
@@ -219,11 +223,8 @@ export function SourcesPanel() {
   const folderScan = useStore((s) => s.folderScan);
   const editSourceText = useStore((s) => s.editSourceText);
   const updateMacNote = useStore((s) => s.updateMacNote);
-  const setSourceTags = useStore((s) => s.setSourceTags);
-  const setSourceNote = useStore((s) => s.setSourceNote);
   const addMacReminder = useStore((s) => s.addMacReminder);
   const refreshSource = useStore((s) => s.refreshSource);
-  const deleteSource = useStore((s) => s.deleteSource);
   const draggingFiles = useStore((s) => s.draggingFiles);
   const toggleSources = useStore((s) => s.toggleSources);
   const openSourceViewer = useStore((s) => s.openSourceViewer);
@@ -373,7 +374,6 @@ export function SourcesPanel() {
   const rowIds = rows.map((r) => r.s.id);
   const rowIdsRef = useRef(rowIds);
   rowIdsRef.current = rowIds;
-  const setSourcesTagsBatch = useStore((s) => s.setSourcesTagsBatch);
 
   const listRef = useRef<HTMLDivElement>(null);
   // An additive drag unions against the selection as it stood when the drag
@@ -428,16 +428,9 @@ export function SourcesPanel() {
   }
 
   async function confirmRemoveBatch(ids: string[]) {
-    if (
-      await confirm({
-        title: `Remove ${ids.length} sources?`,
-        message:
-          "This deletes the selected sources and their embedded chunks from the notebook (folders take their files along). Nothing on disk is touched.",
-        confirmLabel: "Remove",
-        danger: true,
-      })
-    )
-      void deleteSourcesBatch(ids);
+    // Undo beats confirm: restorable sources delete straight away with a
+    // click-to-undo toast; only connector sources still ask.
+    await removeSourcesGuarded(ids, confirm);
   }
   const confirmRemoveBatchRef = useRef(confirmRemoveBatch);
   confirmRemoveBatchRef.current = confirmRemoveBatch;
@@ -1000,26 +993,11 @@ export function SourcesPanel() {
                                     },
                                   ]
                                 : []),
-                              {
-                                label: s.tags ? "Edit tags…" : "Add tags…",
-                                icon: <Tag className="h-3.5 w-3.5" />,
-                                onClick: () =>
-                                  setTagEdit({
-                                    ids: [s.id],
-                                    title: s.title,
-                                    value: s.tags,
-                                  }),
-                              },
-                              {
-                                label: s.note ? "Edit note…" : "Add note…",
-                                icon: <StickyNote className="h-3.5 w-3.5" />,
-                                onClick: () =>
-                                  setNoteEdit({
-                                    id: s.id,
-                                    title: s.title,
-                                    value: s.note,
-                                  }),
-                              },
+                              // Origin trio + tags/note come from the shared
+                              // builders, so this menu, the gallery's, and
+                              // the reader's stay one list per object.
+                              ...sourceOriginItems(s),
+                              ...sourceMetaItems(s, setTagEdit, setNoteEdit),
                               {
                                 label: "File under a card…",
                                 icon: <Package className="h-3.5 w-3.5" />,
@@ -1030,19 +1008,8 @@ export function SourcesPanel() {
                                 label: "Remove",
                                 icon: <Trash2 className="h-3.5 w-3.5" />,
                                 danger: true,
-                                onClick: async () => {
-                                  if (
-                                    await confirm({
-                                      title: `Remove "${s.title}"?`,
-                                      message: isFolder
-                                        ? `This removes the folder and its ${childCount(s.id)} file sources (with their embedded chunks) from the notebook. Nothing on disk is touched.`
-                                        : "This deletes the source and its embedded chunks from the notebook.",
-                                      confirmLabel: "Remove",
-                                      danger: true,
-                                    })
-                                  )
-                                    deleteSource(s.id);
-                                },
+                                onClick: () =>
+                                  void removeSourcesGuarded([s.id], confirm),
                               },
                             ]}
                           />
@@ -1218,85 +1185,12 @@ export function SourcesPanel() {
         onClose={() => setAttaching(null)}
       />
 
-      <Modal
-        open={!!tagEdit}
-        onClose={() => setTagEdit(null)}
-        title={`Tags for "${tagEdit?.title ?? ""}"`}
-        width="max-w-md"
-      >
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            if (!tagEdit) return;
-            const { ids, value } = tagEdit;
-            setTagEdit(null);
-            if (ids.length === 1) await setSourceTags(ids[0], value);
-            else await setSourcesTagsBatch(ids, value);
-          }}
-          className="flex flex-col gap-3"
-        >
-          <Input
-            autoFocus
-            name="source-tags"
-            aria-label="Source tags"
-            placeholder="research rust retrieval"
-            value={tagEdit?.value ?? ""}
-            onChange={(e) =>
-              setTagEdit((s) => (s ? { ...s, value: e.target.value } : s))
-            }
-          />
-          <p className="text-micro leading-relaxed text-subtle-foreground">
-            Space-separated; "#" and case don't matter. Tags show up in
-            chat's source list and help match questions to notebooks.
-          </p>
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => setTagEdit(null)}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="primary">
-              Save
-            </Button>
-          </div>
-        </form>
-      </Modal>
-
-      <Modal
-        open={!!noteEdit}
-        onClose={() => setNoteEdit(null)}
-        title={`Note on "${noteEdit?.title ?? ""}"`}
-        width="max-w-md"
-      >
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            if (!noteEdit) return;
-            const { id, value } = noteEdit;
-            setNoteEdit(null);
-            await setSourceNote(id, value);
-          }}
-          className="flex flex-col gap-3"
-        >
-          <Textarea
-            autoFocus
-            rows={5}
-            name="source-note"
-            aria-label="Source note"
-            placeholder="Why did you save this? Chat can recall it."
-            value={noteEdit?.value ?? ""}
-            onChange={(e) =>
-              setNoteEdit((s) => (s ? { ...s, value: e.target.value } : s))
-            }
-          />
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => setNoteEdit(null)}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="primary">
-              Save
-            </Button>
-          </div>
-        </form>
-      </Modal>
+      <SourceMetaModals
+        tagEdit={tagEdit}
+        setTagEdit={setTagEdit}
+        noteEdit={noteEdit}
+        setNoteEdit={setNoteEdit}
+      />
 
       {/* Hygiene review (RFC-source-hygiene): every removal is a human
           decision — per-item Keep / Remove, nothing automatic. */}

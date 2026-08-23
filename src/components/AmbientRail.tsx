@@ -109,7 +109,7 @@ export function AmbientRail({
                 onClick={() => onInsert(c)}
                 title="Insert a reference at the cursor"
                 aria-label="Insert reference"
-                className="absolute right-1.5 top-1.5 hidden rounded border border-border bg-elevated p-1 text-muted-foreground transition-colors hover:text-foreground group-hover/card:block"
+                className="absolute right-1.5 top-1.5 rounded border border-border bg-elevated p-1 text-muted-foreground opacity-0 transition-colors hover:text-foreground group-hover/card:opacity-100 group-focus-within/card:opacity-100"
               >
                 <CornerDownLeft className="h-3 w-3" />
               </button>

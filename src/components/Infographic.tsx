@@ -351,7 +351,7 @@ function BlockView({
                   aria-hidden
                 >
                   <div
-                    className="h-full rounded-full transition-[width] duration-700 ease-out"
+                    className="h-full rounded-full transition-[width] duration-200 ease-out"
                     style={{
                       width: `${grown ? width : 0}%`,
                       background: `linear-gradient(90deg, color-mix(in srgb, ${color} 70%, transparent), ${color})`,
@@ -374,7 +374,7 @@ function BlockView({
             return (
               <div
                 key={i}
-                className="flex items-center justify-between gap-3 rounded-lg px-4 py-2 transition-[width] duration-700 ease-out"
+                className="flex items-center justify-between gap-3 rounded-lg px-4 py-2 transition-[width] duration-200 ease-out"
                 style={{
                   width: `${grown ? width : 18}%`,
                   minWidth: "fit-content",

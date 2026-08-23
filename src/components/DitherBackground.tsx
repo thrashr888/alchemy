@@ -1,5 +1,22 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { THEMES, resolveThemeId, type ShaderVariant } from "@/lib/themes";
+
+/** Live prefers-reduced-motion. The CSS guard can't reach a WebGL loop, so
+ *  the shader components subscribe to the media query themselves — with a
+ *  change listener (like themes.ts's OS-appearance one), not a mount-time
+ *  snapshot, so flipping the OS setting takes effect without a reload. */
+export function useReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(
+    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onChange = () => setReduced(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return reduced;
+}
 
 /**
  * Animated WebGL1 background: a theme-tinted luminance field quantized with
@@ -31,6 +48,7 @@ export function DitherBackground({
   intensity?: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const reducedMotion = useReducedMotion();
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -88,7 +106,6 @@ export function DitherBackground({
     let raf = 0;
     let last = 0;
     const startT = performance.now();
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     // Grain is a texture, not weather — it draws once, like reduced motion.
     const isStatic = reducedMotion || variant === "grain";
     const render = (now: number) => {
@@ -117,7 +134,7 @@ export function DitherBackground({
       gl.deleteBuffer(buf);
       gl.deleteProgram(program);
     };
-  }, [themeKey, intensity]);
+  }, [themeKey, intensity, reducedMotion]);
 
   return (
     <canvas

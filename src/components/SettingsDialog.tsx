@@ -78,7 +78,6 @@ export function SettingsDialog({
   const [tab, setTab] = useState(initialTab);
   const [draft, setDraft] = useState<AiConfig | null>(null);
   const [saving, setSaving] = useState(false);
-  const [confirmReembed, setConfirmReembed] = useState(false);
 
   useEffect(() => {
     if (open) setTab(initialTab);
@@ -100,9 +99,15 @@ export function SettingsDialog({
 
   async function onSave() {
     if (!draft) return;
-    // Switching the embedding model invalidates existing vectors — re-embed.
+    // Switching the embedding model invalidates existing vectors — save and
+    // re-embed straight away. Destroys nothing; the migration overlay is the
+    // feedback, not a confirm (DESIGN.md §9).
     if (embedChanged && totalSources > 0) {
-      setConfirmReembed(true);
+      setSaving(true);
+      await save(draft);
+      setSaving(false);
+      onClose();
+      await reembedAll();
       return;
     }
     setSaving(true);
@@ -127,22 +132,6 @@ export function SettingsDialog({
     onClose();
   }
 
-  async function confirmSwitch() {
-    if (!draft) return;
-    setConfirmReembed(false);
-    setSaving(true);
-    await save(draft);
-    setSaving(false);
-    onClose();
-    await reembedAll();
-  }
-
-  function cancelSwitch() {
-    // Keep the previous embedding model so we never leave a broken index.
-    setConfirmReembed(false);
-    if (draft && aiConfig)
-      setDraft({ ...draft, embedModel: aiConfig.embedModel });
-  }
 
   if (!draft) {
     return (
@@ -252,35 +241,6 @@ export function SettingsDialog({
         </div>
       </div>
 
-      <Modal
-        open={confirmReembed}
-        onClose={cancelSwitch}
-        title="Switch search model?"
-      >
-        <div className="flex flex-col gap-4">
-          <p className="text-body leading-relaxed text-muted-foreground">
-            Switching to{" "}
-            <span className="font-medium text-foreground">
-              {draft.embedder === "builtin"
-                ? "the built-in model"
-                : draft.embedModel}
-            </span>{" "}
-            rebuilds the search index for all{" "}
-            <span className="font-medium text-foreground">{totalSources}</span>{" "}
-            source
-            {totalSources === 1 ? "" : "s"}. This runs locally and may take a
-            moment.
-          </p>
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={cancelSwitch}>
-              Cancel
-            </Button>
-            <Button variant="primary" onClick={confirmSwitch}>
-              Switch & re-embed
-            </Button>
-          </div>
-        </div>
-      </Modal>
     </Modal>
   );
 }

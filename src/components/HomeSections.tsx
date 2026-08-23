@@ -395,7 +395,7 @@ export function StaffSidebar({
                   </span>
                   <button
                     type="button"
-                    className="ml-auto hidden shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground group-hover:block"
+                    className="ml-auto shrink-0 rounded p-0.5 text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100"
                     onClick={() => void runNow(r)}
                     disabled={runningId !== null}
                     title="Run now"

@@ -33,6 +33,7 @@ import {
   fmtDay,
   folderProvider,
   isWebUrl,
+  scrollMemory,
   shortcutBlocked,
   urlHost,
 } from "@/lib/utils";
@@ -364,8 +365,8 @@ function applyFindHighlights(ranges: Range[], active: number): boolean {
   return true;
 }
 
-/** Per-document scroll positions, remembered for the session. */
-const scrollMemory = new Map<string, number>();
+// Per-document scroll positions ride the persistent scrollMemory in
+// lib/utils, so reading position survives relaunch, not just the session.
 
 /** Restore (once content is ready) and record a container's scroll position.
  *  `restore` false records without jumping (e.g. a citation anchor wins). */
@@ -710,7 +711,9 @@ export function ReaderPane() {
   ];
   return (
     <div ref={rootRef} className="relative flex h-full flex-1 flex-col min-w-0">
-      <div className="relative z-10 flex h-12 shrink-0 items-center gap-0.5 border-b border-border px-3">
+      {/* `group`: the toolbar RowMenu binds right-click to its nearest .group
+          ancestor — without one, right-clicking the title bar did nothing. */}
+      <div className="group relative z-10 flex h-12 shrink-0 items-center gap-0.5 border-b border-border px-3">
         <Button
           variant="ghost"
           size="icon"
@@ -1683,6 +1686,135 @@ function DocProperties({
   );
 }
 
+/** One open reminder parsed out of a Reminders source body. The id rides the
+ *  text as a trailing code span (mac.rs carries it for exactly this); rows
+ *  without one render inert — there is no way to name them to cider. */
+type ReminderRow = {
+  title: string;
+  id: string | null;
+  due: string | null;
+  notes: string | null;
+};
+
+function parseReminders(text: string): { heading: string; items: ReminderRow[] } {
+  const items: ReminderRow[] = [];
+  let heading = "";
+  for (const line of text.split("\n")) {
+    const h = /^# (.*)$/.exec(line);
+    if (h) {
+      heading = h[1];
+      continue;
+    }
+    const m = /^- \[ \] (.*)$/.exec(line);
+    if (m) {
+      let rest = m[1];
+      let due: string | null = null;
+      const dm = / — due (\d{4}-\d{2}-\d{2})$/.exec(rest);
+      if (dm) {
+        due = dm[1];
+        rest = rest.slice(0, -dm[0].length);
+      }
+      let id: string | null = null;
+      const im = / `([^`]+)`$/.exec(rest);
+      if (im) {
+        id = im[1];
+        rest = rest.slice(0, -im[0].length);
+      }
+      items.push({ title: rest, id, due, notes: null });
+      continue;
+    }
+    const n = /^ {2}- (.*)$/.exec(line);
+    if (n && items.length > 0) items[items.length - 1].notes = n[1];
+  }
+  return { heading, items };
+}
+
+/** A Reminders-list source rendered live: each reminder is a real checkbox
+ *  wired to complete_mac_reminder — the same call agents already have — not
+ *  inert markdown. Checking one completes it in Apple Reminders and resyncs
+ *  the source; the row holds its checked state until the refetched body
+ *  (open reminders only) drops it. */
+function RemindersView({
+  content,
+  sourceId,
+  onCompleted,
+}: {
+  content: string;
+  sourceId: string;
+  onCompleted: () => void;
+}) {
+  const parsed = useMemo(() => parseReminders(content), [content]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [done, setDone] = useState<Set<string>>(new Set());
+
+  async function complete(row: ReminderRow) {
+    if (!row.id || busy) return;
+    setBusy(row.id);
+    try {
+      await api.completeMacReminder(sourceId, row.id);
+      setDone((d) => new Set(d).add(row.id!));
+      onCompleted();
+    } catch (err) {
+      useStore.getState().pushToast("error", String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="selectable">
+      {parsed.heading && (
+        <h1 className="mb-4 text-title font-semibold text-foreground">
+          {parsed.heading}
+        </h1>
+      )}
+      <ul className="flex flex-col gap-1.5">
+        {parsed.items.map((row, i) => {
+          const checked = !!row.id && done.has(row.id);
+          return (
+            <li key={row.id ?? `row-${i}`} className="flex items-start gap-2.5">
+              <input
+                type="checkbox"
+                className="select-quiet mt-1"
+                checked={checked}
+                disabled={!row.id || checked || busy === row.id}
+                onChange={() => void complete(row)}
+                aria-label={`Complete “${row.title}”`}
+                title={row.id ? "Check off in Apple Reminders" : undefined}
+              />
+              <div className="min-w-0">
+                <div
+                  className={cn(
+                    "text-body leading-relaxed text-foreground/90",
+                    checked && "text-muted-foreground line-through",
+                  )}
+                >
+                  {row.title}
+                  {row.due && (
+                    <span className="ml-2 text-caption text-subtle-foreground">
+                      due {row.due}
+                    </span>
+                  )}
+                </div>
+                {row.notes && (
+                  <div className="text-caption text-muted-foreground">
+                    {row.notes}
+                  </div>
+                )}
+              </div>
+            </li>
+          );
+        })}
+        {parsed.items.length === 0 && (
+          <li className="text-body text-muted-foreground">
+            Nothing left on this list.
+          </li>
+        )}
+      </ul>
+    </div>
+  );
+}
+
 function SourceReader({
   source,
   highlight,
@@ -1834,6 +1966,9 @@ function SourceReader({
   // exists only while finding).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Not while a modal owns the keyboard or the user is typing in a
+      // field — find used to open behind dialogs and steal focus mid-word.
+      if (shortcutBlocked(e)) return;
       if ((e.metaKey || e.ctrlKey) && e.key === "f") {
         e.preventDefault();
         onFindOpen();
@@ -1908,6 +2043,14 @@ function SourceReader({
   // syntax colors; find-in-source over the colored view re-anchors on the
   // rendered DOM each keystroke.
   const codeMode = source.sourceType === "code" && !highlight;
+  // A Reminders list renders as live checkboxes (complete-in-place) instead
+  // of inert markdown — except during find or a citation anchor, which need
+  // the text views' highlight machinery.
+  const remindersMode =
+    source.sourceType === "mac" &&
+    source.url.startsWith("cider://reminders/list/") &&
+    !query.trim() &&
+    !highlight;
   // "DOM-rendered": find walks text nodes instead of painting the plain
   // <mark> segments. True for both the markdown and code (shiki) views.
   const domMode = richMode || codeMode;
@@ -2029,11 +2172,23 @@ function SourceReader({
 
   // Selection → ask toolbar (window-level mouseup so releasing outside the
   // container still raises it; the handler validates the selection home).
+  // selectionchange rides along, debounced, for keyboard selection —
+  // shift+arrows never fires a mouseup.
   const updateSelectionRef = useRef<() => void>(() => {});
   useEffect(() => {
     const onUp = () => updateSelectionRef.current();
+    let timer: number | null = null;
+    const onChange = () => {
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => updateSelectionRef.current(), 200);
+    };
     window.addEventListener("mouseup", onUp);
-    return () => window.removeEventListener("mouseup", onUp);
+    document.addEventListener("selectionchange", onChange);
+    return () => {
+      if (timer) window.clearTimeout(timer);
+      window.removeEventListener("mouseup", onUp);
+      document.removeEventListener("selectionchange", onChange);
+    };
   }, []);
 
   function updateSelection() {
@@ -2320,6 +2475,12 @@ function SourceReader({
                 </span>
               )}
             </div>
+          ) : remindersMode ? (
+            <RemindersView
+              content={content}
+              sourceId={source.id}
+              onCompleted={() => setHydrateTick((t) => t + 1)}
+            />
           ) : codeMode ? (
             <CodeView path={source.title} code={content} lineNums />
           ) : richMode ? (
@@ -2703,9 +2864,14 @@ function InlineNote({ note }: { note: Note }) {
     timer.current = window.setTimeout(() => flushRef.current(), 1200);
   };
 
-  // Doc switch or leaving the reader saves whatever is pending.
+  // Doc switch or leaving the reader saves whatever is pending — and so
+  // does quitting: pagehide is the last synchronous moment the webview
+  // gives us, and a 1200ms debounce otherwise loses the final keystrokes.
   useEffect(() => {
+    const onPageHide = () => flushRef.current();
+    window.addEventListener("pagehide", onPageHide);
     return () => {
+      window.removeEventListener("pagehide", onPageHide);
       if (timer.current) window.clearTimeout(timer.current);
       flushRef.current();
     };
@@ -3201,6 +3367,23 @@ function RepoView({ source, map }: { source: Source; map: string | null }) {
       setTierBusy(false);
     }
   }
+
+  // Keyboard selection (shift+arrows) never fires the pane's onMouseUp —
+  // follow selectionchange too, debounced so drags don't churn the toolbar.
+  const captureSelectionRef = useRef<() => void>(() => {});
+  captureSelectionRef.current = captureSelection;
+  useEffect(() => {
+    let timer: number | null = null;
+    const onChange = () => {
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => captureSelectionRef.current(), 200);
+    };
+    document.addEventListener("selectionchange", onChange);
+    return () => {
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("selectionchange", onChange);
+    };
+  }, []);
 
   function captureSelection() {
     const container = paneRef.current;

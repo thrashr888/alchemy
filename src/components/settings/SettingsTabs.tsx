@@ -4,7 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { checkForUpdates } from "@/lib/updates";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
-import { SYSTEM_THEME, THEME_LIST } from "@/lib/themes";
+import { SYSTEM_THEME, THEME_LIST, THEMES, resolveThemeId } from "@/lib/themes";
 import { SLASH_COMMANDS } from "@/lib/slashCommands";
 import type { BuildInfo, ChatConfig } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -401,7 +401,12 @@ function ThemePicker() {
       <ThemeButton
         label="System"
         selected={theme === SYSTEM_THEME}
-        colors={["#08090a", "#eceef1", "#5e6ad2"]}
+        // The swatch shows what System resolves to right now, from the same
+        // theme table as every other row — not a hand-copied triple.
+        colors={(() => {
+          const t = THEMES[resolveThemeId(SYSTEM_THEME)];
+          return [t.vars.background, t.vars.surface, t.vars.primary];
+        })()}
         onClick={() => setTheme(SYSTEM_THEME)}
       />
       {THEME_LIST.map((item) => {

@@ -27,7 +27,7 @@ export function MigrationOverlay() {
 
         <div className="mb-2 h-2 overflow-hidden rounded-full bg-surface-2">
           <div
-            className="h-full rounded-full bg-primary transition-all duration-300"
+            className="h-full rounded-full bg-primary transition-all duration-200"
             style={{ width: `${Math.max(3, pct)}%` }}
           />
         </div>
