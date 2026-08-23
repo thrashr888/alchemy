@@ -78,7 +78,7 @@ pub async fn run_second_look(
                         .show();
                 }
             }
-            Err(err) => eprintln!("second look: {err:#}"),
+            Err(err) => crate::note!("second look: {err:#}"),
         }
     });
     Ok(())

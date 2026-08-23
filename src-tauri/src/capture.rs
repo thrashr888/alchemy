@@ -324,7 +324,7 @@ fn remember(url: &str, rendered_won: bool) {
     drop(m);
     if let (Some(ctx), Ok(json)) = (CTX.get(), serde_json::to_string_pretty(&snapshot)) {
         if let Err(err) = std::fs::write(&ctx.memory_path, json) {
-            eprintln!("capture memory write failed: {err}");
+            crate::note!("capture memory write failed: {err}");
         }
     }
 }

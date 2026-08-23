@@ -641,7 +641,7 @@ impl Ai {
                         .filter_map(|i| hits.get(i).cloned())
                         .collect()
                 }
-                Err(err) => eprintln!("xenc rerank skipped: {err:#}"),
+                Err(err) => crate::note!("xenc rerank skipped: {err:#}"),
             }
         }
         hits.truncate(k);
@@ -744,7 +744,7 @@ impl Ai {
                 match engine.chat(messages).await {
                     Ok(out) => return Ok(out),
                     Err(err) => {
-                        eprintln!("small-role engine failed, falling through: {err:#}");
+                        crate::note!("small-role engine failed, falling through: {err:#}");
                     }
                 }
             }

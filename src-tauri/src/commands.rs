@@ -10,12 +10,14 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 mod brief;
+mod diagnostics;
 mod ledger;
 mod registry;
 mod reports;
 mod second_look;
 mod weave;
 pub(crate) use brief::ensure_default_brief;
+pub use diagnostics::*;
 pub use ledger::*;
 pub use registry::*;
 pub use reports::*;
@@ -66,6 +68,13 @@ static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
 
 pub(crate) fn set_app_handle(app: tauri::AppHandle) {
     let _ = APP.set(app);
+}
+
+/// The same handle, for the code that runs outside any command and may run
+/// before setup — `diagnostics` broadcasts fatals through it, and must cope
+/// with the handle not existing yet.
+pub(crate) fn app_handle() -> Option<tauri::AppHandle> {
+    APP.get().cloned()
 }
 
 /// Announce a background write on the same event the MCP mutations use, so
@@ -1247,7 +1256,7 @@ pub(crate) async fn spawn_embed_stage(
         if EMBED_QUEUE.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) == 1 {
             db.defer_fts(false);
             if let Err(err) = db.flush_fts().await {
-                eprintln!("embed stage: FTS flush failed: {err:#}");
+                crate::note!("embed stage: FTS flush failed: {err:#}");
             }
         }
         notify_changed("sources", Some(&source.notebook_id));
@@ -1782,7 +1791,7 @@ pub(crate) async fn ingest_git(
                 .await?;
             if let Err(err) = crate::git::adopt_cache(&staged.dir, &data_dir, &src.id) {
                 // The source still works; it just can't re-sync until re-added.
-                eprintln!("git: failed to adopt cache for {}: {err:#}", src.id);
+                crate::note!("git: failed to adopt cache for {}: {err:#}", src.id);
             }
             let stamp = crate::mac::content_stamp(&staged.sha);
             state.db.set_source_mtime(&src.id, stamp).await?;
@@ -2483,7 +2492,7 @@ pub(crate) async fn set_source_note_impl(
     let note = note.trim().to_string();
     state.db.set_source_note(source_id, &note).await?;
     if let Err(err) = index_snote(state, &existing, &note).await {
-        eprintln!("indexing note on source {source_id} failed: {err:#}");
+        crate::note!("indexing note on source {source_id} failed: {err:#}");
     }
     state
         .db
@@ -3694,7 +3703,7 @@ async fn rescan_one_folder(
     let result = rescan_one_folder_inner(app, state, folder, force_map).await;
     state.db.defer_fts(false);
     if let Err(err) = state.db.flush_fts().await {
-        eprintln!("folder scan: FTS flush failed: {err:#}");
+        crate::note!("folder scan: FTS flush failed: {err:#}");
     }
     result
 }
@@ -3924,7 +3933,7 @@ async fn rescan_one_folder_inner(
                     // Don't wipe the working text over a failed re-read; bump
                     // the mtime so the file isn't re-attempted every minute.
                     state.db.set_source_mtime(&child.id, mtime).await?;
-                    eprintln!("folder rescan: failed to re-read {path}: {err:#}");
+                    crate::note!("folder rescan: failed to re-read {path}: {err:#}");
                     scan.failed += 1;
                 }
             },
@@ -4208,7 +4217,7 @@ async fn backfill_note_index(state: &AppState) {
     ) {
         Ok(pair) => pair,
         Err(err) => {
-            eprintln!("note backfill: listing failed: {err:#}");
+            crate::note!("note backfill: listing failed: {err:#}");
             return;
         }
     };
@@ -4232,13 +4241,13 @@ async fn collapse_old_report_piles(state: &AppState) {
     let schedules = match state.db.all_report_schedules().await {
         Ok(s) => s,
         Err(err) => {
-            eprintln!("report collapse: listing schedules failed: {err:#}");
+            crate::note!("report collapse: listing schedules failed: {err:#}");
             return;
         }
     };
     for s in schedules {
         if let Err(err) = collapse_report_notes(state, &s.notebook_id, &s.name).await {
-            eprintln!("report collapse for \"{}\" failed: {err:#}", s.name);
+            crate::note!("report collapse for \"{}\" failed: {err:#}", s.name);
         }
     }
 }
@@ -4477,7 +4486,7 @@ async fn note_curator_tick(app: &AppHandle, state: &AppState) {
         let _ = std::fs::write(&path, serde_json::to_string(&cur).unwrap_or_default());
         match curate_notes(&state.db, &cur.open_days).await {
             Ok(a) => actions.extend(a),
-            Err(err) => eprintln!("note curator failed: {err:#}"),
+            Err(err) => crate::note!("note curator failed: {err:#}"),
         }
         // Revived notes need their chunks back in the index.
         for a in actions.iter().filter(|a| a.action == "revived") {
@@ -4500,7 +4509,7 @@ async fn note_curator_tick(app: &AppHandle, state: &AppState) {
         let _ = std::fs::write(&path, serde_json::to_string(&cur).unwrap_or_default());
         match consolidate_notes(state).await {
             Ok(a) => actions.extend(a),
-            Err(err) => eprintln!("note consolidation failed: {err:#}"),
+            Err(err) => crate::note!("note consolidation failed: {err:#}"),
         }
     }
 
@@ -4559,7 +4568,7 @@ async fn note_curator_tick(app: &AppHandle, state: &AppState) {
             }
         };
         if let Err(err) = result {
-            eprintln!("curator report for {notebook_id} failed: {err:#}");
+            crate::note!("curator report for {notebook_id} failed: {err:#}");
         }
         #[derive(serde::Serialize, Clone)]
         #[serde(rename_all = "camelCase")]
@@ -4575,7 +4584,7 @@ async fn note_curator_tick(app: &AppHandle, state: &AppState) {
             },
         );
     }
-    eprintln!("note curator: {} action(s)", actions.len());
+    crate::note!("note curator: {} action(s)", actions.len());
 }
 
 /// Rescan every folder source and re-embed loose file sources whose on-disk
@@ -4649,7 +4658,7 @@ pub(crate) async fn resync_sources_inner(
                     let _ = state.db.set_source_mtime(&folder.id, stamp).await;
                 }
                 Ok(None) => {}
-                Err(err) => eprintln!("git resync: {} failed: {err:#}", folder.url),
+                Err(err) => crate::note!("git resync: {} failed: {err:#}", folder.url),
             }
         }
         // Notion parents: re-export changed pages per cadence tick; the
@@ -4675,7 +4684,7 @@ pub(crate) async fn resync_sources_inner(
                             .await;
                     }
                     Ok(_) => {}
-                    Err(err) => eprintln!("notion resync: {} failed: {err:#}", folder.url),
+                    Err(err) => crate::note!("notion resync: {} failed: {err:#}", folder.url),
                 }
             }
         }
@@ -4688,7 +4697,7 @@ pub(crate) async fn resync_sources_inner(
                 total.absorb(scan);
             }
             Err(err) => {
-                eprintln!("folder rescan: {} failed: {err:#}", folder.url);
+                crate::note!("folder rescan: {} failed: {err:#}", folder.url);
                 total.failed += 1;
             }
         }
@@ -4722,14 +4731,14 @@ pub(crate) async fn resync_sources_inner(
                             total.updated += 1;
                         }
                         Err(err) => {
-                            eprintln!("git resync: failed to re-embed {}: {err:#}", src.url);
+                            crate::note!("git resync: failed to re-embed {}: {err:#}", src.url);
                             scan.failed += 1;
                             total.failed += 1;
                         }
                     }
                 }
                 Ok(None) => {}
-                Err(err) => eprintln!("git resync: {} failed: {err:#}", src.url),
+                Err(err) => crate::note!("git resync: {} failed: {err:#}", src.url),
             }
             continue;
         }
@@ -4765,7 +4774,7 @@ pub(crate) async fn resync_sources_inner(
                             total.updated += 1;
                         }
                         Err(err) => {
-                            eprintln!("mac resync: failed to re-embed {}: {err:#}", src.url);
+                            crate::note!("mac resync: failed to re-embed {}: {err:#}", src.url);
                             scan.failed += 1;
                             total.failed += 1;
                         }
@@ -4774,7 +4783,7 @@ pub(crate) async fn resync_sources_inner(
                 Err(err) => {
                     // Keep the working text; permission prompts and closed
                     // apps are transient. The cadence gate throttles retries.
-                    eprintln!("mac resync: failed to fetch {}: {err:#}", src.url);
+                    crate::note!("mac resync: failed to fetch {}: {err:#}", src.url);
                 }
             }
             continue;
@@ -4809,7 +4818,7 @@ pub(crate) async fn resync_sources_inner(
                         total.updated += 1;
                     }
                     Err(err) => {
-                        eprintln!("file resync: failed to re-embed {}: {err:#}", src.url);
+                        crate::note!("file resync: failed to re-embed {}: {err:#}", src.url);
                         scan.failed += 1;
                         total.failed += 1;
                     }
@@ -4819,7 +4828,7 @@ pub(crate) async fn resync_sources_inner(
                 // Keep the working text; bump the mtime so a broken file isn't
                 // re-attempted every minute.
                 e(state.db.set_source_mtime(&src.id, mtime).await)?;
-                eprintln!("file resync: failed to re-read {}: {err:#}", src.url);
+                crate::note!("file resync: failed to re-read {}: {err:#}", src.url);
                 scan.failed += 1;
                 total.failed += 1;
             }
@@ -7397,7 +7406,7 @@ fn spawn_auto_evidence(
         .collect();
     let distinct: HashSet<&str> = sources.iter().map(|c| c.source_id.as_str()).collect();
     if distinct.len() < 2 || answer.chars().count() < 400 {
-        eprintln!(
+        crate::note!(
             "auto evidence: gate skipped ({} distinct sources, {} chars)",
             distinct.len(),
             answer.chars().count()
@@ -7410,7 +7419,7 @@ fn spawn_auto_evidence(
     let answer = answer.to_string();
     tauri::async_runtime::spawn(async move {
         if let Err(err) = auto_evidence(&app, &notebook_id, &question, &answer, &sources).await {
-            eprintln!("auto evidence pass failed: {err:#}");
+            crate::note!("auto evidence pass failed: {err:#}");
         }
     });
 }
@@ -7453,7 +7462,7 @@ async fn auto_evidence(
     let Some((title, body)) = rag::parse_auto_evidence(&draft) else {
         // SKIP is the common, correct case — but say so in the terminal so
         // "nothing happened" is diagnosable from the dev console.
-        eprintln!(
+        crate::note!(
             "auto evidence: model declined ({} chars): {}",
             draft.len(),
             draft
@@ -7491,7 +7500,7 @@ async fn auto_evidence(
             ai.chat(&messages).await?.text
         };
         let Some((title, body)) = rag::parse_auto_evidence(&merged) else {
-            eprintln!("auto evidence: merge declined for \"{}\"", prior.title);
+            crate::note!("auto evidence: merge declined for \"{}\"", prior.title);
             return Ok(());
         };
         state
@@ -7525,7 +7534,7 @@ async fn auto_evidence(
             updated_at: ts,
         };
         add_note_indexed(&state, &note).await?;
-        eprintln!("auto evidence: created \"{}\"", note.title);
+        crate::note!("auto evidence: created \"{}\"", note.title);
         note
     };
 
@@ -7600,7 +7609,7 @@ async fn auto_evidence(
         }
     };
     if let Err(err) = ledger_result {
-        eprintln!("auto evidence: ledger write failed: {err:#}");
+        crate::note!("auto evidence: ledger write failed: {err:#}");
     }
 
     // Same event the MCP server emits — open windows refresh their notes
@@ -7640,7 +7649,7 @@ pub async fn bump_note_usage(db: &Db, citations: &[Citation], field: &str) {
         return;
     }
     if let Err(err) = db.bump_note_usage(&ids, field, now()).await {
-        eprintln!("note usage bump ({field}) failed: {err:#}");
+        crate::note!("note usage bump ({field}) failed: {err:#}");
     }
 }
 
@@ -7658,7 +7667,7 @@ pub async fn add_note_indexed(state: &AppState, note: &Note) -> anyhow::Result<(
 /// the source chunk table under `source_id = "note:<id>"`.
 pub async fn index_note(state: &AppState, note: &Note) {
     if let Err(err) = try_index_note(state, note).await {
-        eprintln!("indexing note {} failed: {err:#}", note.id);
+        crate::note!("indexing note {} failed: {err:#}", note.id);
     }
 }
 
@@ -8427,7 +8436,7 @@ pub async fn start_generation_detached(
                     .update_note(&spawned.id, &title, &content, ts)
                     .await
                 {
-                    eprintln!("mcp generate: persisting result failed: {err:#}");
+                    crate::note!("mcp generate: persisting result failed: {err:#}");
                     return;
                 }
                 let _ = state.db.set_note_status(&spawned.id, "").await;
@@ -10139,7 +10148,7 @@ pub(crate) async fn retrieve_everything(
         // the app was quitting mid-backfill).
         crate::gist::spawn_sweep(state.db.clone(), ai.clone());
         if let Err(err) = crate::router::ensure_router(&state.db, &ai).await {
-            eprintln!("router refresh failed (falling back to flat): {err:#}");
+            crate::note!("router refresh failed (falling back to flat): {err:#}");
         }
         match crate::router::route_notebooks(
             &state.db,
@@ -10151,7 +10160,7 @@ pub(crate) async fn retrieve_everything(
             Ok(ids) if !ids.is_empty() => Some(ids),
             Ok(_) => None,
             Err(err) => {
-                eprintln!("notebook routing failed (falling back to flat): {err:#}");
+                crate::note!("notebook routing failed (falling back to flat): {err:#}");
                 None
             }
         }
@@ -10203,7 +10212,7 @@ pub(crate) async fn retrieve_everything(
     // The synthetic-corpus percentiles live in eval_retrieval_latency; this
     // is how those numbers get checked against an actual library.
     if std::env::var_os("ALCHEMY_TIMING").is_some() {
-        eprintln!(
+        crate::note!(
             "timing meta-retrieval: {:.1}ms (deep={deep})",
             retrieval_t.elapsed().as_secs_f64() * 1000.0
         );
@@ -10336,7 +10345,7 @@ pub(crate) async fn retrieve_everything(
             .bump_note_usage(&note_ids, "retrieval_hits", now())
             .await
         {
-            eprintln!("note usage bump (retrieval_hits) failed: {err:#}");
+            crate::note!("note usage bump (retrieval_hits) failed: {err:#}");
         }
     }
 
@@ -10537,7 +10546,7 @@ pub async fn ask_everything(
         match global_meta_route(&state, Some(&app), &question).await {
             Ok(g) => g,
             Err(err) => {
-                eprintln!("meta-global route failed, falling back to pointed: {err:#}");
+                crate::note!("meta-global route failed, falling back to pointed: {err:#}");
                 None
             }
         }

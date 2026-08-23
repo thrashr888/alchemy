@@ -621,10 +621,10 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
     // promotion and pruning are naturally once-only, the rematch is gated,
     // and enrichment is budgeted per pass).
     if let Err(err) = sweep_orphan_cards(db).await {
-        eprintln!("registry orphan sweep failed: {err:#}");
+        crate::note!("registry orphan sweep failed: {err:#}");
     }
     if let Err(err) = enrich_card_facts(db, ai).await {
-        eprintln!("registry fact enrichment failed: {err:#}");
+        crate::note!("registry fact enrichment failed: {err:#}");
     }
     let gists = db.list_gists().await?;
     if gists.is_empty() {
@@ -656,7 +656,7 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
     // over from earlier ones. One batched Small call; when the queue is
     // short enough to rule on by hand it costs nothing at all.
     if let Err(err) = triage_suggested_cards(db, ai).await {
-        eprintln!("registry triage failed: {err:#}");
+        crate::note!("registry triage failed: {err:#}");
     }
     Ok(proposed)
 }
@@ -1013,7 +1013,7 @@ async fn suggest_for_notebook(
         let haystack = material.to_lowercase();
         let gated = gate_suggestions(&reply, &haystack);
         if gated.is_empty() {
-            eprintln!(
+            crate::note!(
                 "registry: nothing survived the gate; model said: {}",
                 reply
                     .replace('\n', " / ")
@@ -1116,13 +1116,13 @@ pub(crate) async fn suggest_now(
     let db = db.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(err) = triage_suggested_cards(&db, &ai).await {
-            eprintln!("registry triage failed: {err:#}");
+            crate::note!("registry triage failed: {err:#}");
         }
         if let Err(err) = sweep_orphan_cards(&db).await {
-            eprintln!("registry orphan sweep failed: {err:#}");
+            crate::note!("registry orphan sweep failed: {err:#}");
         }
         if let Err(err) = enrich_card_facts(&db, &ai).await {
-            eprintln!("registry fact enrichment failed: {err:#}");
+            crate::note!("registry fact enrichment failed: {err:#}");
         }
     });
     Ok(SuggestOutcome {

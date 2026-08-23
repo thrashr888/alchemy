@@ -195,7 +195,7 @@ pub fn seed_on_startup(data_dir: &Path) {
     std::thread::spawn(move || {
         let Some(dir) = templates_dir() else { return };
         if let Err(err) = ensure_default_templates(&dir) {
-            eprintln!("templates: could not seed {}: {err:#}", dir.display());
+            crate::note!("templates: could not seed {}: {err:#}", dir.display());
             return; // retry next launch — don't write the marker
         }
         let _ = std::fs::write(&marker, b"");

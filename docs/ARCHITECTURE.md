@@ -89,6 +89,24 @@ routing/deep flags, ranked citations) appended to
 failures never break retrieval. This is the raw data for future retrieval
 tuning.
 
+### `diagnostics.rs` — errors, panics, and the way out of them
+One JSONL line per failure — Rust panics (hook installed on the first line of
+`run()`), every failed IPC call (logged at `api.ts`'s single `run()`
+chokepoint), front-end throws and unhandled rejections, render crashes, and
+the background sweeps that fail where no one is looking. Written to
+`~/Library/Logs/com.thrashr888.alchemy/alchemy.log` (2 MB rotation, one
+generation) so Console.app lists it beside the crash reports, mirrored to the
+unified log under the `com.thrashr888.alchemy` subsystem, and readable back
+through `recent_errors` over IPC and MCP.
+
+A GUI app has no stderr, so this is the only record that exists in a bundled
+build. Two rules: recording never fails loudly (a logger that throws hands the
+caller a second error inside its error path), and a flood never becomes the
+log (identical failures write three times a minute, then every hundredth
+carrying its count). Fatals — a poisoned lock, repeated panics, a render crash
+— raise a restart screen rather than leaving a dead window.
+See `docs/RFC-diagnostics.md`.
+
 ### `ingest.rs` — extraction & chunking
 - Extraction dispatches on type: **PDF** via `pdf-extract` (scanned/image PDFs
   rejected with an OCR hint), **URL/HTML** via readability extraction (article

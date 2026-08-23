@@ -158,12 +158,14 @@ async fn run_pass(app: &AppHandle) {
     if now_ms() - LAST_MAINTAIN.load(Ordering::Relaxed) >= MAINTAIN_EVERY_MS {
         LAST_MAINTAIN.store(now_ms(), Ordering::Relaxed);
         match state.db.maintain().await {
-            Ok((bytes, versions)) if versions > 0 => eprintln!(
+            Ok((bytes, versions)) if versions > 0 => crate::note!(
                 "db maintenance: pruned {versions} old versions, reclaimed {} MB",
                 bytes / (1024 * 1024)
             ),
             Ok(_) => {}
-            Err(err) => eprintln!("db maintenance failed: {err:#}"),
+            Err(err) => {
+                crate::diagnostics::error("maintenance", format!("db maintenance failed: {err:#}"))
+            }
         }
     }
     let background = {
@@ -191,7 +193,7 @@ async fn run_pass(app: &AppHandle) {
         let schedules = match state.db.all_report_schedules().await {
             Ok(schedules) => schedules,
             Err(err) => {
-                eprintln!("night shift: schedule read failed: {err:#}");
+                crate::diagnostics::error("night-shift", format!("schedule read failed: {err:#}"));
                 Vec::new()
             }
         };
@@ -265,9 +267,10 @@ async fn run_pass(app: &AppHandle) {
                                 let _ = app.notification().builder().title(title).body(body).show();
                             }
                         }
-                        Err(err) => {
-                            eprintln!("night shift: report {} failed: {err}", schedule.name)
-                        }
+                        Err(err) => crate::diagnostics::error(
+                            "night-shift",
+                            format!("report {} failed: {err}", schedule.name),
+                        ),
                     }
                 }
                 REPORTS_RUNNING.store(false, Ordering::SeqCst);

@@ -340,7 +340,7 @@ fn dump_json() -> String {
 pub fn prime() {
     *LAST_SCALE.lock().unwrap() = Some(current_scale());
     #[cfg(all(target_os = "macos", feature = "debug"))]
-    eprintln!("[textsize] startup signals: {}", dump_json());
+    crate::note!("[textsize] startup signals: {}", dump_json());
 }
 
 /// Re-query and, if the scale changed since we last published, broadcast it to

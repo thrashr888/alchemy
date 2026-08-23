@@ -7,6 +7,7 @@ mod clip;
 mod commands;
 mod connectors;
 mod db;
+mod diagnostics;
 mod examples;
 mod export;
 mod filesearch;
@@ -57,6 +58,10 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before anything else: a panic in setup used to be a silent bounce in
+    // the Dock. From here on it lands in ~/Library/Logs (docs/RFC-diagnostics.md).
+    diagnostics::install_panic_hook();
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -110,11 +115,16 @@ pub fn run() {
             // Hand background sweeps their announce channel before anything
             // can spawn one (commands::notify_changed).
             commands::set_app_handle(app.handle().clone());
-            let data_dir = app
-                .path()
-                .app_data_dir()
-                .expect("could not resolve app data dir");
-            std::fs::create_dir_all(&data_dir).ok();
+            // Point the diagnostics log at the app log dir and open the
+            // session. Everything below can now fail out loud.
+            diagnostics::init(&app.handle().clone());
+            let data_dir = match app.path().app_data_dir() {
+                Ok(dir) => dir,
+                Err(err) => diagnostics::fatal_startup("could not resolve the app data dir", &err),
+            };
+            if let Err(err) = std::fs::create_dir_all(&data_dir) {
+                diagnostics::fatal_startup("could not create the app data dir", &err);
+            }
 
             let db_dir = data_dir.join("lancedb");
             let config_path = data_dir.join("ai_config.json");
@@ -133,8 +143,14 @@ pub fn run() {
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default();
 
-            let db = tauri::async_runtime::block_on(db::Db::open(&db_dir))
-                .expect("failed to open LanceDB");
+            // The one startup failure users actually hit: a database left
+            // half-written by a hard kill, or a schema a downgraded binary
+            // can't read. Dying here with no window and no message is the
+            // worst possible answer — say what happened and where to look.
+            let db = match tauri::async_runtime::block_on(db::Db::open(&db_dir)) {
+                Ok(db) => db,
+                Err(err) => diagnostics::fatal_startup("could not open the database", &err),
+            };
 
             // App menu, built exactly once (rebuilding would clear AppKit's
             // auto-managed Window list). Open Recent mutates in place later.
@@ -234,7 +250,7 @@ pub fn run() {
                         db.fts_write_notified().await;
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                         if let Err(err) = db.flush_fts().await {
-                            eprintln!("fts flush: {err:#}");
+                            crate::note!("fts flush: {err:#}");
                         }
                     }
                 });
@@ -249,12 +265,12 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                     match db.maintain().await {
-                        Ok((bytes, versions)) if versions > 0 => eprintln!(
+                        Ok((bytes, versions)) if versions > 0 => crate::note!(
                             "db maintenance: pruned {versions} old versions, reclaimed {} MB",
                             bytes / (1024 * 1024)
                         ),
                         Ok(_) => {}
-                        Err(err) => eprintln!("db maintenance failed: {err:#}"),
+                        Err(err) => crate::note!("db maintenance failed: {err:#}"),
                     }
                 });
             }
@@ -267,6 +283,10 @@ pub fn run() {
         })
         .on_menu_event(|app, event| menu::handle_event(app, event.id().0.as_str()))
         .invoke_handler(tauri::generate_handler![
+            commands::log_client_error,
+            commands::recent_errors,
+            commands::pending_fatal,
+            commands::reveal_log,
             commands::list_notebooks,
             commands::create_notebook,
             commands::rename_notebook,

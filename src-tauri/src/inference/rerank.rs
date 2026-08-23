@@ -163,7 +163,7 @@ mod tests {
             .await
             .is_err()
         {
-            eprintln!("SKIP: reranker model not downloaded");
+            crate::note!("SKIP: reranker model not downloaded");
             return;
         }
         let t0 = std::time::Instant::now();
@@ -171,7 +171,7 @@ mod tests {
             .rank("how do I dial in espresso grind size", &pool)
             .await
             .expect("rank");
-        eprintln!(
+        crate::note!(
             "xenc small: 24 chunk-sized passages in {:.0} ms",
             t0.elapsed().as_secs_f64() * 1000.0
         );
