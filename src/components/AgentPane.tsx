@@ -57,6 +57,10 @@ export function AgentPane({
   const setAcpAgentId = useStore((s) => s.setAcpAgentId);
   const setAcpEntries = useStore((s) => s.setAcpEntries);
   const setAcpDraft = useStore((s) => s.setAcpDraft);
+  const setAcpSessionId = useStore((s) => s.setAcpSessionId);
+  const sessionId = useStore((s) =>
+    agentId ? (s.acpPanes[notebookId]?.agents[agentId]?.sessionId ?? null) : null,
+  );
   const hydrateAcpPane = useStore((s) => s.hydrateAcpPane);
   const hostedAgent = useStore((s) => s.aiConfig?.hostedAgent ?? "");
 
@@ -70,24 +74,33 @@ export function AgentPane({
     (id: string | null) => setAcpAgentId(notebookId, id),
     [notebookId, setAcpAgentId],
   );
-  // Every write names the agent it belongs to. Sessions can't outlive a
-  // picker change (the picker locks while one runs), so "the selected agent"
-  // is always the one this stream is for.
+  // Every write names the agent it belongs to, read live rather than closed
+  // over. Long-lived callbacks here (the event listener, sendPrompt) capture
+  // their writer once, so a writer that depended on `agentId` would keep the
+  // value from first render — null, before the picker had defaulted — and
+  // drop every entry on the floor. Reading from the store at call time keeps
+  // these stable and correct. Sessions can't outlive a picker change (it
+  // locks while one runs), so the selected agent is always the right owner.
+  const currentAgentId = useCallback(
+    () => useStore.getState().acpPanes[notebookId]?.agentId ?? null,
+    [notebookId],
+  );
   const setEntries = useCallback(
     (update: Entry[] | ((prev: Entry[]) => Entry[])) => {
-      if (!agentId) return;
-      setAcpEntries(notebookId, agentId, (prev) =>
+      const owner = currentAgentId();
+      if (!owner) return;
+      setAcpEntries(notebookId, owner, (prev) =>
         typeof update === "function" ? update(prev) : update,
       );
     },
-    [notebookId, agentId, setAcpEntries],
+    [notebookId, currentAgentId, setAcpEntries],
   );
   const setDraft = useCallback(
     (text: string) => {
-      if (!agentId) return;
-      setAcpDraft(notebookId, agentId, text);
+      const owner = currentAgentId();
+      if (owner) setAcpDraft(notebookId, owner, text);
     },
-    [notebookId, agentId, setAcpDraft],
+    [notebookId, currentAgentId, setAcpDraft],
   );
   const [permission, setPermission] = useState<AcpPermissionEvent | null>(null);
   const [starting, setStarting] = useState(false);
@@ -158,8 +171,13 @@ export function AgentPane({
       if (e.payload.notebookId !== notebookId) return;
       setState(e.payload.state);
       if (e.payload.state === "ready") {
-        const detail = e.payload.detail as { mcpAttached?: boolean } | null;
+        const detail = e.payload.detail as {
+          mcpAttached?: boolean;
+          sessionId?: string;
+        } | null;
         setNoNotebookAccess(detail?.mcpAttached === false);
+        if (detail?.sessionId)
+          setAcpSessionId(notebookId, e.payload.agentId, detail.sessionId);
       }
       if (e.payload.state === "error") {
         const detail = e.payload.detail;
@@ -185,7 +203,7 @@ export function AgentPane({
       void unlistenUpdate.then((fn) => fn());
       void unlistenPermission.then((fn) => fn());
     };
-  }, [notebookId]);
+  }, [notebookId, setAcpSessionId, setEntries]);
 
   // Stop the session when the pane goes away, so no agent subprocess
   // outlives the UI that was driving it.
@@ -221,8 +239,8 @@ export function AgentPane({
     if (!agentId) return false;
     setStarting(true);
     try {
-      await api.acpStart(notebookId, agentId);
       setEntries([]);
+      await api.acpStart(notebookId, agentId, sessionId);
       setFailure(null);
       composerRef.current?.focus();
       return true;
@@ -235,7 +253,7 @@ export function AgentPane({
     } finally {
       setStarting(false);
     }
-  }, [agentId, notebookId]);
+  }, [agentId, notebookId, sessionId, setEntries]);
 
   const sendPrompt = useCallback(
     async (text: string) => {
@@ -250,7 +268,7 @@ export function AgentPane({
         });
       }
     },
-    [notebookId],
+    [notebookId, setEntries],
   );
 
   async function submit() {
@@ -481,12 +499,27 @@ function AgentBlankSlate({
 
 /** Fold one session/update into the transcript. Message and thought chunks
  *  stream token by token, so they append into the trailing entry of their
- *  kind rather than starting a new one; tool calls update in place by id. */
+ *  kind rather than starting a new one; tool calls update in place by id.
+ *
+ *  `user_message_chunk` only ever arrives from a `session/load` replay — in a
+ *  live turn the composer has already put the user's words on screen. Ignoring
+ *  it made a resumed conversation unreadable: every user turn vanished, and
+ *  with nothing between them the agent's separate answers merged into one
+ *  run-on paragraph. */
 function applyUpdate(prev: Entry[], update: AcpUpdateEvent["update"]): Entry[] {
   const kind = update.sessionUpdate;
   const text = update.content?.text ?? "";
-  if (kind === "agent_message_chunk" || kind === "agent_thought_chunk") {
-    const want = kind === "agent_message_chunk" ? "agent" : "thought";
+  if (
+    kind === "agent_message_chunk" ||
+    kind === "agent_thought_chunk" ||
+    kind === "user_message_chunk"
+  ) {
+    const want =
+      kind === "agent_message_chunk"
+        ? "agent"
+        : kind === "user_message_chunk"
+          ? "user"
+          : "thought";
     const last = prev[prev.length - 1];
     if (last && last.kind === want) {
       const merged = { ...last, text: last.text + text } as Entry;

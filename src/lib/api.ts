@@ -627,8 +627,8 @@ export const api = {
     run(query<string | null>("acp_status", { notebookId })),
   /** Spawns the agent subprocess — npx-backed adapters can take a while on
    *  first run, so this gets the long AI timeout, not the 30s command one. */
-  acpStart: (notebookId: string, agentId: string) =>
-    run(ai<void>("acp_start", { notebookId, agentId })),
+  acpStart: (notebookId: string, agentId: string, resume?: string | null) =>
+    run(ai<void>("acp_start", { notebookId, agentId, resume: resume ?? null })),
   acpPrompt: (notebookId: string, text: string) =>
     run(cmd<void>("acp_prompt", { notebookId, text })),
   acpCancel: (notebookId: string) =>

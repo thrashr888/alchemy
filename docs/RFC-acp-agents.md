@@ -116,7 +116,37 @@ detected agents, pick default, per-agent auth status.
    every one of these CLIs authenticates through its own device flow, so the
    honest affordance is the Sign in button that opens their terminal command,
    not a login form of ours that would only proxy theirs.
-4. Later: `session/load` resume, plans panel, terminal.
+4. `session/load` resume ~~done~~ (2026-08-23); plans panel and terminal
+   still open.
+
+## Resume (2026-08-23)
+
+A restored transcript used to be a photograph: the words were there, but the
+agent behind them was gone, so the next prompt started cold and wiped the
+history it had just shown. `acp_start` now takes the session id the pane
+remembers and tries `session/load` first, when the agent advertises
+`loadSession`. The agent replays the whole conversation back as
+`session/update` notifications, so the transcript is rebuilt from its memory
+rather than ours — and this time it can be prompted again, with everything
+before it still in context. Verified across a real app restart: the agent
+recalled a codeword given to it by the previous process.
+
+A stale id is ordinary rather than exceptional — agents expire their own
+sessions — so a failed load falls through to `session/new` silently. Clearing
+a conversation drops its session id too, or Clear would be undone by the next
+resume.
+
+Two things this taught us, both fixed here:
+
+- **`user_message_chunk` only ever arrives from a replay.** In a live turn the
+  composer has already drawn the user's words, so we ignored the update. On
+  replay that made every user turn vanish, and with nothing between them the
+  agent's separate answers merged into one run-on paragraph.
+- **Long-lived callbacks must not close over the selected agent.** The event
+  listener and `sendPrompt` capture their writer once; a writer that depended
+  on `agentId` kept the value from first render — null, before the picker had
+  defaulted — and dropped every entry silently. The writers now read the
+  current agent from the store at call time.
 
 ## Which agents (2026-08-22)
 
