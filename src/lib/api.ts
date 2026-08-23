@@ -408,6 +408,22 @@ export const api = {
   kokoroStatus: () => run(query<KokoroStatus>("kokoro_status")),
   setupKokoro: () => run(slow<KokoroStatus>("setup_kokoro")),
   removeKokoro: () => run(cmd<KokoroStatus>("remove_kokoro")),
+  /** Push the frontend-owned menu lists (themes, studio generators) into
+   *  the native menu; re-called on theme change to move the selection dot. */
+  fillMenuLists: (
+    themes: [string, string][],
+    generators: [string, string][],
+    currentTheme: string,
+  ) =>
+    run(cmd<void>("fill_menu_lists", { themes, generators, currentTheme })),
+  /** Settings → Shortcuts rows from the menu's command registry. */
+  listShortcuts: () =>
+    run(
+      query<{ keys: string; label: string; context: string }[]>(
+        "list_shortcuts",
+        {},
+      ),
+    ),
   exportNotebookOkfZip: (notebookId: string, destPath: string) =>
     run(slow<string>("export_notebook_okf_zip", { notebookId, destPath })),
   probeOkf: (path: string) => run(query<boolean>("probe_okf", { path })),

@@ -251,6 +251,9 @@ export interface AppState {
 
   /** Omit the id to export the currently open notebook (palette/menu). */
   exportNotebookOkf: (notebookId?: string) => Promise<void>;
+  /** Bumped by Edit > Find; whichever find-capable surface is mounted
+   *  (reader, gallery, home) opens its find bar. */
+  findBump: number;
   importOkfOpen: boolean;
   pendingImportPath: string | null;
   importOkf: (path: string, notebookId?: string | null) => Promise<void>;

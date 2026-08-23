@@ -291,30 +291,25 @@ export function AppearanceTab() {
   );
 }
 
-const SHORTCUTS: { keys: string[]; label: string; context?: string }[] = [
-  { keys: ["⌘", "N"], label: "New notebook", context: "Home" },
-  { keys: ["⌘", "N"], label: "New note", context: "Notebook" },
-  { keys: ["⌘", "K"], label: "Open the command menu" },
-  { keys: ["⌘", "F"], label: "Find in source", context: "Reader" },
-  { keys: ["⌘", "1"], label: "Show or hide Sources", context: "Notebook" },
-  { keys: ["⌘", "2"], label: "Show or hide Studio", context: "Notebook" },
-  { keys: ["⌘", ","], label: "Open Settings" },
-  { keys: ["⌘", "A"], label: "Select all sources or notes", context: "Notebook" },
-  { keys: ["⇧", "click"], label: "Select a range of rows", context: "Notebook" },
-  { keys: ["⌘", "click"], label: "Add or remove a row from the selection", context: "Notebook" },
-  { keys: ["⌫"], label: "Remove the selected rows", context: "Notebook" },
-  { keys: ["↩"], label: "Send message · next find match" },
-  { keys: ["⇧", "↩"], label: "New line in the composer" },
-  { keys: ["esc"], label: "Close dialog or menu · clear selection" },
-];
-
 export function ShortcutsTab() {
+  // The rows come from the menu's command registry (menu.rs::CMD) — one
+  // source of truth for the native menu and this tab, so a shortcut can no
+  // longer be registered in one and missing from the other.
+  const [shortcuts, setShortcuts] = useState<
+    { keys: string; label: string; context: string }[]
+  >([]);
+  useEffect(() => {
+    api
+      .listShortcuts()
+      .then(setShortcuts)
+      .catch(() => setShortcuts([]));
+  }, []);
   return (
     <div className="flex flex-col gap-1">
-      {SHORTCUTS.map((shortcut) => (
-        <div key={`${shortcut.label}-${shortcut.context ?? "global"}`} className="flex items-center gap-3 rounded-md px-1 py-1.5">
+      {shortcuts.map((shortcut) => (
+        <div key={`${shortcut.label}-${shortcut.context || "global"}`} className="flex items-center gap-3 rounded-md px-1 py-1.5">
           <div className="flex w-20 shrink-0 items-center gap-1">
-            {shortcut.keys.map((key) => <Kbd key={key}>{key}</Kbd>)}
+            {shortcut.keys.split(" ").map((key) => <Kbd key={key}>{key}</Kbd>)}
           </div>
           <span className="text-body text-foreground/90">{shortcut.label}</span>
           {shortcut.context && <span className="ml-auto text-micro text-subtle-foreground">{shortcut.context}</span>}

@@ -5,7 +5,7 @@ import {
   getCurrentWebviewWindow,
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import { isWebUrl, SUPPORTED_EXTENSIONS, visibleTitle } from "./utils";
 import { applyTheme, SYSTEM_THEME, themeIsDark } from "./themes";
@@ -409,6 +409,7 @@ export const useStore = create<AppState>((set, get) => {
     failedInput: null,
     pendingInput: null,
     pendingAsk: null,
+    findBump: 0,
     importOkfOpen: false,
     pendingImportPath: null,
     error: null,
@@ -805,6 +806,85 @@ export const useStore = create<AppState>((set, get) => {
           set({ importOkfOpen: true });
         else if (e.payload.id === "menu-back") s.navBack();
         else if (e.payload.id === "menu-forward") s.navForward();
+        else if (e.payload.id === "menu-new-notebook") {
+          // Same auto-title the palette's New Notebook uses.
+          const taken = new Set(get().notebooks.map((n) => n.title));
+          let title = "Untitled notebook";
+          for (let i = 2; taken.has(title); i++) title = `Untitled notebook ${i}`;
+          void s.createNotebook(title);
+        } else if (e.payload.id === "menu-new-note") {
+          if (!get().currentId) {
+            s.pushToast("info", "Open a notebook first, then add a note");
+            return;
+          }
+          // Open the panel; StudioPanel opens the composer when it mounts.
+          set({ pendingNewNote: true });
+          if (!get().studioOpen) s.toggleStudio();
+        } else if (e.payload.id === "menu-add-files") {
+          if (get().currentId) s.openAddSource();
+          else s.pushToast("info", "Open a notebook first, then add sources");
+        } else if (e.payload.id === "menu-find") {
+          set({ findBump: get().findBump + 1 });
+        } else if (e.payload.id === "menu-toggle-sources") {
+          if (get().currentId) s.toggleSources();
+        } else if (e.payload.id === "menu-toggle-studio") {
+          if (get().currentId) s.toggleStudio();
+        } else if (e.payload.id === "menu-toggle-gallery") {
+          if (get().currentId)
+            set({ galleryOpen: !get().galleryOpen, ledgerOpen: false });
+          else s.pushToast("info", "Open a notebook to browse its gallery");
+        } else if (e.payload.id === "menu-toggle-ledger") {
+          if (get().currentId)
+            set({ ledgerOpen: !get().ledgerOpen, galleryOpen: false });
+          else s.pushToast("info", "Open a notebook to read its ledger");
+        } else if (e.payload.id === "menu-toggle-glass") {
+          s.setReading({ glass: !get().reading.glass });
+        } else if (e.payload.id.startsWith("theme:")) {
+          s.setTheme(e.payload.id.slice("theme:".length));
+        } else if (e.payload.id.startsWith("generate:")) {
+          if (get().currentId)
+            void s.generateArtifact(
+              e.payload.id.slice("generate:".length) as Note["kind"],
+            );
+          else s.pushToast("info", "Open a notebook first, then generate");
+        } else if (e.payload.id === "menu-export-note") {
+          const r = get().reader;
+          const doc = r.open ? r.history[r.index] : undefined;
+          const note =
+            doc?.type === "note"
+              ? get().notes.find((n) => n.id === doc.id)
+              : undefined;
+          if (!note) {
+            s.pushToast("info", "Open a note in the reader to export it");
+            return;
+          }
+          void (async () => {
+            const { exportNote, exportTargets } = await import("./noteExport");
+            await exportNote(note, exportTargets(note)[0]);
+          })();
+        } else if (e.payload.id === "menu-archive-notebook") {
+          const id = get().currentId;
+          if (!id) {
+            s.pushToast("info", "Open a notebook to archive it");
+            return;
+          }
+          void s.setNotebookStatus(id, "archived").then(() => s.closeNotebook());
+        } else if (e.payload.id === "menu-delete-notebook") {
+          const id = get().currentId;
+          const nb = get().notebooks.find((n) => n.id === id);
+          if (!id || !nb) {
+            s.pushToast("info", "Open a notebook to delete it");
+            return;
+          }
+          // Native confirm: this is the one delete no toast can undo, and
+          // the menu has no in-app dialog host.
+          void ask(
+            `This permanently deletes "${nb.title}" and all of its sources.`,
+            { title: `Delete "${nb.title}"?`, kind: "warning" },
+          ).then((ok) => {
+            if (ok) void s.deleteNotebook(id);
+          });
+        }
       });
       void listen<{ target: string; id: string }>(
         "menu://open-notebook",

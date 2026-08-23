@@ -217,6 +217,18 @@ export function GalleryPane() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Edit > Find (menu.rs): the menu item has no accelerator, so it bumps
+  // findBump; the mounted find surface (here, the gallery) answers.
+  const findBump = useStore((s) => s.findBump);
+  useEffect(() => {
+    if (findBump === 0) return;
+    setFindOpen(true);
+    requestAnimationFrame(() => {
+      findRef.current?.focus();
+      findRef.current?.select();
+    });
+  }, [findBump]);
+
   // Closing clears the query, so the grid is never left silently filtered.
   useEffect(() => {
     if (!findOpen) setFindQuery("");

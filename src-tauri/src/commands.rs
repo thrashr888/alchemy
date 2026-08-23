@@ -9437,6 +9437,31 @@ pub async fn rebuild_app_menu(
     crate::menu::fill_recents(&app, &tray_recent.0, &recents).map_err(|err| err.to_string())
 }
 
+/// Fill the frontend-owned menu lists — View > Theme (themes.ts is the
+/// authority on the 23 schemes) and Notebook > Generate (studioArtifacts.tsx
+/// owns the roster). Called at startup and again when the theme changes so
+/// the selection dot tracks. In-place mutation, like Open Recent.
+#[tauri::command]
+pub fn fill_menu_lists(
+    app: AppHandle,
+    themes_menu: State<'_, crate::menu::ThemeMenu>,
+    generate_menu: State<'_, crate::menu::GenerateMenu>,
+    themes: Vec<(String, String)>,
+    generators: Vec<(String, String)>,
+    current_theme: String,
+) -> Result<(), String> {
+    crate::menu::fill_themes(&app, &themes_menu.0, &themes, &current_theme)
+        .map_err(|err| err.to_string())?;
+    crate::menu::fill_generators(&app, &generate_menu.0, &generators).map_err(|err| err.to_string())
+}
+
+/// The Settings → Shortcuts rows, straight from the menu's command registry
+/// — one source of truth (menu.rs::CMD) for both surfaces.
+#[tauri::command]
+pub fn list_shortcuts() -> Vec<crate::menu::ShortcutRow> {
+    crate::menu::shortcut_rows()
+}
+
 // ---- Home page: activity, stats, global search ----------------------------
 
 #[tauri::command]
