@@ -46,11 +46,17 @@ export function AgentPane({
   const agentId = useStore(
     (s) => s.acpPanes[notebookId]?.agentId ?? null,
   );
-  const entries = useStore(
-    (s) => s.acpPanes[notebookId]?.entries ?? NO_ENTRIES,
+  const entries = useStore((s) =>
+    agentId
+      ? (s.acpPanes[notebookId]?.agents[agentId]?.entries ?? NO_ENTRIES)
+      : NO_ENTRIES,
+  );
+  const draft = useStore((s) =>
+    agentId ? (s.acpPanes[notebookId]?.agents[agentId]?.draft ?? "") : "",
   );
   const setAcpAgentId = useStore((s) => s.setAcpAgentId);
   const setAcpEntries = useStore((s) => s.setAcpEntries);
+  const setAcpDraft = useStore((s) => s.setAcpDraft);
   const hydrateAcpPane = useStore((s) => s.hydrateAcpPane);
   const hostedAgent = useStore((s) => s.aiConfig?.hostedAgent ?? "");
 
@@ -64,15 +70,26 @@ export function AgentPane({
     (id: string | null) => setAcpAgentId(notebookId, id),
     [notebookId, setAcpAgentId],
   );
+  // Every write names the agent it belongs to. Sessions can't outlive a
+  // picker change (the picker locks while one runs), so "the selected agent"
+  // is always the one this stream is for.
   const setEntries = useCallback(
-    (update: Entry[] | ((prev: Entry[]) => Entry[])) =>
-      setAcpEntries(notebookId, (prev) =>
+    (update: Entry[] | ((prev: Entry[]) => Entry[])) => {
+      if (!agentId) return;
+      setAcpEntries(notebookId, agentId, (prev) =>
         typeof update === "function" ? update(prev) : update,
-      ),
-    [notebookId, setAcpEntries],
+      );
+    },
+    [notebookId, agentId, setAcpEntries],
+  );
+  const setDraft = useCallback(
+    (text: string) => {
+      if (!agentId) return;
+      setAcpDraft(notebookId, agentId, text);
+    },
+    [notebookId, agentId, setAcpDraft],
   );
   const [permission, setPermission] = useState<AcpPermissionEvent | null>(null);
-  const [draft, setDraft] = useState("");
   const [starting, setStarting] = useState(false);
   // A session can open fine and still have no notebook tools, when Alchemy's
   // MCP server isn't running. That's the whole reason to host the agent here,
@@ -177,6 +194,17 @@ export function AgentPane({
       void api.acpStop(notebookId).catch(() => {});
     };
   }, [notebookId]);
+
+  // A draft restored from the store (agent switch, remount, app restart)
+  // never passed through onChange, so the textarea would sit at one row with
+  // the rest of the question scrolled out of sight. Size it to its content
+  // whenever the text arrives from outside.
+  useEffect(() => {
+    const el = composerRef.current;
+    if (!el || !visible) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_H)}px`;
+  }, [draft, visible]);
 
   // Also re-run on becoming visible: while the pane is hidden (Chat view in
   // front) the scroll area has no height, so any pinning done then is lost.

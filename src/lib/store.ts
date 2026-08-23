@@ -15,6 +15,8 @@ import { playArrival, playDone, playError } from "./sound";
 import { autoUpdateEnabled, checkForUpdatesQuietly } from "./updates";
 import { DEFAULT_CHAT_CONFIG, DEFAULT_READING_PREFS } from "./types";
 import type {
+  AcpAgentPane,
+  AcpEntry,
   AcpPaneState,
   AppState,
   Migration,
@@ -66,11 +68,37 @@ function saveSourceSel(
 function loadAcpPane(notebookId: string): AcpPaneState | null {
   try {
     const raw = localStorage.getItem(`acpPane:${notebookId}`);
-    const pane = raw ? (JSON.parse(raw) as AcpPaneState) : null;
-    return pane && Array.isArray(pane.entries) ? pane : null;
+    if (!raw) return null;
+    const stored = JSON.parse(raw) as Partial<AcpPaneState> & {
+      /** Pre-per-agent shape: one transcript for the whole notebook. */
+      entries?: AcpEntry[];
+    };
+    const agentId = stored.agentId ?? null;
+    // Migrate the flat shape by filing its transcript under the agent that
+    // was selected when it was written — that is whose conversation it was.
+    if (!stored.agents && Array.isArray(stored.entries)) {
+      return {
+        agentId,
+        agents: agentId
+          ? { [agentId]: { entries: stored.entries, draft: "" } }
+          : {},
+      };
+    }
+    return stored.agents ? { agentId, agents: stored.agents } : null;
   } catch {
     return null;
   }
+}
+
+/** One agent's slice, or an empty one — the shape every writer starts from. */
+function acpAgentPane(
+  panes: Record<string, AcpPaneState>,
+  notebookId: string,
+  agentId: string,
+): AcpAgentPane {
+  return (
+    panes[notebookId]?.agents[agentId] ?? { entries: [], draft: "" }
+  );
 }
 
 /** Entries stream token by token, so writes coalesce behind a short timer
@@ -1636,26 +1664,52 @@ export const useStore = create<AppState>((set, get) => {
     setAcpAgentId: (notebookId, agentId) =>
       set((s) => {
         const pane: AcpPaneState = {
-          entries: s.acpPanes[notebookId]?.entries ?? [],
+          agents: s.acpPanes[notebookId]?.agents ?? {},
           agentId,
         };
         saveAcpPaneSoon(notebookId, pane);
         return { acpPanes: { ...s.acpPanes, [notebookId]: pane } };
       }),
-    setAcpEntries: (notebookId, update) =>
+    setAcpEntries: (notebookId, agentId, update) =>
       set((s) => {
-        const prev = s.acpPanes[notebookId] ?? { agentId: null, entries: [] };
-        const pane = { ...prev, entries: update(prev.entries) };
+        const mine = acpAgentPane(s.acpPanes, notebookId, agentId);
+        const pane: AcpPaneState = {
+          agentId: s.acpPanes[notebookId]?.agentId ?? agentId,
+          agents: {
+            ...s.acpPanes[notebookId]?.agents,
+            [agentId]: { ...mine, entries: update(mine.entries) },
+          },
+        };
         saveAcpPaneSoon(notebookId, pane);
         return { acpPanes: { ...s.acpPanes, [notebookId]: pane } };
       }),
-    clearAcpPane: (notebookId) =>
+    setAcpDraft: (notebookId, agentId, draft) =>
       set((s) => {
-        const pane = s.acpPanes[notebookId];
-        if (!pane || pane.entries.length === 0) return {};
-        const cleared = { ...pane, entries: [] };
-        saveAcpPaneSoon(notebookId, cleared);
-        return { acpPanes: { ...s.acpPanes, [notebookId]: cleared } };
+        const mine = acpAgentPane(s.acpPanes, notebookId, agentId);
+        if (mine.draft === draft) return {};
+        const pane: AcpPaneState = {
+          agentId: s.acpPanes[notebookId]?.agentId ?? agentId,
+          agents: {
+            ...s.acpPanes[notebookId]?.agents,
+            [agentId]: { ...mine, draft },
+          },
+        };
+        saveAcpPaneSoon(notebookId, pane);
+        return { acpPanes: { ...s.acpPanes, [notebookId]: pane } };
+      }),
+    clearAcpPane: (notebookId, agentId) =>
+      set((s) => {
+        const mine = s.acpPanes[notebookId]?.agents[agentId];
+        if (!mine || (mine.entries.length === 0 && !mine.draft)) return {};
+        const pane: AcpPaneState = {
+          agentId: s.acpPanes[notebookId]?.agentId ?? agentId,
+          agents: {
+            ...s.acpPanes[notebookId]?.agents,
+            [agentId]: { entries: [], draft: "" },
+          },
+        };
+        saveAcpPaneSoon(notebookId, pane);
+        return { acpPanes: { ...s.acpPanes, [notebookId]: pane } };
       }),
 
     generateArtifact: async (kind, prompt) => {
