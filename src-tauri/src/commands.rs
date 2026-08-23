@@ -9341,7 +9341,13 @@ pub async fn new_window(
     notebook_id: Option<String>,
     note_id: Option<String>,
 ) -> Result<(), String> {
-    let label = format!("win-{}", new_id());
+    // Note readers get their own label prefix so window-state restores them
+    // at reader size, not workspace size (both still match the win-* capability).
+    let label = if note_id.is_some() {
+        format!("win-note-{}", new_id())
+    } else {
+        format!("win-{}", new_id())
+    };
     let mut boot = match notebook_id {
         Some(id) => format!("window.__ALCHEMY_NOTEBOOK__ = '{}';", id.replace('\'', "")),
         None => "window.__ALCHEMY_FRESH__ = true;".to_string(),

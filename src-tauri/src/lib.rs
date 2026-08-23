@@ -71,6 +71,33 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // Window geometry survives relaunch. Pop-outs share one state slot
+        // per kind (workspace / note reader) via label mapping; render-only
+        // windows (export, capture) are denylisted. VISIBLE stays excluded:
+        // close-to-tray hides the main window, and saving visible=false
+        // would relaunch the app with no window at all.
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED
+                        | tauri_plugin_window_state::StateFlags::FULLSCREEN,
+                )
+                .map_label(|label| {
+                    if label.starts_with("win-export-") || label.starts_with("capture-") {
+                        "ephemeral"
+                    } else if label.starts_with("win-note-") {
+                        "note"
+                    } else if label.starts_with("win-") {
+                        "workspace"
+                    } else {
+                        label
+                    }
+                })
+                .with_denylist(&["ephemeral"])
+                .build(),
+        )
         .plugin(tauri_plugin_liquid_glass::init());
 
     #[cfg(feature = "debug")]

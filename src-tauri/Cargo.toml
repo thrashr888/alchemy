@@ -64,6 +64,7 @@ grep-regex = "0.1"
 grep-searcher = "0.1"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
+tauri-plugin-window-state = "2.4.1"
 
 # Embedded MCP server for agent access (see docs/RFC-mcp-server.md):
 # official Rust MCP SDK + axum to host the streamable-HTTP transport.
