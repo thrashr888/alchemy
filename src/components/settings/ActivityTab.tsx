@@ -3,13 +3,14 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Spinner } from "../ui";
 import { TileShader } from "./TileShader";
-import type { ActivityStats } from "@/lib/types";
+import type { ActivityStats, ModelStat } from "@/lib/types";
 import {
   CalendarDays,
   Clock,
   Flame,
   Library,
   MessageSquare,
+  Zap,
   Moon,
   Search,
   StickyNote,
@@ -109,6 +110,55 @@ function Tile({
       </div>
       <div className="relative mt-0.5 text-[1.0625rem] font-semibold tabular-nums">
         {value}
+      </div>
+    </div>
+  );
+}
+
+/** Sub-second TTFTs read in ms, the rest in seconds. */
+function fmtMs(ms: number): string {
+  return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
+/** Chat responsiveness per model, quickest first — average time to first
+ *  token plus throughput, from the running stats send_message records. */
+function SpeedList({
+  rows,
+}: {
+  rows: { name: string; avgTtftMs: number; avgTokensPerSec: number }[];
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="min-w-0">
+      <div className="pb-1.5 text-caption font-medium text-muted-foreground">
+        Time to first token
+      </div>
+      <div className="flex flex-col gap-1">
+        {rows.map((r, i) => (
+          <div
+            key={r.name}
+            className="flex items-baseline justify-between gap-3 text-body"
+          >
+            <span className="flex min-w-0 items-baseline gap-1.5 truncate">
+              {i === 0 && (
+                <Zap
+                  className="h-3 w-3 shrink-0 self-center text-success"
+                  aria-label="Fastest"
+                />
+              )}
+              <span className="truncate">{r.name}</span>
+            </span>
+            <span className="shrink-0 tabular-nums text-muted-foreground">
+              {fmtMs(r.avgTtftMs)}
+              {r.avgTokensPerSec > 0 && (
+                <span className="text-subtle-foreground">
+                  {" "}
+                  · {Math.round(r.avgTokensPerSec)} tok/s
+                </span>
+              )}
+            </span>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -247,6 +297,7 @@ function Heatmap({ stats }: { stats: ActivityStats }) {
 
 export function ActivityTab() {
   const [stats, setStats] = useState<ActivityStats | null>(null);
+  const [modelStats, setModelStats] = useState<ModelStat[]>([]);
   const [error, setError] = useState(false);
   const [range, setRange] = useState<RangeId>("all");
 
@@ -255,7 +306,20 @@ export function ActivityTab() {
       .activityStats()
       .then(setStats)
       .catch(() => setError(true));
+    api
+      .getModelStats()
+      .then(setModelStats)
+      .catch(() => {});
   }, []);
+
+  // Chat models with a measured time-to-first-token, quickest first.
+  const speed = useMemo(
+    () =>
+      modelStats
+        .filter((m) => m.avgTtftMs > 0)
+        .sort((a, b) => a.avgTtftMs - b.avgTtftMs),
+    [modelStats],
+  );
 
   const ranged = useMemo(() => {
     if (!stats) return null;
@@ -418,6 +482,7 @@ export function ActivityTab() {
       <div className="grid grid-cols-2 gap-5">
         <CountList title="Most used models" rows={stats.models} />
         <CountList title="Most active notebooks" rows={stats.notebooks} />
+        <SpeedList rows={speed} />
       </div>
 
       {stats.sourceTypes.length > 0 && (

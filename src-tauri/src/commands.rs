@@ -11231,14 +11231,39 @@ pub async fn provider_models(
 }
 
 #[tauri::command]
-pub async fn check_models(state: State<'_, AppState>) -> Result<ModelHealth, String> {
+pub async fn check_models(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<ModelHealth, String> {
     let ai = state.ai.read().await.clone();
     let cfg = ai.config().clone();
     let norm = |m: &str| m.trim_end_matches(":latest").to_string();
 
-    // Chat status comes from the configured provider; embeddings and vision
-    // remain Ollama-backed below.
-    let gateway_chat = if cfg.provider == "openai" {
+    // Chat status comes from the ACTIVE chat provider. Only an Ollama-kind
+    // provider is Ollama's problem — Apple FM, gateways, and agent CLIs
+    // probe on their own, so a sleeping Ollama no longer flags a working
+    // chat setup ("Chat model: Ollama not reachable" over an FM answer).
+    let provider_chat = match cfg.provider_by_id(&cfg.chat_provider) {
+        Some(entry) if entry.kind != "ollama" => {
+            let (ready, detail) = readiness_for_entry(&app, entry, &cfg).await?;
+            Some(ModelStatus {
+                name: if entry.chat_model.trim().is_empty() {
+                    entry.label.clone()
+                } else {
+                    entry.chat_model.clone()
+                },
+                installed: ready,
+                working: ready,
+                detail: format!("{} · {detail}", entry.label),
+            })
+        }
+        _ => None,
+    };
+    // Legacy flat-config path: no provider entry resolved, but the flat
+    // provider says gateway.
+    let gateway_chat = if provider_chat.is_some() {
+        provider_chat
+    } else if cfg.provider == "openai" {
         let name = cfg.openai_chat_model.clone();
         Some(if name.trim().is_empty() {
             ModelStatus {
