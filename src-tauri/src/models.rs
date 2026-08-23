@@ -156,6 +156,12 @@ pub struct ModelStat {
     pub last_tokens_per_sec: f64,
     pub avg_tokens_per_sec: f64,
     pub samples: u64,
+    /// Chat time-to-first-token, wall-clock ms (0 = never measured).
+    /// The count is its own: throughput and TTFT are recorded separately
+    /// (a stopped or errored turn contributes neither).
+    pub ttft_samples: u64,
+    pub last_ttft_ms: u64,
+    pub avg_ttft_ms: f64,
 }
 
 /// One anchor pinning a ledger entry to verbatim source text. The quote is

@@ -166,6 +166,10 @@ struct SessionHandle {
     tx: mpsc::UnboundedSender<HostCmd>,
     /// Permission requests awaiting a UI answer, keyed by the id we emitted.
     permissions: Arc<Mutex<HashMap<String, PendingPermission>>>,
+    /// Clock for the turn in flight, so the agent pane reports the same
+    /// send-to-first-token wait the chat surfaces do. Taken by the first
+    /// answer chunk of the turn; None between turns.
+    ttft: Arc<Mutex<Option<crate::commands::TtftClock>>>,
 }
 
 struct PendingPermission {
@@ -367,6 +371,7 @@ pub async fn acp_start(
     let state = app.state::<AcpState>();
     let (tx, rx) = mpsc::unbounded_channel();
     let permissions: Arc<Mutex<HashMap<String, PendingPermission>>> = Arc::default();
+    let ttft: Arc<Mutex<Option<crate::commands::TtftClock>>> = Arc::default();
     {
         let mut sessions = state.sessions.lock().unwrap();
         if let Some(old) = sessions.remove(&notebook_id) {
@@ -378,6 +383,7 @@ pub async fn acp_start(
                 agent_id: agent_id.clone(),
                 tx,
                 permissions: permissions.clone(),
+                ttft: ttft.clone(),
             },
         );
     }
@@ -399,6 +405,7 @@ pub async fn acp_start(
             rx,
             ready_tx,
             permissions,
+            ttft,
         )
         .await;
         // Clear the slot — but only if this session still owns it. A restart
@@ -437,6 +444,17 @@ pub async fn acp_start(
 /// Send a user prompt into the notebook's hosted session.
 #[tauri::command]
 pub fn acp_prompt(app: AppHandle, notebook_id: String, text: String) -> Result<(), String> {
+    // Start the turn clock before the prompt goes out, so the agent pane's
+    // time to first token covers the same span the chat surfaces time.
+    if let Some(handle) = app
+        .state::<AcpState>()
+        .sessions
+        .lock()
+        .unwrap()
+        .get(&notebook_id)
+    {
+        *handle.ttft.lock().unwrap() = Some(crate::commands::TtftClock::start());
+    }
     send_cmd(&app, &notebook_id, HostCmd::Prompt(text))
 }
 
@@ -578,6 +596,7 @@ async fn run_session(
     mut rx: mpsc::UnboundedReceiver<HostCmd>,
     ready_tx: oneshot::Sender<Result<(), String>>,
     permissions: Arc<Mutex<HashMap<String, PendingPermission>>>,
+    ttft: Arc<Mutex<Option<crate::commands::TtftClock>>>,
 ) -> Result<(), agent_client_protocol::Error> {
     let agent = AcpAgent::new(config);
     // Errors name the agent the way the picker does ("Claude Code"), not by
@@ -586,6 +605,9 @@ async fn run_session(
 
     let update_app = app.clone();
     let update_notebook = notebook_id.clone();
+    let update_ttft = ttft.clone();
+    // Ranked under the label the picker shows ("Claude Code"), not the id.
+    let update_model = agent_label.to_string();
     let perm_app = app.clone();
     let perm_notebook = notebook_id.clone();
 
@@ -599,6 +621,26 @@ async fn run_session(
             async move |notification: SessionNotification, _cx| {
                 let update =
                     serde_json::to_value(&notification.update).unwrap_or(serde_json::Value::Null);
+                // First answer chunk of the turn stops the clock — thoughts
+                // and tool calls stream before it, but "first answer token"
+                // is what the chat surfaces measure, so the agent pane is
+                // ranked on the same basis.
+                if update.get("sessionUpdate").and_then(|v| v.as_str())
+                    == Some("agent_message_chunk")
+                {
+                    if let Some(clock) = update_ttft.lock().unwrap().take() {
+                        clock.mark();
+                        if let Some(state) = update_app.try_state::<crate::commands::AppState>() {
+                            state.record_ttft(
+                                &update_model,
+                                "agent-pane",
+                                &update_notebook,
+                                &clock,
+                                None,
+                            );
+                        }
+                    }
+                }
                 let _ = update_app.emit(
                     "acp://update",
                     UpdateEvent {

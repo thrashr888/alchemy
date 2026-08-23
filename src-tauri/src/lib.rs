@@ -197,6 +197,8 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             handles.window.set_as_windows_menu_for_nsapp()?;
             app.manage(menu::RecentMenu(handles.recent));
+            app.manage(menu::ThemeMenu(handles.themes));
+            app.manage(menu::GenerateMenu(handles.generate));
 
             let runtime = commands::ai_runtime(app.handle().clone(), data_dir.clone());
             let (mcp_enabled, mcp_port) = (config.mcp_enabled, config.mcp_port);
@@ -400,6 +402,8 @@ pub fn run() {
             commands::live_view_visible,
             commands::live_view_close,
             commands::rebuild_app_menu,
+            commands::fill_menu_lists,
+            commands::list_shortcuts,
             commands::search_everything,
             commands::grep_sources,
             commands::export_notebook_okf_zip,

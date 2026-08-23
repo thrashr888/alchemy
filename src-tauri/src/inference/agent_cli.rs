@@ -546,6 +546,44 @@ fn cli_default_model(kind: AgentKind) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+/// The readable sentence inside an opencode error event.
+///
+/// Shape is `{name, data: {message, statusCode, ...}}`, and `data.message`
+/// often embeds the provider's own JSON body verbatim
+/// (`Payment Required: {"error":{"message":"You have exceeded your monthly
+/// quota"}}`). Splice the inner message in place of the blob so the user
+/// reads one sentence instead of a wire dump.
+fn opencode_error_message(err: &serde_json::Value) -> String {
+    let raw = err["data"]["message"]
+        .as_str()
+        .or_else(|| err["message"].as_str())
+        .or_else(|| err["name"].as_str())
+        .unwrap_or("opencode reported an error");
+    let Some(brace) = raw.find('{') else {
+        return raw.to_string();
+    };
+    let (prefix, body) = raw.split_at(brace);
+    let inner = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            v["error"]["message"]
+                .as_str()
+                .or_else(|| v["message"].as_str())
+                .map(str::to_string)
+        });
+    match inner {
+        Some(msg) => {
+            let prefix = prefix.trim_end_matches([':', ' ']);
+            if prefix.is_empty() {
+                msg
+            } else {
+                format!("{prefix}: {msg}")
+            }
+        }
+        None => raw.to_string(),
+    }
+}
+
 /// Drop ANSI colour/cursor escapes so a CLI's decorated output parses. These
 /// CLIs redraw a "Loading models…" spinner before printing, and the control
 /// bytes otherwise glue themselves to the first model name.
@@ -1169,6 +1207,14 @@ impl AgentCli {
                                 let name = v["part"]["tool"].as_str().unwrap_or("a tool");
                                 emit_step(tool_step_label(name), false);
                             }
+                            // opencode reports provider failures as an event
+                            // on STDOUT and then exits 0-ish with no text.
+                            // Dropping it turned "You have exceeded your
+                            // monthly quota" into "agent produced no output"
+                            // — the cause was on the pipe the whole time.
+                            Some("error") => {
+                                errored = Some(opencode_error_message(&v["error"]));
+                            }
                             _ => {}
                         }
                     }
@@ -1720,6 +1766,29 @@ mod tests {
 
     /// The provider's model field reaches the CLI, and blank still means "the
     /// CLI's own default" — the state every existing entry is saved in.
+    #[test]
+    fn opencode_error_events_surface_the_provider_sentence() {
+        // Real 402 shape from `opencode run --format json` with a spent
+        // Copilot quota: the useful sentence is buried in an embedded body.
+        let ev = serde_json::json!({
+            "name": "APIError",
+            "data": {
+                "message": "Payment Required: {\"error\":{\"message\":\"You have exceeded your monthly quota\",\"code\":\"quota_exceeded\"}}",
+                "statusCode": 402
+            }
+        });
+        assert_eq!(
+            opencode_error_message(&ev),
+            "Payment Required: You have exceeded your monthly quota"
+        );
+        // No embedded body: passed through untouched.
+        let plain = serde_json::json!({ "data": { "message": "session expired" } });
+        assert_eq!(opencode_error_message(&plain), "session expired");
+        // Nothing usable at all still names the source rather than panicking.
+        let empty = serde_json::json!({});
+        assert!(!opencode_error_message(&empty).is_empty());
+    }
+
     #[test]
     fn a_blank_model_stays_unset() {
         assert!(AgentCli::configured(AgentKind::Codex, "", "")

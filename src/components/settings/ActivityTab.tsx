@@ -3,13 +3,14 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Spinner } from "../ui";
 import { TileShader } from "./TileShader";
-import type { ActivityStats } from "@/lib/types";
+import type { ActivityStats, ModelStat } from "@/lib/types";
 import {
   CalendarDays,
   Clock,
   Flame,
   Library,
   MessageSquare,
+  Zap,
   Moon,
   Search,
   StickyNote,
@@ -109,6 +110,91 @@ function Tile({
       </div>
       <div className="relative mt-0.5 text-[1.0625rem] font-semibold tabular-nums">
         {value}
+      </div>
+    </div>
+  );
+}
+
+/** Sub-second TTFTs read in ms, the rest in seconds. */
+function fmtMs(ms: number): string {
+  return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
+/** The fastest-models ranking: which model answers soonest, ordered.
+ *
+ *  Time to first token is the metric because it is the wait the user
+ *  actually feels — throughput rides along as a secondary number, since a
+ *  model can be quick to start and slow to finish. Bars are wait time
+ *  (shorter = faster), so the ranking reads as a descending staircase, and
+ *  each row shows how many runs it averages: a model measured once has no
+ *  business silently outranking one measured fifty times. */
+function SpeedRanking({ rows }: { rows: ModelStat[] }) {
+  const slowest = Math.max(...rows.map((r) => r.avgTtftMs), 0);
+  return (
+    <div className="min-w-0">
+      <div className="flex items-baseline justify-between gap-3 pb-1.5">
+        <span className="text-caption font-medium text-muted-foreground">
+          Fastest models
+        </span>
+        <span className="text-micro text-subtle-foreground">
+          average time to first token
+        </span>
+      </div>
+      {/* Says why it is empty rather than vanishing: a section that hides
+          itself is indistinguishable from one that failed to load. */}
+      {rows.length === 0 && (
+        <p className="text-caption leading-relaxed text-subtle-foreground">
+          No timings yet. Each chat records how long its model took to start
+          answering; models you have already used appear here after their
+          next reply.
+        </p>
+      )}
+      <div className="flex flex-col gap-1">
+        {rows.map((r, i) => {
+          const lead = i === 0;
+          return (
+            <div
+              key={r.name}
+              className="grid grid-cols-[1rem_minmax(0,1fr)_5rem_auto] items-center gap-2.5 text-body"
+            >
+              <span className="text-caption tabular-nums text-subtle-foreground">
+                {i + 1}
+              </span>
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate">{r.name}</span>
+                {lead && (
+                  <Zap
+                    className="h-3 w-3 shrink-0 text-success"
+                    aria-label="Fastest"
+                  />
+                )}
+              </span>
+              {/* Wait-time bar, scaled to the slowest model in the list. */}
+              <span
+                className="h-1 overflow-hidden rounded-full bg-muted-foreground/15"
+                aria-hidden
+              >
+                <span
+                  className={cn(
+                    "block h-full rounded-full",
+                    lead ? "bg-success" : "bg-muted-foreground/50",
+                  )}
+                  style={{
+                    width: `${slowest > 0 ? Math.max((r.avgTtftMs / slowest) * 100, 4) : 100}%`,
+                  }}
+                />
+              </span>
+              <span className="shrink-0 tabular-nums text-caption text-muted-foreground">
+                {fmtMs(r.avgTtftMs)}
+                <span className="text-subtle-foreground">
+                  {r.avgTokensPerSec > 0 &&
+                    ` \u00b7 ${Math.round(r.avgTokensPerSec)} tok/s`}
+                  {` \u00b7 ${r.ttftSamples} run${r.ttftSamples === 1 ? "" : "s"}`}
+                </span>
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -247,6 +333,7 @@ function Heatmap({ stats }: { stats: ActivityStats }) {
 
 export function ActivityTab() {
   const [stats, setStats] = useState<ActivityStats | null>(null);
+  const [modelStats, setModelStats] = useState<ModelStat[]>([]);
   const [error, setError] = useState(false);
   const [range, setRange] = useState<RangeId>("all");
 
@@ -255,7 +342,20 @@ export function ActivityTab() {
       .activityStats()
       .then(setStats)
       .catch(() => setError(true));
+    api
+      .getModelStats()
+      .then(setModelStats)
+      .catch(() => {});
   }, []);
+
+  // Chat models with a measured time-to-first-token, quickest first.
+  const speed = useMemo(
+    () =>
+      modelStats
+        .filter((m) => m.avgTtftMs > 0)
+        .sort((a, b) => a.avgTtftMs - b.avgTtftMs),
+    [modelStats],
+  );
 
   const ranged = useMemo(() => {
     if (!stats) return null;
@@ -419,6 +519,8 @@ export function ActivityTab() {
         <CountList title="Most used models" rows={stats.models} />
         <CountList title="Most active notebooks" rows={stats.notebooks} />
       </div>
+
+      <SpeedRanking rows={speed} />
 
       {stats.sourceTypes.length > 0 && (
         <div>

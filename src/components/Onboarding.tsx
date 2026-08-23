@@ -104,10 +104,22 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
   }, [aiConfig]);
 
   const provider = aiConfig?.provider ?? "ollama";
+  // Which setup path the tiles show. Apple Intelligence rides the modern
+  // chatProvider field; the flat provider string still drives the two
+  // original paths (normalize mirrors them either way).
+  const mode =
+    aiConfig?.chatProvider === "on-device"
+      ? "fm"
+      : provider === "openai"
+        ? "openai"
+        : "ollama";
 
-  async function setProvider(p: string) {
+  async function setMode(m: "fm" | "ollama" | "openai") {
     if (!aiConfig) return;
-    await save({ ...aiConfig, provider: p });
+    if (m === "fm") await save({ ...aiConfig, chatProvider: "on-device" });
+    else if (m === "ollama")
+      await save({ ...aiConfig, provider: "ollama", chatProvider: "ollama" });
+    else await save({ ...aiConfig, provider: "openai", chatProvider: "" });
     await refresh();
   }
 
@@ -169,10 +181,15 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
             Set up Alchemy
           </h1>
           <p className="max-w-sm text-body leading-relaxed text-muted-foreground">
-            {provider === "openai" ? (
+            {mode === "openai" ? (
               <>
                 Connect an OpenAI-compatible gateway. Your sources are indexed
                 locally; only your chat prompts are sent to the gateway.
+              </>
+            ) : mode === "fm" ? (
+              <>
+                Answers come from Apple Intelligence, on this Mac. Nothing to
+                install; nothing leaves your computer.
               </>
             ) : (
               <>
@@ -189,17 +206,20 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
           </p>
         </div>
 
-        <div className="grid grid-cols-2 gap-1.5">
-          {[
-            { id: "ollama", label: "Ollama", note: "Local & private" },
-            { id: "openai", label: "OpenAI-compatible", note: "Cloud or enterprise gateway" },
-          ].map((pv) => (
+        <div className="grid grid-cols-3 gap-1.5">
+          {(
+            [
+              { id: "fm", label: "Apple Intelligence", note: "On-device · zero setup" },
+              { id: "ollama", label: "Ollama", note: "Local models · private" },
+              { id: "openai", label: "OpenAI-compatible", note: "Your API key · 30+ services" },
+            ] as const
+          ).map((pv) => (
             <button
               key={pv.id}
-              onClick={() => void setProvider(pv.id)}
+              onClick={() => void setMode(pv.id)}
               className={cn(
                 "flex flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors",
-                provider === pv.id
+                mode === pv.id
                   ? "border-primary/60 bg-primary/10 text-foreground"
                   : "border-border bg-surface text-muted-foreground hover:text-foreground",
               )}
@@ -209,8 +229,18 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
             </button>
           ))}
         </div>
+        {/* The full roster (Claude Code and other signed-in subscriptions,
+            per-provider keys) lives in Settings — the overlay stays the
+            three broadest doors. */}
+        <button
+          className="-mt-3 text-center text-caption text-subtle-foreground hover:text-muted-foreground"
+          onClick={onOpenSettings}
+        >
+          Already pay for Claude or ChatGPT? Connect a subscription in
+          Settings → Models…
+        </button>
 
-        {provider === "openai" && (
+        {mode === "openai" && (
           <div className="flex flex-col gap-1.5 rounded-lg border border-border-strong bg-surface px-4 py-3">
             <span className="text-body font-medium text-foreground">Gateway</span>
             <Input
@@ -281,10 +311,19 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
         )}
 
         <div className="flex flex-col gap-2">
-          {!(provider === "openai" && aiConfig?.embedder === "builtin") && (
+          {/* Only when something actually needs Ollama — chat in Ollama mode,
+              or the Ollama embedder. A goal-form title while unchecked: a red
+              ✗ beside "Ollama is running" read as the app asserting a lie. */}
+          {(mode === "ollama" || aiConfig?.embedder === "ollama") && (
           <Step
             ok={health.reachable}
-            title={provider === "openai" ? "Ollama is running (for source indexing)" : "Ollama is running"}
+            title={
+              health.reachable
+                ? "Ollama is running"
+                : mode === "ollama"
+                  ? "Start Ollama"
+                  : "Start Ollama (for source indexing)"
+            }
             detail="Install Ollama, then start it. Alchemy connects to it locally."
           >
             <CommandChip command="brew install ollama" />
@@ -299,20 +338,30 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
           )}
 
           <Step
-            ok={provider === "openai" ? chat.working : health.reachable && chat.working}
-            title={provider === "openai" ? "Gateway connected" : "Chat model"}
+            ok={mode === "ollama" ? health.reachable && chat.working : chat.working}
+            title={
+              mode === "openai"
+                ? chat.working
+                  ? "Gateway connected"
+                  : "Connect a gateway"
+                : mode === "fm"
+                  ? "Apple Intelligence"
+                  : chat.working
+                    ? "Chat model ready"
+                    : "Get a chat model"
+            }
             detail={
-              provider === "openai"
+              mode === "openai" || mode === "fm"
                 ? chat.detail
                 : health.reachable
                   ? `Answers questions and generates documents. ${chat.detail}`
                   : "Waiting for Ollama."
             }
           >
-            {provider !== "openai" && health.reachable && (
+            {mode === "ollama" && health.reachable && (
               <CommandChip command={`ollama pull ${chat.name}`} />
             )}
-            {provider !== "openai" && health.reachable && (
+            {mode === "ollama" && health.reachable && (
               <button className="text-caption text-citation hover:underline" onClick={onOpenSettings}>
                 or pick a smaller model
               </button>
@@ -336,16 +385,16 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
           </Step>
 
           <Step
-            ok={provider === "openai" ? vision.working : health.reachable && vision.working}
+            ok={mode === "openai" ? vision.working : health.reachable && vision.working}
             optional
             title="Vision model"
             detail={
-              provider === "openai"
+              mode === "openai"
                 ? "Enables OCR for images and scanned PDFs. Set a vision-capable model (e.g. gpt-4o) in the Gateway box above."
                 : "Enables OCR for images and scanned PDFs. Skip it if you don't need that."
             }
           >
-            {provider !== "openai" && health.reachable && (
+            {mode !== "openai" && health.reachable && (
               <CommandChip command={`ollama pull ${vision.name || "glm-ocr"}`} />
             )}
           </Step>

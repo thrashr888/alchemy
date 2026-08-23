@@ -1982,6 +1982,20 @@ function SourceReader({
     return () => window.removeEventListener("keydown", onKey);
   }, [onFindOpen]);
 
+  // Edit > Find (menu.rs) lands here too — the menu can't carry the ⌘F
+  // accelerator (it would override focused text fields), so it bumps
+  // findBump and whichever find surface is mounted answers.
+  const findBump = useStore((s) => s.findBump);
+  useEffect(() => {
+    if (findBump === 0) return;
+    onFindOpen();
+    requestAnimationFrame(() => {
+      searchRef.current?.focus();
+      searchRef.current?.select();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findBump]);
+
   // The bar opening (via toolbar button) grabs focus; closing clears the
   // query so highlights drop back to the citation passage.
   useEffect(() => {

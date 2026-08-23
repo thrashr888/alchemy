@@ -1,5 +1,4 @@
 import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
@@ -86,6 +85,10 @@ function fuzzyScore(query: string, title: string): number | null {
   return score;
 }
 
+/** Stable empty array for the steps selector — a fresh [] per call would
+ *  fail zustand's equality check every render. */
+const EMPTY_STEPS: string[] = [];
+
 /** Draft @mentions saved beside the draft text (chatDraftMentions:<nb>). */
 function loadDraftMentions(
   notebookId: string | null,
@@ -107,9 +110,21 @@ export function ChatPanel() {
   const loadOlderMessages = useStore((s) => s.loadOlderMessages);
   const sources = useStore((s) => s.sources);
   const sending = useStore((s) => s.sending);
-  const streamingText = useStore((s) => s.streamingText);
-  const steps = useStore((s) => s.steps);
-  const waiting = useStore((s) => s.waiting);
+  // A stream keeps running when the user navigates elsewhere (the backend
+  // persists the turn either way) — but its tokens belong to ONE notebook.
+  // Paint them only there; other notebooks see a quiet composer.
+  const streamingHere = useStore(
+    (s) => s.sendingFor === null || s.sendingFor === s.currentId,
+  );
+  const streamingText = useStore((s) =>
+    s.sendingFor === s.currentId ? s.streamingText : "",
+  );
+  const steps = useStore((s) =>
+    s.sendingFor === s.currentId ? s.steps : EMPTY_STEPS,
+  );
+  const waiting = useStore((s) =>
+    s.sendingFor === s.currentId ? s.waiting : "",
+  );
   const agentMode = useStore((s) => s.agentMode);
   const toggleAgentMode = useStore((s) => s.toggleAgentMode);
   // Hosted-agent mode (docs/RFC-acp-agents.md) swaps the RAG transcript for
@@ -129,8 +144,6 @@ export function ChatPanel() {
   const cancelGeneration = useStore((s) => s.cancelGeneration);
   const reading = useStore((s) => s.reading);
   const clearChat = useStore((s) => s.clearChat);
-  const appendToken = useStore((s) => s.appendToken);
-  const appendStep = useStore((s) => s.appendStep);
   const theme = useStore((s) => s.theme);
   // Under glass the material is the ambience — the shader must not mount
   // (display:none alone leaves its rAF/WebGL loop running invisibly).
@@ -235,41 +248,9 @@ export function ChatPanel() {
     el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_H)}px`;
   }, [draft]);
 
-  // Subscribe once to streaming tokens + agent progress steps from the backend.
-  // Events broadcast to every window — only the one with a send in flight
-  // should accumulate them.
-  useEffect(() => {
-    const unToken = listen<{ content: string }>("chat://token", (e) => {
-      if (useStore.getState().sending) appendToken(e.payload.content);
-    });
-    const unStep = listen<{ label: string; transient: boolean }>(
-      "chat://step",
-      (e) => {
-        if (useStore.getState().sending)
-          appendStep(e.payload.label, e.payload.transient);
-      },
-    );
-    // Verify-and-repair swaps a revised answer under the same message id
-    // (backend spawn_answer_verify). Events reach every window — apply
-    // only when the message is in this window's transcript.
-    const unRevised = listen<{ id: string; content: string }>(
-      "chat://revised",
-      (e) => {
-        const { messages } = useStore.getState();
-        if (!messages.some((m) => m.id === e.payload.id)) return;
-        useStore.setState({
-          messages: messages.map((m) =>
-            m.id === e.payload.id ? { ...m, content: e.payload.content } : m,
-          ),
-        });
-      },
-    );
-    return () => {
-      unToken.then((fn) => fn());
-      unStep.then((fn) => fn());
-      unRevised.then((fn) => fn());
-    };
-  }, [appendToken, appendStep]);
+  // Streaming token/step listeners live in the store's global listeners now
+  // (bindGlobalListeners): they must keep accumulating while the user is on
+  // Home or in another notebook, and this component unmounts there.
 
   // "Focus the chat composer" command from the Cmd+K menu.
   useEffect(() => {
@@ -809,7 +790,12 @@ export function ChatPanel() {
             <ChatMessage key={m.id} message={m} />
           ))}
 
-          {sending && (
+          {sending && !streamingHere && (
+            <div className="text-caption text-muted-foreground">
+              Answering in another notebook…
+            </div>
+          )}
+          {sending && streamingHere && (
             <div className="flex flex-col gap-2">
               <RoleLabel role="assistant" />
               {steps.length > 0 && (
