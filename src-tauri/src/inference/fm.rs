@@ -128,7 +128,7 @@ impl FmEngine {
         for attempt in 0..MAX_ATTEMPTS {
             let fitted = budget::fit_messages(messages, budget_tokens);
             if let Cow::Owned(_) = &fitted {
-                eprintln!(
+                crate::note!(
                     "foundation models: trimming prompt to ~{budget_tokens} est input tokens \
                      (assembled ~{} est) to fit the on-device window",
                     budget::messages_tokens(messages),
@@ -147,7 +147,7 @@ impl FmEngine {
                         budget::note_context_limit(limit);
                         let next =
                             retuned_budget(sent_est, actual, budget::fm_input_budget_tokens());
-                        eprintln!(
+                        crate::note!(
                             "foundation models: prompt measured {actual} tokens (limit {limit}, \
                              ~{sent_est} est); re-trimming to ~{next} est input tokens and retrying",
                         );

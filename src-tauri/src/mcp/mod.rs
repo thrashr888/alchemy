@@ -20,6 +20,7 @@ use crate::commands::{self, AppState};
 use crate::db::NOTEBOOK_PALETTE;
 use crate::models::{Note, Notebook, Source};
 
+mod diagnostics;
 mod ledger;
 mod mac;
 mod notebooks;
@@ -88,7 +89,10 @@ pub async fn apply_config(app: &AppHandle, enabled: bool, port: u16) {
             *mcp.running.lock().unwrap() = Some(Running { port, shutdown });
             write_port_file(app, port);
         }
-        Err(err) => eprintln!("mcp: failed to start on 127.0.0.1:{port}: {err:#}"),
+        Err(err) => crate::diagnostics::error(
+            "mcp",
+            format!("failed to start on 127.0.0.1:{port}: {err:#}"),
+        ),
     }
 }
 
@@ -251,7 +255,8 @@ impl AlchemyMcp {
     + Self::studio_router()
     + Self::ledger_router()
     + Self::registry_router()
-    + Self::settings_router()))]
+    + Self::settings_router()
+    + Self::diagnostics_router()))]
 impl ServerHandler for AlchemyMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())

@@ -81,7 +81,7 @@ impl AlchemyMcp {
             .bump_note_usage(std::slice::from_ref(&note.id), "reads", commands::now())
             .await
         {
-            eprintln!("note usage bump (reads) failed: {err:#}");
+            crate::note!("note usage bump (reads) failed: {err:#}");
         }
         json_result(&note)
     }

@@ -139,9 +139,21 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
         .maximize()
         .build()?;
 
+    // The diagnostics log (docs/RFC-diagnostics.md) lives in a folder no one
+    // should have to be talked through finding over a support thread.
+    let log = MenuItemBuilder::with_id("menu-reveal-log", "Show Diagnostics Log").build(app)?;
+    let help_menu = SubmenuBuilder::new(app, "Help").item(&log).build()?;
+
     let menu = Menu::with_items(
         app,
-        &[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu],
+        &[
+            &app_menu,
+            &file_menu,
+            &edit_menu,
+            &view_menu,
+            &window_menu,
+            &help_menu,
+        ],
     )?;
     Ok(AppMenu {
         menu,
@@ -181,6 +193,14 @@ pub fn handle_event(app: &AppHandle, id: &str) {
     }
     if id == "menu-quit" {
         crate::scheduler::request_quit(app);
+        return;
+    }
+    // Reveals a folder — no window involved, and it must work even when the
+    // one thing broken is the window.
+    if id == "menu-reveal-log" {
+        if let Err(err) = crate::commands::reveal_log() {
+            crate::diagnostics::error("reveal-log", err);
+        }
         return;
     }
     let windows = app.webview_windows();

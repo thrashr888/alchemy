@@ -167,7 +167,10 @@ pub async fn apply_config(app: &AppHandle, enabled: bool, port: u16) {
             *clip.running.lock().unwrap() = Some(Running { port, shutdown });
             write_port_file(app, port);
         }
-        Err(err) => eprintln!("clip: failed to start on 127.0.0.1:{port}: {err:#}"),
+        Err(err) => crate::diagnostics::error(
+            "clip",
+            format!("failed to start on 127.0.0.1:{port}: {err:#}"),
+        ),
     }
 }
 

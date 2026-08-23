@@ -280,7 +280,7 @@ pub async fn ensure_gists(db: &Db, ai: &Ai) -> Result<(usize, usize)> {
             Ok(out) => out.text,
             Err(err) => {
                 // Engine trouble ends the batch — the next sweep retries.
-                eprintln!("gist: generation failed for \"{}\": {err:#}", source.title);
+                crate::note!("gist: generation failed for \"{}\": {err:#}", source.title);
                 break;
             }
         };
@@ -292,7 +292,7 @@ pub async fn ensure_gists(db: &Db, ai: &Ai) -> Result<(usize, usize)> {
         let gist = match gate(&reply, &haystack) {
             Ok(g) => g,
             Err(reason) => {
-                eprintln!("gist: gate rejected \"{}\": {reason}", source.title);
+                crate::note!("gist: gate rejected \"{}\": {reason}", source.title);
                 remember_refusal(&want.source_id, hash);
                 continue;
             }
@@ -372,7 +372,7 @@ fn save_enrich_state(dir: &Path, state: &HashMap<String, i32>) {
         std::fs::write(enrich_state_path(dir), bytes)
     };
     if let Err(err) = write() {
-        eprintln!("enrich: marker write failed: {err}");
+        crate::note!("enrich: marker write failed: {err}");
     }
 }
 
@@ -494,7 +494,7 @@ async fn enrich_source(
         let reply = match ai.chat_role(Role::Small, &messages).await {
             Ok(out) => out.text,
             Err(err) => {
-                eprintln!(
+                crate::note!(
                     "enrich: Small role failed for \"{}\": {err:#}",
                     source.title
                 );
@@ -640,17 +640,23 @@ pub fn spawn_sweep(db: std::sync::Arc<Db>, ai: Ai) {
                                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                             }
                             Err(err) => {
-                                eprintln!("enrichment sweep failed: {err:#}");
+                                crate::diagnostics::error(
+                                    "sweep",
+                                    format!("enrichment sweep failed: {err:#}"),
+                                );
                                 break;
                             }
                         },
                         Err(err) => {
-                            eprintln!("card suggestion failed: {err:#}");
+                            crate::diagnostics::error(
+                                "sweep",
+                                format!("card suggestion failed: {err:#}"),
+                            );
                             break;
                         }
                     },
                     Err(err) => {
-                        eprintln!("tag sweep failed: {err:#}");
+                        crate::diagnostics::error("sweep", format!("tag sweep failed: {err:#}"));
                         break;
                     }
                 },
@@ -659,7 +665,7 @@ pub fn spawn_sweep(db: std::sync::Arc<Db>, ai: Ai) {
                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                 }
                 Err(err) => {
-                    eprintln!("gist sweep failed: {err:#}");
+                    crate::diagnostics::error("sweep", format!("gist sweep failed: {err:#}"));
                     break;
                 }
             }
@@ -717,7 +723,7 @@ pub async fn ensure_tags(db: &Db, ai: &Ai) -> Result<usize> {
             let reply = match ai.chat_role(Role::Small, &messages).await {
                 Ok(out) => out.text,
                 Err(err) => {
-                    eprintln!("tags: generation failed for \"{}\": {err:#}", source.title);
+                    crate::note!("tags: generation failed for \"{}\": {err:#}", source.title);
                     return Ok(tagged);
                 }
             };

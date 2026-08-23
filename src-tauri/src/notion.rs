@@ -291,7 +291,7 @@ impl NotionClient {
             let table = match self.query_database(db_id).await {
                 Ok((cols, rows)) => render_database(&cols, &rows),
                 Err(err) => {
-                    eprintln!("notion: database {db_id} skipped: {err:#}");
+                    crate::note!("notion: database {db_id} skipped: {err:#}");
                     format!("*(couldn't load database \"{db_title}\")*")
                 }
             };
@@ -312,7 +312,7 @@ impl NotionClient {
                     Box::pin(self.export_page(child_id, &child_dir, depth + 1, stats)).await
                 {
                     // One unshared/deleted child shouldn't sink the tree.
-                    eprintln!("notion: child {child_id} skipped: {err:#}");
+                    crate::note!("notion: child {child_id} skipped: {err:#}");
                 }
             }
         }

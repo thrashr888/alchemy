@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Cause, Duration, Effect, Schedule } from "effect";
 import { describe, IpcError, TimeoutError, type AppError } from "./errors";
+import { report } from "./diagnostics";
 import type {
   ProviderModels,
   AcpAgentInfo,
@@ -110,11 +111,23 @@ const slow = <T>(command: string, args?: Record<string, unknown>) =>
     }),
   );
 
-/** Run an Effect to a Promise, rejecting with a clean, user-friendly Error. */
+/** Run an Effect to a Promise, rejecting with a clean, user-friendly Error.
+ *
+ *  Every backend failure the app ever surfaces passes through here, after
+ *  retries and timeouts have had their say — which makes it the one place
+ *  worth logging from (docs/RFC-diagnostics.md). Without it, a command that
+ *  fails becomes a toast the user reads once and we never see. */
 async function run<A>(effect: Effect.Effect<A, AppError>): Promise<A> {
   const exit = await Effect.runPromiseExit(effect);
   if (exit._tag === "Success") return exit.value;
-  throw new Error(describe(Cause.squash(exit.cause)));
+  const failure = Cause.squash(exit.cause);
+  const message = describe(failure);
+  const error = failure as Partial<AppError>;
+  report("error", "ipc", message, undefined, {
+    command: error?.command ?? "unknown",
+    failure: error?._tag ?? "Unknown",
+  });
+  throw new Error(message);
 }
 
 export const api = {

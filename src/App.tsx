@@ -12,6 +12,7 @@ import { NoteWindow } from "@/components/NoteWindow";
 import { PrintExportView } from "@/components/PrintExportView";
 import { Onboarding } from "@/components/Onboarding";
 import { Toaster } from "@/components/ui";
+import { FatalOverlay } from "@/components/ErrorBoundary";
 import { shortcutBlocked } from "@/lib/utils";
 import { isTauri } from "@tauri-apps/api/core";
 
@@ -161,6 +162,9 @@ function App() {
       )}
 
       <Toaster toasts={toasts} onDismiss={dismissToast} />
+      {/* Backend panics: last, and above everything, so the way out is
+          visible even when the rest of the window is mid-failure. */}
+      <FatalOverlay />
     </>
   );
 }
