@@ -532,10 +532,12 @@ pub fn refresh_installed_skills(app: &AppHandle) {
             continue;
         }
         match install_skill(&home, target) {
-            Ok(()) => eprintln!("connectors: refreshed the {} skill", target.name),
-            Err(e) => eprintln!(
-                "connectors: could not refresh the {} skill: {e:#}",
-                target.name
+            Ok(()) => crate::note!("connectors: refreshed the {} skill", target.name),
+            // A stale skill leaves the agent working from last release's
+            // instructions, and nobody is watching this sweep run.
+            Err(e) => crate::diagnostics::error(
+                "connectors",
+                format!("could not refresh the {} skill: {e:#}", target.name),
             ),
         }
     }
