@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
-import { Button, Input, Modal, useConfirm } from "../ui";
+import { Button, Input, Modal } from "../ui";
 import { Field } from "./SettingsTabs";
 import { OllamaModelPicker } from "./OllamaModelPicker";
 import { cn } from "@/lib/utils";
@@ -156,18 +156,11 @@ export function ModelsTab({
   const [wizard, setWizard] = useState<null | { editId?: string }>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const reembedAll = useStore((s) => s.reembedAll);
-  const { confirm, dialog: confirmDialog } = useConfirm();
 
-  async function handleReembed() {
-    const ok = await confirm({
-      title: "Re-embed all sources?",
-      message:
-        "Rebuilds the search index for every notebook with the current embedding model. " +
-        "Needed after switching models or if search stopped matching; it reprocesses " +
-        "all sources and can take a few minutes.",
-      confirmLabel: "Re-embed",
-    });
-    if (ok) void reembedAll();
+  function handleReembed() {
+    // Destroys nothing — the migration overlay is the feedback, not a
+    // confirm (DESIGN.md §9).
+    void reembedAll();
   }
 
   // The set of provider ids drives every probe below: re-run when a provider
@@ -698,7 +691,6 @@ export function ModelsTab({
           onClose={() => setWizard(null)}
         />
       )}
-      {confirmDialog}
     </div>
   );
 }

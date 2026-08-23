@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api } from "@/lib/api";
-import { useStore } from "@/lib/store";
+import { removeSourcesGuarded, useStore } from "@/lib/store";
 import type { Source } from "@/lib/types";
 import { GROUP_LABEL, GROUP_OF, type TypeGroup } from "@/lib/sourceGroups";
 import {
@@ -463,20 +463,7 @@ export function GalleryPane() {
         label: "Remove…",
         icon: <Trash2 className="h-3.5 w-3.5" />,
         danger: true,
-        onClick: async () => {
-          if (
-            await confirm({
-              title: `Remove "${s.title}"?`,
-              message:
-                GROUP_OF[s.sourceType] === "folders"
-                  ? "This removes the folder and everything under it from the notebook."
-                  : "This removes the source and its indexed content from the notebook.",
-              confirmLabel: "Remove",
-              danger: true,
-            })
-          )
-            void useStore.getState().deleteSource(s.id);
-        },
+        onClick: () => void removeSourcesGuarded([s.id], confirm),
       },
     ];
   };

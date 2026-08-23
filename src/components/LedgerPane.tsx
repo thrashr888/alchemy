@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import type { LedgerEntry } from "@/lib/types";
-import { Button, EmptyState, Input, RowMenu, useConfirm } from "./ui";
+import { Button, EmptyState, Input, RowMenu } from "./ui";
 import { cn, relativeTime } from "@/lib/utils";
 import {
   HelpCircle,
@@ -62,7 +62,6 @@ export function LedgerPane() {
   const ledgerBump = useStore((s) => s.ledgerBump);
   const openSourceViewer = useStore((s) => s.openSourceViewer);
   const pushToast = useStore((s) => s.pushToast);
-  const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [entries, setEntries] = useState<LedgerEntry[] | null>(null);
   const [filter, setFilter] = useState<"all" | Kind>("all");
@@ -111,18 +110,34 @@ export function LedgerPane() {
   }
 
   async function remove(entry: LedgerEntry) {
-    if (
-      !(await confirm({
-        title: "Delete this entry?",
-        message: `“${entry.text.slice(0, 120)}” will be removed from the ledger permanently.`,
-        confirmLabel: "Delete",
-        danger: true,
-      }))
-    )
-      return;
+    // Undo beats confirm: the toast recreates the entry with its anchors and
+    // status (chat-minted origin doesn't survive — the restored row is yours).
     try {
       await api.deleteLedgerEntry(entry.id);
       void load();
+      pushToast(
+        "success",
+        `Deleted “${entry.text.slice(0, 60)}” — click to undo`,
+        () =>
+          void (async () => {
+            try {
+              const restored = await api.addLedgerEntry(
+                entry.notebookId,
+                entry.kind,
+                entry.text,
+                entry.why || undefined,
+                entry.anchors,
+              );
+              if (entry.status)
+                await api.updateLedgerEntry(restored.id, {
+                  status: entry.status,
+                });
+              void load();
+            } catch (e) {
+              pushToast("error", e instanceof Error ? e.message : String(e));
+            }
+          })(),
+      );
     } catch (e) {
       pushToast("error", e instanceof Error ? e.message : String(e));
     }
@@ -394,7 +409,6 @@ export function LedgerPane() {
           )}
         </div>
       </div>
-      {confirmDialog}
     </div>
   );
 }

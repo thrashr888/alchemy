@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useStore } from "@/lib/store";
+import { removeSourcesGuarded, useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import {
   Badge,
@@ -223,7 +223,6 @@ export function SourcesPanel() {
   const setSourceNote = useStore((s) => s.setSourceNote);
   const addMacReminder = useStore((s) => s.addMacReminder);
   const refreshSource = useStore((s) => s.refreshSource);
-  const deleteSource = useStore((s) => s.deleteSource);
   const draggingFiles = useStore((s) => s.draggingFiles);
   const toggleSources = useStore((s) => s.toggleSources);
   const openSourceViewer = useStore((s) => s.openSourceViewer);
@@ -428,16 +427,9 @@ export function SourcesPanel() {
   }
 
   async function confirmRemoveBatch(ids: string[]) {
-    if (
-      await confirm({
-        title: `Remove ${ids.length} sources?`,
-        message:
-          "This deletes the selected sources and their embedded chunks from the notebook (folders take their files along). Nothing on disk is touched.",
-        confirmLabel: "Remove",
-        danger: true,
-      })
-    )
-      void deleteSourcesBatch(ids);
+    // Undo beats confirm: restorable sources delete straight away with a
+    // click-to-undo toast; only connector sources still ask.
+    await removeSourcesGuarded(ids, confirm);
   }
   const confirmRemoveBatchRef = useRef(confirmRemoveBatch);
   confirmRemoveBatchRef.current = confirmRemoveBatch;
@@ -1030,19 +1022,8 @@ export function SourcesPanel() {
                                 label: "Remove",
                                 icon: <Trash2 className="h-3.5 w-3.5" />,
                                 danger: true,
-                                onClick: async () => {
-                                  if (
-                                    await confirm({
-                                      title: `Remove "${s.title}"?`,
-                                      message: isFolder
-                                        ? `This removes the folder and its ${childCount(s.id)} file sources (with their embedded chunks) from the notebook. Nothing on disk is touched.`
-                                        : "This deletes the source and its embedded chunks from the notebook.",
-                                      confirmLabel: "Remove",
-                                      danger: true,
-                                    })
-                                  )
-                                    deleteSource(s.id);
-                                },
+                                onClick: () =>
+                                  void removeSourcesGuarded([s.id], confirm),
                               },
                             ]}
                           />

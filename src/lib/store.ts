@@ -7,7 +7,7 @@ import {
 } from "@tauri-apps/api/webviewWindow";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
-import { SUPPORTED_EXTENSIONS, visibleTitle } from "./utils";
+import { isWebUrl, SUPPORTED_EXTENSIONS, visibleTitle } from "./utils";
 import { applyTheme, SYSTEM_THEME, themeIsDark } from "./themes";
 import { refreshEpigraph } from "./epigraph";
 import { notify } from "./notify";
@@ -32,6 +32,74 @@ import type {
   ReadingPrefs,
   Source,
 } from "./types";
+
+/** Can an undo toast bring this source back by re-importing its origin?
+ *  Connector types (git/notion/obsidian) carry setup state a re-add can't
+ *  reproduce — their delete keeps the confirm dialog instead. */
+export function sourceRestorable(s: Source): boolean {
+  return !["git", "notion", "obsidian"].includes(s.sourceType);
+}
+
+/** The undo half of the source-remove toast: re-import from the origin the
+ *  dialog copy always promised was untouched. Pasted text has no origin, so
+ *  its content rides in as a pre-delete snapshot. Fresh id, fresh embed;
+ *  tags and the user's note are re-applied after. */
+async function restoreSource(
+  nb: string,
+  s: Source,
+  text: string | undefined,
+): Promise<Source | null> {
+  let restored: Source;
+  if (s.sourceType === "mac") {
+    const m = /^cider:\/\/([^/]+)\/[^/]+\/(.+)$/.exec(s.url);
+    if (!m) return null;
+    restored = await api.addSourceMac(nb, m[1], m[2], s.title);
+  } else if (s.sourceType === "folder") {
+    restored = await api.addSourceFolder(nb, s.url);
+  } else if (s.sourceType === "url" || isWebUrl(s.url)) {
+    restored = await api.addSourceUrl(nb, s.url);
+  } else if (s.url) {
+    restored = await api.addSourceFile(nb, s.url);
+  } else {
+    restored = await api.addSourceText(nb, s.title, text ?? "");
+  }
+  if (s.tags) await api.setSourceTags(restored.id, s.tags);
+  if (s.note) await api.setSourceNote(restored.id, s.note);
+  return restored;
+}
+
+/** The one guarded source-remove path (DESIGN.md §9: undo beats confirm).
+ *  Restorable sources delete immediately — the toast carries the undo.
+ *  Connector sources, which an undo can't rebuild, still ask first; this is
+ *  the single copy of that dialog for every call site. */
+export async function removeSourcesGuarded(
+  ids: string[],
+  confirmFn: (opts: {
+    title: string;
+    message?: string;
+    items?: string[];
+    confirmLabel?: string;
+    danger?: boolean;
+  }) => Promise<boolean>,
+): Promise<void> {
+  const sources = useStore.getState().sources.filter((s) => ids.includes(s.id));
+  const blocked = sources.filter((s) => !sourceRestorable(s));
+  if (blocked.length > 0) {
+    const ok = await confirmFn({
+      title:
+        ids.length === 1
+          ? `Remove “${sources[0]?.title ?? "source"}”?`
+          : `Remove ${ids.length} sources?`,
+      message:
+        "Connected sources can't be brought back by undo — restoring means reconnecting. Nothing on disk is touched.",
+      items: blocked.map((s) => s.title),
+      confirmLabel: "Remove",
+      danger: true,
+    });
+    if (!ok) return;
+  }
+  await useStore.getState().deleteSourcesBatch(ids);
+}
 
 // Side panels stay usable at any drag position: wide enough for content,
 // narrow enough to leave the chat column room at the 1040px minimum window.
@@ -1337,13 +1405,7 @@ export const useStore = create<AppState>((set, get) => {
       if (get().currentId === id) set({ sources: await api.listSources(id) });
     },
 
-    deleteSource: (id) =>
-      guard(async () => {
-        await api.deleteSource(id);
-        const nb = get().currentId;
-        if (nb) set({ sources: await api.listSources(nb) });
-        get().pushToast("success", "Source removed");
-      }),
+    deleteSource: (id) => get().deleteSourcesBatch([id]),
 
     // ---- Finder-style selection (RFC-multi-select) ----------------------
 
@@ -1418,17 +1480,40 @@ export const useStore = create<AppState>((set, get) => {
     deleteSourcesBatch: (sourceIds) =>
       guard(async () => {
         if (sourceIds.length === 0) return;
-        await api.deleteSources(get().currentId ?? "", sourceIds);
-        const nb = get().currentId;
+        const nb = get().currentId ?? "";
+        // Snapshot before the rows go: what to restore, and the content of
+        // pasted-text sources (their only copy). Children of a folder being
+        // deleted are skipped — restoring the folder re-scans them.
+        const doomed = get().sources.filter(
+          (s) => sourceIds.includes(s.id) && !sourceIds.includes(s.parentId),
+        );
+        const texts = new Map<string, string>();
+        for (const s of doomed) {
+          if (!s.url && sourceRestorable(s))
+            texts.set(s.id, await api.getSourceContent(s.id));
+        }
+        await api.deleteSources(nb, sourceIds);
         if (nb) set({ sources: await api.listSources(nb) });
         set({ picked: null });
-        get().pushToast(
-          "success",
-          sourceIds.length === 1
-            ? "Source removed"
-            : `${sourceIds.length} sources removed`,
-        );
         void get().refreshHygiene();
+        const restorable = doomed.filter(sourceRestorable);
+        const label =
+          sourceIds.length === 1
+            ? `Removed “${doomed[0]?.title ?? "source"}”`
+            : `Removed ${sourceIds.length} sources`;
+        if (restorable.length === 0 || !nb) {
+          get().pushToast("success", label);
+          return;
+        }
+        get().pushToast("success", `${label} — click to undo`, () =>
+          guard(async () => {
+            for (const s of restorable)
+              await restoreSource(nb, s, texts.get(s.id));
+            if (get().currentId === nb)
+              set({ sources: await api.listSources(nb) });
+            void get().refreshHygiene();
+          }),
+        );
       }),
 
     setSourcesTagsBatch: (sourceIds, tags) =>
@@ -1448,16 +1533,24 @@ export const useStore = create<AppState>((set, get) => {
     deleteNotesBatch: (noteIds) =>
       guard(async () => {
         if (noteIds.length === 0) return;
+        // Snapshot for the undo toast: restore_note re-inserts with kind and
+        // prompt intact, so studio artifacts keep their viewer.
+        const doomed = get().notes.filter((n) => noteIds.includes(n.id));
         await api.deleteNotes(noteIds);
         set({
           notes: get().notes.filter((n) => !noteIds.includes(n.id)),
           picked: null,
         });
-        get().pushToast(
-          "success",
+        const label =
           noteIds.length === 1
-            ? "Note deleted"
-            : `${noteIds.length} notes deleted`,
+            ? `Deleted “${visibleTitle(doomed[0]?.title ?? "note")}”`
+            : `Deleted ${noteIds.length} notes`;
+        get().pushToast("success", `${label} — click to undo`, () =>
+          guard(async () => {
+            for (const n of doomed) await api.restoreNote(n);
+            const nb = get().currentId;
+            if (nb) set({ notes: await api.listNotes(nb) });
+          }),
         );
       }),
 
@@ -2008,12 +2101,7 @@ export const useStore = create<AppState>((set, get) => {
         set({ notes: await api.listNotes(id) });
       }),
 
-    deleteNote: (noteId) =>
-      guard(async () => {
-        await api.deleteNote(noteId);
-        set({ notes: get().notes.filter((n) => n.id !== noteId) });
-        get().pushToast("success", "Note deleted");
-      }),
+    deleteNote: (noteId) => get().deleteNotesBatch([noteId]),
 
     discussNoteInChat: (noteId) =>
       guard(async () => {

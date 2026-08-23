@@ -13,7 +13,6 @@ import {
   type RowMenuItem,
   Spinner,
   CardAction,
-  useConfirm,
   useHoverCard,
   useMarquee,
 } from "./ui";
@@ -227,7 +226,6 @@ export function StudioPanel() {
   const pickSet = useStore((s) => s.pickSet);
   const clearPicked = useStore((s) => s.clearPicked);
   const deleteNotesBatch = useStore((s) => s.deleteNotesBatch);
-  const { confirm, dialog: confirmDialog } = useConfirm();
 
   // ---- Finder-style selection over the notes list (RFC-multi-select) ----
   const pickedNoteIds = useMemo(
@@ -291,15 +289,9 @@ export function StudioPanel() {
   }
 
   async function confirmDeleteNotes(ids: string[]) {
-    if (
-      await confirm({
-        title: `Delete ${ids.length} notes?`,
-        message: "The selected notes will be permanently removed.",
-        confirmLabel: "Delete",
-        danger: true,
-      })
-    )
-      void deleteNotesBatch(ids);
+    // Undo beats confirm: the delete toast restores notes with their kind
+    // intact, so there is nothing left to warn about.
+    await deleteNotesBatch(ids);
   }
   const confirmDeleteNotesRef = useRef(confirmDeleteNotes);
   confirmDeleteNotesRef.current = confirmDeleteNotes;
@@ -752,18 +744,7 @@ export function StudioPanel() {
                           label: "Delete",
                           icon: <Trash2 className="h-3.5 w-3.5" />,
                           danger: true,
-                          onClick: async () => {
-                            if (
-                              await confirm({
-                                title: `Delete "${n.title}"?`,
-                                message:
-                                  "This note will be permanently removed.",
-                                confirmLabel: "Delete",
-                                danger: true,
-                              })
-                            )
-                              deleteNote(n.id);
-                          },
+                          onClick: () => void deleteNote(n.id),
                         },
                       ]}
                     />
@@ -880,7 +861,6 @@ export function StudioPanel() {
       </Modal>
 
       {marquee}
-      {confirmDialog}
       {hoverCard}
     </div>
   );
