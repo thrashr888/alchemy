@@ -840,7 +840,10 @@ impl AgentCli {
                 // the lenient parser treats non-JSON lines as raw text so
                 // plain-text builds still work. No system flag — folded
                 // into the prompt below. Prompt over stdin.
-                cmd.args(["-p", "--output-format", "stream-json"]);
+                // --trust: headless runs inherit the app's cwd, which the
+                // CLI has never trusted; without it every run dies on the
+                // interactive Workspace Trust prompt.
+                cmd.args(["-p", "--output-format", "stream-json", "--trust"]);
                 set_model(&mut cmd);
             }
             AgentKind::Gemini => {
