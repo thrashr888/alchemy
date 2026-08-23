@@ -308,6 +308,12 @@ pub fn record(event: Event) {
     // Then the system console.
     mirror_to_os_log(event.level, &event.kind, &event.message);
 
+    // And, in dev builds, the debug bridge's ring — so `tauri-browser errors`
+    // shows Alchemy's own failures next to the JS errors and panics it
+    // captures itself, and an agent driving the app has one place to look.
+    #[cfg(feature = "debug")]
+    mirror_to_bridge(event.level, &event.kind, &event.message, &event.detail);
+
     if event.level == Level::Fatal {
         announce_fatal(&json);
     }
@@ -698,6 +704,26 @@ fn mirror_to_os_log(level: Level, kind: &str, message: &str) {
 
 #[cfg(not(target_os = "macos"))]
 fn mirror_to_os_log(_level: Level, _kind: &str, _message: &str) {}
+
+/// Push one record into `tauri-plugin-debug-bridge`, which keeps it in its
+/// own ring and mirrors it to `/tmp/tauri-debug-bridge/`. Dev builds only —
+/// the bridge is feature-gated off in releases, where `alchemy.log` is the
+/// record that matters.
+#[cfg(feature = "debug")]
+fn mirror_to_bridge(level: Level, kind: &str, message: &str, detail: &Option<String>) {
+    use tauri_plugin_debug_bridge::Level as BridgeLevel;
+    let bridge_level = match level {
+        Level::Info => BridgeLevel::Info,
+        Level::Warn => BridgeLevel::Warn,
+        Level::Error | Level::Fatal => BridgeLevel::Error,
+    };
+    match detail {
+        Some(detail) => {
+            tauri_plugin_debug_bridge::record_detailed(bridge_level, kind, message, detail)
+        }
+        None => tauri_plugin_debug_bridge::record(bridge_level, kind, message),
+    }
+}
 
 #[cfg(test)]
 mod tests {
