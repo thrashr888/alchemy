@@ -1543,18 +1543,12 @@ function SlashPicker({
   );
 }
 
-/** Hover row under a user turn: copy, re-run, and when it happened. Re-run is
- *  a rewind — it drops this question and everything after it, then resends —
- *  so it only appears on the last question; re-running an older one would
- *  silently discard the exchanges below it. */
+/** Hover row under a user turn: copy, re-run, and when it happened. Re-run
+ *  asks the question again as a fresh turn at the end of the chat — the
+ *  earlier exchange stays put, so nothing is destroyed and any question in
+ *  the transcript can be re-asked. */
 function UserMessageActions({ message }: { message: Message }) {
   const [copied, setCopied] = useState(false);
-  const isLastUser = useStore((s) => {
-    for (let i = s.messages.length - 1; i >= 0; i--) {
-      if (s.messages[i].role === "user") return s.messages[i].id === message.id;
-    }
-    return false;
-  });
   const sending = useStore((s) => s.sending);
 
   async function copy() {
@@ -1566,14 +1560,9 @@ function UserMessageActions({ message }: { message: Message }) {
       /* clipboard unavailable */
     }
   }
-  async function rerun() {
+  function rerun() {
     const st = useStore.getState();
     if (st.sending) return;
-    const msgs = st.messages;
-    const i = msgs.findIndex((m) => m.id === message.id);
-    if (i < 0) return;
-    for (const m of msgs.slice(i)) await api.deleteMessage(m.id);
-    useStore.setState({ messages: msgs.slice(0, i) });
     void st.sendMessage(message.content);
   }
 
@@ -1598,17 +1587,15 @@ function UserMessageActions({ message }: { message: Message }) {
         )}
         {copied ? "Copied" : "Copy"}
       </button>
-      {isLastUser && (
-        <button
-          onClick={() => void rerun()}
-          disabled={sending}
-          className={btn}
-          title="Ask this again — replaces the answer below"
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-          Re-run
-        </button>
-      )}
+      <button
+        onClick={rerun}
+        disabled={sending}
+        className={btn}
+        title="Ask this again as a new turn"
+      >
+        <RefreshCw className="h-3.5 w-3.5" />
+        Re-run
+      </button>
     </div>
   );
 }

@@ -900,10 +900,28 @@ function SuggestionStrip({
   );
   const recommended = cards.filter((c) => c.triage === "recommended").length;
 
+  // Dismissing is sticky ("won't be suggested again"), so the toast carries
+  // the undo: put the dismissed cards back in the queue as suggestions. The
+  // triage highlight is queue metadata and doesn't survive the round trip.
+  const undoDismiss = (dismissed: RegistryCard[]) => {
+    const label =
+      dismissed.length === 1
+        ? `Dismissed “${dismissed[0].name}” — click to undo`
+        : `Dismissed ${dismissed.length} suggestions — click to undo`;
+    useStore.getState().pushToast("success", label, () =>
+      void (async () => {
+        for (const c of dismissed) await api.setCardOrigin(c.id, "auto");
+        onChanged();
+      })(),
+    );
+  };
+
   const rule = async (id: string, origin: string) => {
     setBusy(id);
     try {
+      const card = cards.find((c) => c.id === id);
       await api.setCardOrigin(id, origin);
+      if (origin === "dismissed" && card) undoDismiss([card]);
       onChanged();
     } finally {
       setBusy(null);
@@ -913,7 +931,11 @@ function SuggestionStrip({
   const ruleAll = async (key: string, origin: string, onlyRec?: boolean) => {
     setBusy(key);
     try {
+      const affected = onlyRec
+        ? cards.filter((c) => c.triage === "recommended")
+        : cards;
       await api.ruleAllSuggested(origin, onlyRec);
+      if (origin === "dismissed" && affected.length > 0) undoDismiss(affected);
       onChanged();
     } finally {
       setBusy(null);
