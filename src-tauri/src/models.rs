@@ -156,6 +156,9 @@ pub struct ModelStat {
     pub last_tokens_per_sec: f64,
     pub avg_tokens_per_sec: f64,
     pub samples: u64,
+    /// Chat time-to-first-token, wall-clock ms (0 = never measured).
+    pub last_ttft_ms: u64,
+    pub avg_ttft_ms: f64,
 }
 
 /// One anchor pinning a ledger entry to verbatim source text. The quote is

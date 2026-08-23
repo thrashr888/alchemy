@@ -39,6 +39,16 @@ pub struct ModelStatAcc {
     pub total_tokens: u64,
     pub total_seconds: f64,
     pub last_tps: f64,
+    /// Time to first streamed token over the chat surface, wall-clock from
+    /// the send to the first chat://token emit — retrieval included, because
+    /// that is the wait the user actually feels. serde(default) so stats
+    /// files from before the field deserialize.
+    #[serde(default)]
+    pub ttft_samples: u64,
+    #[serde(default)]
+    pub total_ttft_ms: u64,
+    #[serde(default)]
+    pub last_ttft_ms: u64,
 }
 
 pub struct AppState {
@@ -135,6 +145,18 @@ impl AppState {
         }
     }
 
+    /// Fold one chat's time-to-first-token into the running stats.
+    pub fn record_chat_ttft(&self, model: &str, ttft_ms: u64) {
+        let mut map = self.model_stats.lock().unwrap();
+        let entry = map.entry(model.to_string()).or_default();
+        entry.ttft_samples += 1;
+        entry.total_ttft_ms += ttft_ms;
+        entry.last_ttft_ms = ttft_ms;
+        if let Ok(json) = serde_json::to_string_pretty(&*map) {
+            let _ = std::fs::write(&self.stats_path, json);
+        }
+    }
+
     pub fn model_stats_snapshot(&self) -> Vec<ModelStat> {
         let map = self.model_stats.lock().unwrap();
         map.iter()
@@ -147,6 +169,12 @@ impl AppState {
                     0.0
                 },
                 samples: a.samples,
+                last_ttft_ms: a.last_ttft_ms,
+                avg_ttft_ms: if a.ttft_samples > 0 {
+                    a.total_ttft_ms as f64 / a.ttft_samples as f64
+                } else {
+                    0.0
+                },
             })
             .collect()
     }
@@ -7050,6 +7078,9 @@ pub async fn send_message(
         return Err("Message is empty".into());
     }
     let extra = chat_style_instruction(&config.unwrap_or_default());
+    // Time-to-first-token clock: from the send to the first chat://token
+    // emit. Phase marks land in the chat-timing trace line below.
+    let t0 = std::time::Instant::now();
 
     // Persist the user's turn first.
     let user_msg = Message {
@@ -7073,9 +7104,14 @@ pub async fn send_message(
     // retrieval depth can scale with how much text is actually in play
     // (RFC-infinite-context §3) and the manifest reuses the same rows.
     let ai = state.ai.read().await.clone();
-    let query_vec = e(ai.embed_one(&content).await)?;
+    // Embedding the question and listing sources are independent — overlap
+    // them; every pre-stream millisecond is felt time-to-first-token.
+    let (query_vec, sources_list) =
+        tokio::join!(ai.embed_one(&content), state.db.list_sources(&notebook_id));
+    let query_vec = e(query_vec)?;
+    let embed_ms = t0.elapsed().as_millis() as u64;
     let profile = ai.profile(crate::inference::Role::Chat);
-    let selected_sources: Vec<Source> = e(state.db.list_sources(&notebook_id).await)?
+    let selected_sources: Vec<Source> = e(sources_list)?
         .into_iter()
         .filter(|s| source_ids.as_ref().is_none_or(|ids| ids.contains(&s.id)))
         .collect();
@@ -7135,6 +7171,7 @@ pub async fn send_message(
     let pool_cap = pool.len() + grep_hits.len();
     let citations = fuse_grep_hits(pool, grep_hits, pool_cap);
     let citations = ai.rerank_hits(&content, citations, k).await;
+    let retrieval_ms = (t0.elapsed().as_millis() as u64).saturating_sub(embed_ms);
     bump_note_usage(&state.db, &citations, "retrieval_hits").await;
 
     // Widen prompt excerpts to ordinal neighbors where the model's window
@@ -7230,6 +7267,9 @@ pub async fn send_message(
     let cancel = state.begin_generation(&format!("chat:{}", window.label()));
     let partial = Arc::new(Mutex::new(String::new()));
     let partial_cb = partial.clone();
+    // 0 = no token yet; the first token stores max(elapsed, 1).
+    let first_tok = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let first_tok_cb = first_tok.clone();
     let (answer, kind, stats, cost_usd, model) = {
         let ai = state.ai.read().await.clone();
         let engine = override_engine
@@ -7241,6 +7281,12 @@ pub async fn send_message(
         let app_for_steps = app.clone();
         let streamed = tokio::select! {
             out = engine.chat_stream_steps(&messages, |tok| {
+                let _ = first_tok_cb.compare_exchange(
+                    0,
+                    (t0.elapsed().as_millis() as u64).max(1),
+                    std::sync::atomic::Ordering::Relaxed,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
                 partial_cb.lock().unwrap().push_str(tok);
                 let _ = app_for_cb.emit(
                     "chat://token",
@@ -7279,6 +7325,22 @@ pub async fn send_message(
         }
     };
     state.record_chat_stats(&model, stats);
+    let ttft_ms = first_tok.load(std::sync::atomic::Ordering::Relaxed);
+    if kind == "chat" && ttft_ms > 0 {
+        state.record_chat_ttft(&model, ttft_ms);
+        crate::trace::log(
+            &state.trace_dir,
+            serde_json::json!({
+                "ts": now(),
+                "surface": "chat-timing",
+                "notebookId": notebook_id,
+                "model": model,
+                "ttftMs": ttft_ms,
+                "embedMs": embed_ms,
+                "retrievalMs": retrieval_ms,
+            }),
+        );
+    }
 
     let assistant_msg = Message {
         id: new_id(),

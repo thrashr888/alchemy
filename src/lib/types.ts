@@ -362,6 +362,9 @@ export interface ModelStat {
   lastTokensPerSec: number;
   avgTokensPerSec: number;
   samples: number;
+  /** Chat time-to-first-token, wall-clock ms (0 = never measured). */
+  lastTtftMs: number;
+  avgTtftMs: number;
 }
 
 export interface ReportSchedule {
