@@ -127,7 +127,14 @@ detected agents, pick default, per-agent auth status.
   LanceDB dir: the agent's own file tools operate there, and notebook
   content stays reachable only through our MCP tools.
 - The pane stops its session on unmount, so no agent subprocess outlives the
-  UI driving it; the SDK's `ChildGuard` reaps the process group.
+  UI driving it; the SDK's `ChildGuard` reaps the process group. Unmount
+  means the notebook went away, not a view flip: the pane stays mounted
+  (hidden) behind the Chat view, because toggling Chat ↔ Agent used to kill
+  the live session and reset the picker to the first agent with an empty
+  transcript. The transcript and agent choice also persist per notebook in
+  the store (`acpPanes`), and the header gains a Clear button in agent view —
+  clearing ends the session too, since a live agent quietly keeping the
+  cleared context would belie the empty pane.
 - **A session can open with no notebook access, and used to do it silently.**
   If the MCP server isn't running, `session/new` simply carries no
   `mcpServers` — the agent works but can't see a single source, which is the
@@ -144,6 +151,13 @@ detected agents, pick default, per-agent auth status.
   `initialize`, so the message leads with those ("Claude Code couldn't open a
   session — it may need you to sign in first (Log in with Claude Code)") and
   the wire text trails, flattened to one line.
+- **The agent needs to be told where it is.** MCP attachment alone isn't
+  context: the agent can see the alchemy tools but not which notebook the
+  session belongs to, so "what's the cheapest one?" got a coding assistant's
+  shrug instead of a search. The session's first prompt now carries a
+  preamble (`session_preamble`) naming the notebook (title + id) and
+  pointing at `search`/`list_sources`/`get_source` — only when the MCP
+  server actually attached. The transcript shows only what the user typed.
 - **Session failures must not be toasts.** They auto-dismissed before the
   message could be read, which made the auth problem above invisible in
   practice. Failures render in-pane until dismissed, and carry the fix: an
@@ -169,17 +183,23 @@ Exercised live against the dev app, opencode 1.18.15:
   a running session.
 - No orphaned agent subprocesses after stop.
 
-**Not yet covered, and worth knowing:**
+**Closed 2026-08-21, live against the dev app (Claude Code adapter 0.16.2):**
 
-- **The permission path has never fired.** opencode auto-allows tool use in
-  ACP mode, so `acp://permission` and `PermissionPrompt` are written but
-  unexercised — asking it to write a file produced no prompt. An agent with
-  stricter defaults (Claude Code) is needed to validate that flow.
-- **Claude Code end-to-end is unverified.** The adapter reaches `session/new`
-  but this machine's `claude` OAuth is expired ("OAuth session expired and
-  could not be refreshed"), which is environmental rather than an Alchemy
-  bug. Its *failure* path is now well covered — the notice, the sign-in hint,
-  Open Terminal, and Retry were all exercised against this exact failure —
-  but a successful Claude Code turn has never run. Re-test after signing in;
-  that run also validates permissions.
+- **The permission path works.** Claude Code's stricter defaults fired
+  `session/request_permission` for both an MCP tool (`list_notebooks`) and a
+  file `Write`; the in-pane prompt rendered Always Allow / Allow / Reject /
+  Cancel, Allow resumed the turn, and the tool chips transitioned to done.
+- **Claude Code end-to-end works.** After a fresh `claude` login: full turn
+  with parallel tool calls, the notebook list streamed back through the MCP
+  hand-off, and the file landed in the per-notebook scratch cwd.
+- **New scar: the CLAUDECODE env leak.** The SDK spawns agents with the
+  app's own env underneath the login-shell env and has no `env_clear`, so a
+  dev build launched from a Claude Code terminal passes `CLAUDECODE` down to
+  the adapter's `claude`, which refuses to nest and dies at `session/new`
+  with the same generic wire error as an auth failure. `launch()` now
+  overrides it to the empty string (reads as unset to the guard). Any
+  agent-driven dev run hits this; a Finder-launched app never does.
+
+**Still not covered:**
+
 - Gemini and Codex are detected but never launched.

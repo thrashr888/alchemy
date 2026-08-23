@@ -484,6 +484,11 @@ export function ResizeHandle({
 
 let modalSeq = 0;
 
+/** Open modals, bottom to top. Escape must close only the topmost — every
+ *  Modal listens on `window`, so without this a confirm stacked over
+ *  Settings would take Settings down with it. */
+const modalStack: symbol[] = [];
+
 export function Modal({
   open,
   onClose,
@@ -526,6 +531,8 @@ export function Modal({
 
   React.useEffect(() => {
     if (!open) return;
+    const stackToken = Symbol("modal");
+    modalStack.push(stackToken);
     const trigger = document.activeElement as HTMLElement | null;
     // Focus the first form field if there is one (the header close button is
     // first in DOM order), else the first focusable, else the panel itself.
@@ -539,6 +546,7 @@ export function Modal({
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        if (modalStack[modalStack.length - 1] !== stackToken) return;
         onCloseRef.current();
         return;
       }
@@ -563,6 +571,8 @@ export function Modal({
     };
     window.addEventListener("keydown", onKey);
     return () => {
+      const i = modalStack.indexOf(stackToken);
+      if (i >= 0) modalStack.splice(i, 1);
       window.removeEventListener("keydown", onKey);
       // Restore focus to whatever opened the dialog — one tick later, so
       // the keystroke that closed it (Enter submitting a form) can't land

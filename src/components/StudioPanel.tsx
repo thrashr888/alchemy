@@ -267,8 +267,18 @@ export function StudioPanel() {
             .filter((x): x is Note => !!x)
             .map((x) => `# ${x.title}\n\n${x.content}`)
             .join("\n\n---\n\n");
-          void navigator.clipboard.writeText(text);
-          useStore.getState().pushToast("success", `${n} notes copied`);
+          // Report what actually happened: a denied clipboard write used to
+          // toast success anyway and leave an unhandled rejection behind.
+          navigator.clipboard.writeText(text).then(
+            () => useStore.getState().pushToast("success", `${n} notes copied`),
+            (err: unknown) =>
+              useStore
+                .getState()
+                .pushToast(
+                  "error",
+                  err instanceof Error ? err.message : "Couldn't copy to the clipboard",
+                ),
+          );
         },
       },
       {

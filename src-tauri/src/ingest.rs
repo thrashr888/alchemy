@@ -208,8 +208,8 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
         // earns its keep.
         Some(anydoc::Format::Csv) => match anydoc::to_markdown(path) {
             Ok(md) if !md.trim().is_empty() => return finish(md),
-            Ok(_) => eprintln!("anydoc fallback: empty output for {path}"),
-            Err(err) => eprintln!("anydoc fallback: {path}: {err}"),
+            Ok(_) => crate::note!("anydoc fallback: empty output for {path}"),
+            Err(err) => crate::note!("anydoc fallback: {path}: {err}"),
         },
         // The office family is anydoc's alone (the bespoke extractors are
         // gone) — a failure here is the import's failure, reported as such.

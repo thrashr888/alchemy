@@ -1,7 +1,10 @@
 import { create } from "zustand";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import {
+  getCurrentWebviewWindow,
+  WebviewWindow,
+} from "@tauri-apps/api/webviewWindow";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import { SUPPORTED_EXTENSIONS, visibleTitle } from "./utils";
@@ -12,6 +15,7 @@ import { playArrival, playDone, playError } from "./sound";
 import { autoUpdateEnabled, checkForUpdatesQuietly } from "./updates";
 import { DEFAULT_CHAT_CONFIG, DEFAULT_READING_PREFS } from "./types";
 import type {
+  AcpPaneState,
   AppState,
   Migration,
   NavEntry,
@@ -55,6 +59,36 @@ function saveSourceSel(
   if (!notebookId) return;
   if (sel === null) localStorage.removeItem(`sourceSel:${notebookId}`);
   else localStorage.setItem(`sourceSel:${notebookId}`, JSON.stringify(sel));
+}
+
+/** Load a notebook's persisted hosted-agent pane (transcript + agent choice),
+ *  so an app restart reopens on the last session's view. */
+function loadAcpPane(notebookId: string): AcpPaneState | null {
+  try {
+    const raw = localStorage.getItem(`acpPane:${notebookId}`);
+    const pane = raw ? (JSON.parse(raw) as AcpPaneState) : null;
+    return pane && Array.isArray(pane.entries) ? pane : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Entries stream token by token, so writes coalesce behind a short timer
+ *  rather than hitting localStorage on every chunk. */
+const acpSaveTimers = new Map<string, number>();
+function saveAcpPaneSoon(notebookId: string, pane: AcpPaneState) {
+  clearTimeout(acpSaveTimers.get(notebookId));
+  acpSaveTimers.set(
+    notebookId,
+    window.setTimeout(() => {
+      acpSaveTimers.delete(notebookId);
+      try {
+        localStorage.setItem(`acpPane:${notebookId}`, JSON.stringify(pane));
+      } catch {
+        // Quota or private-mode noise; the transcript is a convenience.
+      }
+    }, 300),
+  );
 }
 
 /** Glass chrome: native vibrancy under the window + the html.glass CSS
@@ -619,8 +653,25 @@ export const useStore = create<AppState>((set, get) => {
       // (JS "Any" listeners receive every event regardless of emit target, so
       // this self-filter is what actually prevents N windows from all reacting.)
       const label = getCurrentWebview().label;
+      // A note pop-out (or print-export shell) renders only the note — no
+      // palette, settings, importer, or add-source modal is mounted, so a
+      // menu action addressed here would flip state nothing displays. Hand
+      // the action to the main window and bring it forward instead. (The
+      // re-emitted payload targets "main"; every window's listener sees it,
+      // but the self-filter below keeps everyone else out.)
+      const isReaderShell = !!window.__ALCHEMY_NOTE__;
+      const forwardMenuToMain = async (event: string, id: string) => {
+        await emit(event, { target: "main", id });
+        const main = await WebviewWindow.getByLabel("main");
+        await main?.show();
+        await main?.setFocus();
+      };
       void listen<{ target: string; id: string }>("menu://action", (e) => {
         if (e.payload.target !== label) return;
+        if (isReaderShell) {
+          void forwardMenuToMain("menu://action", e.payload.id);
+          return;
+        }
         const s = get();
         if (e.payload.id === "menu-settings") s.openSettings();
         else if (e.payload.id === "menu-about") s.openSettings("about");
@@ -643,6 +694,12 @@ export const useStore = create<AppState>((set, get) => {
         "menu://open-notebook",
         (e) => {
           if (e.payload.target !== label) return;
+          if (isReaderShell) {
+            // Opening a notebook under a pop-out note would swap the note's
+            // notebook out from beneath it — route to the main window.
+            void forwardMenuToMain("menu://open-notebook", e.payload.id);
+            return;
+          }
           void get().selectNotebook(e.payload.id);
         },
       );
@@ -1715,6 +1772,39 @@ export const useStore = create<AppState>((set, get) => {
       set({ messages: [], messagesHasMore: false });
     },
 
+    acpPanes: {},
+    hydrateAcpPane: (notebookId) =>
+      set((s) => {
+        if (s.acpPanes[notebookId]) return {};
+        const stored = loadAcpPane(notebookId);
+        if (!stored) return {};
+        return { acpPanes: { ...s.acpPanes, [notebookId]: stored } };
+      }),
+    setAcpAgentId: (notebookId, agentId) =>
+      set((s) => {
+        const pane: AcpPaneState = {
+          entries: s.acpPanes[notebookId]?.entries ?? [],
+          agentId,
+        };
+        saveAcpPaneSoon(notebookId, pane);
+        return { acpPanes: { ...s.acpPanes, [notebookId]: pane } };
+      }),
+    setAcpEntries: (notebookId, update) =>
+      set((s) => {
+        const prev = s.acpPanes[notebookId] ?? { agentId: null, entries: [] };
+        const pane = { ...prev, entries: update(prev.entries) };
+        saveAcpPaneSoon(notebookId, pane);
+        return { acpPanes: { ...s.acpPanes, [notebookId]: pane } };
+      }),
+    clearAcpPane: (notebookId) =>
+      set((s) => {
+        const pane = s.acpPanes[notebookId];
+        if (!pane || pane.entries.length === 0) return {};
+        const cleared = { ...pane, entries: [] };
+        saveAcpPaneSoon(notebookId, cleared);
+        return { acpPanes: { ...s.acpPanes, [notebookId]: cleared } };
+      }),
+
     generateArtifact: async (kind, prompt) => {
       const id = get().currentId;
       if (!id || get().generatingKind) return;
@@ -1971,10 +2061,38 @@ export const useStore = create<AppState>((set, get) => {
 
     deleteReport: (rid) =>
       guard(async () => {
+        // A schedule is user-authored config the backend hard-deletes, so the
+        // toast carries the undo: recreate from this snapshot on click.
+        const gone = get().reportSchedules.find((r) => r.id === rid);
         await api.deleteReportSchedule(rid);
         set({
           reportSchedules: get().reportSchedules.filter((r) => r.id !== rid),
         });
+        if (!gone) return;
+        get().pushToast("success", `Deleted “${gone.name}” — click to undo`, () =>
+          guard(async () => {
+            const restored = await api.createReportSchedule(
+              gone.notebookId,
+              gone.name,
+              gone.kind,
+              gone.prompt,
+              gone.trigger,
+              gone.intervalSecs,
+            );
+            if (!gone.enabled)
+              await api.updateReportSchedule(
+                restored.id,
+                gone.name,
+                gone.kind,
+                gone.prompt,
+                gone.trigger,
+                gone.intervalSecs,
+                false,
+              );
+            const id = get().currentId;
+            if (id) set({ reportSchedules: await api.listReportSchedules(id) });
+          }),
+        );
       }),
 
     runReportNow: async (rid) => {

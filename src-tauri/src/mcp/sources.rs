@@ -312,7 +312,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Set a source's tags (user organization that retrieval also uses: tags join the source's route summary and the chat manifest). Free-form input — '#' prefixes, commas, mixed case all accepted; stored normalized (lowercase, deduped, space-separated). Empty tags clears them. Returns the updated source."
+        description = "Set a source's tags (user organization that retrieval also uses: tags join the source's route summary and the chat manifest). Free-form input — '#' prefixes, commas, mixed case all accepted; stored normalized (lowercase, deduped, space-separated). Empty tags clears them. Returns the updated source for a single source_id, or {ok, updated} for a source_ids batch."
     )]
     async fn set_source_tags(
         &self,
@@ -369,13 +369,30 @@ impl AlchemyMcp {
     ) -> Result<CallToolResult, McpError> {
         let ids = req.ids()?;
         let state = self.state();
-        let notebook_id = state
-            .db
-            .get_source(&ids[0])
-            .await
-            .map_err(internal)?
-            .map(|s| s.notebook_id)
-            .ok_or_else(|| invalid(format!("no source with id {}", ids[0])))?;
+        // Every id is resolved before anything is deleted, not just the
+        // first: the bulk delete works by id alone, so a batch that
+        // accidentally spans notebooks would take rows from a notebook the
+        // caller never named (and emit `sources://changed` for the wrong
+        // one). A mixed batch is a caller mistake, so it is refused whole.
+        let mut notebook_id: Option<String> = None;
+        for id in &ids {
+            let source = state
+                .db
+                .get_source(id)
+                .await
+                .map_err(internal)?
+                .ok_or_else(|| invalid(format!("no source with id {id}")))?;
+            match &notebook_id {
+                None => notebook_id = Some(source.notebook_id),
+                Some(first) if *first != source.notebook_id => {
+                    return Err(invalid(
+                        "source_ids span more than one notebook — delete them one notebook at a time",
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+        let notebook_id = notebook_id.expect("ids is non-empty");
         commands::delete_sources_impl(&state, &notebook_id, &ids)
             .await
             .map_err(internal)?;

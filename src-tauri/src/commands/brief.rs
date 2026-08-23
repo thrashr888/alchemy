@@ -331,7 +331,7 @@ pub(crate) async fn run_brief(
     let spoken = note.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(err) = synthesize_brief_audio(&app, &spoken).await {
-            eprintln!("brief audio: {err:#}");
+            crate::note!("brief audio: {err:#}");
         }
     });
     Ok(note)

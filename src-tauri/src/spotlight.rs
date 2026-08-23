@@ -78,9 +78,14 @@ pub fn reindex(entries: Vec<Entry>) {
             // wrong entitlement or container issue would look like "works".
             let done = block2::RcBlock::new(move |err: *mut objc2_foundation::NSError| {
                 if err.is_null() {
-                    eprintln!("spotlight: indexed {count} items");
+                    crate::note!("spotlight: indexed {count} items");
                 } else {
-                    eprintln!("spotlight: index failed: {}", (*err).localizedDescription());
+                    // A real failure — a wrong entitlement or a container
+                    // problem — and invisible to the user either way.
+                    crate::diagnostics::error(
+                        "spotlight",
+                        format!("index failed: {}", (*err).localizedDescription()),
+                    );
                 }
             });
             index.indexSearchableItems_completionHandler(

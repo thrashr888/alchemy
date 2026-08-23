@@ -26,7 +26,7 @@ pub fn log(dir: &Path, record: serde_json::Value) {
 /// Page capture telemetry (capture.rs) writes `capture.jsonl` through this.
 pub fn log_file(dir: &Path, file: &str, record: serde_json::Value) {
     if let Err(err) = try_log(dir, file, &record) {
-        eprintln!("{file} trace write failed: {err}");
+        crate::note!("{file} trace write failed: {err}");
     }
 }
 

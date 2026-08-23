@@ -54,7 +54,7 @@ pub(crate) fn spawn_weave(
     tauri::async_runtime::spawn(async move {
         IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
         if let Err(err) = weave_pass(&db, &ai, &notebook_id, &source_title, &changed).await {
-            eprintln!("weave: {err:#}");
+            crate::note!("weave: {err:#}");
         }
         IN_FLIGHT.fetch_sub(1, Ordering::Relaxed);
     });
@@ -135,13 +135,13 @@ async fn weave_pass(
         updated.updated_at = now();
         db.update_ledger_entry(&updated).await?;
         moved += 1;
-        eprintln!(
+        crate::note!(
             "weave: \u{201c}{}\u{2026}\u{201d} \u{2192} {next} (per {source_title})",
             entry.text.chars().take(48).collect::<String>()
         );
     }
     if moved > 0 {
-        eprintln!("weave: {moved} ledger row(s) moved for notebook {notebook_id}");
+        crate::note!("weave: {moved} ledger row(s) moved for notebook {notebook_id}");
     }
     Ok(())
 }

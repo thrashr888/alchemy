@@ -72,8 +72,11 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
     let add_url = MenuItemBuilder::with_id("menu-add-url", "Add URL Source…")
         .accelerator("CmdOrCtrl+Shift+U")
         .build(app)?;
+    // ⌥⌘V, not ⇧⌘V: menu key equivalents win over focused text fields, and
+    // ⇧⌘V is the platform-wide Paste and Match Style — binding it here made
+    // typing users ingest a source instead of pasting.
     let add_clipboard = MenuItemBuilder::with_id("menu-add-clipboard", "Add Clipboard Source…")
-        .accelerator("CmdOrCtrl+Shift+V")
+        .accelerator("CmdOrCtrl+Alt+V")
         .build(app)?;
     // One export verb: the .okf.zip is the notebook's portable form (share
     // it, back it up, unzip it for an OKF folder) — the separate
@@ -136,9 +139,21 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
         .maximize()
         .build()?;
 
+    // The diagnostics log (docs/RFC-diagnostics.md) lives in a folder no one
+    // should have to be talked through finding over a support thread.
+    let log = MenuItemBuilder::with_id("menu-reveal-log", "Show Diagnostics Log").build(app)?;
+    let help_menu = SubmenuBuilder::new(app, "Help").item(&log).build()?;
+
     let menu = Menu::with_items(
         app,
-        &[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu],
+        &[
+            &app_menu,
+            &file_menu,
+            &edit_menu,
+            &view_menu,
+            &window_menu,
+            &help_menu,
+        ],
     )?;
     Ok(AppMenu {
         menu,
@@ -178,6 +193,14 @@ pub fn handle_event(app: &AppHandle, id: &str) {
     }
     if id == "menu-quit" {
         crate::scheduler::request_quit(app);
+        return;
+    }
+    // Reveals a folder — no window involved, and it must work even when the
+    // one thing broken is the window.
+    if id == "menu-reveal-log" {
+        if let Err(err) = crate::commands::reveal_log() {
+            crate::diagnostics::error("reveal-log", err);
+        }
         return;
     }
     let windows = app.webview_windows();

@@ -174,7 +174,7 @@ pub fn spawn_sweep(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(err) = run_sweep(&app).await {
-            eprintln!("hygiene sweep failed: {err:#}");
+            crate::diagnostics::error("hygiene", format!("sweep failed: {err:#}"));
         }
         SWEEPING.store(false, Ordering::SeqCst);
     });
@@ -215,7 +215,10 @@ async fn run_sweep(app: &AppHandle) -> anyhow::Result<()> {
         match refresh_stale_url(&state, src).await {
             Ok(true) => *refreshed.entry(src.notebook_id.clone()).or_default() += 1,
             Ok(false) => {} // unchanged upstream — freshness stamped, nothing to announce
-            Err(err) => eprintln!(
+            // A single source failing is the expected shape of an outage or
+            // a dead link, not an app fault: it is already recorded as a
+            // strike on the row, so this is a note, not an error event.
+            Err(err) => crate::note!(
                 "hygiene: refresh of \u{201c}{}\u{201d} failed: {err:#}",
                 src.title
             ),

@@ -487,6 +487,8 @@ export function SourcesPanel() {
   }, [currentId, sources, refreshHygiene]);
 
   const [reviewOpen, setReviewOpen] = useState(false);
+  /** Source id currently being re-fetched from the review modal. */
+  const [retrying, setRetrying] = useState<string | null>(null);
   const [keptVersion, setKeptVersion] = useState(0);
   const issueBySource = useMemo(() => {
     const kept = loadHygieneKept(currentId);
@@ -501,6 +503,21 @@ export function SourcesPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hygiene, currentId, keptVersion]);
   const proposals = [...issueBySource.values()];
+
+  /** Fetch a flagged source again, right now. This is the user-initiated
+   *  path on purpose — someone is watching, so it keeps the hard-fail
+   *  semantics the background sweep deliberately avoids, and a success
+   *  clears the strike count (reingest stamps it), dropping the flag.
+   *  Duplicates get no Retry: re-fetching says nothing about them. */
+  async function retryIssue(h: { sourceId: string; bucket: string }) {
+    setRetrying(h.sourceId);
+    try {
+      await refreshSource(h.sourceId);
+    } finally {
+      setRetrying(null);
+    }
+    await refreshHygiene();
+  }
 
   function keepIssue(h: { sourceId: string; bucket: string }) {
     if (h.bucket === "unreachable") {
@@ -1312,6 +1329,16 @@ export function SourcesPanel() {
                     {HYGIENE_LABEL[h.bucket] ?? h.bucket} · {h.detail}
                   </div>
                 </div>
+                {h.bucket !== "duplicate" && (
+                  <Button
+                    variant="ghost"
+                    disabled={retrying === h.sourceId}
+                    onClick={() => void retryIssue(h)}
+                    title="Fetch it again now"
+                  >
+                    {retrying === h.sourceId ? "Retrying…" : "Retry"}
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   onClick={() => keepIssue(h)}

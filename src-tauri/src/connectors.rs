@@ -497,6 +497,52 @@ fn skill_installed(home: &std::path::Path, target: &Target) -> bool {
         .any(|d| resolve(home, d).join("alchemy/SKILL.md").exists())
 }
 
+/// Whether every installed skill file matches what this build ships.
+/// Compares content rather than a version stamp: the file is small, and a
+/// byte comparison also catches a downgrade, a half-written file, and the
+/// skills we shipped before any stamp existed.
+fn skill_current(home: &std::path::Path, target: &Target) -> bool {
+    target.skills_dirs.iter().all(|d| {
+        let dir = resolve(home, d).join("alchemy");
+        target.skill_files.iter().all(|(rel, content)| {
+            std::fs::read_to_string(dir.join(rel)).is_ok_and(|on_disk| on_disk == *content)
+        })
+    })
+}
+
+/// Re-write already-installed skills that have drifted from this build's.
+///
+/// Connect used to be the only writer, so a skill froze at whichever version
+/// was running the day the user clicked it — the Settings row kept reporting
+/// "Connected + skill" while the file taught agents tool names and flows that
+/// had since changed. Refreshing at launch keeps that green check honest
+/// without asking the user to re-click anything.
+///
+/// Only touches directories that already hold an alchemy skill, so this never
+/// installs into a client the user didn't connect, and never resurrects one
+/// they deleted. Silent by design: nothing here is worth a toast, and a
+/// read-only skills dir is the client's business, not an error we can fix.
+pub fn refresh_installed_skills(app: &AppHandle) {
+    let home = home(app);
+    for target in TARGETS {
+        if target.skills_dirs.is_empty() || !skill_installed(&home, target) {
+            continue;
+        }
+        if skill_current(&home, target) {
+            continue;
+        }
+        match install_skill(&home, target) {
+            Ok(()) => crate::note!("connectors: refreshed the {} skill", target.name),
+            // A stale skill leaves the agent working from last release's
+            // instructions, and nobody is watching this sweep run.
+            Err(e) => crate::diagnostics::error(
+                "connectors",
+                format!("could not refresh the {} skill: {e:#}", target.name),
+            ),
+        }
+    }
+}
+
 fn install_skill(home: &std::path::Path, target: &Target) -> anyhow::Result<()> {
     for d in target.skills_dirs {
         let dir = resolve(home, d).join("alchemy");
@@ -742,6 +788,41 @@ mod tests {
         assert!(skill.join("src/alchemy/__init__.py").exists());
         assert!(skill_installed(&home, t));
         assert!(status_of(&home, t, 41414).configured);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// The drift this exists to fix: Connect wrote the skill once, a later
+    /// release changed the text, and the stale copy kept reporting itself as
+    /// installed. `skill_current` is what separates the two.
+    #[test]
+    fn a_stale_skill_reads_as_installed_but_not_current() {
+        let home = tmp_home();
+        let t = target("claude");
+        install_skill(&home, t).unwrap();
+        assert!(skill_installed(&home, t));
+        assert!(skill_current(&home, t));
+
+        let file = home.join(".claude/skills/alchemy/SKILL.md");
+        std::fs::write(&file, "# an older release's skill\n").unwrap();
+        assert!(skill_installed(&home, t), "still present, just wrong");
+        assert!(!skill_current(&home, t));
+
+        install_skill(&home, t).unwrap();
+        assert!(skill_current(&home, t));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), SKILL_MD);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// Refresh must never install into a client the user didn't connect —
+    /// an absent skill stays absent.
+    #[test]
+    fn refresh_skips_targets_with_no_skill_installed() {
+        let home = tmp_home();
+        let t = target("claude");
+        assert!(!skill_installed(&home, t));
+        // `skill_current` is vacuously false for a missing file, so the
+        // installed check is what has to hold the line.
+        assert!(!skill_current(&home, t));
         let _ = std::fs::remove_dir_all(home);
     }
 

@@ -100,9 +100,14 @@ export function ChatPanel() {
   const agentMode = useStore((s) => s.agentMode);
   const toggleAgentMode = useStore((s) => s.toggleAgentMode);
   // Hosted-agent mode (docs/RFC-acp-agents.md) swaps the RAG transcript for
-  // the user's own coding agent. Per-notebook and deliberately not persisted:
-  // a session is a live subprocess, so reopening a notebook starts in chat.
+  // the user's own coding agent. The pane itself stays mounted behind the
+  // chat view (its session is a live subprocess and its transcript persists
+  // in the store); only which view fronts is local, so reopening a notebook
+  // starts in chat.
   const [hostedAgent, setHostedAgent] = useState(false);
+  const agentHistory = useStore((s) =>
+    s.currentId ? (s.acpPanes[s.currentId]?.entries.length ?? 0) > 0 : false,
+  );
   const send = useStore((s) => s.sendMessage);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
   const reading = useStore((s) => s.reading);
@@ -681,6 +686,24 @@ export function ChatPanel() {
               Clear
             </Button>
           )}
+          {hostedAgent && currentId && agentHistory && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={async () => {
+                // Clearing the transcript also ends the session: the two
+                // together mean "start over", and a live agent quietly
+                // keeping the cleared context would belie the empty pane.
+                if (await confirm({ title: "Clear this session?", confirmLabel: "Clear", danger: true })) {
+                  void api.acpStop(currentId).catch(() => {});
+                  useStore.getState().clearAcpPane(currentId);
+                }
+              }}
+            >
+              <Eraser className="h-3.5 w-3.5" />
+              Clear
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon"
@@ -693,9 +716,21 @@ export function ChatPanel() {
         </div>
       </div>
 
-      {hostedAgent && currentId ? (
-        <AgentPane notebookId={currentId} />
-      ) : (
+      {/* The agent pane stays mounted (hidden) while Chat is in front: its
+          session is a live subprocess, and toggling views must not kill it
+          or drop the streamed transcript. It unmounts — and stops its
+          session — only when the notebook goes away. */}
+      {currentId && (
+        <div
+          className={cn(
+            "relative flex min-h-0 flex-1 flex-col",
+            !hostedAgent && "hidden",
+          )}
+        >
+          <AgentPane notebookId={currentId} visible={hostedAgent} />
+        </div>
+      )}
+      {!(hostedAgent && currentId) && (
       <>
       <div ref={scrollRef} onScroll={updateAtBottom} className="relative z-10 flex-1 overflow-y-auto">
         <div className={cn("mx-auto flex max-w-[720px] flex-col gap-6 px-5 py-6", chatReadingClass(reading))}>

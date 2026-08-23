@@ -131,10 +131,11 @@ introduce a webfont; the system stack is deliberate.
 - **Inputs / Textareas**: 32px tall, `surface-2` fill, 1px `--input` border,
   radius 6px; focus swaps border to `ring/70` plus a 1px ring — no glow.
 - **Cards / list rows**: `surface` fill, 1px `--border`, radius 6–10px; hover
-  raises to `surface-2` and `--border-strong`. Clickable cards are
-  keyboard-operable (`role="button"`, `tabIndex=0`, Enter/Space — use
-  `cardButtonProps` from `lib/utils`). Row actions hidden until
-  hover **or focus-within**, never hover-only.
+  raises to `surface-2` and `--border-strong`. Clickable cards use
+  `ui.CardAction` — an `absolute inset-0` real button rendered as a *sibling*
+  of the card content (card is `relative`, secondary controls sit above it
+  with `relative z-20`), so nothing interactive ever nests. Row actions
+  hidden until hover **or focus-within**, never hover-only.
 - **Menus**: `menu-glass` material (see §2), hairline edge (see §6), radius 6px, 13px items;
   open focuses the first item, arrows cycle, Escape closes and restores focus,
   `role="menu"`/`menuitem`.
@@ -234,7 +235,35 @@ rather than disappearing. No mobile breakpoints; instead, guarantee that
 every panel width within its drag bounds truncates gracefully (single-line
 truncation with `title` tooltips).
 
-## 9. Agent Prompt Guide
+## 9. macOS Behavior — the Mac formula
+
+Apple's HIG, distilled to one line:
+
+> **The system is law, the menu is the index, the keyboard is complete,
+> undo beats confirm, objects are direct, state survives.**
+
+What each clause means here:
+
+- **System is law** — appearance, accessibility text size, and reduced
+  motion come from macOS and are never overridden (§3, §7). Standard edit
+  shortcuts (⌘C/V/X/Z/A, ⌘F) always mean the standard thing.
+- **Menu is the index** — every user-facing command appears in the native
+  menu bar (`menu.rs`) with its shortcut. If it's not in a menu, it's not
+  discoverable; the menu is the app's table of contents, not a formality.
+- **Keyboard is complete** — anything clickable is reachable and operable
+  by keyboard (§4, §7). New shortcuts register in `SHORTCUTS` (§10).
+- **Undo beats confirm** — prefer an immediate, undoable action with a
+  toast over a confirmation modal. Confirm only genuinely unrecoverable
+  bulk loss; never interrogate the user about reversible things.
+- **Objects are direct** — the things on screen are the things: right-click
+  any object for its actions (mirroring its row actions), drag files in to
+  import, drag/copy content out. No "select then hunt for a toolbar" flows.
+- **State survives** — window size, panel widths, selection, and in-progress
+  text restore on relaunch. Quitting is not losing your place.
+
+When a rule here conflicts with a web idiom, the Mac wins.
+
+## 10. Agent Prompt Guide
 
 Quick reference for agents building UI here:
 
@@ -248,8 +277,9 @@ Quick reference for agents building UI here:
 - Structural materials: `app-root` (window chrome), `side-card` (panel
   cards), `menu-glass` (floating surfaces) — defined in `index.css`,
   scheme- and glass-aware. Use them instead of re-deriving backgrounds.
-- Clickable non-button elements: spread `cardButtonProps(onActivate)` and add
-  `cursor-pointer`; reveal row actions with
+- Clickable cards: render `<CardAction label onClick />` from `ui.tsx` as a
+  sibling of the card content (never wrap content in a button); reveal row
+  actions with
   `opacity-0 group-hover:opacity-100 group-focus-within:opacity-100`.
 - New keyboard shortcuts: add the listener at the owning component, guard with
   `shortcutBlocked(e)`, and register the shortcut in `SHORTCUTS` in

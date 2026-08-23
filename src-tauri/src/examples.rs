@@ -503,12 +503,12 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
         let added = match top_up_ai_research(&state.db, &ai).await {
             Ok(n) => n > 0,
             Err(err) => {
-                eprintln!("examples: papers top-up failed ({err:#}); will retry next launch");
+                crate::note!("examples: papers top-up failed ({err:#}); will retry next launch");
                 return false;
             }
         };
         if let Err(err) = std::fs::write(&marker, EXAMPLES_VERSION) {
-            eprintln!("examples: couldn't write marker: {err}");
+            crate::note!("examples: couldn't write marker: {err}");
         }
         return added;
     }
@@ -528,7 +528,7 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
             Err(err) => {
                 // Quiet abort (usually: no embed model reachable yet) —
                 // marker stays unwritten so the next launch retries.
-                eprintln!("examples: seeding \u{201c}{title}\u{201d} failed ({err:#}); will retry next launch");
+                crate::note!("examples: seeding \u{201c}{title}\u{201d} failed ({err:#}); will retry next launch");
                 return seeded;
             }
         }
@@ -536,11 +536,11 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
     if let Err(err) = seed_registry_cards(&state.db).await {
         // Same contract as the notebooks: leave the marker unwritten so the
         // next launch retries, rather than shipping a half-built cast.
-        eprintln!("examples: seeding registry cards failed ({err:#}); will retry next launch");
+        crate::note!("examples: seeding registry cards failed ({err:#}); will retry next launch");
         return seeded;
     }
     if let Err(err) = std::fs::write(&marker, EXAMPLES_VERSION) {
-        eprintln!("examples: couldn't write marker: {err}");
+        crate::note!("examples: couldn't write marker: {err}");
     }
     seeded
 }
@@ -579,7 +579,7 @@ async fn top_up_ai_research(db: &Db, ai: &Ai) -> anyhow::Result<usize> {
     for p in prepared {
         insert_prepared(db, &nb.id, ts, p).await?;
     }
-    eprintln!("examples: added {n} papers to \u{201c}{AI_RESEARCH_TITLE}\u{201d}");
+    crate::note!("examples: added {n} papers to \u{201c}{AI_RESEARCH_TITLE}\u{201d}");
     Ok(n)
 }
 

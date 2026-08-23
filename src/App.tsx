@@ -12,7 +12,9 @@ import { NoteWindow } from "@/components/NoteWindow";
 import { PrintExportView } from "@/components/PrintExportView";
 import { Onboarding } from "@/components/Onboarding";
 import { Toaster } from "@/components/ui";
+import { FatalOverlay } from "@/components/ErrorBoundary";
 import { shortcutBlocked } from "@/lib/utils";
+import { isTauri } from "@tauri-apps/api/core";
 
 function App() {
   const init = useStore((s) => s.init);
@@ -38,15 +40,22 @@ function App() {
 
   // Cmd/Ctrl+, opens Settings (standard desktop convention); Cmd/Ctrl+K
   // toggles the command menu — from anywhere, including inputs.
+  // In the app both keys belong to the native menu accelerators (menu.rs),
+  // which consume the keystroke before the webview sees it — these branches
+  // exist for the browser dev build, where no menu exists. Handling them in
+  // both places would double-fire togglePalette (open, then instantly close)
+  // whenever a keydown does reach JS.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return;
       if (e.key === ",") {
+        if (isTauri()) return;
         // Don't stack Settings on top of an open dialog (confirms, palette).
         if (shortcutBlocked(e)) return;
         e.preventDefault();
         openSettings();
       } else if (e.key === "k") {
+        if (isTauri()) return;
         // togglePalette handles open dialogs itself: it closes an open
         // palette and dismisses other dialogs before opening.
         e.preventDefault();
@@ -153,6 +162,9 @@ function App() {
       )}
 
       <Toaster toasts={toasts} onDismiss={dismissToast} />
+      {/* Backend panics: last, and above everything, so the way out is
+          visible even when the rest of the window is mid-failure. */}
+      <FatalOverlay />
     </>
   );
 }

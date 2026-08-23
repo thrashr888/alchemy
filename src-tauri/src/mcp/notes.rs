@@ -92,7 +92,7 @@ impl AlchemyMcp {
             .bump_note_usage(std::slice::from_ref(&note.id), "reads", commands::now())
             .await
         {
-            eprintln!("note usage bump (reads) failed: {err:#}");
+            crate::note!("note usage bump (reads) failed: {err:#}");
         }
         json_result(&note)
     }
@@ -208,12 +208,28 @@ impl AlchemyMcp {
             _ => return Err(invalid("provide note_id or note_ids")),
         };
         let state = self.state();
-        let notebook_id = state
-            .db
-            .get_note(&ids[0])
-            .await
-            .map_err(internal)?
-            .map(|n| n.notebook_id);
+        // Resolve every id first: a missing id used to slip through and
+        // report success while deleting nothing, and a batch spanning
+        // notebooks would emit `notes://changed` for whichever notebook the
+        // first id happened to live in.
+        let mut notebook_id: Option<String> = None;
+        for id in &ids {
+            let note = state
+                .db
+                .get_note(id)
+                .await
+                .map_err(internal)?
+                .ok_or_else(|| invalid(format!("no note with id {id}")))?;
+            match &notebook_id {
+                None => notebook_id = Some(note.notebook_id),
+                Some(first) if *first != note.notebook_id => {
+                    return Err(invalid(
+                        "note_ids span more than one notebook — delete them one notebook at a time",
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
         // An Audio Overview's episode file lives outside the DB — remove it too.
         for id in &ids {
             if let Some(path) = commands::audio_path(&self.app, id) {
