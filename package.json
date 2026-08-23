@@ -12,7 +12,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "typecheck": "tsc --noEmit",
+    "bundle": "vite build",
+    "build": "pnpm run typecheck && pnpm run bundle",
+    "test": "pnpm run test:rust",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --lib",
     "preview": "vite preview",
     "tauri": "tauri",
     "postinstall": "scripts/fetch-pdfium.sh && scripts/build-fm-sidecar.sh"

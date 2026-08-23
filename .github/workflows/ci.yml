@@ -29,6 +29,15 @@ jobs:
           node-version: lts/*
           cache: pnpm
 
+      # TypeScript validates source content against this file, so it remains
+      # correct when source changes while avoiding a full graph rebuild on
+      # subsequent CI runs with the same dependency and compiler setup.
+      - name: Cache TypeScript build info
+        uses: actions/cache@v4
+        with:
+          path: tsconfig.tsbuildinfo
+          key: typescript-build-info-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig.json', 'tsconfig.node.json') }}
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -38,6 +47,20 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
+
+      # The Foundation Models helper is deterministic for a given Swift
+      # manifest. Cache its build products so pnpm's postinstall hook can
+      # reuse them, while still rebuilding whenever its source is newer.
+      # Keep PDFium out of this cache: fetch-pdfium.sh deliberately tracks the
+      # publisher's latest binary on every clean runner.
+      - name: Cache Foundation Models sidecar
+        uses: actions/cache@v4
+        with:
+          path: |
+            sidecar/alchemy-fm/.build
+            src-tauri/binaries/alchemy-fm
+            src-tauri/binaries/alchemy-fm.sha256
+          key: fm-sidecar-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('sidecar/alchemy-fm/Package.swift', 'scripts/build-fm-sidecar.sh') }}
 
       - name: Install frontend dependencies
         # Postinstall fetches PDFium and builds the Swift FM sidecar. Both are
