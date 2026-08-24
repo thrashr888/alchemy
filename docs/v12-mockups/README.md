@@ -140,6 +140,53 @@ available. Notebooks remains the default Home section.
 Registry; whether the page stays human-centered at cross-notebook scale; whether
 cost and authority are legible without becoming KPI cards.
 
+## Night Shift as an area (10–12)
+
+A probe past the shipped Staff sidebar: Night Shift promoted to a third
+top-level area beside Notebooks and Registry — the sidebar is the staff's
+timesheet, the area is the desk you leave instructions on. Three screens, one
+per part: Tonight (commissioning), Standing orders (authoring), The record
+(receipts). Generated with codex ImageGen against 09 as the strict style
+reference; prompts in [PROMPTS.md](PROMPTS.md).
+
+### 10. Tonight — the commissioning desk
+
+![Tonight](10-night-shift-tonight.png)
+
+The missing verb: one-off overnight jobs handed to the resident staff before
+bed. Commissions queue beside the recurring work already due; the budget rail
+holds wall-clock, steps, and a spend cap that degrades to local; sealed
+notebooks stay visibly sealed.
+
+**Tests:** whether "commission overnight work" reads as an ask-box twin rather
+than a job queue; whether estimates and Remove are enough control; whether the
+propose-never-act line belongs at the point of commissioning.
+
+### 11. Standing orders — the cross-notebook index
+
+![Standing orders](11-night-shift-standing-orders.png)
+
+Reports, watchers, and standing questions as first-class objects in one place,
+each with cadence, last run, cost, and next fire; the selected order's detail
+(run history, what it produces, Run now / Pause / Edit) rides the contextual
+rail.
+
+**Tests:** whether standing orders deserve authoring outside their notebooks;
+whether three kinds share one index cleanly; how much run history the rail can
+carry before it becomes an admin console.
+
+### 12. The record — receipts, not monitoring
+
+![The record](12-night-shift-record.png)
+
+Every pass leaves a receipt: what was read, written, flagged, and spent,
+grouped by night. The rail shows one receipt in full — engine, egress,
+authority, trace pointer. Morning-after review, never live ops.
+
+**Tests:** whether receipts build enough trust to justify overnight autonomy;
+whether egress and authority belong on every receipt or only metered ones;
+whether this absorbs Meter & Seal from Settings.
+
 ## Shared design invariants
 
 - Preserve Alchemy’s narrow navigator, unboxed center “paper,” and floating

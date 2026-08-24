@@ -67,3 +67,86 @@ Exact palette: canvas #1e1a29; surface #262335; surface-2 #2a2139; elevated #342
 Geometry: keep the center workspace unboxed like a sheet of paper. Make only the left and right rails floating 12px-radius side cards with an 8px outer inset and a small gap from the center, matching the current Alchemy screenshot. Retain the 48px macOS overlay titlebar and compact density.
 Constraints: preserve every word, number, label, icon, status, document passage, source row, control, spacing relationship, column width, and overall composition exactly. Do not add, remove, rewrite, or misspell any text. Change only palette and side-card container geometry. No gradients, no glow, no blur, no colored left-border decoration, no watermark.
 ```
+
+## Night Shift area set (10–12)
+
+Generated via `codex exec` with the built-in ImageGen tool;
+09-steward-staff.png was the strict style and geometry reference for all three.
+
+### 10. Tonight
+
+```text
+Use your image generation tool to create one PNG mockup. Read the reference image first.
+
+Input image: docs/v12-mockups/09-steward-staff.png is the STRICT visual, palette, and layout reference — same product, same theme, same three-pane geometry. Create a new screen in the same product; do not reproduce its content.
+
+Save the result to: docs/v12-mockups/10-night-shift-tonight.png
+
+Use case: ui-mockup
+Asset type: high-fidelity desktop macOS Tauri app product mockup, 1568x1003, realistic product UI, not concept art.
+Primary request: Create "Night Shift · Tonight" — the commissioning desk of a new top-level Night Shift area. The user leaves one-off overnight jobs for the resident staff before bed.
+Scene: full app window, macOS overlay title bar. Top-center segmented navigation reads exactly "Notebooks   Registry   Night Shift" with Night Shift selected.
+Palette (Synthwave '84): canvas #1e1a29; surface #262335; elevated #34294f; floating side cards #2e2b3d with 12px radius; foreground #f4f2ff; muted #9096c3; primary/focus #ff7edb; links #36f9f6; success #72f1b8; amber warnings; borders subtle lavender rgba(176,132,235,0.16). Center workspace unboxed like a sheet of paper; left and right rails are floating side cards.
+Left rail: header exactly "NIGHT SHIFT". Nav items with small icons: "Tonight" (selected, dot), "Standing orders · 7", "The record". Below, a small footer line "Resident · this Mac · next pass 2:00 AM".
+Center: kicker line "TONIGHT · BEGINS 2:00 AM", heading exactly "The plan for tonight", right-aligned quiet button "Pause until morning".
+Section "COMMISSIONED" with three dense flat rows (thin rules, not cards):
+1. "Deep read — Japan 2027" with lavender chip "COMMISSION", sub-line "Read all 42 sources, rebuild the Growing Answer with a since-last-time delta." and right-aligned "est. $0.40 · Remove".
+2. "Second Look — RFC: import pipeline" chip "COMMISSION", sub-line "Re-verify 22 claims with fresh retrieval, different engine." right "est. $0.25 · Remove".
+3. "Re-gist Health & Insurance" chip "COMMISSION", sub-line "Distill 118 sources; sealed, local only." right "$0.00 · local · Remove".
+Section "DUE ON SCHEDULE" with two rows: "Release brief — Alchemy Development · daily · 2:10 AM" and "Pricing page watch — Market Research · every 4 hours".
+Bottom of center: a single prominent input field with placeholder exactly "Commission overnight work…" and a small send button, above it one quiet line exactly "Proposals and notes only. It will not act outward."
+Right rail: header exactly "TONIGHT'S BUDGET". Rows: "Wall clock" "until 6:30 AM"; "Steps" "120"; "Metered spend cap" "$1.00" with a thin progress bar at zero; note line exactly "At cap: degrades to local". Below, small header "SEALED" with rows "Health & Insurance · never leaves this Mac" (green lock icon) and "Money · never leaves this Mac". Bottom small header "NEXT" with "First run · Deep read — Japan 2027 · 2:00 AM".
+Constraints: all text readable and correctly spelled, especially quoted strings. Icon plus text for every status, never color alone. Compact SF Pro-like typography, hairline dividers, no gradients, no glow, no KPI cards, no charts, no avatars, no admin UI, no watermark, no colored left borders.
+```
+
+### 11. Standing orders
+
+```text
+Use your image generation tool to create one PNG mockup. Read the reference image first.
+
+Input image: docs/v12-mockups/09-steward-staff.png is the STRICT visual, palette, and layout reference — same product, same theme, same three-pane geometry. Create a new screen in the same product; do not reproduce its content.
+
+Save the result to: docs/v12-mockups/11-night-shift-standing-orders.png
+
+Use case: ui-mockup
+Asset type: high-fidelity desktop macOS Tauri app product mockup, 1568x1003, realistic product UI, not concept art.
+Primary request: Create "Night Shift · Standing orders" — the cross-notebook index of everything the user has commissioned to recur: scheduled reports, watchers, and standing questions, each a first-class object.
+Scene: full app window, macOS overlay title bar. Top-center segmented navigation reads exactly "Notebooks   Registry   Night Shift" with Night Shift selected.
+Palette (Synthwave '84): canvas #1e1a29; surface #262335; elevated #34294f; floating side cards #2e2b3d with 12px radius; foreground #f4f2ff; muted #9096c3; primary/focus #ff7edb; links #36f9f6; success #72f1b8; amber warnings; borders subtle lavender rgba(176,132,235,0.16). Center workspace unboxed like a sheet of paper; left and right rails are floating side cards.
+Left rail: header exactly "NIGHT SHIFT". Nav items: "Tonight", "Standing orders · 7" (selected, dot), "The record". Footer line "Resident · this Mac · next pass 2:00 AM".
+Center: heading exactly "Standing orders", small filter chips "All · Reports · Watchers · Questions", quiet right-aligned button "New standing order".
+Group header "REPORTS" with three dense flat rows (thin rules, not cards), each with name, notebook, cadence, last run, next run:
+1. "Release brief" · "Alchemy Development · daily" · "ran 2:10 AM · $0.19" · "next 2:10 AM" — selected row, subtle highlight.
+2. "Sunday household brief" · "Home · weekly" · "ran Sun 7:00 AM · $0.00 local".
+3. "Shipping record" · "Alchemy Development · Fridays" · "ran Fri 6:00 PM · $0.31".
+Group header "WATCHERS" with two rows: "Pricing page changes" · "Market Research · every 4 hours" · green dot "quiet 3 days"; "LanceDB releases" · "Alchemy Development · daily" · magenta chip "CHANGED" · "diff waiting in the Brief".
+Group header "STANDING QUESTIONS" with two rows: "When the 10-K drops, what changed?" · "Investments · on change" · "armed"; "New papers that complicate the 2024 synthesis" · "Coffee Science · weekly" · "armed".
+Right rail (detail of the selected order): header exactly "RELEASE BRIEF". Lines: "Report · Alchemy Development", "Daily · 2:10 AM · prior runs threaded". Small header "LAST 5 RUNS" with five short rows like "Thu · 2:10 AM · $0.19 · 8 citations", "Wed · 2:10 AM · $0.22 · 11 citations". Small header "PRODUCES" with "Note: Release brief · unread dot". Buttons "Run now", "Pause", "Edit". Bottom quiet line exactly "Writes notes only. It will not act outward."
+Constraints: all text readable and correctly spelled, especially quoted strings. Icon plus text for every status, never color alone. Compact SF Pro-like typography, hairline dividers, no gradients, no glow, no KPI cards, no charts, no avatars, no admin UI, no watermark, no colored left borders.
+```
+
+### 12. The record
+
+```text
+Use your image generation tool to create one PNG mockup. Read the reference image first.
+
+Input image: docs/v12-mockups/09-steward-staff.png is the STRICT visual, palette, and layout reference — same product, same theme, same three-pane geometry. Create a new screen in the same product; do not reproduce its content.
+
+Save the result to: docs/v12-mockups/12-night-shift-record.png
+
+Use case: ui-mockup
+Asset type: high-fidelity desktop macOS Tauri app product mockup, 1568x1003, realistic product UI, not concept art.
+Primary request: Create "Night Shift · The record" — the run ledger of the Night Shift area: every overnight pass as a receipt of what was read, written, flagged, and spent. Morning-after review, not live monitoring.
+Scene: full app window, macOS overlay title bar. Top-center segmented navigation reads exactly "Notebooks   Registry   Night Shift" with Night Shift selected.
+Palette (Synthwave '84): canvas #1e1a29; surface #262335; elevated #34294f; floating side cards #2e2b3d with 12px radius; foreground #f4f2ff; muted #9096c3; primary/focus #ff7edb; links #36f9f6; success #72f1b8; amber warnings; borders subtle lavender rgba(176,132,235,0.16). Center workspace unboxed like a sheet of paper; left and right rails are floating side cards.
+Left rail: header exactly "NIGHT SHIFT". Nav items: "Tonight", "Standing orders · 7", "The record" (selected, dot). Footer line "Resident · this Mac · next pass 2:00 AM".
+Center: heading exactly "The record", sub-line "Every pass leaves a receipt."
+Group header "LAST NIGHT · 4 RUNS · $0.58" with four dense flat receipt rows (thin rules, not cards):
+1. "Deep read — Japan 2027" chip "COMMISSION", teal check, sub-line "Read 42 sources · wrote Growing Answer +1 delta · 2:00–3:41 AM" · right "$0.40 · Open note".
+2. "Release brief — Alchemy Development" teal check, sub-line "Read 12 changed sources · wrote 1 report · 8 citations" · right "$0.19 · Open report". This row is selected with a subtle highlight.
+3. "Pricing page watch — Market Research" magenta chip "CHANGED", sub-line "Diff summarized · flagged to the Brief" · right "$0.00 · local".
+4. "Re-gist Health & Insurance" teal check, green lock icon, sub-line "118 gists refreshed · sealed run" · right "$0.00 · local".
+Group header "WEDNESDAY · 3 RUNS · $0.41" with two quieter collapsed rows, then a muted line "Older nights…".
+Right rail (receipt of the selected run): header exactly "RECEIPT". Lines: "Release brief · Thursday 2:10 AM", "Engine: gateway · gpt-5-codex", "Read: 12 sources, 3 notes", "Wrote: 1 report note", "Flagged: nothing". Small header "EGRESS" with "2 gateway calls · $0.19" and "0 agent CLI calls". Small header "AUTHORITY" with three checked lines "Read scheduled scopes", "Write reports & notes", and a dash line "No outward actions". Buttons "Open report", "Search trace". Bottom small line "Trace: retrieval.jsonl · 2:10:04 AM".
+Constraints: all text readable and correctly spelled, especially quoted strings. Icon plus text for every status, never color alone. Compact SF Pro-like typography, hairline dividers, no gradients, no glow, no KPI cards, no charts, no avatars, no admin UI, no watermark, no colored left borders.
+```
