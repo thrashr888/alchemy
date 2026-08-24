@@ -36,7 +36,7 @@ export function NoteWindow({ noteId }: { noteId: string }) {
         data-tauri-drag-region
         className="flex h-12 shrink-0 items-center gap-2 border-b border-border pl-[84px] pr-4"
       >
-        <StickyNote className="h-3.5 w-3.5 shrink-0 text-primary" />
+        <StickyNote aria-hidden className="h-3.5 w-3.5 shrink-0 text-primary" />
         <span className="truncate text-body font-semibold" title={note?.title}>
           {note?.title ?? "Note"}
         </span>
@@ -61,11 +61,14 @@ export function NoteWindow({ noteId }: { noteId: string }) {
           )}
         >
           {loading ? (
-            <div className="flex items-center gap-2 text-body text-muted-foreground">
+            <div
+              role="status"
+              className="flex items-center gap-2 text-body text-muted-foreground"
+            >
               <Spinner className="h-3.5 w-3.5" /> Loading note…
             </div>
           ) : !note ? (
-            <div className="text-body text-muted-foreground">
+            <div role="status" className="text-body text-muted-foreground">
               This note no longer exists — it may have been deleted.
             </div>
           ) : note.kind === "mind_map" ? (

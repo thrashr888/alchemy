@@ -3,7 +3,14 @@ import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import { Button, CardAction, RowMenu, Textarea, useConfirm } from "./ui";
+import {
+  Button,
+  CardAction,
+  LiveRegion,
+  RowMenu,
+  Textarea,
+  useConfirm,
+} from "./ui";
 import { Markdown } from "./Markdown";
 import { cn, chatReadingClass, fmtDateTime, isWebUrl, relativeTime } from "@/lib/utils";
 import { DitherBackground } from "./DitherBackground";
@@ -270,6 +277,41 @@ export function ChatPanel() {
       unRevised.then((fn) => fn());
     };
   }, [appendToken, appendStep]);
+
+  // VoiceOver hears the shape of a generation, never its tokens. A live
+  // region wrapped around the streaming text would speak every fragment as it
+  // lands — noisier than silence and impossible to follow — so the region
+  // below carries two transitions instead: the question going out, and the
+  // finished answer with how many citations it came back with. The answer
+  // text itself is ordinary prose in the transcript, there to navigate.
+  const [announcements, setAnnouncements] = useState<
+    { id: number; text: string }[]
+  >([]);
+  const announceSeq = useRef(0);
+  const announce = (text: string) =>
+    setAnnouncements([{ id: ++announceSeq.current, text }]);
+  const wasSending = useRef(false);
+  useEffect(() => {
+    if (sending === wasSending.current) return;
+    wasSending.current = sending;
+    if (sending) {
+      announce("Answering.");
+      return;
+    }
+    // A send that failed outright hands its text back to the composer and
+    // pushes an error toast; that toast is already an announcement, so this
+    // region stays quiet rather than saying it twice.
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== "assistant") return;
+    if (last.kind === "error") {
+      announce(`The answer failed. ${last.content}`);
+      return;
+    }
+    const n = last.citations.length;
+    announce(
+      `Answer ready. ${n === 0 ? "No citations" : n === 1 ? "1 citation" : `${n} citations`}.`,
+    );
+  }, [sending, messages]);
 
   // "Focus the chat composer" command from the Cmd+K menu.
   useEffect(() => {
@@ -662,6 +704,7 @@ export function ChatPanel() {
 
   return (
     <div className="relative flex h-full flex-1 flex-col min-w-0">
+      <LiveRegion announcements={announcements} />
       {isBlank && !glassOn && (
         <>
           <div className="glass-mist pointer-events-none absolute inset-0 z-0">
@@ -810,7 +853,7 @@ export function ChatPanel() {
           ))}
 
           {sending && (
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-2" aria-busy="true">
               <RoleLabel role="assistant" />
               {steps.length > 0 && (
                 <StepTrail

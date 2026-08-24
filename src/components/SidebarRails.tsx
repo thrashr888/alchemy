@@ -47,11 +47,22 @@ export function SourcesRail() {
             key={s.id}
             onClick={toggleSources}
             title={s.title}
+            // Every icon here opens the panel, so the source it stands for is
+            // what distinguishes it. The red dot means a failed import; say so,
+            // since a dot is nothing to a screen reader.
+            aria-label={
+              s.status === "error"
+                ? `Show sources. ${s.title} failed to import.`
+                : `Show sources. ${s.title}`
+            }
             className="relative rounded-md p-1.5 transition-colors hover:bg-surface-2"
           >
             {sourceIcon(s.sourceType, s.url)}
             {s.status === "error" && (
-              <AlertCircle className="absolute -right-0 -top-0 h-2.5 w-2.5 text-destructive" />
+              <AlertCircle
+                aria-hidden
+                className="absolute -right-0 -top-0 h-2.5 w-2.5 text-destructive"
+              />
             )}
           </button>
         ))}

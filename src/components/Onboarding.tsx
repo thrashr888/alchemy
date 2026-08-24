@@ -36,10 +36,19 @@ function CommandChip({ command }: { command: string }) {
   );
 }
 
+/** Tick, hollow circle, or cross — the state of one setup step. The word for
+ *  it rides beside the icon (see `Step`), so the icon itself is decoration. */
 function StatusIcon({ ok, optional }: { ok: boolean; optional?: boolean }) {
-  if (ok) return <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />;
-  if (optional) return <Circle className="h-4 w-4 shrink-0 text-subtle-foreground" />;
-  return <XCircle className="h-4 w-4 shrink-0 text-destructive" />;
+  if (ok)
+    return <CheckCircle2 aria-hidden className="h-4 w-4 shrink-0 text-success" />;
+  if (optional)
+    return <Circle aria-hidden className="h-4 w-4 shrink-0 text-subtle-foreground" />;
+  return <XCircle aria-hidden className="h-4 w-4 shrink-0 text-destructive" />;
+}
+
+function statusWord(ok: boolean, optional?: boolean): string {
+  if (ok) return "Ready";
+  return optional ? "Not set up" : "Needs setting up";
 }
 
 function Step({
@@ -65,6 +74,7 @@ function Step({
       <div className="flex items-center gap-2.5">
         <StatusIcon ok={ok} optional={optional} />
         <span className="text-body font-medium text-foreground">{title}</span>
+        <span className="sr-only">{statusWord(ok, optional)}</span>
         {optional && (
           <span className="rounded border border-border px-1 py-px text-badge uppercase tracking-wide text-subtle-foreground">
             Optional
@@ -161,11 +171,21 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
   const vision: ModelStatus = health.vision;
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center overflow-y-auto bg-background">
+    <div
+      // Covers the whole app until setup is done, so it has to say so —
+      // otherwise a screen reader walks straight into the inert UI behind it.
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="onboarding-title"
+      className="fixed inset-0 z-40 flex items-center justify-center overflow-y-auto bg-background"
+    >
       <div className="flex w-full max-w-[520px] flex-col gap-5 px-6 py-10">
         <div className="flex flex-col items-center gap-3 text-center">
           <AlchemySymbol className="h-14 w-14 text-citation" />
-          <h1 className="font-serif text-[1.625rem] font-medium tracking-[0.14em] text-foreground">
+          <h1
+            id="onboarding-title"
+            className="font-serif text-[1.625rem] font-medium tracking-[0.14em] text-foreground"
+          >
             Set up Alchemy
           </h1>
           <p className="max-w-sm text-body leading-relaxed text-muted-foreground">
@@ -196,6 +216,8 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
           ].map((pv) => (
             <button
               key={pv.id}
+              type="button"
+              aria-pressed={provider === pv.id}
               onClick={() => void setProvider(pv.id)}
               className={cn(
                 "flex flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors",

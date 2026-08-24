@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { usePickList } from "@/lib/pick";
 import { DevBadge } from "./DevBadge";
+import { HealthBanner } from "./HealthBanner";
 import {
   Badge,
   Button,
@@ -641,6 +642,13 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           </Button>
         </div>
       </header>
+
+      {/* Same degraded-state bar the notebook view carries: a model problem
+          or a half-finished index is just as true on the shelf, and once
+          onboarding has been dismissed this is the only place that says so. */}
+      <HealthBanner
+        onOpenSettings={() => useStore.getState().openSettings("models")}
+      />
 
       {notebooks.length === 0 ? (
         <div className="flex-1">

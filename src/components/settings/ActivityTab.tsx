@@ -148,7 +148,7 @@ function CountList({
  *  to the user's own p90 so light users still see texture. Color carries
  *  meaning (quantity) — DESIGN.md compliant. */
 function Heatmap({ stats }: { stats: ActivityStats }) {
-  const { columns, monthLabels } = useMemo(() => {
+  const { columns, monthLabels, summary } = useMemo(() => {
     const totals = new Map<string, number>();
     for (const d of stats.days) {
       totals.set(d.date, d.messages + d.sources + d.notes + d.retrievals);
@@ -198,7 +198,16 @@ function Heatmap({ stats }: { stats: ActivityStats }) {
       }
       columns.push(col);
     }
-    return { columns, monthLabels };
+    // 91 undifferentiated squares are noise read one at a time, so the grid
+    // is one labelled image: the shape of the last quarter in a sentence.
+    let events = 0;
+    let activeDays = 0;
+    for (const total of totals.values()) {
+      events += total;
+      if (total > 0) activeDays += 1;
+    }
+    const summary = `Activity over the last ${WEEKS} weeks: ${events} events across ${activeDays} ${activeDays === 1 ? "day" : "days"}.`;
+    return { columns, monthLabels, summary };
   }, [stats.days]);
 
   const LEVEL = [
@@ -209,7 +218,7 @@ function Heatmap({ stats }: { stats: ActivityStats }) {
     "bg-primary",
   ];
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-1" role="img" aria-label={summary}>
       <div className="flex gap-[3px]">
         {monthLabels.map((m, i) => (
           <div
