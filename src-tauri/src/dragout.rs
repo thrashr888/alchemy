@@ -19,7 +19,7 @@ use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, AnyThread, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSDragOperation, NSDraggingContext, NSDraggingItem, NSDraggingSession,
-    NSDraggingSource, NSPasteboardWriting, NSWorkspace,
+    NSDraggingSource, NSEventType, NSPasteboardWriting, NSWorkspace,
 };
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSObject, NSPoint, NSRect, NSSize, NSString, NSURL,
@@ -80,6 +80,18 @@ pub fn start(path: &str) -> Result<(), String> {
     let event = app
         .currentEvent()
         .ok_or_else(|| "no current event to attach the drag to".to_string())?;
+    // The session must hang off a live mouse drag. Slow exports (a poster
+    // renders through the print pipeline) can outlast the gesture, and by
+    // then the current event is a key-up or nothing at all. AppKit answers
+    // that with nil, which the binding treats as non-null and panics on — so
+    // check here, where it is a message rather than a crash.
+    let kind = event.r#type();
+    if !matches!(
+        kind,
+        NSEventType::LeftMouseDown | NSEventType::LeftMouseDragged
+    ) {
+        return Err("Let go too early — try dragging again".into());
+    }
 
     let ns_path = NSString::from_str(path);
     let url = NSURL::fileURLWithPath(&ns_path);
@@ -151,7 +163,17 @@ pub async fn stage_note_for_drag(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("no note with id {note_id}"))?;
     let ext = crate::export::export_ext(&format).map_err(|e| e.to_string())?;
+    // Cached per note revision, under a directory keyed by id and edit
+    // stamp so the visible filename stays the note's own title. A poster or
+    // mind map renders through the print pipeline — a real window, a real
+    // wait — and that cost belongs to the first drag only. Editing the note
+    // changes the stamp, so a stale image can never be dragged.
+    let dir = dir.join(format!("{note_id}-{}", note.updated_at));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("could not stage drag: {e}"))?;
     let dest = dir.join(format!("{}.{ext}", crate::export::safe_name(&note.title)));
+    if dest.is_file() {
+        return Ok(dest.to_string_lossy().into_owned());
+    }
     crate::export::export_note_file(&app, &note_id, &format, Some(dest.to_string_lossy().into()))
         .await
         .map_err(|e| e.to_string())

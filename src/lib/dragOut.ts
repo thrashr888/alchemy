@@ -16,30 +16,19 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
  *  far enough that a click on a note tile is never mistaken for one. */
 const THRESHOLD_PX = 3;
 
-/** Formats whose export is pure background work (export.rs funnels each
- *  through spawn_blocking).
+/** The format to drag a note out as: its kind-true one, so a poster leaves
+ *  as a PNG and a deck as a deck. Falls back to the Word document.
  *
- *  `pdf` and `png` are deliberately absent: both render through
- *  `print_note_pdf`, which opens a real on-screen window — WKWebView prints
- *  never-composited content as blank pages, so the export window cannot be
- *  hidden — and waits up to 60s for the file to settle. Perfectly fine
- *  behind a Save dialog the user is already waiting on; catastrophic inside
- *  a drag, where it would throw a window up mid-gesture and stall the drag
- *  behind a print job. */
-const DRAG_SAFE = new Set(["docx", "xlsx", "pptx", "m4a"]);
-
-/** The format to drag a note out as, given its kind-true export targets.
- *  Falls back to the Word document, which every note can produce without
- *  touching the print pipeline. */
+ *  Posters and mind maps render through the print pipeline, which opens a
+ *  real window and takes a moment — WKWebView prints never-composited
+ *  content as blank pages, so it cannot be hidden. That cost lands on the
+ *  first drag of a given revision only; the backend caches the rendered file
+ *  per note edit, so afterwards the drag is immediate.
+ */
 export function dragFormat(formats: string[]): string {
-  return formats.find((f) => DRAG_SAFE.has(f)) ?? "docx";
+  return formats[0] ?? "docx";
 }
 
-/**
- * Wire a note tile for drag-out. Returns props to spread onto the element;
- * outside Tauri (the browser dev build) it returns nothing and the element
- * behaves normally.
- */
 export function noteDragProps(
   noteId: string,
   format: string,
