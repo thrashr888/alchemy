@@ -10,6 +10,7 @@
 //! a clear "model unavailable" error.
 
 use anyhow::{Context, Result};
+use futures::FutureExt;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,16 +152,56 @@ pub async fn ensure_kokoro_files(
     Ok(())
 }
 
-/// Stay comfortably under Kokoro's 510-phoneme ceiling (phoneme tokens track
-/// character count closely for English).
-const MAX_SYNTH_CHARS: usize = 300;
+/// Stay comfortably under Kokoro's 510-phoneme ceiling.
+const MAX_SYNTH_COST: usize = 300;
+
+/// Rough phoneme count for a stretch of text.
+///
+/// The earlier version of this budget counted characters, on the assumption
+/// that phonemes track characters closely in English. They do for prose —
+/// and not at all for the things a Brief is full of. A phonemizer speaks
+/// "2026" as "twenty twenty six" and "%" as "percent", so a date- and
+/// figure-heavy line blows through 510 phonemes while still looking like a
+/// short line, and kokoro-en indexes past its style pack and panics. Hence
+/// weights: a letter is worth about one phoneme, a digit about four, and the
+/// symbols that expand into whole words rather more.
+///
+/// Deliberately an over-estimate. Guessing high costs a slightly earlier
+/// split, which nobody can hear; guessing low panics inside a dependency.
+pub(crate) fn speech_cost(text: &str) -> usize {
+    text.chars()
+        .map(|c| match c {
+            '0'..='9' => 4,
+            '%' | '$' | '£' | '€' | '#' | '=' | '+' | '@' | '&' | '/' => 6,
+            _ => 1,
+        })
+        .sum()
+}
+
+/// Break one over-budget word on character boundaries. Nothing about this
+/// sounds good — but it is the difference between a garbled second of audio
+/// and a panic that loses the whole Brief.
+fn split_word(word: &str, max_cost: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for ch in word.chars() {
+        if !cur.is_empty() && speech_cost(&cur) + speech_cost(&ch.to_string()) > max_cost {
+            out.push(std::mem::take(&mut cur));
+        }
+        cur.push(ch);
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
 
 /// Split a dialogue line into chunks short enough for Kokoro: pack whole
 /// sentences up to the cap; hard-split on whitespace only when a single
 /// sentence alone exceeds it.
-pub(crate) fn split_for_synthesis(text: &str, max_chars: usize) -> Vec<String> {
+pub(crate) fn split_for_synthesis(text: &str, max_cost: usize) -> Vec<String> {
     let text = text.trim();
-    if text.chars().count() <= max_chars {
+    if speech_cost(text) <= max_cost {
         return vec![text.to_string()];
     }
     let mut sentences: Vec<String> = Vec::new();
@@ -182,13 +223,24 @@ pub(crate) fn split_for_synthesis(text: &str, max_chars: usize) -> Vec<String> {
         if s.is_empty() {
             continue;
         }
-        if s.chars().count() > max_chars {
+        if speech_cost(s) > max_cost {
             if !cur.is_empty() {
                 chunks.push(std::mem::take(&mut cur));
             }
             let mut piece = String::new();
             for w in s.split_whitespace() {
-                if !piece.is_empty() && piece.chars().count() + 1 + w.chars().count() > max_chars {
+                // A single "word" can outrun the budget alone — a long digit
+                // run, a hash, an identifier. Splitting on whitespace can't
+                // help there, so break it on characters rather than emit the
+                // one chunk guaranteed to panic the model.
+                if speech_cost(w) > max_cost {
+                    if !piece.is_empty() {
+                        chunks.push(std::mem::take(&mut piece));
+                    }
+                    chunks.extend(split_word(w, max_cost));
+                    continue;
+                }
+                if !piece.is_empty() && speech_cost(&piece) + 1 + speech_cost(w) > max_cost {
                     chunks.push(std::mem::take(&mut piece));
                 }
                 if !piece.is_empty() {
@@ -201,7 +253,7 @@ pub(crate) fn split_for_synthesis(text: &str, max_chars: usize) -> Vec<String> {
             }
             continue;
         }
-        if !cur.is_empty() && cur.chars().count() + 1 + s.chars().count() > max_chars {
+        if !cur.is_empty() && speech_cost(&cur) + 1 + speech_cost(s) > max_cost {
             chunks.push(std::mem::take(&mut cur));
         }
         if !cur.is_empty() {
@@ -241,21 +293,25 @@ impl KokoroEngine {
         // inside kokoro-en. Synthesize in sentence-packed chunks instead, with
         // a small breath between chunks so the join stays conversational.
         let mut samples: Vec<f32> = Vec::new();
-        for (i, chunk) in split_for_synthesis(text, MAX_SYNTH_CHARS)
-            .iter()
-            .enumerate()
-        {
+        for (i, chunk) in split_for_synthesis(text, MAX_SYNTH_COST).iter().enumerate() {
             if i > 0 {
                 samples.extend(std::iter::repeat_n(
                     0.0f32,
                     (Self::SAMPLE_RATE / 8) as usize,
                 ));
             }
-            let (chunk_samples, _took) = self
-                .tts
-                .synth(chunk, voice)
-                .await
-                .map_err(|e| anyhow::anyhow!("Voice synthesis failed: {e}"))?;
+            // kokoro-en indexes its style pack by phoneme count and panics
+            // rather than erroring when the count runs past 510. The budget
+            // above is an estimate, and an estimate can be wrong — so a bad
+            // guess costs this line, not the whole Brief and not the process.
+            let attempt = std::panic::AssertUnwindSafe(self.tts.synth(chunk, voice)).catch_unwind();
+            let (chunk_samples, _took) = match attempt.await {
+                Ok(Ok(v)) => v,
+                Ok(Err(e)) => anyhow::bail!("Voice synthesis failed: {e}"),
+                Err(_) => anyhow::bail!(
+                    "Voice synthesis failed on an unusually dense passage                      (too many phonemes for the model)"
+                ),
+            };
             samples.extend(chunk_samples);
         }
         anyhow::ensure!(!samples.is_empty(), "No audio was produced for a line");
@@ -324,7 +380,7 @@ pub async fn assemble_episode(
 
 #[cfg(test)]
 mod split_tests {
-    use super::split_for_synthesis;
+    use super::{speech_cost, split_for_synthesis};
 
     #[test]
     fn short_lines_pass_through() {
@@ -344,6 +400,48 @@ mod split_tests {
         // Nothing lost: same words in, same words out.
         let rejoined: Vec<&str> = chunks.iter().flat_map(|c| c.split_whitespace()).collect();
         assert_eq!(rejoined.len(), line.split_whitespace().count());
+    }
+
+    /// The regression: a Brief line is dates and figures, and those speak
+    /// far longer than they read. Under the old character budget this line
+    /// looked short enough to pass whole, then panicked inside kokoro-en.
+    #[test]
+    fn figure_dense_line_is_budgeted_by_speech_not_length() {
+        let line = "Revenue hit $1,284,300 on 2026-08-23, up 47% from                     2025-08-23, across 1,024 accounts and 512 regions. "
+            .repeat(3);
+        assert!(
+            line.chars().count() < 600,
+            "fixture should look short by character count"
+        );
+        let chunks = split_for_synthesis(&line, 300);
+        assert!(
+            chunks.iter().all(|c| speech_cost(c) <= 300),
+            "every chunk must fit the phoneme budget: {:?}",
+            chunks.iter().map(|c| speech_cost(c)).collect::<Vec<_>>()
+        );
+        // Nothing lost on the way through.
+        let rejoined: Vec<&str> = chunks.iter().flat_map(|c| c.split_whitespace()).collect();
+        assert_eq!(rejoined.len(), line.split_whitespace().count());
+    }
+
+    #[test]
+    fn digits_cost_more_than_letters() {
+        assert!(speech_cost("2026") > speech_cost("abcd"));
+        assert_eq!(speech_cost("abcd"), 4);
+    }
+
+    /// A single unbroken digit run has no whitespace to split on, so the
+    /// word-level fallback is the only thing standing between it and a panic.
+    #[test]
+    fn one_oversized_word_still_fits_the_budget() {
+        let line = format!("id {} end", "9".repeat(400));
+        let chunks = split_for_synthesis(&line, 300);
+        assert!(
+            chunks.iter().all(|c| speech_cost(c) <= 300),
+            "oversized word must be broken: {:?}",
+            chunks.iter().map(|c| speech_cost(c)).collect::<Vec<_>>()
+        );
+        assert!(!chunks.is_empty());
     }
 
     #[test]
