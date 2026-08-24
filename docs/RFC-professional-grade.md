@@ -169,13 +169,22 @@ then frozen; loosening one thereafter is a deliberate commit, not drift.
   Release-over-release regression is a one-line jq away.
 - **Counts are cached, not rescanned:** `list_notebooks` reports per-notebook
   source/note/report totals, which meant scanning two whole tables on every
-  refresh — every `mcp://changed`, and once during boot, where on a large
-  library it reached the frontend's 30s IPC timeout and left the shelf
-  looking like a new install. The totals are cached under the Lance versions
-  they were computed from: a version is one manifest read where a recount is
+  refresh — every `mcp://changed`, and once during boot. The totals are
+  cached under the Lance versions they were computed from: a version is one manifest read where a recount is
   a full scan, and keying on it cannot miss a write, including one made by
   another process. Persisted beside the tables, so a cold start pays the
   version check rather than the scan.
+
+  > Correction. This was introduced on the theory that the counts scan was
+  > what pushed boot into the frontend's 30s IPC timeout. Measured against
+  > the library that actually timed out — 30 notebooks, 973 sources — the
+  > uncached scan takes **16 ms**, so it cannot have been the cause. The
+  > cache is a real improvement (16 ms → 4 ms cold, 2 ms warm, and the gap
+  > widens with the corpus) but a small one, and **what pushed that boot
+  > past 30 s is still unknown**. `real_library_notebook_list` in
+  > `perf_budgets.rs` is the harness that produced these numbers; the next
+  > step is per-command IPC timing, since nothing today records which call
+  > was slow.
 - **Frontend at scale:** the sources list, chat history, and gallery are
   the three lists that grow unboundedly — virtualize whichever of them the
   10k fixture shows janking (measure first; don't virtualize on faith).

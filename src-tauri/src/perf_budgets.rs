@@ -403,3 +403,74 @@ async fn notebook_list_latency_cold_and_warm() {
     assert!(cold_best < 1_000.0, "cold list_notebooks {cold_best:.0} ms");
     assert!(warm_best < 250.0, "warm list_notebooks {warm_best:.0} ms");
 }
+
+/// Measure `list_notebooks` against a real library rather than a fixture.
+///
+/// Point `ALCHEMY_STORE` at a COPY of a lancedb directory (`cp -c -R` clones
+/// it in constant time on APFS) and run:
+///
+/// ```text
+/// ALCHEMY_STORE=/tmp/store cargo test --lib real_library_notebook_list \
+///     -- --ignored --nocapture
+/// ```
+///
+/// Asserts nothing — fixtures are what CI gates on, because they are the
+/// only thing every machine shares. This exists to answer "did that help on
+/// MY library", where the fixture's answer is only suggestive.
+#[tokio::test]
+#[ignore = "opt-in: needs ALCHEMY_STORE pointing at a copy of a real library"]
+async fn real_library_notebook_list() {
+    let Ok(dir) = std::env::var("ALCHEMY_STORE") else {
+        eprintln!("SKIP: set ALCHEMY_STORE to a copy of a lancedb directory");
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    let counts = dir.join("notebook-counts.json");
+
+    // Uncached: what every refresh used to cost.
+    let _ = std::fs::remove_file(&counts);
+    let db = crate::db::Db::open(&dir).await.expect("open store");
+    let t = Instant::now();
+    let cold_scan = db.list_notebooks().await.expect("list");
+    let scan_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    // Cached, cold process: what a launch costs now.
+    let reopened = crate::db::Db::open(&dir).await.expect("reopen store");
+    let t = Instant::now();
+    let cold_cached = reopened.list_notebooks().await.expect("list");
+    let cold_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    // Cached, warm handle: what every mcp://changed refresh costs now.
+    let mut warm = Vec::new();
+    for _ in 0..10 {
+        let t = Instant::now();
+        reopened.list_notebooks().await.expect("list");
+        warm.push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+
+    assert_eq!(
+        cold_scan.len(),
+        cold_cached.len(),
+        "cache and scan must see the same notebooks"
+    );
+    let totals = |v: &[crate::models::Notebook]| -> (i64, i64) {
+        (
+            v.iter().map(|n| n.source_count).sum(),
+            v.iter().map(|n| n.note_count).sum(),
+        )
+    };
+    assert_eq!(
+        totals(&cold_scan),
+        totals(&cold_cached),
+        "cached totals must equal the scanned ones"
+    );
+
+    eprintln!(
+        "real library: {} notebooks, {} sources, {} notes\n  \
+         uncached scan {scan_ms:.0} ms | cold cached {cold_ms:.0} ms | warm {:.0} ms",
+        cold_scan.len(),
+        totals(&cold_scan).0,
+        totals(&cold_scan).1,
+        best(&warm),
+    );
+}
