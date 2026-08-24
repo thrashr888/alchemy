@@ -148,9 +148,11 @@ then frozen; loosening one thereafter is a deliberate commit, not drift.
 > privacy permissions on the signing identity, and an ad-hoc bundle draws a
 > random signing identifier and a fresh hash every build — so each rebuild
 > reads as a new app and re-prompts for file access, blocking startup on a
-> click. `scripts/dev-app.sh` signs with the Developer ID, whose designated
+> click. Signing with a Developer ID fixes it: the designated
 > requirement is built from the bundle id and team rather than the binary,
-> so the grant survives a rebuild. Timings taken against an ad-hoc build are
+> so the grant survives a rebuild. Set `APPLE_SIGNING_IDENTITY` in the shell
+> environment before building (the Tauri CLI reads the process environment;
+> it does not load `.env`). Timings taken against an ad-hoc build are
 > measuring the prompt.
 
 ### Mechanics
