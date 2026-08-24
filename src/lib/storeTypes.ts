@@ -189,7 +189,7 @@ export interface AppState {
    *  a document). Corpus-scoped, so it fires with no notebook open. */
   registryBump: number;
   /** Home's center column: the notebook grid, or the Registry's cast. */
-  homeSection: "notebooks" | "registry";
+  homeSection: "notebooks" | "registry" | "nightShift";
   /** How that column lays out. Cards are recognisable, rows are scannable
    *  and sortable — which one is "easier to find things in" depends on the
    *  collection, so it's a per-user choice, remembered. */

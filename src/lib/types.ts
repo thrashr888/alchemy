@@ -378,7 +378,9 @@ export interface ReportSchedule {
   prompt: string;
   /** "interval" (clock-fired) or "change" (a standing question — runs when
    *  sources in the notebook change, intervalSecs as the throttle floor). */
-  trigger: "interval" | "change";
+  /** "once" is a commission: one job handed to the night, which
+   *  retires itself after it runs (docs/RFC-night-shift-area.md §1). */
+  trigger: "interval" | "change" | "once";
   /** Epoch ms before which a "once" commission may not start; 0 = next pass. */
   notBefore: number;
   intervalSecs: number;
@@ -619,6 +621,9 @@ export interface AiConfig {
   sourceHygiene: boolean;
   /** Days before a url source counts as stale and gets re-fetched. */
   hygieneRefreshDays: number;
+  /** Per-source distillation sweep. On by default; the toggle is cost
+   *  control, and the sweep self-heals either way. */
+  sourceGists: boolean;
 }
 
 /** One passage behind a meta-chat answer: what it is and where it lives. */

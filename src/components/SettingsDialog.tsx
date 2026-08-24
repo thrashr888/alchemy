@@ -3,6 +3,7 @@ import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { previewSound } from "@/lib/sound";
 import { checkForUpdates, type UpdateFlow } from "@/lib/updates";
+import type { SnapshotStatus } from "@/lib/types";
 import { Button, Input, Modal, Spinner, Switch } from "./ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "@/lib/utils";
@@ -39,6 +40,7 @@ import {
   Trash2,
   Bot,
   Copy,
+  Moon,
 } from "lucide-react";
 
 /** Treat `name` and `name:latest` as the same model for matching. */
@@ -46,6 +48,7 @@ const normModel = (m: string) => m.replace(/:latest$/, "");
 
 const TABS = [
   { id: "general", label: "General", icon: SlidersHorizontal },
+  { id: "background", label: "Background Work", icon: Moon },
   { id: "sources", label: "Sources", icon: FolderGit2 },
   { id: "studio", label: "Studio", icon: Wand2 },
   { id: "models", label: "Models", icon: Cpu },
@@ -211,6 +214,7 @@ export function SettingsDialog({
               the note above); 11rem additionally clears the pane header. */}
           <div className="flex max-h-[calc(92vh-11rem)] min-w-0 flex-col gap-4 overflow-y-auto px-1">
           {tab === "general" && <GeneralTab />}
+          {tab === "background" && <BackgroundTab />}
           {tab === "sources" && <SourcesTab />}
           {tab === "studio" && <StudioTab />}
           {tab === "models" && (
@@ -378,17 +382,13 @@ function GeneralTab() {
         </div>
       </div>
 
-      <NotificationsToggle />
       <PrefToggle
         storageKey="playSounds"
         label="Play sounds"
         hint="Soft cues for finished work, new arrivals, and errors."
         onEnable={previewSound}
       />
-      <QuietWhenFocusedToggle />
       <SelfDiagnoseToggle />
-      <BackgroundToggle />
-      <TrayToggle />
     </div>
   );
 }
@@ -408,6 +408,214 @@ function SelfDiagnoseToggle() {
       checked={aiConfig.selfDiagnose}
       onChange={(v) => void saveAiConfig({ ...aiConfig, selfDiagnose: v })}
     />
+  );
+}
+
+/** One page for everything that happens while you are away
+ *  (docs/RFC-night-shift-area.md §5). Two jobs: the real cost controls, and
+ *  an honest account of what the Mac does at night — a settings page you can
+ *  read to learn the machine's habits. Knobs only where they are genuine
+ *  cost control; everything else is documented, not switched. */
+function BackgroundTab() {
+  return (
+    <div className="flex flex-col gap-5">
+      <BackgroundToggle />
+
+      <div className="h-px bg-border" />
+
+      <div className="flex flex-col gap-3">
+        <div className="text-body">Residency</div>
+        <TrayToggle />
+        <WakeDisclosure />
+      </div>
+
+      <div className="h-px bg-border" />
+
+      <div className="flex flex-col gap-3">
+        <div className="text-body">Notifications</div>
+        <NotificationsToggle />
+        <QuietWhenFocusedToggle />
+      </div>
+
+      <div className="h-px bg-border" />
+
+      <div className="flex flex-col gap-3">
+        <div className="text-body">Overnight housekeeping</div>
+        <p className="text-micro leading-relaxed text-subtle-foreground">
+          Mechanical work with no model behind it. It runs whenever Night
+          Shift is on, and never costs anything.
+        </p>
+        <SnapshotRow />
+        <ChoreLine
+          label="Database optimize"
+          hint="Prunes old table versions and reclaims disk. Runs automatically."
+        />
+        <ChoreLine
+          label="Orphan cleanup"
+          hint="Clears index rows whose source is gone. Runs automatically."
+        />
+        <HygieneSelect />
+        <GitSyncSelect />
+      </div>
+
+      <div className="h-px bg-border" />
+
+      <div className="flex flex-col gap-3">
+        <div className="text-body">Background intelligence</div>
+        <p className="text-micro leading-relaxed text-subtle-foreground">
+          Work that runs a model while you are away. Each is on by default;
+          the switches are cost control.
+        </p>
+        <SourceGistsToggle />
+        <CuratorToggle />
+      </div>
+    </div>
+  );
+}
+
+/** A chore with no knob: named so the page is a complete account of what
+ *  runs, not just the parts that happen to be configurable. */
+function ChoreLine({ label, hint }: { label: string; hint: string }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-body text-foreground">{label}</span>
+        <span className="text-micro text-subtle-foreground">Automatic</span>
+      </div>
+      <span className="text-micro leading-relaxed text-subtle-foreground">
+        {hint}
+      </span>
+    </div>
+  );
+}
+
+/** Source distillation (the `source_gists` sweep). On by default; the switch
+ *  is cost control, and the sweep self-heals either way. */
+function SourceGistsToggle() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  if (!aiConfig) return null;
+  return (
+    <SettingRow
+      label="Summarize new sources"
+      hint="Distills each source once so cross-notebook questions can find it."
+      checked={aiConfig.sourceGists}
+      onChange={(v) => void saveAiConfig({ ...aiConfig, sourceGists: v })}
+    />
+  );
+}
+
+/** The nightly snapshot's status, plus the two buttons that matter
+ *  (docs/RFC-night-shift-area.md §7). */
+function SnapshotRow() {
+  const pushToast = useStore((s) => s.pushToast);
+  const [status, setStatus] = useState<SnapshotStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void api.snapshotStatus().then(setStatus).catch(() => {});
+  }, []);
+
+  const when =
+    status && status.takenAt > 0
+      ? new Date(status.takenAt).toLocaleString(undefined, {
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        })
+      : null;
+  const size =
+    status && status.bytes > 0
+      ? `${(status.bytes / (1024 * 1024)).toFixed(0)} MB`
+      : null;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-body text-foreground">Nightly snapshot</span>
+        <span className="text-micro text-subtle-foreground">
+          {when ? `${when}${size ? ` \u00b7 ${size}` : ""}` : "None yet"}
+        </span>
+      </div>
+      <span className="text-micro leading-relaxed text-subtle-foreground">
+        A copy of your library each night, kept for a week plus four weekly
+        ones. Copies share disk with the original until they differ, so they
+        cost almost nothing.
+      </span>
+      <div className="flex items-center gap-2 pt-1">
+        <Button
+          variant="secondary"
+          size="sm"
+          loading={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              setStatus(await api.snapshotNow());
+              pushToast("success", "Snapshot taken.");
+            } catch (err) {
+              pushToast("error", `Snapshot failed: ${String(err)}`);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Back up now
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={!status || status.takenAt === 0}
+          onClick={async () => {
+            try {
+              const aside = await api.restoreSnapshot();
+              pushToast(
+                "success",
+                `Restored. The previous library is kept at ${aside}. Restart Alchemy to use it.`,
+              );
+            } catch (err) {
+              pushToast("error", `Restore failed: ${String(err)}`);
+            }
+          }}
+        >
+          Restore last snapshot…
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Scheduled wake, as a disclosure rather than a toggle: it needs one
+ *  administrator command, and Alchemy never escalates on the user's behalf
+ *  (docs/RFC-night-shift-area.md §6). */
+function WakeDisclosure() {
+  const pushToast = useStore((s) => s.pushToast);
+  const command = "sudo pmset repeat wakeorpoweron MTWRFSU 01:55:00";
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-body text-foreground">Wake for Night Shift</span>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => {
+            void navigator.clipboard.writeText(command);
+            pushToast("success", "Command copied.");
+          }}
+        >
+          <Copy className="size-3.5" />
+          Copy command
+        </Button>
+      </div>
+      <span className="text-micro leading-relaxed text-subtle-foreground">
+        Night Shift runs while your Mac is awake. A closed laptop on battery
+        sleeps, and the work runs when you next open it. To have the Mac wake
+        itself at 1:55 AM on power, run this in Terminal once.
+      </span>
+      <code className="mt-1 rounded-md border border-border bg-surface-2 px-2 py-1 font-mono text-micro text-subtle-foreground">
+        {command}
+      </code>
+    </div>
   );
 }
 

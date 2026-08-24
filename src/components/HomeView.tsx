@@ -44,10 +44,12 @@ import {
   Package,
   Sparkles,
   FolderInput,
+  Moon,
 } from "lucide-react";
 import { BriefSidebar, SidebarRail, StaffSidebar } from "./HomeSections";
 import { NOTEBOOK_ICONS, notebookIcon } from "@/lib/notebookIcons";
 import { RegistrySection } from "./RegistrySection";
+import { NightShiftSection } from "./NightShiftSection";
 import {
   HomeTable,
   HomeViewControls,
@@ -187,6 +189,7 @@ function HomeSectionTabs() {
   const tabs = [
     { id: "notebooks", label: "Notebooks", icon: BookOpen },
     { id: "registry", label: "Registry", icon: Package },
+    { id: "nightShift", label: "Night Shift", icon: Moon },
   ] as const;
   return (
     <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5">
@@ -201,7 +204,9 @@ function HomeSectionTabs() {
           title={
             id === "registry"
               ? "The things your documents are about"
-              : "Your notebooks"
+              : id === "nightShift"
+                ? "Work that happens while you're away"
+                : "Your notebooks"
           }
           className={cn(
             "flex items-center gap-1.5 rounded-md px-2 py-1 text-caption transition-colors",
@@ -868,7 +873,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               </div>
             </div>
 
-            {homeSection === "registry" ? (
+            {homeSection === "nightShift" ? (
+              <NightShiftSection />
+            ) : homeSection === "registry" ? (
               <RegistrySection />
             ) : (
             <div
