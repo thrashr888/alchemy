@@ -153,6 +153,10 @@ function TonightView({
             <Row
               key={s.id}
               title={s.name}
+              // Work whose hour has already passed says so here rather than
+              // looking simply "not yet run" — the Mac was asleep, and it
+              // will run on the next pass.
+              late={overdueLabel(s)}
               sub={`${nbTitle(s.notebookId) || "Cross-notebook"} · ${cadence(s)}`}
               right={
                 s.lastRunAt > 0 ? `ran ${relativeTime(s.lastRunAt)}` : "not yet run"
@@ -384,6 +388,7 @@ function RecordView({ receipts }: { receipts: RunReceipt[] }) {
               title={r.name}
               chip={r.trigger === "once" ? "COMMISSION" : undefined}
               failed={r.status === "failed"}
+              late={lateLabel(r)}
               sub={r.status === "ok" ? r.detail : r.error}
               right={
                 r.costMicros > 0
@@ -398,6 +403,32 @@ function RecordView({ receipts }: { receipts: RunReceipt[] }) {
       ))}
     </div>
   );
+}
+
+/** An interval order whose next turn is already behind us. Shown on
+ *  Tonight so a schedule that slept through its hour reads as "overdue,
+ *  running shortly" rather than as broken. */
+function overdueLabel(s: ReportSchedule): string | undefined {
+  if (s.trigger !== "interval" || s.lastRunAt === 0) return undefined;
+  const due = s.lastRunAt + s.intervalSecs * 1000;
+  const ms = Date.now() - due;
+  if (ms < 15 * 60 * 1000) return undefined;
+  const hours = Math.round(ms / 3600000);
+  return hours < 1 ? "overdue" : `overdue by ${hours}h`;
+}
+
+/** "3h late", or nothing when the run was on time or its due time predates
+ *  the recording of one. Mirrors the Rust threshold: under a quarter hour is
+ *  the pass interval doing its job, not news. */
+function lateLabel(r: RunReceipt): string | undefined {
+  if (!r.dueAt) return undefined;
+  const ms = r.startedAt - r.dueAt;
+  if (ms < 15 * 60 * 1000) return undefined;
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 90) return `${minutes}m late`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 36) return `${hours}h late`;
+  return `${Math.round(hours / 24)}d late`;
 }
 
 /** Total for one night, stated only when something was actually metered —
@@ -450,12 +481,16 @@ function Row({
   chip,
   right,
   failed,
+  late,
 }: {
   title: string;
   sub?: string;
   chip?: string;
   right?: string;
   failed?: boolean;
+  /** "3h late" — shown as its own chip so the delay is legible at a glance
+   *  without colour carrying the meaning. */
+  late?: string;
 }) {
   return (
     <div className="flex items-baseline justify-between gap-3 border-b border-border py-2.5 last:border-b-0">
@@ -463,6 +498,7 @@ function Row({
         <span className="flex items-baseline gap-2">
           <span className="text-body text-foreground">{title}</span>
           {chip && <Badge>{chip}</Badge>}
+          {late && <Badge>{late}</Badge>}
           {failed && <Badge className="text-destructive">Failed</Badge>}
         </span>
         {sub && (

@@ -524,6 +524,10 @@ export interface RunReceipt {
   model: string;
   /** Millionths of a dollar; 0 when nothing was metered. */
   costMicros: number;
+  /** When the run should have started; 0 when not recorded. A Mac asleep
+   *  past a due time runs on wake, and this is what makes the delay
+   *  explainable rather than mysterious. */
+  dueAt: number;
   startedAt: number;
   endedAt: number;
 }

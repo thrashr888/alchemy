@@ -262,6 +262,7 @@ impl Db {
             .await?;
         db.migrate_source_events().await?;
         db.ensure_table(T_RECEIPTS, receipts_schema()).await?;
+        db.migrate_receipts().await?;
         db.ensure_table(T_LEDGER, ledger_schema()).await?;
         db.migrate_ledger().await?;
         db.ensure_table(T_REGISTRY, registry_schema()).await?;
@@ -332,6 +333,12 @@ impl Db {
         // pass", which is the right reading for every schedule that predates
         // the column.
         self.add_i64_column(T_REPORTS, "not_before", "0").await
+    }
+
+    /// Lateness came after receipts did; 0 reads as "not recorded", which is
+    /// what an older receipt honestly is.
+    async fn migrate_receipts(&self) -> Result<()> {
+        self.add_i64_column(T_RECEIPTS, "due_at", "0").await
     }
 
     /// Add the `diff` column ("") to pre-existing event tables.
@@ -3006,6 +3013,8 @@ impl Db {
             let provider = str_col(b, "provider")?;
             let model = str_col(b, "model")?;
             let cost = i64_col(b, "cost_micros")?;
+            // Optional: receipts written before lateness was recorded.
+            let due = opt_i64_col(b, "due_at");
             let started = i64_col(b, "started_at")?;
             let ended = i64_col(b, "ended_at")?;
             for i in 0..b.num_rows() {
@@ -3023,6 +3032,7 @@ impl Db {
                     provider: provider.value(i).to_string(),
                     model: model.value(i).to_string(),
                     cost_micros: cost.value(i),
+                    due_at: due.as_ref().map(|c| c.value(i)).unwrap_or(0),
                     started_at: started.value(i),
                     ended_at: ended.value(i),
                 });
@@ -3769,6 +3779,7 @@ fn receipts_schema() -> SchemaRef {
         Field::new("provider", DataType::Utf8, false),
         Field::new("model", DataType::Utf8, false),
         Field::new("cost_micros", DataType::Int64, false),
+        Field::new("due_at", DataType::Int64, false),
         Field::new("started_at", DataType::Int64, false),
         Field::new("ended_at", DataType::Int64, false),
     ]))
@@ -3791,6 +3802,7 @@ fn receipt_batch(schema: &SchemaRef, r: &RunReceipt) -> Result<RecordBatch> {
             Arc::new(StringArray::from(vec![r.provider.clone()])),
             Arc::new(StringArray::from(vec![r.model.clone()])),
             Arc::new(Int64Array::from(vec![r.cost_micros])),
+            Arc::new(Int64Array::from(vec![r.due_at])),
             Arc::new(Int64Array::from(vec![r.started_at])),
             Arc::new(Int64Array::from(vec![r.ended_at])),
         ],

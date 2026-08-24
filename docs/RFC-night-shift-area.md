@@ -197,7 +197,21 @@ db maintenance keeps its deliberate position ahead of the gate
 
 The default stands: due-ness is wall-clock, so everything runs on the
 first tick after wake — late, not lost. The area's copy says so plainly
-("Runs when your Mac is awake."). Above the default:
+("Runs when your Mac is awake.").
+
+**And the app says when it was late.** "Late, not lost" is only true from
+the user's side if the lateness is disclosed: an 8:00 brief that appears at
+11:00 with a bare "Report ready" reads like a broken schedule, not a
+sleeping Mac. So every receipt records `due_at` — the hour the run was
+meant for, derived from persisted state exactly as due-ness is — and past a
+15-minute threshold (under that, the delay is just the pass interval) three
+surfaces say so: the notification names it ("was due while your Mac was
+asleep — 3 hours late"), the receipt carries it, and Tonight marks an order
+whose hour has passed as overdue rather than merely "not yet run". A
+standing question's due time is when the change landed, not when its
+interval elapsed — that is the moment the user would have wanted to know.
+
+Above the default:
 
 1. **Keep-awake during runs**: hold a `PreventUserIdleSystemSleep` power
    assertion while a commission or report batch is active on AC power, so

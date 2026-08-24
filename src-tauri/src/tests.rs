@@ -921,6 +921,7 @@ async fn receipts_round_trip() {
         provider: "ollama".into(),
         model: "test-model".into(),
         cost_micros: 0,
+        due_at: 0,
         started_at: ended - 1_000,
         ended_at: ended,
     };

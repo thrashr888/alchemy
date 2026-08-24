@@ -345,6 +345,11 @@ pub struct RunReceipt {
     /// Millionths of a dollar; 0 when nothing was metered.
     #[serde(default)]
     pub cost_micros: i64,
+    /// When the run should have started. A Mac asleep past a due time runs
+    /// on wake, so this is what makes "your 8:00 brief, 3 hours late"
+    /// sayable instead of silently surprising.
+    #[serde(default)]
+    pub due_at: i64,
     pub started_at: i64,
     pub ended_at: i64,
 }

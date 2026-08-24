@@ -67,16 +67,26 @@ pub(crate) async fn engine_attribution(state: &AppState) -> (String, String) {
 pub(crate) async fn schedule_receipt(
     state: &AppState,
     schedule: &crate::models::ReportSchedule,
+    due_at: i64,
     started_at: i64,
     note: Option<&crate::models::Note>,
     error: Option<&str>,
 ) -> RunReceipt {
     let (provider, model) = engine_attribution(state).await;
-    let detail = match (note, error) {
+    let mut detail = match (note, error) {
         (Some(n), _) => format!("Wrote \u{201c}{}\u{201d}", n.title),
         (None, Some(_)) => String::new(),
         (None, None) => String::new(),
     };
+    // Say it on the receipt, not just in the notification: the record is
+    // where someone goes to work out why a brief arrived at lunchtime.
+    if let Some(late) = lateness(due_at, started_at) {
+        detail = if detail.is_empty() {
+            late
+        } else {
+            format!("{detail} \u{00b7} {late}")
+        };
+    }
     RunReceipt {
         id: commands::new_id(),
         schedule_id: schedule.id.clone(),
@@ -94,6 +104,7 @@ pub(crate) async fn schedule_receipt(
         // free. Left at zero rather than estimated - an invented number on a
         // receipt is worse than no number.
         cost_micros: 0,
+        due_at,
         started_at,
         ended_at: now_ms(),
     }
@@ -122,6 +133,8 @@ pub(crate) fn chore_receipt(
         provider: "local".into(),
         model: String::new(),
         cost_micros: 0,
+        // Chores have no appointment to be late for.
+        due_at: 0,
         started_at,
         ended_at: now_ms(),
     }
@@ -274,6 +287,76 @@ pub(crate) fn is_due(
     }
 }
 
+/// When this run *should* have started. Pure, for the same reason `is_due`
+/// is: lateness is a claim the app makes to the user, so it has to be
+/// derived from persisted state rather than guessed at run time.
+///
+/// A Mac that slept through 8 AM runs the brief on wake, which is the right
+/// behaviour — but showing up at 11:00 with no explanation reads like the
+/// schedule is broken. Recording the due time is what lets the app say
+/// "this was due at 8:00" instead.
+pub(crate) fn due_at(
+    s: &crate::models::ReportSchedule,
+    events: &[crate::models::SourceEvent],
+) -> i64 {
+    match s.trigger.as_str() {
+        // A commission is due at its floor; "run now" commissions (floor 0)
+        // are due from the moment they were created.
+        "once" => {
+            if s.not_before > 0 {
+                s.not_before
+            } else {
+                s.created_at
+            }
+        }
+        // A standing question became due when the change it answers landed,
+        // not when its interval elapsed — that is the moment the user would
+        // have wanted to know.
+        "change" => events
+            .iter()
+            .filter(|e| e.notebook_id == s.notebook_id && e.at > s.last_run_at)
+            .map(|e| e.at)
+            .min()
+            .unwrap_or(s.last_run_at),
+        // A never-run schedule is due from creation; otherwise one interval
+        // past the last run.
+        _ => {
+            if s.last_run_at == 0 {
+                s.created_at
+            } else {
+                s.last_run_at + s.interval_secs * 1000
+            }
+        }
+    }
+}
+
+/// How late is late enough to mention? Under this, the delay is just the
+/// pass interval doing its job and saying so would be noise.
+pub(crate) const LATE_THRESHOLD_MS: i64 = 15 * 60 * 1000;
+
+/// "3 hours late" / "25 minutes late", or None when it ran on time. Rounded
+/// to the unit a person would use — a brief that is 187 minutes late is
+/// three hours late.
+pub(crate) fn lateness(due_at: i64, started_at: i64) -> Option<String> {
+    if due_at <= 0 {
+        return None;
+    }
+    let late_ms = started_at - due_at;
+    if late_ms < LATE_THRESHOLD_MS {
+        return None;
+    }
+    let minutes = late_ms / 60_000;
+    if minutes < 90 {
+        return Some(format!("{minutes} minutes late"));
+    }
+    let hours = (minutes as f64 / 60.0).round() as i64;
+    if hours < 36 {
+        return Some(format!("{hours} hours late"));
+    }
+    let days = (hours as f64 / 24.0).round() as i64;
+    Some(format!("{days} days late"))
+}
+
 /// Take the day's snapshot if it hasn't been taken, and leave a receipt
 /// either way. Runs on the pass thread: an APFS clone is a metadata
 /// operation, and the fallback copy only happens on volumes that cannot
@@ -409,9 +492,15 @@ async fn run_pass(app: &AppHandle) {
         // unarchiving resumes the schedule where it left off.
         let archived = state.db.archived_notebook_ids().await.unwrap_or_default();
         let now = now_ms();
+        // Pair each run with the time it should have started, computed here
+        // while the triggering events are still in hand.
         let due: Vec<_> = schedules
             .into_iter()
             .filter(|s| is_due(s, now, &archived, &events))
+            .map(|s| {
+                let due_at = due_at(&s, &events);
+                (s, due_at)
+            })
             .collect();
         // Off the tick: a slow report (an agent CLI can legitimately run
         // many minutes, or hang to its deadline) used to stall the entire
@@ -423,14 +512,20 @@ async fn run_pass(app: &AppHandle) {
             tauri::async_runtime::spawn(async move {
                 let state = app.state::<AppState>();
                 let mut finished = 0u32;
-                for schedule in due {
+                for (schedule, due_at) in due {
                     let started_at = now_ms();
                     match commands::run_report_inner(&app, &state, &schedule.id).await {
                         Ok(note) => {
                             finished += 1;
-                            let receipt =
-                                schedule_receipt(&state, &schedule, started_at, Some(&note), None)
-                                    .await;
+                            let receipt = schedule_receipt(
+                                &state,
+                                &schedule,
+                                due_at,
+                                started_at,
+                                Some(&note),
+                                None,
+                            )
+                            .await;
                             write_receipt(&state, receipt).await;
                             // A commission is done when it has run once. The
                             // row stays as its own history; it just never
@@ -448,19 +543,38 @@ async fn run_pass(app: &AppHandle) {
                             // At send time, not pass time: a report can run
                             // for minutes, and focus may have changed.
                             if notifications_wanted(&app).await {
-                                let (title, body) = if schedule.kind == "brief" {
-                                    (
+                                // A run that slept past its hour says so.
+                                // Arriving at lunchtime with no explanation
+                                // reads like the schedule is broken; naming
+                                // the delay is what keeps "late, not lost"
+                                // true from the user's side too.
+                                let late = lateness(due_at, started_at);
+                                let (title, body) = match (schedule.kind.as_str(), &late) {
+                                    ("brief", Some(late)) => (
+                                        "Your brief is ready",
+                                        format!(
+                                            "\u{201c}{}\u{201d} was due while your Mac was asleep \u{2014} {late}.",
+                                            schedule.name
+                                        ),
+                                    ),
+                                    ("brief", None) => (
                                         "Your brief is ready",
                                         format!(
                                             "\u{201c}{}\u{201d} has the rundown.",
                                             schedule.name
                                         ),
-                                    )
-                                } else {
-                                    (
+                                    ),
+                                    (_, Some(late)) => (
+                                        "Report ready",
+                                        format!(
+                                            "\u{201c}{}\u{201d} was due while your Mac was asleep \u{2014} {late}.",
+                                            schedule.name
+                                        ),
+                                    ),
+                                    (_, None) => (
                                         "Report ready",
                                         format!("\u{201c}{}\u{201d} was generated.", schedule.name),
-                                    )
+                                    ),
                                 };
                                 let _ = app.notification().builder().title(title).body(body).show();
                             }
@@ -470,9 +584,15 @@ async fn run_pass(app: &AppHandle) {
                                 "night-shift",
                                 format!("report {} failed: {err}", schedule.name),
                             );
-                            let receipt =
-                                schedule_receipt(&state, &schedule, started_at, None, Some(&err))
-                                    .await;
+                            let receipt = schedule_receipt(
+                                &state,
+                                &schedule,
+                                due_at,
+                                started_at,
+                                None,
+                                Some(&err),
+                            )
+                            .await;
                             write_receipt(&state, receipt).await;
                         }
                     }
@@ -626,6 +746,77 @@ mod tests {
             !is_due(&throttled, now, &none, &[event(now - 1_000)]),
             "one run per interval at most"
         );
+    }
+
+    #[test]
+    fn a_slept_through_run_reports_when_it_was_due() {
+        // The case that prompted this: an 8 AM brief on a Mac that woke at
+        // 11. It runs (is_due says so), and the receipt has to carry the
+        // hour it was meant for, or the user just sees a brief at lunchtime.
+        let eight_am = 8 * HOUR;
+        let mut brief = schedule("interval");
+        brief.interval_secs = 86_400;
+        brief.last_run_at = eight_am - 24 * HOUR;
+        assert_eq!(due_at(&brief, &[]), eight_am, "due one interval on");
+
+        let woke_at = 11 * HOUR;
+        assert_eq!(lateness(eight_am, woke_at).as_deref(), Some("3 hours late"));
+
+        // A never-run schedule is due from creation, not from epoch zero.
+        let mut fresh = schedule("interval");
+        fresh.created_at = 5 * HOUR;
+        fresh.last_run_at = 0;
+        assert_eq!(due_at(&fresh, &[]), 5 * HOUR);
+    }
+
+    #[test]
+    fn lateness_stays_quiet_about_ordinary_delay() {
+        let due = 8 * HOUR;
+        // The pass runs once a minute; that is not news.
+        assert_eq!(lateness(due, due + 60_000), None);
+        assert_eq!(lateness(due, due + LATE_THRESHOLD_MS - 1), None);
+        // Nor is a run that beat its due time.
+        assert_eq!(lateness(due, due - HOUR), None);
+        // An unrecorded due time makes no claim either way.
+        assert_eq!(lateness(0, due), None);
+
+        // Past the threshold it speaks, in the unit a person would use.
+        assert_eq!(
+            lateness(due, due + 25 * 60_000).as_deref(),
+            Some("25 minutes late")
+        );
+        assert_eq!(
+            lateness(due, due + 3 * HOUR).as_deref(),
+            Some("3 hours late")
+        );
+        assert_eq!(
+            lateness(due, due + 50 * HOUR).as_deref(),
+            Some("2 days late"),
+            "a long weekend away is stated in days"
+        );
+    }
+
+    #[test]
+    fn a_standing_question_is_due_when_the_change_landed() {
+        // Not when its interval elapsed: the moment the user would have
+        // wanted to know is the moment the source changed.
+        let mut question = schedule("change");
+        question.last_run_at = 4 * HOUR;
+        let events = [event(9 * HOUR), event(6 * HOUR), event(2 * HOUR)];
+        assert_eq!(
+            due_at(&question, &events),
+            6 * HOUR,
+            "the earliest change it has not answered yet"
+        );
+
+        // Commissions are due at their floor, or at creation when run-now.
+        let mut tonight = schedule("once");
+        tonight.not_before = 2 * HOUR;
+        assert_eq!(due_at(&tonight, &[]), 2 * HOUR);
+        let mut now_job = schedule("once");
+        now_job.not_before = 0;
+        now_job.created_at = 7 * HOUR;
+        assert_eq!(due_at(&now_job, &[]), 7 * HOUR);
     }
 
     #[test]
