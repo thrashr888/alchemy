@@ -61,6 +61,26 @@ Replace the auto-generated changelog with notes in the house style
 
 ## One-time setup
 
+### Environment
+
+Set these in your shell environment (a profile, or direnv) — never in the
+repo. The Tauri CLI and `notarytool` read the process environment; neither
+loads a `.env` file.
+
+| Variable | What it is | Needed for |
+| -------- | ---------- | ---------- |
+| `APPLE_SIGNING_IDENTITY` | full identity name, `Developer ID Application: Name (TEAMID)` | signing any bundle; release only needs it when the Keychain holds more than one |
+| `APPLE_ID` | Apple ID email | creating the notary profile |
+| `APPLE_TEAM_ID` | ten-character team identifier | creating the notary profile |
+
+`APPLE_SIGNING_IDENTITY` matters for day-to-day work too, not just releases.
+macOS keys privacy permissions on the signing identity, and an unsigned
+bundle draws a fresh random one every build — so a rebuilt dev app reads as
+a brand-new app and re-prompts for file access, blocking startup on a click
+and making any startup timing meaningless. With the variable set,
+`pnpm tauri build --debug --bundles app` produces a bundle whose designated
+requirement is stable across rebuilds, and the grant sticks.
+
 You need three things on your machine:
 
 1. **A Developer ID Application certificate** in your login Keychain
@@ -101,8 +121,12 @@ You need three things on your machine:
    ```bash
    op read "op://Private/Apple notary app-specific password/password" |
      xcrun notarytool store-credentials alchemy-notary \
-       --apple-id thrashr888@gmail.com --team-id 5T4QSYSNP2
+       --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID"
    ```
+   `APPLE_ID` is the Apple ID email and `APPLE_TEAM_ID` the ten-character
+   team identifier from the Developer portal (also the parenthesised part of
+   the signing identity name). Keep both in your shell environment rather
+   than in the repo.
 
 3. **`gh`** authenticated with push + release access (`gh auth login`).
 
