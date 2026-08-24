@@ -9641,6 +9641,10 @@ pub async fn rebuild_app_menu(
         .map(|n| (n.id, n.title))
         .collect();
     crate::menu::fill_recents(&app, &recent.0, &recents).map_err(|err| err.to_string())?;
+    // The Dock's right-click menu reads this cache; it cannot await a query
+    // when AppKit asks for it.
+    #[cfg(target_os = "macos")]
+    crate::dockmenu::set_recents(&recents);
     // The tray's Recent Notebooks mirrors Open Recent.
     crate::menu::fill_recents(&app, &tray_recent.0, &recents).map_err(|err| err.to_string())
 }

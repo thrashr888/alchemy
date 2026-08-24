@@ -9,6 +9,8 @@ mod connectors;
 mod db;
 mod diagnostics;
 #[cfg(target_os = "macos")]
+mod dockmenu;
+#[cfg(target_os = "macos")]
 mod dragout;
 mod examples;
 mod export;
@@ -209,6 +211,13 @@ pub fn run() {
             integrations::setup(app, &recents, config.tray_enabled)?;
             #[cfg(target_os = "macos")]
             services::setup(app);
+            #[cfg(target_os = "macos")]
+            {
+                // Seed the Dock's list from the same recents the app menu was
+                // just built with; rebuild_app_menu keeps it current after.
+                dockmenu::set_recents(&recents);
+                dockmenu::setup(app);
+            }
             // Only after set_menu does the NSMenu exist — now AppKit can be
             // told this is the windows menu and start listing open windows.
             #[cfg(target_os = "macos")]

@@ -598,6 +598,15 @@ pub fn handle_event(app: &AppHandle, id: &str) {
         .or_else(|| windows.keys().next().cloned());
     let Some(target) = target else { return };
     if let Some(nb) = id.strip_prefix("recent:") {
+        // Opening a notebook can be asked for from places where the app is
+        // not frontmost — the menu bar extra, and the Dock's right-click
+        // menu. Emitting alone would switch notebooks behind whatever the
+        // user is looking at, so bring the window forward too.
+        if let Some(win) = windows.get(&target) {
+            let _ = win.show();
+            let _ = win.unminimize();
+            let _ = win.set_focus();
+        }
         let _ = app.emit(
             "menu://open-notebook",
             MenuPayload {
