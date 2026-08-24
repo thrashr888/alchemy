@@ -50,6 +50,12 @@ jobs:
       - name: Frontend typecheck + build
         run: pnpm build
 
+      # Theme contrast matrix + undo-history mechanics
+      # (docs/RFC-professional-grade.md Pillar 4). Pure logic, no DOM —
+      # a readability regression in any of the 23 themes fails here.
+      - name: Frontend tests
+        run: pnpm test
+
       - name: Rust format check
         working-directory: src-tauri
         run: cargo fmt -- --check
@@ -64,3 +70,10 @@ jobs:
         # executable coverage lives in the library test harness. Avoid
         # linking an empty second harness and running empty doc-tests.
         run: cargo test --lib
+
+      # Wall-clock budgets (docs/RFC-professional-grade.md Pillar 2), run
+      # serially and apart from the parallel suite so they fail on
+      # regression rather than on machine load.
+      - name: Rust performance budgets
+        working-directory: src-tauri
+        run: cargo test --lib perf_budgets -- --ignored --test-threads=1
