@@ -134,6 +134,7 @@ scan storm fails a test instead of a user.**
 | Metric | Budget | Where measured |
 |---|---|---|
 | Cold start → window interactive | < 1.5 s | startup trace |
+| Notebook list (the call boot waits on), cold and warm | < 1 s / < 250 ms | perf test |
 | Hybrid search, 10k-chunk store | < 300 ms p95 | perf test |
 | Chat first-token overhead (retrieval + prompt build, excl. model) | < 500 ms | retrieval trace |
 | Import throughput, 100-page PDF | < 10 s excl. embedding | perf test |
@@ -155,6 +156,15 @@ then frozen; loosening one thereafter is a deliberate commit, not drift.
 - **Startup trace:** `trace.rs` gains `startup.jsonl` — stamps at process
   start, db open, tables ensured, scheduler up, first window ready.
   Release-over-release regression is a one-line jq away.
+- **Counts are cached, not rescanned:** `list_notebooks` reports per-notebook
+  source/note/report totals, which meant scanning two whole tables on every
+  refresh — every `mcp://changed`, and once during boot, where on a large
+  library it reached the frontend's 30s IPC timeout and left the shelf
+  looking like a new install. The totals are cached under the Lance versions
+  they were computed from: a version is one manifest read where a recount is
+  a full scan, and keying on it cannot miss a write, including one made by
+  another process. Persisted beside the tables, so a cold start pays the
+  version check rather than the scan.
 - **Frontend at scale:** the sources list, chat history, and gallery are
   the three lists that grow unboundedly — virtualize whichever of them the
   10k fixture shows janking (measure first; don't virtualize on faith).

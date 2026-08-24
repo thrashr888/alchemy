@@ -317,3 +317,89 @@ async fn import_throughput_pdf() {
     // plain, so holding it to 10 s would assert nothing.
     assert!(secs < 1.5, "100-page PDF import took {secs:.2} s");
 }
+
+/// Cold app start, at library scale.
+///
+/// `list_notebooks` is the call boot waits on, and it used to scan the
+/// sources and notes tables end to end on every refresh. On a large library
+/// that grew slow enough to reach the frontend's 30s IPC timeout — which
+/// rejected init's whole `Promise.all` and rendered the shelf as a brand-new
+/// install over an intact library. That is the regression this budget
+/// exists to catch, so it measures the two shapes separately:
+///
+/// - **cold**, a fresh `Db::open` reading the persisted counts cache, which
+///   is what an app launch actually does;
+/// - **warm**, a repeat call on the same handle, which is what every
+///   `mcp://changed` refresh does.
+///
+/// Neither may approach the IPC timeout, and the whole point of the cache is
+/// that neither depends on corpus size.
+#[tokio::test]
+#[ignore = "wall-clock budget: runs serially in its own CI step, not alongside 390 parallel tests"]
+async fn notebook_list_latency_cold_and_warm() {
+    let Some(lib) = fixtures::library(fixtures::LARGE).await else {
+        return;
+    };
+    // Warm the cache the way a first launch does, then measure a genuine
+    // cold open: a new Db over the same directory, as a relaunch would.
+    lib.db.list_notebooks().await.expect("prime counts");
+
+    let mut cold = Vec::new();
+    for _ in 0..3 {
+        let db = crate::db::Db::open(&lib.dir).await.expect("reopen store");
+        let t = Instant::now();
+        let list = db.list_notebooks().await.expect("list notebooks");
+        cold.push(t.elapsed().as_secs_f64() * 1000.0);
+        assert!(!list.is_empty(), "fixture library has notebooks to count");
+    }
+
+    let mut warm = Vec::new();
+    for _ in 0..SAMPLES {
+        let t = Instant::now();
+        lib.db.list_notebooks().await.expect("list notebooks");
+        warm.push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+
+    // What the cache is worth: drop the file and make it scan for real. Also
+    // a correctness check — a recount must agree with what was served from
+    // the cache, or the cache is confidently wrong, which is worse than slow.
+    let cached_counts: Vec<(String, i64, i64)> = lib
+        .db
+        .list_notebooks()
+        .await
+        .expect("list notebooks")
+        .into_iter()
+        .map(|n| (n.id, n.source_count, n.note_count))
+        .collect();
+    let _ = std::fs::remove_file(lib.dir.join("notebook-counts.json"));
+    let scanning = crate::db::Db::open(&lib.dir).await.expect("reopen store");
+    let t = Instant::now();
+    let recounted = scanning.list_notebooks().await.expect("list notebooks");
+    let recount_ms = t.elapsed().as_secs_f64() * 1000.0;
+    let recounted: Vec<(String, i64, i64)> = recounted
+        .into_iter()
+        .map(|n| (n.id, n.source_count, n.note_count))
+        .collect();
+    assert_eq!(
+        cached_counts, recounted,
+        "cached counts must equal a full recount"
+    );
+
+    let cold_best = best(&cold);
+    let warm_best = best(&warm);
+    eprintln!(
+        "list_notebooks, {} sources / {} chunks: cold {cold_best:.0} ms, \
+         warm {warm_best:.0} ms, uncached recount {recount_ms:.0} ms",
+        lib.sources, lib.chunks
+    );
+
+    // Measured 2026-08-24, debug build, M-series laptop: cold 3 ms, warm
+    // 2 ms, uncached recount 11 ms — against a frontend timeout of
+    // 30_000 ms. The gap between cached and recount is the point, and it
+    // widens with the corpus: the scan is O(rows), the cache O(notebooks).
+    // The thresholds sit far below the IPC ceiling on purpose — by the time
+    // this call takes a second, something has gone wrong that a 30s
+    // tripwire would never catch.
+    assert!(cold_best < 1_000.0, "cold list_notebooks {cold_best:.0} ms");
+    assert!(warm_best < 250.0, "warm list_notebooks {warm_best:.0} ms");
+}
