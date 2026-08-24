@@ -151,9 +151,15 @@ pub async fn ensure_kokoro_files(
     Ok(())
 }
 
-/// Stay comfortably under Kokoro's 510-phoneme ceiling (phoneme tokens track
-/// character count closely for English).
-const MAX_SYNTH_CHARS: usize = 300;
+/// Stay comfortably under Kokoro's 510-phoneme ceiling.
+///
+/// Phoneme tokens track character count closely for ordinary English prose,
+/// but not for everything: digits and symbols are spoken out ("2024" ->
+/// "twenty twenty-four"), so an expansion-heavy line can clear 510 phonemes
+/// well inside a 300-character chunk — which is how a 511-index panic
+/// reached a shipped build. 240 leaves room for that expansion without
+/// chopping ordinary lines into noticeably more breaths.
+const MAX_SYNTH_CHARS: usize = 240;
 
 /// Split a dialogue line into chunks short enough for Kokoro: pack whole
 /// sentences up to the cap; hard-split on whitespace only when a single
@@ -188,6 +194,22 @@ pub(crate) fn split_for_synthesis(text: &str, max_chars: usize) -> Vec<String> {
             }
             let mut piece = String::new();
             for w in s.split_whitespace() {
+                // A single token longer than the cap has no whitespace to
+                // break on, and pushing it whole put a 500+ phoneme chunk
+                // into Kokoro — whose voice packs hold one style vector per
+                // phoneme up to 510, so it indexed past the pack and
+                // panicked mid-episode. Split the token itself.
+                if w.chars().count() > max_chars {
+                    if !piece.is_empty() {
+                        chunks.push(std::mem::take(&mut piece));
+                    }
+                    let mut chars = w.chars().peekable();
+                    while chars.peek().is_some() {
+                        let part: String = chars.by_ref().take(max_chars).collect();
+                        chunks.push(part);
+                    }
+                    continue;
+                }
                 if !piece.is_empty() && piece.chars().count() + 1 + w.chars().count() > max_chars {
                     chunks.push(std::mem::take(&mut piece));
                 }
@@ -344,6 +366,32 @@ mod split_tests {
         // Nothing lost: same words in, same words out.
         let rejoined: Vec<&str> = chunks.iter().flat_map(|c| c.split_whitespace()).collect();
         assert_eq!(rejoined.len(), line.split_whitespace().count());
+    }
+
+    #[test]
+    fn single_token_longer_than_the_cap_is_split() {
+        // A URL or unbroken run has no whitespace to break on. Pushing it
+        // whole is what put a 500+ phoneme chunk into Kokoro and panicked
+        // the episode; every chunk must honour the cap the caller asked for.
+        let line = format!("Start. https://example.com/{} end.", "a".repeat(400));
+        let chunks = split_for_synthesis(&line, 300);
+        assert!(
+            chunks.iter().all(|c| c.chars().count() <= 300),
+            "chunk over cap: {:?}",
+            chunks.iter().map(|c| c.chars().count()).collect::<Vec<_>>()
+        );
+        // Nothing is dropped on the way through.
+        let rejoined: String = chunks.join("");
+        assert!(rejoined.contains(&"a".repeat(50)), "long token lost");
+    }
+
+    #[test]
+    fn a_lone_giant_word_still_splits() {
+        let line = "z".repeat(1000);
+        let chunks = split_for_synthesis(&line, 300);
+        assert!(chunks.len() >= 4);
+        assert!(chunks.iter().all(|c| c.chars().count() <= 300));
+        assert_eq!(chunks.join("").chars().count(), 1000, "characters lost");
     }
 
     #[test]
