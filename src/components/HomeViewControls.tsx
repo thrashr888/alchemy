@@ -57,6 +57,14 @@ export function HomeViewControls({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Edit > Find (menu.rs): accelerator-less menu item, routed via findBump.
+  const findBump = useStore((s) => s.findBump);
+  useEffect(() => {
+    if (findBump === 0) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [findBump]);
+
   const setView = (v: "grid" | "table") => {
     localStorage.setItem("homeView", v);
     useStore.setState({ homeView: v });

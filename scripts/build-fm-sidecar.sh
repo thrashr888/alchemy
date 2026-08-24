@@ -10,14 +10,24 @@ set -eu
 cd "$(dirname "$0")/.."
 SOURCE_DIR="sidecar/alchemy-fm"
 DEST="src-tauri/binaries/alchemy-fm"
+STAMP="$DEST.sha256"
 
-# pnpm install invokes this hook even when the Swift package has not changed.
-# Reuse the staged executable until a tracked package/source file is newer;
-# this also makes the explicit CI/release preparation step cheap after install.
+# Git checkout gives every source file a fresh timestamp, while GitHub Actions
+# restores caches afterward with their original timestamps. Compare content,
+# not mtimes, so a restored sidecar genuinely skips the Swift build but any
+# package/source edit invalidates it.
+inputs_hash() {
+  find "$SOURCE_DIR" -path "$SOURCE_DIR/.build" -prune -o -type f -print \
+    | LC_ALL=C sort \
+    | while IFS= read -r file; do shasum -a 256 "$file"; done \
+    | shasum -a 256 \
+    | awk '{print $1}'
+}
+
+INPUTS_HASH="$(inputs_hash)"
 if [ -f "$DEST" ] \
-  && [ -f "$SOURCE_DIR/Package.swift" ] \
-  && [ -f "$SOURCE_DIR/Sources/alchemy-fm/main.swift" ] \
-  && [ -z "$(find "$SOURCE_DIR" -path "$SOURCE_DIR/.build" -prune -o -type f -newer "$DEST" -print -quit)" ]; then
+  && [ -f "$STAMP" ] \
+  && [ "$(cat "$STAMP")" = "$INPUTS_HASH" ]; then
   echo "up to date: $DEST"
   exit 0
 fi
@@ -25,4 +35,5 @@ fi
 (cd "$SOURCE_DIR" && swift build -c release)
 mkdir -p "$(dirname "$DEST")"
 cp "$SOURCE_DIR/.build/release/alchemy-fm" "$DEST"
+printf '%s\n' "$INPUTS_HASH" > "$STAMP"
 echo "staged: src-tauri/binaries/alchemy-fm"

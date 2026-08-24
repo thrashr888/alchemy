@@ -5,7 +5,7 @@ import {
   getCurrentWebviewWindow,
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import { isWebUrl, SUPPORTED_EXTENSIONS, visibleTitle } from "./utils";
 import { applyTheme, SYSTEM_THEME, themeIsDark } from "./themes";
@@ -372,6 +372,7 @@ export const useStore = create<AppState>((set, get) => {
     reading: loadReadingPrefs(),
 
     sending: false,
+    sendingFor: null,
     streamingText: "",
     steps: [],
     waiting: "",
@@ -381,6 +382,7 @@ export const useStore = create<AppState>((set, get) => {
     summary: "",
     summaryLoading: false,
     generatingKind: null,
+    generatingFor: null,
     generatingTemplateId: null,
     ingestQueue: [],
     migration: null,
@@ -411,6 +413,7 @@ export const useStore = create<AppState>((set, get) => {
     failedInput: null,
     pendingInput: null,
     pendingAsk: null,
+    findBump: 0,
     importOkfOpen: false,
     pendingImportPath: null,
     error: null,
@@ -599,6 +602,30 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     bindGlobalListeners: () => {
+      // Chat streaming tokens + agent progress steps. Store-level, not in
+      // ChatPanel: the stream keeps running when the user navigates to Home
+      // or another notebook (where ChatPanel is unmounted), and returning
+      // mid-stream must show the whole accumulated text, not a gap. Events
+      // broadcast to every window — only the one with a send in flight
+      // accumulates them.
+      void listen<{ content: string }>("chat://token", (e) => {
+        if (get().sending) get().appendToken(e.payload.content);
+      });
+      void listen<{ label: string; transient: boolean }>("chat://step", (e) => {
+        if (get().sending) get().appendStep(e.payload.label, e.payload.transient);
+      });
+      // Verify-and-repair swaps a revised answer under the same message id
+      // (backend spawn_answer_verify) — apply only when the message is in
+      // this window's transcript.
+      void listen<{ id: string; content: string }>("chat://revised", (e) => {
+        const { messages } = get();
+        if (!messages.some((m) => m.id === e.payload.id)) return;
+        set({
+          messages: messages.map((m) =>
+            m.id === e.payload.id ? { ...m, content: e.payload.content } : m,
+          ),
+        });
+      });
       // Built-in embedder first-use download progress (one-time ~30 MB).
       void listen<{ label: string; done: number; total: number }>(
         "embedder://progress",
@@ -818,6 +845,84 @@ export const useStore = create<AppState>((set, get) => {
           if (!claimTextUndo(false)) void s.undoLast();
         } else if (e.payload.id === "menu-redo") {
           if (!claimTextUndo(true)) void s.redoLast();
+        } else if (e.payload.id === "menu-new-notebook") {
+          // Same auto-title the palette's New Notebook uses.
+          const taken = new Set(get().notebooks.map((n) => n.title));
+          let title = "Untitled notebook";
+          for (let i = 2; taken.has(title); i++) title = `Untitled notebook ${i}`;
+          void s.createNotebook(title);
+        } else if (e.payload.id === "menu-new-note") {
+          if (!get().currentId) {
+            s.pushToast("info", "Open a notebook first, then add a note");
+            return;
+          }
+          // Open the panel; StudioPanel opens the composer when it mounts.
+          set({ pendingNewNote: true });
+          if (!get().studioOpen) s.toggleStudio();
+        } else if (e.payload.id === "menu-add-files") {
+          if (get().currentId) s.openAddSource();
+          else s.pushToast("info", "Open a notebook first, then add sources");
+        } else if (e.payload.id === "menu-find") {
+          set({ findBump: get().findBump + 1 });
+        } else if (e.payload.id === "menu-toggle-sources") {
+          if (get().currentId) s.toggleSources();
+        } else if (e.payload.id === "menu-toggle-studio") {
+          if (get().currentId) s.toggleStudio();
+        } else if (e.payload.id === "menu-toggle-gallery") {
+          if (get().currentId)
+            set({ galleryOpen: !get().galleryOpen, ledgerOpen: false });
+          else s.pushToast("info", "Open a notebook to browse its gallery");
+        } else if (e.payload.id === "menu-toggle-ledger") {
+          if (get().currentId)
+            set({ ledgerOpen: !get().ledgerOpen, galleryOpen: false });
+          else s.pushToast("info", "Open a notebook to read its ledger");
+        } else if (e.payload.id === "menu-toggle-glass") {
+          s.setReading({ glass: !get().reading.glass });
+        } else if (e.payload.id.startsWith("theme:")) {
+          s.setTheme(e.payload.id.slice("theme:".length));
+        } else if (e.payload.id.startsWith("generate:")) {
+          if (get().currentId)
+            void s.generateArtifact(
+              e.payload.id.slice("generate:".length) as Note["kind"],
+            );
+          else s.pushToast("info", "Open a notebook first, then generate");
+        } else if (e.payload.id === "menu-export-note") {
+          const r = get().reader;
+          const doc = r.open ? r.history[r.index] : undefined;
+          const note =
+            doc?.type === "note"
+              ? get().notes.find((n) => n.id === doc.id)
+              : undefined;
+          if (!note) {
+            s.pushToast("info", "Open a note in the reader to export it");
+            return;
+          }
+          void (async () => {
+            const { exportNote, exportTargets } = await import("./noteExport");
+            await exportNote(note, exportTargets(note)[0]);
+          })();
+        } else if (e.payload.id === "menu-archive-notebook") {
+          const id = get().currentId;
+          if (!id) {
+            s.pushToast("info", "Open a notebook to archive it");
+            return;
+          }
+          void s.setNotebookStatus(id, "archived").then(() => s.closeNotebook());
+        } else if (e.payload.id === "menu-delete-notebook") {
+          const id = get().currentId;
+          const nb = get().notebooks.find((n) => n.id === id);
+          if (!id || !nb) {
+            s.pushToast("info", "Open a notebook to delete it");
+            return;
+          }
+          // Native confirm: this is the one delete no toast can undo, and
+          // the menu has no in-app dialog host.
+          void ask(
+            `This permanently deletes "${nb.title}" and all of its sources.`,
+            { title: `Delete "${nb.title}"?`, kind: "warning" },
+          ).then((ok) => {
+            if (ok) void s.deleteNotebook(id);
+          });
         }
       });
       void listen<{ target: string; id: string }>(
@@ -1001,9 +1106,6 @@ export const useStore = create<AppState>((set, get) => {
         messagesLoadingOlder: false,
         notes: [],
         reportSchedules: [],
-        streamingText: "",
-        steps: [],
-        waiting: "",
         followups: [],
         chatConfig,
         summary: localStorage.getItem(`summary:${id}`) ?? "",
@@ -1766,6 +1868,7 @@ export const useStore = create<AppState>((set, get) => {
       set({
         messages: [...get().messages, optimistic],
         sending: true,
+        sendingFor: id,
         streamingText: "",
         steps: [],
         waiting: "",
@@ -1821,6 +1924,16 @@ export const useStore = create<AppState>((set, get) => {
           });
           playDone();
           void get().loadFollowups();
+        } else {
+          // Finished while the user was elsewhere — the answer is persisted;
+          // the toast is the way back (selectNotebook re-lists on arrival).
+          const title = get().notebooks.find((n) => n.id === id)?.title ?? "notebook";
+          playDone();
+          get().pushToast(
+            "success",
+            `Answer ready in “${title}” — click to open`,
+            () => void get().selectNotebook(id),
+          );
         }
         await get().refreshNotebooks();
       } catch (e) {
@@ -1836,7 +1949,13 @@ export const useStore = create<AppState>((set, get) => {
       } finally {
         // sending/steps are global in-flight flags — always clear them, even if
         // the user switched notebooks while the request ran.
-        set({ sending: false, streamingText: "", steps: [], waiting: "" });
+        set({
+          sending: false,
+          sendingFor: null,
+          streamingText: "",
+          steps: [],
+          waiting: "",
+        });
         void get().refreshModelStats();
       }
     },
@@ -2093,7 +2212,12 @@ export const useStore = create<AppState>((set, get) => {
     generateArtifact: async (kind, prompt) => {
       const id = get().currentId;
       if (!id || get().generatingKind) return;
-      set({ generatingKind: kind, artifactStreamText: "", error: null });
+      set({
+        generatingKind: kind,
+        generatingFor: id,
+        artifactStreamText: "",
+        error: null,
+      });
       try {
         const note = await api.generateArtifact(
           id,
@@ -2107,12 +2231,26 @@ export const useStore = create<AppState>((set, get) => {
         // upserted this note already, and an unfiltered prepend rendered the
         // same note twice (deleting "one" then removed both cards — they were
         // one row shown twice).
-        set({
-          notes: [note, ...get().notes.filter((n) => n.id !== note.id)],
-          justCreatedNoteId: note.id,
-        });
+        // The user may have navigated away while it generated — never write
+        // another notebook's note into the open one. The note is persisted;
+        // the toast is the way back.
+        if (get().currentId === id) {
+          set({
+            notes: [note, ...get().notes.filter((n) => n.id !== note.id)],
+            justCreatedNoteId: note.id,
+          });
+          get().pushToast("success", `${note.title} ready`);
+        } else {
+          get().pushToast(
+            "success",
+            `${note.title} ready — click to open`,
+            () =>
+              void get()
+                .selectNotebook(id)
+                .then(() => set({ justCreatedNoteId: note.id })),
+          );
+        }
         void get().refreshModelStats();
-        get().pushToast("success", `${note.title} ready`);
         playDone();
         void notify("Document ready", `“${note.title}” finished generating.`);
       } catch (e) {
@@ -2124,6 +2262,7 @@ export const useStore = create<AppState>((set, get) => {
       } finally {
         set({
           generatingKind: null,
+          generatingFor: null,
           artifactStreamText: "",
           audioProgress: null,
         });
@@ -2135,6 +2274,7 @@ export const useStore = create<AppState>((set, get) => {
       if (!id || get().generatingKind) return;
       set({
         generatingKind: "template",
+        generatingFor: id,
         generatingTemplateId: t.id,
         artifactStreamText: "",
         error: null,
@@ -2144,12 +2284,23 @@ export const useStore = create<AppState>((set, get) => {
         // The backend titles unknown kinds "Report" — rename to the template's name.
         await api.updateNote(note.id, t.name, note.content);
         const titled = { ...note, title: t.name };
-        set({
-          notes: [titled, ...get().notes.filter((n) => n.id !== note.id)],
-          justCreatedNoteId: note.id,
-        });
+        if (get().currentId === id) {
+          set({
+            notes: [titled, ...get().notes.filter((n) => n.id !== note.id)],
+            justCreatedNoteId: note.id,
+          });
+          get().pushToast("success", `${t.name} ready`);
+        } else {
+          get().pushToast(
+            "success",
+            `${t.name} ready — click to open`,
+            () =>
+              void get()
+                .selectNotebook(id)
+                .then(() => set({ justCreatedNoteId: note.id })),
+          );
+        }
         void get().refreshModelStats();
-        get().pushToast("success", `${t.name} ready`);
         playDone();
         void notify("Document ready", `“${t.name}” finished generating.`);
       } catch (e) {
@@ -2160,6 +2311,7 @@ export const useStore = create<AppState>((set, get) => {
       } finally {
         set({
           generatingKind: null,
+          generatingFor: null,
           generatingTemplateId: null,
           artifactStreamText: "",
           audioProgress: null,

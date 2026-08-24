@@ -15,6 +15,9 @@ import { Toaster } from "@/components/ui";
 import { FatalOverlay } from "@/components/ErrorBoundary";
 import { shortcutBlocked } from "@/lib/utils";
 import { isTauri } from "@tauri-apps/api/core";
+import { api } from "@/lib/api";
+import { THEME_LIST, SYSTEM_THEME } from "@/lib/themes";
+import { ARTIFACTS, AUDIO_OVERVIEW } from "@/components/studioArtifacts";
 
 function App() {
   const init = useStore((s) => s.init);
@@ -37,6 +40,24 @@ function App() {
   useEffect(() => {
     void init();
   }, [init]);
+
+  // The native menu's Theme and Generate submenus render TypeScript-owned
+  // lists (themes.ts, studioArtifacts.tsx) — push them over IPC at startup,
+  // and again when the theme changes so the selection dot tracks.
+  const theme = useStore((s) => s.theme);
+  useEffect(() => {
+    if (!isTauri()) return;
+    const themes: [string, string][] = [
+      [SYSTEM_THEME, "System"],
+      ...THEME_LIST.map((t): [string, string] => [t.id, t.label]),
+    ];
+    const generators: [string, string][] = [AUDIO_OVERVIEW, ...ARTIFACTS].map(
+      (a): [string, string] => [a.kind, a.label],
+    );
+    void api.fillMenuLists(themes, generators, theme).catch(() => {
+      /* older backend without the command — menu just keeps its placeholder */
+    });
+  }, [theme]);
 
   // Cmd/Ctrl+, opens Settings (standard desktop convention); Cmd/Ctrl+K
   // toggles the command menu — from anywhere, including inputs.

@@ -239,13 +239,29 @@ fn chat_tier(kind: &str, runtime: AiRuntime) -> Ai {
 }
 
 /// Apple's on-device model for the rerank leg, via the repo-built sidecar.
+/// Where the FM sidecar actually is, in the app's own order: the built
+/// binary that `scripts/build-fm-sidecar.sh` produces first, then the raw
+/// Swift build directory.
+///
+/// The build script stopped leaving a binary in `.build/release` some time
+/// ago, so checking only that path made every FM eval SKIP quietly — the
+/// same silent-green failure `evals.rs` already warns about, one directory
+/// over.
+pub(crate) fn fm_sidecar_path() -> Option<std::path::PathBuf> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    [
+        root.join("binaries/alchemy-fm"),
+        root.join("../sidecar/alchemy-fm/.build/release/alchemy-fm"),
+    ]
+    .into_iter()
+    .find(|p| p.exists())
+}
+
 pub(crate) fn fm_ai() -> Option<Ai> {
-    let sidecar = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../sidecar/alchemy-fm/.build/release/alchemy-fm");
-    if !sidecar.exists() {
+    let Some(sidecar) = fm_sidecar_path() else {
         eprintln!("SKIP: FM sidecar not built");
         return None;
-    }
+    };
     Some(chat_tier(
         "fm",
         AiRuntime {

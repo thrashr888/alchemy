@@ -712,6 +712,51 @@ impl Ai {
         }
     }
 
+    /// The identity to record speed metrics under, for the configured chat
+    /// provider or a named one.
+    ///
+    /// `active_chat_model` is the caption ("Codex", "Hermes") — right for a
+    /// transcript row, but too coarse for a ranking: reasoning effort and the
+    /// model an agent CLI routes to move time-to-first-token more than the
+    /// choice of CLI does, so pooling `Codex minimal` with `Codex max` under
+    /// one average answers nothing. Anything that changes the wait belongs in
+    /// the key.
+    pub fn chat_metrics_key(&self, provider_id: Option<&str>) -> String {
+        let id = provider_id.unwrap_or(&self.config.chat_provider);
+        let base = match provider_id {
+            // An override names its own provider; resolve that entry's
+            // caption the same way the active one is resolved.
+            Some(_) => self
+                .config
+                .provider_by_id(id)
+                .map(|p| {
+                    let model = p.chat_model.trim();
+                    match p.kind.as_str() {
+                        "gateway" | "ollama" if !model.is_empty() => model.to_string(),
+                        _ if !p.label.trim().is_empty() => p.label.clone(),
+                        other => other.to_string(),
+                    }
+                })
+                .unwrap_or_else(|| self.active_chat_model()),
+            None => self.active_chat_model(),
+        };
+        let Some(entry) = self.config.provider_by_id(id) else {
+            return base;
+        };
+        let mut key = base;
+        // Agent CLIs caption as their label, so the model they route to is
+        // not in the key yet — and it is exactly what the user picked.
+        let model = entry.chat_model.trim();
+        if !model.is_empty() && !key.contains(model) {
+            key = format!("{key} \u{b7} {model}");
+        }
+        let effort = entry.effort.trim();
+        if !effort.is_empty() {
+            key = format!("{key} \u{b7} {effort}");
+        }
+        key
+    }
+
     /// Resolve a per-call provider override: the engine for the configured
     /// entry with this id, plus the model name to key stats under. `Err`
     /// names the valid ids — an agent typo should read as "pick one of
@@ -750,6 +795,14 @@ impl Ai {
     /// Role-routed chat with failure fallthrough (RFC-inference-providers
     /// §7): if the role's engine is unavailable or errors, the configured
     /// chat engine answers instead — one log line, never a dead call.
+    /// Is there a distinct Small-role engine, or would `chat_role(Small)`
+    /// fall through to the chat engine? Evals comparing the two roles need
+    /// to know the difference is real before reporting a comparison.
+    #[cfg(test)]
+    pub fn has_small_role(&self) -> bool {
+        self.router.has_small()
+    }
+
     pub async fn chat_role(&self, role: Role, messages: &[ChatTurn]) -> Result<ChatOutcome> {
         let engine = self.router.chat_engine(role);
         if role == Role::Generate {

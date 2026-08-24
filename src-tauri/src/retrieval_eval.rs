@@ -2077,3 +2077,442 @@ async fn eval_retrieval_latency() {
     report("joined (now)   ", &mut joined_ms);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- Deep-research planner: role A/B (RFC-agentic-chat) --------------------
+//
+// The loop's planner, rerank, and distill calls run on the Small role by
+// default (agent::loop_role), because paying chat-model latency up to
+// MAX_STEPS times before the user sees one answer token is what dominates
+// deep research's time to first token. Small is only worth it if it still
+// plans sensibly — that is what this measures, on the two things that can
+// actually go wrong: the action fails to parse, or it aims at the wrong
+// place.
+//
+// Model-dependent, so it prints rather than fences (house rule: assert only
+// where the inputs are deterministic). The number IS the product; read the
+// table and decide.
+
+/// Build the two-tier A/B engine. `small` is either an Ollama model name or
+/// the literal "fm", which routes the Small role to the Apple Foundation
+/// Models sidecar — an empty `small_model` plus a sidecar path is what
+/// selects FM (see `Ai::new`).
+fn planner_ab_ai(chat_model: &str, small: &str) -> Option<crate::ai::Ai> {
+    let (small_model, runtime) = if small.eq_ignore_ascii_case("fm") {
+        let Some(sidecar) = crate::beir_eval::fm_sidecar_path() else {
+            eprintln!("SKIP: FM sidecar not built");
+            return None;
+        };
+        (
+            String::new(),
+            crate::ai::AiRuntime {
+                fm_sidecar: Some(sidecar),
+                ..Default::default()
+            },
+        )
+    } else {
+        (small.to_string(), crate::ai::AiRuntime::default())
+    };
+    Some(crate::ai::Ai::new(
+        crate::ai::AiConfig {
+            embedder: "builtin".into(),
+            chat_model: chat_model.to_string(),
+            small_model,
+            ..Default::default()
+        },
+        runtime,
+    ))
+}
+
+/// One planner probe: a question, and the distinctive terms a good first
+/// action should aim at — either in the search query or via reading the
+/// source whose title contains the gold marker.
+const PLANNER_PROBES: &[(&str, &str)] = &[
+    (
+        "What retention window does the backup policy specify?",
+        "backup",
+    ),
+    (
+        "Which model does the ranking service use for reranking?",
+        "rank",
+    ),
+    (
+        "What is the escalation path for a Sev-1 incident?",
+        "incident",
+    ),
+    (
+        "How is the vector index rebuilt after a schema change?",
+        "index",
+    ),
+];
+
+/// Does this first action aim at the gold area — searching with the marker
+/// term, or reading a source whose title carries it?
+fn planner_on_target(
+    action: &crate::agent::Action,
+    marker: &str,
+    titles: &[(String, String)],
+) -> bool {
+    match action {
+        crate::agent::Action::Search(q) => q.to_lowercase().contains(marker),
+        crate::agent::Action::Read(ids) => ids.iter().any(|id| {
+            titles
+                .iter()
+                .find(|(sid, _)| sid == id)
+                .is_some_and(|(_, t)| t.to_lowercase().contains(marker))
+        }),
+        // Stopping before gathering anything is never the right opening move.
+        crate::agent::Action::Stop => false,
+    }
+}
+
+#[tokio::test]
+#[ignore = "live models: one planner call per probe per role — run with --ignored --nocapture"]
+async fn eval_agent_planner_roles() {
+    // Two engines on purpose: the built-in embedder seeds the corpus, and a
+    // chat-capable tier answers the planner probes. `builtin_ai` has no chat
+    // model at all, so planning through it would measure nothing.
+    let Some(embedder) = builtin_ai().await else {
+        return;
+    };
+    // A real A/B needs the roles to resolve to different models. Defaults are
+    // a mid-size local chat model against the repo's fast local pick; both
+    // are overridable for a targeted run.
+    let chat_model =
+        std::env::var("PLANNER_CHAT_MODEL").unwrap_or_else(|_| "muse-glimmer:30b-mlx".to_string());
+    let small_model = std::env::var("PLANNER_SMALL_MODEL")
+        .unwrap_or_else(|_| "digitsflow/bonsai-8b:latest".to_string());
+    let Some(ai) = planner_ab_ai(&chat_model, &small_model) else {
+        return;
+    };
+    eprintln!("\n  chat={chat_model}   small={small_model}");
+    assert!(
+        ai.list_models().await.is_ok(),
+        "Ollama not reachable on localhost:11434 — start it, then rerun"
+    );
+    // An A/B is only an A/B if the roles resolve to different engines. With
+    // no small model configured, chat_role(Small) falls through to Chat and
+    // both columns would measure the same thing under two names — the
+    // mistake judged_eval's resolution guard exists to prevent.
+    if !ai.has_small_role() {
+        eprintln!(
+            "SKIP: no small model configured — Small would fall through to \
+             Chat and the comparison would be two names for one engine"
+        );
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("nbl-planner-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb = "planner-nb";
+    seed_corpus(&embedder, &db, nb).await;
+
+    let sources = db.list_sources(nb).await.expect("sources");
+    let titles: Vec<(String, String)> = sources
+        .iter()
+        .map(|s| (s.id.clone(), s.title.clone()))
+        .collect();
+    let source_list = sources
+        .iter()
+        .map(|s| format!("- {} (id: {}, {} chunks)", s.title, s.id, s.chunk_count))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    eprintln!("\ndeep-research planner, first action by role:");
+    for role in [crate::inference::Role::Small, crate::inference::Role::Chat] {
+        let (mut parsed, mut on_target, mut total_ms) = (0usize, 0usize, 0u128);
+        for (question, marker) in PLANNER_PROBES {
+            let messages = crate::rag::build_agent_decision(question, &source_list, "", 0);
+            let t = std::time::Instant::now();
+            let raw = match ai.chat_role(role, &messages).await {
+                Ok(out) => out.text,
+                Err(err) => {
+                    eprintln!("  MISS ({role:?}): {question} — call failed: {err:#}");
+                    continue;
+                }
+            };
+            total_ms += t.elapsed().as_millis();
+            match crate::agent::parse_action(&raw) {
+                Some(action) => {
+                    parsed += 1;
+                    if planner_on_target(&action, marker, &titles) {
+                        on_target += 1;
+                    } else {
+                        eprintln!("  MISS ({role:?}): {question} — aimed elsewhere: {action:?}");
+                    }
+                }
+                None => eprintln!(
+                    "  MISS ({role:?}): {question} — unparseable: {}",
+                    raw.trim().chars().take(80).collect::<String>()
+                ),
+            }
+        }
+        let n = PLANNER_PROBES.len();
+        eprintln!(
+            "  {:<8}  parsed {parsed}/{n}   on-target {on_target}/{n}   avg {}ms",
+            format!("{role:?}"),
+            total_ms / n as u128
+        );
+    }
+    eprintln!(
+        "  (Small is the shipping default — agent::loop_role; \
+         ALCHEMY_PLANNER_ROLE=chat restores the old behaviour.)"
+    );
+}
+
+/// Distillation probes: a question, the fixture document it should be read
+/// against, and a fact that MUST survive into the evidence note.
+///
+/// Distill is the riskiest of the three calls moved to the Small role,
+/// because its output is not a routing decision the loop can recover from —
+/// it becomes the evidence the final answer quotes. A distillate that drops
+/// the number is an answer that cannot cite it.
+const DISTILL_PROBES: &[(&str, &str, &str)] = &[
+    (
+        "How long should a failed retry wait?",
+        "Acme Invoices Q3",
+        "sixty",
+    ),
+    (
+        "Which port forwards to the media server?",
+        "Home Network Guide",
+        "32400",
+    ),
+    (
+        "When are firmware updates applied?",
+        "Home Network Guide",
+        "Monday",
+    ),
+    (
+        "How much paid time off accrues per month?",
+        "Employee Handbook",
+        "half",
+    ),
+];
+
+#[tokio::test]
+#[ignore = "live models: one distill call per probe per role — run with --ignored --nocapture"]
+async fn eval_agent_distill_roles() {
+    let chat_model =
+        std::env::var("PLANNER_CHAT_MODEL").unwrap_or_else(|_| "muse-glimmer:30b-mlx".to_string());
+    let small_model = std::env::var("PLANNER_SMALL_MODEL")
+        .unwrap_or_else(|_| "digitsflow/bonsai-8b:latest".to_string());
+    let Some(ai) = planner_ab_ai(&chat_model, &small_model) else {
+        return;
+    };
+    assert!(
+        ai.list_models().await.is_ok(),
+        "Ollama not reachable on localhost:11434 — start it, then rerun"
+    );
+    eprintln!("\n  chat={chat_model}   small={small_model}");
+    eprintln!("deep-research distillation, fact retention by role:");
+    for role in [crate::inference::Role::Small, crate::inference::Role::Chat] {
+        let (mut kept, mut total_ms) = (0usize, 0u128);
+        for (question, title, fact) in DISTILL_PROBES {
+            let Some((_, body)) = CORPUS.iter().find(|(t, _)| t == title) else {
+                panic!("fixture {title} missing from CORPUS");
+            };
+            let t = std::time::Instant::now();
+            let evidence = crate::agent::distill_with(&ai, role, question, title, body).await;
+            total_ms += t.elapsed().as_millis();
+            if evidence.to_lowercase().contains(&fact.to_lowercase()) {
+                kept += 1;
+            } else {
+                eprintln!(
+                    "  MISS ({role:?}): {question} — \"{fact}\" absent from: {}",
+                    evidence.trim().chars().take(90).collect::<String>()
+                );
+            }
+        }
+        let n = DISTILL_PROBES.len();
+        eprintln!(
+            "  {:<8}  kept {kept}/{n}   avg {}ms",
+            format!("{role:?}"),
+            total_ms / n as u128
+        );
+    }
+}
+
+/// Per-phase cost of one deep-research step, so the next optimization aims
+/// at whatever is actually left.
+///
+/// The loop's wall-clock is (planner + action) per step, repeated up to
+/// MAX_STEPS, then the answer stream. This times each piece against the
+/// same corpus so their magnitudes are directly comparable — a phase worth
+/// parallelising has to be big enough to notice next to the others.
+#[tokio::test]
+#[ignore = "live models: times every phase of a research step — run with --ignored --nocapture"]
+async fn eval_agent_phase_costs() {
+    let Some(embedder) = builtin_ai().await else {
+        return;
+    };
+    let chat_model =
+        std::env::var("PLANNER_CHAT_MODEL").unwrap_or_else(|_| "muse-glimmer:30b-mlx".to_string());
+    let small_model = std::env::var("PLANNER_SMALL_MODEL")
+        .unwrap_or_else(|_| "digitsflow/bonsai-8b:latest".to_string());
+    let Some(ai) = planner_ab_ai(&chat_model, &small_model) else {
+        return;
+    };
+    assert!(
+        ai.list_models().await.is_ok(),
+        "Ollama not reachable on localhost:11434 — start it, then rerun"
+    );
+    let dir = std::env::temp_dir().join(format!("nbl-phase-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb = "phase-nb";
+    seed_corpus(&embedder, &db, nb).await;
+    let sources = db.list_sources(nb).await.expect("sources");
+    let source_list = sources
+        .iter()
+        .map(|s| format!("- {} (id: {}, {} chunks)", s.title, s.id, s.chunk_count))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let question = "How long should a failed retry wait?";
+
+    eprintln!("\n  chat={chat_model}   small={small_model}");
+    eprintln!("one deep-research step, phase by phase (cold = first call, warm = repeat):");
+    eprintln!("  {:<18} {:>9} {:>9}", "phase", "cold", "warm");
+
+    macro_rules! timed {
+        ($label:expr, $body:expr) => {{
+            let t = std::time::Instant::now();
+            let first = $body;
+            let cold = t.elapsed().as_millis();
+            let t = std::time::Instant::now();
+            let _second = $body;
+            let warm = t.elapsed().as_millis();
+            eprintln!("  {:<18} {:>7}ms {:>7}ms", $label, cold, warm);
+            first
+        }};
+    }
+
+    // Planner decision (Small role — the shipping default).
+    let messages = crate::rag::build_agent_decision(question, &source_list, "", 0);
+    let _ = timed!("planner (small)", {
+        ai.chat_role(crate::inference::Role::Small, &messages)
+            .await
+            .map(|o| o.text)
+    });
+
+    // Query embedding — the step's only non-model local cost of note.
+    let qvec = timed!("embed query", {
+        ai.embed_one(question).await.expect("embed")
+    });
+
+    // Hybrid search over the seeded corpus.
+    let hits = timed!("hybrid search", {
+        db.search_chunks(nb, qvec.clone(), question, 20, None)
+            .await
+            .expect("search")
+    });
+    eprintln!("     ({} hits)", hits.len());
+
+    // Rerank — a model call per search that returned a wide pool.
+    // Whatever the loop actually runs — cross-encoder or model-picked.
+    let picked = timed!("rerank", {
+        crate::agent::rerank_for_search(&ai, question, hits.clone()).await
+    });
+    eprintln!("     ({} kept of {})", picked.len(), hits.len());
+
+    // Distill one source — the per-read cost, which the loop pays
+    // DISTILL_CONCURRENCY-at-a-time for a multi-source read.
+    if let Some((title, body)) = CORPUS.first() {
+        let _ = timed!("distill one doc", {
+            crate::agent::distill_with(&ai, crate::inference::Role::Small, question, title, body)
+                .await
+        });
+    }
+    eprintln!(
+        "  (cold-warm gap is model load. A turn pays planner+action per step, \n\
+          up to MAX_STEPS, then streams the answer.)"
+    );
+}
+
+/// Rerank probes: a question and the fixture document whose passage must
+/// survive the rerank, or the answer cannot cite it.
+const RERANK_PROBES: &[(&str, &str)] = &[
+    ("How long should a failed retry wait?", "Acme Invoices Q3"),
+    (
+        "Which port forwards to the media server?",
+        "Home Network Guide",
+    ),
+    (
+        "How much paid time off accrues per month?",
+        "Employee Handbook",
+    ),
+    ("Where did we stay in Kyoto?", "Kyoto Trip Journal"),
+];
+
+/// The research loop reranks each wide search with an LLM call, while the
+/// direct-chat path reranks with the local cross-encoder (`Ai::rerank_hits`).
+/// Phase timing put the LLM rerank at 3.3s warm — the most expensive phase
+/// in the loop, more than twice the planner — so this measures whether the
+/// cross-encoder keeps the gold passage as reliably, far cheaper.
+#[tokio::test]
+#[ignore = "live models: one rerank per probe per path — run with --ignored --nocapture"]
+async fn eval_agent_rerank_paths() {
+    let Some(embedder) = builtin_ai().await else {
+        return;
+    };
+    let chat_model =
+        std::env::var("PLANNER_CHAT_MODEL").unwrap_or_else(|_| "muse-glimmer:30b-mlx".to_string());
+    let small_model = std::env::var("PLANNER_SMALL_MODEL").unwrap_or_else(|_| "fm".to_string());
+    let Some(ai) = planner_ab_ai(&chat_model, &small_model) else {
+        return;
+    };
+    assert!(
+        ai.has_xenc(),
+        "no cross-encoder for this config — the comparison would be truncation, not reranking"
+    );
+    let dir = std::env::temp_dir().join(format!("nbl-rerank-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb = "rerank-nb";
+    seed_corpus(&embedder, &db, nb).await;
+
+    eprintln!("\n  chat={chat_model}   small={small_model}");
+    eprintln!("search rerank, gold passage retained:");
+    let (mut llm_kept, mut llm_ms, mut xe_kept, mut xe_ms) = (0usize, 0u128, 0usize, 0u128);
+    let (mut llm_n, mut xe_n) = (0usize, 0usize);
+
+    for (question, gold) in RERANK_PROBES {
+        let qvec = ai.embed_one(question).await.expect("embed");
+        let hits = db
+            .search_chunks(nb, qvec, question, 20, None)
+            .await
+            .expect("search");
+        let has_gold = |v: &[Citation]| v.iter().any(|c| c.source_title == *gold);
+
+        let t = std::time::Instant::now();
+        let picked = crate::agent::rerank(&ai, question, hits.clone()).await;
+        llm_ms += t.elapsed().as_millis();
+        llm_n += picked.len();
+        if has_gold(&picked) {
+            llm_kept += 1;
+        } else {
+            eprintln!("  MISS (llm): {question} — dropped {gold}");
+        }
+
+        let t = std::time::Instant::now();
+        let ranked = ai
+            .rerank_hits(question, hits.clone(), crate::agent::SEARCH_K)
+            .await;
+        xe_ms += t.elapsed().as_millis();
+        xe_n += ranked.len();
+        if has_gold(&ranked) {
+            xe_kept += 1;
+        } else {
+            eprintln!("  MISS (xenc): {question} — dropped {gold}");
+        }
+    }
+    let n = RERANK_PROBES.len();
+    eprintln!(
+        "  {:<14} gold {llm_kept}/{n}   avg {:>6}ms   avg kept {:.1}",
+        "llm rerank",
+        llm_ms / n as u128,
+        llm_n as f64 / n as f64
+    );
+    eprintln!(
+        "  {:<14} gold {xe_kept}/{n}   avg {:>6}ms   avg kept {:.1}",
+        "cross-encoder",
+        xe_ms / n as u128,
+        xe_n as f64 / n as f64
+    );
+}

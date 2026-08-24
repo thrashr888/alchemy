@@ -15,8 +15,57 @@ use crate::models::Citation;
 use crate::rag;
 
 const MAX_STEPS: usize = 5;
+
+/// Which model role runs the loop's internal calls — planning, reranking,
+/// and per-source distillation.
+///
+/// Small by default. Every one of these produces short structured output
+/// (`SEARCH "..."`, a list of passage numbers, a ~500-word evidence note),
+/// which is what the Small role exists for; paying full chat-model latency
+/// up to MAX_STEPS times before the user sees a single answer token is the
+/// waste that dominates deep research's time to first token. `chat_role`
+/// falls through to the chat engine when no small model is configured, so
+/// this is a no-op for anyone who has not opted into a small tier.
+///
+/// The final answer always streams from the chat model — the quality that
+/// matters most is the one the user reads.
+///
+/// `ALCHEMY_PLANNER_ROLE=chat` restores the old behaviour.
+///
+/// Measured 2026-08-23 against muse-glimmer:30b-mlx as the chat tier,
+/// 4 probes each:
+///
+/// | call    | role              | quality        | avg latency |
+/// |---------|-------------------|----------------|-------------|
+/// | planner | Small (bonsai-8b) | 4/4 on-target  |     1,475ms |
+/// | planner | Small (Apple FM)  | 4/4 on-target  |     2,735ms |
+/// | planner | Chat              | 4/4 on-target  |    24,214ms |
+/// | distill | Small (bonsai-8b) | 4/4 facts kept |       810ms |
+/// | distill | Chat              | 4/4 facts kept |    36,428ms |
+///
+/// Both small tiers plan correctly on every probe. Apple FM is roughly half
+/// bonsai's raw speed but pays no model-load penalty: a cold Ollama small
+/// model cost 21.4s on its first call, against 1.5s cold for FM, and a cold
+/// call is exactly what the first question after opening the app is.
+///
+/// The loop's search rerank moved to the local cross-encoder on the same
+/// evidence (`eval_agent_rerank_paths`): gold passage retained 4/4 by both
+/// paths, 91ms against the LLM rerank's 1,272ms, and it keeps SEARCH_K
+/// passages where the model's pick averaged three.
+///
+/// No quality difference on these probes, 16-45x the speed. Re-run with
+/// `cargo test --lib eval_agent_planner_roles eval_agent_distill_roles --
+/// --ignored --nocapture` after changing the prompts or the default pair.
+/// Both probe sets are small and cover the first action / fact retention —
+/// they show no regression, which is not the same as proving parity.
+pub(crate) fn loop_role() -> crate::inference::Role {
+    match std::env::var("ALCHEMY_PLANNER_ROLE").as_deref() {
+        Ok("chat") => crate::inference::Role::Chat,
+        _ => crate::inference::Role::Small,
+    }
+}
 /// Results kept per search step, after reranking.
-const SEARCH_K: usize = 5;
+pub(crate) const SEARCH_K: usize = 5;
 /// Hybrid-retrieval pool handed to the reranker.
 const SEARCH_POOL: usize = 20;
 
@@ -44,7 +93,8 @@ struct TokenEvent {
     content: String,
 }
 
-enum Action {
+#[derive(Debug)]
+pub(crate) enum Action {
     Search(String),
     /// One planner step can read several sources; they distill in parallel.
     Read(Vec<String>),
@@ -71,6 +121,12 @@ pub async fn run(
     history: &[ChatTurn],
     extra_system: &str,
     source_ids: Option<&[String]>,
+    // Timed by the caller so deep research reports the same
+    // send-to-first-token wait the direct chat path does — the loop's tool
+    // rounds run before this stream, and that delay is part of it.
+    ttft: &crate::commands::TtftClock,
+    // Where the pre-answer time went, for the timing trace.
+    phases: &crate::commands::AgentPhases,
 ) -> Result<(String, Vec<Citation>, Option<crate::ai::GenStats>)> {
     let mut read_remaining = if ollama.config().is_gateway() {
         READ_CHARS_GATEWAY
@@ -96,9 +152,12 @@ pub async fn run(
     for _ in 0..MAX_STEPS {
         let messages =
             rag::build_agent_decision(question, &source_list, &transcript, gathered.len());
-        let raw = ollama.chat(&messages).await?.text;
+        let planned = std::time::Instant::now();
+        let raw = ollama.chat_role(loop_role(), &messages).await?.text;
+        phases.planner(planned.elapsed().as_millis() as u64);
         match parse_action(&raw) {
             Some(Action::Search(query)) => {
+                let searched = std::time::Instant::now();
                 emit_step(app, format!("Searching: {query}"));
                 let qvec = ollama.embed_one(&query).await?;
                 let mut hits = db
@@ -109,7 +168,18 @@ pub async fn run(
                 // the rerank.
                 if hits.len() > SEARCH_K {
                     emit_step(app, "Ranking results".into());
-                    hits = rerank(ollama, &query, hits).await;
+                    // The local cross-encoder when there is one: measured
+                    // 91ms against the LLM rerank's 1,272ms for the same
+                    // gold retention (4/4 both), and it keeps SEARCH_K
+                    // passages where the model's pick averaged three — more
+                    // evidence for the answer, at a fraction of the wait.
+                    //
+                    // The Ollama embedder tier has no cross-encoder
+                    // (Router::xenc_model), and there rerank_hits would
+                    // degrade to plain truncation — so those configs keep
+                    // the model-picked rerank rather than silently losing
+                    // the ranking step.
+                    hits = rerank_for_search(ollama, &query, hits).await;
                 }
                 transcript.push_str(&format!("SEARCH \"{query}\":\n"));
                 for h in &hits {
@@ -123,8 +193,10 @@ pub async fn run(
                     ));
                 }
                 transcript.push('\n');
+                phases.search(searched.elapsed().as_millis() as u64);
             }
             Some(Action::Read(source_ids)) => {
+                let readed = std::time::Instant::now();
                 // Fetches stay sequential (DB reads are cheap and the char
                 // budget is a running total), then every distill — the model
                 // call that dominates a read's wall-clock — runs concurrently.
@@ -184,6 +256,7 @@ pub async fn run(
                         });
                     }
                 }
+                phases.read(readed.elapsed().as_millis() as u64);
             }
             Some(Action::Stop) | None => break,
         }
@@ -223,8 +296,10 @@ pub async fn run(
         &crate::inference::ContextProfile::default(),
     );
     let app_cb = app.clone();
+    let ttft_cb = ttft.clone();
     let outcome = ollama
         .chat_stream(&messages, |tok| {
+            ttft_cb.mark();
             let _ = app_cb.emit(
                 "chat://token",
                 TokenEvent {
@@ -249,7 +324,7 @@ pub(crate) async fn rerank_indices(
     keep: usize,
 ) -> Option<Vec<usize>> {
     let messages = rag::build_rerank_messages(question, snippets, keep);
-    let raw = ai.chat(&messages).await.ok()?.text;
+    let raw = ai.chat_role(loop_role(), &messages).await.ok()?.text;
     let json = extract_json(&raw)?;
     let value: serde_json::Value = serde_json::from_str(&json).ok()?;
     let indices: Vec<usize> = value
@@ -289,13 +364,44 @@ pub(crate) async fn rerank(ai: &Ai, question: &str, hits: Vec<Citation>) -> Vec<
     }
 }
 
+/// How a wide search result gets narrowed, in one place so the eval cannot
+/// drift from what the loop actually runs.
+///
+/// The local cross-encoder when there is one: measured 91ms against the LLM
+/// rerank's 1,272ms for the same gold retention (4/4 both), and it keeps
+/// SEARCH_K passages where the model's pick averaged three — more evidence
+/// for the answer, at a fraction of the wait.
+///
+/// The Ollama embedder tier has no cross-encoder (`Router::xenc_model`), and
+/// there `rerank_hits` would degrade to plain truncation — so those configs
+/// keep the model-picked rerank rather than silently losing the step.
+pub(crate) async fn rerank_for_search(ai: &Ai, query: &str, hits: Vec<Citation>) -> Vec<Citation> {
+    if ai.has_xenc() {
+        ai.rerank_hits(query, hits, SEARCH_K).await
+    } else {
+        rerank(ai, query, hits).await
+    }
+}
+
 /// Distill one document against the question into verbatim quotes via a
 /// sub-call. On failure (model error, empty output) fall back to a raw head
 /// excerpt — a degraded read still beats an empty one. Shared with artifact
 /// generation, which distills content that won't fit its corpus budget.
 pub(crate) async fn distill(ai: &Ai, question: &str, title: &str, content: &str) -> String {
+    distill_with(ai, loop_role(), question, title, content).await
+}
+
+/// `distill` with the role named explicitly, so an eval can A/B the tiers
+/// without mutating process-global state.
+pub(crate) async fn distill_with(
+    ai: &Ai,
+    role: crate::inference::Role,
+    question: &str,
+    title: &str,
+    content: &str,
+) -> String {
     let messages = rag::build_distill_messages(question, title, content);
-    match ai.chat(&messages).await {
+    match ai.chat_role(role, &messages).await {
         Ok(out) if !out.text.trim().is_empty() => truncate(out.text.trim(), DISTILL_MAX_CHARS),
         _ => truncate(content, READ_GIST_CHARS),
     }
@@ -306,7 +412,7 @@ fn emit_step(app: &AppHandle, label: String) {
 }
 
 /// Parse the planner's JSON action, tolerating surrounding prose/code fences.
-fn parse_action(raw: &str) -> Option<Action> {
+pub(crate) fn parse_action(raw: &str) -> Option<Action> {
     let json = extract_json(raw)?;
     let value: serde_json::Value = serde_json::from_str(&json).ok()?;
     match value.get("action").and_then(|a| a.as_str())? {

@@ -153,7 +153,19 @@ pub async fn ensure_kokoro_files(
 }
 
 /// Stay comfortably under Kokoro's 510-phoneme ceiling.
-const MAX_SYNTH_COST: usize = 300;
+///
+/// The budget is in estimated phonemes, not characters. Counting characters
+/// was the original bug: phonemes track characters closely for ordinary
+/// prose and not at all for what a Brief is made of, since a phonemizer
+/// speaks "2026" as "twenty twenty six" and "%" as "percent". An
+/// expansion-heavy line therefore clears 510 phonemes while still looking
+/// short, and kokoro-en indexes past its style pack and panics.
+///
+/// 240 is main's figure, kept: for prose a phoneme costs about a character,
+/// so ordinary lines break where they did before rather than into
+/// noticeably more breaths. Dense lines now break earlier, which is the
+/// point.
+const MAX_SYNTH_COST: usize = 240;
 
 /// Rough phoneme count for a stretch of text.
 ///
@@ -442,6 +454,32 @@ mod split_tests {
             chunks.iter().map(|c| speech_cost(c)).collect::<Vec<_>>()
         );
         assert!(!chunks.is_empty());
+    }
+
+    #[test]
+    fn single_token_longer_than_the_cap_is_split() {
+        // A URL or unbroken run has no whitespace to break on. Pushing it
+        // whole is what put a 500+ phoneme chunk into Kokoro and panicked
+        // the episode; every chunk must honour the cap the caller asked for.
+        let line = format!("Start. https://example.com/{} end.", "a".repeat(400));
+        let chunks = split_for_synthesis(&line, 300);
+        assert!(
+            chunks.iter().all(|c| c.chars().count() <= 300),
+            "chunk over cap: {:?}",
+            chunks.iter().map(|c| c.chars().count()).collect::<Vec<_>>()
+        );
+        // Nothing is dropped on the way through.
+        let rejoined: String = chunks.join("");
+        assert!(rejoined.contains(&"a".repeat(50)), "long token lost");
+    }
+
+    #[test]
+    fn a_lone_giant_word_still_splits() {
+        let line = "z".repeat(1000);
+        let chunks = split_for_synthesis(&line, 300);
+        assert!(chunks.len() >= 4);
+        assert!(chunks.iter().all(|c| c.chars().count() <= 300));
+        assert_eq!(chunks.join("").chars().count(), 1000, "characters lost");
     }
 
     #[test]

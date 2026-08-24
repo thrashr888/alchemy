@@ -1,7 +1,7 @@
 {
   "name": "alchemy",
   "private": true,
-  "version": "0.45.0",
+  "version": "0.46.0",
   "description": "Local-first research notebook inspired by NotebookLM — RAG over your sources, powered by Ollama",
   "license": "MPL-2.0",
   "author": "Paul Thrasher",
@@ -12,7 +12,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "typecheck": "tsc --noEmit",
+    "bundle": "vite build",
+    "build": "pnpm run typecheck && pnpm run bundle",
+    "test": "pnpm run test:rust",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --lib",
     "preview": "vite preview",
     "test": "vitest run",
     "tauri": "tauri",

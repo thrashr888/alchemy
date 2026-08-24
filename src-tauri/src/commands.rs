@@ -39,6 +39,103 @@ pub struct ModelStatAcc {
     pub total_tokens: u64,
     pub total_seconds: f64,
     pub last_tps: f64,
+    /// Time to first streamed token over the chat surface, wall-clock from
+    /// the send to the first chat://token emit — retrieval included, because
+    /// that is the wait the user actually feels. serde(default) so stats
+    /// files from before the field deserialize.
+    #[serde(default)]
+    pub ttft_samples: u64,
+    #[serde(default)]
+    pub total_ttft_ms: u64,
+    #[serde(default)]
+    pub last_ttft_ms: u64,
+}
+
+/// Wall-clock time to first token for one streamed answer: started when the
+/// user's turn is accepted (retrieval included, because that is the wait the
+/// user actually feels) and stopped by the first token the engine emits.
+///
+/// Cloneable so a streaming callback can hold one — every path that emits a
+/// token calls `mark`, and only the first call sticks.
+#[derive(Clone)]
+pub struct TtftClock {
+    start: std::time::Instant,
+    first_ms: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl TtftClock {
+    pub fn start() -> Self {
+        Self {
+            start: std::time::Instant::now(),
+            first_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
+
+    /// Record this instant if no token has arrived yet. Clamped to 1ms so an
+    /// instant first token still reads as measured rather than as "never".
+    pub fn mark(&self) {
+        let _ = self.first_ms.compare_exchange(
+            0,
+            (self.start.elapsed().as_millis() as u64).max(1),
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    /// Milliseconds to the first token; 0 when none ever arrived.
+    pub fn ttft_ms(&self) -> u64 {
+        self.first_ms.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// Chat surfaces whose time-to-first-token is a fair measure of the model's
+/// own responsiveness, and so feed Activity's fastest-models ranking.
+/// "deep-research" is deliberately absent — see `AppState::record_ttft`.
+const RANKED_TTFT_PATHS: [&str; 3] = ["chat", "ask-everything", "agent-pane"];
+
+/// Where a deep-research turn spent its time before the answer streamed.
+/// Filled by `agent::run` as it works; read once for the timing trace.
+/// Atomics rather than a lock: the loop touches these on every step and the
+/// numbers are independent counters, never a consistent snapshot.
+#[derive(Clone, Default)]
+pub struct AgentPhases {
+    inner: Arc<AgentPhasesInner>,
+}
+
+#[derive(Default)]
+struct AgentPhasesInner {
+    planner_ms: std::sync::atomic::AtomicU64,
+    search_ms: std::sync::atomic::AtomicU64,
+    read_ms: std::sync::atomic::AtomicU64,
+    steps: std::sync::atomic::AtomicU64,
+}
+
+impl AgentPhases {
+    fn add(slot: &std::sync::atomic::AtomicU64, ms: u64) {
+        slot.fetch_add(ms, std::sync::atomic::Ordering::Relaxed);
+    }
+    /// One planner decision call — the model choosing the next action.
+    pub fn planner(&self, ms: u64) {
+        Self::add(&self.inner.planner_ms, ms);
+        Self::add(&self.inner.steps, 1);
+    }
+    /// One search action: embed + hybrid search + any rerank.
+    pub fn search(&self, ms: u64) {
+        Self::add(&self.inner.search_ms, ms);
+    }
+    /// One read action: fetches plus the distill calls.
+    pub fn read(&self, ms: u64) {
+        Self::add(&self.inner.read_ms, ms);
+    }
+    pub fn as_json(&self) -> serde_json::Value {
+        use std::sync::atomic::Ordering::Relaxed;
+        serde_json::json!({
+            "plannerMs": self.inner.planner_ms.load(Relaxed),
+            "searchMs": self.inner.search_ms.load(Relaxed),
+            "readMs": self.inner.read_ms.load(Relaxed),
+            "steps": self.inner.steps.load(Relaxed),
+        })
+    }
 }
 
 pub struct AppState {
@@ -135,6 +232,58 @@ impl AppState {
         }
     }
 
+    /// Fold one answer's time-to-first-token into the running stats and
+    /// leave a timing trace line. `path` names which chat surface produced
+    /// it.
+    ///
+    /// Only surfaces whose wait reflects how fast the MODEL answers feed the
+    /// per-model ranking. Deep research is traced but not ranked: its time is
+    /// dominated by up to MAX_STEPS planner round trips before a single
+    /// answer token, so averaging it in would rank the mode rather than the
+    /// model, and one research turn would bury a model's real chat latency.
+    ///
+    /// A clock that never saw a token records nothing: a failed or stopped
+    /// turn has no first token to time.
+    pub fn record_ttft(
+        &self,
+        model: &str,
+        path: &str,
+        notebook_id: &str,
+        clock: &TtftClock,
+        phases: Option<serde_json::Value>,
+    ) {
+        let ttft_ms = clock.ttft_ms();
+        if ttft_ms == 0 {
+            return;
+        }
+        // Traced always; ranked only where the number means "model speed".
+        if RANKED_TTFT_PATHS.contains(&path) {
+            let mut map = self.model_stats.lock().unwrap();
+            let entry = map.entry(model.to_string()).or_default();
+            entry.ttft_samples += 1;
+            entry.total_ttft_ms += ttft_ms;
+            entry.last_ttft_ms = ttft_ms;
+            if let Ok(json) = serde_json::to_string_pretty(&*map) {
+                let _ = std::fs::write(&self.stats_path, json);
+            }
+        }
+        let mut record = serde_json::json!({
+            "ts": now(),
+            "surface": "chat-timing",
+            "path": path,
+            "notebookId": notebook_id,
+            "model": model,
+            "ttftMs": ttft_ms,
+        });
+        // Whatever split the surface can account for, merged in as-is.
+        if let Some(serde_json::Value::Object(extra)) = phases {
+            for (k, v) in extra {
+                record[k] = v;
+            }
+        }
+        crate::trace::log(&self.trace_dir, record);
+    }
+
     pub fn model_stats_snapshot(&self) -> Vec<ModelStat> {
         let map = self.model_stats.lock().unwrap();
         map.iter()
@@ -147,6 +296,13 @@ impl AppState {
                     0.0
                 },
                 samples: a.samples,
+                ttft_samples: a.ttft_samples,
+                last_ttft_ms: a.last_ttft_ms,
+                avg_ttft_ms: if a.ttft_samples > 0 {
+                    a.total_ttft_ms as f64 / a.ttft_samples as f64
+                } else {
+                    0.0
+                },
             })
             .collect()
     }
@@ -7050,6 +7206,10 @@ pub async fn send_message(
         return Err("Message is empty".into());
     }
     let extra = chat_style_instruction(&config.unwrap_or_default());
+    // Time-to-first-token clock: from the send to the first chat://token
+    // emit. Phase marks land in the chat-timing trace line below.
+    let ttft = TtftClock::start();
+    let t0 = std::time::Instant::now();
 
     // Persist the user's turn first.
     let user_msg = Message {
@@ -7073,9 +7233,14 @@ pub async fn send_message(
     // retrieval depth can scale with how much text is actually in play
     // (RFC-infinite-context §3) and the manifest reuses the same rows.
     let ai = state.ai.read().await.clone();
-    let query_vec = e(ai.embed_one(&content).await)?;
+    // Embedding the question and listing sources are independent — overlap
+    // them; every pre-stream millisecond is felt time-to-first-token.
+    let (query_vec, sources_list) =
+        tokio::join!(ai.embed_one(&content), state.db.list_sources(&notebook_id));
+    let query_vec = e(query_vec)?;
+    let embed_ms = t0.elapsed().as_millis() as u64;
     let profile = ai.profile(crate::inference::Role::Chat);
-    let selected_sources: Vec<Source> = e(state.db.list_sources(&notebook_id).await)?
+    let selected_sources: Vec<Source> = e(sources_list)?
         .into_iter()
         .filter(|s| source_ids.as_ref().is_none_or(|ids| ids.contains(&s.id)))
         .collect();
@@ -7135,6 +7300,7 @@ pub async fn send_message(
     let pool_cap = pool.len() + grep_hits.len();
     let citations = fuse_grep_hits(pool, grep_hits, pool_cap);
     let citations = ai.rerank_hits(&content, citations, k).await;
+    let retrieval_ms = (t0.elapsed().as_millis() as u64).saturating_sub(embed_ms);
     bump_note_usage(&state.db, &citations, "retrieval_hits").await;
 
     // Widen prompt excerpts to ordinal neighbors where the model's window
@@ -7192,16 +7358,20 @@ pub async fn send_message(
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    let (override_engine, model) = {
+    // `model` captions the transcript row; `metrics_key` additionally carries
+    // the model and reasoning effort behind it, because those move latency and
+    // a speed ranking that pools them measures nothing.
+    let (override_engine, model, metrics_key) = {
         let ai = state.ai.read().await.clone();
         match override_id {
             Some(id) => {
                 let (engine, model) = ai
                     .engine_for_provider(id)
                     .map_err(|err| friendly_error(&format!("{err:#}")))?;
-                (Some(engine), model)
+                let key = ai.chat_metrics_key(Some(id));
+                (Some(engine), model, key)
             }
-            None => (None, ai.active_chat_model()),
+            None => (None, ai.active_chat_model(), ai.chat_metrics_key(None)),
         }
     };
     // On-device model only: cap the prompt to its 8192-token window before
@@ -7230,6 +7400,8 @@ pub async fn send_message(
     let cancel = state.begin_generation(&format!("chat:{}", window.label()));
     let partial = Arc::new(Mutex::new(String::new()));
     let partial_cb = partial.clone();
+    // 0 = no token yet; the first token stores max(elapsed, 1).
+    let ttft_cb = ttft.clone();
     let (answer, kind, stats, cost_usd, model) = {
         let ai = state.ai.read().await.clone();
         let engine = override_engine
@@ -7241,6 +7413,7 @@ pub async fn send_message(
         let app_for_steps = app.clone();
         let streamed = tokio::select! {
             out = engine.chat_stream_steps(&messages, |tok| {
+                ttft_cb.mark();
                 partial_cb.lock().unwrap().push_str(tok);
                 let _ = app_for_cb.emit(
                     "chat://token",
@@ -7278,7 +7451,19 @@ pub async fn send_message(
             None => (partial.lock().unwrap().clone(), "chat", None, None, model),
         }
     };
-    state.record_chat_stats(&model, stats);
+    state.record_chat_stats(&metrics_key, stats);
+    if kind == "chat" {
+        state.record_ttft(
+            &metrics_key,
+            "chat",
+            &notebook_id,
+            &ttft,
+            Some(serde_json::json!({
+                "embedMs": embed_ms,
+                "retrievalMs": retrieval_ms,
+            })),
+        );
+    }
 
     let assistant_msg = Message {
         id: new_id(),
@@ -7361,9 +7546,12 @@ pub async fn send_message_agentic(
         .collect();
 
     let cancel = state.begin_generation(&format!("chat:{}", window.label()));
-    let (answer, kind, citations, stats, model) = {
+    let ttft = TtftClock::start();
+    let phases = AgentPhases::default();
+    let (answer, kind, citations, stats, model, metrics_key) = {
         let ai = state.ai.read().await.clone();
         let model = ai.active_chat_model();
+        let metrics_key = ai.chat_metrics_key(None);
         let out = tokio::select! {
             r = crate::agent::run(
                 &app,
@@ -7374,11 +7562,15 @@ pub async fn send_message_agentic(
                 &history_turns,
                 &extra,
                 source_ids.as_deref(),
+                &ttft,
+                &phases,
             ) => Some(r),
             _ = cancel.cancelled() => None,
         };
         match out {
-            Some(Ok((answer, citations, stats))) => (answer, "chat", citations, stats, model),
+            Some(Ok((answer, citations, stats))) => {
+                (answer, "chat", citations, stats, model, metrics_key)
+            }
             // Durable transcript row for a failed run — same contract as the
             // direct chat path: fix-classified (phase 1), then one capped
             // diagnosis call for unclassified shapes (phase 2).
@@ -7388,12 +7580,28 @@ pub async fn send_message_agentic(
                 if let Some(extra) = crate::selfheal::diagnose(&ai, &raw).await {
                     text.push_str(&extra);
                 }
-                (text, "error", vec![], None, model)
+                (text, "error", vec![], None, model, metrics_key)
             }
-            None => ("_(Stopped.)_".to_string(), "chat", vec![], None, model),
+            None => (
+                "_(Stopped.)_".to_string(),
+                "chat",
+                vec![],
+                None,
+                model,
+                metrics_key,
+            ),
         }
     };
-    state.record_chat_stats(&model, stats);
+    state.record_chat_stats(&metrics_key, stats);
+    if kind == "chat" {
+        state.record_ttft(
+            &metrics_key,
+            "deep-research",
+            &notebook_id,
+            &ttft,
+            Some(phases.as_json()),
+        );
+    }
 
     let assistant_msg = Message {
         id: new_id(),
@@ -9437,6 +9645,31 @@ pub async fn rebuild_app_menu(
     crate::menu::fill_recents(&app, &tray_recent.0, &recents).map_err(|err| err.to_string())
 }
 
+/// Fill the frontend-owned menu lists — View > Theme (themes.ts is the
+/// authority on the 23 schemes) and Notebook > Generate (studioArtifacts.tsx
+/// owns the roster). Called at startup and again when the theme changes so
+/// the selection dot tracks. In-place mutation, like Open Recent.
+#[tauri::command]
+pub fn fill_menu_lists(
+    app: AppHandle,
+    themes_menu: State<'_, crate::menu::ThemeMenu>,
+    generate_menu: State<'_, crate::menu::GenerateMenu>,
+    themes: Vec<(String, String)>,
+    generators: Vec<(String, String)>,
+    current_theme: String,
+) -> Result<(), String> {
+    crate::menu::fill_themes(&app, &themes_menu.0, &themes, &current_theme)
+        .map_err(|err| err.to_string())?;
+    crate::menu::fill_generators(&app, &generate_menu.0, &generators).map_err(|err| err.to_string())
+}
+
+/// The Settings → Shortcuts rows, straight from the menu's command registry
+/// — one source of truth (menu.rs::CMD) for both surfaces.
+#[tauri::command]
+pub fn list_shortcuts() -> Vec<crate::menu::ShortcutRow> {
+    crate::menu::shortcut_rows()
+}
+
 // ---- Home page: activity, stats, global search ----------------------------
 
 #[tauri::command]
@@ -9555,16 +9788,25 @@ pub async fn activity_stats(
     let messages = e(state.db.message_activity().await)?;
     let notes = e(state.db.note_activity().await)?;
     let sources = e(state.db.source_activity().await)?;
-    let titles: std::collections::HashMap<String, String> = e(state.db.list_notebooks().await)?
-        .into_iter()
-        .map(|n| (n.id, n.title))
+    let all_notebooks = e(state.db.list_notebooks().await)?;
+    // Archived and system notebooks stay out of the "most active" ranking:
+    // both are already absent from the shelf, and neither is where the
+    // user's attention currently goes. Their turns still count everywhere
+    // else — totals, heatmap, peak hour — because they really happened.
+    let ranked_out: std::collections::HashSet<String> = all_notebooks
+        .iter()
+        .filter(|n| n.status == "archived" || n.status == "system")
+        .map(|n| n.id.clone())
         .collect();
+    let titles: std::collections::HashMap<String, String> =
+        all_notebooks.into_iter().map(|n| (n.id, n.title)).collect();
     let retrievals = crate::activity::trace_times(&state.trace_dir);
     Ok(crate::activity::aggregate(
         &messages,
         &notes,
         &sources,
         &titles,
+        &ranked_out,
         &retrievals,
         chrono::Local::now().date_naive(),
     ))
@@ -10853,11 +11095,14 @@ pub async fn ask_everything(
     let cancel = state.begin_generation(&format!("meta:{}", window.label()));
     let partial = Arc::new(Mutex::new(String::new()));
     let partial_cb = partial.clone();
+    let ttft = TtftClock::start();
+    let ttft_cb = ttft.clone();
     let (answer, stats, model) = {
         let ai = state.ai.read().await.clone();
-        let model = ai.active_chat_model();
+        let model = ai.chat_metrics_key(None);
         let streamed = tokio::select! {
             out = ai.chat_stream(&messages, |tok| {
+                ttft_cb.mark();
                 partial_cb.lock().unwrap().push_str(tok);
                 let _ = app_for_cb.emit(
                     "meta://token",
@@ -10872,6 +11117,7 @@ pub async fn ask_everything(
         }
     };
     state.record_chat_stats(&model, stats);
+    state.record_ttft(&model, "ask-everything", "", &ttft, None);
 
     Ok(MetaAnswer { answer, citations })
 }
@@ -11144,14 +11390,39 @@ pub async fn provider_models(
 }
 
 #[tauri::command]
-pub async fn check_models(state: State<'_, AppState>) -> Result<ModelHealth, String> {
+pub async fn check_models(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<ModelHealth, String> {
     let ai = state.ai.read().await.clone();
     let cfg = ai.config().clone();
     let norm = |m: &str| m.trim_end_matches(":latest").to_string();
 
-    // Chat status comes from the configured provider; embeddings and vision
-    // remain Ollama-backed below.
-    let gateway_chat = if cfg.provider == "openai" {
+    // Chat status comes from the ACTIVE chat provider. Only an Ollama-kind
+    // provider is Ollama's problem — Apple FM, gateways, and agent CLIs
+    // probe on their own, so a sleeping Ollama no longer flags a working
+    // chat setup ("Chat model: Ollama not reachable" over an FM answer).
+    let provider_chat = match cfg.provider_by_id(&cfg.chat_provider) {
+        Some(entry) if entry.kind != "ollama" => {
+            let (ready, detail) = readiness_for_entry(&app, entry, &cfg).await?;
+            Some(ModelStatus {
+                name: if entry.chat_model.trim().is_empty() {
+                    entry.label.clone()
+                } else {
+                    entry.chat_model.clone()
+                },
+                installed: ready,
+                working: ready,
+                detail: format!("{} · {detail}", entry.label),
+            })
+        }
+        _ => None,
+    };
+    // Legacy flat-config path: no provider entry resolved, but the flat
+    // provider says gateway.
+    let gateway_chat = if provider_chat.is_some() {
+        provider_chat
+    } else if cfg.provider == "openai" {
         let name = cfg.openai_chat_model.clone();
         Some(if name.trim().is_empty() {
             ModelStatus {
