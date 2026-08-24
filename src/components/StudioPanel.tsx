@@ -1,12 +1,14 @@
 import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
+import { dragFormat, noteDragProps } from "@/lib/dragOut";
 import {
   Button,
   Input,
   Textarea,
   Modal,
   EmptyState,
+  LoadingState,
   Badge,
   ResizeHandle,
   RowMenu,
@@ -202,6 +204,7 @@ export function StudioPanel() {
   const currentId = useStore((s) => s.currentId);
   const sources = useStore((s) => s.sources);
   const notes = useStore((s) => s.notes);
+  const notebookLoading = useStore((s) => s.notebookLoading);
   const generatingKind = useStore((s) => s.generatingKind);
   const artifactStreamText = useStore((s) => s.artifactStreamText);
   const audioProgress = useStore((s) => s.audioProgress);
@@ -627,7 +630,9 @@ export function StudioPanel() {
         </div>
 
         <div className="px-2 pb-2">
-          {notes.length === 0 ? (
+          {notebookLoading && notes.length === 0 ? (
+            <LoadingState label="Loading notes…" compact />
+          ) : notes.length === 0 ? (
             <EmptyState
               icon={<StickyNote className="h-6 w-6" />}
               title="No notes yet"
@@ -641,6 +646,16 @@ export function StudioPanel() {
                   data-pick-id={n.id}
                   onMouseEnter={(e) => showCard(e, noteCard(n))}
                   onMouseLeave={hideCard}
+                  // Drag the row into Finder/Mail as a real file, in the
+                  // note's kind-true format (RFC-professional-grade Pillar
+                  // 6). The gesture only commits past a 3px threshold, so
+                  // clicking to open the note is unaffected.
+                  {...noteDragProps(
+                    n.id,
+                    dragFormat(exportTargets(n).map((t) => t.format)),
+                    (message) =>
+                      useStore.getState().pushToast("error", message),
+                  )}
                   className={cn(
                     // has-: an open row menu must outrank the z-10 content of
                     // the rows after it (they'd paint over the dropdown
