@@ -795,6 +795,14 @@ impl Ai {
     /// Role-routed chat with failure fallthrough (RFC-inference-providers
     /// §7): if the role's engine is unavailable or errors, the configured
     /// chat engine answers instead — one log line, never a dead call.
+    /// Is there a distinct Small-role engine, or would `chat_role(Small)`
+    /// fall through to the chat engine? Evals comparing the two roles need
+    /// to know the difference is real before reporting a comparison.
+    #[cfg(test)]
+    pub fn has_small_role(&self) -> bool {
+        self.router.has_small()
+    }
+
     pub async fn chat_role(&self, role: Role, messages: &[ChatTurn]) -> Result<ChatOutcome> {
         let engine = self.router.chat_engine(role);
         if role == Role::Generate {
