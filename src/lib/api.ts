@@ -39,6 +39,7 @@ import type {
   ReportSchedule,
   SearchHit,
   Source,
+  RunReceipt,
   SourceEvent,
   SuggestOutcome,
   Template,
@@ -597,6 +598,10 @@ export const api = {
   listSourceEvents: (hours = 24) =>
     run(query<SourceEvent[]>("list_source_events", { hours })),
   nightShiftStatus: () => run(query<NightShiftStatus>("night_shift_status")),
+  listReceipts: (hours = 24 * 7, limit = 200) =>
+    run(query<RunReceipt[]>("list_receipts", { hours, limit })),
+  receiptsForSchedule: (scheduleId: string, limit = 5) =>
+    run(query<RunReceipt[]>("receipts_for_schedule", { scheduleId, limit })),
   toggleNightShiftPause: () => run(cmd<boolean>("toggle_night_shift_pause")),
 
   // Reports

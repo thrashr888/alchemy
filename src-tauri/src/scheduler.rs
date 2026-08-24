@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
 use crate::commands::{self, AppState};
+use crate::models::RunReceipt;
 
 /// Set by the explicit quit paths (⌘Q, the app menu's Quit, tray Quit) so
 /// `ExitRequested` can tell "the user said quit" from "a window closed."
@@ -28,10 +29,102 @@ static PAUSED_UNTIL: AtomicI64 = AtomicI64::new(0);
 static LAST_MAINTAIN: AtomicI64 = AtomicI64::new(0);
 const MAINTAIN_EVERY_MS: i64 = 6 * 60 * 60 * 1000;
 
+/// Epoch ms of the last snapshot attempt. Checked hourly; the job itself is
+/// idempotent within a calendar day, so a machine that wakes at odd hours
+/// still gets exactly one snapshot per day.
+static LAST_SNAPSHOT: AtomicI64 = AtomicI64::new(0);
+const SNAPSHOT_EVERY_MS: i64 = 60 * 60 * 1000;
+
 /// Quit for real: mark the exit as intentional, then exit.
 pub fn request_quit(app: &AppHandle) {
     QUIT_REQUESTED.store(true, Ordering::Relaxed);
     app.exit(0);
+}
+
+/// Record what a run did. Best-effort by contract (docs/RFC-night-shift-area.md
+/// §2): a receipt is a description of work, so failing to write one must
+/// never fail — or hide — the work itself. Errors are noted and dropped.
+pub(crate) async fn write_receipt(state: &AppState, receipt: RunReceipt) {
+    if let Err(err) = state.db.add_receipt(&receipt).await {
+        crate::diagnostics::error("night-shift", format!("receipt write failed: {err:#}"));
+    }
+}
+
+/// The provider and model that answered a run, for the receipt's egress
+/// line. Read at write time rather than run time: role resolution is stable
+/// across a pass, and this keeps the run path untouched.
+pub(crate) async fn engine_attribution(state: &AppState) -> (String, String) {
+    let ai = state.ai.read().await;
+    (
+        ai.chat_engine_id(crate::inference::Role::Generate)
+            .to_string(),
+        ai.active_chat_model(),
+    )
+}
+
+/// Build a receipt for one scheduled run. `note` is the artifact it wrote,
+/// when it wrote one; `error` is the user-facing reason when it did not.
+pub(crate) async fn schedule_receipt(
+    state: &AppState,
+    schedule: &crate::models::ReportSchedule,
+    started_at: i64,
+    note: Option<&crate::models::Note>,
+    error: Option<&str>,
+) -> RunReceipt {
+    let (provider, model) = engine_attribution(state).await;
+    let detail = match (note, error) {
+        (Some(n), _) => format!("Wrote \u{201c}{}\u{201d}", n.title),
+        (None, Some(_)) => String::new(),
+        (None, None) => String::new(),
+    };
+    RunReceipt {
+        id: commands::new_id(),
+        schedule_id: schedule.id.clone(),
+        notebook_id: schedule.notebook_id.clone(),
+        name: schedule.name.clone(),
+        kind: schedule.kind.clone(),
+        trigger: schedule.trigger.clone(),
+        status: if error.is_some() { "failed" } else { "ok" }.into(),
+        detail,
+        error: error.unwrap_or_default().to_string(),
+        note_id: note.map(|n| n.id.clone()).unwrap_or_default(),
+        provider,
+        model,
+        // Only agent CLIs report a price today; local runs are genuinely
+        // free. Left at zero rather than estimated - an invented number on a
+        // receipt is worse than no number.
+        cost_micros: 0,
+        started_at,
+        ended_at: now_ms(),
+    }
+}
+
+/// Build a receipt for a housekeeping chore (docs/RFC-night-shift-area.md §7):
+/// mechanical, never metered, and attributed to no model.
+pub(crate) fn chore_receipt(
+    name: &str,
+    kind: &str,
+    started_at: i64,
+    detail: String,
+    error: Option<String>,
+) -> RunReceipt {
+    RunReceipt {
+        id: commands::new_id(),
+        schedule_id: String::new(),
+        notebook_id: String::new(),
+        name: name.to_string(),
+        kind: kind.to_string(),
+        trigger: "chore".into(),
+        status: if error.is_some() { "failed" } else { "ok" }.into(),
+        detail,
+        error: error.unwrap_or_default(),
+        note_id: String::new(),
+        provider: "local".into(),
+        model: String::new(),
+        cost_micros: 0,
+        started_at,
+        ended_at: now_ms(),
+    }
 }
 
 fn now_ms() -> i64 {
@@ -147,6 +240,57 @@ pub fn start(app: AppHandle) {
     });
 }
 
+/// Take the day's snapshot if it hasn't been taken, and leave a receipt
+/// either way. Runs on the pass thread: an APFS clone is a metadata
+/// operation, and the fallback copy only happens on volumes that cannot
+/// clone at all.
+async fn run_snapshot(app: &AppHandle, state: &AppState) {
+    let Ok(data_dir) = app.path().app_data_dir() else {
+        return;
+    };
+    // Idempotent per day, so a machine that wakes hourly still snapshots once.
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    if let Some((path, _, _)) = crate::backup::latest_snapshot(&data_dir) {
+        if path.file_name().map(|n| n.to_string_lossy().to_string()) == Some(today) {
+            return;
+        }
+    }
+    let started_at = now_ms();
+    let receipt =
+        match tokio::task::spawn_blocking(move || crate::backup::snapshot(&data_dir)).await {
+            Ok(Ok(out)) => {
+                let how = if out.cloned { "cloned" } else { "copied" };
+                let mb = out.bytes / (1024 * 1024);
+                crate::note!("nightly snapshot {how}: {mb} MB at {}", out.path.display());
+                chore_receipt(
+                    "Nightly snapshot",
+                    "snapshot",
+                    started_at,
+                    format!("Store {how} \u{00b7} {mb} MB"),
+                    None,
+                )
+            }
+            Ok(Err(err)) => {
+                crate::diagnostics::error("backup", format!("snapshot failed: {err:#}"));
+                chore_receipt(
+                    "Nightly snapshot",
+                    "snapshot",
+                    started_at,
+                    String::new(),
+                    Some(format!("{err}")),
+                )
+            }
+            Err(err) => chore_receipt(
+                "Nightly snapshot",
+                "snapshot",
+                started_at,
+                String::new(),
+                Some(format!("{err}")),
+            ),
+        };
+    write_receipt(state, receipt).await;
+}
+
 /// One pass: resync sources, then run due reports sequentially — exactly the
 /// work the two frontend ticks did, minus the window requirement. A pass
 /// longer than the interval delays the next tick rather than stacking.
@@ -168,6 +312,15 @@ async fn run_pass(app: &AppHandle) {
             }
         }
     }
+    // The nightly snapshot (docs/RFC-night-shift-area.md §7). Like database
+    // maintenance this sits ahead of the background gate on purpose: an APFS
+    // clone costs almost nothing, and losing the library is the one failure
+    // no other feature can undo.
+    if now_ms() - LAST_SNAPSHOT.load(Ordering::Relaxed) >= SNAPSHOT_EVERY_MS {
+        LAST_SNAPSHOT.store(now_ms(), Ordering::Relaxed);
+        run_snapshot(app, &state).await;
+    }
+
     let background = {
         let ai = state.ai.read().await;
         ai.config().background_enabled
@@ -249,9 +402,14 @@ async fn run_pass(app: &AppHandle) {
                 let state = app.state::<AppState>();
                 let mut finished = 0u32;
                 for schedule in due {
+                    let started_at = now_ms();
                     match commands::run_report_inner(&app, &state, &schedule.id).await {
-                        Ok(_) => {
+                        Ok(note) => {
                             finished += 1;
+                            let receipt =
+                                schedule_receipt(&state, &schedule, started_at, Some(&note), None)
+                                    .await;
+                            write_receipt(&state, receipt).await;
                             // At send time, not pass time: a report can run
                             // for minutes, and focus may have changed.
                             if notifications_wanted(&app).await {
@@ -272,10 +430,16 @@ async fn run_pass(app: &AppHandle) {
                                 let _ = app.notification().builder().title(title).body(body).show();
                             }
                         }
-                        Err(err) => crate::diagnostics::error(
-                            "night-shift",
-                            format!("report {} failed: {err}", schedule.name),
-                        ),
+                        Err(err) => {
+                            crate::diagnostics::error(
+                                "night-shift",
+                                format!("report {} failed: {err}", schedule.name),
+                            );
+                            let receipt =
+                                schedule_receipt(&state, &schedule, started_at, None, Some(&err))
+                                    .await;
+                            write_receipt(&state, receipt).await;
+                        }
                     }
                 }
                 REPORTS_RUNNING.store(false, Ordering::SeqCst);

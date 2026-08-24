@@ -20,7 +20,7 @@ use lancedb::Connection;
 
 use crate::models::{
     Citation, LedgerEntry, Message, Note, NoteUsage, Notebook, RegistryCard, ReportSchedule,
-    Source, SourceEvent,
+    RunReceipt, Source, SourceEvent,
 };
 
 const T_NOTEBOOKS: &str = "notebooks";
@@ -32,12 +32,17 @@ const T_NOTE_USAGE: &str = "note_usage";
 const T_REPORTS: &str = "report_schedules";
 const T_ROUTES: &str = "routes";
 const T_SOURCE_EVENTS: &str = "source_events";
+const T_RECEIPTS: &str = "run_receipts";
 const T_LEDGER: &str = "ledger";
 /// The Registry's cast (docs/RFC-registry.md). Corpus-scoped: no
 /// notebook_id column, unlike every other entity table here.
 const T_REGISTRY: &str = "registry";
 /// Source events prune past this window — a rolling record, not an archive.
 const SOURCE_EVENT_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+
+/// Receipts are a recent record, not an archive (docs/RFC-night-shift-area.md
+/// §2) — the durable artifacts are the notes the runs wrote.
+const RECEIPT_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 /// Note chunks share the chunks table with source chunks, stored under
 /// `source_id = "note:<note_id>"` — real source ids are UUIDs, so the prefix
 /// can't collide, and every existing notebook/source filter and delete
@@ -256,6 +261,7 @@ impl Db {
         db.ensure_table(T_SOURCE_EVENTS, source_events_schema())
             .await?;
         db.migrate_source_events().await?;
+        db.ensure_table(T_RECEIPTS, receipts_schema()).await?;
         db.ensure_table(T_LEDGER, ledger_schema()).await?;
         db.migrate_ledger().await?;
         db.ensure_table(T_REGISTRY, registry_schema()).await?;
@@ -2960,6 +2966,82 @@ impl Db {
         Ok(out)
     }
 
+    /// Record one run. Best-effort by contract: a receipt that fails to
+    /// write must never fail the run it describes, so callers log and move on.
+    pub async fn add_receipt(&self, receipt: &RunReceipt) -> Result<()> {
+        let schema = receipts_schema();
+        let batch = receipt_batch(&schema, receipt)?;
+        self.add_batch(T_RECEIPTS, schema, batch).await
+    }
+
+    /// Receipts newest first, pruning the rolling window on the way in — the
+    /// same self-bounding idiom as `source_events_since`, so the table needs
+    /// no dedicated sweep. `since` is a wall-clock floor; `limit` caps the
+    /// read for the UI's "last night" grouping.
+    pub async fn list_receipts(&self, since: i64, limit: usize) -> Result<Vec<RunReceipt>> {
+        let cutoff = crate::commands::now() - RECEIPT_WINDOW_MS;
+        self.delete_where(T_RECEIPTS, &format!("ended_at < {cutoff}"))
+            .await?;
+        let batches = self
+            .collect(T_RECEIPTS, Some(&format!("ended_at >= {since}")))
+            .await?;
+        let mut out = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let sched = str_col(b, "schedule_id")?;
+            let nb = str_col(b, "notebook_id")?;
+            let name = str_col(b, "name")?;
+            let kind = str_col(b, "kind")?;
+            let trigger = str_col(b, "trigger")?;
+            let status = str_col(b, "status")?;
+            let detail = str_col(b, "detail")?;
+            let error = str_col(b, "error")?;
+            let note_id = str_col(b, "note_id")?;
+            let provider = str_col(b, "provider")?;
+            let model = str_col(b, "model")?;
+            let cost = i64_col(b, "cost_micros")?;
+            let started = i64_col(b, "started_at")?;
+            let ended = i64_col(b, "ended_at")?;
+            for i in 0..b.num_rows() {
+                out.push(RunReceipt {
+                    id: id.value(i).to_string(),
+                    schedule_id: sched.value(i).to_string(),
+                    notebook_id: nb.value(i).to_string(),
+                    name: name.value(i).to_string(),
+                    kind: kind.value(i).to_string(),
+                    trigger: trigger.value(i).to_string(),
+                    status: status.value(i).to_string(),
+                    detail: detail.value(i).to_string(),
+                    error: error.value(i).to_string(),
+                    note_id: note_id.value(i).to_string(),
+                    provider: provider.value(i).to_string(),
+                    model: model.value(i).to_string(),
+                    cost_micros: cost.value(i),
+                    started_at: started.value(i),
+                    ended_at: ended.value(i),
+                });
+            }
+        }
+        out.sort_by_key(|r| std::cmp::Reverse(r.ended_at));
+        out.truncate(limit);
+        Ok(out)
+    }
+
+    /// Every receipt for one schedule, newest first — the run history behind
+    /// a standing order.
+    pub async fn receipts_for_schedule(
+        &self,
+        schedule_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RunReceipt>> {
+        let all = self.list_receipts(0, usize::MAX).await?;
+        Ok(all
+            .into_iter()
+            .filter(|r| r.schedule_id == schedule_id)
+            .take(limit)
+            .collect())
+    }
+
     pub async fn add_ledger_entry(&self, entry: &LedgerEntry) -> Result<()> {
         let schema = ledger_schema();
         let batch = ledger_batch(&schema, entry)?;
@@ -3651,6 +3733,49 @@ fn notes_schema() -> SchemaRef {
         Field::new("origin", DataType::Utf8, false),
         Field::new("status", DataType::Utf8, false),
     ]))
+}
+
+fn receipts_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("schedule_id", DataType::Utf8, false),
+        Field::new("notebook_id", DataType::Utf8, false),
+        Field::new("name", DataType::Utf8, false),
+        Field::new("kind", DataType::Utf8, false),
+        Field::new("trigger", DataType::Utf8, false),
+        Field::new("status", DataType::Utf8, false),
+        Field::new("detail", DataType::Utf8, false),
+        Field::new("error", DataType::Utf8, false),
+        Field::new("note_id", DataType::Utf8, false),
+        Field::new("provider", DataType::Utf8, false),
+        Field::new("model", DataType::Utf8, false),
+        Field::new("cost_micros", DataType::Int64, false),
+        Field::new("started_at", DataType::Int64, false),
+        Field::new("ended_at", DataType::Int64, false),
+    ]))
+}
+
+fn receipt_batch(schema: &SchemaRef, r: &RunReceipt) -> Result<RecordBatch> {
+    Ok(RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from(vec![r.id.clone()])),
+            Arc::new(StringArray::from(vec![r.schedule_id.clone()])),
+            Arc::new(StringArray::from(vec![r.notebook_id.clone()])),
+            Arc::new(StringArray::from(vec![r.name.clone()])),
+            Arc::new(StringArray::from(vec![r.kind.clone()])),
+            Arc::new(StringArray::from(vec![r.trigger.clone()])),
+            Arc::new(StringArray::from(vec![r.status.clone()])),
+            Arc::new(StringArray::from(vec![r.detail.clone()])),
+            Arc::new(StringArray::from(vec![r.error.clone()])),
+            Arc::new(StringArray::from(vec![r.note_id.clone()])),
+            Arc::new(StringArray::from(vec![r.provider.clone()])),
+            Arc::new(StringArray::from(vec![r.model.clone()])),
+            Arc::new(Int64Array::from(vec![r.cost_micros])),
+            Arc::new(Int64Array::from(vec![r.started_at])),
+            Arc::new(Int64Array::from(vec![r.ended_at])),
+        ],
+    )?)
 }
 
 fn source_events_schema() -> SchemaRef {

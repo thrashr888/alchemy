@@ -486,6 +486,34 @@ export interface SourceEvent {
   at: number;
 }
 
+/** One Night Shift run, as recorded at the run boundary
+ *  (docs/RFC-night-shift-area.md §2). A rolling 30-day record — the durable
+ *  artifacts are the notes the runs wrote. */
+export interface RunReceipt {
+  id: string;
+  /** Empty for housekeeping chores. */
+  scheduleId: string;
+  /** Empty for cross-notebook work (briefs) and chores. */
+  notebookId: string;
+  name: string;
+  /** Report kind, or a chore kind: "snapshot", "maintain", "hygiene". */
+  kind: string;
+  /** "interval" | "change" | "once" | "manual" | "chore" */
+  trigger: string;
+  /** "ok" | "failed" */
+  status: string;
+  detail: string;
+  error: string;
+  noteId: string;
+  /** Resolved provider ("ollama", "gateway", "local", …). */
+  provider: string;
+  model: string;
+  /** Millionths of a dollar; 0 when nothing was metered. */
+  costMicros: number;
+  startedAt: number;
+  endedAt: number;
+}
+
 export interface NightShiftStatus {
   backgroundEnabled: boolean;
   paused: boolean;

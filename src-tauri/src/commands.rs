@@ -9696,6 +9696,99 @@ pub async fn list_source_events(
         .await)
 }
 
+/// What the last snapshot did, for the Background Work settings page
+/// (docs/RFC-night-shift-area.md §7).
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotStatus {
+    /// Epoch ms of the most recent snapshot; 0 when none has been taken.
+    pub taken_at: i64,
+    pub bytes: u64,
+    pub path: String,
+    /// Store format version this build reads.
+    pub store_version: u32,
+}
+
+#[tauri::command]
+pub async fn snapshot_status(app: AppHandle) -> Result<SnapshotStatus, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(match crate::backup::latest_snapshot(&data_dir) {
+        Some((path, taken_at, bytes)) => SnapshotStatus {
+            taken_at,
+            bytes,
+            path: path.to_string_lossy().to_string(),
+            store_version: crate::backup::STORE_VERSION,
+        },
+        None => SnapshotStatus {
+            taken_at: 0,
+            bytes: 0,
+            path: String::new(),
+            store_version: crate::backup::STORE_VERSION,
+        },
+    })
+}
+
+/// Snapshot now rather than waiting for tonight — the "Back up now" button,
+/// and what an agent calls before doing something it wants to be able to undo.
+#[tauri::command]
+pub async fn snapshot_now(app: AppHandle) -> Result<SnapshotStatus, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dir = data_dir.clone();
+    let out = tokio::task::spawn_blocking(move || crate::backup::snapshot(&dir))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("{e:#}"))?;
+    Ok(SnapshotStatus {
+        taken_at: now(),
+        bytes: out.bytes,
+        path: out.path.to_string_lossy().to_string(),
+        store_version: crate::backup::STORE_VERSION,
+    })
+}
+
+/// Put the newest snapshot back, moving the current store aside first. The
+/// app must restart afterwards: the open LanceDB handle points at the store
+/// this just replaced.
+#[tauri::command]
+pub async fn restore_snapshot(app: AppHandle) -> Result<String, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dir = data_dir.clone();
+    let aside = tokio::task::spawn_blocking(move || crate::backup::restore_latest(&dir))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("{e:#}"))?;
+    Ok(aside.to_string_lossy().to_string())
+}
+
+/// The Night Shift's run record (docs/RFC-night-shift-area.md §2). Agents get
+/// the same signal via the MCP list_receipts tool.
+#[tauri::command]
+pub async fn list_receipts(
+    state: State<'_, AppState>,
+    hours: Option<u32>,
+    limit: Option<usize>,
+) -> Result<Vec<crate::models::RunReceipt>, String> {
+    let hours = i64::from(hours.unwrap_or(24 * 7));
+    e(state
+        .db
+        .list_receipts(now() - hours * 3_600_000, limit.unwrap_or(200))
+        .await)
+}
+
+/// Run history for one standing order — what the rail shows when an order is
+/// selected.
+#[tauri::command]
+pub async fn receipts_for_schedule(
+    state: State<'_, AppState>,
+    schedule_id: String,
+    limit: Option<usize>,
+) -> Result<Vec<crate::models::RunReceipt>, String> {
+    e(state
+        .db
+        .receipts_for_schedule(&schedule_id, limit.unwrap_or(5))
+        .await)
+}
+
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct NightShiftStatus {

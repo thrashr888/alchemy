@@ -895,3 +895,77 @@ fn terminal_allowlist_covers_ollama_fixes() {
     assert!(!terminal_command_allowed("rm -rf /"));
     assert!(!terminal_command_allowed(""));
 }
+
+/// Receipts round-trip through their own table and come back newest-first
+/// (docs/RFC-night-shift-area.md §2). No model server needed: this is pure
+/// storage, which is the point — the record must survive whatever the run did.
+#[tokio::test]
+async fn receipts_round_trip() {
+    use crate::models::RunReceipt;
+
+    let dir = std::env::temp_dir().join(format!("nbl-receipts-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+
+    let base = now();
+    let mk = |name: &str, sched: &str, status: &str, ended: i64| RunReceipt {
+        id: uuid::Uuid::new_v4().to_string(),
+        schedule_id: sched.into(),
+        notebook_id: "nb-1".into(),
+        name: name.into(),
+        kind: "briefing".into(),
+        trigger: "interval".into(),
+        status: status.into(),
+        detail: "Wrote a note".into(),
+        error: String::new(),
+        note_id: "note-1".into(),
+        provider: "ollama".into(),
+        model: "test-model".into(),
+        cost_micros: 0,
+        started_at: ended - 1_000,
+        ended_at: ended,
+    };
+
+    db.add_receipt(&mk("Older run", "sched-a", "ok", base - 60_000))
+        .await
+        .expect("add older");
+    db.add_receipt(&mk("Newest run", "sched-a", "failed", base))
+        .await
+        .expect("add newest");
+    db.add_receipt(&mk("Other order", "sched-b", "ok", base - 30_000))
+        .await
+        .expect("add other");
+
+    let all = db.list_receipts(0, 10).await.expect("list");
+    assert_eq!(all.len(), 3, "every receipt is readable");
+    assert_eq!(all[0].name, "Newest run", "newest first");
+    assert_eq!(
+        all[0].status, "failed",
+        "failures are recorded, not dropped"
+    );
+
+    // The limit truncates after ordering, so it keeps the newest.
+    let capped = db.list_receipts(0, 1).await.expect("list capped");
+    assert_eq!(capped.len(), 1);
+    assert_eq!(capped[0].name, "Newest run");
+
+    // A wall-clock floor excludes older runs.
+    let recent = db
+        .list_receipts(base - 45_000, 10)
+        .await
+        .expect("list since");
+    assert_eq!(recent.len(), 2, "the 60s-old run falls outside the window");
+
+    // One standing order's history, newest first.
+    let for_a = db
+        .receipts_for_schedule("sched-a", 5)
+        .await
+        .expect("per schedule");
+    assert_eq!(for_a.len(), 2);
+    assert!(
+        for_a.iter().all(|r| r.schedule_id == "sched-a"),
+        "no cross-order leakage"
+    );
+    assert_eq!(for_a[0].name, "Newest run");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
