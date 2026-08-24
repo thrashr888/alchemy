@@ -2143,10 +2143,23 @@ async fn eval_agent_planner_roles() {
     let Some(embedder) = builtin_ai().await else {
         return;
     };
-    let Some(ai) = crate::beir_eval::rerank_ai().await else {
-        eprintln!("SKIP: no local chat tier for planner probes");
-        return;
-    };
+    // A real A/B needs the roles to resolve to different models. Defaults are
+    // a mid-size local chat model against the repo's fast local pick; both
+    // are overridable for a targeted run.
+    let chat_model =
+        std::env::var("PLANNER_CHAT_MODEL").unwrap_or_else(|_| "muse-glimmer:30b-mlx".to_string());
+    let small_model = std::env::var("PLANNER_SMALL_MODEL")
+        .unwrap_or_else(|_| "digitsflow/bonsai-8b:latest".to_string());
+    let ai = crate::ai::Ai::new(
+        crate::ai::AiConfig {
+            embedder: "builtin".into(),
+            chat_model: chat_model.clone(),
+            small_model: small_model.clone(),
+            ..Default::default()
+        },
+        crate::ai::AiRuntime::default(),
+    );
+    eprintln!("\n  chat={chat_model}   small={small_model}");
     assert!(
         ai.list_models().await.is_ok(),
         "Ollama not reachable on localhost:11434 — start it, then rerun"
@@ -2218,4 +2231,83 @@ async fn eval_agent_planner_roles() {
         "  (Small is the shipping default — agent::loop_role; \
          ALCHEMY_PLANNER_ROLE=chat restores the old behaviour.)"
     );
+}
+
+/// Distillation probes: a question, the fixture document it should be read
+/// against, and a fact that MUST survive into the evidence note.
+///
+/// Distill is the riskiest of the three calls moved to the Small role,
+/// because its output is not a routing decision the loop can recover from —
+/// it becomes the evidence the final answer quotes. A distillate that drops
+/// the number is an answer that cannot cite it.
+const DISTILL_PROBES: &[(&str, &str, &str)] = &[
+    (
+        "How long should a failed retry wait?",
+        "Acme Invoices Q3",
+        "sixty",
+    ),
+    (
+        "Which port forwards to the media server?",
+        "Home Network Guide",
+        "32400",
+    ),
+    (
+        "When are firmware updates applied?",
+        "Home Network Guide",
+        "Monday",
+    ),
+    (
+        "How much paid time off accrues per month?",
+        "Employee Handbook",
+        "half",
+    ),
+];
+
+#[tokio::test]
+#[ignore = "live models: one distill call per probe per role — run with --ignored --nocapture"]
+async fn eval_agent_distill_roles() {
+    let chat_model =
+        std::env::var("PLANNER_CHAT_MODEL").unwrap_or_else(|_| "muse-glimmer:30b-mlx".to_string());
+    let small_model = std::env::var("PLANNER_SMALL_MODEL")
+        .unwrap_or_else(|_| "digitsflow/bonsai-8b:latest".to_string());
+    let ai = crate::ai::Ai::new(
+        crate::ai::AiConfig {
+            embedder: "builtin".into(),
+            chat_model: chat_model.clone(),
+            small_model: small_model.clone(),
+            ..Default::default()
+        },
+        crate::ai::AiRuntime::default(),
+    );
+    assert!(
+        ai.list_models().await.is_ok(),
+        "Ollama not reachable on localhost:11434 — start it, then rerun"
+    );
+    eprintln!("\n  chat={chat_model}   small={small_model}");
+    eprintln!("deep-research distillation, fact retention by role:");
+    for role in [crate::inference::Role::Small, crate::inference::Role::Chat] {
+        let (mut kept, mut total_ms) = (0usize, 0u128);
+        for (question, title, fact) in DISTILL_PROBES {
+            let Some((_, body)) = CORPUS.iter().find(|(t, _)| t == title) else {
+                panic!("fixture {title} missing from CORPUS");
+            };
+            let t = std::time::Instant::now();
+            let evidence = crate::agent::distill_with(&ai, role, question, title, body).await;
+            total_ms += t.elapsed().as_millis();
+            if evidence.to_lowercase().contains(&fact.to_lowercase()) {
+                kept += 1;
+            } else {
+                eprintln!(
+                    "  MISS ({role:?}): {question} — \"{fact}\" absent from: {}",
+                    evidence.trim().chars().take(90).collect::<String>()
+                );
+            }
+        }
+        let n = DISTILL_PROBES.len();
+        eprintln!(
+            "  {:<8}  kept {kept}/{n}   avg {}ms",
+            format!("{role:?}"),
+            total_ms / n as u128
+        );
+    }
 }

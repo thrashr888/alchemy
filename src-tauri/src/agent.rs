@@ -30,8 +30,23 @@ const MAX_STEPS: usize = 5;
 /// The final answer always streams from the chat model — the quality that
 /// matters most is the one the user reads.
 ///
-/// `ALCHEMY_PLANNER_ROLE=chat` restores the old behaviour; the eval
-/// (`eval_agent_planner_roles`) A/Bs the two.
+/// `ALCHEMY_PLANNER_ROLE=chat` restores the old behaviour.
+///
+/// Measured 2026-08-23, muse-glimmer:30b-mlx (chat) vs
+/// digitsflow/bonsai-8b (small), 4 probes each:
+///
+/// | call    | role  | quality      | avg latency |
+/// |---------|-------|--------------|-------------|
+/// | planner | Small | 4/4 on-target|     1,475ms |
+/// | planner | Chat  | 4/4 on-target|    24,214ms |
+/// | distill | Small | 4/4 facts kept|      810ms |
+/// | distill | Chat  | 4/4 facts kept|   36,428ms |
+///
+/// No quality difference on these probes, 16-45x the speed. Re-run with
+/// `cargo test --lib eval_agent_planner_roles eval_agent_distill_roles --
+/// --ignored --nocapture` after changing the prompts or the default pair.
+/// Both probe sets are small and cover the first action / fact retention —
+/// they show no regression, which is not the same as proving parity.
 pub(crate) fn loop_role() -> crate::inference::Role {
     match std::env::var("ALCHEMY_PLANNER_ROLE").as_deref() {
         Ok("chat") => crate::inference::Role::Chat,
@@ -332,8 +347,20 @@ pub(crate) async fn rerank(ai: &Ai, question: &str, hits: Vec<Citation>) -> Vec<
 /// excerpt — a degraded read still beats an empty one. Shared with artifact
 /// generation, which distills content that won't fit its corpus budget.
 pub(crate) async fn distill(ai: &Ai, question: &str, title: &str, content: &str) -> String {
+    distill_with(ai, loop_role(), question, title, content).await
+}
+
+/// `distill` with the role named explicitly, so an eval can A/B the tiers
+/// without mutating process-global state.
+pub(crate) async fn distill_with(
+    ai: &Ai,
+    role: crate::inference::Role,
+    question: &str,
+    title: &str,
+    content: &str,
+) -> String {
     let messages = rag::build_distill_messages(question, title, content);
-    match ai.chat_role(loop_role(), &messages).await {
+    match ai.chat_role(role, &messages).await {
         Ok(out) if !out.text.trim().is_empty() => truncate(out.text.trim(), DISTILL_MAX_CHARS),
         _ => truncate(content, READ_GIST_CHARS),
     }
