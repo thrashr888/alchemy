@@ -102,11 +102,25 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
         .close_window()
         .build()?;
 
-    // WKWebView routes clipboard shortcuts through the menu on macOS — these
-    // predefined items are what make ⌘C/⌘V/⌘Z work in inputs.
+    // WKWebView routes clipboard shortcuts through the menu on macOS — the
+    // predefined cut/copy/paste items are what make ⌘C/⌘V work in inputs.
+    //
+    // Undo and redo are deliberately NOT the predefined items: ⌘Z now
+    // reverses the last app mutation (docs/RFC-professional-grade.md
+    // Pillar 5), which only works if the app receives the keystroke — and a
+    // menu accelerator consumes it before any webview keydown fires. Having
+    // claimed it, the frontend owes text fields their own undo back, so
+    // textUndo.ts offers a focused editor or input first claim and falls
+    // through to the session history stack only when nothing is being typed.
+    let undo = MenuItemBuilder::with_id("menu-undo", "Undo")
+        .accelerator("CmdOrCtrl+Z")
+        .build(app)?;
+    let redo = MenuItemBuilder::with_id("menu-redo", "Redo")
+        .accelerator("Shift+CmdOrCtrl+Z")
+        .build(app)?;
     let edit_menu = SubmenuBuilder::new(app, "Edit")
-        .undo()
-        .redo()
+        .item(&undo)
+        .item(&redo)
         .separator()
         .cut()
         .copy()

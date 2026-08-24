@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useEditor, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import { registerTextUndo, releaseTextUndo } from "@/lib/textUndo";
 import { TableKit } from "@tiptap/extension-table";
 import { Markdown } from "tiptap-markdown";
 import { cn } from "@/lib/utils";
@@ -78,6 +79,34 @@ export function RichEditor({
       },
     },
   });
+
+  // The Edit menu's Undo is app-routed (RFC-professional-grade Pillar 5), so
+  // while this editor holds the caret it lends the router its own TipTap
+  // history — otherwise Cmd-Z inside a note would undo the last *app*
+  // mutation instead of the last thing typed.
+  //
+  // Subscribed once per editor rather than passed as useEditor options:
+  // options are inline closures re-applied on every render, and this sits
+  // behind a component that re-renders on every keystroke.
+  useEffect(() => {
+    if (!editor) return;
+    const handler = {
+      undo: () => void editor.chain().focus().undo().run(),
+      redo: () => void editor.chain().focus().redo().run(),
+    };
+    const claim = () => registerTextUndo(handler);
+    const release = () => releaseTextUndo(handler);
+    editor.on("focus", claim);
+    editor.on("blur", release);
+    if (editor.isFocused) claim();
+    return () => {
+      editor.off("focus", claim);
+      editor.off("blur", release);
+      // An editor that unmounts while focused never fires blur; releasing
+      // by identity leaves a newer editor's claim alone.
+      release();
+    };
+  }, [editor]);
 
   useEffect(() => {
     if (!insertRef || !editor) return;
