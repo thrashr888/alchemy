@@ -2092,6 +2092,37 @@ async fn eval_retrieval_latency() {
 // where the inputs are deterministic). The number IS the product; read the
 // table and decide.
 
+/// Build the two-tier A/B engine. `small` is either an Ollama model name or
+/// the literal "fm", which routes the Small role to the Apple Foundation
+/// Models sidecar — an empty `small_model` plus a sidecar path is what
+/// selects FM (see `Ai::new`).
+fn planner_ab_ai(chat_model: &str, small: &str) -> Option<crate::ai::Ai> {
+    let (small_model, runtime) = if small.eq_ignore_ascii_case("fm") {
+        let Some(sidecar) = crate::beir_eval::fm_sidecar_path() else {
+            eprintln!("SKIP: FM sidecar not built");
+            return None;
+        };
+        (
+            String::new(),
+            crate::ai::AiRuntime {
+                fm_sidecar: Some(sidecar),
+                ..Default::default()
+            },
+        )
+    } else {
+        (small.to_string(), crate::ai::AiRuntime::default())
+    };
+    Some(crate::ai::Ai::new(
+        crate::ai::AiConfig {
+            embedder: "builtin".into(),
+            chat_model: chat_model.to_string(),
+            small_model,
+            ..Default::default()
+        },
+        runtime,
+    ))
+}
+
 /// One planner probe: a question, and the distinctive terms a good first
 /// action should aim at — either in the search query or via reading the
 /// source whose title contains the gold marker.
@@ -2150,15 +2181,9 @@ async fn eval_agent_planner_roles() {
         std::env::var("PLANNER_CHAT_MODEL").unwrap_or_else(|_| "muse-glimmer:30b-mlx".to_string());
     let small_model = std::env::var("PLANNER_SMALL_MODEL")
         .unwrap_or_else(|_| "digitsflow/bonsai-8b:latest".to_string());
-    let ai = crate::ai::Ai::new(
-        crate::ai::AiConfig {
-            embedder: "builtin".into(),
-            chat_model: chat_model.clone(),
-            small_model: small_model.clone(),
-            ..Default::default()
-        },
-        crate::ai::AiRuntime::default(),
-    );
+    let Some(ai) = planner_ab_ai(&chat_model, &small_model) else {
+        return;
+    };
     eprintln!("\n  chat={chat_model}   small={small_model}");
     assert!(
         ai.list_models().await.is_ok(),
@@ -2270,15 +2295,9 @@ async fn eval_agent_distill_roles() {
         std::env::var("PLANNER_CHAT_MODEL").unwrap_or_else(|_| "muse-glimmer:30b-mlx".to_string());
     let small_model = std::env::var("PLANNER_SMALL_MODEL")
         .unwrap_or_else(|_| "digitsflow/bonsai-8b:latest".to_string());
-    let ai = crate::ai::Ai::new(
-        crate::ai::AiConfig {
-            embedder: "builtin".into(),
-            chat_model: chat_model.clone(),
-            small_model: small_model.clone(),
-            ..Default::default()
-        },
-        crate::ai::AiRuntime::default(),
-    );
+    let Some(ai) = planner_ab_ai(&chat_model, &small_model) else {
+        return;
+    };
     assert!(
         ai.list_models().await.is_ok(),
         "Ollama not reachable on localhost:11434 — start it, then rerun"
@@ -2310,4 +2329,98 @@ async fn eval_agent_distill_roles() {
             total_ms / n as u128
         );
     }
+}
+
+/// Per-phase cost of one deep-research step, so the next optimization aims
+/// at whatever is actually left.
+///
+/// The loop's wall-clock is (planner + action) per step, repeated up to
+/// MAX_STEPS, then the answer stream. This times each piece against the
+/// same corpus so their magnitudes are directly comparable — a phase worth
+/// parallelising has to be big enough to notice next to the others.
+#[tokio::test]
+#[ignore = "live models: times every phase of a research step — run with --ignored --nocapture"]
+async fn eval_agent_phase_costs() {
+    let Some(embedder) = builtin_ai().await else {
+        return;
+    };
+    let chat_model =
+        std::env::var("PLANNER_CHAT_MODEL").unwrap_or_else(|_| "muse-glimmer:30b-mlx".to_string());
+    let small_model = std::env::var("PLANNER_SMALL_MODEL")
+        .unwrap_or_else(|_| "digitsflow/bonsai-8b:latest".to_string());
+    let Some(ai) = planner_ab_ai(&chat_model, &small_model) else {
+        return;
+    };
+    assert!(
+        ai.list_models().await.is_ok(),
+        "Ollama not reachable on localhost:11434 — start it, then rerun"
+    );
+    let dir = std::env::temp_dir().join(format!("nbl-phase-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb = "phase-nb";
+    seed_corpus(&embedder, &db, nb).await;
+    let sources = db.list_sources(nb).await.expect("sources");
+    let source_list = sources
+        .iter()
+        .map(|s| format!("- {} (id: {}, {} chunks)", s.title, s.id, s.chunk_count))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let question = "How long should a failed retry wait?";
+
+    eprintln!("\n  chat={chat_model}   small={small_model}");
+    eprintln!("one deep-research step, phase by phase (cold = first call, warm = repeat):");
+    eprintln!("  {:<18} {:>9} {:>9}", "phase", "cold", "warm");
+
+    macro_rules! timed {
+        ($label:expr, $body:expr) => {{
+            let t = std::time::Instant::now();
+            let first = $body;
+            let cold = t.elapsed().as_millis();
+            let t = std::time::Instant::now();
+            let _second = $body;
+            let warm = t.elapsed().as_millis();
+            eprintln!("  {:<18} {:>7}ms {:>7}ms", $label, cold, warm);
+            first
+        }};
+    }
+
+    // Planner decision (Small role — the shipping default).
+    let messages = crate::rag::build_agent_decision(question, &source_list, "", 0);
+    let _ = timed!("planner (small)", {
+        ai.chat_role(crate::inference::Role::Small, &messages)
+            .await
+            .map(|o| o.text)
+    });
+
+    // Query embedding — the step's only non-model local cost of note.
+    let qvec = timed!("embed query", {
+        ai.embed_one(question).await.expect("embed")
+    });
+
+    // Hybrid search over the seeded corpus.
+    let hits = timed!("hybrid search", {
+        db.search_chunks(nb, qvec.clone(), question, 20, None)
+            .await
+            .expect("search")
+    });
+    eprintln!("     ({} hits)", hits.len());
+
+    // Rerank — a model call per search that returned a wide pool.
+    let picked = timed!("rerank (small)", {
+        crate::agent::rerank(&ai, question, hits.clone()).await
+    });
+    eprintln!("     ({} kept of {})", picked.len(), hits.len());
+
+    // Distill one source — the per-read cost, which the loop pays
+    // DISTILL_CONCURRENCY-at-a-time for a multi-source read.
+    if let Some((title, body)) = CORPUS.first() {
+        let _ = timed!("distill one doc", {
+            crate::agent::distill_with(&ai, crate::inference::Role::Small, question, title, body)
+                .await
+        });
+    }
+    eprintln!(
+        "  (cold-warm gap is model load. A turn pays planner+action per step, \n\
+          up to MAX_STEPS, then streams the answer.)"
+    );
 }

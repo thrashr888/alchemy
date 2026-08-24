@@ -32,15 +32,21 @@ const MAX_STEPS: usize = 5;
 ///
 /// `ALCHEMY_PLANNER_ROLE=chat` restores the old behaviour.
 ///
-/// Measured 2026-08-23, muse-glimmer:30b-mlx (chat) vs
-/// digitsflow/bonsai-8b (small), 4 probes each:
+/// Measured 2026-08-23 against muse-glimmer:30b-mlx as the chat tier,
+/// 4 probes each:
 ///
-/// | call    | role  | quality      | avg latency |
-/// |---------|-------|--------------|-------------|
-/// | planner | Small | 4/4 on-target|     1,475ms |
-/// | planner | Chat  | 4/4 on-target|    24,214ms |
-/// | distill | Small | 4/4 facts kept|      810ms |
-/// | distill | Chat  | 4/4 facts kept|   36,428ms |
+/// | call    | role              | quality        | avg latency |
+/// |---------|-------------------|----------------|-------------|
+/// | planner | Small (bonsai-8b) | 4/4 on-target  |     1,475ms |
+/// | planner | Small (Apple FM)  | 4/4 on-target  |     2,735ms |
+/// | planner | Chat              | 4/4 on-target  |    24,214ms |
+/// | distill | Small (bonsai-8b) | 4/4 facts kept |       810ms |
+/// | distill | Chat              | 4/4 facts kept |    36,428ms |
+///
+/// Both small tiers plan correctly on every probe. Apple FM is roughly half
+/// bonsai's raw speed but pays no model-load penalty: a cold Ollama small
+/// model cost 21.4s on its first call, against 1.5s cold for FM, and a cold
+/// call is exactly what the first question after opening the app is.
 ///
 /// No quality difference on these probes, 16-45x the speed. Re-run with
 /// `cargo test --lib eval_agent_planner_roles eval_agent_distill_roles --
