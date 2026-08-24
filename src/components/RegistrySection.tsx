@@ -194,6 +194,7 @@ export function RegistrySection() {
   const setCreating = (open: boolean) =>
     useStore.setState({ registryCreating: open });
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [suggesting, setSuggesting] = useState(false);
   // Sort order, remembered like homeView.
   const [sort, setSort] = useState<RegistrySort>(
@@ -208,6 +209,12 @@ export function RegistrySection() {
   const load = useCallback(async () => {
     try {
       setCards(await api.listRegistry());
+      setLoadError(null);
+    } catch (e) {
+      // Without this the rejection went unhandled and the pane simply stayed
+      // empty — a registry that failed to load looked exactly like a
+      // registry with nothing in it.
+      setLoadError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoaded(true);
     }
@@ -448,7 +455,17 @@ export function RegistrySection() {
             chipAllLabel="All notebooks"
             chipPrefix=""
           />
-          {loaded && mine.length === 0 ? (
+          {loaded && loadError ? (
+            <EmptyState
+              icon={<Package className="h-5 w-5" />}
+              title="The registry didn't load"
+              hint={loadError}
+            >
+              <Button variant="primary" className="mt-3" onClick={() => void load()}>
+                Try again
+              </Button>
+            </EmptyState>
+          ) : loaded && mine.length === 0 ? (
             <EmptyState
               icon={<Package className="h-5 w-5" />}
               title="No cards yet"
@@ -584,7 +601,9 @@ export function CardRail({ sourceId }: { sourceId: string }) {
 
   const load = useCallback(() => {
     if (!sourceId) return;
-    void api.cardsForSource(sourceId).then(setCards);
+    // The rail hides itself when empty, so a failure here has nothing to
+    // show — but it must not surface as an unhandled rejection either.
+    void api.cardsForSource(sourceId).then(setCards, () => setCards([]));
   }, [sourceId]);
   useEffect(load, [load, registryBump]);
 
@@ -1039,10 +1058,13 @@ function SuggestionStrip({
             <span className="text-micro text-subtle-foreground">
               {kindLabel(c.kind)}
             </span>
+            {/* Every chip repeats the same two verbs, so the name has to say
+                which suggestion it acts on. */}
             <Button
               size="sm"
               onClick={() => void rule(c.id, "")}
               loading={busy === c.id}
+              aria-label={`Keep ${c.name}`}
             >
               <Check className="h-3.5 w-3.5" />
               Keep
@@ -1050,6 +1072,7 @@ function SuggestionStrip({
             <button
               className="rounded p-1 text-muted-foreground transition hover:text-destructive"
               title="Won't be suggested again"
+              aria-label={`Dismiss ${c.name}`}
               onClick={() => void rule(c.id, "dismissed")}
             >
               <X className="h-3.5 w-3.5" />
