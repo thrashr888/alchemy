@@ -144,6 +144,15 @@ scan storm fails a test instead of a user.**
 Numbers are proposals to be calibrated against a first measurement pass,
 then frozen; loosening one thereafter is a deliberate commit, not drift.
 
+> Measuring startup at all requires a stably-signed dev build. macOS keys
+> privacy permissions on the signing identity, and an ad-hoc bundle draws a
+> random signing identifier and a fresh hash every build — so each rebuild
+> reads as a new app and re-prompts for file access, blocking startup on a
+> click. `scripts/dev-app.sh` signs with the Developer ID, whose designated
+> requirement is built from the bundle id and team rather than the binary,
+> so the grant survives a rebuild. Timings taken against an ad-hoc build are
+> measuring the prompt.
+
 ### Mechanics
 
 - **Seeded fixture library:** a deterministic generator (reusing the eval
