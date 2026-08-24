@@ -40,6 +40,7 @@ pub async fn create_report_schedule(
         kind,
         prompt,
         trigger: resolve_trigger(trigger),
+        not_before: 0,
         interval_secs,
         enabled: true,
         last_run_at: 0,

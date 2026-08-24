@@ -71,6 +71,7 @@ pub(crate) async fn ensure_default_brief(state: &AppState) {
         kind: BRIEF_KIND.into(),
         prompt: String::new(),
         trigger: "interval".into(),
+        not_before: 0,
         interval_secs: 86_400,
         enabled: true,
         // Aligned so the first run lands at the next 7 AM local rather than

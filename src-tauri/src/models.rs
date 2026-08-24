@@ -362,11 +362,18 @@ pub struct ReportSchedule {
     /// Custom instruction when `kind == "custom"`.
     #[serde(default)]
     pub prompt: String,
-    /// "interval" (the clock fires it) or "change" (a standing question —
+    /// "interval" (the clock fires it), "change" (a standing question —
     /// source events in its notebook pull the trigger, with `interval_secs`
-    /// as the throttle floor between runs). RFC-night-shift §Staged.
+    /// as the throttle floor between runs), or "once" (a commission: one
+    /// job handed to the night, which disables itself after it runs).
+    /// RFC-night-shift §Staged, RFC-night-shift-area §1.
     #[serde(default = "default_trigger")]
     pub trigger: String,
+    /// Epoch ms before which a "once" commission must not start; 0 means
+    /// "as soon as the next pass comes round". Ignored by the other
+    /// triggers, whose clock is `interval_secs`.
+    #[serde(default)]
+    pub not_before: i64,
     pub interval_secs: i64,
     pub enabled: bool,
     /// Unix millis of the last successful run; 0 = never run.

@@ -379,6 +379,8 @@ export interface ReportSchedule {
   /** "interval" (clock-fired) or "change" (a standing question — runs when
    *  sources in the notebook change, intervalSecs as the throttle floor). */
   trigger: "interval" | "change";
+  /** Epoch ms before which a "once" commission may not start; 0 = next pass. */
+  notBefore: number;
   intervalSecs: number;
   enabled: boolean;
   lastRunAt: number;
@@ -484,6 +486,16 @@ export interface SourceEvent {
   /** Capped ±-prefixed line excerpt; empty when nothing textual changed. */
   diff: string;
   at: number;
+}
+
+/** Last-snapshot state for the Background Work settings page
+ *  (docs/RFC-night-shift-area.md §7). */
+export interface SnapshotStatus {
+  /** Epoch ms; 0 when no snapshot has been taken. */
+  takenAt: number;
+  bytes: number;
+  path: string;
+  storeVersion: number;
 }
 
 /** One Night Shift run, as recorded at the run boundary

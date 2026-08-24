@@ -474,6 +474,8 @@ pub fn run() {
             commands::list_source_events,
             commands::night_shift_status,
             commands::list_receipts,
+            commands::commission_run,
+            commands::tonight_plan,
             commands::snapshot_status,
             commands::snapshot_now,
             commands::restore_snapshot,

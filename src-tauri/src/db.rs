@@ -327,7 +327,11 @@ impl Db {
     /// Add the `trigger` column ("interval") to pre-existing schedule tables.
     async fn migrate_reports(&self) -> Result<()> {
         self.add_string_column(T_REPORTS, "trigger", "interval")
-            .await
+            .await?;
+        // Commissions (docs/RFC-night-shift-area.md §1). Zero means "the next
+        // pass", which is the right reading for every schedule that predates
+        // the column.
+        self.add_i64_column(T_REPORTS, "not_before", "0").await
     }
 
     /// Add the `diff` column ("") to pre-existing event tables.
@@ -2874,6 +2878,7 @@ impl Db {
             let kind = str_col(b, "kind")?;
             let prompt = str_col(b, "prompt")?;
             let trigger = opt_str_col(b, "trigger");
+            let not_before = opt_i64_col(b, "not_before");
             let interval = i64_col(b, "interval_secs")?;
             let enabled = i64_col(b, "enabled")?;
             let last = i64_col(b, "last_run_at")?;
@@ -2890,6 +2895,7 @@ impl Db {
                         .map(|c| c.value(i).to_string())
                         .filter(|t| !t.is_empty())
                         .unwrap_or_else(|| "interval".to_string()),
+                    not_before: not_before.as_ref().map(|c| c.value(i)).unwrap_or(0),
                     interval_secs: interval.value(i),
                     enabled: enabled.value(i) != 0,
                     last_run_at: last.value(i),
@@ -3283,6 +3289,19 @@ impl Db {
             .column("prompt", format!("'{}'", esc(prompt)))
             .column("trigger", format!("'{}'", esc(trigger)))
             .column("interval_secs", interval_secs.to_string())
+            .column("enabled", i64::from(enabled).to_string())
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    /// Retire a commission after it runs (docs/RFC-night-shift-area.md §1).
+    /// The row stays as its own history — the receipt points at it — but it
+    /// will never come due again.
+    pub async fn set_report_enabled(&self, id: &str, enabled: bool) -> Result<()> {
+        let tbl = self.conn.open_table(T_REPORTS).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(id)))
             .column("enabled", i64::from(enabled).to_string())
             .execute()
             .await?;
@@ -3890,6 +3909,7 @@ fn reports_schema() -> SchemaRef {
         Field::new("kind", DataType::Utf8, false),
         Field::new("prompt", DataType::Utf8, false),
         Field::new("trigger", DataType::Utf8, false),
+        Field::new("not_before", DataType::Int64, false),
         Field::new("interval_secs", DataType::Int64, false),
         Field::new("enabled", DataType::Int64, false),
         Field::new("last_run_at", DataType::Int64, false),
@@ -3907,6 +3927,7 @@ fn report_batch(schema: &SchemaRef, r: &ReportSchedule) -> Result<RecordBatch> {
             Arc::new(StringArray::from(vec![r.kind.clone()])),
             Arc::new(StringArray::from(vec![r.prompt.clone()])),
             Arc::new(StringArray::from(vec![r.trigger.clone()])),
+            Arc::new(Int64Array::from(vec![r.not_before])),
             Arc::new(Int64Array::from(vec![r.interval_secs])),
             Arc::new(Int64Array::from(vec![i64::from(r.enabled)])),
             Arc::new(Int64Array::from(vec![r.last_run_at])),

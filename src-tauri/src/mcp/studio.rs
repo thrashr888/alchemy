@@ -42,6 +42,22 @@ struct SaveTemplateReq {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+struct CommissionReq {
+    /// Notebook the job runs in (from list_notebooks).
+    notebook_id: String,
+    /// Short name for the job, shown in Tonight and on its receipt.
+    name: String,
+    /// Generator kind, a template (template:<id> or name), or "custom".
+    kind: String,
+    /// What to do, required when kind is "custom".
+    #[serde(default)]
+    prompt: Option<String>,
+    /// "tonight" (default, 2 AM local) or "now" (the next scheduler pass).
+    #[serde(default)]
+    when: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 struct ScheduleReportReq {
     /// Notebook the report runs against.
     notebook_id: String,
@@ -196,6 +212,51 @@ impl AlchemyMcp {
     }
 
     #[tool(
+        description = "Hand ONE job to the Night Shift instead of running it now: a deep read, a rebuild, a re-gist, any generator kind or \"custom\" with a prompt. It runs unattended (default: tonight at 2 AM local; pass when=\"now\" for the next scheduler pass), writes its result as a note, and retires itself. Use this for work too slow to wait on. It writes notes and reports only — it never acts outward."
+    )]
+    async fn commission_run(
+        &self,
+        Parameters(CommissionReq {
+            notebook_id,
+            name,
+            kind,
+            prompt,
+            when,
+        }): Parameters<CommissionReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let prompt = prompt.unwrap_or_default();
+        let kind = commands::resolve_report_kind(&kind, &prompt).map_err(invalid)?;
+        let name = if name.trim().is_empty() {
+            "Commissioned run".to_string()
+        } else {
+            name.trim().to_string()
+        };
+        let not_before = match when.as_deref() {
+            Some("now") => 0,
+            _ => crate::scheduler::next_local_hour_ms(2),
+        };
+        let schedule = ReportSchedule {
+            id: commands::new_id(),
+            notebook_id,
+            name,
+            kind,
+            prompt,
+            trigger: "once".into(),
+            not_before,
+            interval_secs: 86_400,
+            enabled: true,
+            last_run_at: 0,
+            created_at: commands::now(),
+        };
+        self.state()
+            .db
+            .add_report_schedule(&schedule)
+            .await
+            .map_err(|e| invalid(format!("{e:#}")))?;
+        json_result(&schedule)
+    }
+
+    #[tool(
         description = "Schedule a recurring report in a notebook: any generator kind, one of the user's templates (by template:<id> or name), \"custom\" with a prompt, or \"brief\" — the cross-notebook morning brief (reads across ALL notebooks, ranked needs-you → changed → record; schedule it in the \"Briefs\" notebook). Interval is hourly, daily, or weekly. Each run refreshes URL sources first, then writes a timestamped note the user sees in Studio → Reports."
     )]
     async fn schedule_report(
@@ -239,6 +300,7 @@ impl AlchemyMcp {
             kind,
             prompt,
             trigger,
+            not_before: 0,
             interval_secs,
             enabled: true,
             last_run_at: 0,
