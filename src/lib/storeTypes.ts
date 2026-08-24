@@ -179,6 +179,9 @@ export interface AppState {
   /** The open notebook's collections (sources, messages, notes, schedules)
    *  are still in flight. Distinguishes "nothing here" from "not here yet". */
   notebookLoading: boolean;
+  /** The notebook list failed to load. Distinguishes "no notebooks" from
+   *  "we could not find out", which look identical on the shelf. */
+  notebooksFailed: boolean;
   /** Session undo history (RFC-professional-grade Pillar 5). Newest last;
    *  a push clears `redoStack`, the standard rule. */
   undoStack: HistoryEntry[];

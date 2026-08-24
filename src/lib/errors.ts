@@ -32,11 +32,31 @@ const ACTIVITIES: Record<string, string> = {
   import_notebook_okf: "Importing the notebook",
 };
 
+/** Commands that actually wait on a model, and so deserve the "is Ollama
+ *  running?" hint when they time out. Everything else is local work. */
+const MODEL_BOUND = new Set([
+  "send_message",
+  "generate",
+  "generate_artifact",
+  "run_report",
+  "reembed_all",
+  "ask_everything",
+  "second_look",
+  "run_second_look",
+  "deep_research",
+]);
+
 /** Render an AppError (or anything) as a human-friendly message for the UI. */
 export function describe(error: unknown): string {
   if (error instanceof TimeoutError) {
     const what = ACTIVITIES[error.command] ?? "The request";
-    return `${what} timed out. If you're using Ollama, check that it's running and the model is loaded.`;
+    // Only blame the model when a model was involved. Every command shares
+    // this path, so a slow database read used to arrive as advice about
+    // Ollama — which sent people to check something that was never wrong.
+    const modelBound = MODEL_BOUND.has(error.command);
+    return modelBound
+      ? `${what} timed out. If you're using Ollama, check that it's running and the model is loaded.`
+      : `${what} timed out. It may just be busy — try again.`;
   }
   if (error instanceof IpcError) {
     return error.message;

@@ -10,6 +10,7 @@ import { api } from "./api";
 import { isWebUrl, SUPPORTED_EXTENSIONS, visibleTitle } from "./utils";
 import { applyTheme, SYSTEM_THEME, themeIsDark } from "./themes";
 import { refreshEpigraph } from "./epigraph";
+import { describe } from "./errors";
 import { notify } from "./notify";
 import { dropEntry, makeEntry, pushEntry } from "./history";
 import { claimTextUndo } from "./textUndo";
@@ -419,6 +420,7 @@ export const useStore = create<AppState>((set, get) => {
     error: null,
     toasts: [],
     notebookLoading: false,
+    notebooksFailed: false,
     undoStack: [],
     redoStack: [],
     justCreatedNoteId: null,
@@ -488,39 +490,67 @@ export const useStore = create<AppState>((set, get) => {
         listenersBound = true;
         get().bindGlobalListeners();
       }
-      const [notebooks, aiConfig, ollamaOk, templates] = await Promise.all([
-        api.listNotebooks(),
-        api.getAiConfig(),
+      // Settled, not all-or-nothing. These used to share one Promise.all
+      // rejection: a single slow read — and the notebook list is a cold scan
+      // of three tables, which on a large library can approach the IPC
+      // timeout — took the whole boot down with it, leaving the shelf
+      // indistinguishable from a brand-new install. Forever, since init does
+      // not run twice.
+      const settled = <T,>(p: Promise<T>) =>
+        p.then(
+          (value) => ({ ok: true as const, value }),
+          (err: unknown) => ({ ok: false as const, err }),
+        );
+      const [notebooksR, aiConfigR, ollamaOk, templates] = await Promise.all([
+        settled(api.listNotebooks()),
+        settled(api.getAiConfig()),
         api.checkOllama().catch(() => false),
         // Templates are global (a user folder), not per-notebook. A read failure
         // just hides the section — never blocks boot.
         api.listTemplates().catch(() => []),
       ]);
-      set({ notebooks, aiConfig, ollamaOk, templates });
+      const aiConfig = aiConfigR.ok ? aiConfigR.value : get().aiConfig;
+      const notebooks = notebooksR.ok ? notebooksR.value : [];
+      set({
+        notebooks,
+        notebooksFailed: !notebooksR.ok,
+        aiConfig,
+        ollamaOk,
+        templates,
+      });
+      if (!notebooksR.ok) {
+        set({ error: describe(notebooksR.err) });
+      } else if (!aiConfigR.ok) {
+        set({ error: describe(aiConfigR.err) });
+      }
       // Releases any OS entry point that arrived before the corpus was known.
       markNotebooksLoaded();
       // showNotifications lives in config now (the Night Shift's resident
       // scheduler reads it backend-side, as does notify()'s send_notification
       // path). Honor a pre-migration localStorage opt-out once, then mirror
       // config down so the legacy key can't re-trigger this migration.
-      if (
-        localStorage.getItem("showNotifications") === "false" &&
-        aiConfig.showNotifications
-      ) {
-        void api.setAiConfig({ ...aiConfig, showNotifications: false });
-      } else {
+      // Skipped entirely when the config read failed: mirroring a config we
+      // never loaded would write defaults over the user's real settings.
+      if (aiConfig) {
+        if (
+          localStorage.getItem("showNotifications") === "false" &&
+          aiConfig.showNotifications
+        ) {
+          void api.setAiConfig({ ...aiConfig, showNotifications: false });
+        } else {
+          localStorage.setItem(
+            "showNotifications",
+            String(aiConfig.showNotifications),
+          );
+        }
+        // Quiet-while-focused mirrors config → localStorage for the sound
+        // module's synchronous check (desktop notifications read config
+        // directly, backend-side).
         localStorage.setItem(
-          "showNotifications",
-          String(aiConfig.showNotifications),
+          "quietWhenFocused",
+          String(aiConfig.quietWhenFocused),
         );
       }
-      // Quiet-while-focused mirrors config → localStorage for the sound
-      // module's synchronous check (desktop notifications read config
-      // directly, backend-side).
-      localStorage.setItem(
-        "quietWhenFocused",
-        String(aiConfig.quietWhenFocused),
-      );
       void get().refreshModelHealth();
       void get().refreshModelStats();
       void get().refreshKokoroStatus();
@@ -1082,7 +1112,7 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     refreshNotebooks: async () => {
-      set({ notebooks: await api.listNotebooks() });
+      set({ notebooks: await api.listNotebooks(), notebooksFailed: false });
       void api.rebuildAppMenu();
     },
 

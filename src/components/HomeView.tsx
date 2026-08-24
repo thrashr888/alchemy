@@ -45,6 +45,7 @@ import {
   Package,
   Sparkles,
   FolderInput,
+  Library,
 } from "lucide-react";
 import { BriefSidebar, SidebarRail, StaffSidebar } from "./HomeSections";
 import { NOTEBOOK_ICONS, notebookIcon } from "@/lib/notebookIcons";
@@ -221,6 +222,7 @@ function HomeSectionTabs() {
 
 export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const notebooks = useStore((s) => s.notebooks);
+  const notebooksFailed = useStore((s) => s.notebooksFailed);
   const open = useStore((s) => s.selectNotebook);
   const create = useStore((s) => s.createNotebook);
   const rename = useStore((s) => s.renameNotebook);
@@ -650,7 +652,26 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         onOpenSettings={() => useStore.getState().openSettings("models")}
       />
 
-      {notebooks.length === 0 ? (
+      {notebooksFailed ? (
+        // Not the same as an empty shelf: the library is probably fine and
+        // the read timed out. Offering the new-install hero here invites
+        // someone to start over on top of work that is still there.
+        <div className="flex-1">
+          <EmptyState
+            icon={<Library className="h-5 w-5" />}
+            title="Couldn't load your notebooks"
+            hint="The library didn't answer in time. Nothing has been lost — it may just be busy."
+          >
+            <Button
+              variant="primary"
+              className="mt-3"
+              onClick={() => void useStore.getState().refreshNotebooks()}
+            >
+              Try again
+            </Button>
+          </EmptyState>
+        </div>
+      ) : notebooks.length === 0 ? (
         <div className="flex-1">
           <AlchemyHero
             title="Alchemy"
