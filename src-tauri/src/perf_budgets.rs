@@ -1,0 +1,319 @@
+//! Performance budgets (docs/RFC-professional-grade.md Pillar 2).
+//!
+//! Named budgets asserted against the seeded fixture library (`fixtures.rs`),
+//! so the next scan storm fails a test instead of a user.
+//!
+//! Every threshold below was set from a measurement on this machine, recorded
+//! in a comment beside it, with roughly 2x headroom — these are regression
+//! tripwires, not targets, and a run on a busy laptop must not turn red.
+//!
+//! Two things keep that promise. Each test is `#[ignore]`d out of the default
+//! run and executed by its own CI step with `--test-threads=1`: these are
+//! wall-clock measurements, and sharing a machine with 390 parallel tests
+//! made them fail on load rather than on regression. And each budget asserts
+//! on the *fastest* sample rather than p95 — contention can only make a
+//! sample slower, so the minimum is the statistic load cannot fake, while a
+//! real regression still raises the floor. A budget that goes red for
+//! reasons unrelated to the code teaches everyone to ignore it, which is
+//! worse than having no budget.
+//! Tightening or loosening one is a deliberate commit.
+//!
+//! Two budgets from the RFC's table are deliberately absent rather than faked:
+//!
+//! - **Cold start → window interactive.** Out of process by definition. What
+//!   is measurable lands in `traces/startup.jsonl` (see `trace::Startup`); the
+//!   backend phases are there, and the paint that completes the number needs a
+//!   front-end beacon.
+//! - **Idle CPU over 60 s.** A test process is not an idle app: the scheduler,
+//!   the FTS debouncer, and the webview are exactly what idle CPU is about, and
+//!   none of them run here. `activity_stats` and Activity Monitor measure this
+//!   honestly; a test cannot.
+//!
+//! Memory is measured but not asserted — see `search_latency_10k`.
+//!
+//! The RFC files chat first-token overhead under the retrieval trace; it is
+//! asserted here too, because everything in it (embed, search, expansion,
+//! manifest, prompt build) runs in-process and none of it needs a model.
+//!
+//!   cargo test --lib perf_budgets -- --nocapture
+//!   cargo test --lib perf_budgets -- --ignored --nocapture   # 10k-chunk store
+
+use std::time::Instant;
+
+use crate::fixtures;
+
+/// Queries per latency sample. Enough that p95 means something without making
+/// the default test slow.
+const SAMPLES: usize = 40;
+
+/// Top-k the chat path asks for.
+const K: usize = 8;
+
+/// Wall-clock milliseconds for each query in `queries`, embedding excluded —
+/// the budget is about retrieval, and the embedder is measured separately by
+/// the eval harness.
+async fn search_millis(lib: &fixtures::Library, queries: &[String]) -> Vec<f64> {
+    let mut out = Vec::with_capacity(queries.len());
+    let mut hits = 0usize;
+    for q in queries {
+        let qvec = lib.ai.embed_one(q).await.expect("embed query");
+        let start = Instant::now();
+        let found = lib
+            .db
+            .search_chunks(&lib.notebook_id, qvec, q, K, None)
+            .await
+            .expect("hybrid search");
+        out.push(start.elapsed().as_secs_f64() * 1000.0);
+        hits += found.len();
+    }
+    // A search that finds nothing is fast and meaningless. This is the guard
+    // that keeps the budget honest — a store seeded without `flush_fts`, or a
+    // filter typo, would otherwise post excellent numbers.
+    assert!(
+        hits >= queries.len(),
+        "fixture searches returned {hits} citations over {} queries — \
+         the store is not answering, so the latency numbers mean nothing",
+        queries.len()
+    );
+    out
+}
+
+/// Wall-clock milliseconds to get from a typed question to a built prompt:
+/// embed, hybrid search, neighbor expansion, source manifest, prompt assembly
+/// — everything `send_message` does before the first token can be asked for,
+/// which is the RFC's "chat first-token overhead, excl. model". Reranking is
+/// left out on purpose: it is a model call, and the budget says excl. model.
+async fn chat_overhead_millis(lib: &fixtures::Library, queries: &[String]) -> Vec<f64> {
+    let profile = lib.ai.profile(crate::inference::Role::Chat);
+    let persona = crate::rag::persona_block(&lib.ai.config().profile);
+    let mut out = Vec::with_capacity(queries.len());
+    for q in queries {
+        let start = Instant::now();
+        let qvec = lib.ai.embed_one(q).await.expect("embed query");
+        let sources = lib
+            .db
+            .list_sources(&lib.notebook_id)
+            .await
+            .expect("list sources");
+        let corpus_chars: i64 = sources.iter().map(|s| s.char_count).sum();
+        let k = profile.retrieve_k_for(corpus_chars);
+        let citations = lib
+            .db
+            .search_chunks(&lib.notebook_id, qvec, q, k, None)
+            .await
+            .expect("hybrid search");
+        let expanded = if profile.neighbor_expansion {
+            lib.db
+                .expand_neighbor_excerpts(&citations)
+                .await
+                .unwrap_or_default()
+        } else {
+            std::collections::HashMap::new()
+        };
+        let manifest: Vec<(String, String, String)> = sources
+            .into_iter()
+            .map(|s| (s.title, s.url, s.tags))
+            .collect();
+        let messages = crate::rag::build_chat_messages(
+            &[],
+            q,
+            crate::rag::Excerpts {
+                citations: &citations,
+                expanded: &expanded,
+            },
+            &manifest,
+            "",
+            &persona,
+            &profile,
+        );
+        out.push(start.elapsed().as_secs_f64() * 1000.0);
+        assert!(!messages.is_empty(), "prompt build produced no messages");
+    }
+    out
+}
+
+/// (p50, p95) of a millisecond sample, nearest-rank.
+fn percentiles(mut ms: Vec<f64>) -> (f64, f64) {
+    ms.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let at = |p: f64| ms[(((ms.len() as f64) * p).ceil() as usize).clamp(1, ms.len()) - 1];
+    (at(0.50), at(0.95))
+}
+
+/// The fastest sample — what this machine can do when nothing is in the way.
+///
+/// Budgets assert on this rather than on p95, because `cargo test` runs the
+/// whole suite in parallel and these are wall-clock measurements: a fixture
+/// seeding on another thread inflates p95 without anything having regressed.
+/// Contention can only ever make a sample slower, so the minimum is the one
+/// statistic load cannot fake — and a real regression raises the floor too,
+/// which is exactly what the budget is meant to catch. p50/p95 are still
+/// printed, because the spread is worth seeing even when it can't be
+/// asserted on.
+fn best(ms: &[f64]) -> f64 {
+    ms.iter().copied().fold(f64::INFINITY, f64::min)
+}
+
+/// Resident set size of this process in megabytes, or None where `ps` cannot
+/// answer. Reported only — see the call site.
+fn rss_mb() -> Option<f64> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .ok()?;
+    String::from_utf8(out.stdout)
+        .ok()?
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .map(|kb| kb / 1024.0)
+}
+
+/// Hybrid search over a small seeded store. The default run: fast, and it
+/// catches the gross regressions (a full scan per query, a rebuilt index per
+/// query, an N+1 over sources) without waiting on a 10k-chunk seed.
+#[tokio::test]
+#[ignore = "wall-clock budget: runs serially in its own CI step, not alongside 390 parallel tests"]
+async fn search_latency_small() {
+    let Some(lib) = fixtures::library(fixtures::SMALL).await else {
+        return;
+    };
+    let queries = fixtures::queries(lib.sources, SAMPLES);
+    // Warm the table handle and the FTS index before sampling.
+    search_millis(&lib, &queries[..4]).await;
+    let samples = search_millis(&lib, &queries).await;
+    let (p50, p95) = percentiles(samples.clone());
+    let fastest = best(&samples);
+    eprintln!(
+        "hybrid search, {} sources / {} chunks, {:.0} MB on disk (cached={}): \
+         best {fastest:.0} ms, p50 {p50:.0} ms, p95 {p95:.0} ms",
+        lib.sources,
+        lib.chunks,
+        lib.disk_mb(),
+        lib.cached
+    );
+
+    // Measured 2026-08-23, debug build, M-series laptop: best 13-14 ms,
+    // p50 14-18 ms.
+    assert!(
+        fastest < 60.0,
+        "small-store hybrid search best {fastest:.0} ms"
+    );
+
+    let chat = chat_overhead_millis(&lib, &queries).await;
+    let (c50, c95) = percentiles(chat.clone());
+    let chat_best = best(&chat);
+    eprintln!(
+        "chat overhead excl. model: best {chat_best:.0} ms, p50 {c50:.0} ms, \
+         p95 {c95:.0} ms"
+    );
+    // Measured 2026-08-23, debug build: best ~50 ms. The RFC's 500 ms is the
+    // budget at library scale; this store is 48 sources, so it gets a
+    // threshold its own size.
+    assert!(chat_best < 120.0, "chat overhead best {chat_best:.0} ms");
+}
+
+/// The RFC's search budget at its stated scale: a ~10k-chunk store.
+/// `#[ignore]`d because the first run seeds it — about 20 s and 86 MB — and a
+/// default `cargo test` should not pay that; the fixture cache carries every
+/// run after.
+#[tokio::test]
+#[ignore = "seeds a ~10k-chunk fixture store on first run; cached after"]
+async fn search_latency_10k() {
+    let Some(lib) = fixtures::library(fixtures::LARGE).await else {
+        return;
+    };
+    let queries = fixtures::queries(lib.sources, SAMPLES);
+    search_millis(&lib, &queries[..4]).await;
+    let samples = search_millis(&lib, &queries).await;
+    let (p50, p95) = percentiles(samples.clone());
+    let fastest = best(&samples);
+    eprintln!(
+        "hybrid search, {} sources / {} chunks, {:.0} MB on disk (cached={}): \
+         best {fastest:.0} ms, p50 {p50:.0} ms, p95 {p95:.0} ms",
+        lib.sources,
+        lib.chunks,
+        lib.disk_mb(),
+        lib.cached
+    );
+
+    // Reported, never asserted: `cargo test` shares one process across tests,
+    // so resident memory here is the harness plus the embedder plus whatever
+    // ran alongside — not attributable to the store. The number is worth
+    // printing for calibration; asserting it would be a number about the
+    // test harness dressed up as a number about the app.
+    // Measured 2026-08-23: 215-229 MB warm, 497 MB on the run that also
+    // seeded the store. The RFC's ceiling is 800 MB for a 10k-*source*
+    // library, an axis this fixture (833 sources, 10k chunks) does not reach.
+    if let Some(mb) = rss_mb() {
+        eprintln!("process RSS after the sweep: {mb:.0} MB (reported, not asserted)");
+    }
+
+    // Measured 2026-08-23, debug build, M-series laptop: best ~32 ms,
+    // p50 32-38 ms. The RFC proposed 300 ms for this scale and the machine
+    // came in six times under it, so the tripwire sits near 4x measured
+    // instead — a regression to 200 ms would still be a regression.
+    assert!(
+        fastest < 120.0,
+        "10k-chunk hybrid search best {fastest:.0} ms"
+    );
+
+    let chat = chat_overhead_millis(&lib, &queries).await;
+    let (c50, c95) = percentiles(chat.clone());
+    let chat_best = best(&chat);
+    eprintln!(
+        "chat overhead excl. model: best {chat_best:.0} ms, p50 {c50:.0} ms, \
+         p95 {c95:.0} ms"
+    );
+    // Measured 2026-08-23, debug build: best ~116 ms (RFC budget 500 ms).
+    // The term that grows here is the source manifest — `list_sources` scans
+    // every row in the notebook on every question — so this is the number to
+    // watch as libraries get wide rather than deep.
+    assert!(chat_best < 350.0, "chat overhead best {chat_best:.0} ms");
+}
+
+/// Import throughput for a 100-page PDF, embedding excluded — the extract and
+/// chunk legs, which are the ones that have regressed before.
+#[tokio::test]
+#[ignore = "wall-clock budget: runs serially in its own CI step, not alongside 390 parallel tests"]
+async fn import_throughput_pdf() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/fixture-cache");
+    std::fs::create_dir_all(&dir).expect("fixture cache dir");
+    let path = dir.join("throughput-100p.pdf");
+    fixtures::write_pdf(&path, 100).expect("generate fixture pdf");
+
+    // Best of three, for the same reason the latency sweeps assert on their
+    // fastest sample: this runs alongside the rest of the suite.
+    let mut secs = f64::INFINITY;
+    let mut last = None;
+    for _ in 0..3 {
+        let start = Instant::now();
+        let t = crate::pdf::extract_text(path.to_str().expect("utf-8 path")).expect("extract pdf");
+        let e = t.markdown();
+        let c = crate::ingest::chunk_text("Throughput Fixture", &e);
+        secs = secs.min(start.elapsed().as_secs_f64());
+        last = Some((t, e, c));
+    }
+    let (text, extracted, chunks) = last.expect("three runs happened");
+    eprintln!(
+        "import, 100-page PDF: {secs:.2} s excl. embedding \
+         ({} pages, {} chars, {} chunks)",
+        text.pages.len(),
+        extracted.chars().count(),
+        chunks.len()
+    );
+
+    // The generator has to actually produce a text layer for this to measure
+    // anything; a silently empty extraction would post a perfect time.
+    assert_eq!(text.pages.len(), 100, "fixture PDF lost pages");
+    assert!(
+        text.pages_needing_ocr.is_empty(),
+        "fixture PDF has no text layer on pages {:?}",
+        text.pages_needing_ocr
+    );
+    assert!(chunks.len() > 20, "fixture PDF chunked to {}", chunks.len());
+
+    // Measured 2026-08-23, debug build, M-series laptop: best 0.48 s. The
+    // RFC's 10 s budget is for real-world PDFs; this fixture is deliberately
+    // plain, so holding it to 10 s would assert nothing.
+    assert!(secs < 1.5, "100-page PDF import took {secs:.2} s");
+}
