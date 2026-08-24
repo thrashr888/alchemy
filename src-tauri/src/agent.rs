@@ -48,6 +48,11 @@ const MAX_STEPS: usize = 5;
 /// model cost 21.4s on its first call, against 1.5s cold for FM, and a cold
 /// call is exactly what the first question after opening the app is.
 ///
+/// The loop's search rerank moved to the local cross-encoder on the same
+/// evidence (`eval_agent_rerank_paths`): gold passage retained 4/4 by both
+/// paths, 91ms against the LLM rerank's 1,272ms, and it keeps SEARCH_K
+/// passages where the model's pick averaged three.
+///
 /// No quality difference on these probes, 16-45x the speed. Re-run with
 /// `cargo test --lib eval_agent_planner_roles eval_agent_distill_roles --
 /// --ignored --nocapture` after changing the prompts or the default pair.
@@ -60,7 +65,7 @@ pub(crate) fn loop_role() -> crate::inference::Role {
     }
 }
 /// Results kept per search step, after reranking.
-const SEARCH_K: usize = 5;
+pub(crate) const SEARCH_K: usize = 5;
 /// Hybrid-retrieval pool handed to the reranker.
 const SEARCH_POOL: usize = 20;
 
@@ -163,7 +168,18 @@ pub async fn run(
                 // the rerank.
                 if hits.len() > SEARCH_K {
                     emit_step(app, "Ranking results".into());
-                    hits = rerank(ollama, &query, hits).await;
+                    // The local cross-encoder when there is one: measured
+                    // 91ms against the LLM rerank's 1,272ms for the same
+                    // gold retention (4/4 both), and it keeps SEARCH_K
+                    // passages where the model's pick averaged three — more
+                    // evidence for the answer, at a fraction of the wait.
+                    //
+                    // The Ollama embedder tier has no cross-encoder
+                    // (Router::xenc_model), and there rerank_hits would
+                    // degrade to plain truncation — so those configs keep
+                    // the model-picked rerank rather than silently losing
+                    // the ranking step.
+                    hits = rerank_for_search(ollama, &query, hits).await;
                 }
                 transcript.push_str(&format!("SEARCH \"{query}\":\n"));
                 for h in &hits {
@@ -345,6 +361,25 @@ pub(crate) async fn rerank(ai: &Ai, question: &str, hits: Vec<Citation>) -> Vec<
     match rerank_indices(ai, question, &snippets, SEARCH_K).await {
         Some(picked) => picked.into_iter().map(|i| hits[i].clone()).collect(),
         None => hits.into_iter().take(SEARCH_K).collect(),
+    }
+}
+
+/// How a wide search result gets narrowed, in one place so the eval cannot
+/// drift from what the loop actually runs.
+///
+/// The local cross-encoder when there is one: measured 91ms against the LLM
+/// rerank's 1,272ms for the same gold retention (4/4 both), and it keeps
+/// SEARCH_K passages where the model's pick averaged three — more evidence
+/// for the answer, at a fraction of the wait.
+///
+/// The Ollama embedder tier has no cross-encoder (`Router::xenc_model`), and
+/// there `rerank_hits` would degrade to plain truncation — so those configs
+/// keep the model-picked rerank rather than silently losing the step.
+pub(crate) async fn rerank_for_search(ai: &Ai, query: &str, hits: Vec<Citation>) -> Vec<Citation> {
+    if ai.has_xenc() {
+        ai.rerank_hits(query, hits, SEARCH_K).await
+    } else {
+        rerank(ai, query, hits).await
     }
 }
 

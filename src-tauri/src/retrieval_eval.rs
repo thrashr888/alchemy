@@ -2406,8 +2406,9 @@ async fn eval_agent_phase_costs() {
     eprintln!("     ({} hits)", hits.len());
 
     // Rerank — a model call per search that returned a wide pool.
-    let picked = timed!("rerank (small)", {
-        crate::agent::rerank(&ai, question, hits.clone()).await
+    // Whatever the loop actually runs — cross-encoder or model-picked.
+    let picked = timed!("rerank", {
+        crate::agent::rerank_for_search(&ai, question, hits.clone()).await
     });
     eprintln!("     ({} kept of {})", picked.len(), hits.len());
 
@@ -2422,5 +2423,96 @@ async fn eval_agent_phase_costs() {
     eprintln!(
         "  (cold-warm gap is model load. A turn pays planner+action per step, \n\
           up to MAX_STEPS, then streams the answer.)"
+    );
+}
+
+/// Rerank probes: a question and the fixture document whose passage must
+/// survive the rerank, or the answer cannot cite it.
+const RERANK_PROBES: &[(&str, &str)] = &[
+    ("How long should a failed retry wait?", "Acme Invoices Q3"),
+    (
+        "Which port forwards to the media server?",
+        "Home Network Guide",
+    ),
+    (
+        "How much paid time off accrues per month?",
+        "Employee Handbook",
+    ),
+    ("Where did we stay in Kyoto?", "Kyoto Trip Journal"),
+];
+
+/// The research loop reranks each wide search with an LLM call, while the
+/// direct-chat path reranks with the local cross-encoder (`Ai::rerank_hits`).
+/// Phase timing put the LLM rerank at 3.3s warm — the most expensive phase
+/// in the loop, more than twice the planner — so this measures whether the
+/// cross-encoder keeps the gold passage as reliably, far cheaper.
+#[tokio::test]
+#[ignore = "live models: one rerank per probe per path — run with --ignored --nocapture"]
+async fn eval_agent_rerank_paths() {
+    let Some(embedder) = builtin_ai().await else {
+        return;
+    };
+    let chat_model =
+        std::env::var("PLANNER_CHAT_MODEL").unwrap_or_else(|_| "muse-glimmer:30b-mlx".to_string());
+    let small_model = std::env::var("PLANNER_SMALL_MODEL").unwrap_or_else(|_| "fm".to_string());
+    let Some(ai) = planner_ab_ai(&chat_model, &small_model) else {
+        return;
+    };
+    assert!(
+        ai.has_xenc(),
+        "no cross-encoder for this config — the comparison would be truncation, not reranking"
+    );
+    let dir = std::env::temp_dir().join(format!("nbl-rerank-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb = "rerank-nb";
+    seed_corpus(&embedder, &db, nb).await;
+
+    eprintln!("\n  chat={chat_model}   small={small_model}");
+    eprintln!("search rerank, gold passage retained:");
+    let (mut llm_kept, mut llm_ms, mut xe_kept, mut xe_ms) = (0usize, 0u128, 0usize, 0u128);
+    let (mut llm_n, mut xe_n) = (0usize, 0usize);
+
+    for (question, gold) in RERANK_PROBES {
+        let qvec = ai.embed_one(question).await.expect("embed");
+        let hits = db
+            .search_chunks(nb, qvec, question, 20, None)
+            .await
+            .expect("search");
+        let has_gold = |v: &[Citation]| v.iter().any(|c| c.source_title == *gold);
+
+        let t = std::time::Instant::now();
+        let picked = crate::agent::rerank(&ai, question, hits.clone()).await;
+        llm_ms += t.elapsed().as_millis();
+        llm_n += picked.len();
+        if has_gold(&picked) {
+            llm_kept += 1;
+        } else {
+            eprintln!("  MISS (llm): {question} — dropped {gold}");
+        }
+
+        let t = std::time::Instant::now();
+        let ranked = ai
+            .rerank_hits(question, hits.clone(), crate::agent::SEARCH_K)
+            .await;
+        xe_ms += t.elapsed().as_millis();
+        xe_n += ranked.len();
+        if has_gold(&ranked) {
+            xe_kept += 1;
+        } else {
+            eprintln!("  MISS (xenc): {question} — dropped {gold}");
+        }
+    }
+    let n = RERANK_PROBES.len();
+    eprintln!(
+        "  {:<14} gold {llm_kept}/{n}   avg {:>6}ms   avg kept {:.1}",
+        "llm rerank",
+        llm_ms / n as u128,
+        llm_n as f64 / n as f64
+    );
+    eprintln!(
+        "  {:<14} gold {xe_kept}/{n}   avg {:>6}ms   avg kept {:.1}",
+        "cross-encoder",
+        xe_ms / n as u128,
+        xe_n as f64 / n as f64
     );
 }
