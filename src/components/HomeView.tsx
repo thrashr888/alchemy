@@ -729,12 +729,19 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   <h1 className="text-page font-semibold tracking-tight">
                     {homeSection === "registry"
                       ? "Your registry"
-                      : "Your notebooks"}
+                      : homeSection === "nightShift"
+                        ? "The Night Shift"
+                        : "Your notebooks"}
                   </h1>
                   {homeSection === "registry" ? (
                     <p className="mt-1 text-body text-muted-foreground">
                       The things your documents are about: assets, people,
                       projects.
+                    </p>
+                  ) : homeSection === "nightShift" ? (
+                    <p className="mt-1 text-body text-muted-foreground">
+                      Work that happens while you're away. It runs when your
+                      Mac is awake.
                     </p>
                   ) : (
                   <p className="mt-1 text-body text-muted-foreground">
@@ -762,7 +769,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   )}
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  {homeSection === "registry" ? (
+                  {homeSection === "nightShift" ? null : homeSection ===
+                    "registry" ? (
                     // The registry's verbs are its own: source/import belong
                     // to notebooks, and the primary action here mints a card.
                     <Button
