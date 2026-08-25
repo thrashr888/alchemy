@@ -44,16 +44,8 @@ pub async fn export_note_file(
         .await?
         .ok_or_else(|| anyhow!("no note with id {note_id}"))?;
 
-    let format = match format {
-        "audio" | "mp3" => "m4a", // the episode is AAC; see the RFC
-        f => f,
-    };
-    let ext = match format {
-        "png" | "pdf" | "pptx" | "docx" | "xlsx" | "m4a" => format,
-        other => {
-            bail!("unknown export format \"{other}\" — use png, pdf, pptx, docx, xlsx, or m4a")
-        }
-    };
+    let format = export_ext(format)?;
+    let ext = format;
     let dest: PathBuf = match dest {
         Some(d) => PathBuf::from(d),
         None => app
@@ -154,8 +146,24 @@ fn pptx_note_bytes(note: &Note) -> Result<Vec<u8>> {
     crate::pptx::pptx_bytes(&slides)
 }
 
+/// Normalize an export format to the extension it writes. Shared with the
+/// drag-out staging path (dragout.rs), which needs the same name the Save
+/// dialog would have produced.
+pub(crate) fn export_ext(format: &str) -> Result<&str> {
+    let format = match format {
+        "audio" | "mp3" => "m4a", // the episode is AAC; see the RFC
+        f => f,
+    };
+    match format {
+        "png" | "pdf" | "pptx" | "docx" | "xlsx" | "m4a" => Ok(format),
+        other => {
+            bail!("unknown export format \"{other}\" — use png, pdf, pptx, docx, xlsx, or m4a")
+        }
+    }
+}
+
 /// Titles become filenames; keep them, minus path separators.
-fn safe_name(title: &str) -> String {
+pub(crate) fn safe_name(title: &str) -> String {
     let cleaned: String = title
         .chars()
         .map(|c| {

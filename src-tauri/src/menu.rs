@@ -405,13 +405,28 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
         .close_window()
         .build()?;
 
-    // WKWebView routes clipboard shortcuts through the menu on macOS — these
-    // predefined items are what make ⌘C/⌘V/⌘Z work in inputs. Find carries
-    // no accelerator on purpose: ⌘F must respect focused text fields, so the
-    // frontend's shortcutBlocked-guarded handler owns the key.
+    // WKWebView routes clipboard shortcuts through the menu on macOS — the
+    // predefined cut/copy/paste items are what make ⌘C/⌘V work in inputs.
+    //
+    // Two items here deliberately break from that. Find carries no
+    // accelerator, because ⌘F must respect focused text fields, so the
+    // frontend's shortcutBlocked-guarded handler owns the key. Undo and redo
+    // go the other way: they are NOT the predefined items, because ⌘Z now
+    // reverses the last app mutation (docs/RFC-professional-grade.md
+    // Pillar 5) and that only works if the app receives the keystroke — a
+    // menu accelerator consumes it before any webview keydown fires. Having
+    // claimed it, the frontend owes text fields their own undo back, so
+    // textUndo.ts offers a focused editor or input first claim and falls
+    // through to the session history stack only when nothing is being typed.
+    let undo = MenuItemBuilder::with_id("menu-undo", "Undo")
+        .accelerator("CmdOrCtrl+Z")
+        .build(app)?;
+    let redo = MenuItemBuilder::with_id("menu-redo", "Redo")
+        .accelerator("Shift+CmdOrCtrl+Z")
+        .build(app)?;
     let edit_menu = SubmenuBuilder::new(app, "Edit")
-        .undo()
-        .redo()
+        .item(&undo)
+        .item(&redo)
         .separator()
         .cut()
         .copy()
@@ -583,6 +598,15 @@ pub fn handle_event(app: &AppHandle, id: &str) {
         .or_else(|| windows.keys().next().cloned());
     let Some(target) = target else { return };
     if let Some(nb) = id.strip_prefix("recent:") {
+        // Opening a notebook can be asked for from places where the app is
+        // not frontmost — the menu bar extra, and the Dock's right-click
+        // menu. Emitting alone would switch notebooks behind whatever the
+        // user is looking at, so bring the window forward too.
+        if let Some(win) = windows.get(&target) {
+            let _ = win.show();
+            let _ = win.unminimize();
+            let _ = win.set_focus();
+        }
         let _ = app.emit(
             "menu://open-notebook",
             MenuPayload {

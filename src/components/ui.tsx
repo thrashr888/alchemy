@@ -102,7 +102,8 @@ export function Textarea({
 }
 
 export function Spinner({ className }: { className?: string }) {
-  return <Loader2 className={cn("animate-spin", className)} />;
+  // Decoration: the words beside it say what is happening.
+  return <Loader2 aria-hidden className={cn("animate-spin", className)} />;
 }
 
 export interface HoverCardData {
@@ -357,9 +358,12 @@ export function useMarquee({
     const t = e.target as HTMLElement;
     // Real controls keep their gestures; the row surface (CardAction) and
     // true background both start a marquee.
+    // A row that can be dragged out of the app (dragOut.ts) owns its own
+    // drag: pressing it means "take this file", not "start a band". Finder
+    // draws the same line — bands begin on background, never on an item.
     if (
       t.closest(
-        "button:not([data-card-action]), input, a, textarea, select, [role='menu']",
+        "button:not([data-card-action]), input, a, textarea, select, [role='menu'], [data-drag-out]",
       )
     )
       return;
@@ -817,6 +821,43 @@ export function useConfirm() {
   return { confirm, dialog };
 }
 
+export interface Announcement {
+  id: string | number;
+  text: string;
+}
+
+/**
+ * Screen-reader-only polite live region: the channel for state changes a
+ * sighted user reads off the screen and a VoiceOver user would otherwise
+ * miss. Two rules make it work:
+ *
+ * - It stays mounted for the life of its host. A region that appears
+ *   together with its first message is announced unreliably — the region
+ *   has to exist before the text lands in it.
+ * - Each announcement is its own child node (`aria-atomic="false"`), so a
+ *   sentence repeats aloud even when the words are identical to the last.
+ *
+ * Feed it transitions, never a stream: one entry per meaningful change.
+ */
+export function LiveRegion({
+  announcements,
+}: {
+  announcements: Announcement[];
+}) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      aria-atomic="false"
+      className="sr-only"
+    >
+      {announcements.map((a) => (
+        <div key={a.id}>{a.text}</div>
+      ))}
+    </div>
+  );
+}
+
 /** Bottom-center stack of ephemeral toasts. */
 export function Toaster({
   toasts,
@@ -825,13 +866,30 @@ export function Toaster({
   toasts: Toast[];
   onDismiss: (id: string) => void;
 }) {
-  if (toasts.length === 0) return null;
+  // The announcer renders unconditionally — the visible stack comes and goes,
+  // but the live region it speaks through must already be in the document.
+  // The stack itself is not the live region: its dismiss buttons would be
+  // read out with every toast.
+  const announcer = (
+    <LiveRegion
+      announcements={toasts.map((t) => ({ id: t.id, text: t.message }))}
+    />
+  );
+  if (toasts.length === 0) return announcer;
   const icon = {
-    success: <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />,
-    error: (
-      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+    success: (
+      <CheckCircle2
+        aria-hidden
+        className="mt-0.5 h-4 w-4 shrink-0 text-success"
+      />
     ),
-    info: <Info className="mt-0.5 h-4 w-4 shrink-0 text-citation" />,
+    error: (
+      <AlertTriangle
+        aria-hidden
+        className="mt-0.5 h-4 w-4 shrink-0 text-destructive"
+      />
+    ),
+    info: <Info aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-citation" />,
   };
   const border = {
     success: "border-success/40",
@@ -839,47 +897,45 @@ export function Toaster({
     info: "border-border-strong",
   };
   return (
-    <div
-      role="status"
-      aria-live="polite"
-      aria-atomic="false"
-      className="pointer-events-none fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-1/2 z-[70] flex -translate-x-1/2 flex-col items-center gap-2"
-    >
-      {toasts.map((t) => (
-        <div
-          key={t.id}
-          className={cn(
-            "pointer-events-auto flex max-w-[520px] items-start gap-2.5 rounded-lg border bg-elevated/90 backdrop-blur-md px-3.5 py-2.5 shadow-lg animate-in slide-in-from-bottom-2 fade-in duration-150",
-            border[t.kind],
-          )}
-        >
-          {icon[t.kind]}
-          {t.onClick ? (
-            <button
-              type="button"
-              className="text-left text-caption text-foreground/90 underline-offset-2 hover:underline"
-              onClick={() => {
-                t.onClick?.();
-                onDismiss(t.id);
-              }}
-            >
-              {t.message}
-            </button>
-          ) : (
-            <div className="text-caption text-foreground/90 selectable">
-              {t.message}
-            </div>
-          )}
-          <button
-            className="ml-1 rounded p-0.5 text-muted-foreground hover:text-foreground"
-            onClick={() => onDismiss(t.id)}
-            aria-label="Dismiss notification"
+    <>
+      {announcer}
+      <div className="pointer-events-none fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-1/2 z-[70] flex -translate-x-1/2 flex-col items-center gap-2">
+        {toasts.map((t) => (
+          <div
+            key={t.id}
+            className={cn(
+              "pointer-events-auto flex max-w-[520px] items-start gap-2.5 rounded-lg border bg-elevated/90 backdrop-blur-md px-3.5 py-2.5 shadow-lg animate-in slide-in-from-bottom-2 fade-in duration-150",
+              border[t.kind],
+            )}
           >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      ))}
-    </div>
+            {icon[t.kind]}
+            {t.onClick ? (
+              <button
+                type="button"
+                className="text-left text-caption text-foreground/90 underline-offset-2 hover:underline"
+                onClick={() => {
+                  t.onClick?.();
+                  onDismiss(t.id);
+                }}
+              >
+                {t.message}
+              </button>
+            ) : (
+              <div className="text-caption text-foreground/90 selectable">
+                {t.message}
+              </div>
+            )}
+            <button
+              className="ml-1 rounded p-0.5 text-muted-foreground hover:text-foreground"
+              onClick={() => onDismiss(t.id)}
+              aria-label="Dismiss notification"
+            >
+              <X aria-hidden className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -1165,6 +1221,30 @@ export function Badge({
     >
       {children}
     </span>
+  );
+}
+
+/** EmptyState's twin for the moment before an answer exists. Same rhythm and
+ *  the same slot in a pane, so a list that is still loading doesn't reflow
+ *  into its empty state the instant data lands. */
+export function LoadingState({
+  label,
+  compact = false,
+}: {
+  label: string;
+  compact?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex flex-col items-center justify-center gap-2 text-center",
+        compact ? "px-4 py-3" : "px-6 py-10",
+      )}
+      role="status"
+    >
+      <Spinner className="text-subtle-foreground" />
+      <div className="text-caption text-muted-foreground">{label}</div>
+    </div>
   );
 }
 

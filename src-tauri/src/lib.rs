@@ -8,6 +8,10 @@ mod commands;
 mod connectors;
 mod db;
 mod diagnostics;
+#[cfg(target_os = "macos")]
+mod dockmenu;
+#[cfg(target_os = "macos")]
+mod dragout;
 mod examples;
 mod export;
 mod filesearch;
@@ -46,7 +50,13 @@ mod beir_eval;
 #[cfg(test)]
 mod evals;
 #[cfg(test)]
+mod fidelity;
+#[cfg(test)]
+mod fixtures;
+#[cfg(test)]
 mod judged_eval;
+#[cfg(test)]
+mod perf_budgets;
 #[cfg(test)]
 mod retrieval_eval;
 #[cfg(test)]
@@ -153,6 +163,9 @@ pub fn run() {
             if let Err(err) = std::fs::create_dir_all(&data_dir) {
                 diagnostics::fatal_startup("could not create the app data dir", &err);
             }
+            // Boot-phase stamps -> traces/startup.jsonl (docs/RFC-professional-grade.md
+            // Pillar 2). See trace::Startup for exactly what the clock covers.
+            let startup = trace::Startup::begin(data_dir.join("traces"));
 
             let db_dir = data_dir.join("lancedb");
             let config_path = data_dir.join("ai_config.json");
@@ -179,6 +192,9 @@ pub fn run() {
                 Ok(db) => db,
                 Err(err) => diagnostics::fatal_startup("could not open the database", &err),
             };
+            // Db::open both connects and ensures every table, so the two phases
+            // the RFC names collapse into this one stamp.
+            startup.stamp("db_open");
 
             // App menu, built exactly once (rebuilding would clear AppKit's
             // auto-managed Window list). Open Recent mutates in place later.
@@ -186,12 +202,22 @@ pub fn run() {
                 tauri::async_runtime::block_on(db.list_notebooks())
                     .map(|nbs| nbs.into_iter().map(|n| (n.id, n.title)).collect())
                     .unwrap_or_default();
+            // First read back through the ensured tables — the honest "tables
+            // are readable" signal, not just "the directory opened".
+            startup.stamp("tables_ready");
             let handles = menu::build(&app.handle().clone(), &recents)?;
             app.set_menu(handles.menu)?;
             // Deep links, tray, global hotkey (docs/RFC-macos-integrations.md).
             integrations::setup(app, &recents, config.tray_enabled)?;
             #[cfg(target_os = "macos")]
             services::setup(app);
+            #[cfg(target_os = "macos")]
+            {
+                // Seed the Dock's list from the same recents the app menu was
+                // just built with; rebuild_app_menu keeps it current after.
+                dockmenu::set_recents(&recents);
+                dockmenu::setup(app);
+            }
             // Only after set_menu does the NSMenu exist — now AppKit can be
             // told this is the windows menu and start listing open windows.
             #[cfg(target_os = "macos")]
@@ -255,6 +281,7 @@ pub fn run() {
             // The Night Shift's resident scheduler (docs/RFC-night-shift.md):
             // source resync + due report runs, window or no window.
             scheduler::start(app.handle().clone());
+            startup.stamp("scheduler_up");
 
             // Fusion follows the embedder tier (BEIR-measured; db.rs): the
             // built-in leg fuses at 0.25, nomic-class at full weight.
@@ -309,6 +336,10 @@ pub fn run() {
             // focus doesn't spuriously broadcast; the frontend reads it at boot
             // via get_system_text_scale, and window-focus republishes changes.
             textsize::prime();
+
+            // Last backend phase: state is managed, background tasks are
+            // spawned, and the webview has been loading in parallel.
+            startup.stamp("setup_done");
             Ok(())
         })
         .on_menu_event(|app, event| menu::handle_event(app, event.id().0.as_str()))
@@ -317,6 +348,10 @@ pub fn run() {
             commands::recent_errors,
             commands::pending_fatal,
             commands::reveal_log,
+            #[cfg(target_os = "macos")]
+            dragout::start_file_drag,
+            #[cfg(target_os = "macos")]
+            dragout::stage_note_for_drag,
             commands::list_notebooks,
             commands::create_notebook,
             commands::rename_notebook,

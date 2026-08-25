@@ -64,3 +64,83 @@ pub fn cite_summaries(citations: &[crate::models::Citation]) -> Vec<serde_json::
         })
         .collect()
 }
+
+// ---- Startup ---------------------------------------------------------------
+
+const STARTUP_FILE: &str = "startup.jsonl";
+
+/// Boot-phase stamps in `startup.jsonl` (docs/RFC-professional-grade.md
+/// Pillar 2): one line per phase, so a cold-start regression between releases
+/// is a `jq` one-liner instead of a stopwatch.
+///
+/// The clock is honest about where it starts and stops. `t0` is the top of
+/// `setup()`; the builder chain, plugin registration, and the config window
+/// whose webview Tauri builds *before* it runs our hook all happen earlier and
+/// are unreachable from there, so `ms` is elapsed-since-setup, never since
+/// `exec`. The last stamp is `setup_done` — the backend is ready and the
+/// webview has been loading alongside it. "Window interactive" would need a
+/// beacon the front-end does not emit; a stamp here would time `setup` rather
+/// than paint, so it is deliberately absent instead of wrong.
+pub struct Startup {
+    dir: std::path::PathBuf,
+    t0: std::time::Instant,
+    /// Groups one boot's lines together — the log interleaves runs.
+    boot: String,
+}
+
+impl Startup {
+    /// Start the clock and stamp `setup_start`. `dir` is the traces directory.
+    pub fn begin(dir: std::path::PathBuf) -> Self {
+        let started = Self {
+            dir,
+            t0: std::time::Instant::now(),
+            boot: uuid::Uuid::new_v4().to_string(),
+        };
+        started.stamp("setup_start");
+        started
+    }
+
+    /// Stamp one phase with its elapsed milliseconds since `begin`.
+    /// Infallible like every other trace write — see module docs.
+    pub fn stamp(&self, phase: &str) {
+        log_file(
+            &self.dir,
+            STARTUP_FILE,
+            serde_json::json!({
+                "ts": chrono::Utc::now().timestamp_millis(),
+                "version": env!("CARGO_PKG_VERSION"),
+                "boot": self.boot,
+                "phase": phase,
+                "ms": self.t0.elapsed().as_millis() as u64,
+            }),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The startup trace is only ever exercised by a real launch, so pin its
+    /// shape here: one line per phase, in order, each parseable and stamped
+    /// with a monotonic elapsed time under a single boot id.
+    #[test]
+    fn startup_stamps_write_ordered_jsonl() {
+        let dir = std::env::temp_dir().join(format!("alchemy-startup-{}", uuid::Uuid::new_v4()));
+        let startup = super::Startup::begin(dir.clone());
+        startup.stamp("db_open");
+        startup.stamp("setup_done");
+
+        let text = std::fs::read_to_string(dir.join(super::STARTUP_FILE)).expect("trace written");
+        let lines: Vec<serde_json::Value> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("valid json"))
+            .collect();
+        let phases: Vec<&str> = lines.iter().map(|l| l["phase"].as_str().unwrap()).collect();
+        assert_eq!(phases, ["setup_start", "db_open", "setup_done"]);
+        assert!(lines
+            .windows(2)
+            .all(|w| w[0]["ms"].as_u64() <= w[1]["ms"].as_u64()));
+        assert!(lines.iter().all(|l| l["boot"] == lines[0]["boot"]));
+        assert_eq!(lines[0]["version"], env!("CARGO_PKG_VERSION"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

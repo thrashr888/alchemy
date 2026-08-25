@@ -205,6 +205,32 @@ pub struct Db {
     /// (beir_eval.rs, measured 2026-08-09 across three domains).
     fusion_vector_weight: std::sync::atomic::AtomicU32,
     fusion_rrf_k: std::sync::atomic::AtomicU32,
+    /// Where the tables live — the counts cache is persisted beside them.
+    dir: std::path::PathBuf,
+    /// Per-notebook document counts, keyed by the table versions they were
+    /// computed from. See `NotebookCounts`.
+    counts_cache: tokio::sync::RwLock<Option<NotebookCounts>>,
+}
+
+/// Cached source/note/report counts per notebook.
+///
+/// Computing these means scanning the sources and notes tables end to end,
+/// and `list_notebooks` runs on every refresh — every `mcp://changed`, every
+/// window focus, and once during boot, where on a large library it grew
+/// slow enough to threaten the frontend's IPC timeout.
+///
+/// The cache is keyed by the two tables' Lance versions rather than
+/// invalidated by hand at each write site. A version is one manifest read
+/// where a recount is a full scan, and keying on it cannot miss a mutation
+/// — including one made by another process against the same store, which
+/// hand-placed invalidation would never see. It persists beside the tables
+/// so a cold start pays the version check instead of the scan.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct NotebookCounts {
+    sources_version: u64,
+    notes_version: u64,
+    /// notebook id -> (sources, notes excluding reports, reports)
+    counts: HashMap<String, (i64, i64, i64)>,
 }
 
 /// One stored source-gist row (docs/RFC-infinite-context.md Phase 1).
@@ -216,6 +242,19 @@ pub struct GistRow {
     pub source_id: String,
     pub hash: i32,
     pub text: String,
+}
+
+/// Where the counts cache lives. Beside the tables, so a store copied or
+/// restored elsewhere carries its cache — and its version keys — with it.
+fn counts_path(dir: &std::path::Path) -> std::path::PathBuf {
+    dir.join("notebook-counts.json")
+}
+
+/// Best-effort read. A missing, truncated, or stale-format file just means
+/// the next `list_notebooks` recounts, which is always correct.
+fn load_counts(dir: &std::path::Path) -> Option<NotebookCounts> {
+    let raw = std::fs::read(counts_path(dir)).ok()?;
+    serde_json::from_slice(&raw).ok()
 }
 
 impl Db {
@@ -237,6 +276,8 @@ impl Db {
             fts_notify: tokio::sync::Notify::new(),
             fusion_vector_weight: std::sync::atomic::AtomicU32::new(1.0f32.to_bits()),
             fusion_rrf_k: std::sync::atomic::AtomicU32::new(60.0f32.to_bits()),
+            dir: dir.to_path_buf(),
+            counts_cache: tokio::sync::RwLock::new(load_counts(dir)),
         };
         db.ensure_table(T_NOTEBOOKS, notebooks_schema()).await?;
         db.migrate_notebooks().await?;
@@ -796,9 +837,29 @@ impl Db {
             }
         }
 
+        // Counting means scanning sources and notes end to end, so it is
+        // done only when one of those tables has actually moved. See
+        // `NotebookCounts`.
+        let sources_version = self.table_version(T_SOURCES).await;
+        let notes_version = self.table_version(T_NOTES).await;
+        if let (Some(sv), Some(nv)) = (sources_version, notes_version) {
+            let cached = self.counts_cache.read().await.clone();
+            if let Some(c) = cached {
+                if c.sources_version == sv && c.notes_version == nv {
+                    for n in &mut notebooks {
+                        let (s, no, r) = c.counts.get(&n.id).copied().unwrap_or((0, 0, 0));
+                        n.source_count = s;
+                        n.note_count = no;
+                        n.report_count = r;
+                    }
+                    notebooks.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
+                    return Ok(notebooks);
+                }
+            }
+        }
+
         // Count sources per notebook in one pass — projected to the one
-        // column a count needs. This runs on every notebooks refresh (every
-        // mcp://changed), and unprojected it dragged the whole corpus's
+        // column a count needs. Unprojected it dragged the whole corpus's
         // content through Arrow each time.
         let mut counts: HashMap<String, i64> = HashMap::new();
         for b in &self.collect_cols(T_SOURCES, None, &["notebook_id"]).await? {
@@ -840,8 +901,44 @@ impl Db {
             n.note_count = note_counts.get(&n.id).copied().unwrap_or(0);
             n.report_count = report_counts.get(&n.id).copied().unwrap_or(0);
         }
+        // Store under the versions read BEFORE the scan: a write that landed
+        // mid-scan leaves the cache keyed to the older version, so the next
+        // call recounts rather than serving a number it never computed.
+        if let (Some(sv), Some(nv)) = (sources_version, notes_version) {
+            let fresh = NotebookCounts {
+                sources_version: sv,
+                notes_version: nv,
+                counts: notebooks
+                    .iter()
+                    .map(|n| (n.id.clone(), (n.source_count, n.note_count, n.report_count)))
+                    .collect(),
+            };
+            self.save_counts(&fresh).await;
+        }
         notebooks.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
         Ok(notebooks)
+    }
+
+    /// A table's Lance version, or None if it does not exist yet. One
+    /// manifest read — the whole point of keying the counts cache on it.
+    async fn table_version(&self, table: &str) -> Option<u64> {
+        let tbl = self.conn.open_table(table).execute().await.ok()?;
+        tbl.version().await.ok()
+    }
+
+    /// Publish freshly counted totals to memory and disk. Failing to write
+    /// the file costs a recount next boot and nothing else, so it is not an
+    /// error worth propagating out of a read.
+    async fn save_counts(&self, fresh: &NotebookCounts) {
+        *self.counts_cache.write().await = Some(fresh.clone());
+        match serde_json::to_vec(fresh) {
+            Ok(bytes) => {
+                if let Err(err) = std::fs::write(counts_path(&self.dir), bytes) {
+                    crate::note!("notebook counts cache write failed: {err}");
+                }
+            }
+            Err(err) => crate::note!("notebook counts cache encode failed: {err}"),
+        }
     }
 
     pub async fn create_notebook(&self, notebook: &Notebook) -> Result<()> {
