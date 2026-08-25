@@ -500,6 +500,19 @@ export interface SnapshotStatus {
   storeVersion: number;
 }
 
+/** One planned or blocked run (docs/RFC-night-shift-area.md). The reason is
+ *  the point: a schedule that has not run for days usually is not broken, and
+ *  the app knows why - an archived notebook, background work switched off. */
+export interface PlannedRun {
+  schedule: ReportSchedule;
+  notebookTitle: string;
+  /** "queued" | "due" | "waiting" | "blocked" */
+  state: string;
+  /** The cause and the fix, in one sentence. Empty unless blocked. */
+  reason: string;
+  dueAt: number;
+}
+
 /** One Night Shift run, as recorded at the run boundary
  *  (docs/RFC-night-shift-area.md §2). A rolling 30-day record — the durable
  *  artifacts are the notes the runs wrote. */

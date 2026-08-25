@@ -426,7 +426,6 @@ function BackgroundTab() {
       <div className="flex flex-col gap-3">
         <div className="text-body">Residency</div>
         <TrayToggle />
-        <WakeDisclosure />
       </div>
 
       <div className="h-px bg-border" />
@@ -440,20 +439,8 @@ function BackgroundTab() {
       <div className="h-px bg-border" />
 
       <div className="flex flex-col gap-3">
-        <div className="text-body">Overnight housekeeping</div>
-        <p className="text-micro leading-relaxed text-subtle-foreground">
-          Mechanical work with no model behind it. It runs whenever Night
-          Shift is on, and never costs anything.
-        </p>
+        <div className="text-body">Library</div>
         <SnapshotRow />
-        <ChoreLine
-          label="Database optimize"
-          hint="Prunes old table versions and reclaims disk. Runs automatically."
-        />
-        <ChoreLine
-          label="Orphan cleanup"
-          hint="Clears index rows whose source is gone. Runs automatically."
-        />
         <HygieneSelect />
         <GitSyncSelect />
       </div>
@@ -461,30 +448,10 @@ function BackgroundTab() {
       <div className="h-px bg-border" />
 
       <div className="flex flex-col gap-3">
-        <div className="text-body">Background intelligence</div>
-        <p className="text-micro leading-relaxed text-subtle-foreground">
-          Work that runs a model while you are away. Each is on by default;
-          the switches are cost control.
-        </p>
+        <div className="text-body">While you are away</div>
         <SourceGistsToggle />
         <CuratorToggle />
       </div>
-    </div>
-  );
-}
-
-/** A chore with no knob: named so the page is a complete account of what
- *  runs, not just the parts that happen to be configurable. */
-function ChoreLine({ label, hint }: { label: string; hint: string }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-body text-foreground">{label}</span>
-        <span className="text-micro text-subtle-foreground">Automatic</span>
-      </div>
-      <span className="text-micro leading-relaxed text-subtle-foreground">
-        {hint}
-      </span>
     </div>
   );
 }
@@ -581,40 +548,6 @@ function SnapshotRow() {
           Restore last snapshot…
         </Button>
       </div>
-    </div>
-  );
-}
-
-/** Scheduled wake, as a disclosure rather than a toggle: it needs one
- *  administrator command, and Alchemy never escalates on the user's behalf
- *  (docs/RFC-night-shift-area.md §6). */
-function WakeDisclosure() {
-  const pushToast = useStore((s) => s.pushToast);
-  const command = "sudo pmset repeat wakeorpoweron MTWRFSU 01:55:00";
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-body text-foreground">Wake for Night Shift</span>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => {
-            void navigator.clipboard.writeText(command);
-            pushToast("success", "Command copied.");
-          }}
-        >
-          <Copy className="size-3.5" />
-          Copy command
-        </Button>
-      </div>
-      <span className="text-micro leading-relaxed text-subtle-foreground">
-        Night Shift runs while your Mac is awake. A closed laptop on battery
-        sleeps, and the work runs when you next open it. To have the Mac wake
-        itself at 1:55 AM on power, run this in Terminal once.
-      </span>
-      <code className="mt-1 rounded-md border border-border bg-surface-2 px-2 py-1 font-mono text-micro text-subtle-foreground">
-        {command}
-      </code>
     </div>
   );
 }

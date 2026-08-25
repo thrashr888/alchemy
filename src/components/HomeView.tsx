@@ -26,7 +26,14 @@ import {
   relativeTime,
   shortcutBlocked,
 } from "@/lib/utils";
-import type { Note, Notebook, SourceEvent } from "@/lib/types";
+import type {
+  Note,
+  Notebook,
+  PlannedRun,
+  RunReceipt,
+  SourceEvent,
+} from "@/lib/types";
+import { api } from "@/lib/api";
 import {
   Archive,
   ArchiveRestore,
@@ -186,6 +193,25 @@ function NotebookTable({
  *  switch, so it lives in the same place and wears the same chrome. */
 function HomeSectionTabs() {
   const section = useStore((s) => s.homeSection);
+  // Blocked or failed overnight work — the only thing on that screen that
+  // wants a human. Polled once per mount; this is a dot, not a dashboard.
+  const [needsYou, setNeedsYou] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    void Promise.all([
+      api.tonightPlan().catch(() => [] as PlannedRun[]),
+      api.listReceipts(24 * 7, 200).catch(() => [] as RunReceipt[]),
+    ]).then(([plan, receipts]) => {
+      if (!alive) return;
+      setNeedsYou(
+        plan.filter((p) => p.state === "blocked").length +
+          receipts.filter((r) => r.status === "failed").length,
+      );
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
   const tabs = [
     { id: "notebooks", label: "Notebooks", icon: BookOpen },
     { id: "registry", label: "Registry", icon: Package },
@@ -217,6 +243,14 @@ function HomeSectionTabs() {
         >
           <Icon className="h-3.5 w-3.5" />
           {label}
+          {id === "nightShift" && needsYou > 0 && (
+            <span
+              className="ml-0.5 rounded-full bg-surface-2 px-1.5 text-micro text-muted-foreground"
+              title={`${needsYou} ${needsYou === 1 ? "item needs" : "items need"} you`}
+            >
+              {needsYou}
+            </span>
+          )}
         </button>
       ))}
     </div>
@@ -672,7 +706,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           {/* Three regions, same side-card idiom as the notebook view:
             Staff rail left, notebooks center, Brief + reports column right.
             Each sidebar collapses on its own. */}
-          {staffOpen ? (
+          {staffOpen && homeSection !== "nightShift" ? (
             <aside
               className="side-card relative mx-2 mb-2 mt-1 hidden shrink-0 flex-col lg:flex"
               style={{ width: staffWidth }}
@@ -882,7 +916,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             </div>
 
             {homeSection === "nightShift" ? (
-              <NightShiftSection />
+              <NightShiftSection onOpenNote={openNote} />
             ) : homeSection === "registry" ? (
               <RegistrySection />
             ) : (
@@ -1096,8 +1130,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           </div>
 
           {/* Right column: the Brief card above the reports feed — the
-            morning-read surface, arrival point first. */}
-          {!briefOpen && !reportsOpen ? (
+            morning-read surface, arrival point first. Night Shift carries
+            its own results list, so the column stands down there rather
+            than restating it. */}
+          {homeSection === "nightShift" ? null : !briefOpen && !reportsOpen ? (
             <div className="side-card mx-2 mt-1 hidden w-12 shrink-0 flex-col items-center gap-1 self-start py-2 lg:flex">
               <SidebarRail
                 icon="brief"

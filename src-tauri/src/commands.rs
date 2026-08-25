@@ -9900,22 +9900,101 @@ pub async fn commission_run(
     Ok(schedule)
 }
 
-/// Everything queued for tonight: commissions that have not run, plus the
-/// recurring orders whose next turn falls in the window. The Tonight view
-/// and the "what's planned?" chat question read the same list.
+/// One planned or blocked run, with the reason it is in that state
+/// (docs/RFC-night-shift-area.md).
+///
+/// The reason is the point. A schedule that has not run in two days looks
+/// broken; almost always it is deliberate - its notebook is archived, or
+/// background work is off - and the app knew and never said so. A bare
+/// "overdue by 34h" is a duration masquerading as a diagnosis.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PlannedRun {
+    pub schedule: ReportSchedule,
+    pub notebook_title: String,
+    /// "queued" - a commission waiting for its hour.
+    /// "due" - it runs on the next pass.
+    /// "waiting" - recurring work whose next turn has not arrived.
+    /// "blocked" - it will not run until something changes; see `reason`.
+    pub state: String,
+    /// User-facing sentence naming the cause and the fix. Empty unless blocked.
+    pub reason: String,
+    /// When this run is (or was) due.
+    pub due_at: i64,
+}
+
+/// Tonight's plan: commissions, recurring work, and - the part that was
+/// missing - anything that will not run, with why.
 #[tauri::command]
-pub async fn tonight_plan(state: State<'_, AppState>) -> Result<Vec<ReportSchedule>, String> {
+pub async fn tonight_plan(state: State<'_, AppState>) -> Result<Vec<PlannedRun>, String> {
     let mut all = e(state.db.all_report_schedules().await)?;
     all.retain(|s| s.enabled);
-    all.sort_by_key(|s| {
-        // Commissions first, in the order they will run; recurring work after.
-        if s.trigger == "once" {
-            (0, s.not_before)
-        } else {
-            (1, s.last_run_at + s.interval_secs * 1000)
-        }
+    let archived = state.db.archived_notebook_ids().await.unwrap_or_default();
+    let titles: std::collections::HashMap<String, String> = e(state.db.list_notebooks().await)?
+        .into_iter()
+        .map(|n| (n.id, n.title))
+        .collect();
+    let background = state.ai.read().await.config().background_enabled;
+    let paused = crate::scheduler::is_paused();
+    let now = now();
+
+    let mut out: Vec<PlannedRun> = all
+        .into_iter()
+        .map(|s| {
+            let notebook_title = titles.get(&s.notebook_id).cloned().unwrap_or_default();
+            let due_at = crate::scheduler::due_at(&s, &[]);
+            let (state_label, reason) = if !background {
+                (
+                    "blocked",
+                    "Background work is off. Turn it on in Settings, under Background Work."
+                        .to_string(),
+                )
+            } else if archived.contains(&s.notebook_id) {
+                (
+                    "blocked",
+                    format!(
+                        "{notebook_title} is archived, so its scheduled work stays quiet. \
+                         Unarchive it to resume."
+                    ),
+                )
+            } else if paused {
+                (
+                    "blocked",
+                    "Paused until morning. Resume from the menu bar to run it sooner.".to_string(),
+                )
+            } else if s.trigger == "once" {
+                if now >= s.not_before {
+                    ("due", String::new())
+                } else {
+                    ("queued", String::new())
+                }
+            } else if now >= due_at {
+                ("due", String::new())
+            } else {
+                ("waiting", String::new())
+            };
+            PlannedRun {
+                schedule: s,
+                notebook_title,
+                state: state_label.to_string(),
+                reason,
+                due_at,
+            }
+        })
+        .collect();
+
+    // Blocked first - it is the only part the user can act on - then the work
+    // about to happen, then the rest by when it comes round.
+    out.sort_by_key(|p| {
+        let rank = match p.state.as_str() {
+            "blocked" => 0,
+            "due" => 1,
+            "queued" => 2,
+            _ => 3,
+        };
+        (rank, p.due_at)
     });
-    Ok(all)
+    Ok(out)
 }
 
 /// What the last snapshot did, for the Background Work settings page
