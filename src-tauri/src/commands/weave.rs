@@ -172,7 +172,9 @@ async fn judge(
             changed,
         )),
     ];
-    let reply = ai.chat_role(Role::Small, &messages).await.ok()?.text;
+    let out = ai.chat_role(Role::Small, &messages).await.ok()?;
+    crate::freshness::record_outcome(&out);
+    let reply = out.text;
     let mut verdict = None;
     let mut reason = String::new();
     for line in reply.lines() {

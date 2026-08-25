@@ -9928,8 +9928,8 @@ pub struct PlannedRun {
 #[tauri::command]
 pub async fn tonight_plan(state: State<'_, AppState>) -> Result<Vec<PlannedRun>, String> {
     let mut all = e(state.db.all_report_schedules().await)?;
-    all.retain(|s| s.enabled);
     let archived = state.db.archived_notebook_ids().await.unwrap_or_default();
+    all.retain(|s| s.enabled && !archived.contains(&s.notebook_id));
     let titles: std::collections::HashMap<String, String> = e(state.db.list_notebooks().await)?
         .into_iter()
         .map(|n| (n.id, n.title))
@@ -9948,14 +9948,6 @@ pub async fn tonight_plan(state: State<'_, AppState>) -> Result<Vec<PlannedRun>,
                     "blocked",
                     "Background work is off. Turn it on in Settings, under Background Work."
                         .to_string(),
-                )
-            } else if archived.contains(&s.notebook_id) {
-                (
-                    "blocked",
-                    format!(
-                        "{notebook_title} is archived, so its scheduled work stays quiet. \
-                         Unarchive it to resume."
-                    ),
                 )
             } else if paused {
                 (

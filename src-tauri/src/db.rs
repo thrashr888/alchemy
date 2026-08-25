@@ -3064,6 +3064,33 @@ impl Db {
         self.add_batch(T_LEDGER, schema, batch).await
     }
 
+    /// How many ledger rows the Weave moved to a contradicted or superseded
+    /// state since `since` (freshness.rs). Counted from persisted status
+    /// rather than instrumented at the call site, the same way due-ness is
+    /// derived rather than queued.
+    pub async fn ledger_upsets_since(&self, since: i64) -> Result<u32> {
+        let batches = self
+            .collect(T_LEDGER, Some(&format!("updated_at >= {since}")))
+            .await?;
+        let mut count = 0;
+        for b in &batches {
+            let status = str_col(b, "status")?;
+            let updated = i64_col(b, "updated_at")?;
+            let created = i64_col(b, "created_at")?;
+            for i in 0..b.num_rows() {
+                // A row that arrived already contradicted was minted that
+                // way; only a row the night CHANGED is a finding.
+                if updated.value(i) == created.value(i) {
+                    continue;
+                }
+                if matches!(status.value(i), "contradicted" | "superseded") {
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
+    }
+
     pub async fn list_ledger(&self, notebook_id: &str) -> Result<Vec<LedgerEntry>> {
         let batches = self
             .collect(

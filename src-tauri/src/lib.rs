@@ -12,6 +12,7 @@ mod diagnostics;
 mod examples;
 mod export;
 mod filesearch;
+mod freshness;
 mod gist;
 mod git;
 mod graph;

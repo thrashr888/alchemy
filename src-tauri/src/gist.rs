@@ -277,7 +277,10 @@ pub async fn ensure_gists(db: &Db, ai: &Ai) -> Result<(usize, usize)> {
 
         let messages = build_messages(&source.title, &source.source_type, &source.content);
         let reply = match ai.chat_role(Role::Small, &messages).await {
-            Ok(out) => out.text,
+            Ok(out) => {
+                crate::freshness::record_outcome(&out);
+                out.text
+            }
             Err(err) => {
                 // Engine trouble ends the batch — the next sweep retries.
                 crate::note!("gist: generation failed for \"{}\": {err:#}", source.title);
@@ -492,7 +495,10 @@ async fn enrich_source(
         }
         let messages = build_situating_messages(&source.title, gist, &chunk.text);
         let reply = match ai.chat_role(Role::Small, &messages).await {
-            Ok(out) => out.text,
+            Ok(out) => {
+                crate::freshness::record_outcome(&out);
+                out.text
+            }
             Err(err) => {
                 crate::note!(
                     "enrich: Small role failed for \"{}\": {err:#}",

@@ -447,19 +447,36 @@ async fn run_pass(app: &AppHandle) {
         return;
     }
 
+    // The nightly freshness queue (docs/RFC-night-shift-area.md, freshness.rs).
+    // One notch of user control; the priority order is the app's job:
+    // keep the corpus current, then judge what arrived, then tidy up. Each
+    // stage checks the budget before starting rather than mid-run — stopping
+    // a generation half-written wastes what it already spent.
+    let budget = {
+        let ai = state.ai.read().await;
+        ai.config().background_budget.clone()
+    };
+
+    // 1. Freshness. Resync is cheap table/mtime work and always runs: a
+    //    foregrounded window going stale is worse than a few tokens.
     let _ = commands::resync_sources_inner(app, &state, None).await;
 
-    // Distillation, tags, and card suggestions converge even when no fresh
-    // import kicks them — a restart mid-sweep used to strand untagged
-    // sources until the next import happened to arrive. Self-gating
-    // (SWEEPING) and budgeted, so a converged corpus makes this a cheap
-    // no-op pass.
-    crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
+    if crate::freshness::has_budget(&budget) {
+        // Distillation, tags, and card suggestions converge even when no
+        // fresh import kicks them — a restart mid-sweep used to strand
+        // untagged sources until the next import happened to arrive.
+        // Self-gating (SWEEPING), so a converged corpus is a cheap no-op.
+        crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
 
-    // Source hygiene (docs/RFC-source-hygiene.md): re-fetch aging urls,
-    // count strikes on unreachable ones. Single-flight and budgeted like the
-    // gist sweep; its own config gate lives inside.
-    crate::hygiene::spawn_sweep(app);
+        // Source hygiene (docs/RFC-source-hygiene.md): re-fetch aging urls,
+        // count strikes on unreachable ones. Its own config gate lives inside.
+        crate::hygiene::spawn_sweep(app);
+    } else {
+        crate::note!(
+            "freshness: nightly budget spent ({} tokens), holding until morning",
+            crate::freshness::spent_tonight()
+        );
+    }
 
     // Reports now run off-tick (below), so this pass never counts them —
     // the spawned batch stamps the tray itself when it lands.

@@ -110,6 +110,12 @@ pub struct AiConfig {
     /// Off means on-demand only — Run Now and manual Refresh still work.
     #[serde(default = "default_true")]
     pub background_enabled: bool,
+    /// How much overnight work to do: "light" | "standard" | "generous".
+    /// One notch rather than a slider, because a token count is not a unit
+    /// anyone has intuitions about. Cost control, not an opt-in gate - the
+    /// queue runs at Standard unless told otherwise.
+    #[serde(default = "default_budget")]
+    pub background_budget: String,
     /// Desktop notifications (report ready, work finishing). Lives in config
     /// rather than webview localStorage so the resident scheduler can honor
     /// it with no window open; the frontend mirrors it for its own checks.
@@ -190,6 +196,11 @@ pub struct UserProfile {
 
 fn default_provider() -> String {
     "ollama".to_string()
+}
+
+/// Standard is a night's work on a normal corpus without the fans coming on.
+fn default_budget() -> String {
+    "standard".to_string()
 }
 
 fn default_true() -> bool {
@@ -374,6 +385,7 @@ impl Default for AiConfig {
             clip_port: default_clip_port(),
             tray_enabled: default_true(),
             background_enabled: default_true(),
+            background_budget: default_budget(),
             show_notifications: default_true(),
             quiet_when_focused: default_true(),
             curator_consolidate: default_true(),

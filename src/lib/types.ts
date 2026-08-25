@@ -641,6 +641,8 @@ export interface AiConfig {
   /** Per-source distillation sweep. On by default; the toggle is cost
    *  control, and the sweep self-heals either way. */
   sourceGists: boolean;
+  /** Overnight effort notch: light | standard | generous (freshness.rs). */
+  backgroundBudget: string;
 }
 
 /** One passage behind a meta-chat answer: what it is and where it lives. */
