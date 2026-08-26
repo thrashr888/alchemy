@@ -103,9 +103,14 @@ pub async fn export_note_file(
         }
         "png" => {
             let tmp = print_note_pdf(app, &note).await?;
-            // Mind maps scale to fit one sheet, so rasterize them wider to
-            // keep node labels crisp; posters get poster width.
-            let width = if note.kind == "mind_map" { 2200 } else { 1600 };
+            // Mind maps and UML diagrams scale to fit one sheet, so
+            // rasterize them wider to keep node labels crisp; posters get
+            // poster width.
+            let width = if note.kind == "mind_map" || note.kind == "uml" {
+                2200
+            } else {
+                1600
+            };
             blocking(move || {
                 let pages = crate::pdf::render_pdf_pages(&tmp.to_string_lossy(), 8, width)?;
                 let png = stitch_png_pages(&pages)?;

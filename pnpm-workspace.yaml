@@ -1,3 +1,9 @@
 allowBuilds:
   esbuild: true
 verifyDepsBeforeRun: false
+overrides:
+  # Vite pulls lightningcss transitively; 1.32 doesn't know the CSS Custom
+  # Highlight API's ::highlight() pseudo-element and warns on every build
+  # (three times, for the citation/find/find-active rules in index.css).
+  # 1.33 parses it.
+  lightningcss: '^1.33.0'

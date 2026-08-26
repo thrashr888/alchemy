@@ -7,6 +7,7 @@ import { Flashcards } from "./Flashcards";
 import { Infographic } from "./Infographic";
 import { Markdown } from "./Markdown";
 import { MindMap } from "./MindMap";
+import { UmlDiagram } from "./UmlDiagram";
 import { QuizView } from "./QuizView";
 import { SlideDeck } from "./SlideDeck";
 import { RichEditor } from "./RichEditor";
@@ -132,6 +133,8 @@ export function StudioNoteViewer({
                 <StreamingBody text={artifactStreamText} />
               ) : live.kind === "mind_map" ? (
                 <MindMap content={live.content} />
+              ) : live.kind === "uml" ? (
+                <UmlDiagram content={live.content} />
               ) : live.kind === "flashcards" ? (
                 <Flashcards content={live.content} noteId={live.id} />
               ) : live.kind === "quiz" ? (

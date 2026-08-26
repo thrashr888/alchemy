@@ -5,6 +5,7 @@ import { Flashcards } from "./Flashcards";
 import { Infographic } from "./Infographic";
 import { Markdown } from "./Markdown";
 import { MindMap } from "./MindMap";
+import { UmlDiagram } from "./UmlDiagram";
 import { QuizView } from "./QuizView";
 import { SlideDeck } from "./SlideDeck";
 import { AudioPlayer, DialogueScript } from "./AudioNote";
@@ -25,6 +26,12 @@ export function NoteWindow({ noteId }: { noteId: string }) {
   // The store clears notes on selectNotebook, so "loaded but missing" is only
   // trustworthy once the notebook is current and the notes list settled.
   const loading = !note && (!currentId || notes.length === 0);
+  // Canvas artifacts size themselves to the window instead of scrolling in a
+  // reading column.
+  const fillsWindow =
+    note?.kind === "slide_deck" ||
+    note?.kind === "mind_map" ||
+    note?.kind === "uml";
 
   useEffect(() => {
     if (note) void getCurrentWebviewWindow().setTitle(`${note.title} — Alchemy`);
@@ -45,19 +52,15 @@ export function NoteWindow({ noteId }: { noteId: string }) {
         className={cn(
           "flex-1",
           // Slides size themselves to the window; everything else scrolls.
-          note?.kind === "slide_deck" || note?.kind === "mind_map"
-            ? "min-h-0 overflow-hidden"
-            : "overflow-y-auto",
+          fillsWindow ? "min-h-0 overflow-hidden" : "overflow-y-auto",
         )}
       >
         <div
           className={cn(
             "mx-auto px-8 py-8",
-            // Mind maps and slide decks want the full window; prose reads
-            // best at column width.
-            (note?.kind === "mind_map" || note?.kind === "slide_deck") &&
-              "h-full max-w-none py-6",
-            note?.kind !== "mind_map" && note?.kind !== "slide_deck" && "max-w-[760px]",
+            // Canvas artifacts want the full window; prose reads best at
+            // column width.
+            fillsWindow ? "h-full max-w-none py-6" : "max-w-[760px]",
           )}
         >
           {loading ? (
@@ -73,6 +76,8 @@ export function NoteWindow({ noteId }: { noteId: string }) {
             </div>
           ) : note.kind === "mind_map" ? (
             <MindMap content={note.content} />
+          ) : note.kind === "uml" ? (
+            <UmlDiagram content={note.content} />
           ) : note.kind === "flashcards" ? (
             <Flashcards content={note.content} noteId={note.id} />
           ) : note.kind === "quiz" ? (

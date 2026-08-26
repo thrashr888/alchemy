@@ -214,6 +214,7 @@ export type NoteKind =
   | "quiz"
   | "audio_overview"
   | "mind_map"
+  | "uml"
   | "slide_deck"
   | "infographic"
   | "data_table"

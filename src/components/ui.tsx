@@ -169,6 +169,10 @@ export function useHoverCard(side: "left" | "right") {
   const card = state
     ? createPortal(
         <div
+          // The reader's live web view is a NATIVE child webview: it paints
+          // above every HTML layer, whatever the z-index. `data-overlay`
+          // is the marker it watches for to hide itself (see ReaderPane).
+          data-overlay=""
           className={cn(
             "pointer-events-none fixed z-[100] w-64 rounded-lg border border-border-strong bg-surface-2 p-3 shadow-2xl",
             side === "left" && "-translate-x-full",
@@ -960,6 +964,8 @@ export function RowMenu({
   onOpen,
   contextItems,
   alwaysVisible = false,
+  trigger,
+  triggerClassName,
 }: {
   items: RowMenuItem[];
   label?: string;
@@ -976,6 +982,13 @@ export function RowMenu({
    *  or null/undefined to open the normal menu — side effects here (like
    *  collapsing the selection to this row) are welcome (RFC-multi-select). */
   contextItems?: () => RowMenuItem[] | null | undefined;
+  /** Replace the ⋯ glyph with custom trigger content (a text link, say).
+   *  It stays the SAME button, so the dropdown still anchors to it —
+   *  hiding the ⋯ and clicking it from outside gives the menu a zero-sized
+   *  trigger rect, which lands it in the window's top-left corner. */
+  trigger?: React.ReactNode;
+  /** Classes for the trigger button when `trigger` supplies its own look. */
+  triggerClassName?: string;
 }) {
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef<HTMLDivElement>(null);
@@ -1016,7 +1029,11 @@ export function RowMenu({
       return;
     }
     if (!triggerRef.current) return;
-    const t = triggerRef.current.getBoundingClientRect();
+    // A display:none trigger measures 0×0 at the origin; fall back to the
+    // container so the menu still lands on its row.
+    let t = triggerRef.current.getBoundingClientRect();
+    if (t.width === 0 && t.height === 0 && ref.current)
+      t = ref.current.getBoundingClientRect();
     const up = t.bottom + 4 + m.height > window.innerHeight - 8;
     const style: React.CSSProperties = up
       ? { bottom: window.innerHeight - t.top + 4 }
@@ -1156,15 +1173,19 @@ export function RowMenu({
         aria-label={label}
         aria-haspopup="menu"
         aria-expanded={open}
-        className="rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+        className={
+          triggerClassName ??
+          "rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+        }
       >
-        <MoreHorizontal className="h-3.5 w-3.5" />
+        {trigger ?? <MoreHorizontal className="h-3.5 w-3.5" />}
       </button>
       {open &&
         createPortal(
           <div
             ref={menuRef}
             role="menu"
+            data-overlay=""
             aria-label={label}
             style={pos ?? { top: 0, left: 0, visibility: "hidden" }}
             className="menu-glass fixed z-50 w-44 overflow-hidden rounded-md py-1 shadow-[0_0_0_0.5px_var(--border-strong),0_8px_24px_-6px_rgba(0,0,0,0.4)]"
