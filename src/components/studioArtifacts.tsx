@@ -22,6 +22,7 @@ import {
   TriangleAlert,
   Users,
   Waypoints,
+  Workflow,
 } from "lucide-react";
 
 export type ArtifactFamily = "generate" | "learning" | "documents";
@@ -80,6 +81,7 @@ const LEARNING = inFamily("learning", [
   { kind: "flashcards", label: "Flashcards", icon: <Layers className="h-3.5 w-3.5" /> },
   { kind: "quiz", label: "Quiz", icon: <ListChecks className="h-3.5 w-3.5" /> },
   { kind: "mind_map", label: "Mind map", icon: <Waypoints className="h-3.5 w-3.5" /> },
+  { kind: "uml", label: "UML diagram", icon: <Workflow className="h-3.5 w-3.5" /> },
   {
     kind: "slide_deck",
     label: "Slide deck",

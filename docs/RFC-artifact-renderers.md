@@ -96,3 +96,33 @@ Each parses its spec and falls back to `<Markdown>` when it can't
 - Full SM-2 ease factors and cross-device sync of flashcard review state
   (localStorage is per-machine); quiz attempt history.
 - Retrofitting other kinds (timeline, data_table already read fine as prose).
+
+## Addendum: UML diagrams (`uml`)
+
+The UML kind breaks the rule at the top of this RFC on purpose, and it is
+worth writing down why.
+
+The rule is: don't ask a model for Mermaid, ask for a rigid text format and
+lay it out natively. That holds when the native layout is tractable — a mind
+map is a tree, and `MindMap.tsx` is 400 lines. UML is five different
+grammars with five different layout algorithms (class boxes with typed
+edges, sequence lifelines with activation bars, state machines, ER
+cardinalities, component graphs). Writing those is a project, not a
+renderer, and mermaid — already a dependency, already sanitized and
+theme-mapped in `lib/mermaid.ts` — implements all five.
+
+So the generator emits Mermaid source and `UmlDiagram.tsx` renders it. The
+contract this RFC actually cares about — *an artifact never arrives broken* —
+is kept a different way: a diagram that will not parse shows its source with
+mermaid's own error message, so a near-miss model is a two-word fix rather
+than a blank box and a Rebuild. The source view is always one click away
+even when the diagram is fine.
+
+- Content is bare Mermaid (`classDiagram` / `sequenceDiagram` /
+  `stateDiagram-v2` / `erDiagram` / `flowchart TD`); `umlSource()` tolerates
+  a stray ```mermaid fence or a prose preamble, since that is the failure
+  models actually make.
+- The diagram fills the pane on a shared `PanCanvas` (exported from
+  `MindMap.tsx`) — UML grows wider than any reading column.
+- Export follows the mind-map path: PNG primary via the print pipeline,
+  rasterized at 2200px so class-box labels stay crisp.

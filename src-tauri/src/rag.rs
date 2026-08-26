@@ -593,6 +593,7 @@ pub const ARTIFACT_KINDS: &[&str] = &[
     "slide_deck",
     "infographic",
     "mind_map",
+    "uml",
     "problems",
     "evidence",
     "prd",
@@ -841,6 +842,32 @@ pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
              below the root. Keep every label short — 5 words or fewer, telegraphic style. \
              Output ONLY the outline: no prose before or after, no headings, no code fences, \
              no bold or other formatting.",
+        )),
+        "uml" => Some((
+            "UML Diagram",
+            "Model the system the sources below describe as a single UML diagram, written as \
+             Mermaid source. Choose the ONE diagram type that fits what the corpus actually \
+             documents:\n\
+             - `classDiagram` — entities, their fields and methods, and how they relate \
+               (inheritance `<|--`, composition `*--`, aggregation `o--`, association `-->`). \
+               Use this for data models, domain objects, and type hierarchies.\n\
+             - `sequenceDiagram` — an interaction over time between participants \
+               (`A->>B: message`, `B-->>A: reply`, `activate`/`deactivate`). Use this for \
+               protocols, request flows, and call chains.\n\
+             - `stateDiagram-v2` — the states of one thing and the transitions between them \
+               (`[*] --> Idle`, `Idle --> Running: start`). Use this for lifecycles, status \
+               machines, and workflows with named states.\n\
+             - `erDiagram` — entities and their cardinalities (`CUSTOMER ||--o{ ORDER : places`). \
+               Use this for database schemas and record relationships.\n\
+             - `flowchart TD` — components and the paths between them. Use this only when \
+               none of the above fit: component, deployment, and activity views.\n\
+             Rules: 8-20 nodes or participants — enough to be useful, few enough to read. \
+             Label every relationship. Name things exactly as the sources name them; never \
+             invent a class, message, state, or table the corpus does not describe, and leave \
+             out anything you would have to guess at. Keep identifiers free of spaces and \
+             punctuation (Mermaid rejects them); put the prose in the labels. Output ONLY the \
+             Mermaid source, starting with the diagram-type keyword: no code fences, no \
+             headings, no prose before or after.",
         )),
         "problems" => Some((
             "Problems",

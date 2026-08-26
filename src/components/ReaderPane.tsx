@@ -19,6 +19,7 @@ import { Flashcards } from "./Flashcards";
 import { Infographic } from "./Infographic";
 import { Markdown } from "./Markdown";
 import { MindMap } from "./MindMap";
+import { UmlDiagram } from "./UmlDiagram";
 import { QuizView } from "./QuizView";
 import { SlideDeck } from "./SlideDeck";
 import { RichEditor } from "./RichEditor";
@@ -846,6 +847,7 @@ export function ReaderPane() {
               "slide_deck",
               "infographic",
               "mind_map",
+              "uml",
               "quiz",
               "flashcards",
               "audio_overview",
@@ -1872,7 +1874,9 @@ function SourceReader({
 
   // Live web view: a native child webview positioned over the placeholder
   // below (see live_view_* commands). Bounds track the placeholder; in-app
-  // overlays (palette, modals) hide it so they are never painted over.
+  // overlays (palette, modals, hover cards, row menus) hide it so they are
+  // never painted over — a native child webview sits above every HTML
+  // layer, so z-index cannot win this fight.
   const liveRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!live) return;
@@ -1888,7 +1892,9 @@ function SourceReader({
     ro.observe(el);
     window.addEventListener("resize", update);
     const overlayCheck = () =>
-      void api.liveViewVisible(!document.querySelector('[role="dialog"]'));
+      void api.liveViewVisible(
+        !document.querySelector('[role="dialog"],[data-overlay]'),
+      );
     const mo = new MutationObserver(overlayCheck);
     mo.observe(document.body, { childList: true, subtree: true });
     return () => {
@@ -2043,6 +2049,11 @@ function SourceReader({
     source.sourceType === "markdown" ||
     ((source.sourceType === "text" ||
       source.sourceType === "url" ||
+      // Apple integrations (Notes, Calendar, Reminders, Stocks) come out of
+      // mac.rs as Markdown — Stocks is a GFM table, and reading it as flat
+      // text showed the pipes instead of a table. Reminders keeps its own
+      // checkbox view, which is checked before this one.
+      source.sourceType === "mac" ||
       // PDFs extract to Markdown now (pdf-inspector reconstructs headings,
       // lists and tables) — but older sources were ingested as flat text, so
       // this still asks the content rather than trusting the type.
@@ -2532,9 +2543,13 @@ function SourceReader({
           {backlinks.length > 0 && (
             <span className="group ml-auto flex shrink-0 items-center">
               <RowMenu
-                // The text link is the visible affordance; the RowMenu's own
-                // trigger only anchors the dropdown.
-                className="!flex [&>button:first-child]:hidden"
+                // The text link IS the trigger: a hidden ⋯ button clicked
+                // from outside measures 0x0, which parks the dropdown in the
+                // window's top-left corner instead of beside the link.
+                alwaysVisible
+                className="!flex"
+                triggerClassName="text-citation hover:underline"
+                trigger={<>← linked from {backlinks.length}</>}
                 label={`Linked from ${backlinks.length} ${
                   backlinks.length === 1 ? "document" : "documents"
                 }`}
@@ -2547,17 +2562,6 @@ function SourceReader({
                       .openInReader({ type: b.kind, id: b.id }),
                 }))}
               />
-              <button
-                type="button"
-                className="text-citation hover:underline"
-                onClick={(e) => {
-                  const menu = (e.currentTarget.previousElementSibling as HTMLElement)
-                    ?.querySelector("button");
-                  (menu as HTMLButtonElement | null)?.click();
-                }}
-              >
-                ← linked from {backlinks.length}
-              </button>
             </span>
           )}
         </div>
@@ -2729,11 +2733,13 @@ function NoteReader({
 
   const rebuilding = !!generatingKind && note.kind !== "note";
   // Kinds that size themselves to the pane and bring their own controls.
-  const fillsPane = note.kind === "slide_deck" || note.kind === "mind_map";
+  const fillsPane =
+    note.kind === "slide_deck" || note.kind === "mind_map" || note.kind === "uml";
   const artifact =
     note.kind === "slide_deck" ||
     note.kind === "infographic" ||
     note.kind === "mind_map" ||
+    note.kind === "uml" ||
     note.kind === "quiz" ||
     note.kind === "flashcards" ||
     note.kind === "audio_overview";
@@ -2792,6 +2798,8 @@ function NoteReader({
             <StreamingBody text={artifactStreamText} />
           ) : note.kind === "mind_map" ? (
             <MindMap content={note.content} />
+          ) : note.kind === "uml" ? (
+            <UmlDiagram content={note.content} />
           ) : note.kind === "flashcards" ? (
             <Flashcards content={note.content} noteId={note.id} />
           ) : note.kind === "quiz" ? (

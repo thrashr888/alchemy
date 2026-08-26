@@ -149,7 +149,7 @@ two-host podcast voiced on-device.*
   **Data table**, **Round table** (product, engineering, and design critique the
   sources from their own risk lenses, then close on agreements and open
   questions), **Problems** (finds errors/gaps/contradictions), **Flashcards**,
-  **Quiz**, **Slide deck**, and a **Mind map**, plus HashiCorp-style
+  **Quiz**, **Slide deck**, a **Mind map**, and a **UML diagram**, plus HashiCorp-style
   **PRD**, **PR/FAQ**, **RFC**, and a **Skill** (SKILL.md) generator. Add custom
   instructions, and **rebuild** any document against the latest sources.
 - **Artifacts are real, not text dumps** — **flashcards** are a flippable deck
@@ -161,7 +161,9 @@ two-host podcast voiced on-device.*
   axis (both switchable, persisted in front-matter), a fullscreen **Present**
   mode, and **one-click PDF export** (landscape 16:9 pages; flashcards export
   a study sheet) — all local via the native print system; **mind maps** are a
-  native SVG on a **pannable canvas** (drag or scroll, Photoshop-style).
+  native SVG on a **pannable canvas** (drag or scroll, Photoshop-style), and
+  **UML diagrams** render class, sequence, state, ER, and component views on
+  that same canvas, with the model's source one click away.
 - **Notes** — a **WYSIWYG** editor (Markdown under the hood), copy to clipboard,
   **Convert to source** to fold a note into the retrievable source set, and
   **Open in window** for a full-size reader (mind maps especially).

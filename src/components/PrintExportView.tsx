@@ -1,10 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "@/lib/store";
 import { Markdown } from "./Markdown";
 import { PrintPortal } from "./printExport";
 import { parseInfographic, PrintInfographic } from "./Infographic";
 import { PrintMindMap } from "./MindMap";
+import { PrintUml } from "./UmlDiagram";
 import { parseDeck, PrintDeck } from "./SlideDeck";
 import { parseCards, PrintCards } from "./Flashcards";
 
@@ -30,9 +31,22 @@ export function PrintExportView({
   // Slide pages print edge-to-edge on 16:9 landscape paper (print_webview).
   const deck =
     note?.kind === "slide_deck" ? parseDeck(note.content, appTheme) : null;
+  // UML sheets are the one kind whose ink isn't there on the first frame:
+  // mermaid is a lazily-imported chunk, and printing before it answers ships
+  // a blank page. The sheet says when it has settled (diagram or error) and
+  // the timeout keeps a wedged render from leaving the window open forever.
+  const asyncSheet = note?.kind === "uml";
+  const [sheetReady, setSheetReady] = useState(false);
+  useEffect(() => {
+    if (!asyncSheet) return;
+    const t = window.setTimeout(() => setSheetReady(true), 8000);
+    return () => window.clearTimeout(t);
+  }, [asyncSheet]);
+
   const fired = useRef(false);
   useEffect(() => {
     if (!note || fired.current) return;
+    if (asyncSheet && !sheetReady) return;
     fired.current = true;
     const landscape = !!deck;
     // Two frames: one for the print portal to mount, one for layout.
@@ -41,10 +55,14 @@ export function PrintExportView({
         void invoke("print_webview", { landscape, savePath: pdfPath });
       });
     });
-  }, [note, deck, pdfPath]);
+  }, [note, deck, pdfPath, asyncSheet, sheetReady]);
   if (!note) return null;
 
   if (note.kind === "mind_map") return <PrintMindMap content={note.content} />;
+  if (note.kind === "uml")
+    return (
+      <PrintUml content={note.content} onReady={() => setSheetReady(true)} />
+    );
   if (deck) return <PrintDeck deck={deck} />;
   if (note.kind === "flashcards") {
     const cards = parseCards(note.content);

@@ -14,6 +14,7 @@ script is already in the note).
 | -------------------------------------------------- | ------- | ---- | ------------------------------------------------------------------ |
 | infographic                                        | .png    | .pdf | Export window renders the poster print sheet → PDF → pdfium raster |
 | mind_map                                           | .png    | .pdf | Same pipeline; fixed-ink SVG scaled to one page, rasterized wide   |
+| uml                                                | .png    | .pdf | Same pipeline; the mermaid SVG on a white sheet, rasterized wide   |
 | slide_deck                                         | .pptx   | .pdf | Hand-rolled OOXML writer (below); PDF prints the 16:9 slide pages  |
 | flashcards                                         | .pptx   | .pdf | Q/A slide pairs (below); PDF prints the study sheet                |
 | data_table (or one-table markdown)                 | .xlsx   | .pdf | Markdown tables → `rust_xlsxwriter` worksheets                     |

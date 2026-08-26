@@ -37,7 +37,7 @@ const PDF_TARGET: ExportTarget = {
  *  Word document — plus a PDF of the note's own render for everything the
  *  print pipeline covers (audio stays audio). */
 export function exportTargets(n: Note): ExportTarget[] {
-  if (n.kind === "infographic" || n.kind === "mind_map")
+  if (n.kind === "infographic" || n.kind === "mind_map" || n.kind === "uml")
     return [
       { label: "Export PNG", format: "png", ext: "png", name: "PNG image" },
       PDF_TARGET,

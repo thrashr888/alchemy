@@ -210,8 +210,8 @@ export function MindMap({ content }: { content: string }) {
 
 /** Infinite-canvas panning and zooming (Photoshop-style): drag with a grab
  *  cursor or two-finger scroll to move; pinch (ctrl+wheel on macOS) or the
- *  corner buttons to zoom around the cursor. */
-function PanCanvas({ children }: { children: React.ReactNode }) {
+ *  corner buttons to zoom around the cursor. Shared with the UML viewer. */
+export function PanCanvas({ children }: { children: React.ReactNode }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 });
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);

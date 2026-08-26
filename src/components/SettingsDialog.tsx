@@ -345,6 +345,11 @@ function GeneralTab() {
     const flow = await checkForUpdates();
     setUpdate(flow);
     setChecking(false);
+    // Keep the title-bar notice (UpdateBadge) honest: an explicit check is
+    // the freshest answer there is, in both directions.
+    if (flow.status === "available")
+      useStore.setState({ updateAvailable: flow.version });
+    if (flow.status === "none") useStore.setState({ updateAvailable: null });
     if (flow.status === "none")
       pushToast("success", "You're on the latest version.");
     if (flow.status === "error")

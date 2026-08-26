@@ -342,6 +342,9 @@ export const api = {
     ),
   openInTerminal: (command: string) =>
     run(cmd<void>("open_in_terminal", { command })),
+  /** Start Ollama detached from Alchemy: the Mac app when it's installed,
+   *  else a backgrounded `ollama serve`. Resolves to "app" or "cli". */
+  startOllama: () => run(cmd<string>("start_ollama")),
   /** Apply one settings-tool change from an error-row fix button
    *  (RFC-self-resolve): same allowlist as the chat `settings` tool; the
    *  returned Message is the tool row echoed into the transcript. */
