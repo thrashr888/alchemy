@@ -250,8 +250,26 @@ pub fn setup(
     // routes them to bundled apps, so dev testing uses a debug bundle).
     let handle = app.handle().clone();
     app.deep_link().on_open_url(move |event| {
+        // Documents opened from Finder ("Open With", double-click, drop on
+        // the icon) arrive on this same channel as file:// URLs — tao
+        // forwards application:openURLs: for both kinds. The frontend router
+        // only speaks alchemy://, so reshape them into the identical
+        // add-intent the Services menu builds for a Finder selection
+        // (services.rs), rather than teaching the router a second dialect.
+        let mut files: Vec<String> = Vec::new();
         for url in event.urls() {
+            if url.scheme() == "file" {
+                if let Ok(path) = url.to_file_path() {
+                    files.push(format!("file={}", encode(&path.to_string_lossy())));
+                    continue;
+                }
+            }
             route_url(&handle, url.to_string());
+        }
+        // One intent for the whole selection: opening three files should add
+        // three sources together, not race three separate routes.
+        if !files.is_empty() {
+            route_url(&handle, format!("alchemy://add?{}", files.join("&")));
         }
     });
 

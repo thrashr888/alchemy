@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { previewSound } from "@/lib/sound";
 import { checkForUpdates, type UpdateFlow } from "@/lib/updates";
 import type { SnapshotStatus } from "@/lib/types";
+import { clearReindexPending, markReindexStarted } from "@/lib/reindex";
 import { Button, Input, Modal, Spinner, Switch } from "./ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "@/lib/utils";
@@ -110,7 +111,14 @@ export function SettingsDialog({
       await save(draft);
       setSaving(false);
       onClose();
-      await reembedAll();
+      // Bracket the rebuild: a stamp that outlives it (the app was quit
+      // mid-way, or reembedAll swallowed a failure into store.error) is what
+      // raises the "search index is incomplete" banner on the next launch.
+      markReindexStarted(
+        draft.embedder === "builtin" ? "the built-in model" : draft.embedModel,
+      );
+      // Only a rebuild that finished whole clears the pending stamp.
+      if (await reembedAll()) clearReindexPending();
       return;
     }
     setSaving(true);

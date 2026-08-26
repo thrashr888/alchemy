@@ -16,6 +16,7 @@ import type {
   Toast,
   ToastKind,
 } from "./types";
+import type { HistoryEntry } from "./history";
 
 export interface QueueItem {
   id: string;
@@ -175,6 +176,16 @@ export interface AppState {
   pendingInput: string | null;
   pendingAsk: string | null;
   toasts: Toast[];
+  /** The open notebook's collections (sources, messages, notes, schedules)
+   *  are still in flight. Distinguishes "nothing here" from "not here yet". */
+  notebookLoading: boolean;
+  /** The notebook list failed to load. Distinguishes "no notebooks" from
+   *  "we could not find out", which look identical on the shelf. */
+  notebooksFailed: boolean;
+  /** Session undo history (RFC-professional-grade Pillar 5). Newest last;
+   *  a push clears `redoStack`, the standard rule. */
+  undoStack: HistoryEntry[];
+  redoStack: HistoryEntry[];
   justCreatedNoteId: string | null;
   /** Center-column Ledger mode; reader wins below it, chat is the default. */
   ledgerOpen: boolean;
@@ -387,12 +398,32 @@ export interface AppState {
   saveAiConfig: (config: AiConfig) => Promise<void>;
   refreshModelHealth: () => Promise<void>;
   refreshModelStats: () => Promise<void>;
-  reembedAll: () => Promise<void>;
+  /** Resolves true when the rebuild finished whole; failure is reported
+   *  through `error` rather than thrown, so this is how a caller knows. */
+  reembedAll: () => Promise<boolean>;
   refreshKokoroStatus: () => Promise<void>;
   setupKokoro: () => Promise<void>;
   removeKokoro: () => Promise<void>;
   setError: (error: string | null) => void;
   pushToast: (kind: ToastKind, message: string, onClick?: () => void) => void;
   dismissToast: (id: string) => void;
+  /** Record a reversible mutation silently — for changes that need no toast
+   *  of their own (a rename, a tag edit) but should still answer Cmd-Z. */
+  pushHistory: (
+    label: string,
+    undo: () => Promise<void>,
+    redo: () => Promise<void>,
+  ) => HistoryEntry;
+  /** Record a reversible mutation and show its undo toast in one call —
+   *  both routes drive the same entry, so undoing twice is impossible. */
+  undoableToast: (
+    message: string,
+    label: string,
+    undo: () => Promise<void>,
+    redo: () => Promise<void>,
+  ) => void;
+  /** ⌘Z / ⇧⌘Z, routed from the Edit menu (see menu.rs). */
+  undoLast: () => Promise<void>;
+  redoLast: () => Promise<void>;
   markNotesRead: (ids: string[]) => void;
 }

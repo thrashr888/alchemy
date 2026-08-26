@@ -30,6 +30,22 @@ cargo test --lib evals -- --ignored --nocapture  # distill/rerank evals — need
 cargo test --lib rag_round_trip -- --nocapture   # e2e data path — no-ops if Ollama isn't running
 ```
 
+To exercise anything the OS has to know about — the `alchemy://` scheme,
+file associations, the Dock menu, Services — build a real bundle, not
+`--no-bundle`:
+
+```bash
+pnpm tauri build --debug --bundles app    # -> target/debug/bundle/macos/Alchemy.app
+```
+
+A bare executable has no `Info.plist`, so those integrations are never
+registered and silently do nothing. Set `APPLE_SIGNING_IDENTITY` (a
+`Developer ID Application: ...` name) in the **shell environment** first, or
+macOS re-prompts for file access on every rebuild: privacy permissions are
+keyed on the signing identity, and an ad-hoc bundle draws a fresh random one
+each build. The Tauri CLI reads the process environment and does not load
+`.env`. Never commit an identity — it belongs in the developer's env.
+
 Releases go through `scripts/release.sh` (see `RELEASE.md`). pnpm 11 quirks (`allowBuilds`, `verifyDepsBeforeRun: false`) are deliberate — don't "fix" `pnpm-workspace.yaml`.
 
 ## Architecture

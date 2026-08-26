@@ -296,3 +296,143 @@ Quick reference for agents building UI here:
 - Example prompt: "Add a 'pin source' action to each source row: h-3.5 lucide
   Pin icon button, hidden until hover/focus-within, aria-label with the source
   title, confirm nothing, toast on success."
+
+## 11. Accessibility & State Inventory
+
+Two things a design system has to keep honest once it has 50 components: what
+the app says to someone who cannot see it, and what each pane shows when it
+has nothing, is waiting, has failed, or is quietly returning less than it
+should. This section records both — the rules, and the current state of the
+app measured against them, gaps included.
+
+### Accessibility rules
+
+- **Semantic HTML carries its own role.** A `<button>` never gets
+  `role="button"`; a `<label>` wrapping its control never gets
+  `aria-labelledby`. Redundant ARIA is worse than none — it is one more thing
+  to go stale. Reach for ARIA only where the platform has nothing to say:
+  icon-only controls, live updates, custom groupings, blocking overlays.
+- **Icon-only buttons carry `aria-label`** (§4). When several copies of one
+  control repeat down a list ("Keep", "Dismiss", a source icon in the rail),
+  the label names the object it acts on, not just the verb.
+- **Decorative icons are `aria-hidden`.** `Spinner` sets it for you; a lucide
+  icon beside its own text label should set it too. Where an icon is the
+  *only* carrier of meaning — a tick for a right answer, a red dot for a
+  failed import — the meaning goes into `sr-only` text or the control's
+  label. Color and shape do not survive being read aloud.
+- **Live regions announce transitions, not streams.** A region wrapped around
+  streaming chat tokens speaks every fragment as it lands, which is worse
+  than silence. Use `LiveRegion` from `ui.tsx` and feed it the moments that
+  matter: the question going out, the answer arriving with its citation
+  count, a toast's text. Two properties make it work — the region stays
+  mounted for the life of its host (a region that appears with its first
+  message is announced unreliably), and each announcement is a fresh child
+  node, so an identical sentence still speaks.
+- **A blocking overlay is a dialog.** Anything covering the app —
+  `MigrationOverlay`, `Onboarding` — sets `role="dialog"`, `aria-modal`, and
+  a label, and takes focus. Otherwise a screen reader walks straight past it
+  into the inert UI behind. `Modal` in `ui.tsx` already does all of this;
+  prefer it, and match it when you cannot use it.
+- **Charts are one labelled image.** A 91-cell heatmap read one square at a
+  time is noise. `role="img"` plus an `aria-label` that says what the picture
+  says (`ActivityTab`'s heatmap is the reference).
+
+### VoiceOver traversal checklist
+
+Re-runnable by hand: ⌘F5 to start VoiceOver, then walk the main window with
+VO-→ and confirm each line. A failure here is a bug, not a nit.
+
+1. **Titlebar** — notebook name is read once, not twice (the color dot is
+   `aria-hidden`); "Open the command menu" and "Open settings" announce as
+   buttons with those names.
+2. **Degraded bar**, when one is showing — the title and the sentence are
+   read together, and each fix button announces its own verb ("Start
+   Ollama", "Install qwen3", "Rebuild now").
+3. **Sources panel** — each row reads title, then type, then status; a failed
+   import says it failed rather than showing a silent red dot. The collapsed
+   rail reads "Show sources" plus the source it stands for.
+4. **Chat** — send a question: the region says "Answering." once, stays
+   silent through the stream, then says "Answer ready" with the citation
+   count. Nothing repeats per token. An inline `[3]` reads "Citation 3,"
+   plus the source title, not a bare number.
+5. **Toasts** — trigger one (delete a source): the message is spoken once,
+   without "Dismiss notification" trailing it. The Undo action is reachable
+   by Tab while the toast is up.
+6. **Studio** — the generate tiles announce their document kind; a disabled
+   tile announces as dimmed rather than silently doing nothing.
+7. **Settings** — tabs announce as a list with the current one marked;
+   every switch reads its label and on/off state.
+8. **Modals** — opening one moves focus inside, Escape closes it, and focus
+   returns to whatever opened it.
+
+### State inventory
+
+Who owns each pane's four states today. "none" means the state genuinely is
+not rendered — recorded as found, not as it ought to be.
+
+| Pane | Empty | Loading | Error | Degraded |
+|---|---|---|---|---|
+| Notebook shelf (`HomeView`) | `AlchemyHero` branch; filter-empty line | none | `activityError` row + Retry (activity feed only) | `HealthBanner` |
+| Home Staff + Brief (`HomeSections`) | `StaffQuiet` per group; "No brief yet" | `StaffQuiet` "Loading…" (watchers only) | none — toasts, and `FiledGroup` catches into an empty list | "Night Shift is off" button |
+| Latest reports (`HomeReportsFeed`) | "You're all caught up"; `EmptyState` in `HomeView` | "Loading reports…" in `HomeView` | `EmptyState` "Reports unavailable" + Retry | none |
+| Registry (`RegistrySection`) | `EmptyState` "No cards yet"; filter-empty | none | none — `load()` has no catch | orphan `Badge` + cleanup action; unconfirmed proposals |
+| Sources (`SourcesPanel`) | `EmptyState` "No sources yet" / "No notebook selected" | per-item queue spinners; "Embedding n/m…" | queue error row + Retry/Dismiss; "Import failed" per row | "n sources need attention" banner; hygiene badges; online-only line |
+| Chat (`ChatPanel`) | `ChatHero`; disabled composer | `ThinkingDots`, `StepTrail`, streaming markdown | `ChatMessage` error branch + Retry + `FallbackOffers` | `ModelPill` "unavailable" rows; `HealthBanner` via `Workspace` |
+| Agent pane (`AgentPane`) | `AgentBlankSlate` | `AgentBlankSlate` "Looking for agents…" | `FailureNotice` + Terminal + Retry | "Running without notebook access" notice |
+| Reader (`ReaderPane`) | "No text stored for this source" | per-view spinners (source, live page, PDF pages, repo) | image / PDF / import failure lines | online-only placeholder + Download; live-view fallback; anchor downgrade |
+| Studio (`StudioPanel`) | `EmptyState` "No notes yet" | per-tile spinners; streaming preview | none — generation failures are toast-only | "stale" badge; archived group |
+| Gallery (`GalleryPane`) | `EmptyState`, four variants | none | none — thumbnail failures swallowed | per-card "Import failed" strip |
+| Ledger (`LedgerPane`) | `EmptyState` "Nothing on the record yet" | "Loading…" | none — catch renders as empty | none |
+| Graph (`GraphView`) | `EmptyState` "Nothing to graph yet" | two-stage progress with bar | none — catch renders as empty | none |
+| Settings (`SettingsDialog`) | per-row "Not installed" | dialog spinner; per-section "Loading…" | Notion token error; hosted-agent failure + Sign in | dimmed "not installed" rows |
+| Models (`ModelsTab`) | `FirstRunDoor` "None found" | per-provider "checking…" | probe error pill + message | "unavailable" pill per provider |
+| Activity (`ActivityTab`) | "Your activity will appear here" | `Spinner` | "Couldn't load activity" | none |
+| Command palette (`CommandPalette`) | "No matching commands" | live stage line + `Spinner` | weak — the failure is written into the answer slot as plain prose | none |
+| Note window (`NoteWindow`) | "This note no longer exists" | `Spinner` + "Loading note…" | none | none |
+| Reports (`Reports`) | `EmptyState` "No reports scheduled" | per-row run spinner | none | none |
+| App shell (`App`) | — | — | `ErrorBoundary`, `FatalOverlay` | `HealthBanner`, `Onboarding`, `MigrationOverlay` |
+
+### The degraded states, designed
+
+`HealthBanner` owns the four the app can actually detect, each with the fix
+inline rather than a sentence about the fix. It renders on both the shelf
+(`HomeView`) and inside a notebook (`Workspace`), and stacks at most three
+rows. Its live region stays mounted even when nothing is wrong, so a problem
+that appears mid-session is spoken rather than discovered.
+
+| State | Detected by | Says | Fix inline |
+|---|---|---|---|
+| Ollama isn't running | `modelHealth.reachable === false` with a broken role | "Alchemy needs it to answer questions and to index sources." | **Start Ollama** (`ollama serve` in Terminal), Check again |
+| No model set for a role | role's `name` is blank | "Pick one in Settings and this works again." | **Choose a model** → Models |
+| Model isn't installed | role detail names `ollama pull <model>` | "Install `<model>` and chat can answer again." | **Install `<model>`**, Check again |
+| Search index is incomplete | `reindexPending()` in `src/lib/reindex.ts` | "A re-index didn't finish, so some sources won't appear in search or citations." | **Rebuild now**, Ignore |
+
+Tone follows the stakes: `destructive` when nothing can be answered,
+`warning` when the app runs but returns less than it should. The two Terminal
+commands are the ones `terminal_command_allowed` permits; nothing else may be
+launched from a banner.
+
+The fourth state — "the embedding model changed" — is not a state the store
+can be asked about. `chunk_count` on a source is written at ingest and is not
+zeroed when a rebuild drops the index, so it cannot answer "is this
+indexed?". What `reindex.ts` records instead is narrower and true: a rebuild
+this app started and never saw finish. Only the Settings save path stamps it
+today, so a model swapped through MCP or the config file will not raise the
+banner — widen the stamp when another path starts dropping the index.
+
+### Known gaps
+
+Recorded so the next pass starts from fact:
+
+- **Errors that render as empty.** `GraphView`, `LedgerPane`,
+  `CommandPalette` search, and `HomeSections`' filed groups each `.catch()`
+  into an empty result, so a failed fetch is indistinguishable from "there is
+  nothing here."
+- **No error state at all.** Registry (`load()` has no catch), Studio
+  (generation failures are toast-only), Gallery, Note window, Reports.
+- **No loading state.** The shelf, Registry, Studio's note list, Gallery, and
+  the Sources list all render straight off the store with no per-collection
+  loading flag, so a slow first load looks like an empty pane.
+- **No frontend tests cover any of this.** The contrast matrix and the
+  history stack are unit-tested; no component renders under test, so the
+  table above is maintained by reading, not by CI.

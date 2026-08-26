@@ -85,7 +85,10 @@ function Quiz({ questions }: { questions: Question[] }) {
   return (
     <div className="flex flex-col gap-4">
       <div className="sticky top-0 z-10 flex items-center gap-2 rounded-md border border-border bg-elevated px-3 py-1.5 text-caption text-muted-foreground">
-        <span className="tabular-nums">
+        {/* The score is the one thing that changes out from under you when you
+            answer, so it speaks. The grading of the option you clicked rides
+            in that option's own label below — not here. */}
+        <span role="status" aria-live="polite" className="tabular-nums">
           {answered} / {questions.length} answered
           {answered > 0 && (
             <>
@@ -111,10 +114,19 @@ function Quiz({ questions }: { questions: Question[] }) {
         const pick = picks[q.n];
         return (
           <div key={q.n} className="flex flex-col gap-1.5">
-            <div className="text-[0.84375rem] font-medium text-foreground">
+            <div
+              id={`quiz-q-${q.n}`}
+              className="text-[0.84375rem] font-medium text-foreground"
+            >
               {q.n}. {q.text}
             </div>
-            <div className="flex flex-col gap-1">
+            {/* Group the options under their question: arrowing into the list
+                otherwise reads four bare answers with no stem in front. */}
+            <div
+              role="group"
+              aria-labelledby={`quiz-q-${q.n}`}
+              className="flex flex-col gap-1"
+            >
               {q.options.map((o) => {
                 const chosen = pick === o.letter;
                 const isRight = o.letter === q.answer;
@@ -136,9 +148,24 @@ function Quiz({ questions }: { questions: Question[] }) {
                       {o.letter})
                     </span>
                     <span className="flex-1 text-foreground/90">{o.text}</span>
-                    {pick && isRight && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />}
+                    {/* Right and wrong are a tick, a cross, and a wash of
+                        color — none of which survive being read aloud. */}
+                    {pick && (isRight || chosen) && (
+                      <span className="sr-only">
+                        {isRight ? "Correct answer." : "Your answer. Wrong."}
+                      </span>
+                    )}
+                    {pick && isRight && (
+                      <Check
+                        aria-hidden
+                        className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success"
+                      />
+                    )}
                     {pick && chosen && !isRight && (
-                      <X className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
+                      <X
+                        aria-hidden
+                        className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive"
+                      />
                     )}
                   </button>
                 );

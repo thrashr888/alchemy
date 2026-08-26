@@ -970,3 +970,79 @@ async fn receipts_round_trip() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The notebook counts cache must never serve a number it did not compute
+/// (docs/RFC-professional-grade.md Pillar 2). Counting scans the sources and
+/// notes tables end to end, so the result is cached — keyed on those tables'
+/// Lance versions rather than invalidated by hand at each write site.
+///
+/// This is the test for the failure that would matter: a write that the
+/// cache does not notice, leaving the shelf showing yesterday's totals.
+#[tokio::test]
+async fn notebook_counts_follow_writes_through_the_cache() {
+    use crate::models::Note;
+
+    let dir = std::env::temp_dir().join(format!("nbl-counts-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb_id = uuid::Uuid::new_v4().to_string();
+    db.create_notebook(&Notebook {
+        id: nb_id.clone(),
+        title: "Counts".into(),
+        created_at: now(),
+        updated_at: now(),
+        color: String::new(),
+        icon: String::new(),
+        status: String::new(),
+        source_count: 0,
+        note_count: 0,
+        report_count: 0,
+    })
+    .await
+    .expect("create notebook");
+
+    let note = |kind: &str| Note {
+        id: uuid::Uuid::new_v4().to_string(),
+        notebook_id: nb_id.clone(),
+        title: format!("A {kind}"),
+        content: "body".into(),
+        kind: kind.to_string(),
+        prompt: String::new(),
+        origin: String::new(),
+        status: String::new(),
+        created_at: now(),
+        updated_at: now(),
+    };
+
+    // Cold: nothing counted yet.
+    let first = db.list_notebooks().await.expect("list");
+    assert_eq!(first[0].note_count, 0, "new notebook has no notes");
+
+    // Warm: this read is served from the cache, and must still be right.
+    assert_eq!(
+        db.list_notebooks().await.expect("list")[0].note_count,
+        0,
+        "cached read agrees with the cold one"
+    );
+
+    db.add_note(&note("note")).await.expect("add note");
+    assert_eq!(
+        db.list_notebooks().await.expect("list")[0].note_count,
+        1,
+        "a write must invalidate the cache — this is the whole contract"
+    );
+
+    // Reports are counted out of the note total, not added to it.
+    db.add_note(&note("report")).await.expect("add report");
+    let after = db.list_notebooks().await.expect("list");
+    assert_eq!(after[0].note_count, 1, "report is not a note");
+    assert_eq!(after[0].report_count, 1, "report counted as a report");
+
+    // A second Db over the same directory reads the persisted cache — the
+    // path a cold app start takes.
+    let reopened = Db::open(&dir).await.expect("reopen db");
+    let cold = reopened.list_notebooks().await.expect("list");
+    assert_eq!(cold[0].note_count, 1, "counts survive a reopen");
+    assert_eq!(cold[0].report_count, 1, "report counts survive a reopen");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

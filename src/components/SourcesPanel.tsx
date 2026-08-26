@@ -8,6 +8,7 @@ import {
   Textarea,
   Modal,
   EmptyState,
+  LoadingState,
   ResizeHandle,
   RowMenu,
   type RowMenuItem,
@@ -215,6 +216,7 @@ export function SourcesPanel() {
     (s) => s.notebooks.find((n) => n.id === s.currentId)?.color,
   );
   const sources = useStore((s) => s.sources);
+  const notebookLoading = useStore((s) => s.notebookLoading);
   const currentId = useStore((s) => s.currentId);
   const queue = useStore((s) => s.ingestQueue);
   const importingFolders = useStore((s) => s.importingFolders);
@@ -700,6 +702,8 @@ export function SourcesPanel() {
 
         {!currentId ? (
           <EmptyState title="No notebook selected" />
+        ) : notebookLoading && sources.length === 0 && queue.length === 0 ? (
+          <LoadingState label="Loading sources…" />
         ) : sources.length === 0 && queue.length === 0 ? (
           <EmptyState
             icon={<FileText className="h-7 w-7" />}

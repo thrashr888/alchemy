@@ -10,7 +10,10 @@ import { api } from "./api";
 import { isWebUrl, SUPPORTED_EXTENSIONS, visibleTitle } from "./utils";
 import { applyTheme, SYSTEM_THEME, themeIsDark } from "./themes";
 import { refreshEpigraph } from "./epigraph";
+import { describe } from "./errors";
 import { notify } from "./notify";
+import { dropEntry, makeEntry, pushEntry } from "./history";
+import { claimTextUndo } from "./textUndo";
 import { playArrival, playDone, playError } from "./sound";
 import { autoUpdateEnabled, checkForUpdatesQuietly } from "./updates";
 import { DEFAULT_CHAT_CONFIG, DEFAULT_READING_PREFS } from "./types";
@@ -416,6 +419,10 @@ export const useStore = create<AppState>((set, get) => {
     pendingImportPath: null,
     error: null,
     toasts: [],
+    notebookLoading: false,
+    notebooksFailed: false,
+    undoStack: [],
+    redoStack: [],
     justCreatedNoteId: null,
     // Center-column Ledger mode (Chat | Reader | Ledger) + a bump counter
     // the pane watches so agent writes appear live (mcp://changed).
@@ -483,39 +490,67 @@ export const useStore = create<AppState>((set, get) => {
         listenersBound = true;
         get().bindGlobalListeners();
       }
-      const [notebooks, aiConfig, ollamaOk, templates] = await Promise.all([
-        api.listNotebooks(),
-        api.getAiConfig(),
+      // Settled, not all-or-nothing. These used to share one Promise.all
+      // rejection: a single slow read — and the notebook list is a cold scan
+      // of three tables, which on a large library can approach the IPC
+      // timeout — took the whole boot down with it, leaving the shelf
+      // indistinguishable from a brand-new install. Forever, since init does
+      // not run twice.
+      const settled = <T,>(p: Promise<T>) =>
+        p.then(
+          (value) => ({ ok: true as const, value }),
+          (err: unknown) => ({ ok: false as const, err }),
+        );
+      const [notebooksR, aiConfigR, ollamaOk, templates] = await Promise.all([
+        settled(api.listNotebooks()),
+        settled(api.getAiConfig()),
         api.checkOllama().catch(() => false),
         // Templates are global (a user folder), not per-notebook. A read failure
         // just hides the section — never blocks boot.
         api.listTemplates().catch(() => []),
       ]);
-      set({ notebooks, aiConfig, ollamaOk, templates });
+      const aiConfig = aiConfigR.ok ? aiConfigR.value : get().aiConfig;
+      const notebooks = notebooksR.ok ? notebooksR.value : [];
+      set({
+        notebooks,
+        notebooksFailed: !notebooksR.ok,
+        aiConfig,
+        ollamaOk,
+        templates,
+      });
+      if (!notebooksR.ok) {
+        set({ error: describe(notebooksR.err) });
+      } else if (!aiConfigR.ok) {
+        set({ error: describe(aiConfigR.err) });
+      }
       // Releases any OS entry point that arrived before the corpus was known.
       markNotebooksLoaded();
       // showNotifications lives in config now (the Night Shift's resident
       // scheduler reads it backend-side, as does notify()'s send_notification
       // path). Honor a pre-migration localStorage opt-out once, then mirror
       // config down so the legacy key can't re-trigger this migration.
-      if (
-        localStorage.getItem("showNotifications") === "false" &&
-        aiConfig.showNotifications
-      ) {
-        void api.setAiConfig({ ...aiConfig, showNotifications: false });
-      } else {
+      // Skipped entirely when the config read failed: mirroring a config we
+      // never loaded would write defaults over the user's real settings.
+      if (aiConfig) {
+        if (
+          localStorage.getItem("showNotifications") === "false" &&
+          aiConfig.showNotifications
+        ) {
+          void api.setAiConfig({ ...aiConfig, showNotifications: false });
+        } else {
+          localStorage.setItem(
+            "showNotifications",
+            String(aiConfig.showNotifications),
+          );
+        }
+        // Quiet-while-focused mirrors config → localStorage for the sound
+        // module's synchronous check (desktop notifications read config
+        // directly, backend-side).
         localStorage.setItem(
-          "showNotifications",
-          String(aiConfig.showNotifications),
+          "quietWhenFocused",
+          String(aiConfig.quietWhenFocused),
         );
       }
-      // Quiet-while-focused mirrors config → localStorage for the sound
-      // module's synchronous check (desktop notifications read config
-      // directly, backend-side).
-      localStorage.setItem(
-        "quietWhenFocused",
-        String(aiConfig.quietWhenFocused),
-      );
       void get().refreshModelHealth();
       void get().refreshModelStats();
       void get().refreshKokoroStatus();
@@ -832,7 +867,15 @@ export const useStore = create<AppState>((set, get) => {
           set({ importOkfOpen: true });
         else if (e.payload.id === "menu-back") s.navBack();
         else if (e.payload.id === "menu-forward") s.navForward();
-        else if (e.payload.id === "menu-new-notebook") {
+        // Undo is app-routed because the menu accelerator eats the keystroke
+        // before any keydown handler runs. A focused editor or input gets
+        // first claim; only when nothing is being typed into does Cmd-Z mean
+        // "reverse my last mutation".
+        else if (e.payload.id === "menu-undo") {
+          if (!claimTextUndo(false)) void s.undoLast();
+        } else if (e.payload.id === "menu-redo") {
+          if (!claimTextUndo(true)) void s.redoLast();
+        } else if (e.payload.id === "menu-new-notebook") {
           // Same auto-title the palette's New Notebook uses.
           const taken = new Set(get().notebooks.map((n) => n.title));
           let title = "Untitled notebook";
@@ -1003,6 +1046,18 @@ export const useStore = create<AppState>((set, get) => {
           await get().selectNotebook(nb);
           // The just-created hook opens the note card (and marks it read).
           set({ studioOpen: true, justCreatedNoteId: tail });
+        } else if (kind === "ask") {
+          // The tray item and ⌥Space reach the palette over the
+          // `integrations://ask` event, which no URL could trigger — so a
+          // Shortcut had no way in (docs/shortcuts.md). Same destination,
+          // now addressable; `q` pre-fills the question.
+          // Seed the question in the SAME set as the open: the palette reads
+          // pendingAsk in its open effect, so setting it afterwards would
+          // arrive too late and silently drop the question (HomeView's ask
+          // box sets both together for exactly this reason).
+          const q = u.searchParams.get("q");
+          if (q) set({ pendingAsk: q, paletteOpen: true });
+          else get().setPaletteOpen(true);
         } else if (kind === "add") {
           const p = u.searchParams;
           const payload = {
@@ -1057,7 +1112,7 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     refreshNotebooks: async () => {
-      set({ notebooks: await api.listNotebooks() });
+      set({ notebooks: await api.listNotebooks(), notebooksFailed: false });
       void api.rebuildAppMenu();
     },
 
@@ -1085,23 +1140,41 @@ export const useStore = create<AppState>((set, get) => {
         chatConfig,
         summary: localStorage.getItem(`summary:${id}`) ?? "",
         reader: { open: false, history: [], index: -1 },
+        // Every collection above was just emptied. Until the fetch lands,
+        // an empty Sources list means "still loading", not "no sources" —
+        // one flag, because they all arrive in the same Promise.all.
+        notebookLoading: true,
       });
       const nb = get().notebooks.find((n) => n.id === id);
       if (nb) void getCurrentWebviewWindow().setTitle(`${nb.title} — Alchemy`);
-      const [sources, messagePage, notes, reportSchedules] = await Promise.all([
-        api.listSources(id),
-        api.listMessagesPage(id, undefined, CHAT_PAGE_SIZE),
-        api.listNotes(id),
-        api.listReportSchedules(id),
-      ]);
-      if (get().currentId === id)
-        set({
-          sources,
-          messages: messagePage.messages,
-          messagesHasMore: messagePage.hasMore,
-          notes,
-          reportSchedules,
-        });
+      try {
+        const [sources, messagePage, notes, reportSchedules] = await Promise.all(
+          [
+            api.listSources(id),
+            api.listMessagesPage(id, undefined, CHAT_PAGE_SIZE),
+            api.listNotes(id),
+            api.listReportSchedules(id),
+          ],
+        );
+        // Guarded on both paths: a slow load for a notebook the user already
+        // navigated away from must not clear the newer one's flag.
+        if (get().currentId === id)
+          set({
+            sources,
+            messages: messagePage.messages,
+            messagesHasMore: messagePage.hasMore,
+            notes,
+            reportSchedules,
+            notebookLoading: false,
+          });
+      } catch (e) {
+        if (get().currentId === id)
+          set({
+            notebookLoading: false,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        return;
+      }
       // Catch up THIS notebook's folder and file sources right away rather
       // than waiting for the next minute tick — scoped, because the corpus-
       // wide sweep this used to fire competed with the notebook's own loads
@@ -1222,8 +1295,21 @@ export const useStore = create<AppState>((set, get) => {
 
     renameNotebook: (id, title) =>
       guard(async () => {
+        const before = get().notebooks.find((n) => n.id === id)?.title;
         await api.renameNotebook(id, title);
         await get().refreshNotebooks();
+        // Silent history: a rename needs no toast, but it is the mutation
+        // people most often want back (RFC-professional-grade Pillar 5).
+        if (before === undefined || before === title) return;
+        const rename = async (to: string) => {
+          await api.renameNotebook(id, to);
+          await get().refreshNotebooks();
+        };
+        get().pushHistory(
+          "Rename Notebook",
+          () => rename(before),
+          () => rename(title),
+        );
       }),
 
     setNotebookColor: (id, color) =>
@@ -1622,20 +1708,43 @@ export const useStore = create<AppState>((set, get) => {
           get().pushToast("success", label);
           return;
         }
-        get().pushToast("success", `${label} — click to undo`, () =>
-          guard(async () => {
-            for (const s of restorable)
-              await restoreSource(nb, s, texts.get(s.id));
+        // Undo re-imports rather than resurrects, so the restored sources
+        // carry fresh ids — redo has to delete those, not the dead ones.
+        let restoredIds: string[] = [];
+        get().undoableToast(
+          label,
+          sourceIds.length === 1
+            ? "Remove Source"
+            : `Remove ${sourceIds.length} Sources`,
+          async () => {
+            restoredIds = [];
+            for (const s of restorable) {
+              const back = await restoreSource(nb, s, texts.get(s.id));
+              if (back) restoredIds.push(back.id);
+            }
             if (get().currentId === nb)
               set({ sources: await api.listSources(nb) });
             void get().refreshHygiene();
-          }),
+          },
+          async () => {
+            if (restoredIds.length > 0) await api.deleteSources(nb, restoredIds);
+            if (get().currentId === nb)
+              set({ sources: await api.listSources(nb) });
+            void get().refreshHygiene();
+          },
         );
       }),
 
     setSourcesTagsBatch: (sourceIds, tags) =>
       guard(async () => {
         if (sourceIds.length === 0) return;
+        // Each source keeps its own prior tag string — one shared "before"
+        // would flatten distinct sets into whichever was read last.
+        const before = new Map(
+          get()
+            .sources.filter((s) => sourceIds.includes(s.id))
+            .map((s) => [s.id, s.tags] as const),
+        );
         await api.setSourcesTags(sourceIds, tags);
         const nb = get().currentId;
         if (nb) set({ sources: await api.listSources(nb) });
@@ -1644,6 +1753,22 @@ export const useStore = create<AppState>((set, get) => {
           sourceIds.length === 1
             ? "Tags saved"
             : `Tagged ${sourceIds.length} sources`,
+        );
+        const relist = async () => {
+          const open = get().currentId;
+          if (open) set({ sources: await api.listSources(open) });
+        };
+        get().pushHistory(
+          "Edit Tags",
+          async () => {
+            for (const [id, prior] of before)
+              await api.setSourceTags(id, prior);
+            await relist();
+          },
+          async () => {
+            await api.setSourcesTags(sourceIds, tags);
+            await relist();
+          },
         );
       }),
 
@@ -1662,12 +1787,20 @@ export const useStore = create<AppState>((set, get) => {
           noteIds.length === 1
             ? `Deleted “${visibleTitle(doomed[0]?.title ?? "note")}”`
             : `Deleted ${noteIds.length} notes`;
-        get().pushToast("success", `${label} — click to undo`, () =>
-          guard(async () => {
+        get().undoableToast(
+          label,
+          noteIds.length === 1 ? "Delete Note" : `Delete ${noteIds.length} Notes`,
+          async () => {
+            // restore_note re-inserts under the original id, so redo can
+            // reuse the very same list.
             for (const n of doomed) await api.restoreNote(n);
             const nb = get().currentId;
             if (nb) set({ notes: await api.listNotes(nb) });
-          }),
+          },
+          async () => {
+            await api.deleteNotes(noteIds);
+            set({ notes: get().notes.filter((n) => !noteIds.includes(n.id)) });
+          },
         );
       }),
 
@@ -2307,9 +2440,15 @@ export const useStore = create<AppState>((set, get) => {
       const unlisten = await listen<Migration>("migrate://progress", (e) => {
         set({ migration: e.payload });
       });
+      // Reported, not thrown — the overlay is the feedback — but the caller
+      // still needs to know whether the index came out whole, and reading
+      // `error` after the await would also catch an unrelated failure that
+      // landed meanwhile.
+      let ok = true;
       try {
         await api.reembedAll();
       } catch (e) {
+        ok = false;
         set({ error: e instanceof Error ? e.message : String(e) });
       } finally {
         unlisten();
@@ -2317,6 +2456,7 @@ export const useStore = create<AppState>((set, get) => {
         const id = get().currentId;
         if (id) set({ sources: await api.listSources(id) });
       }
+      return ok;
     },
 
     // The one export verb: a .okf.zip is the notebook's portable form —
@@ -2398,8 +2538,13 @@ export const useStore = create<AppState>((set, get) => {
           reportSchedules: get().reportSchedules.filter((r) => r.id !== rid),
         });
         if (!gone) return;
-        get().pushToast("success", `Deleted “${gone.name}” — click to undo`, () =>
-          guard(async () => {
+        // As with sources, the restored schedule is a new row with a new
+        // id; redo deletes that one.
+        let restoredId: string | null = null;
+        get().undoableToast(
+          `Deleted “${gone.name}”`,
+          "Delete Schedule",
+          async () => {
             const restored = await api.createReportSchedule(
               gone.notebookId,
               gone.name,
@@ -2408,6 +2553,7 @@ export const useStore = create<AppState>((set, get) => {
               gone.trigger,
               gone.intervalSecs,
             );
+            restoredId = restored.id;
             if (!gone.enabled)
               await api.updateReportSchedule(
                 restored.id,
@@ -2420,7 +2566,16 @@ export const useStore = create<AppState>((set, get) => {
               );
             const id = get().currentId;
             if (id) set({ reportSchedules: await api.listReportSchedules(id) });
-          }),
+          },
+          async () => {
+            if (!restoredId) return;
+            await api.deleteReportSchedule(restoredId);
+            set({
+              reportSchedules: get().reportSchedules.filter(
+                (r) => r.id !== restoredId,
+              ),
+            });
+          },
         );
       }),
 
@@ -2493,6 +2648,62 @@ export const useStore = create<AppState>((set, get) => {
 
     dismissToast: (id) =>
       set({ toasts: get().toasts.filter((t) => t.id !== id) }),
+
+    // ---- Undo history (RFC-professional-grade Pillar 5) -----------------
+
+    pushHistory: (label, undo, redo) => {
+      const entry = makeEntry(label, undo, redo);
+      // A fresh mutation invalidates any redo branch — the standard rule.
+      set({ undoStack: pushEntry(get().undoStack, entry), redoStack: [] });
+      return entry;
+    },
+
+    undoableToast: (message, label, undo, redo) => {
+      const entry = get().pushHistory(label, undo, redo);
+      // One entry, two routes. Clicking the toast drops it from the stack,
+      // so a later Cmd-Z can never undo the same mutation a second time.
+      get().pushToast("success", `${message} — click to undo`, () => {
+        set({ undoStack: dropEntry(get().undoStack, entry.id) });
+        void guard(entry.undo);
+      });
+    },
+
+    undoLast: async () => {
+      const stack = get().undoStack;
+      const top = stack[stack.length - 1];
+      if (!top) return;
+      // Pop before running so a repeated Cmd-Z can't fire the same undo
+      // twice; a failed undo puts the entry back rather than losing the
+      // only way home.
+      set({ undoStack: stack.slice(0, -1) });
+      try {
+        await top.undo();
+        set({ redoStack: pushEntry(get().redoStack, top) });
+        get().pushToast("info", `Undid ${top.label.toLowerCase()}`);
+      } catch (e) {
+        set({
+          undoStack: pushEntry(get().undoStack, top),
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    },
+
+    redoLast: async () => {
+      const stack = get().redoStack;
+      const top = stack[stack.length - 1];
+      if (!top) return;
+      set({ redoStack: stack.slice(0, -1) });
+      try {
+        await top.redo();
+        set({ undoStack: pushEntry(get().undoStack, top) });
+        get().pushToast("info", `Redid ${top.label.toLowerCase()}`);
+      } catch (e) {
+        set({
+          redoStack: pushEntry(get().redoStack, top),
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    },
 
     markNotesRead: (ids) => {
       if (ids.length === 0) return;
