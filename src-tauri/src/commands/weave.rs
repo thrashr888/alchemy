@@ -61,6 +61,11 @@ pub(crate) fn spawn_weave(
     });
 }
 
+/// One nightly pass at a time. Separate from `IN_FLIGHT` on purpose - see
+/// `spawn_nightly`.
+static NIGHTLY_RUNNING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// At most this many changed sources re-judged per night. The cap is the
 /// point: a night that re-judges everything is a night that spends its whole
 /// budget on the corpus's least interesting corners.
@@ -76,21 +81,24 @@ const MAX_NIGHTLY_SOURCES: usize = 8;
 /// Budget-checked per source rather than once up front, because the cost is
 /// per judgment and a night can run out halfway through the list.
 pub(crate) fn spawn_nightly(db: Arc<Db>, ai: Ai, since: i64, budget: String) {
-    if IN_FLIGHT.load(Ordering::Relaxed) >= MAX_IN_FLIGHT {
+    // One nightly pass at a time, and never blocked by arrival judgments:
+    // the pass is serial internally, so it is not the pile-up the arrival
+    // cap guards against.
+    if NIGHTLY_RUNNING.swap(true, Ordering::SeqCst) {
         return;
     }
     tauri::async_runtime::spawn(async move {
-        IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
         if let Err(err) = nightly_pass(&db, &ai, since, &budget).await {
             crate::note!("weave nightly: {err:#}");
         }
-        IN_FLIGHT.fetch_sub(1, Ordering::Relaxed);
+        NIGHTLY_RUNNING.store(false, Ordering::SeqCst);
     });
 }
 
 async fn nightly_pass(db: &Db, ai: &Ai, since: i64, budget: &str) -> anyhow::Result<()> {
     let events = db.source_events_since(since).await.unwrap_or_default();
     if events.is_empty() {
+        crate::note!("weave nightly: nothing changed since the last pass");
         return Ok(());
     }
     // Newest change per source: a page that changed three times tonight is
@@ -139,9 +147,7 @@ async fn nightly_pass(db: &Db, ai: &Ai, since: i64, budget: &str) -> anyhow::Res
         }
         judged += 1;
     }
-    if judged > 0 {
-        crate::note!("weave nightly: re-judged {judged} changed sources");
-    }
+    crate::note!("weave nightly: re-judged {judged} changed sources");
     Ok(())
 }
 
