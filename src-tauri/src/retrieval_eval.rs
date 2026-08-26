@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::db::{Db, SearchOptions};
-use crate::evals::{builtin_ai, seed_corpus, seed_docs, CORPUS};
+use crate::evals::{builtin_ai, eval_ai, seed_corpus, seed_docs, CORPUS};
 use crate::models::Citation;
 
 /// Retrieval depth for all metrics; recall is additionally reported at 5.
@@ -263,7 +263,7 @@ fn mean(rows: &[(String, Metrics)], kind: Option<&str>) -> Metrics {
 /// skips BM25), FTS-only, and the production hybrid RRF.
 #[tokio::test]
 async fn eval_retrieval_datasets() {
-    let Some(ai) = builtin_ai().await else { return };
+    let Some(ai) = eval_ai().await else { return };
     let datasets = load_datasets();
     assert!(!datasets.is_empty(), "no datasets in evals/datasets/");
 
@@ -556,7 +556,7 @@ const META_GOLDEN: &[MetaGolden] = &[
 /// distinct sources/notebooks in the top-k.
 #[tokio::test]
 async fn eval_meta_diversity() {
-    let Some(ai) = builtin_ai().await else { return };
+    let Some(ai) = eval_ai().await else { return };
     let dir = std::env::temp_dir().join(format!("nbl-eval-meta-{}", uuid::Uuid::new_v4()));
     let db = Db::open(&dir).await.expect("open db");
     seed_docs(&ai, &db, "meta-a", DOMINATOR, "dom-").await;
@@ -660,11 +660,11 @@ async fn eval_meta_diversity() {
 /// Deep-search eval. Deterministic part: how much recall headroom a wide
 /// pool gives a reranker (recall@4 in fusion order vs recall within the
 /// 16-candidate pool — the ceiling a perfect reranker reaches). Ollama-gated
-/// part: run the real rerank over the pool and score it against fusion
-/// order at the same cutoff.
+/// part (`ALCHEMY_OLLAMA_TESTS=1`): run the real rerank over the pool and
+/// score it against fusion order at the same cutoff.
 #[tokio::test]
 async fn eval_deep_rerank() {
-    let Some(ai) = builtin_ai().await else { return };
+    let Some(ai) = eval_ai().await else { return };
     let dir = std::env::temp_dir().join(format!("nbl-eval-deep-{}", uuid::Uuid::new_v4()));
     let db = Db::open(&dir).await.expect("open db");
     let nb = "eval-nb";
@@ -687,9 +687,15 @@ async fn eval_deep_rerank() {
         },
         crate::ai::AiRuntime::default(),
     );
-    let ollama_up = chat.list_models().await.is_ok();
+    // Opt-in, not opportunistic: the rerank half is a per-query model call
+    // over every dataset, and firing it just because Ollama is listening made
+    // this the slowest test in the suite on any machine with Ollama up.
+    let ollama_up = crate::evals::ollama_tests_enabled() && chat.list_models().await.is_ok();
     if !ollama_up {
-        eprintln!("NOTE: Ollama not reachable — reporting deterministic headroom only");
+        eprintln!(
+            "NOTE: reporting deterministic headroom only — \
+             set ALCHEMY_OLLAMA_TESTS=1 (with Ollama running) for the LLM rerank half"
+        );
     }
 
     let mut n = 0usize;
@@ -762,7 +768,7 @@ async fn eval_deep_rerank() {
 /// (top-2 notebooks) against flat.
 #[tokio::test]
 async fn eval_router() {
-    let Some(ai) = builtin_ai().await else { return };
+    let Some(ai) = eval_ai().await else { return };
     let dir = std::env::temp_dir().join(format!("nbl-eval-router-{}", uuid::Uuid::new_v4()));
     let db = Db::open(&dir).await.expect("open db");
     let notebooks = [
@@ -890,7 +896,7 @@ async fn eval_router() {
 /// on retention: the k=4 profile must keep ≥75% of k=8's hits.
 #[tokio::test]
 async fn eval_context_profiles() {
-    let Some(ai) = builtin_ai().await else { return };
+    let Some(ai) = eval_ai().await else { return };
     let datasets = load_datasets();
     assert!(!datasets.is_empty(), "no datasets in evals/datasets/");
 
@@ -1083,7 +1089,7 @@ async fn seed_gist(ai: &crate::ai::Ai, db: &Db, notebook_id: &str, title: &str, 
 /// title-filling pass this RFC required.
 #[tokio::test]
 async fn eval_gist_rows() {
-    let Some(ai) = builtin_ai().await else { return };
+    let Some(ai) = eval_ai().await else { return };
     let dir = std::env::temp_dir().join(format!("nbl-eval-gist-{}", uuid::Uuid::new_v4()));
     let db = Db::open(&dir).await.expect("open db");
     seed_docs(&ai, &db, "gist-a", CORPUS, "a-").await;
@@ -1191,7 +1197,7 @@ async fn eval_gist_rows() {
 
 #[tokio::test]
 async fn eval_enrichment_reembed() {
-    let Some(ai) = builtin_ai().await else { return };
+    let Some(ai) = eval_ai().await else { return };
     let dir = std::env::temp_dir().join(format!("nbl-eval-enrich-{}", uuid::Uuid::new_v4()));
     let db = Db::open(&dir).await.expect("open db");
     let nb = "enrich-nb";
@@ -1480,7 +1486,7 @@ const GLOBAL_CASES: &[GlobalCase] = &[
 /// gists), so a failure is a selection regression, not flakiness.
 #[tokio::test]
 async fn eval_global_source_selection() {
-    let Some(ai) = builtin_ai().await else { return };
+    let Some(ai) = eval_ai().await else { return };
     let dir = std::env::temp_dir().join(format!("nbl-eval-global-{}", uuid::Uuid::new_v4()));
     let db = Db::open(&dir).await.expect("open db");
     seed_docs(&ai, &db, "glob-net", GLOBAL_NET, "gn-").await;
@@ -2004,7 +2010,7 @@ async fn eval_scale_fence_10m() {
 /// the app with ALCHEMY_TIMING=1. No absolute-time assertions: machines vary.
 #[tokio::test]
 async fn eval_retrieval_latency() {
-    let Some(ai) = builtin_ai().await else { return };
+    let Some(ai) = eval_ai().await else { return };
     let dir = std::env::temp_dir().join(format!("nbl-eval-lat-{}", uuid::Uuid::new_v4()));
     let db = Db::open(&dir).await.expect("open db");
     let nb = "lat-nb";

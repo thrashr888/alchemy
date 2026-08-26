@@ -175,6 +175,58 @@ const GOLDEN: &[Golden] = &[
     },
 ];
 
+/// Do the corpus evals get to run?
+///
+/// The eval suite seeds fixture corpora and embeds every document through the
+/// built-in embedder — real work, and the bulk of `cargo test`'s wall clock
+/// and CPU (roughly 23s of a 36s run, with the fans to match). It measures
+/// retrieval quality rather than guarding correctness, so it does not need to
+/// run on every local edit. CI sets `ALCHEMY_EVALS=1`, which is where the
+/// numbers actually need watching.
+///
+///   ALCHEMY_EVALS=1 cargo test --lib -- --nocapture
+pub(crate) fn evals_enabled() -> bool {
+    flag_set("ALCHEMY_EVALS")
+}
+
+/// Do the Ollama-backed tests get to run?
+///
+/// A handful of tests reach for a live Ollama *whenever one happens to be
+/// listening* rather than when someone asked for a model run. On any machine
+/// with Ollama up — which is most developer machines — that quietly turns a
+/// fast deterministic `cargo test` into a minutes-long model sweep with the
+/// fans on. Reachability is not consent, so it takes an explicit opt-in:
+///
+///   ALCHEMY_OLLAMA_TESTS=1 cargo test --lib -- --nocapture
+///
+/// Unset (or `0`/`false`/empty), those tests report their deterministic half
+/// and skip the model calls.
+pub(crate) fn ollama_tests_enabled() -> bool {
+    flag_set("ALCHEMY_OLLAMA_TESTS")
+}
+
+/// Truthy-env test shared by the opt-in gates: set and not `0`/`false`.
+fn flag_set(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(v) => {
+            let v = v.trim();
+            !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false")
+        }
+        Err(_) => false,
+    }
+}
+
+/// The embedder for a corpus eval: `builtin_ai`, behind [`evals_enabled`].
+/// The `#[ignore]`d evals call `builtin_ai` directly — `--ignored` is already
+/// an explicit ask, and gating those twice would make them silently no-op.
+pub(crate) async fn eval_ai() -> Option<Ai> {
+    if !evals_enabled() {
+        eprintln!("SKIP: set ALCHEMY_EVALS=1 to run the corpus evals");
+        return None;
+    }
+    builtin_ai().await
+}
+
 pub(crate) async fn builtin_ai() -> Option<Ai> {
     let ai = Ai::new(
         AiConfig {
@@ -259,7 +311,7 @@ fn hit(citations: &[Citation], expect: &str) -> bool {
 /// gives us the vector-only baseline through the exact same code path.
 #[tokio::test]
 async fn eval_retrieval_recall() {
-    let Some(ai) = builtin_ai().await else { return };
+    let Some(ai) = eval_ai().await else { return };
     let dir = std::env::temp_dir().join(format!("nbl-eval-{}", uuid::Uuid::new_v4()));
     let db = Db::open(&dir).await.expect("open db");
     let nb = "eval-nb";
