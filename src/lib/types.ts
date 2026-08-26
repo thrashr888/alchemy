@@ -490,7 +490,7 @@ export interface SourceEvent {
   at: number;
 }
 
-/** Last-snapshot state for the Background Work settings page
+/** Last-snapshot state for the Nightly settings page
  *  (docs/RFC-night-shift-area.md §7). */
 export interface SnapshotStatus {
   /** Epoch ms; 0 when no snapshot has been taken. */

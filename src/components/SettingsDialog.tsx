@@ -48,7 +48,7 @@ const normModel = (m: string) => m.replace(/:latest$/, "");
 
 const TABS = [
   { id: "general", label: "General", icon: SlidersHorizontal },
-  { id: "background", label: "Background Work", icon: Moon },
+  { id: "background", label: "Nightly", icon: Moon },
   { id: "sources", label: "Sources", icon: FolderGit2 },
   { id: "studio", label: "Studio", icon: Wand2 },
   { id: "models", label: "Models", icon: Cpu },

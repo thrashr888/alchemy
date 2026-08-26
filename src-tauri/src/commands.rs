@@ -6684,7 +6684,7 @@ async fn night_shift_reply(state: &AppState, op: &str) -> String {
         _ => {
             let background = state.ai.read().await.config().background_enabled;
             if !background {
-                return "Background work is off, so nothing runs on its own. Turn it back on in Settings \u{2192} Background Work.".into();
+                return "Background work is off, so nothing runs on its own. Turn it back on in Settings \u{2192} Nightly.".into();
             }
             let queued = state
                 .db
@@ -9946,8 +9946,7 @@ pub async fn tonight_plan(state: State<'_, AppState>) -> Result<Vec<PlannedRun>,
             let (state_label, reason) = if !background {
                 (
                     "blocked",
-                    "Background work is off. Turn it on in Settings, under Background Work."
-                        .to_string(),
+                    "Background work is off. Turn it on in Settings, under Nightly.".to_string(),
                 )
             } else if paused {
                 (
@@ -9989,7 +9988,7 @@ pub async fn tonight_plan(state: State<'_, AppState>) -> Result<Vec<PlannedRun>,
     Ok(out)
 }
 
-/// What the last snapshot did, for the Background Work settings page
+/// What the last snapshot did, for the Nightly settings page
 /// (docs/RFC-night-shift-area.md §7).
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
