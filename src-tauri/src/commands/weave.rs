@@ -1,4 +1,5 @@
-//! The Weave, stage 1 (RFC-v12-steward pillar 3): judgment on arrival.
+//! The Weave (RFC-v12-steward pillar 3): judgment on arrival, and again
+//! nightly over whatever changed while nobody was looking.
 //! When a source's content changes — or a top-level source lands — the new
 //! text is weighed against the notebook's active ledger entries, and the
 //! Small role renders a verdict per close pair: corroborates / contradicts /
@@ -58,6 +59,90 @@ pub(crate) fn spawn_weave(
         }
         IN_FLIGHT.fetch_sub(1, Ordering::Relaxed);
     });
+}
+
+/// At most this many changed sources re-judged per night. The cap is the
+/// point: a night that re-judges everything is a night that spends its whole
+/// budget on the corpus's least interesting corners.
+const MAX_NIGHTLY_SOURCES: usize = 8;
+
+/// Nightly re-judgment (freshness.rs stage 2, "verification").
+///
+/// Arrival-time weaving catches a source the moment it lands, which misses
+/// the case that actually matters: a page the user is watching changed at
+/// 3 AM, and the conclusion it undermines was written in March. This walks
+/// what changed since `since` and weighs each one against the ledger again.
+///
+/// Budget-checked per source rather than once up front, because the cost is
+/// per judgment and a night can run out halfway through the list.
+pub(crate) fn spawn_nightly(db: Arc<Db>, ai: Ai, since: i64, budget: String) {
+    if IN_FLIGHT.load(Ordering::Relaxed) >= MAX_IN_FLIGHT {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
+        if let Err(err) = nightly_pass(&db, &ai, since, &budget).await {
+            crate::note!("weave nightly: {err:#}");
+        }
+        IN_FLIGHT.fetch_sub(1, Ordering::Relaxed);
+    });
+}
+
+async fn nightly_pass(db: &Db, ai: &Ai, since: i64, budget: &str) -> anyhow::Result<()> {
+    let events = db.source_events_since(since).await.unwrap_or_default();
+    if events.is_empty() {
+        return Ok(());
+    }
+    // Newest change per source: a page that changed three times tonight is
+    // one judgment, against its current text.
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut targets: Vec<&crate::models::SourceEvent> = Vec::new();
+    for e in &events {
+        if seen.insert(e.source_id.as_str()) {
+            targets.push(e);
+        }
+        if targets.len() >= MAX_NIGHTLY_SOURCES {
+            break;
+        }
+    }
+
+    let archived = db.archived_notebook_ids().await.unwrap_or_default();
+    let mut judged = 0;
+    for event in targets {
+        // Archiving is the user saying they are done with a notebook; its
+        // conclusions are not re-litigated overnight.
+        if archived.contains(&event.notebook_id) {
+            continue;
+        }
+        if !crate::freshness::has_budget(budget) {
+            crate::note!("weave nightly: budget spent after {judged} sources");
+            break;
+        }
+        // Prefer the diff the watcher already computed - it is the part that
+        // changed, which is the part worth judging. Fall back to the source
+        // text when the change was not textual.
+        let text = if event.diff.trim().chars().count() >= 80 {
+            event.diff.clone()
+        } else {
+            db.source_content(&event.source_id)
+                .await
+                .unwrap_or_default()
+        };
+        let changed: String = text.chars().take(TEXT_CAP).collect();
+        if changed.trim().chars().count() < 80 {
+            continue;
+        }
+        if let Err(err) =
+            weave_pass(db, ai, &event.notebook_id, &event.source_title, &changed).await
+        {
+            crate::note!("weave nightly: {} failed: {err:#}", event.source_title);
+        }
+        judged += 1;
+    }
+    if judged > 0 {
+        crate::note!("weave nightly: re-judged {judged} changed sources");
+    }
+    Ok(())
 }
 
 async fn weave_pass(

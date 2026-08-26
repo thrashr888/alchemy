@@ -35,6 +35,12 @@ const MAINTAIN_EVERY_MS: i64 = 6 * 60 * 60 * 1000;
 static LAST_SNAPSHOT: AtomicI64 = AtomicI64::new(0);
 const SNAPSHOT_EVERY_MS: i64 = 60 * 60 * 1000;
 
+/// Epoch ms of the last nightly Weave pass, and the window it judges. Hourly
+/// rather than per-tick: judging is the expensive stage, and a source that
+/// changed two minutes ago is no more urgent than one that changed fifty.
+static LAST_WEAVE: AtomicI64 = AtomicI64::new(0);
+const WEAVE_EVERY_MS: i64 = 60 * 60 * 1000;
+
 /// Quit for real: mark the exit as intentional, then exit.
 pub fn request_quit(app: &AppHandle) {
     QUIT_REQUESTED.store(true, Ordering::Relaxed);
@@ -471,6 +477,28 @@ async fn run_pass(app: &AppHandle) {
         // Source hygiene (docs/RFC-source-hygiene.md): re-fetch aging urls,
         // count strikes on unreachable ones. Its own config gate lives inside.
         crate::hygiene::spawn_sweep(app);
+        // 2. Verification. The Weave already judges a source the moment it
+        //    arrives; this catches the case that matters more — a watched
+        //    page changed at 3 AM, and the conclusion it undermines was
+        //    written in March. Its own stamp, so a Mac that stays awake does
+        //    not re-judge the same changes every minute.
+        let last_weave = LAST_WEAVE.load(Ordering::Relaxed);
+        if now_ms() - last_weave >= WEAVE_EVERY_MS {
+            LAST_WEAVE.store(now_ms(), Ordering::Relaxed);
+            // Never run is a fresh install, not a licence to judge the whole
+            // corpus: start from the last hour, not from the epoch.
+            let since = if last_weave == 0 {
+                now_ms() - WEAVE_EVERY_MS
+            } else {
+                last_weave
+            };
+            crate::commands::weave::spawn_nightly(
+                state.db.clone(),
+                state.ai.read().await.clone(),
+                since,
+                budget.clone(),
+            );
+        }
     } else {
         crate::note!(
             "freshness: nightly budget spent ({} tokens), holding until morning",

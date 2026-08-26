@@ -599,14 +599,6 @@ function SourcesTab() {
 
       <div className="h-px bg-border" />
 
-      <GitSyncSelect />
-
-      <div className="h-px bg-border" />
-
-      <HygieneSelect />
-
-      <div className="h-px bg-border" />
-
       <NotionTokenField />
 
       <div className="h-px bg-border" />

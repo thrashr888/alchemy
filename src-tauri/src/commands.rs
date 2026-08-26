@@ -15,7 +15,7 @@ mod ledger;
 mod registry;
 mod reports;
 mod second_look;
-mod weave;
+pub(crate) mod weave;
 pub(crate) use brief::ensure_default_brief;
 pub use diagnostics::*;
 pub use ledger::*;
