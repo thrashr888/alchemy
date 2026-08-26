@@ -363,6 +363,13 @@ pub(crate) fn lateness(due_at: i64, started_at: i64) -> Option<String> {
     Some(format!("{days} days late"))
 }
 
+/// Put the Weave's stamp back when a pass could not do its work, so the
+/// changes it skipped come round again on the next window instead of being
+/// silently written off.
+pub(crate) fn rewind_weave_stamp(to: i64) {
+    LAST_WEAVE.store(to, Ordering::Relaxed);
+}
+
 /// Take the day's snapshot if it hasn't been taken, and leave a receipt
 /// either way. Runs on the pass thread: an APFS clone is a metadata
 /// operation, and the fallback copy only happens on volumes that cannot
