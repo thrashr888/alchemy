@@ -20,7 +20,7 @@ use lancedb::Connection;
 
 use crate::models::{
     Citation, LedgerEntry, Message, Note, NoteUsage, Notebook, RegistryCard, ReportSchedule,
-    Source, SourceEvent,
+    RunReceipt, Source, SourceEvent,
 };
 
 const T_NOTEBOOKS: &str = "notebooks";
@@ -32,12 +32,17 @@ const T_NOTE_USAGE: &str = "note_usage";
 const T_REPORTS: &str = "report_schedules";
 const T_ROUTES: &str = "routes";
 const T_SOURCE_EVENTS: &str = "source_events";
+const T_RECEIPTS: &str = "run_receipts";
 const T_LEDGER: &str = "ledger";
 /// The Registry's cast (docs/RFC-registry.md). Corpus-scoped: no
 /// notebook_id column, unlike every other entity table here.
 const T_REGISTRY: &str = "registry";
 /// Source events prune past this window — a rolling record, not an archive.
 const SOURCE_EVENT_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+
+/// Receipts are a recent record, not an archive (docs/RFC-night-shift-area.md
+/// §2) — the durable artifacts are the notes the runs wrote.
+const RECEIPT_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 /// Note chunks share the chunks table with source chunks, stored under
 /// `source_id = "note:<note_id>"` — real source ids are UUIDs, so the prefix
 /// can't collide, and every existing notebook/source filter and delete
@@ -297,6 +302,8 @@ impl Db {
         db.ensure_table(T_SOURCE_EVENTS, source_events_schema())
             .await?;
         db.migrate_source_events().await?;
+        db.ensure_table(T_RECEIPTS, receipts_schema()).await?;
+        db.migrate_receipts().await?;
         db.ensure_table(T_LEDGER, ledger_schema()).await?;
         db.migrate_ledger().await?;
         db.ensure_table(T_REGISTRY, registry_schema()).await?;
@@ -362,7 +369,17 @@ impl Db {
     /// Add the `trigger` column ("interval") to pre-existing schedule tables.
     async fn migrate_reports(&self) -> Result<()> {
         self.add_string_column(T_REPORTS, "trigger", "interval")
-            .await
+            .await?;
+        // Commissions (docs/RFC-night-shift-area.md §1). Zero means "the next
+        // pass", which is the right reading for every schedule that predates
+        // the column.
+        self.add_i64_column(T_REPORTS, "not_before", "0").await
+    }
+
+    /// Lateness came after receipts did; 0 reads as "not recorded", which is
+    /// what an older receipt honestly is.
+    async fn migrate_receipts(&self) -> Result<()> {
+        self.add_i64_column(T_RECEIPTS, "due_at", "0").await
     }
 
     /// Add the `diff` column ("") to pre-existing event tables.
@@ -2965,6 +2982,7 @@ impl Db {
             let kind = str_col(b, "kind")?;
             let prompt = str_col(b, "prompt")?;
             let trigger = opt_str_col(b, "trigger");
+            let not_before = opt_i64_col(b, "not_before");
             let interval = i64_col(b, "interval_secs")?;
             let enabled = i64_col(b, "enabled")?;
             let last = i64_col(b, "last_run_at")?;
@@ -2981,6 +2999,7 @@ impl Db {
                         .map(|c| c.value(i).to_string())
                         .filter(|t| !t.is_empty())
                         .unwrap_or_else(|| "interval".to_string()),
+                    not_before: not_before.as_ref().map(|c| c.value(i)).unwrap_or(0),
                     interval_secs: interval.value(i),
                     enabled: enabled.value(i) != 0,
                     last_run_at: last.value(i),
@@ -3057,10 +3076,116 @@ impl Db {
         Ok(out)
     }
 
+    /// Record one run. Best-effort by contract: a receipt that fails to
+    /// write must never fail the run it describes, so callers log and move on.
+    pub async fn add_receipt(&self, receipt: &RunReceipt) -> Result<()> {
+        let schema = receipts_schema();
+        let batch = receipt_batch(&schema, receipt)?;
+        self.add_batch(T_RECEIPTS, schema, batch).await
+    }
+
+    /// Receipts newest first, pruning the rolling window on the way in — the
+    /// same self-bounding idiom as `source_events_since`, so the table needs
+    /// no dedicated sweep. `since` is a wall-clock floor; `limit` caps the
+    /// read for the UI's "last night" grouping.
+    pub async fn list_receipts(&self, since: i64, limit: usize) -> Result<Vec<RunReceipt>> {
+        let cutoff = crate::commands::now() - RECEIPT_WINDOW_MS;
+        self.delete_where(T_RECEIPTS, &format!("ended_at < {cutoff}"))
+            .await?;
+        let batches = self
+            .collect(T_RECEIPTS, Some(&format!("ended_at >= {since}")))
+            .await?;
+        let mut out = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let sched = str_col(b, "schedule_id")?;
+            let nb = str_col(b, "notebook_id")?;
+            let name = str_col(b, "name")?;
+            let kind = str_col(b, "kind")?;
+            let trigger = str_col(b, "trigger")?;
+            let status = str_col(b, "status")?;
+            let detail = str_col(b, "detail")?;
+            let error = str_col(b, "error")?;
+            let note_id = str_col(b, "note_id")?;
+            let provider = str_col(b, "provider")?;
+            let model = str_col(b, "model")?;
+            let cost = i64_col(b, "cost_micros")?;
+            // Optional: receipts written before lateness was recorded.
+            let due = opt_i64_col(b, "due_at");
+            let started = i64_col(b, "started_at")?;
+            let ended = i64_col(b, "ended_at")?;
+            for i in 0..b.num_rows() {
+                out.push(RunReceipt {
+                    id: id.value(i).to_string(),
+                    schedule_id: sched.value(i).to_string(),
+                    notebook_id: nb.value(i).to_string(),
+                    name: name.value(i).to_string(),
+                    kind: kind.value(i).to_string(),
+                    trigger: trigger.value(i).to_string(),
+                    status: status.value(i).to_string(),
+                    detail: detail.value(i).to_string(),
+                    error: error.value(i).to_string(),
+                    note_id: note_id.value(i).to_string(),
+                    provider: provider.value(i).to_string(),
+                    model: model.value(i).to_string(),
+                    cost_micros: cost.value(i),
+                    due_at: due.as_ref().map(|c| c.value(i)).unwrap_or(0),
+                    started_at: started.value(i),
+                    ended_at: ended.value(i),
+                });
+            }
+        }
+        out.sort_by_key(|r| std::cmp::Reverse(r.ended_at));
+        out.truncate(limit);
+        Ok(out)
+    }
+
+    /// Every receipt for one schedule, newest first — the run history behind
+    /// a standing order.
+    pub async fn receipts_for_schedule(
+        &self,
+        schedule_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RunReceipt>> {
+        let all = self.list_receipts(0, usize::MAX).await?;
+        Ok(all
+            .into_iter()
+            .filter(|r| r.schedule_id == schedule_id)
+            .take(limit)
+            .collect())
+    }
+
     pub async fn add_ledger_entry(&self, entry: &LedgerEntry) -> Result<()> {
         let schema = ledger_schema();
         let batch = ledger_batch(&schema, entry)?;
         self.add_batch(T_LEDGER, schema, batch).await
+    }
+
+    /// How many ledger rows the Weave moved to a contradicted or superseded
+    /// state since `since` (freshness.rs). Counted from persisted status
+    /// rather than instrumented at the call site, the same way due-ness is
+    /// derived rather than queued.
+    pub async fn ledger_upsets_since(&self, since: i64) -> Result<u32> {
+        let batches = self
+            .collect(T_LEDGER, Some(&format!("updated_at >= {since}")))
+            .await?;
+        let mut count = 0;
+        for b in &batches {
+            let status = str_col(b, "status")?;
+            let updated = i64_col(b, "updated_at")?;
+            let created = i64_col(b, "created_at")?;
+            for i in 0..b.num_rows() {
+                // A row that arrived already contradicted was minted that
+                // way; only a row the night CHANGED is a finding.
+                if updated.value(i) == created.value(i) {
+                    continue;
+                }
+                if matches!(status.value(i), "contradicted" | "superseded") {
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
     }
 
     pub async fn list_ledger(&self, notebook_id: &str) -> Result<Vec<LedgerEntry>> {
@@ -3298,6 +3423,19 @@ impl Db {
             .column("prompt", format!("'{}'", esc(prompt)))
             .column("trigger", format!("'{}'", esc(trigger)))
             .column("interval_secs", interval_secs.to_string())
+            .column("enabled", i64::from(enabled).to_string())
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    /// Retire a commission after it runs (docs/RFC-night-shift-area.md §1).
+    /// The row stays as its own history — the receipt points at it — but it
+    /// will never come due again.
+    pub async fn set_report_enabled(&self, id: &str, enabled: bool) -> Result<()> {
+        let tbl = self.conn.open_table(T_REPORTS).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(id)))
             .column("enabled", i64::from(enabled).to_string())
             .execute()
             .await?;
@@ -3750,6 +3888,51 @@ fn notes_schema() -> SchemaRef {
     ]))
 }
 
+fn receipts_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("schedule_id", DataType::Utf8, false),
+        Field::new("notebook_id", DataType::Utf8, false),
+        Field::new("name", DataType::Utf8, false),
+        Field::new("kind", DataType::Utf8, false),
+        Field::new("trigger", DataType::Utf8, false),
+        Field::new("status", DataType::Utf8, false),
+        Field::new("detail", DataType::Utf8, false),
+        Field::new("error", DataType::Utf8, false),
+        Field::new("note_id", DataType::Utf8, false),
+        Field::new("provider", DataType::Utf8, false),
+        Field::new("model", DataType::Utf8, false),
+        Field::new("cost_micros", DataType::Int64, false),
+        Field::new("due_at", DataType::Int64, false),
+        Field::new("started_at", DataType::Int64, false),
+        Field::new("ended_at", DataType::Int64, false),
+    ]))
+}
+
+fn receipt_batch(schema: &SchemaRef, r: &RunReceipt) -> Result<RecordBatch> {
+    Ok(RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from(vec![r.id.clone()])),
+            Arc::new(StringArray::from(vec![r.schedule_id.clone()])),
+            Arc::new(StringArray::from(vec![r.notebook_id.clone()])),
+            Arc::new(StringArray::from(vec![r.name.clone()])),
+            Arc::new(StringArray::from(vec![r.kind.clone()])),
+            Arc::new(StringArray::from(vec![r.trigger.clone()])),
+            Arc::new(StringArray::from(vec![r.status.clone()])),
+            Arc::new(StringArray::from(vec![r.detail.clone()])),
+            Arc::new(StringArray::from(vec![r.error.clone()])),
+            Arc::new(StringArray::from(vec![r.note_id.clone()])),
+            Arc::new(StringArray::from(vec![r.provider.clone()])),
+            Arc::new(StringArray::from(vec![r.model.clone()])),
+            Arc::new(Int64Array::from(vec![r.cost_micros])),
+            Arc::new(Int64Array::from(vec![r.due_at])),
+            Arc::new(Int64Array::from(vec![r.started_at])),
+            Arc::new(Int64Array::from(vec![r.ended_at])),
+        ],
+    )?)
+}
+
 fn source_events_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -3862,6 +4045,7 @@ fn reports_schema() -> SchemaRef {
         Field::new("kind", DataType::Utf8, false),
         Field::new("prompt", DataType::Utf8, false),
         Field::new("trigger", DataType::Utf8, false),
+        Field::new("not_before", DataType::Int64, false),
         Field::new("interval_secs", DataType::Int64, false),
         Field::new("enabled", DataType::Int64, false),
         Field::new("last_run_at", DataType::Int64, false),
@@ -3879,6 +4063,7 @@ fn report_batch(schema: &SchemaRef, r: &ReportSchedule) -> Result<RecordBatch> {
             Arc::new(StringArray::from(vec![r.kind.clone()])),
             Arc::new(StringArray::from(vec![r.prompt.clone()])),
             Arc::new(StringArray::from(vec![r.trigger.clone()])),
+            Arc::new(Int64Array::from(vec![r.not_before])),
             Arc::new(Int64Array::from(vec![r.interval_secs])),
             Arc::new(Int64Array::from(vec![i64::from(r.enabled)])),
             Arc::new(Int64Array::from(vec![r.last_run_at])),

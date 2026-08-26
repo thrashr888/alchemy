@@ -99,7 +99,7 @@ export function ChatTab() {
       </p>
 
       <Field label="Conversational goal, style, or role">
-        <div className="flex flex-wrap gap-3">
+        <div className="grid grid-cols-3 gap-x-2 gap-y-3 sm:grid-cols-4 lg:grid-cols-5">
           {CHAT_STYLES.map((style) => (
             <OptionTile
               key={style.id}
@@ -124,7 +124,7 @@ export function ChatTab() {
       </Field>
 
       <Field label="Response length">
-        <div className="flex flex-wrap gap-3">
+        <div className="grid grid-cols-3 gap-x-2 gap-y-3 sm:grid-cols-4 lg:grid-cols-5">
           {CHAT_LENGTHS.map((length) => (
             <OptionTile
               key={length.id}
@@ -453,7 +453,7 @@ function OptionTile({
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      className="group flex flex-col items-center gap-1.5 outline-none"
+      className="group flex w-full flex-col items-center gap-1.5 outline-none"
     >
       <span
         className={cn(
@@ -468,7 +468,7 @@ function OptionTile({
       </span>
       <span
         className={cn(
-          "text-caption transition-colors",
+          "text-balance text-center text-caption leading-tight transition-colors",
           active ? "font-medium text-foreground" : "text-muted-foreground",
         )}
       >

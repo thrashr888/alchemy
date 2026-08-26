@@ -109,7 +109,7 @@ export function ReportsFeed({
 
   return (
     <>
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-6">
+      <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-6 py-2">
         <span className="whitespace-nowrap text-caption font-semibold uppercase tracking-wide text-muted-foreground">
           Latest reports
         </span>
@@ -121,12 +121,12 @@ export function ReportsFeed({
             {unreadCount}
           </span>
         )}
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           {/* The cursor and chevrons only mean something over visible cards —
               the caught-up state (nothing rendered) shows neither. */}
           {rendered.length > 0 && (
             <>
-              <span className="text-micro tabular-nums text-subtle-foreground">
+              <span className="whitespace-nowrap text-micro tabular-nums text-subtle-foreground">
                 {current + 1} of {total}
               </span>
               <div className="flex items-center">
@@ -157,7 +157,7 @@ export function ReportsFeed({
             <button
               type="button"
               onClick={() => markRead(reports.filter(isUnread).map((note) => note.id))}
-              className="text-micro text-muted-foreground transition-colors hover:text-foreground"
+              className="whitespace-nowrap text-micro text-muted-foreground transition-colors hover:text-foreground"
             >
               Mark all read
             </button>

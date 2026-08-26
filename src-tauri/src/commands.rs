@@ -15,7 +15,7 @@ mod ledger;
 mod registry;
 mod reports;
 mod second_look;
-mod weave;
+pub(crate) mod weave;
 pub(crate) use brief::ensure_default_brief;
 pub use diagnostics::*;
 pub use ledger::*;
@@ -5965,6 +5965,14 @@ fn tool_gate(content: &str) -> bool {
         "alchemy",
         "set up",
         "setup",
+        // Night Shift administration (docs/RFC-night-shift-area.md §4).
+        "night shift",
+        "tonight",
+        "overnight",
+        "watcher",
+        "standing order",
+        "commission",
+        "receipt",
     ]
     .iter()
     .any(|k| l.contains(k));
@@ -5994,6 +6002,19 @@ enum ToolAction {
         interval: String,
         name: String,
         prompt: String,
+    },
+    /// One-off overnight work (docs/RFC-night-shift-area.md §1, §4).
+    Commission {
+        kind: String,
+        name: String,
+        prompt: String,
+        /// "tonight" (default) or "now".
+        when: String,
+    },
+    /// Ask about, pause, or resume the Night Shift.
+    NightShift {
+        /// "status" | "pause" | "resume"
+        op: String,
     },
     UpdateReport {
         /// Name fragment identifying the existing schedule.
@@ -6029,6 +6050,8 @@ Tools:\n\
 - {\"action\":\"save_note\",\"title\":\"<title or empty>\"} — save the assistant's previous answer as a note.\n\
 - {\"action\":\"create_template\",\"name\":\"<short name>\",\"description\":\"<one line>\",\"prompt\":\"<the reusable generation instruction>\"} — save a reusable custom generator the user can run from Studio later. Compose \"prompt\" yourself from what they asked the generator to do.\n\
 - {\"action\":\"schedule_report\",\"kind\":\"<KINDS>|brief|custom, or a template name from the list below\",\"interval\":\"hourly|daily|weekly\",\"name\":\"<report name>\",\"prompt\":\"<what the report should cover, for kind custom; else empty>\"} — create a recurring report (\"make a weekly brief of this notebook\" → kind brief, interval weekly; echo the user's cadence word in \"interval\" even if unsupported).\n\
+- {\"action\":\"commission\",\"kind\":\"<KINDS>|custom, or a template name\",\"name\":\"<short job name>\",\"prompt\":\"<what to do, for kind custom>\",\"when\":\"tonight|now\"} — hand ONE job to the Night Shift instead of running it now (\"tonight, re-read the Japan sources and rebuild the summary\"). Default \"when\" is tonight; use \"now\" only when the user says so.\n\
+- {\"action\":\"night_shift\",\"op\":\"status|pause|resume\"} — report what the Night Shift has queued, or pause/resume overnight report runs (\"pause the night shift until morning\").\n\
 - {\"action\":\"update_report\",\"name\":\"<existing report name fragment>\",\"new_name\":\"\",\"kind\":\"\",\"interval\":\"\",\"prompt\":\"\",\"enabled\":\"true|false or empty\"} — change an existing recurring report; leave fields empty to keep them.\n\
 - {\"action\":\"settings\",\"op\":\"get\"} — show the current AI provider/model settings (always redacted; API keys are never readable).\n\
 - {\"action\":\"settings\",\"op\":\"set\",\"field\":\"chatProvider|studioProvider|chatModel|effort|baseUrl|smallModel|embedder|provider.<id>.chatModel|provider.<id>.effort|provider.<id>.baseUrl\",\"value\":\"<new value>\"} — change ONE AI setting (\"switch chat to ollama\" → field chatProvider, value ollama; bare chatModel/effort/baseUrl target the active chat provider). API keys can never be read or set through this tool.\n\
@@ -6183,6 +6206,20 @@ fn parse_tool_action(raw: &str) -> ToolAction {
                 }
             }
         }
+        "commission" => {
+            let name = s("name");
+            if name.is_empty() {
+                ToolAction::Chat
+            } else {
+                ToolAction::Commission {
+                    kind: s("kind"),
+                    name,
+                    prompt: s("prompt"),
+                    when: s("when"),
+                }
+            }
+        }
+        "night_shift" => ToolAction::NightShift { op: s("op") },
         "schedule_report" => {
             // Keep the raw kind and interval; dispatch validates both against
             // the live registry (artifact kinds + user templates) and refuses
@@ -6568,6 +6605,117 @@ async fn try_settings_fast_path(
 /// Shared by the LLM router's schedule_report action and the deterministic
 /// schedule gate below, so the two can never validate differently.
 ///
+/// Hand one job to the night from chat (docs/RFC-night-shift-area.md §4).
+/// The Tonight composer and the chat box are the same parser, so this reply
+/// is what both produce. Kinds are validated exactly as schedules are:
+/// refusing beats coercing.
+async fn commission_reply(
+    state: &AppState,
+    notebook_id: &str,
+    kind: &str,
+    name: &str,
+    prompt: &str,
+    when: &str,
+) -> String {
+    // Same validation as a recurring schedule, and the same refusal copy:
+    // a commission that quietly runs the wrong generator wastes a night.
+    let kind = match resolve_report_kind(kind, prompt) {
+        Ok(kind) => kind,
+        Err(refusal) => return refusal,
+    };
+    let tonight = when != "now";
+    let not_before = if tonight {
+        crate::scheduler::next_local_hour_ms(2)
+    } else {
+        0
+    };
+    let schedule = ReportSchedule {
+        id: new_id(),
+        notebook_id: notebook_id.to_string(),
+        name: name.trim().to_string(),
+        kind,
+        prompt: prompt.to_string(),
+        trigger: "once".into(),
+        not_before,
+        interval_secs: 86_400,
+        enabled: true,
+        last_run_at: 0,
+        created_at: now(),
+    };
+    match state.db.add_report_schedule(&schedule).await {
+        Ok(()) => {
+            let clock = if tonight {
+                "It starts at 2:00 AM"
+            } else {
+                "It starts on the next pass"
+            };
+            format!(
+                "Commissioned **{name}**. {clock}, and the result waits for you as a note. It writes notes and reports; it will not act outward."
+            )
+        }
+        Err(err) => format!("Couldn't queue that: {err:#}"),
+    }
+}
+
+/// Answer "what is the Night Shift doing?" and flip the overnight pause from
+/// chat. Deterministic on purpose: status should be exact, not retrieved.
+async fn night_shift_reply(state: &AppState, op: &str) -> String {
+    match op {
+        "pause" | "resume" => {
+            let paused = crate::scheduler::is_paused();
+            let want_pause = op == "pause";
+            if paused == want_pause {
+                return if paused {
+                    "The Night Shift is already paused until morning.".into()
+                } else {
+                    "The Night Shift is already running.".into()
+                };
+            }
+            let now_paused = crate::scheduler::toggle_pause();
+            if let Some(app) = app_handle() {
+                crate::integrations::set_tray_pause_label(&app, now_paused);
+            }
+            if now_paused {
+                "Paused until morning. Scheduled reports hold; source syncing and housekeeping continue.".into()
+            } else {
+                "Resumed. Anything that came due while paused runs on the next pass.".into()
+            }
+        }
+        _ => {
+            let background = state.ai.read().await.config().background_enabled;
+            if !background {
+                return "Background work is off, so nothing runs on its own. Turn it back on in Settings \u{2192} Nightly.".into();
+            }
+            let queued = state
+                .db
+                .all_report_schedules()
+                .await
+                .map(|all| {
+                    all.into_iter()
+                        .filter(|s| s.enabled && s.trigger == "once" && s.last_run_at == 0)
+                        .count()
+                })
+                .unwrap_or(0);
+            let paused = if crate::scheduler::is_paused() {
+                " Reports are paused until morning."
+            } else {
+                ""
+            };
+            match queued {
+                0 => {
+                    format!("The Night Shift is on with nothing commissioned for tonight.{paused}")
+                }
+                1 => {
+                    format!("The Night Shift is on with one commission queued for tonight.{paused}")
+                }
+                n => format!(
+                    "The Night Shift is on with {n} commissions queued for tonight.{paused}"
+                ),
+            }
+        }
+    }
+}
+
 /// Validates the kind against the live registry: any artifact kind, any
 /// existing template (by "template:<id>" or by name), the cross-notebook
 /// brief, or "custom" with a prompt. Refusing beats coercing — a schedule
@@ -6601,6 +6749,7 @@ async fn create_schedule_reply(
         kind,
         prompt: prompt.to_string(),
         trigger: "interval".into(),
+        not_before: 0,
         interval_secs,
         enabled: true,
         last_run_at: 0,
@@ -6974,6 +7123,13 @@ async fn try_tool_route(
         } => {
             Some(create_schedule_reply(state, notebook_id, &kind, &interval, &name, &prompt).await)
         }
+        ToolAction::Commission {
+            kind,
+            name,
+            prompt,
+            when,
+        } => Some(commission_reply(state, notebook_id, &kind, &name, &prompt, &when).await),
+        ToolAction::NightShift { op } => Some(night_shift_reply(state, &op).await),
         ToolAction::Settings { op, field, value } => {
             // The settings tool (RFC-self-resolve phase 3, plus the model
             // verbs of RFC-conversational-setup phase 1). The reply comes
@@ -9700,6 +9856,235 @@ pub async fn list_source_events(
         .await)
 }
 
+/// Commission one-off overnight work (docs/RFC-night-shift-area.md §1).
+/// Mechanically a schedule with a "once" trigger, so it rides every path
+/// that already exists — due-ness, running, notification, receipt — and
+/// retires itself afterwards. No queue, nothing to recover after a crash.
+///
+/// `when` is "tonight" (the next 2 AM local) or "now" (the next pass);
+/// anything else is treated as tonight, since a commission the user meant
+/// for the night should never surprise them by starting immediately.
+#[tauri::command]
+pub async fn commission_run(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    name: String,
+    kind: String,
+    prompt: String,
+    when: Option<String>,
+) -> Result<ReportSchedule, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("A commission needs a name.".into());
+    }
+    let not_before = match when.as_deref() {
+        Some("now") => 0,
+        _ => crate::scheduler::next_local_hour_ms(2),
+    };
+    let schedule = ReportSchedule {
+        id: new_id(),
+        notebook_id,
+        name: name.to_string(),
+        kind: if kind.trim().is_empty() {
+            "custom".into()
+        } else {
+            kind
+        },
+        prompt,
+        trigger: "once".into(),
+        not_before,
+        // Unused by the "once" path, but a sane floor keeps the row honest
+        // if a user later flips it to a recurring order.
+        interval_secs: 86_400,
+        enabled: true,
+        last_run_at: 0,
+        created_at: now(),
+    };
+    e(state.db.add_report_schedule(&schedule).await)?;
+    Ok(schedule)
+}
+
+/// One planned or blocked run, with the reason it is in that state
+/// (docs/RFC-night-shift-area.md).
+///
+/// The reason is the point. A schedule that has not run in two days looks
+/// broken; almost always it is deliberate - its notebook is archived, or
+/// background work is off - and the app knew and never said so. A bare
+/// "overdue by 34h" is a duration masquerading as a diagnosis.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PlannedRun {
+    pub schedule: ReportSchedule,
+    pub notebook_title: String,
+    /// "queued" - a commission waiting for its hour.
+    /// "due" - it runs on the next pass.
+    /// "waiting" - recurring work whose next turn has not arrived.
+    /// "blocked" - it will not run until something changes; see `reason`.
+    pub state: String,
+    /// User-facing sentence naming the cause and the fix. Empty unless blocked.
+    pub reason: String,
+    /// When this run is (or was) due.
+    pub due_at: i64,
+}
+
+/// Tonight's plan: commissions, recurring work, and - the part that was
+/// missing - anything that will not run, with why.
+#[tauri::command]
+pub async fn tonight_plan(state: State<'_, AppState>) -> Result<Vec<PlannedRun>, String> {
+    let mut all = e(state.db.all_report_schedules().await)?;
+    let archived = state.db.archived_notebook_ids().await.unwrap_or_default();
+    all.retain(|s| s.enabled && !archived.contains(&s.notebook_id));
+    let titles: std::collections::HashMap<String, String> = e(state.db.list_notebooks().await)?
+        .into_iter()
+        .map(|n| (n.id, n.title))
+        .collect();
+    let background = state.ai.read().await.config().background_enabled;
+    let paused = crate::scheduler::is_paused();
+    let now = now();
+
+    let mut out: Vec<PlannedRun> = all
+        .into_iter()
+        .map(|s| {
+            let notebook_title = titles.get(&s.notebook_id).cloned().unwrap_or_default();
+            let due_at = crate::scheduler::due_at(&s, &[]);
+            let (state_label, reason) = if !background {
+                (
+                    "blocked",
+                    "Background work is off. Turn it on in Settings, under Nightly.".to_string(),
+                )
+            } else if paused {
+                (
+                    "blocked",
+                    "Paused until morning. Resume from the menu bar to run it sooner.".to_string(),
+                )
+            } else if s.trigger == "once" {
+                if now >= s.not_before {
+                    ("due", String::new())
+                } else {
+                    ("queued", String::new())
+                }
+            } else if now >= due_at {
+                ("due", String::new())
+            } else {
+                ("waiting", String::new())
+            };
+            PlannedRun {
+                schedule: s,
+                notebook_title,
+                state: state_label.to_string(),
+                reason,
+                due_at,
+            }
+        })
+        .collect();
+
+    // Blocked first - it is the only part the user can act on - then the work
+    // about to happen, then the rest by when it comes round.
+    out.sort_by_key(|p| {
+        let rank = match p.state.as_str() {
+            "blocked" => 0,
+            "due" => 1,
+            "queued" => 2,
+            _ => 3,
+        };
+        (rank, p.due_at)
+    });
+    Ok(out)
+}
+
+/// What the last snapshot did, for the Nightly settings page
+/// (docs/RFC-night-shift-area.md §7).
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotStatus {
+    /// Epoch ms of the most recent snapshot; 0 when none has been taken.
+    pub taken_at: i64,
+    pub bytes: u64,
+    pub path: String,
+    /// Store format version this build reads.
+    pub store_version: u32,
+}
+
+#[tauri::command]
+pub async fn snapshot_status(app: AppHandle) -> Result<SnapshotStatus, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(match crate::backup::latest_snapshot(&data_dir) {
+        Some((path, taken_at, bytes)) => SnapshotStatus {
+            taken_at,
+            bytes,
+            path: path.to_string_lossy().to_string(),
+            store_version: crate::backup::STORE_VERSION,
+        },
+        None => SnapshotStatus {
+            taken_at: 0,
+            bytes: 0,
+            path: String::new(),
+            store_version: crate::backup::STORE_VERSION,
+        },
+    })
+}
+
+/// Snapshot now rather than waiting for tonight — the "Back up now" button,
+/// and what an agent calls before doing something it wants to be able to undo.
+#[tauri::command]
+pub async fn snapshot_now(app: AppHandle) -> Result<SnapshotStatus, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dir = data_dir.clone();
+    let out = tokio::task::spawn_blocking(move || crate::backup::snapshot(&dir))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("{e:#}"))?;
+    Ok(SnapshotStatus {
+        taken_at: now(),
+        bytes: out.bytes,
+        path: out.path.to_string_lossy().to_string(),
+        store_version: crate::backup::STORE_VERSION,
+    })
+}
+
+/// Put the newest snapshot back, moving the current store aside first. The
+/// app must restart afterwards: the open LanceDB handle points at the store
+/// this just replaced.
+#[tauri::command]
+pub async fn restore_snapshot(app: AppHandle) -> Result<String, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dir = data_dir.clone();
+    let aside = tokio::task::spawn_blocking(move || crate::backup::restore_latest(&dir))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("{e:#}"))?;
+    Ok(aside.to_string_lossy().to_string())
+}
+
+/// The Night Shift's run record (docs/RFC-night-shift-area.md §2). Agents get
+/// the same signal via the MCP list_receipts tool.
+#[tauri::command]
+pub async fn list_receipts(
+    state: State<'_, AppState>,
+    hours: Option<u32>,
+    limit: Option<usize>,
+) -> Result<Vec<crate::models::RunReceipt>, String> {
+    let hours = i64::from(hours.unwrap_or(24 * 7));
+    e(state
+        .db
+        .list_receipts(now() - hours * 3_600_000, limit.unwrap_or(200))
+        .await)
+}
+
+/// Run history for one standing order — what the rail shows when an order is
+/// selected.
+#[tauri::command]
+pub async fn receipts_for_schedule(
+    state: State<'_, AppState>,
+    schedule_id: String,
+    limit: Option<usize>,
+) -> Result<Vec<crate::models::RunReceipt>, String> {
+    e(state
+        .db
+        .receipts_for_schedule(&schedule_id, limit.unwrap_or(5))
+        .await)
+}
+
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct NightShiftStatus {
@@ -11934,6 +12319,55 @@ mod tool_tests {
         assert!(tool_gate("refresh my urls and sources"));
         assert!(!tool_gate("what does the spec say about pricing?"));
         assert!(!tool_gate("compare the two cars"));
+    }
+
+    #[test]
+    fn gate_reaches_night_shift_administration() {
+        // The Tonight composer and the chat box are the same parser, so
+        // these have to pass the cheap gate before the router ever sees them.
+        assert!(tool_gate("pause the night shift until morning"));
+        assert!(tool_gate("show me tonight's plan"));
+        assert!(tool_gate("schedule a commission for the japan notebook"));
+        // Ordinary questions still take the zero-overhead path.
+        assert!(!tool_gate("what happened in the meeting last night?"));
+    }
+
+    #[test]
+    fn parses_commission() {
+        match parse_tool_action(
+            r#"{"action":"commission","kind":"custom","name":"Deep read","prompt":"re-read every source","when":"tonight"}"#,
+        ) {
+            ToolAction::Commission {
+                kind,
+                name,
+                prompt,
+                when,
+            } => {
+                assert_eq!(kind, "custom");
+                assert_eq!(name, "Deep read");
+                assert_eq!(prompt, "re-read every source");
+                assert_eq!(when, "tonight");
+            }
+            _ => panic!("expected commission"),
+        }
+        // A commission with no name is not actionable — fall back to chat
+        // rather than queueing something the user cannot recognise later.
+        assert!(matches!(
+            parse_tool_action(r#"{"action":"commission","kind":"custom","name":""}"#),
+            ToolAction::Chat
+        ));
+    }
+
+    #[test]
+    fn parses_night_shift_ops() {
+        assert!(matches!(
+            parse_tool_action(r#"{"action":"night_shift","op":"pause"}"#),
+            ToolAction::NightShift { op } if op == "pause"
+        ));
+        assert!(matches!(
+            parse_tool_action(r#"{"action":"night_shift","op":"status"}"#),
+            ToolAction::NightShift { op } if op == "status"
+        ));
     }
 
     #[test]

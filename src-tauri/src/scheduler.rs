@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
 use crate::commands::{self, AppState};
+use crate::models::RunReceipt;
 
 /// Set by the explicit quit paths (⌘Q, the app menu's Quit, tray Quit) so
 /// `ExitRequested` can tell "the user said quit" from "a window closed."
@@ -28,10 +29,121 @@ static PAUSED_UNTIL: AtomicI64 = AtomicI64::new(0);
 static LAST_MAINTAIN: AtomicI64 = AtomicI64::new(0);
 const MAINTAIN_EVERY_MS: i64 = 6 * 60 * 60 * 1000;
 
+/// Epoch ms of the last snapshot attempt. Checked hourly; the job itself is
+/// idempotent within a calendar day, so a machine that wakes at odd hours
+/// still gets exactly one snapshot per day.
+static LAST_SNAPSHOT: AtomicI64 = AtomicI64::new(0);
+const SNAPSHOT_EVERY_MS: i64 = 60 * 60 * 1000;
+
+/// Epoch ms of the last nightly Weave pass, and the window it judges. Hourly
+/// rather than per-tick: judging is the expensive stage, and a source that
+/// changed two minutes ago is no more urgent than one that changed fifty.
+static LAST_WEAVE: AtomicI64 = AtomicI64::new(0);
+const WEAVE_EVERY_MS: i64 = 60 * 60 * 1000;
+
 /// Quit for real: mark the exit as intentional, then exit.
 pub fn request_quit(app: &AppHandle) {
     QUIT_REQUESTED.store(true, Ordering::Relaxed);
     app.exit(0);
+}
+
+/// Record what a run did. Best-effort by contract (docs/RFC-night-shift-area.md
+/// §2): a receipt is a description of work, so failing to write one must
+/// never fail — or hide — the work itself. Errors are noted and dropped.
+pub(crate) async fn write_receipt(state: &AppState, receipt: RunReceipt) {
+    if let Err(err) = state.db.add_receipt(&receipt).await {
+        crate::diagnostics::error("night-shift", format!("receipt write failed: {err:#}"));
+    }
+}
+
+/// The provider and model that answered a run, for the receipt's egress
+/// line. Read at write time rather than run time: role resolution is stable
+/// across a pass, and this keeps the run path untouched.
+pub(crate) async fn engine_attribution(state: &AppState) -> (String, String) {
+    let ai = state.ai.read().await;
+    (
+        ai.chat_engine_id(crate::inference::Role::Generate)
+            .to_string(),
+        ai.active_chat_model(),
+    )
+}
+
+/// Build a receipt for one scheduled run. `note` is the artifact it wrote,
+/// when it wrote one; `error` is the user-facing reason when it did not.
+pub(crate) async fn schedule_receipt(
+    state: &AppState,
+    schedule: &crate::models::ReportSchedule,
+    due_at: i64,
+    started_at: i64,
+    note: Option<&crate::models::Note>,
+    error: Option<&str>,
+) -> RunReceipt {
+    let (provider, model) = engine_attribution(state).await;
+    let mut detail = match (note, error) {
+        (Some(n), _) => format!("Wrote \u{201c}{}\u{201d}", n.title),
+        (None, Some(_)) => String::new(),
+        (None, None) => String::new(),
+    };
+    // Say it on the receipt, not just in the notification: the record is
+    // where someone goes to work out why a brief arrived at lunchtime.
+    if let Some(late) = lateness(due_at, started_at) {
+        detail = if detail.is_empty() {
+            late
+        } else {
+            format!("{detail} \u{00b7} {late}")
+        };
+    }
+    RunReceipt {
+        id: commands::new_id(),
+        schedule_id: schedule.id.clone(),
+        notebook_id: schedule.notebook_id.clone(),
+        name: schedule.name.clone(),
+        kind: schedule.kind.clone(),
+        trigger: schedule.trigger.clone(),
+        status: if error.is_some() { "failed" } else { "ok" }.into(),
+        detail,
+        error: error.unwrap_or_default().to_string(),
+        note_id: note.map(|n| n.id.clone()).unwrap_or_default(),
+        provider,
+        model,
+        // Only agent CLIs report a price today; local runs are genuinely
+        // free. Left at zero rather than estimated - an invented number on a
+        // receipt is worse than no number.
+        cost_micros: 0,
+        due_at,
+        started_at,
+        ended_at: now_ms(),
+    }
+}
+
+/// Build a receipt for a housekeeping chore (docs/RFC-night-shift-area.md §7):
+/// mechanical, never metered, and attributed to no model.
+pub(crate) fn chore_receipt(
+    name: &str,
+    kind: &str,
+    started_at: i64,
+    detail: String,
+    error: Option<String>,
+) -> RunReceipt {
+    RunReceipt {
+        id: commands::new_id(),
+        schedule_id: String::new(),
+        notebook_id: String::new(),
+        name: name.to_string(),
+        kind: kind.to_string(),
+        trigger: "chore".into(),
+        status: if error.is_some() { "failed" } else { "ok" }.into(),
+        detail,
+        error: error.unwrap_or_default(),
+        note_id: String::new(),
+        provider: "local".into(),
+        model: String::new(),
+        cost_micros: 0,
+        // Chores have no appointment to be late for.
+        due_at: 0,
+        started_at,
+        ended_at: now_ms(),
+    }
 }
 
 fn now_ms() -> i64 {
@@ -147,6 +259,168 @@ pub fn start(app: AppHandle) {
     });
 }
 
+/// Is this schedule due right now? Pure so the cases that matter — a
+/// commission that has already run, one whose hour has not arrived, an
+/// archived notebook, a standing question with nothing to answer — are
+/// testable without a database or a clock.
+///
+/// Due-ness stays derived from persisted state (docs/RFC-night-shift.md):
+/// a Mac asleep past a due time runs on the first pass after wake, because
+/// every comparison here is against wall-clock, not tick count.
+pub(crate) fn is_due(
+    s: &crate::models::ReportSchedule,
+    now: i64,
+    archived: &std::collections::HashSet<String>,
+    events: &[crate::models::SourceEvent],
+) -> bool {
+    if !s.enabled || archived.contains(&s.notebook_id) {
+        return false;
+    }
+    match s.trigger.as_str() {
+        // A commission runs once, when its hour arrives. `last_run_at` is
+        // the guard against a second run: the success path disables the row,
+        // but a crash between running and disabling must not re-run the job.
+        "once" => s.last_run_at == 0 && now >= s.not_before,
+        // A standing question needs both its throttle floor and something
+        // to answer.
+        "change" => {
+            now - s.last_run_at >= s.interval_secs * 1000
+                && events
+                    .iter()
+                    .any(|e| e.notebook_id == s.notebook_id && e.at > s.last_run_at)
+        }
+        _ => now - s.last_run_at >= s.interval_secs * 1000,
+    }
+}
+
+/// When this run *should* have started. Pure, for the same reason `is_due`
+/// is: lateness is a claim the app makes to the user, so it has to be
+/// derived from persisted state rather than guessed at run time.
+///
+/// A Mac that slept through 8 AM runs the brief on wake, which is the right
+/// behaviour — but showing up at 11:00 with no explanation reads like the
+/// schedule is broken. Recording the due time is what lets the app say
+/// "this was due at 8:00" instead.
+pub(crate) fn due_at(
+    s: &crate::models::ReportSchedule,
+    events: &[crate::models::SourceEvent],
+) -> i64 {
+    match s.trigger.as_str() {
+        // A commission is due at its floor; "run now" commissions (floor 0)
+        // are due from the moment they were created.
+        "once" => {
+            if s.not_before > 0 {
+                s.not_before
+            } else {
+                s.created_at
+            }
+        }
+        // A standing question became due when the change it answers landed,
+        // not when its interval elapsed — that is the moment the user would
+        // have wanted to know.
+        "change" => events
+            .iter()
+            .filter(|e| e.notebook_id == s.notebook_id && e.at > s.last_run_at)
+            .map(|e| e.at)
+            .min()
+            .unwrap_or(s.last_run_at),
+        // A never-run schedule is due from creation; otherwise one interval
+        // past the last run.
+        _ => {
+            if s.last_run_at == 0 {
+                s.created_at
+            } else {
+                s.last_run_at + s.interval_secs * 1000
+            }
+        }
+    }
+}
+
+/// How late is late enough to mention? Under this, the delay is just the
+/// pass interval doing its job and saying so would be noise.
+pub(crate) const LATE_THRESHOLD_MS: i64 = 15 * 60 * 1000;
+
+/// "3 hours late" / "25 minutes late", or None when it ran on time. Rounded
+/// to the unit a person would use — a brief that is 187 minutes late is
+/// three hours late.
+pub(crate) fn lateness(due_at: i64, started_at: i64) -> Option<String> {
+    if due_at <= 0 {
+        return None;
+    }
+    let late_ms = started_at - due_at;
+    if late_ms < LATE_THRESHOLD_MS {
+        return None;
+    }
+    let minutes = late_ms / 60_000;
+    if minutes < 90 {
+        return Some(format!("{minutes} minutes late"));
+    }
+    let hours = (minutes as f64 / 60.0).round() as i64;
+    if hours < 36 {
+        return Some(format!("{hours} hours late"));
+    }
+    let days = (hours as f64 / 24.0).round() as i64;
+    Some(format!("{days} days late"))
+}
+
+/// Put the Weave's stamp back when a pass could not do its work, so the
+/// changes it skipped come round again on the next window instead of being
+/// silently written off.
+pub(crate) fn rewind_weave_stamp(to: i64) {
+    LAST_WEAVE.store(to, Ordering::Relaxed);
+}
+
+/// Take the day's snapshot if it hasn't been taken, and leave a receipt
+/// either way. Runs on the pass thread: an APFS clone is a metadata
+/// operation, and the fallback copy only happens on volumes that cannot
+/// clone at all.
+async fn run_snapshot(app: &AppHandle, state: &AppState) {
+    let Ok(data_dir) = app.path().app_data_dir() else {
+        return;
+    };
+    // Idempotent per day, so a machine that wakes hourly still snapshots once.
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    if let Some((path, _, _)) = crate::backup::latest_snapshot(&data_dir) {
+        if path.file_name().map(|n| n.to_string_lossy().to_string()) == Some(today) {
+            return;
+        }
+    }
+    let started_at = now_ms();
+    let receipt =
+        match tokio::task::spawn_blocking(move || crate::backup::snapshot(&data_dir)).await {
+            Ok(Ok(out)) => {
+                let how = if out.cloned { "cloned" } else { "copied" };
+                let mb = out.bytes / (1024 * 1024);
+                crate::note!("nightly snapshot {how}: {mb} MB at {}", out.path.display());
+                chore_receipt(
+                    "Nightly snapshot",
+                    "snapshot",
+                    started_at,
+                    format!("Store {how} \u{00b7} {mb} MB"),
+                    None,
+                )
+            }
+            Ok(Err(err)) => {
+                crate::diagnostics::error("backup", format!("snapshot failed: {err:#}"));
+                chore_receipt(
+                    "Nightly snapshot",
+                    "snapshot",
+                    started_at,
+                    String::new(),
+                    Some(format!("{err}")),
+                )
+            }
+            Err(err) => chore_receipt(
+                "Nightly snapshot",
+                "snapshot",
+                started_at,
+                String::new(),
+                Some(format!("{err}")),
+            ),
+        };
+    write_receipt(state, receipt).await;
+}
+
 /// One pass: resync sources, then run due reports sequentially — exactly the
 /// work the two frontend ticks did, minus the window requirement. A pass
 /// longer than the interval delays the next tick rather than stacking.
@@ -168,6 +442,15 @@ async fn run_pass(app: &AppHandle) {
             }
         }
     }
+    // The nightly snapshot (docs/RFC-night-shift-area.md §7). Like database
+    // maintenance this sits ahead of the background gate on purpose: an APFS
+    // clone costs almost nothing, and losing the library is the one failure
+    // no other feature can undo.
+    if now_ms() - LAST_SNAPSHOT.load(Ordering::Relaxed) >= SNAPSHOT_EVERY_MS {
+        LAST_SNAPSHOT.store(now_ms(), Ordering::Relaxed);
+        run_snapshot(app, &state).await;
+    }
+
     let background = {
         let ai = state.ai.read().await;
         ai.config().background_enabled
@@ -177,19 +460,58 @@ async fn run_pass(app: &AppHandle) {
         return;
     }
 
+    // The nightly freshness queue (docs/RFC-night-shift-area.md, freshness.rs).
+    // One notch of user control; the priority order is the app's job:
+    // keep the corpus current, then judge what arrived, then tidy up. Each
+    // stage checks the budget before starting rather than mid-run — stopping
+    // a generation half-written wastes what it already spent.
+    let budget = {
+        let ai = state.ai.read().await;
+        ai.config().background_budget.clone()
+    };
+
+    // 1. Freshness. Resync is cheap table/mtime work and always runs: a
+    //    foregrounded window going stale is worse than a few tokens.
     let _ = commands::resync_sources_inner(app, &state, None).await;
 
-    // Distillation, tags, and card suggestions converge even when no fresh
-    // import kicks them — a restart mid-sweep used to strand untagged
-    // sources until the next import happened to arrive. Self-gating
-    // (SWEEPING) and budgeted, so a converged corpus makes this a cheap
-    // no-op pass.
-    crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
+    if crate::freshness::has_budget(&budget) {
+        // Distillation, tags, and card suggestions converge even when no
+        // fresh import kicks them — a restart mid-sweep used to strand
+        // untagged sources until the next import happened to arrive.
+        // Self-gating (SWEEPING), so a converged corpus is a cheap no-op.
+        crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
 
-    // Source hygiene (docs/RFC-source-hygiene.md): re-fetch aging urls,
-    // count strikes on unreachable ones. Single-flight and budgeted like the
-    // gist sweep; its own config gate lives inside.
-    crate::hygiene::spawn_sweep(app);
+        // Source hygiene (docs/RFC-source-hygiene.md): re-fetch aging urls,
+        // count strikes on unreachable ones. Its own config gate lives inside.
+        crate::hygiene::spawn_sweep(app);
+        // 2. Verification. The Weave already judges a source the moment it
+        //    arrives; this catches the case that matters more — a watched
+        //    page changed at 3 AM, and the conclusion it undermines was
+        //    written in March. Its own stamp, so a Mac that stays awake does
+        //    not re-judge the same changes every minute.
+        let last_weave = LAST_WEAVE.load(Ordering::Relaxed);
+        if now_ms() - last_weave >= WEAVE_EVERY_MS {
+            LAST_WEAVE.store(now_ms(), Ordering::Relaxed);
+            // Never run is a fresh install, not a licence to judge the whole
+            // corpus: start from the last hour, not from the epoch.
+            let since = if last_weave == 0 {
+                now_ms() - WEAVE_EVERY_MS
+            } else {
+                last_weave
+            };
+            crate::commands::weave::spawn_nightly(
+                state.db.clone(),
+                state.ai.read().await.clone(),
+                since,
+                budget.clone(),
+            );
+        }
+    } else {
+        crate::note!(
+            "freshness: nightly budget spent ({} tokens), holding until morning",
+            crate::freshness::spent_tonight()
+        );
+    }
 
     // Reports now run off-tick (below), so this pass never counts them —
     // the spawned batch stamps the tray itself when it lands.
@@ -221,21 +543,15 @@ async fn run_pass(app: &AppHandle) {
         // Archived notebooks' reports stay quiet — nothing is mutated, so
         // unarchiving resumes the schedule where it left off.
         let archived = state.db.archived_notebook_ids().await.unwrap_or_default();
+        let now = now_ms();
+        // Pair each run with the time it should have started, computed here
+        // while the triggering events are still in hand.
         let due: Vec<_> = schedules
             .into_iter()
-            .filter(|s| {
-                if !s.enabled
-                    || archived.contains(&s.notebook_id)
-                    || now_ms() - s.last_run_at < s.interval_secs * 1000
-                {
-                    return false;
-                }
-                match s.trigger.as_str() {
-                    "change" => events
-                        .iter()
-                        .any(|e| e.notebook_id == s.notebook_id && e.at > s.last_run_at),
-                    _ => true,
-                }
+            .filter(|s| is_due(s, now, &archived, &events))
+            .map(|s| {
+                let due_at = due_at(&s, &events);
+                (s, due_at)
             })
             .collect();
         // Off the tick: a slow report (an agent CLI can legitimately run
@@ -248,34 +564,89 @@ async fn run_pass(app: &AppHandle) {
             tauri::async_runtime::spawn(async move {
                 let state = app.state::<AppState>();
                 let mut finished = 0u32;
-                for schedule in due {
+                for (schedule, due_at) in due {
+                    let started_at = now_ms();
                     match commands::run_report_inner(&app, &state, &schedule.id).await {
-                        Ok(_) => {
+                        Ok(note) => {
                             finished += 1;
+                            let receipt = schedule_receipt(
+                                &state,
+                                &schedule,
+                                due_at,
+                                started_at,
+                                Some(&note),
+                                None,
+                            )
+                            .await;
+                            write_receipt(&state, receipt).await;
+                            // A commission is done when it has run once. The
+                            // row stays as its own history; it just never
+                            // comes due again.
+                            if schedule.trigger == "once" {
+                                if let Err(err) =
+                                    state.db.set_report_enabled(&schedule.id, false).await
+                                {
+                                    crate::diagnostics::error(
+                                        "night-shift",
+                                        format!("could not retire commission: {err:#}"),
+                                    );
+                                }
+                            }
                             // At send time, not pass time: a report can run
                             // for minutes, and focus may have changed.
                             if notifications_wanted(&app).await {
-                                let (title, body) = if schedule.kind == "brief" {
-                                    (
+                                // A run that slept past its hour says so.
+                                // Arriving at lunchtime with no explanation
+                                // reads like the schedule is broken; naming
+                                // the delay is what keeps "late, not lost"
+                                // true from the user's side too.
+                                let late = lateness(due_at, started_at);
+                                let (title, body) = match (schedule.kind.as_str(), &late) {
+                                    ("brief", Some(late)) => (
+                                        "Your brief is ready",
+                                        format!(
+                                            "\u{201c}{}\u{201d} was due while your Mac was asleep \u{2014} {late}.",
+                                            schedule.name
+                                        ),
+                                    ),
+                                    ("brief", None) => (
                                         "Your brief is ready",
                                         format!(
                                             "\u{201c}{}\u{201d} has the rundown.",
                                             schedule.name
                                         ),
-                                    )
-                                } else {
-                                    (
+                                    ),
+                                    (_, Some(late)) => (
+                                        "Report ready",
+                                        format!(
+                                            "\u{201c}{}\u{201d} was due while your Mac was asleep \u{2014} {late}.",
+                                            schedule.name
+                                        ),
+                                    ),
+                                    (_, None) => (
                                         "Report ready",
                                         format!("\u{201c}{}\u{201d} was generated.", schedule.name),
-                                    )
+                                    ),
                                 };
                                 let _ = app.notification().builder().title(title).body(body).show();
                             }
                         }
-                        Err(err) => crate::diagnostics::error(
-                            "night-shift",
-                            format!("report {} failed: {err}", schedule.name),
-                        ),
+                        Err(err) => {
+                            crate::diagnostics::error(
+                                "night-shift",
+                                format!("report {} failed: {err}", schedule.name),
+                            );
+                            let receipt = schedule_receipt(
+                                &state,
+                                &schedule,
+                                due_at,
+                                started_at,
+                                None,
+                                Some(&err),
+                            )
+                            .await;
+                            write_receipt(&state, receipt).await;
+                        }
                     }
                 }
                 REPORTS_RUNNING.store(false, Ordering::SeqCst);
@@ -301,4 +672,211 @@ async fn run_pass(app: &AppHandle) {
         format!("Synced {stamp}")
     };
     crate::integrations::set_tray_status(app, &status);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{ReportSchedule, SourceEvent};
+    use std::collections::HashSet;
+
+    const HOUR: i64 = 3_600_000;
+
+    fn schedule(trigger: &str) -> ReportSchedule {
+        ReportSchedule {
+            id: "s1".into(),
+            notebook_id: "nb".into(),
+            name: "Test order".into(),
+            kind: "briefing".into(),
+            prompt: String::new(),
+            trigger: trigger.into(),
+            not_before: 0,
+            interval_secs: 3_600,
+            enabled: true,
+            last_run_at: 0,
+            created_at: 0,
+        }
+    }
+
+    fn event(at: i64) -> SourceEvent {
+        SourceEvent {
+            id: "e1".into(),
+            notebook_id: "nb".into(),
+            source_id: "src".into(),
+            source_title: "A page".into(),
+            kind: "updated".into(),
+            detail: String::new(),
+            diff: String::new(),
+            at,
+        }
+    }
+
+    #[test]
+    fn commissions_run_once_when_their_hour_arrives() {
+        let none = HashSet::new();
+        let now = 10 * HOUR;
+
+        let mut queued = schedule("once");
+        queued.not_before = now + HOUR;
+        assert!(
+            !is_due(&queued, now, &none, &[]),
+            "a commission for later tonight is not due yet"
+        );
+
+        queued.not_before = now - 1;
+        assert!(is_due(&queued, now, &none, &[]), "its hour has arrived");
+
+        // "now" commissions carry no floor at all.
+        let immediate = schedule("once");
+        assert!(
+            is_due(&immediate, now, &none, &[]),
+            "run-now starts next pass"
+        );
+
+        // Having run once is the guard, so a crash between running and
+        // retiring the row cannot produce a second run.
+        let mut ran = schedule("once");
+        ran.last_run_at = now - HOUR;
+        assert!(!is_due(&ran, now, &none, &[]), "never runs twice");
+
+        let mut retired = schedule("once");
+        retired.enabled = false;
+        assert!(!is_due(&retired, now, &none, &[]));
+    }
+
+    #[test]
+    fn interval_orders_wait_out_their_interval() {
+        let none = HashSet::new();
+        let now = 10 * HOUR;
+
+        let fresh = schedule("interval");
+        assert!(is_due(&fresh, now, &none, &[]), "never run means due");
+
+        let mut just_ran = schedule("interval");
+        just_ran.last_run_at = now - 60_000;
+        assert!(!is_due(&just_ran, now, &none, &[]), "inside the interval");
+
+        let mut overdue = schedule("interval");
+        overdue.last_run_at = now - 2 * HOUR;
+        assert!(is_due(&overdue, now, &none, &[]), "past the interval");
+
+        // The wall-clock comparison is what makes sleep safe: a machine that
+        // slept through several intervals runs once on wake, not once per
+        // missed tick.
+        let mut slept = schedule("interval");
+        slept.last_run_at = now - 48 * HOUR;
+        assert!(
+            is_due(&slept, now, &none, &[]),
+            "runs on the pass after wake"
+        );
+    }
+
+    #[test]
+    fn standing_questions_need_something_to_answer() {
+        let none = HashSet::new();
+        let now = 10 * HOUR;
+
+        let mut question = schedule("change");
+        question.last_run_at = now - 2 * HOUR;
+        assert!(
+            !is_due(&question, now, &none, &[]),
+            "no source changed, so nothing to say"
+        );
+        assert!(
+            is_due(&question, now, &none, &[event(now - HOUR)]),
+            "a change since the last run pulls the trigger"
+        );
+        assert!(
+            !is_due(&question, now, &none, &[event(now - 3 * HOUR)]),
+            "a change it already reported on does not re-fire"
+        );
+
+        // The interval is the throttle floor even when changes keep landing.
+        let mut throttled = schedule("change");
+        throttled.last_run_at = now - 60_000;
+        assert!(
+            !is_due(&throttled, now, &none, &[event(now - 1_000)]),
+            "one run per interval at most"
+        );
+    }
+
+    #[test]
+    fn a_slept_through_run_reports_when_it_was_due() {
+        // The case that prompted this: an 8 AM brief on a Mac that woke at
+        // 11. It runs (is_due says so), and the receipt has to carry the
+        // hour it was meant for, or the user just sees a brief at lunchtime.
+        let eight_am = 8 * HOUR;
+        let mut brief = schedule("interval");
+        brief.interval_secs = 86_400;
+        brief.last_run_at = eight_am - 24 * HOUR;
+        assert_eq!(due_at(&brief, &[]), eight_am, "due one interval on");
+
+        let woke_at = 11 * HOUR;
+        assert_eq!(lateness(eight_am, woke_at).as_deref(), Some("3 hours late"));
+
+        // A never-run schedule is due from creation, not from epoch zero.
+        let mut fresh = schedule("interval");
+        fresh.created_at = 5 * HOUR;
+        fresh.last_run_at = 0;
+        assert_eq!(due_at(&fresh, &[]), 5 * HOUR);
+    }
+
+    #[test]
+    fn lateness_stays_quiet_about_ordinary_delay() {
+        let due = 8 * HOUR;
+        // The pass runs once a minute; that is not news.
+        assert_eq!(lateness(due, due + 60_000), None);
+        assert_eq!(lateness(due, due + LATE_THRESHOLD_MS - 1), None);
+        // Nor is a run that beat its due time.
+        assert_eq!(lateness(due, due - HOUR), None);
+        // An unrecorded due time makes no claim either way.
+        assert_eq!(lateness(0, due), None);
+
+        // Past the threshold it speaks, in the unit a person would use.
+        assert_eq!(
+            lateness(due, due + 25 * 60_000).as_deref(),
+            Some("25 minutes late")
+        );
+        assert_eq!(
+            lateness(due, due + 3 * HOUR).as_deref(),
+            Some("3 hours late")
+        );
+        assert_eq!(
+            lateness(due, due + 50 * HOUR).as_deref(),
+            Some("2 days late"),
+            "a long weekend away is stated in days"
+        );
+    }
+
+    #[test]
+    fn a_standing_question_is_due_when_the_change_landed() {
+        // Not when its interval elapsed: the moment the user would have
+        // wanted to know is the moment the source changed.
+        let mut question = schedule("change");
+        question.last_run_at = 4 * HOUR;
+        let events = [event(9 * HOUR), event(6 * HOUR), event(2 * HOUR)];
+        assert_eq!(
+            due_at(&question, &events),
+            6 * HOUR,
+            "the earliest change it has not answered yet"
+        );
+
+        // Commissions are due at their floor, or at creation when run-now.
+        let mut tonight = schedule("once");
+        tonight.not_before = 2 * HOUR;
+        assert_eq!(due_at(&tonight, &[]), 2 * HOUR);
+        let mut now_job = schedule("once");
+        now_job.not_before = 0;
+        now_job.created_at = 7 * HOUR;
+        assert_eq!(due_at(&now_job, &[]), 7 * HOUR);
+    }
+
+    #[test]
+    fn archived_notebooks_stay_quiet() {
+        let now = 10 * HOUR;
+        let archived: HashSet<String> = ["nb".to_string()].into_iter().collect();
+        assert!(!is_due(&schedule("interval"), now, &archived, &[]));
+        assert!(!is_due(&schedule("once"), now, &archived, &[]));
+        assert!(!is_due(&schedule("change"), now, &archived, &[event(now)]));
+    }
 }

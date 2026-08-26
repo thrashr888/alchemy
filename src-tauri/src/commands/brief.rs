@@ -71,6 +71,7 @@ pub(crate) async fn ensure_default_brief(state: &AppState) {
         kind: BRIEF_KIND.into(),
         prompt: String::new(),
         trigger: "interval".into(),
+        not_before: 0,
         interval_secs: 86_400,
         enabled: true,
         // Aligned so the first run lands at the next 7 AM local rather than
@@ -245,6 +246,15 @@ async fn collect(state: &AppState, briefs_notebook_id: &str, since: i64) -> Coll
         }
     }
     let mut context = String::new();
+    // What the freshness queue produced, denominated in findings with the
+    // token count as a footnote (freshness.rs). A quiet night contributes
+    // nothing at all rather than a line saying so.
+    if let Some(line) = crate::freshness::collect_findings(&state.db, since)
+        .await
+        .brief_line()
+    {
+        context.push_str(&format!("## Overnight\n{line}\n\n"));
+    }
     if !attention.is_empty() {
         context.push_str(&format!("## Needs attention (rank first)\n{attention}\n"));
     }

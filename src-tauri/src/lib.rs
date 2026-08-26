@@ -2,6 +2,7 @@ mod acp;
 mod activity;
 mod agent;
 mod ai;
+mod backup;
 mod capture;
 mod clip;
 mod commands;
@@ -15,6 +16,7 @@ mod dragout;
 mod examples;
 mod export;
 mod filesearch;
+mod freshness;
 mod gist;
 mod git;
 mod graph;
@@ -188,10 +190,45 @@ pub fn run() {
             // half-written by a hard kill, or a schema a downgraded binary
             // can't read. Dying here with no window and no message is the
             // worst possible answer — say what happened and where to look.
+            // Data trust (docs/RFC-night-shift-area.md §7). Three guards, in
+            // the order they can save the library:
+            //
+            // 1. A stamp from a NEWER Alchemy means this binary would read
+            //    columns it has never heard of. Refuse with a sentence the
+            //    user can act on instead of a Lance panic.
+            if let Some(stamp) = backup::check_store_version(&data_dir) {
+                diagnostics::fatal_startup(
+                    "this library was written by a newer version of Alchemy",
+                    &format!(
+                        "the store is at version {stamp}, this build reads version {}. Update Alchemy to open it.",
+                        backup::STORE_VERSION
+                    ),
+                );
+            }
+            // 2. Clone the store aside before a migration touches it, so an
+            //    upgrade is rehearsable and a downgrade has somewhere to go.
+            //    A store already at this version has nothing to rehearse.
+            if db_dir.exists() && backup::read_stamp(&data_dir) < backup::STORE_VERSION {
+                match backup::snapshot_pre_migrate(&data_dir, env!("CARGO_PKG_VERSION")) {
+                    Ok(path) => note!("pre-migration snapshot at {}", path.display()),
+                    Err(err) => {
+                        // Not fatal: a first run has no store to copy, and a
+                        // full disk should not block the app from opening.
+                        diagnostics::error(
+                            "backup",
+                            format!("pre-migration snapshot skipped: {err:#}"),
+                        )
+                    }
+                }
+            }
+
             let db = match tauri::async_runtime::block_on(db::Db::open(&db_dir)) {
                 Ok(db) => db,
                 Err(err) => diagnostics::fatal_startup("could not open the database", &err),
             };
+            // 3. The store opened and migrated cleanly — stamp it, so an
+            //    older binary meeting it later gets guard 1 instead of a panic.
+            backup::write_stamp(&data_dir);
             // Db::open both connects and ensures every table, so the two phases
             // the RFC names collapse into this one stamp.
             startup.stamp("db_open");
@@ -472,6 +509,13 @@ pub fn run() {
             commands::list_all_report_schedules,
             commands::list_source_events,
             commands::night_shift_status,
+            commands::list_receipts,
+            commands::commission_run,
+            commands::tonight_plan,
+            commands::snapshot_status,
+            commands::snapshot_now,
+            commands::restore_snapshot,
+            commands::receipts_for_schedule,
             commands::toggle_night_shift_pause,
             commands::list_ledger,
             commands::add_ledger_entry,

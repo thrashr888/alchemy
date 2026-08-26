@@ -186,6 +186,7 @@ function NotebookTable({
  *  switch, so it lives in the same place and wears the same chrome. */
 function HomeSectionTabs() {
   const section = useStore((s) => s.homeSection);
+
   const tabs = [
     { id: "notebooks", label: "Notebooks", icon: BookOpen },
     { id: "registry", label: "Registry", icon: Package },

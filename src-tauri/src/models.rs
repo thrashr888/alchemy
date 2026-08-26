@@ -301,6 +301,59 @@ pub struct SourceEvent {
     pub at: i64,
 }
 
+/// What one Night Shift run did (docs/RFC-night-shift-area.md §2). Written
+/// at the run boundary — success or failure — so the morning after is a
+/// record rather than a guess. Like `SourceEvent` this is a rolling window,
+/// not an archive: the durable artifacts are the notes the runs produced.
+///
+/// Deliberately records only what the app can measure. Cost is integer
+/// micro-dollars (money in floats is a bug waiting), and is 0 unless the
+/// provider actually reports a price — local runs are free and say so.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunReceipt {
+    pub id: String,
+    /// The schedule this run came from; empty for housekeeping chores.
+    #[serde(default)]
+    pub schedule_id: String,
+    /// Empty for cross-notebook work (briefs) and chores.
+    #[serde(default)]
+    pub notebook_id: String,
+    /// Human name: the schedule's name, or the chore's ("Nightly snapshot").
+    pub name: String,
+    /// Report kind, or a chore kind: "snapshot", "maintain", "hygiene".
+    pub kind: String,
+    /// "interval" | "change" | "once" | "manual" | "chore".
+    pub trigger: String,
+    /// "ok" | "failed".
+    pub status: String,
+    /// One human line: "Read 12 sources - wrote 1 report".
+    #[serde(default)]
+    pub detail: String,
+    /// Failure reason, user-facing, empty when status is "ok".
+    #[serde(default)]
+    pub error: String,
+    /// The note this run wrote, when it wrote one.
+    #[serde(default)]
+    pub note_id: String,
+    /// Resolved provider for the run's main role ("ollama", "gateway", …) —
+    /// the honest egress signal until the Seal lands.
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub model: String,
+    /// Millionths of a dollar; 0 when nothing was metered.
+    #[serde(default)]
+    pub cost_micros: i64,
+    /// When the run should have started. A Mac asleep past a due time runs
+    /// on wake, so this is what makes "your 8:00 brief, 3 hours late"
+    /// sayable instead of silently surprising.
+    #[serde(default)]
+    pub due_at: i64,
+    pub started_at: i64,
+    pub ended_at: i64,
+}
+
 /// A periodic report definition. On its interval, the app refreshes the
 /// notebook's URL sources, then generates a timestamped note.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -314,11 +367,18 @@ pub struct ReportSchedule {
     /// Custom instruction when `kind == "custom"`.
     #[serde(default)]
     pub prompt: String,
-    /// "interval" (the clock fires it) or "change" (a standing question —
+    /// "interval" (the clock fires it), "change" (a standing question —
     /// source events in its notebook pull the trigger, with `interval_secs`
-    /// as the throttle floor between runs). RFC-night-shift §Staged.
+    /// as the throttle floor between runs), or "once" (a commission: one
+    /// job handed to the night, which disables itself after it runs).
+    /// RFC-night-shift §Staged, RFC-night-shift-area §1.
     #[serde(default = "default_trigger")]
     pub trigger: String,
+    /// Epoch ms before which a "once" commission must not start; 0 means
+    /// "as soon as the next pass comes round". Ignored by the other
+    /// triggers, whose clock is `interval_secs`.
+    #[serde(default)]
+    pub not_before: i64,
     pub interval_secs: i64,
     pub enabled: bool,
     /// Unix millis of the last successful run; 0 = never run.

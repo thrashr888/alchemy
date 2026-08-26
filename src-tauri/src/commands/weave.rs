@@ -1,4 +1,5 @@
-//! The Weave, stage 1 (RFC-v12-steward pillar 3): judgment on arrival.
+//! The Weave (RFC-v12-steward pillar 3): judgment on arrival, and again
+//! nightly over whatever changed while nobody was looking.
 //! When a source's content changes — or a top-level source lands — the new
 //! text is weighed against the notebook's active ledger entries, and the
 //! Small role renders a verdict per close pair: corroborates / contradicts /
@@ -60,13 +61,119 @@ pub(crate) fn spawn_weave(
     });
 }
 
+/// One nightly pass at a time. Separate from `IN_FLIGHT` on purpose - see
+/// `spawn_nightly`.
+static NIGHTLY_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// At most this many changed sources re-judged per night. The cap is the
+/// point: a night that re-judges everything is a night that spends its whole
+/// budget on the corpus's least interesting corners.
+const MAX_NIGHTLY_SOURCES: usize = 8;
+
+/// Nightly re-judgment (freshness.rs stage 2, "verification").
+///
+/// Arrival-time weaving catches a source the moment it lands, which misses
+/// the case that actually matters: a page the user is watching changed at
+/// 3 AM, and the conclusion it undermines was written in March. This walks
+/// what changed since `since` and weighs each one against the ledger again.
+///
+/// Budget-checked per source rather than once up front, because the cost is
+/// per judgment and a night can run out halfway through the list.
+pub(crate) fn spawn_nightly(db: Arc<Db>, ai: Ai, since: i64, budget: String) {
+    // One nightly pass at a time, and never blocked by arrival judgments:
+    // the pass is serial internally, so it is not the pile-up the arrival
+    // cap guards against.
+    if NIGHTLY_RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        match nightly_pass(&db, &ai, since, &budget).await {
+            Ok(true) => {}
+            // Work that did not happen must not be marked done.
+            Ok(false) => crate::scheduler::rewind_weave_stamp(since),
+            Err(err) => {
+                crate::note!("weave nightly: {err:#}");
+                crate::scheduler::rewind_weave_stamp(since);
+            }
+        }
+        NIGHTLY_RUNNING.store(false, Ordering::SeqCst);
+    });
+}
+
+async fn nightly_pass(db: &Db, ai: &Ai, since: i64, budget: &str) -> anyhow::Result<bool> {
+    let events = db.source_events_since(since).await.unwrap_or_default();
+    if events.is_empty() {
+        crate::note!("weave nightly: nothing changed since the last pass");
+        return Ok(true);
+    }
+    // Newest change per source: a page that changed three times tonight is
+    // one judgment, against its current text.
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut targets: Vec<&crate::models::SourceEvent> = Vec::new();
+    for e in &events {
+        if seen.insert(e.source_id.as_str()) {
+            targets.push(e);
+        }
+        if targets.len() >= MAX_NIGHTLY_SOURCES {
+            break;
+        }
+    }
+
+    let archived = db.archived_notebook_ids().await.unwrap_or_default();
+    let mut judged = 0;
+    for event in targets {
+        // Archiving is the user saying they are done with a notebook; its
+        // conclusions are not re-litigated overnight.
+        if archived.contains(&event.notebook_id) {
+            continue;
+        }
+        if !crate::freshness::has_budget(budget) {
+            crate::note!("weave nightly: budget spent after {judged} sources");
+            break;
+        }
+        // Prefer the diff the watcher already computed - it is the part that
+        // changed, which is the part worth judging. Fall back to the source
+        // text when the change was not textual.
+        let text = if event.diff.trim().chars().count() >= 80 {
+            event.diff.clone()
+        } else {
+            db.source_content(&event.source_id)
+                .await
+                .unwrap_or_default()
+        };
+        let changed: String = text.chars().take(TEXT_CAP).collect();
+        if changed.trim().chars().count() < 80 {
+            continue;
+        }
+        match weave_pass(db, ai, &event.notebook_id, &event.source_title, &changed).await {
+            Ok(true) => judged += 1,
+            // The model never answered. Nothing was judged, so nothing may be
+            // recorded as judged - and the window must stay open so the next
+            // pass retries these changes instead of skipping them forever.
+            Ok(false) => {
+                crate::note!(
+                    "weave nightly: the model was unavailable after {judged} sources; \
+                     leaving the rest for the next pass"
+                );
+                return Ok(false);
+            }
+            Err(err) => crate::note!("weave nightly: {} failed: {err:#}", event.source_title),
+        }
+    }
+    crate::note!("weave nightly: judged {judged} changed sources");
+    Ok(true)
+}
+
+/// Judge one changed text against the notebook's ledger. `Ok(false)` means
+/// the engine never answered - the work did not happen and must not be
+/// recorded as if it had.
 async fn weave_pass(
     db: &Db,
     ai: &Ai,
     notebook_id: &str,
     source_title: &str,
     changed: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     // Judgeable rows: active statuses only, logs never (a log is what
     // happened — nothing to corroborate).
     let entries: Vec<LedgerEntry> = db
@@ -86,7 +193,7 @@ async fn weave_pass(
         .take(MAX_ENTRIES)
         .collect();
     if entries.is_empty() {
-        return Ok(());
+        return Ok(true);
     }
 
     // One embed call covers the entries and the arrival.
@@ -95,7 +202,7 @@ async fn weave_pass(
     let vectors = ai.embed(&inputs).await?;
     let (entry_vecs, changed_vec) = vectors.split_at(entries.len());
     let Some(changed_vec) = changed_vec.first() else {
-        return Ok(());
+        return Ok(true);
     };
     let mut scored: Vec<(usize, f32)> = entry_vecs
         .iter()
@@ -109,8 +216,13 @@ async fn weave_pass(
     let mut moved = 0u32;
     for (idx, _score) in scored {
         let entry = &entries[idx];
-        let Some((verdict, reason)) = judge(ai, entry, source_title, changed).await else {
-            continue;
+        let (verdict, reason) = match judge(ai, entry, source_title, changed).await {
+            Judgment::Verdict(v, r) => (v, r),
+            Judgment::NoOpinion => continue,
+            // Stop rather than grinding through the remaining pairs: if the
+            // engine is down for one it is down for all, and the caller needs
+            // to know this source was never really judged.
+            Judgment::EngineDown => return Ok(false),
         };
         // Asymmetric on purpose: corroboration only lifts a fresh assertion;
         // contradiction sticks until a human (or a later, wiser pass) clears
@@ -143,17 +255,21 @@ async fn weave_pass(
     if moved > 0 {
         crate::note!("weave: {moved} ledger row(s) moved for notebook {notebook_id}");
     }
-    Ok(())
+    Ok(true)
 }
 
 /// One strict verdict. Anything malformed, hedged, or outside the vocabulary
 /// is a skip — the pass must opt IN to acting.
-async fn judge(
-    ai: &Ai,
-    entry: &LedgerEntry,
-    source_title: &str,
-    changed: &str,
-) -> Option<(String, String)> {
+/// What came back from one judgment. `EngineDown` is deliberately separate
+/// from `NoOpinion`: a night that could not ask must never look like a night
+/// that asked and found nothing.
+pub(crate) enum Judgment {
+    Verdict(String, String),
+    NoOpinion,
+    EngineDown,
+}
+
+async fn judge(ai: &Ai, entry: &LedgerEntry, source_title: &str, changed: &str) -> Judgment {
     let messages = vec![
         ChatTurn::system(
             "You weigh newly arrived text against one recorded claim. Reply with exactly two \
@@ -172,7 +288,15 @@ async fn judge(
             changed,
         )),
     ];
-    let reply = ai.chat_role(Role::Small, &messages).await.ok()?.text;
+    let out = match ai.chat_role(Role::Small, &messages).await {
+        Ok(out) => out,
+        Err(err) => {
+            crate::note!("weave: judge unavailable: {err:#}");
+            return Judgment::EngineDown;
+        }
+    };
+    crate::freshness::record_outcome(&out);
+    let reply = out.text;
     let mut verdict = None;
     let mut reason = String::new();
     for line in reply.lines() {
@@ -195,7 +319,11 @@ async fn judge(
         }
     }
     match verdict {
-        Some(v) if v != "unrelated" && v != "extends" && !reason.is_empty() => Some((v, reason)),
-        _ => None,
+        Some(v) if v != "unrelated" && v != "extends" && !reason.is_empty() => {
+            Judgment::Verdict(v, reason)
+        }
+        // The model answered and had nothing status-driving to say. That is
+        // a real result, and the quiet night it produces is honest.
+        _ => Judgment::NoOpinion,
     }
 }

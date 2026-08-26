@@ -140,6 +140,17 @@ struct ActivityReq {
     hours: Option<u32>,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct ReceiptsReq {
+    /// Look-back window in hours (default 168, one week; capped to the
+    /// 30-day window the table keeps).
+    #[serde(default)]
+    hours: Option<u32>,
+    /// Only this schedule's runs (from list_schedules).
+    #[serde(default)]
+    schedule_id: Option<String>,
+}
+
 #[tool_router(router = sources_router, vis = "pub(super)")]
 impl AlchemyMcp {
     // -- Sources --
@@ -160,6 +171,26 @@ impl AlchemyMcp {
             .await
             .map_err(|e| invalid(format!("{e:#}")))?;
         json_result(&events)
+    }
+
+    #[tool(
+        description = "What the Night Shift actually did: one receipt per run (scheduled reports, standing questions, and housekeeping chores), newest first. Each has name, kind, trigger, status (\"ok\" or \"failed\"), the note it wrote, the provider and model that answered, cost in millionths of a dollar (0 when nothing was metered — local runs are free), and start/end timestamps. Pass schedule_id for one standing order's history. Receipts are a rolling 30-day record; the durable artifacts are the notes themselves."
+    )]
+    async fn list_receipts(
+        &self,
+        Parameters(ReceiptsReq { hours, schedule_id }): Parameters<ReceiptsReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let db = &self.state().db;
+        let receipts = match schedule_id {
+            Some(id) => db.receipts_for_schedule(&id, 50).await,
+            None => {
+                let hours = i64::from(hours.unwrap_or(24 * 7));
+                let since = commands::now() - hours * 60 * 60 * 1000;
+                db.list_receipts(since, 200).await
+            }
+        }
+        .map_err(|e| invalid(format!("{e:#}")))?;
+        json_result(&receipts)
     }
 
     #[tool(

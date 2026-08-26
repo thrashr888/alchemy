@@ -39,6 +39,9 @@ import type {
   ReportSchedule,
   SearchHit,
   Source,
+  PlannedRun,
+  RunReceipt,
+  SnapshotStatus,
   SourceEvent,
   SuggestOutcome,
   Template,
@@ -597,6 +600,30 @@ export const api = {
   listSourceEvents: (hours = 24) =>
     run(query<SourceEvent[]>("list_source_events", { hours })),
   nightShiftStatus: () => run(query<NightShiftStatus>("night_shift_status")),
+  commissionRun: (
+    notebookId: string,
+    name: string,
+    kind: string,
+    prompt: string,
+    when: "tonight" | "now" = "tonight",
+  ) =>
+    run(
+      cmd<ReportSchedule>("commission_run", {
+        notebookId,
+        name,
+        kind,
+        prompt,
+        when,
+      }),
+    ),
+  tonightPlan: () => run(query<PlannedRun[]>("tonight_plan")),
+  snapshotStatus: () => run(query<SnapshotStatus>("snapshot_status")),
+  snapshotNow: () => run(cmd<SnapshotStatus>("snapshot_now")),
+  restoreSnapshot: () => run(cmd<string>("restore_snapshot")),
+  listReceipts: (hours = 24 * 7, limit = 200) =>
+    run(query<RunReceipt[]>("list_receipts", { hours, limit })),
+  receiptsForSchedule: (scheduleId: string, limit = 5) =>
+    run(query<RunReceipt[]>("receipts_for_schedule", { scheduleId, limit })),
   toggleNightShiftPause: () => run(cmd<boolean>("toggle_night_shift_pause")),
 
   // Reports

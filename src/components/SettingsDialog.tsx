@@ -3,6 +3,7 @@ import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { previewSound } from "@/lib/sound";
 import { checkForUpdates, type UpdateFlow } from "@/lib/updates";
+import type { SnapshotStatus } from "@/lib/types";
 import { clearReindexPending, markReindexStarted } from "@/lib/reindex";
 import { Button, Input, Modal, Spinner, Switch } from "./ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -40,6 +41,7 @@ import {
   Trash2,
   Bot,
   Copy,
+  Moon,
 } from "lucide-react";
 
 /** Treat `name` and `name:latest` as the same model for matching. */
@@ -47,6 +49,7 @@ const normModel = (m: string) => m.replace(/:latest$/, "");
 
 const TABS = [
   { id: "general", label: "General", icon: SlidersHorizontal },
+  { id: "background", label: "Nightly", icon: Moon },
   { id: "sources", label: "Sources", icon: FolderGit2 },
   { id: "studio", label: "Studio", icon: Wand2 },
   { id: "models", label: "Models", icon: Cpu },
@@ -219,6 +222,7 @@ export function SettingsDialog({
               the note above); 11rem additionally clears the pane header. */}
           <div className="flex max-h-[calc(92vh-11rem)] min-w-0 flex-col gap-4 overflow-y-auto px-1">
           {tab === "general" && <GeneralTab />}
+          {tab === "background" && <BackgroundTab />}
           {tab === "sources" && <SourcesTab />}
           {tab === "studio" && <StudioTab />}
           {tab === "models" && (
@@ -386,17 +390,13 @@ function GeneralTab() {
         </div>
       </div>
 
-      <NotificationsToggle />
       <PrefToggle
         storageKey="playSounds"
         label="Play sounds"
         hint="Soft cues for finished work, new arrivals, and errors."
         onEnable={previewSound}
       />
-      <QuietWhenFocusedToggle />
       <SelfDiagnoseToggle />
-      <BackgroundToggle />
-      <TrayToggle />
     </div>
   );
 }
@@ -419,6 +419,179 @@ function SelfDiagnoseToggle() {
   );
 }
 
+/** One page for everything that happens while you are away
+ *  (docs/RFC-night-shift-area.md §5). Two jobs: the real cost controls, and
+ *  an honest account of what the Mac does at night — a settings page you can
+ *  read to learn the machine's habits. Knobs only where they are genuine
+ *  cost control; everything else is documented, not switched. */
+function BackgroundTab() {
+  return (
+    <div className="flex flex-col gap-5">
+      <BackgroundToggle />
+
+      <div className="h-px bg-border" />
+
+      <div className="flex flex-col gap-3">
+        <div className="text-body">Residency</div>
+        <TrayToggle />
+      </div>
+
+      <div className="h-px bg-border" />
+
+      <div className="flex flex-col gap-3">
+        <div className="text-body">Notifications</div>
+        <NotificationsToggle />
+        <QuietWhenFocusedToggle />
+      </div>
+
+      <div className="h-px bg-border" />
+
+      <div className="flex flex-col gap-3">
+        <div className="text-body">Library</div>
+        <SnapshotRow />
+        <HygieneSelect />
+        <GitSyncSelect />
+      </div>
+
+      <div className="h-px bg-border" />
+
+      <div className="flex flex-col gap-3">
+        <div className="text-body">While you are away</div>
+        <BudgetSelect />
+        <SourceGistsToggle />
+        <CuratorToggle />
+      </div>
+    </div>
+  );
+}
+
+/** How much overnight work to do (freshness.rs). One notch, not a slider:
+ *  a token count is not a unit anyone has intuitions about, and the queue's
+ *  priority order is the app's job, not the user's. */
+function BudgetSelect() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  if (!aiConfig) return null;
+  return (
+    <div className="flex flex-col gap-1">
+      <label className="flex items-center justify-between gap-3">
+        <span className="text-body text-foreground">Overnight effort</span>
+        <select
+          value={aiConfig.backgroundBudget || "standard"}
+          onChange={(e) =>
+            void saveAiConfig({ ...aiConfig, backgroundBudget: e.target.value })
+          }
+          className="h-8 rounded-md border border-input bg-surface-2 px-2 text-body text-foreground focus:outline-none"
+        >
+          <option value="light">Light</option>
+          <option value="standard">Standard</option>
+          <option value="generous">Generous</option>
+        </select>
+      </label>
+      <span className="text-micro leading-relaxed text-subtle-foreground">
+        How much work to do each night before stopping until morning. Local
+        models are free either way; this caps what a paid model can spend.
+      </span>
+    </div>
+  );
+}
+
+/** Source distillation (the `source_gists` sweep). On by default; the switch
+ *  is cost control, and the sweep self-heals either way. */
+function SourceGistsToggle() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  if (!aiConfig) return null;
+  return (
+    <SettingRow
+      label="Summarize new sources"
+      hint="Distills each source once so cross-notebook questions can find it."
+      checked={aiConfig.sourceGists}
+      onChange={(v) => void saveAiConfig({ ...aiConfig, sourceGists: v })}
+    />
+  );
+}
+
+/** The nightly snapshot's status, plus the two buttons that matter
+ *  (docs/RFC-night-shift-area.md §7). */
+function SnapshotRow() {
+  const pushToast = useStore((s) => s.pushToast);
+  const [status, setStatus] = useState<SnapshotStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void api.snapshotStatus().then(setStatus).catch(() => {});
+  }, []);
+
+  const when =
+    status && status.takenAt > 0
+      ? new Date(status.takenAt).toLocaleString(undefined, {
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        })
+      : null;
+  const size =
+    status && status.bytes > 0
+      ? `${(status.bytes / (1024 * 1024)).toFixed(0)} MB`
+      : null;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-body text-foreground">Nightly snapshot</span>
+        <span className="text-micro text-subtle-foreground">
+          {when ? `${when}${size ? ` \u00b7 ${size}` : ""}` : "None yet"}
+        </span>
+      </div>
+      <span className="text-micro leading-relaxed text-subtle-foreground">
+        A copy of your library each night, kept for a week plus four weekly
+        ones. Copies share disk with the original until they differ, so they
+        cost almost nothing.
+      </span>
+      <div className="flex items-center gap-2 pt-1">
+        <Button
+          variant="secondary"
+          size="sm"
+          loading={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              setStatus(await api.snapshotNow());
+              pushToast("success", "Snapshot taken.");
+            } catch (err) {
+              pushToast("error", `Snapshot failed: ${String(err)}`);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Back up now
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={!status || status.takenAt === 0}
+          onClick={async () => {
+            try {
+              const aside = await api.restoreSnapshot();
+              pushToast(
+                "success",
+                `Restored. The previous library is kept at ${aside}. Restart Alchemy to use it.`,
+              );
+            } catch (err) {
+              pushToast("error", `Restore failed: ${String(err)}`);
+            }
+          }}
+        >
+          Restore last snapshot…
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /** Everything about getting content in: Mac apps, git repositories. */
 function SourcesTab() {
   return (
@@ -434,19 +607,11 @@ function SourcesTab() {
 
       <div className="h-px bg-border" />
 
-      <GitSyncSelect />
-
-      <div className="h-px bg-border" />
-
-      <HygieneSelect />
-
-      <div className="h-px bg-border" />
-
       <NotionTokenField />
 
       <div className="h-px bg-border" />
 
-      <WebClipperToggle />
+      <WebClipperLink />
     </div>
   );
 }
@@ -454,35 +619,25 @@ function SourcesTab() {
 const CLIPPER_URL =
   "https://chromewebstore.google.com/detail/alchemy-web-clipper/bdiidbpifneigmcknjbgolbclbbgjheh";
 
-/** Browser-extension clip receiver: a localhost endpoint that accepts the
- *  rendered DOM the clipper scrapes from the user's logged-in tab, so private
- *  and login-walled pages capture too (docs/RFC-page-capture.md §8). */
-function WebClipperToggle() {
-  const aiConfig = useStore((s) => s.aiConfig);
-  const saveAiConfig = useStore((s) => s.saveAiConfig);
-  if (!aiConfig) return null;
+/** Where to get the browser extension. The receiver is always on: it only
+ *  acts when the user has installed the clipper and clicked it, so a switch
+ *  in front of it gated nothing. */
+function WebClipperLink() {
   return (
     <div className="flex flex-col gap-1.5">
       <div className="text-body">Web clipper</div>
-      <SettingRow
-        label="Accept pages from the browser extension"
-        hint={
-          <>
-            The{" "}
-            <button
-              type="button"
-              onClick={() => void openUrl(CLIPPER_URL)}
-              className="text-citation hover:underline"
-            >
-              Alchemy Web Clipper
-            </button>{" "}
-            sends the page you're viewing, including login-walled pages, to
-            Alchemy over a local endpoint.
-          </>
-        }
-        checked={aiConfig.clipEnabled}
-        onChange={(v) => void saveAiConfig({ ...aiConfig, clipEnabled: v })}
-      />
+      <p className="text-micro leading-relaxed text-subtle-foreground">
+        The{" "}
+        <button
+          type="button"
+          onClick={() => void openUrl(CLIPPER_URL)}
+          className="text-citation hover:underline"
+        >
+          Alchemy Web Clipper
+        </button>{" "}
+        sends the page you are viewing, including login-walled pages, to
+        Alchemy over a local endpoint.
+      </p>
     </div>
   );
 }
@@ -622,7 +777,6 @@ function StudioTab() {
           </Button>
         </div>
       </div>
-      <CuratorToggle />
     </div>
   );
 }
