@@ -459,15 +459,19 @@ pub fn acp_prompt(app: AppHandle, notebook_id: String, text: String) -> Result<(
 }
 
 /// Cancel the in-flight turn (session/cancel); the session stays alive.
+///
+/// Idempotent: see `send_cmd_if_running`.
 #[tauri::command]
 pub fn acp_cancel(app: AppHandle, notebook_id: String) -> Result<(), String> {
-    send_cmd(&app, &notebook_id, HostCmd::Cancel)
+    send_cmd_if_running(&app, &notebook_id, HostCmd::Cancel)
 }
 
 /// End the notebook's hosted session and reap the agent subprocess.
+///
+/// Idempotent: see `send_cmd_if_running`.
 #[tauri::command]
 pub fn acp_stop(app: AppHandle, notebook_id: String) -> Result<(), String> {
-    send_cmd(&app, &notebook_id, HostCmd::Stop)
+    send_cmd_if_running(&app, &notebook_id, HostCmd::Stop)
 }
 
 /// Answer a pending permission request. `option_id: None` cancels it.
@@ -501,6 +505,33 @@ pub fn acp_permission(
         .map_err(|e| e.to_string())
 }
 
+/// Send a command whose goal is the *absence* of something - stop, cancel -
+/// treating "there was no session" as already done rather than as an error.
+///
+/// Both callers ask for a postcondition: no session running, no turn in
+/// flight. When there is no session, that postcondition already holds, so
+/// reporting failure describes the world incorrectly. It also cost real
+/// signal: every `#[tauri::command]` error is recorded at `error` level, and
+/// the agent pane calls stop on unmount, so an ordinary session of closing
+/// notebooks wrote 118 of the 132 errors in a day's log - enough noise to
+/// bury an actual crash, which is exactly what it did during a pre-release
+/// sweep. The front end had already decided this was nothing and swallowed
+/// it (`api.acpStop(id).catch(() => {})`); only the log disagreed.
+///
+/// A hung-up channel is treated the same way: the host loop being gone is
+/// the state the caller was asking for.
+fn send_cmd_if_running(app: &AppHandle, notebook_id: &str, cmd: HostCmd) -> Result<(), String> {
+    let state = app.state::<AcpState>();
+    let sessions = state.sessions.lock().unwrap();
+    let Some(handle) = sessions.get(notebook_id) else {
+        return Ok(());
+    };
+    let _ = handle.tx.send(cmd);
+    Ok(())
+}
+
+/// Send a command that genuinely needs a live session - a prompt, a
+/// permission answer - where "no session" is a real failure worth surfacing.
 fn send_cmd(app: &AppHandle, notebook_id: &str, cmd: HostCmd) -> Result<(), String> {
     let state = app.state::<AcpState>();
     let sessions = state.sessions.lock().unwrap();

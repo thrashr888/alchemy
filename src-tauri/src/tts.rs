@@ -279,6 +279,93 @@ pub(crate) fn split_for_synthesis(text: &str, max_cost: usize) -> Vec<String> {
     chunks
 }
 
+/// The real ceiling, in phoneme characters.
+///
+/// kokoro-en tokenizes a chunk as `chars + 2` — one leading and one trailing
+/// marker — and then indexes its 510-entry style pack by that token count
+/// (`synth_v10`, kokoro-en 0.1.5). 508 phoneme characters is therefore the
+/// largest input that cannot run off the end of the pack. The crate chunks
+/// its own phonemes at 510, which is the off-by-two that panics: a full
+/// 510-character chunk becomes 512 tokens and asks for `pack[511]`.
+const MAX_PHONEME_CHARS: usize = 508;
+
+/// How deep the backstop will keep halving before it gives up and lets the
+/// panic guard at the call site have it. Ten halvings turn any real line
+/// into single words.
+const MAX_SPLIT_DEPTH: usize = 10;
+
+/// The phoneme length kokoro-en will actually see, measured with the crate's
+/// own grapheme-to-phoneme pass rather than estimated.
+///
+/// `speech_cost` is a weighted guess, and the guess is what kept failing: it
+/// was rewritten from characters to weighted phonemes in 1e3fb6f, and a
+/// dense line still ran past the cap two hours later. Estimating how a
+/// phonemizer will expand arbitrary text is not a solvable problem — symbols
+/// outside the weight table each become a whole spoken word — so this asks
+/// the function that will do the expanding.
+///
+/// `KokoroTts` keeps its `is_v11` flag private, so both phoneme sets are
+/// measured and the longer wins: being wrong about which model is loaded is
+/// the class of failure this exists to remove, not to reintroduce.
+///
+/// `None` means g2p itself failed. That is not a measurement of zero, so the
+/// caller keeps whatever the estimate gave it and lets the panic guard stand.
+fn phoneme_len(text: &str) -> Option<usize> {
+    let measure = |v11: bool| kokoro_en::g2p(text, v11).ok().map(|p| p.chars().count());
+    match (measure(false), measure(true)) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (Some(n), None) | (None, Some(n)) => Some(n),
+        (None, None) => None,
+    }
+}
+
+/// Re-split any chunk whose *measured* phoneme length still exceeds the cap.
+///
+/// `split_for_synthesis` breaks lines where they sound best; this makes the
+/// result correct rather than merely likely. It runs after, not instead, so
+/// ordinary prose still breathes where it always did — only a chunk that
+/// would actually have panicked gets divided further.
+fn enforce_phoneme_budget(chunks: Vec<String>) -> Vec<String> {
+    enforce_budget_with(chunks, &|t| phoneme_len(t))
+}
+
+/// The splitting itself, over an injectable measurement so it can be tested
+/// without a phonemizer.
+fn enforce_budget_with(
+    chunks: Vec<String>,
+    measure: &dyn Fn(&str) -> Option<usize>,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for chunk in chunks {
+        divide(chunk, measure, 0, &mut out);
+    }
+    out
+}
+
+fn divide(
+    chunk: String,
+    measure: &dyn Fn(&str) -> Option<usize>,
+    depth: usize,
+    out: &mut Vec<String>,
+) {
+    if measure(&chunk).is_none_or(|n| n <= MAX_PHONEME_CHARS) {
+        out.push(chunk);
+        return;
+    }
+    let words: Vec<&str> = chunk.split_whitespace().collect();
+    // A single word that still measures over cannot be divided on a boundary
+    // anyone would want to hear. It goes out whole: the panic guard at the
+    // call site is the last line, and silently dropping speech would be a
+    // worse answer than a line that fails loudly.
+    if words.len() < 2 || depth >= MAX_SPLIT_DEPTH {
+        out.push(chunk);
+        return;
+    }
+    let mid = words.len() / 2;
+    divide(words[..mid].join(" "), measure, depth + 1, out);
+    divide(words[mid..].join(" "), measure, depth + 1, out);
+}
+
 /// Kokoro-82M via ONNX (`kokoro-en`/ort): near-cloud-quality speech, fully
 /// on-device, roughly 2× realtime on Apple Silicon CPU. 24 kHz output.
 pub struct KokoroEngine {
@@ -305,7 +392,8 @@ impl KokoroEngine {
         // inside kokoro-en. Synthesize in sentence-packed chunks instead, with
         // a small breath between chunks so the join stays conversational.
         let mut samples: Vec<f32> = Vec::new();
-        for (i, chunk) in split_for_synthesis(text, MAX_SYNTH_COST).iter().enumerate() {
+        let chunks = enforce_phoneme_budget(split_for_synthesis(text, MAX_SYNTH_COST));
+        for (i, chunk) in chunks.iter().enumerate() {
             if i > 0 {
                 samples.extend(std::iter::repeat_n(
                     0.0f32,
@@ -392,7 +480,10 @@ pub async fn assemble_episode(
 
 #[cfg(test)]
 mod split_tests {
-    use super::{speech_cost, split_for_synthesis};
+    use super::{
+        enforce_budget_with, enforce_phoneme_budget, phoneme_len, speech_cost, split_for_synthesis,
+        MAX_PHONEME_CHARS, MAX_SYNTH_COST,
+    };
 
     #[test]
     fn short_lines_pass_through() {
@@ -488,5 +579,104 @@ mod split_tests {
         let chunks = split_for_synthesis(&line, 300);
         assert!(chunks.len() >= 4);
         assert!(chunks.iter().all(|c| c.chars().count() <= 300));
+    }
+
+    /// The estimate is allowed to be wrong; the measurement is not. A chunk
+    /// that measures over the cap must come back divided, however innocent it
+    /// looked to `speech_cost`.
+    #[test]
+    fn a_chunk_that_measures_over_is_divided() {
+        // Pretend every word phonemizes to 100 characters - the shape of the
+        // real failure, where a symbol expands into a whole spoken word.
+        let measure = |t: &str| Some(t.split_whitespace().count() * 100);
+        let line = "alpha bravo charlie delta echo foxtrot golf hotel".to_string();
+        assert!(
+            measure(&line).unwrap() > MAX_PHONEME_CHARS,
+            "the fixture must start over budget or it proves nothing"
+        );
+
+        let out = enforce_budget_with(vec![line.clone()], &measure);
+        assert!(out.len() > 1, "an over-budget chunk must be split");
+        for piece in &out {
+            assert!(
+                measure(piece).unwrap() <= MAX_PHONEME_CHARS,
+                "every piece must land under the cap: {piece:?}"
+            );
+        }
+        // Splitting is a re-packing, never an edit: every word survives.
+        assert_eq!(out.join(" "), line);
+    }
+
+    /// Ordinary prose must pass through untouched, or every line breathes in
+    /// a new place for no reason.
+    #[test]
+    fn a_chunk_under_budget_is_left_alone() {
+        let measure = |t: &str| Some(t.chars().count());
+        let chunks = vec!["Short enough.".to_string(), "Also fine.".to_string()];
+        assert_eq!(
+            enforce_budget_with(chunks.clone(), &measure),
+            chunks,
+            "under-budget chunks must not be re-cut"
+        );
+    }
+
+    /// A failed measurement is not a measurement of zero. When g2p cannot
+    /// answer, the estimate stands and the panic guard remains the last line -
+    /// the alternative is shredding every line whenever the phonemizer is
+    /// unavailable.
+    #[test]
+    fn an_unmeasurable_chunk_is_passed_through() {
+        let line = "alpha bravo charlie delta".to_string();
+        let out = enforce_budget_with(vec![line.clone()], &|_| None);
+        assert_eq!(out, vec![line]);
+    }
+
+    /// One indivisible word over the cap must terminate rather than recurse
+    /// forever, and must not be dropped on the floor.
+    #[test]
+    fn one_huge_word_terminates_and_survives() {
+        let word = "supercalifragilisticexpialidocious".to_string();
+        let out = enforce_budget_with(vec![word.clone()], &|_| Some(100_000));
+        assert_eq!(out, vec![word], "an indivisible word goes out whole");
+    }
+
+    /// The integration the unit tests above deliberately fake: run the real
+    /// phonemizer and prove nothing survives the pipeline over the cap.
+    ///
+    /// The fixture is the shape that beat the estimate. With
+    /// `default-features = false` kokoro-en has no bundled espeak, so a word
+    /// its lexicon does not know is *letter-spelled* - every character
+    /// becomes its own run of phonemes - and a line of identifiers and
+    /// symbols expands far past what `speech_cost` predicts.
+    ///
+    /// Skips rather than fails when g2p cannot answer: a machine without the
+    /// phonemizer should not fail the suite, and `phoneme_len` returning None
+    /// is the documented "keep the estimate" path.
+    #[test]
+    fn real_phonemes_stay_under_the_cap() {
+        // Figures and symbols, not nonsense words: each expands into whole
+        // spoken words through the pure-Rust normalizer, which is the same
+        // blowup with none of the per-word espeak subprocesses that would
+        // make this test slow.
+        let nasty = "In 2026 revenue rose 47.5% to $1,284,999 against 2025. ".repeat(8);
+
+        let Some(measured) = phoneme_len(&nasty) else {
+            eprintln!("g2p unavailable; skipping the live phoneme check");
+            return;
+        };
+        assert!(
+            measured > MAX_PHONEME_CHARS,
+            "fixture must actually exceed the cap to prove anything (got {measured})"
+        );
+
+        let chunks = enforce_phoneme_budget(split_for_synthesis(&nasty, MAX_SYNTH_COST));
+        for chunk in &chunks {
+            if let Some(n) = phoneme_len(chunk) {
+                assert!(
+                    n <= MAX_PHONEME_CHARS || chunk.split_whitespace().count() < 2,
+                    "chunk of {n} phonemes would index past the style pack: {chunk:?}"
+                );
+            }
+        }
     }
 }
