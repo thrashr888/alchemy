@@ -500,51 +500,6 @@ export interface SnapshotStatus {
   storeVersion: number;
 }
 
-/** One planned or blocked run (docs/RFC-night-shift-area.md). The reason is
- *  the point: a schedule that has not run for days usually is not broken, and
- *  the app knows why - an archived notebook, background work switched off. */
-export interface PlannedRun {
-  schedule: ReportSchedule;
-  notebookTitle: string;
-  /** "queued" | "due" | "waiting" | "blocked" */
-  state: string;
-  /** The cause and the fix, in one sentence. Empty unless blocked. */
-  reason: string;
-  dueAt: number;
-}
-
-/** One Night Shift run, as recorded at the run boundary
- *  (docs/RFC-night-shift-area.md §2). A rolling 30-day record — the durable
- *  artifacts are the notes the runs wrote. */
-export interface RunReceipt {
-  id: string;
-  /** Empty for housekeeping chores. */
-  scheduleId: string;
-  /** Empty for cross-notebook work (briefs) and chores. */
-  notebookId: string;
-  name: string;
-  /** Report kind, or a chore kind: "snapshot", "maintain", "hygiene". */
-  kind: string;
-  /** "interval" | "change" | "once" | "manual" | "chore" */
-  trigger: string;
-  /** "ok" | "failed" */
-  status: string;
-  detail: string;
-  error: string;
-  noteId: string;
-  /** Resolved provider ("ollama", "gateway", "local", …). */
-  provider: string;
-  model: string;
-  /** Millionths of a dollar; 0 when nothing was metered. */
-  costMicros: number;
-  /** When the run should have started; 0 when not recorded. A Mac asleep
-   *  past a due time runs on wake, and this is what makes the delay
-   *  explainable rather than mysterious. */
-  dueAt: number;
-  startedAt: number;
-  endedAt: number;
-}
-
 export interface NightShiftStatus {
   backgroundEnabled: boolean;
   paused: boolean;

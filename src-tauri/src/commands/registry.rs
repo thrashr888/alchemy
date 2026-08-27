@@ -1546,14 +1546,6 @@ async fn rematch_all(db: &crate::db::Db) {
 }
 
 #[tauri::command]
-pub async fn get_registry_card(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<Option<RegistryCard>, String> {
-    e(state.db.get_registry_card(&id).await)
-}
-
-#[tauri::command]
 pub async fn add_registry_card(
     state: State<'_, AppState>,
     kind: String,

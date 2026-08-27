@@ -2965,34 +2965,6 @@ pub async fn get_source_content(
     e(state.db.source_content(&source_id).await)
 }
 
-#[tauri::command]
-pub async fn delete_source(state: State<'_, AppState>, source_id: String) -> Result<(), String> {
-    // Deleting a folder or repo removes its children (and their chunks) in
-    // one bulk op — a per-child loop was slow enough to trip the IPC timeout.
-    if let Some(src) = e(state.db.get_source(&source_id).await)? {
-        if matches!(
-            src.source_type.as_str(),
-            "folder" | "obsidian" | "git" | "notion"
-        ) {
-            let child_ids: Vec<String> = e(state.db.list_sources(&src.notebook_id).await)?
-                .into_iter()
-                .filter(|c| c.parent_id == source_id)
-                .map(|c| c.id)
-                .collect();
-            // Parent and children can each own a git or notion cache dir; the
-            // bulk delete_source_tree drops their rows in one shot.
-            for id in child_ids.iter().chain(std::iter::once(&source_id)) {
-                cleanup_source_files(&state, id);
-            }
-            e(state.db.delete_source_tree(&source_id, &child_ids).await)?;
-            return Ok(());
-        }
-    }
-    e(state.db.delete_source(&source_id).await)?;
-    cleanup_source_files(&state, &source_id);
-    Ok(())
-}
-
 /// Remove a deleted source's on-disk leavings: git and Notion cache dirs
 /// (no-ops for other types), the gallery thumbnail, and the og:image cache.
 fn cleanup_source_files(state: &AppState, source_id: &str) {
@@ -5235,14 +5207,6 @@ pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u
 
 // ---- Chat ----------------------------------------------------------------
 
-#[tauri::command]
-pub async fn list_messages(
-    state: State<'_, AppState>,
-    notebook_id: String,
-) -> Result<Vec<Message>, String> {
-    e(state.db.list_messages(&notebook_id).await)
-}
-
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessagePage {
@@ -6601,14 +6565,49 @@ async fn try_settings_fast_path(
     }
 }
 
-/// Create a report schedule and render the confirmation/refusal reply.
-/// Shared by the LLM router's schedule_report action and the deterministic
-/// schedule gate below, so the two can never validate differently.
-///
-/// Hand one job to the night from chat (docs/RFC-night-shift-area.md §4).
-/// The Tonight composer and the chat box are the same parser, so this reply
-/// is what both produce. Kinds are validated exactly as schedules are:
-/// refusing beats coercing.
+/// Build the schedule row behind a commission (docs/RFC-night-shift-area.md
+/// §1). Chat and MCP both hand one-off work to the night, and they must
+/// build the identical row: the same request routing differently depending
+/// on which mouth asked is the bug this exists to prevent. Kinds are
+/// validated exactly as recurring schedules are, because a commission that
+/// quietly runs the wrong generator wastes a whole night.
+pub(crate) fn build_commission(
+    notebook_id: &str,
+    name: &str,
+    kind: &str,
+    prompt: &str,
+    when: Option<&str>,
+) -> Result<ReportSchedule, String> {
+    let kind = resolve_report_kind(kind, prompt)?;
+    let name = match name.trim() {
+        "" => "Commissioned run".to_string(),
+        named => named.to_string(),
+    };
+    Ok(ReportSchedule {
+        id: new_id(),
+        notebook_id: notebook_id.to_string(),
+        name,
+        kind,
+        prompt: prompt.to_string(),
+        trigger: "once".into(),
+        // "now" means the next pass; anything else means tonight, since a
+        // commission meant for the night must never surprise the user by
+        // starting immediately.
+        not_before: match when {
+            Some("now") => 0,
+            _ => crate::scheduler::next_local_hour_ms(2),
+        },
+        // Unused by the "once" path, but a sane floor keeps the row honest
+        // if a user later flips it to a recurring order.
+        interval_secs: 86_400,
+        enabled: true,
+        last_run_at: 0,
+        created_at: now(),
+    })
+}
+
+/// Hand one job to the night from chat (docs/RFC-night-shift-area.md §4),
+/// and render the confirmation or refusal.
 async fn commission_reply(
     state: &AppState,
     notebook_id: &str,
@@ -6617,31 +6616,12 @@ async fn commission_reply(
     prompt: &str,
     when: &str,
 ) -> String {
-    // Same validation as a recurring schedule, and the same refusal copy:
-    // a commission that quietly runs the wrong generator wastes a night.
-    let kind = match resolve_report_kind(kind, prompt) {
-        Ok(kind) => kind,
+    let schedule = match build_commission(notebook_id, name, kind, prompt, Some(when)) {
+        Ok(schedule) => schedule,
         Err(refusal) => return refusal,
     };
-    let tonight = when != "now";
-    let not_before = if tonight {
-        crate::scheduler::next_local_hour_ms(2)
-    } else {
-        0
-    };
-    let schedule = ReportSchedule {
-        id: new_id(),
-        notebook_id: notebook_id.to_string(),
-        name: name.trim().to_string(),
-        kind,
-        prompt: prompt.to_string(),
-        trigger: "once".into(),
-        not_before,
-        interval_secs: 86_400,
-        enabled: true,
-        last_run_at: 0,
-        created_at: now(),
-    };
+    let tonight = schedule.not_before > 0;
+    let name = schedule.name.clone();
     match state.db.add_report_schedule(&schedule).await {
         Ok(()) => {
             let clock = if tonight {
@@ -8303,19 +8283,6 @@ pub async fn note_opened(state: State<'_, AppState>, id: String) -> Result<(), S
     e(state.db.bump_note_usage(&[id], "reads", now()).await)
 }
 
-#[tauri::command]
-pub async fn delete_note(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), String> {
-    // An Audio Overview's episode file lives outside the DB — remove it too.
-    if let Some(path) = audio_path(&app, &id) {
-        let _ = std::fs::remove_file(path);
-    }
-    e(state.db.delete_note(&id).await)
-}
-
 /// Bulk note delete (docs/RFC-multi-select.md): one IPC call, three Lance
 /// predicate deletes, plus each note's episode audio if it has one.
 #[tauri::command]
@@ -9832,14 +9799,6 @@ pub fn list_shortcuts() -> Vec<crate::menu::ShortcutRow> {
 
 // ---- Home page: activity, stats, global search ----------------------------
 
-#[tauri::command]
-pub async fn list_recent_notes(
-    state: State<'_, AppState>,
-    limit: Option<usize>,
-) -> Result<Vec<Note>, String> {
-    e(state.db.recent_notes(limit.unwrap_or(6)).await)
-}
-
 /// The latest report notes across every notebook, newest first — the home
 /// page's report reader pages through these.
 /// Watcher activity for the Home Staff section (agents get the same signal
@@ -9854,142 +9813,6 @@ pub async fn list_source_events(
         .db
         .source_events_since(now() - hours * 3_600_000)
         .await)
-}
-
-/// Commission one-off overnight work (docs/RFC-night-shift-area.md §1).
-/// Mechanically a schedule with a "once" trigger, so it rides every path
-/// that already exists — due-ness, running, notification, receipt — and
-/// retires itself afterwards. No queue, nothing to recover after a crash.
-///
-/// `when` is "tonight" (the next 2 AM local) or "now" (the next pass);
-/// anything else is treated as tonight, since a commission the user meant
-/// for the night should never surprise them by starting immediately.
-#[tauri::command]
-pub async fn commission_run(
-    state: State<'_, AppState>,
-    notebook_id: String,
-    name: String,
-    kind: String,
-    prompt: String,
-    when: Option<String>,
-) -> Result<ReportSchedule, String> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err("A commission needs a name.".into());
-    }
-    let not_before = match when.as_deref() {
-        Some("now") => 0,
-        _ => crate::scheduler::next_local_hour_ms(2),
-    };
-    let schedule = ReportSchedule {
-        id: new_id(),
-        notebook_id,
-        name: name.to_string(),
-        kind: if kind.trim().is_empty() {
-            "custom".into()
-        } else {
-            kind
-        },
-        prompt,
-        trigger: "once".into(),
-        not_before,
-        // Unused by the "once" path, but a sane floor keeps the row honest
-        // if a user later flips it to a recurring order.
-        interval_secs: 86_400,
-        enabled: true,
-        last_run_at: 0,
-        created_at: now(),
-    };
-    e(state.db.add_report_schedule(&schedule).await)?;
-    Ok(schedule)
-}
-
-/// One planned or blocked run, with the reason it is in that state
-/// (docs/RFC-night-shift-area.md).
-///
-/// The reason is the point. A schedule that has not run in two days looks
-/// broken; almost always it is deliberate - its notebook is archived, or
-/// background work is off - and the app knew and never said so. A bare
-/// "overdue by 34h" is a duration masquerading as a diagnosis.
-#[derive(serde::Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct PlannedRun {
-    pub schedule: ReportSchedule,
-    pub notebook_title: String,
-    /// "queued" - a commission waiting for its hour.
-    /// "due" - it runs on the next pass.
-    /// "waiting" - recurring work whose next turn has not arrived.
-    /// "blocked" - it will not run until something changes; see `reason`.
-    pub state: String,
-    /// User-facing sentence naming the cause and the fix. Empty unless blocked.
-    pub reason: String,
-    /// When this run is (or was) due.
-    pub due_at: i64,
-}
-
-/// Tonight's plan: commissions, recurring work, and - the part that was
-/// missing - anything that will not run, with why.
-#[tauri::command]
-pub async fn tonight_plan(state: State<'_, AppState>) -> Result<Vec<PlannedRun>, String> {
-    let mut all = e(state.db.all_report_schedules().await)?;
-    let archived = state.db.archived_notebook_ids().await.unwrap_or_default();
-    all.retain(|s| s.enabled && !archived.contains(&s.notebook_id));
-    let titles: std::collections::HashMap<String, String> = e(state.db.list_notebooks().await)?
-        .into_iter()
-        .map(|n| (n.id, n.title))
-        .collect();
-    let background = state.ai.read().await.config().background_enabled;
-    let paused = crate::scheduler::is_paused();
-    let now = now();
-
-    let mut out: Vec<PlannedRun> = all
-        .into_iter()
-        .map(|s| {
-            let notebook_title = titles.get(&s.notebook_id).cloned().unwrap_or_default();
-            let due_at = crate::scheduler::due_at(&s, &[]);
-            let (state_label, reason) = if !background {
-                (
-                    "blocked",
-                    "Background work is off. Turn it on in Settings, under Nightly.".to_string(),
-                )
-            } else if paused {
-                (
-                    "blocked",
-                    "Paused until morning. Resume from the menu bar to run it sooner.".to_string(),
-                )
-            } else if s.trigger == "once" {
-                if now >= s.not_before {
-                    ("due", String::new())
-                } else {
-                    ("queued", String::new())
-                }
-            } else if now >= due_at {
-                ("due", String::new())
-            } else {
-                ("waiting", String::new())
-            };
-            PlannedRun {
-                schedule: s,
-                notebook_title,
-                state: state_label.to_string(),
-                reason,
-                due_at,
-            }
-        })
-        .collect();
-
-    // Blocked first - it is the only part the user can act on - then the work
-    // about to happen, then the rest by when it comes round.
-    out.sort_by_key(|p| {
-        let rank = match p.state.as_str() {
-            "blocked" => 0,
-            "due" => 1,
-            "queued" => 2,
-            _ => 3,
-        };
-        (rank, p.due_at)
-    });
-    Ok(out)
 }
 
 /// What the last snapshot did, for the Nightly settings page
@@ -10056,35 +9879,6 @@ pub async fn restore_snapshot(app: AppHandle) -> Result<String, String> {
     Ok(aside.to_string_lossy().to_string())
 }
 
-/// The Night Shift's run record (docs/RFC-night-shift-area.md §2). Agents get
-/// the same signal via the MCP list_receipts tool.
-#[tauri::command]
-pub async fn list_receipts(
-    state: State<'_, AppState>,
-    hours: Option<u32>,
-    limit: Option<usize>,
-) -> Result<Vec<crate::models::RunReceipt>, String> {
-    let hours = i64::from(hours.unwrap_or(24 * 7));
-    e(state
-        .db
-        .list_receipts(now() - hours * 3_600_000, limit.unwrap_or(200))
-        .await)
-}
-
-/// Run history for one standing order — what the rail shows when an order is
-/// selected.
-#[tauri::command]
-pub async fn receipts_for_schedule(
-    state: State<'_, AppState>,
-    schedule_id: String,
-    limit: Option<usize>,
-) -> Result<Vec<crate::models::RunReceipt>, String> {
-    e(state
-        .db
-        .receipts_for_schedule(&schedule_id, limit.unwrap_or(5))
-        .await)
-}
-
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct NightShiftStatus {
@@ -10108,14 +9902,6 @@ pub async fn toggle_night_shift_pause(app: AppHandle) -> Result<bool, String> {
     let paused = crate::scheduler::toggle_pause();
     crate::integrations::set_tray_pause_label(&app, paused);
     Ok(paused)
-}
-
-#[tauri::command]
-pub async fn list_recent_reports(
-    state: State<'_, AppState>,
-    limit: Option<usize>,
-) -> Result<Vec<Note>, String> {
-    e(state.db.recent_reports(limit.unwrap_or(10)).await)
 }
 
 #[derive(serde::Serialize)]
@@ -10154,17 +9940,6 @@ pub async fn home_activity(state: State<'_, AppState>) -> Result<HomeActivity, S
             notes,
             ledger,
         },
-    })
-}
-
-#[tauri::command]
-pub async fn corpus_stats(state: State<'_, AppState>) -> Result<CorpusStats, String> {
-    let (sources, chars, notes, ledger) = e(state.db.corpus_stats().await)?;
-    Ok(CorpusStats {
-        sources,
-        chars,
-        notes,
-        ledger,
     })
 }
 

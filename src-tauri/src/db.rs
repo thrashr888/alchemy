@@ -1694,15 +1694,6 @@ impl Db {
         Ok(())
     }
 
-    /// Delete a folder/repo source and all its children in a handful of
-    /// predicate ops instead of one transaction pair per child. A 48-file
-    /// folder was 96+ sequential Lance transactions — slow enough to trip the
-    /// IPC timeout; this is two deletes total for the whole tree.
-    pub async fn delete_source_tree(&self, folder_id: &str, child_ids: &[String]) -> Result<()> {
-        self.delete_sources(std::slice::from_ref(&folder_id.to_string()), child_ids)
-            .await
-    }
-
     /// Bulk-delete an arbitrary set of sources (docs/RFC-multi-select.md):
     /// two predicate deletes total, whatever the selection size — the
     /// delete_source_tree lesson applied to multi-select. `ids` are the
@@ -2059,16 +2050,6 @@ impl Db {
         Ok(notes)
     }
 
-    /// The most recently updated report notes across every notebook, full
-    /// content included — the home page reads them in place.
-    pub async fn recent_reports(&self, limit: usize) -> Result<Vec<Note>> {
-        let batches = self.collect(T_NOTES, Some("kind = 'report'")).await?;
-        let mut notes = notes_from_batches(&batches)?;
-        notes.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
-        notes.truncate(limit);
-        Ok(notes)
-    }
-
     /// (id, title, created_at) for notes WITHOUT their bodies — the search
     /// path joins note titles on every query, and generated reports make
     /// note bodies big. `None` = corpus-wide.
@@ -2193,29 +2174,6 @@ impl Db {
             }
         }
         Ok(out)
-    }
-
-    /// Aggregate (source count, total chars, note count, ledger count)
-    /// across every notebook.
-    pub async fn corpus_stats(&self) -> Result<(i64, i64, i64, i64)> {
-        let batches = self.collect_cols(T_SOURCES, None, &["char_count"]).await?;
-        let (mut count, mut chars) = (0i64, 0i64);
-        for b in &batches {
-            let cc = i64_col(b, "char_count")?;
-            for i in 0..b.num_rows() {
-                count += 1;
-                chars += cc.value(i);
-            }
-        }
-        let notes: i64 = match self.collect_cols(T_NOTES, None, &["id"]).await {
-            Ok(bs) => bs.iter().map(|b| b.num_rows() as i64).sum(),
-            Err(_) => 0, // table may not exist yet
-        };
-        let ledger: i64 = match self.collect_cols(T_LEDGER, None, &["id"]).await {
-            Ok(bs) => bs.iter().map(|b| b.num_rows() as i64).sum(),
-            Err(_) => 0,
-        };
-        Ok((count, chars, notes, ledger))
     }
 
     /// Home's activity snapshot in one pass per table. Previously Home read

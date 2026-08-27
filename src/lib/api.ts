@@ -12,7 +12,6 @@ import type {
   ChatConfig,
   CloudFolder,
   ConnectorStatus,
-  CorpusStats,
   FolderScan,
   GrepHit,
   HomeActivity,
@@ -39,8 +38,6 @@ import type {
   ReportSchedule,
   SearchHit,
   Source,
-  PlannedRun,
-  RunReceipt,
   SnapshotStatus,
   SourceEvent,
   SuggestOutcome,
@@ -259,9 +256,6 @@ export const api = {
   notebookGraph: (notebookId: string) =>
     run(query<NotebookGraph>("notebook_graph", { notebookId })),
   reembedAll: () => run(ai<number>("reembed_all")),
-  deleteSource: (sourceId: string) =>
-    run(cmd<void>("delete_source", { sourceId })),
-
   // Mac providers (Calendar, Reminders, Apple Notes via cider)
   macAvailable: () => run(query<boolean>("mac_available")),
   macConnect: (provider: string) => run(cmd<void>("mac_connect", { provider })),
@@ -295,8 +289,6 @@ export const api = {
     run(query<string | null>("locate_note", { noteId })),
 
   // Chat
-  listMessages: (notebookId: string) =>
-    run(query<Message[]>("list_messages", { notebookId })),
   listMessagesPage: (
     notebookId: string,
     before?: { createdAt: number; id: string },
@@ -391,11 +383,6 @@ export const api = {
   // Notes & artifacts
   listNotes: (notebookId: string) =>
     run(query<Note[]>("list_notes", { notebookId })),
-  listRecentNotes: (limit = 6) =>
-    run(query<Note[]>("list_recent_notes", { limit })),
-  listRecentReports: (limit = 10) =>
-    run(query<Note[]>("list_recent_reports", { limit })),
-  corpusStats: () => run(query<CorpusStats>("corpus_stats")),
   activityStats: () => run(query<ActivityStats>("activity_stats")),
   homeActivity: () => run(query<HomeActivity>("home_activity")),
   newWindow: (notebookId?: string, noteId?: string) =>
@@ -475,8 +462,6 @@ export const api = {
     ),
   updateNote: (id: string, title: string, content: string) =>
     run(cmd<void>("update_note", { id, title, content })),
-  deleteNote: (id: string) => run(cmd<void>("delete_note", { id })),
-  /** Batch note delete (RFC-multi-select): one bulk operation. */
   deleteNotes: (ids: string[]) => run(cmd<void>("delete_notes", { ids })),
   /** Fire-and-forget read counter for the note curator (RFC-note-curator). */
   noteOpened: (id: string) => run(cmd<void>("note_opened", { id })),
@@ -541,8 +526,6 @@ export const api = {
 
   // The Registry — corpus-scoped, so no notebookId anywhere here.
   listRegistry: () => run(query<RegistryCard[]>("list_registry", {})),
-  getRegistryCard: (id: string) =>
-    run(query<RegistryCard | null>("get_registry_card", { id })),
   addRegistryCard: (
     kind: string,
     name: string,
@@ -600,37 +583,14 @@ export const api = {
   listSourceEvents: (hours = 24) =>
     run(query<SourceEvent[]>("list_source_events", { hours })),
   nightShiftStatus: () => run(query<NightShiftStatus>("night_shift_status")),
-  commissionRun: (
-    notebookId: string,
-    name: string,
-    kind: string,
-    prompt: string,
-    when: "tonight" | "now" = "tonight",
-  ) =>
-    run(
-      cmd<ReportSchedule>("commission_run", {
-        notebookId,
-        name,
-        kind,
-        prompt,
-        when,
-      }),
-    ),
-  tonightPlan: () => run(query<PlannedRun[]>("tonight_plan")),
   snapshotStatus: () => run(query<SnapshotStatus>("snapshot_status")),
   snapshotNow: () => run(cmd<SnapshotStatus>("snapshot_now")),
   restoreSnapshot: () => run(cmd<string>("restore_snapshot")),
-  listReceipts: (hours = 24 * 7, limit = 200) =>
-    run(query<RunReceipt[]>("list_receipts", { hours, limit })),
-  receiptsForSchedule: (scheduleId: string, limit = 5) =>
-    run(query<RunReceipt[]>("receipts_for_schedule", { scheduleId, limit })),
   toggleNightShiftPause: () => run(cmd<boolean>("toggle_night_shift_pause")),
 
   // Reports
   listReportSchedules: (notebookId: string) =>
     run(query<ReportSchedule[]>("list_report_schedules", { notebookId })),
-  listAllReportSchedules: () =>
-    run(query<ReportSchedule[]>("list_all_report_schedules")),
   createReportSchedule: (
     notebookId: string,
     name: string,

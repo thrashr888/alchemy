@@ -1046,3 +1046,42 @@ async fn notebook_counts_follow_writes_through_the_cache() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Chat and MCP both commission overnight work, and both go through
+/// `build_commission` so a given request can never queue two different rows
+/// depending on which mouth asked. These are the properties that divergence
+/// used to break: the IPC copy that lived here before skipped kind validation
+/// entirely, so a typo'd kind queued a run that wasted the night.
+#[test]
+fn a_commission_is_built_the_same_way_whoever_asks() {
+    use crate::commands::build_commission;
+
+    // A kind nothing can run is refused, not coerced into "custom".
+    assert!(
+        build_commission("nb", "Deep read", "not-a-generator", "", Some("now")).is_err(),
+        "an unrunnable kind must refuse rather than silently substitute"
+    );
+
+    // "now" means the next pass; anything else means tonight.
+    let now_run = build_commission("nb", "Deep read", "custom", "dig in", Some("now"))
+        .expect("custom with a prompt is runnable");
+    assert_eq!(now_run.not_before, 0, "\"now\" starts on the next pass");
+    assert_eq!(now_run.trigger, "once");
+    assert!(now_run.enabled);
+    assert_eq!(now_run.last_run_at, 0, "a fresh commission has never run");
+
+    for when in [Some("tonight"), None, Some("whenever")] {
+        let queued = build_commission("nb", "Deep read", "custom", "dig in", when)
+            .expect("runnable regardless of when");
+        assert!(
+            queued.not_before > 0,
+            "{when:?} must wait for the night, never start immediately"
+        );
+    }
+
+    // An unnamed commission still gets a name — an empty label in the record
+    // is worse than a generic one.
+    let unnamed = build_commission("nb", "   ", "custom", "dig in", Some("now"))
+        .expect("a blank name is not a refusal");
+    assert_eq!(unnamed.name, "Commissioned run");
+}
