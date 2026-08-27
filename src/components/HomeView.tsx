@@ -4,6 +4,7 @@ import { usePickList } from "@/lib/pick";
 import { DevBadge } from "./DevBadge";
 import { UpdateBadge } from "./UpdateBadge";
 import { HealthBanner } from "./HealthBanner";
+import { NavButtons } from "./NavButtons";
 import {
   Badge,
   Button,
@@ -616,6 +617,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         data-tauri-drag-region
         className="flex h-12 items-center gap-2.5 pl-[84px] pr-5"
       >
+        <NavButtons />
+        <div className="h-4 w-px bg-border" />
         <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/15 text-primary">
           <BookOpen className="h-4 w-4" />
         </div>

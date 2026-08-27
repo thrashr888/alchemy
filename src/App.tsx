@@ -82,17 +82,23 @@ function App() {
         e.preventDefault();
         useStore.getState().togglePalette();
       } else if (
-        (e.key === "ArrowLeft" || e.key === "ArrowRight") &&
+        (e.key === "ArrowLeft" ||
+          e.key === "ArrowRight" ||
+          e.key === "[" ||
+          e.key === "]") &&
         !e.shiftKey &&
         !e.altKey
       ) {
         // Back/forward, Safari-style: handled here rather than as native
         // menu accelerators so Cmd+←/→ keep their line-start/line-end
         // meaning inside text fields (shortcutBlocked covers those).
+        // ⌘[ / ⌘] are the canonical pair and mean nothing to a text field,
+        // but they ride the same guard so a shortcut can't fire under an
+        // open dialog.
         if (shortcutBlocked(e)) return;
         e.preventDefault();
         const s = useStore.getState();
-        if (e.key === "ArrowLeft") s.navBack();
+        if (e.key === "ArrowLeft" || e.key === "[") s.navBack();
         else s.navForward();
       }
     };

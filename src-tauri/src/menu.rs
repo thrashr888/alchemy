@@ -109,16 +109,16 @@ const CMD: &[Command] = &[
         id: "menu-back",
         menu_label: "Back",
         accelerator: None,
-        keys: "⌘ ←",
-        label: "Back",
+        keys: "⌘ [",
+        label: "Back (⌘ ← too)",
         context: "",
     },
     Command {
         id: "menu-forward",
         menu_label: "Forward",
         accelerator: None,
-        keys: "⌘ →",
-        label: "Forward",
+        keys: "⌘ ]",
+        label: "Forward (⌘ → too)",
         context: "",
     },
     Command {
@@ -443,7 +443,7 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
             .enabled(false)
             .build(app)?,
     )?;
-    // No ⌘←/⌘→ accelerators on Back/Forward: the menu's key equivalents
+    // No ⌘[/⌘]/⌘←/⌘→ accelerators on Back/Forward: the menu's key equivalents
     // actually WIN over a focused text field (regression: ⌘→ stopped jumping
     // to line end while editing), so the frontend keydown handler in App.tsx
     // owns the shortcut — it guards with shortcutBlocked so text fields keep
