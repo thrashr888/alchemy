@@ -99,8 +99,6 @@ pub struct Findings {
     pub refreshed: u32,
     /// Ledger rows the Weave moved to contradicted or superseded.
     pub contradictions: u32,
-    /// Sources distilled for the first time or re-distilled after a change.
-    pub summarized: u32,
     /// Scheduled work that could not run, or ran and failed.
     pub problems: u32,
     pub tokens: i64,
@@ -110,7 +108,7 @@ impl Findings {
     /// Did the night produce anything a person would want to hear about?
     /// Tokens alone do not count - spending without finding is not news.
     pub fn worth_reporting(&self) -> bool {
-        self.refreshed + self.contradictions + self.summarized + self.problems > 0
+        self.refreshed + self.contradictions + self.problems > 0
     }
 
     /// One line for the Morning Brief, denominated in findings. Returns None
@@ -133,13 +131,6 @@ impl Findings {
                 "refreshed {} {}",
                 self.refreshed,
                 plural(self.refreshed, "source", "sources")
-            ));
-        }
-        if self.summarized > 0 {
-            parts.push(format!(
-                "summarized {} {}",
-                self.summarized,
-                plural(self.summarized, "source", "sources")
             ));
         }
         if self.problems > 0 {
@@ -177,9 +168,6 @@ pub async fn collect_findings(db: &crate::db::Db, since: i64) -> Findings {
     Findings {
         refreshed: changed.len() as u32,
         contradictions,
-        // Distillation has no event of its own yet; counting it would mean
-        // guessing, and a guessed number on a receipt is worse than none.
-        summarized: 0,
         problems: receipts.iter().filter(|r| r.status == "failed").count() as u32,
         tokens: spent_tonight(),
     }
@@ -227,7 +215,6 @@ mod tests {
         let night = Findings {
             refreshed: 12,
             contradictions: 2,
-            summarized: 0,
             problems: 0,
             tokens: 740_000,
         };

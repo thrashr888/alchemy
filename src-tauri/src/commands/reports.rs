@@ -8,13 +8,6 @@ pub async fn list_report_schedules(
     e(state.db.list_report_schedules(&notebook_id).await)
 }
 
-#[tauri::command]
-pub async fn list_all_report_schedules(
-    state: State<'_, AppState>,
-) -> Result<Vec<ReportSchedule>, String> {
-    e(state.db.all_report_schedules().await)
-}
-
 /// "interval" | "change", defaulted so pre-trigger callers keep working.
 fn resolve_trigger(trigger: Option<String>) -> String {
     match trigger.as_deref() {

@@ -225,29 +225,10 @@ impl AlchemyMcp {
         }): Parameters<CommissionReq>,
     ) -> Result<CallToolResult, McpError> {
         let prompt = prompt.unwrap_or_default();
-        let kind = commands::resolve_report_kind(&kind, &prompt).map_err(invalid)?;
-        let name = if name.trim().is_empty() {
-            "Commissioned run".to_string()
-        } else {
-            name.trim().to_string()
-        };
-        let not_before = match when.as_deref() {
-            Some("now") => 0,
-            _ => crate::scheduler::next_local_hour_ms(2),
-        };
-        let schedule = ReportSchedule {
-            id: commands::new_id(),
-            notebook_id,
-            name,
-            kind,
-            prompt,
-            trigger: "once".into(),
-            not_before,
-            interval_secs: 86_400,
-            enabled: true,
-            last_run_at: 0,
-            created_at: commands::now(),
-        };
+        // Same builder the chat path uses, so both mouths queue identical rows.
+        let schedule =
+            commands::build_commission(&notebook_id, &name, &kind, &prompt, when.as_deref())
+                .map_err(invalid)?;
         self.state()
             .db
             .add_report_schedule(&schedule)
