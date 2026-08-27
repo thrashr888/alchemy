@@ -92,6 +92,13 @@ jobs:
         # The crate has no Rust integration-test files or binary tests; all
         # executable coverage lives in the library test harness. Avoid
         # linking an empty second harness and running empty doc-tests.
+        #
+        # ALCHEMY_EVALS: the corpus evals skip themselves unless asked, so a
+        # local `cargo test` stays fast (36s -> 12s) and quiet. CI is exactly
+        # where the retrieval numbers need watching, so it always asks.
+        # ALCHEMY_OLLAMA_TESTS stays unset: no model server here.
+        env:
+          ALCHEMY_EVALS: 1
         run: cargo test --lib
 
       # Wall-clock budgets (docs/RFC-professional-grade.md Pillar 2), run

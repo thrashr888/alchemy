@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { usePickList } from "@/lib/pick";
 import { DevBadge } from "./DevBadge";
+import { UpdateBadge } from "./UpdateBadge";
 import { HealthBanner } from "./HealthBanner";
 import {
   Badge,
@@ -35,6 +36,7 @@ import {
   FileDown,
   ChevronRight,
   PanelRight,
+  PanelRightClose,
   Plus,
   Search,
   Settings,
@@ -625,6 +627,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         </div>
         <div className="ml-auto flex items-center gap-3">
           <DevBadge />
+          <UpdateBadge />
           <Button
             variant="ghost"
             size="icon"
@@ -1212,35 +1215,61 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                         fallbackColor={NOTEBOOK_PALETTE[0]}
                         onOpen={openNote}
                       />
-                    ) : activityLoading ? (
-              <div
-                role="status"
-                className="flex flex-1 items-center justify-center p-8 text-caption text-muted-foreground"
-              >
-                Loading reports…
-              </div>
-            ) : (
-              <div className="flex flex-1 items-center justify-center p-8">
-                <EmptyState
-                  icon={<Newspaper className="h-7 w-7" />}
-                  title={activityError ? "Reports unavailable" : "Reports appear here"}
-                  hint={
-                    activityError
-                      ? "Alchemy couldn’t load recent reports."
-                      : "Schedule a recurring report from a notebook’s Studio panel."
-                  }
-                >
-                  {activityError && (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => void refreshActivity()}
-                    >
-                      Retry
-                    </Button>
-                  )}
-                </EmptyState>
-              </div>
+                    ) : (
+                      // Empty and loading states carry their own header:
+                      // ReportsFeed owns the collapse control, so without one
+                      // here an empty feed can never be closed again.
+                      <>
+                        <div className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-6 py-2">
+                          <span className="whitespace-nowrap text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+                            Latest reports
+                          </span>
+                          <button
+                            type="button"
+                            onClick={toggleReports}
+                            title="Collapse reports"
+                            aria-label="Collapse the reports feed"
+                            aria-expanded
+                            className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+                          >
+                            <PanelRightClose className="h-4 w-4" />
+                          </button>
+                        </div>
+                        {activityLoading ? (
+                          <div
+                            role="status"
+                            className="flex flex-1 items-center justify-center p-8 text-caption text-muted-foreground"
+                          >
+                            Loading reports…
+                          </div>
+                        ) : (
+                          <div className="flex flex-1 items-center justify-center p-8">
+                            <EmptyState
+                              icon={<Newspaper className="h-7 w-7" />}
+                              title={
+                                activityError
+                                  ? "Reports unavailable"
+                                  : "Reports appear here"
+                              }
+                              hint={
+                                activityError
+                                  ? "Alchemy couldn’t load recent reports."
+                                  : "Schedule a recurring report from a notebook’s Studio panel."
+                              }
+                            >
+                              {activityError && (
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  onClick={() => void refreshActivity()}
+                                >
+                                  Retry
+                                </Button>
+                              )}
+                            </EmptyState>
+                          </div>
+                        )}
+                      </>
                     )
                   ) : (
                     <div className="flex h-12 shrink-0 items-center gap-2 px-6">

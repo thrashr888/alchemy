@@ -1,8 +1,12 @@
 //! End-to-end data-path test: ingest → embed → LanceDB write → vector search →
-//! grounded chat. Requires a running Ollama with `nomic-embed-text`. If Ollama
-//! isn't reachable the test no-ops so it never fails CI without a model server.
+//! grounded chat. Requires a running Ollama with `nomic-embed-text`.
 //!
-//! Run with:  cargo test --lib rag_round_trip -- --nocapture
+//! Opt-in. It used to run whenever Ollama happened to be listening, which on a
+//! developer machine is always — a full embed-and-chat round trip on every
+//! plain `cargo test`. It no-ops without the flag, so CI stays green with no
+//! model server and a local run stays fast:
+//!
+//!   ALCHEMY_OLLAMA_TESTS=1 cargo test --lib rag_round_trip -- --nocapture
 
 use crate::ai::{Ollama, OllamaConfig};
 use crate::db::Db;
@@ -24,6 +28,10 @@ async fn rag_round_trip() {
         vision_model: String::new(),
         effort: String::new(),
     });
+    if !crate::evals::ollama_tests_enabled() {
+        eprintln!("SKIP: set ALCHEMY_OLLAMA_TESTS=1 to run the Ollama round trip");
+        return;
+    }
     if ai.list_models().await.is_err() {
         eprintln!("SKIP: Ollama not reachable on localhost:11434");
         return;

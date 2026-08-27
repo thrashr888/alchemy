@@ -438,6 +438,7 @@ pub fn run() {
             commands::send_message_agentic,
             commands::cancel_generation,
             commands::open_in_terminal,
+            commands::start_ollama,
             commands::suggest_notebook,
             commands::pdf_page_count,
             commands::pdf_page_image,

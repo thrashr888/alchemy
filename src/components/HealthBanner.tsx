@@ -106,7 +106,26 @@ export function HealthBanner({
           {
             label: "Start Ollama",
             primary: true,
-            run: () => api.openInTerminal("ollama serve").catch(() => {}),
+            run: async () => {
+              const store = useStore.getState();
+              try {
+                const via = await api.startOllama();
+                store.pushToast(
+                  "info",
+                  via === "app"
+                    ? "Starting the Ollama app…"
+                    : "Started `ollama serve` in the background.",
+                );
+                // The server needs a moment to bind before a probe means
+                // anything; "Check again" is still there if it misses.
+                window.setTimeout(() => void check(), 2500);
+              } catch (err) {
+                store.pushToast(
+                  "error",
+                  err instanceof Error ? err.message : String(err),
+                );
+              }
+            },
           },
           { label: "Check again", run: check },
         ],

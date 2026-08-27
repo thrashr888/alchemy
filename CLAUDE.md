@@ -25,10 +25,28 @@ Tests and evals:
 
 ```bash
 cargo test --lib <name> -- --nocapture           # single test
-cargo test --lib evals -- --nocapture            # retrieval-quality eval (built-in embedder, CI-safe)
 cargo test --lib evals -- --ignored --nocapture  # distill/rerank evals — need live Ollama
-cargo test --lib rag_round_trip -- --nocapture   # e2e data path — no-ops if Ollama isn't running
 ```
+
+**Slow work is opt-in.** A plain `cargo test` runs the 367 correctness tests
+and nothing else: ~12s, no model calls, no corpus embedding. Two env flags buy
+back the rest.
+
+| flag | what it turns on | cost |
+| --- | --- | --- |
+| `ALCHEMY_EVALS=1` | the corpus evals (`evals::`, `retrieval_eval::`) — fixture corpora embedded through the built-in embedder | +23s, CPU-bound |
+| `ALCHEMY_OLLAMA_TESTS=1` | anything that calls a live model (`rag_round_trip`, the LLM half of `eval_deep_rerank`) | model-speed |
+
+```bash
+ALCHEMY_EVALS=1 cargo test --lib -- --nocapture                         # retrieval quality
+ALCHEMY_OLLAMA_TESTS=1 cargo test --lib rag_round_trip -- --nocapture   # e2e data path
+```
+
+Both default off because both used to fire on their own: the evals on every
+run, and the Ollama tests whenever the port happened to answer — which on a
+developer machine is always. Reachability isn't consent, and measurement
+isn't correctness. CI sets `ALCHEMY_EVALS=1` (see `.github/workflows/ci.yml`),
+so the retrieval numbers are still watched where it matters.
 
 To exercise anything the OS has to know about — the `alchemy://` scheme,
 file associations, the Dock menu, Services — build a real bundle, not

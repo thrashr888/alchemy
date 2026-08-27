@@ -674,6 +674,68 @@ pub fn open_in_terminal(command: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Start Ollama, detached from Alchemy's lifetime.
+///
+/// The old path asked Terminal.app to run `ollama serve` over AppleScript.
+/// That is an Apple Event, and a build without `NSAppleEventsUsageDescription`
+/// in its Info.plist (every `tauri dev` binary — a bare executable has no
+/// plist at all) is killed outright by TCC the moment it sends one. So: the
+/// Mac app first, via LaunchServices; otherwise the CLI, backgrounded through
+/// `sh` so the server outlives Alchemy and leaves no zombie behind.
+/// Returns which route ran, for the toast.
+#[tauri::command]
+pub fn start_ollama() -> Result<String, String> {
+    if ollama_app_path().is_some() {
+        let status = std::process::Command::new("/usr/bin/open")
+            .args(["-a", "Ollama"])
+            .status()
+            .map_err(|e| e.to_string())?;
+        if status.success() {
+            return Ok("app".into());
+        }
+    }
+    let bin = ollama_binary().ok_or(
+        "Ollama isn't installed. Get the app from ollama.com/download, or `brew install ollama`.",
+    )?;
+    // `&` inside sh: the server gets its own life, sh returns at once (so
+    // nothing is left for Alchemy to reap), and nothing inherits our stdio.
+    // `bin` is a path this process discovered, never user input.
+    let status = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!(
+            "exec nohup '{}' serve >/dev/null 2>&1 &",
+            bin.display()
+        ))
+        .status()
+        .map_err(|e| e.to_string())?;
+    if !status.success() {
+        return Err("Couldn't start `ollama serve`.".into());
+    }
+    Ok("cli".into())
+}
+
+/// The Ollama Mac app, if it's installed. It runs its own server and menu-bar
+/// item, so launching it beats spawning a bare `ollama serve`.
+fn ollama_app_path() -> Option<std::path::PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    [
+        std::path::PathBuf::from("/Applications/Ollama.app"),
+        std::path::PathBuf::from(format!("{home}/Applications/Ollama.app")),
+    ]
+    .into_iter()
+    .find(|p| p.exists())
+}
+
+/// The `ollama` CLI: the agent-CLI resolver's well-known dirs and login-shell
+/// `which`, plus the binary the Mac app ships inside its bundle.
+fn ollama_binary() -> Option<std::path::PathBuf> {
+    if let Some(found) = crate::inference::find_binary_cached("ollama") {
+        return Some(found);
+    }
+    let bundled = ollama_app_path()?.join("Contents/Resources/ollama");
+    bundled.exists().then_some(bundled)
+}
+
 /// Validate a Notion integration token against the API (Settings field's live
 /// check). Returns the workspace/bot label on success; a human error string
 /// on failure. Standalone — no app state needed.
@@ -10290,6 +10352,7 @@ fn note_kind_from_label(label: &str) -> String {
         "flashcards",
         "quiz",
         "mind_map",
+        "uml",
         "data_table",
         "round_table",
         "problems",

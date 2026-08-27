@@ -39,14 +39,17 @@ function loadMermaid() {
 /** Ids must be unique per render — mermaid keys internal state on them. */
 let diagramSeq = 0;
 
-export function MermaidBlock({ code }: { code: string }) {
+/** Render `code` to sanitized SVG, re-running on theme changes. `error` holds
+ *  mermaid's own parse message so callers can show it (the UML viewer does);
+ *  MermaidBlock only cares that it failed. Both null while loading. */
+export function useMermaidSvg(code: string) {
   const theme = useStore((s) => s.theme);
   const [svg, setSvg] = useState("");
-  const [failed, setFailed] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let stale = false;
-    setFailed(false);
+    setError(null);
     void loadMermaid()
       .then(async (mermaid) => {
         mermaid.initialize(mermaidConfig());
@@ -57,8 +60,8 @@ export function MermaidBlock({ code }: { code: string }) {
         const { svg: out } = await mermaid.render(id, code);
         if (!stale) setSvg(sanitizeSvg(out));
       })
-      .catch(() => {
-        if (!stale) setFailed(true);
+      .catch((e) => {
+        if (!stale) setError(e instanceof Error ? e.message : String(e));
       });
     return () => {
       stale = true;
@@ -66,6 +69,13 @@ export function MermaidBlock({ code }: { code: string }) {
     // `theme` is a dependency on purpose: a theme switch re-reads the tokens
     // and re-renders every diagram on screen.
   }, [code, theme]);
+
+  return { svg, error };
+}
+
+export function MermaidBlock({ code }: { code: string }) {
+  const { svg, error } = useMermaidSvg(code);
+  const failed = error !== null;
 
   if (failed || (!svg && !code.trim())) {
     return (
