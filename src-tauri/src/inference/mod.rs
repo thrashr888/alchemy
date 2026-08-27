@@ -250,6 +250,25 @@ pub enum ChatEngine {
     Agent(AgentCli),
 }
 
+/// Attribute a finished generation's price to the metered run it belongs to,
+/// then hand the outcome straight back.
+///
+/// Placed on `ChatEngine` rather than on `Ai`, because `Ai`'s methods are not
+/// the only way in: the provider-override branches of artifact generation
+/// hold a `ChatEngine` and call it directly, and those are precisely the runs
+/// that cost money - an agent CLI is the only engine that reports a price at
+/// all. Metering the engine means a new caller cannot route around it, and
+/// means it is counted exactly once.
+///
+/// `record_cost` is a no-op unless a run is armed (`freshness::metered_run`),
+/// so a user waiting at the keyboard is charged to nothing.
+fn metered(out: Result<ChatOutcome>) -> Result<ChatOutcome> {
+    if let Ok(o) = out.as_ref() {
+        crate::freshness::record_cost(o.cost_usd);
+    }
+    out
+}
+
 impl ChatEngine {
     /// Stable identifier for stats keying and provider attribution (used by
     /// the availability probes when the preference ladder lands).
@@ -268,12 +287,12 @@ impl ChatEngine {
     where
         F: FnMut(&str),
     {
-        match self {
+        metered(match self {
             ChatEngine::Ollama(o) => o.chat_stream(messages, on_token).await,
             ChatEngine::Gateway(g) => g.chat_stream(messages, on_token).await,
             ChatEngine::FoundationModels(f) => f.chat_stream(messages, on_token).await,
             ChatEngine::Agent(a) => a.chat_stream(messages, on_token).await,
-        }
+        })
     }
 
     /// Streaming with progress: only agent CLIs have anything to narrate
@@ -289,18 +308,21 @@ impl ChatEngine {
         S: FnMut(Step<'_>),
     {
         match self {
-            ChatEngine::Agent(a) => a.chat_stream_steps(messages, on_token, on_step).await,
+            // The delegating arm is metered by `chat_stream` itself; only the
+            // agent path needs its own call, and agent CLIs are the engines
+            // that actually report a price.
+            ChatEngine::Agent(a) => metered(a.chat_stream_steps(messages, on_token, on_step).await),
             _ => self.chat_stream(messages, on_token).await,
         }
     }
 
     pub async fn chat(&self, messages: &[ChatTurn]) -> Result<ChatOutcome> {
-        match self {
+        metered(match self {
             ChatEngine::Ollama(o) => o.chat(messages).await,
             ChatEngine::Gateway(g) => g.chat(messages).await,
             ChatEngine::FoundationModels(f) => f.chat(messages).await,
             ChatEngine::Agent(a) => a.chat(messages).await,
-        }
+        })
     }
 }
 

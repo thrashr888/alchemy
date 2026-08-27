@@ -68,6 +68,56 @@ pub fn record_spend(tokens: i64) {
     SPENT_TONIGHT.fetch_add(tokens.max(0), Ordering::Relaxed);
 }
 
+tokio::task_local! {
+    /// Money spent by the run executing in this task, in micro-dollars.
+    ///
+    /// Task-scoped rather than global on purpose. Reports, the nightly Weave
+    /// and the gist sweep each run under their own single-flight guard and
+    /// can overlap, so a process-wide counter would bill one job for
+    /// another's spend - and a receipt asserting a cost that was not this
+    /// run's is the same class of lie as the "overdue by 34h" badge. A task
+    /// cannot run concurrently with itself, so this attributes exactly.
+    ///
+    /// Unset everywhere it has not been armed, which is what keeps a
+    /// foreground Studio generation - a user waiting at the keyboard - from
+    /// being charged to any run at all.
+    static RUN_COST_MICROS: AtomicI64;
+}
+
+/// Run `fut` as a metered unit, returning its output and what it spent.
+///
+/// Only engines that report a price move the number: local models are
+/// genuinely free and say 0. A generation that spawns its own task escapes
+/// the scope and is undercounted, which is the safe direction to be wrong -
+/// a receipt that understates is recoverable from the provider's own
+/// billing, one that overstates is not.
+pub async fn metered_run<F, T>(fut: F) -> (T, i64)
+where
+    F: std::future::Future<Output = T>,
+{
+    RUN_COST_MICROS
+        .scope(AtomicI64::new(0), async move {
+            let out = fut.await;
+            let spent = RUN_COST_MICROS.with(|c| c.load(Ordering::Relaxed));
+            (out, spent)
+        })
+        .await
+}
+
+/// Attribute one generation's price to the metered run, if any is armed.
+///
+/// Dollars arrive as f64 from the provider and are stored as integer
+/// micro-dollars: money in floats accumulates error, and a receipt is a
+/// record rather than an estimate. Nothing to do when no run is armed.
+pub fn record_cost(cost_usd: Option<f64>) {
+    let Some(usd) = cost_usd else { return };
+    if !usd.is_finite() || usd <= 0.0 {
+        return;
+    }
+    let micros = (usd * 1_000_000.0).round() as i64;
+    let _ = RUN_COST_MICROS.try_with(|c| c.fetch_add(micros, Ordering::Relaxed));
+}
+
 /// Fold one background generation's token count into tonight's spend.
 /// Only background work is metered here: a user waiting at the keyboard is
 /// not spending the night's budget.
@@ -75,6 +125,7 @@ pub fn record_outcome(out: &crate::inference::ChatOutcome) {
     if let Some(stats) = out.stats.as_ref() {
         record_spend(stats.eval_count as i64);
     }
+    record_cost(out.cost_usd);
 }
 
 pub fn spent_tonight() -> i64 {
@@ -286,5 +337,50 @@ mod tests {
         // A negative report cannot claw budget back.
         record_spend(-500_000);
         assert_eq!(spent_tonight(), 1_050_000);
+    }
+
+    /// A run is billed for its own generations and no one else's. The whole
+    /// reason this is task-scoped: reports, the Weave and the gist sweep
+    /// overlap, and a receipt naming another job's spend would be a lie
+    /// stated as a measurement.
+    #[tokio::test]
+    async fn concurrent_runs_do_not_bill_each_other() {
+        let a = metered_run(async {
+            record_cost(Some(1.50));
+            tokio::task::yield_now().await;
+            record_cost(Some(0.25));
+        });
+        let b = metered_run(async {
+            record_cost(Some(0.10));
+            tokio::task::yield_now().await;
+        });
+        let ((), a_cost) = a.await;
+        let ((), b_cost) = b.await;
+        assert_eq!(a_cost, 1_750_000, "1.50 + 0.25 in micro-dollars");
+        assert_eq!(b_cost, 100_000, "0.10 in micro-dollars");
+    }
+
+    /// Foreground work is charged to nobody. `record_cost` outside a metered
+    /// run must be a no-op rather than a panic or a stray global.
+    #[tokio::test]
+    async fn spend_outside_a_run_is_attributed_nowhere() {
+        record_cost(Some(9.99));
+        let ((), cost) = metered_run(async {}).await;
+        assert_eq!(cost, 0, "an unarmed generation bills no run");
+    }
+
+    /// Local models are free and must say 0, not an invented figure. Junk
+    /// from a provider is refused for the same reason.
+    #[tokio::test]
+    async fn unpriced_and_nonsense_costs_are_ignored() {
+        let ((), cost) = metered_run(async {
+            record_cost(None);
+            record_cost(Some(0.0));
+            record_cost(Some(-5.0));
+            record_cost(Some(f64::NAN));
+            record_cost(Some(f64::INFINITY));
+        })
+        .await;
+        assert_eq!(cost, 0, "only a real, positive price counts");
     }
 }

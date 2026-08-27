@@ -77,6 +77,7 @@ pub(crate) async fn schedule_receipt(
     started_at: i64,
     note: Option<&crate::models::Note>,
     error: Option<&str>,
+    cost_micros: i64,
 ) -> RunReceipt {
     let (provider, model) = engine_attribution(state).await;
     let mut detail = match (note, error) {
@@ -106,10 +107,10 @@ pub(crate) async fn schedule_receipt(
         note_id: note.map(|n| n.id.clone()).unwrap_or_default(),
         provider,
         model,
-        // Only agent CLIs report a price today; local runs are genuinely
-        // free. Left at zero rather than estimated - an invented number on a
-        // receipt is worse than no number.
-        cost_micros: 0,
+        // Measured for this run alone (crate::freshness::metered_run), never
+        // estimated: only engines that report a price move it, so a local
+        // run is genuinely 0 and says so.
+        cost_micros,
         due_at,
         started_at,
         ended_at: now_ms(),
@@ -566,7 +567,14 @@ async fn run_pass(app: &AppHandle) {
                 let mut finished = 0u32;
                 for (schedule, due_at) in due {
                     let started_at = now_ms();
-                    match commands::run_report_inner(&app, &state, &schedule.id).await {
+                    // Meter the run as a unit so its receipt can state what
+                    // it cost rather than leaving a column that only ever
+                    // reads zero.
+                    let (outcome, cost_micros) = crate::freshness::metered_run(
+                        commands::run_report_inner(&app, &state, &schedule.id),
+                    )
+                    .await;
+                    match outcome {
                         Ok(note) => {
                             finished += 1;
                             let receipt = schedule_receipt(
@@ -576,6 +584,7 @@ async fn run_pass(app: &AppHandle) {
                                 started_at,
                                 Some(&note),
                                 None,
+                                cost_micros,
                             )
                             .await;
                             write_receipt(&state, receipt).await;
@@ -643,6 +652,7 @@ async fn run_pass(app: &AppHandle) {
                                 started_at,
                                 None,
                                 Some(&err),
+                                cost_micros,
                             )
                             .await;
                             write_receipt(&state, receipt).await;
