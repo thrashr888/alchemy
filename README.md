@@ -209,6 +209,23 @@ two-host podcast voiced on-device.*
   ```bash
   npx skills add thrashr888/alchemy@alchemy
   ```
+- **Command line** — a thin, zero-dependency `alchemy` client talks to the
+  embedded MCP server in the running app; it does not open a second database
+  or start a headless Alchemy process. From a source checkout, install the
+  command once with `pnpm add --global ./cli`, then add files, URLs, or piped text
+  and search from any directory:
+
+  ```bash
+  alchemy notebooks
+  alchemy add report.pdf https://example.com --notebook "Project Atlas"
+  pbpaste | alchemy add --notebook "Project Atlas" --title "Meeting notes"
+  alchemy search "renewal risk" --notebook "Project Atlas"
+  alchemy search "where did I save the contractor agreement?" --json
+  ```
+
+  An omitted `--notebook` searches across all notebooks. `--json` keeps every
+  command scriptable. The app must be running with MCP enabled; discovery uses
+  its app-data `mcp.json`, with `--mcp-url` / `ALCHEMY_MCP_URL` as overrides.
 - **Periodic reports** — schedule a notebook to refresh its URL sources and generate a
   timestamped report note on an interval; each run sees the previous report and
   calls out what changed since.

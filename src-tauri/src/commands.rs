@@ -11992,6 +11992,26 @@ fn meta_step(app: Option<&AppHandle>, label: impl Into<String>, transient: bool)
     }
 }
 
+/// Window-targeted variant for corpus chat. Alchemy can have more than one
+/// window open, so one window's Home Chat must not receive another window's
+/// progress trail.
+fn meta_step_to(
+    target: Option<(&AppHandle, &str)>,
+    label: impl Into<String>,
+    transient: bool,
+) {
+    if let Some((app, window_label)) = target {
+        let _ = app.emit_to(
+            window_label,
+            "meta://step",
+            StepEvent {
+                label: label.into(),
+                transient,
+            },
+        );
+    }
+}
+
 /// A corpus-wide answer (docs/RFC-meta-chat.md).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -12219,7 +12239,7 @@ pub async fn delete_meta_thread(
 /// order, so deep can only reorder-or-equal, never lose the flat result.
 pub(crate) async fn retrieve_everything(
     state: &AppState,
-    app: Option<&AppHandle>,
+    target: Option<(&AppHandle, &str)>,
     question: &str,
     k: usize,
     deep: bool,
@@ -12242,8 +12262,8 @@ pub(crate) async fn retrieve_everything(
     // keeps ROUTE_TOP_K notebooks, so corpora at or below that size are
     // searched in full either way.
     let routed: Option<Vec<String>> = if nb_titles.len() > crate::router::MIN_NOTEBOOKS_TO_ROUTE {
-        meta_step(
-            app,
+        meta_step_to(
+            target,
             format!("Choosing from {} notebooks", nb_titles.len()),
             false,
         );
@@ -12287,8 +12307,8 @@ pub(crate) async fn retrieve_everything(
         // default, one on the tight on-device window.
         max_gists: profile.max_gists,
     };
-    meta_step(
-        app,
+    meta_step_to(
+        target,
         match &routed {
             Some(ids) => format!("Searching the {} most likely notebooks", ids.len()),
             None => match nb_titles.len() {
@@ -12345,8 +12365,8 @@ pub(crate) async fn retrieve_everything(
     // from the wide pool. Failure (model down, unparseable output) degrades
     // to the fusion-ordered top k — exactly the non-deep result.
     if deep && out.len() > k {
-        meta_step(
-            app,
+        meta_step_to(
+            target,
             format!(
                 "Picking the {k} passages that answer best (of {})",
                 out.len()
@@ -12426,8 +12446,8 @@ pub(crate) async fn retrieve_everything(
             .map(|c| c.notebook_id.as_str())
             .collect::<HashSet<_>>()
             .len();
-        meta_step(
-            app,
+        meta_step_to(
+            target,
             format!(
                 "Found {} passage{} across {} notebook{}",
                 out.len(),
@@ -12515,7 +12535,7 @@ async fn global_extract(ai: &Ai, question: &str, content: &str) -> Option<String
 /// caller then takes the pointed path unchanged.
 async fn global_meta_route(
     state: &AppState,
-    app: Option<&AppHandle>,
+    target: Option<(&AppHandle, &str)>,
     question: &str,
 ) -> anyhow::Result<Option<(Vec<MetaCitation>, Vec<rag::MetaPassage>)>> {
     if state.db.list_gists().await?.is_empty() {
@@ -12558,8 +12578,8 @@ async fn global_meta_route(
     let mut citations: Vec<MetaCitation> = Vec::with_capacity(selected.len());
     let mut passages: Vec<rag::MetaPassage> = Vec::with_capacity(selected.len());
     let mut fallbacks: Vec<bool> = Vec::with_capacity(selected.len());
-    meta_step(
-        app,
+    meta_step_to(
+        target,
         format!(
             "Reading {} source{} in depth",
             selected.len(),
@@ -12570,8 +12590,8 @@ async fn global_meta_route(
     for (i, (nb_id, gist)) in selected.iter().enumerate() {
         // Live per-source status, transient: each read replaces the last in
         // the trail — a fan-out of six must not become six log lines.
-        meta_step(
-            app,
+        meta_step_to(
+            target,
             format!(
                 "Reading {} ({} of {})",
                 gist.source_title,
@@ -12707,7 +12727,7 @@ pub async fn ask_everything(
             // None, so the pointed path below runs unchanged whenever the route
             // doesn't fire.
             let global = if rag::is_global_query(&question) {
-                match global_meta_route(&state, Some(&app), &question).await {
+                match global_meta_route(&state, Some((&app, window.label())), &question).await {
                     Ok(g) => g,
                     Err(err) => {
                         crate::note!("meta-global route failed, falling back to pointed: {err:#}");
@@ -12725,7 +12745,9 @@ pub async fn ask_everything(
             if let Some(g) = global {
                 return Ok::<_, String>(g);
             }
-            let passages_raw = retrieve_everything(&state, Some(&app), &question, 16, deep).await?;
+            let passages_raw =
+                retrieve_everything(&state, Some((&app, window.label())), &question, 16, deep)
+                    .await?;
             let mut citations: Vec<MetaCitation> = Vec::new();
             let mut passages: Vec<rag::MetaPassage> = Vec::new();
             for c in &passages_raw {
@@ -12762,8 +12784,8 @@ pub async fn ask_everything(
     // append after the retrieved passages so citation numbers stay stable.
     let card_citations = registry_card_citations(&state, &question, 3).await;
     if !card_citations.is_empty() {
-        meta_step(
-            Some(&app),
+        meta_step_to(
+            Some((&app, window.label())),
             format!(
                 "Reading {} registry card{}",
                 card_citations.len(),
@@ -12811,8 +12833,8 @@ pub async fn ask_everything(
 
     // Same stream/cancel dance as notebook chat, under its own scope so a
     // palette Esc never kills a notebook stream (or vice versa).
-    meta_step(
-        Some(&app),
+    meta_step_to(
+        Some((&app, window.label())),
         format!(
             "Synthesizing from {} excerpt{}",
             passages.len(),
@@ -12821,6 +12843,7 @@ pub async fn ask_everything(
         false,
     );
     let app_for_cb = app.clone();
+    let window_label = window.label().to_string();
     let partial = Arc::new(Mutex::new(String::new()));
     let partial_cb = partial.clone();
     let ttft = TtftClock::start();
@@ -12832,7 +12855,8 @@ pub async fn ask_everything(
             out = ai.chat_stream(&messages, |tok| {
                 ttft_cb.mark();
                 partial_cb.lock().unwrap().push_str(tok);
-                let _ = app_for_cb.emit(
+                let _ = app_for_cb.emit_to(
+                    &window_label,
                     "meta://token",
                     TokenEvent { content: tok.to_string() },
                 );
