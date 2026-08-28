@@ -10,12 +10,17 @@
     "url": "https://github.com/thrashr888/alchemy.git"
   },
   "type": "module",
+  "bin": {
+    "alchemy": "./cli/alchemy.mjs"
+  },
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
     "bundle": "vite build",
     "build": "pnpm run typecheck && pnpm run bundle",
     "test": "vitest run",
+    "test:cli": "node --test cli/alchemy.test.mjs",
+    "cli": "node ./cli/alchemy.mjs",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --lib",
     "preview": "vite preview",
     "tauri": "tauri",

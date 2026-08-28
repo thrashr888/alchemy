@@ -52,6 +52,8 @@ import {
 import { BriefSidebar, SidebarRail, StaffSidebar } from "./HomeSections";
 import { NOTEBOOK_ICONS, notebookIcon } from "@/lib/notebookIcons";
 import { RegistrySection } from "./RegistrySection";
+import { AppNavigationControls } from "./AppNavigationControls";
+import { HomeChat } from "./HomeChat";
 import {
   HomeTable,
   HomeViewControls,
@@ -184,13 +186,15 @@ function NotebookTable({
  *  Chat|Reader|Gallery|Ledger tabs (CenterModeTabs, ReaderPane.tsx): one
  *  control, in the title bar, choosing what the center column shows about a
  *  constant subject. There the subject is one notebook; here it's the whole
- *  corpus — its notebooks, or the cast of things they're about. Same kind of
- *  switch, so it lives in the same place and wears the same chrome. */
+ *  corpus — its notebooks, a corpus-wide conversation, or the cast of things
+ *  they're about. Same kind of switch, so it lives in the same place and
+ *  wears the same chrome. */
 function HomeSectionTabs() {
   const section = useStore((s) => s.homeSection);
 
   const tabs = [
     { id: "notebooks", label: "Notebooks", icon: BookOpen },
+    { id: "chat", label: "Chat", icon: Sparkles },
     { id: "registry", label: "Registry", icon: Package },
   ] as const;
   return (
@@ -206,7 +210,9 @@ function HomeSectionTabs() {
           title={
             id === "registry"
               ? "The things your documents are about"
-              : "Your notebooks"
+              : id === "chat"
+                ? "Ask across your whole library"
+                : "Your notebooks"
           }
           className={cn(
             "flex items-center gap-1.5 rounded-md px-2 py-1 text-caption transition-colors",
@@ -460,16 +466,22 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     },
   ];
 
-  // The unified ask box: one input over the WHOLE corpus. Enter hands the
-  // question to the palette's ask mode (meta-chat, docs/RFC-meta-chat.md) —
-  // no notebook choice needed; citations name where answers live.
+  // The unified ask box is Home Chat's front door. The command palette keeps
+  // its ephemeral ask mode; questions started on Home belong to the visible,
+  // persistent Home conversation instead.
   const [ask, setAsk] = useState("");
   function submitAsk(e: React.FormEvent) {
     e.preventDefault();
     const q = ask.trim();
     if (!q) return;
+    const state = useStore.getState();
+    if (state.metaAskOwner) {
+      state.pushToast("info", "Another library answer is already running.");
+      return;
+    }
     setAsk("");
-    useStore.setState({ pendingAsk: q, paletteOpen: true });
+    useStore.setState({ homeSection: "chat", openCardId: null });
+    void state.sendHomeMessage(q);
   }
 
   // "Since you were away": what landed since the last time home was open.
@@ -616,6 +628,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         data-tauri-drag-region
         className="flex h-12 items-center gap-2.5 pl-[84px] pr-5"
       >
+        <AppNavigationControls />
         <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/15 text-primary">
           <BookOpen className="h-4 w-4" />
         </div>
@@ -675,6 +688,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             </Button>
           </EmptyState>
         </div>
+      ) : homeSection === "chat" ? (
+        <HomeChat />
       ) : notebooks.length === 0 ? (
         <div className="flex-1">
           <AlchemyHero
@@ -845,9 +860,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 </div>
               </div>
 
-              {/* The unified ask box: one input, the whole corpus. Enter asks
-              across every notebook (palette ask mode); the ⌘K chip is the
-              same surface in search mode. */}
+              {/* The unified ask box: one input, the whole corpus. Enter opens
+              the persistent Home Chat; the ⌘K chip keeps the command/search
+              surface one click away. */}
               <div className="mb-8">
                 <form
                   onSubmit={submitAsk}

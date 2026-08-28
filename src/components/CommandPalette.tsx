@@ -153,6 +153,19 @@ export function CommandPalette() {
   function startAsk(question: string) {
     const q = question.trim();
     if (!q || askLoading) return;
+    const store = useStore.getState();
+    // ask_everything's events and cancellation scope are shared by the two
+    // corpus-wide surfaces in this window. Only one may own that stream.
+    if (store.metaAskOwner) {
+      store.pushToast(
+        "info",
+        store.metaAskOwner === "home"
+          ? "Home Chat is already answering. Stop it before asking here."
+          : "A library answer is already running.",
+      );
+      return;
+    }
+    useStore.setState({ metaAskOwner: "palette" });
     setMode("ask");
     setAskQuestion(q);
     setAskText("");
@@ -178,7 +191,11 @@ export function CommandPalette() {
       .catch((e) => {
         setAskText(e instanceof Error ? e.message : String(e));
       })
-      .finally(() => setAskLoading(false));
+      .finally(() => {
+        if (useStore.getState().metaAskOwner === "palette")
+          useStore.setState({ metaAskOwner: null });
+        setAskLoading(false);
+      });
   }
 
   function exitAsk() {
@@ -509,11 +526,7 @@ export function CommandPalette() {
           if (h.kind === "card") {
             // Cards are corpus-scoped: leave the notebook and open the card
             // on Home rather than switching notebooks.
-            s.closeNotebook();
-            useStore.setState({
-              homeSection: "registry",
-              openCardId: h.id,
-            });
+            s.openHomeSection("registry", h.id);
           } else if (h.kind === "ledger") {
             // Open the notebook's Ledger tab — where the row can be acted on.
             await s.selectNotebook(h.notebookId);
@@ -626,8 +639,7 @@ export function CommandPalette() {
     void (async () => {
       const s = useStore.getState();
       if (c.kind === "card") {
-        s.closeNotebook();
-        useStore.setState({ homeSection: "registry", openCardId: c.id });
+        s.openHomeSection("registry", c.id);
       } else if (c.kind === "note") {
         useStore.setState({ justCreatedNoteId: c.id });
         if (!s.studioOpen) s.toggleStudio();

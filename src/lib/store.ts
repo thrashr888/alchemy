@@ -14,6 +14,12 @@ import { describe } from "./errors";
 import { notify } from "./notify";
 import { dropEntry, makeEntry, pushEntry } from "./history";
 import { claimTextUndo } from "./textUndo";
+import {
+  appendHomeChatTurn,
+  homeChatHistory,
+  parseHomeChatTurns,
+} from "./homeChat";
+import { navEntryFromSnapshot, sameNavEntry } from "./appNavigation";
 import { playArrival, playDone, playError } from "./sound";
 import { autoUpdateEnabled, checkForUpdatesQuietly } from "./updates";
 import { DEFAULT_CHAT_CONFIG, DEFAULT_READING_PREFS } from "./types";
@@ -255,6 +261,19 @@ let listenersBound = false;
 // appendToken's per-frame buffer — plumbing, not state (see appendToken).
 let tokenBuffer = "";
 let tokenFlushHandle = 0;
+// Home Chat uses the corpus-wide meta stream. It has the notebook stream's
+// same frame batching, but separate state so the two surfaces never repaint
+// each other.
+let homeChatTokenBuffer = "";
+let homeChatTokenFlushHandle = 0;
+function persistHomeChatTurns(turns: ReturnType<typeof parseHomeChatTurns>) {
+  try {
+    localStorage.setItem("homeChat:v1", JSON.stringify(turns));
+  } catch {
+    // The conversation remains live in the store. A full/quarantined browser
+    // store must not turn a successful model answer into a failed answer.
+  }
+}
 // The artifact stream's twin of the chat token buffer.
 let artifactBuffer = "";
 let artifactFlushHandle = 0;
@@ -351,6 +370,37 @@ export const useStore = create<AppState>((set, get) => {
       .map((s) => s.id);
   };
 
+  /** One atomic notebook → Home transition. `closeNotebook` uses the current
+   *  Home section; explicit destinations (answer-ready, Registry citation)
+   *  set the section in the same store commit so history sees one place. */
+  const showHome = (
+    homeSection?: "notebooks" | "chat" | "registry",
+    openCardId?: string,
+  ) => {
+    void getCurrentWebviewWindow().setTitle("Alchemy");
+    set({
+      currentId: null,
+      sources: [],
+      selectedSourceIds: null,
+      messages: [],
+      messagesHasMore: false,
+      messagesLoadingOlder: false,
+      notes: [],
+      reportSchedules: [],
+      ingestQueue: [],
+      steps: [],
+      waiting: "",
+      reader: { open: false, history: [], index: -1 },
+      ...(homeSection
+        ? {
+            homeSection,
+            openCardId:
+              homeSection === "registry" ? (openCardId ?? null) : null,
+          }
+        : {}),
+    });
+  };
+
   return {
     notebooks: [],
     currentId: null,
@@ -432,6 +482,13 @@ export const useStore = create<AppState>((set, get) => {
     ledgerBump: 0,
     registryBump: 0,
     homeSection: "notebooks",
+    homeChatTurns: parseHomeChatTurns(localStorage.getItem("homeChat:v1")),
+    homeChatSending: false,
+    homeChatQuestion: "",
+    homeChatStreamingText: "",
+    homeChatSteps: [],
+    homeChatWaiting: "",
+    metaAskOwner: null,
     homeView:
       (localStorage.getItem("homeView") as "grid" | "table") || "grid",
     homeQuery: "",
@@ -445,7 +502,10 @@ export const useStore = create<AppState>((set, get) => {
     reader: { open: false, history: [], index: -1 },
     // Home is always the floor of the app-level history; restores and
     // navigations stack on top of it via the location subscriber below.
-    nav: { stack: [{ nb: null, mode: "chat" }], index: 0 },
+    nav: {
+      stack: [{ nb: null, mode: "chat", homeSection: "notebooks" }],
+      index: 0,
+    },
     folderScan: null,
     importingFolders: [],
     noteReads: loadNoteReads(),
@@ -574,7 +634,7 @@ export const useStore = create<AppState>((set, get) => {
           doc?: ReaderDoc;
           readerHistory?: ReaderDoc[];
           readerIndex?: number;
-          section?: "notebooks" | "registry";
+          section?: "notebooks" | "chat" | "registry";
           card?: string | null;
         } | null = null;
         try {
@@ -643,6 +703,39 @@ export const useStore = create<AppState>((set, get) => {
       });
       void listen<{ label: string; transient: boolean }>("chat://step", (e) => {
         if (get().sending) get().appendStep(e.payload.label, e.payload.transient);
+      });
+      // Corpus-wide Home Chat is store-owned for the same reason as notebook
+      // chat: navigating away must not unbind its stream or lose tokens.
+      void listen<{ content: string }>("meta://token", (e) => {
+        if (!get().homeChatSending || get().metaAskOwner !== "home") return;
+        if (get().homeChatWaiting) set({ homeChatWaiting: "" });
+        homeChatTokenBuffer += e.payload.content;
+        if (homeChatTokenFlushHandle !== 0) return;
+        homeChatTokenFlushHandle = requestAnimationFrame(() => {
+          homeChatTokenFlushHandle = 0;
+          const chunk = homeChatTokenBuffer;
+          homeChatTokenBuffer = "";
+          if (
+            !get().homeChatSending ||
+            get().metaAskOwner !== "home" ||
+            !chunk
+          )
+            return;
+          set({
+            homeChatStreamingText: get().homeChatStreamingText + chunk,
+          });
+        });
+      });
+      void listen<{ label: string; transient: boolean }>("meta://step", (e) => {
+        if (!get().homeChatSending || get().metaAskOwner !== "home") return;
+        set(
+          e.payload.transient
+            ? { homeChatWaiting: e.payload.label }
+            : {
+                homeChatSteps: [...get().homeChatSteps, e.payload.label],
+                homeChatWaiting: "",
+              },
+        );
       });
       // Verify-and-repair swaps a revised answer under the same message id
       // (backend spawn_answer_verify) — apply only when the message is in
@@ -854,6 +947,7 @@ export const useStore = create<AppState>((set, get) => {
         if (e.payload.id === "menu-settings") s.openSettings();
         else if (e.payload.id === "menu-about") s.openSettings("about");
         else if (e.payload.id === "menu-search") s.togglePalette();
+        else if (e.payload.id === "menu-home-chat") s.openHomeSection("chat");
         else if (e.payload.id === "menu-check-updates") {
           set({ pendingUpdateCheck: true });
           s.openSettings("general");
@@ -1183,22 +1277,92 @@ export const useStore = create<AppState>((set, get) => {
       void api.resyncSources(id).catch(() => {});
     },
 
-    closeNotebook: () => {
-      void getCurrentWebviewWindow().setTitle("Alchemy");
+    closeNotebook: () => showHome(),
+    openHomeSection: (section, openCardId) => showHome(section, openCardId),
+
+    sendHomeMessage: async (question) => {
+      const q = question.trim();
+      if (!q || get().homeChatSending) return;
+      if (get().metaAskOwner) {
+        get().pushToast(
+          "info",
+          "Another library answer is already running. Stop it before starting Home Chat.",
+        );
+        return;
+      }
+      const history = homeChatHistory(get().homeChatTurns);
+      homeChatTokenBuffer = "";
+      if (homeChatTokenFlushHandle !== 0) {
+        cancelAnimationFrame(homeChatTokenFlushHandle);
+        homeChatTokenFlushHandle = 0;
+      }
       set({
-        currentId: null,
-        sources: [],
-        selectedSourceIds: null,
-        messages: [],
-        messagesHasMore: false,
-        messagesLoadingOlder: false,
-        notes: [],
-        reportSchedules: [],
-        ingestQueue: [],
-        steps: [],
-        waiting: "",
-        reader: { open: false, history: [], index: -1 },
+        homeChatSending: true,
+        homeChatQuestion: q,
+        homeChatStreamingText: "",
+        homeChatSteps: [],
+        homeChatWaiting: "",
+        metaAskOwner: "home",
       });
+      try {
+        const result = await api.askEverything(q, history);
+        const turns = appendHomeChatTurn(get().homeChatTurns, {
+          id: `home-chat-${Date.now()}`,
+          question: q,
+          answer: result.answer,
+          citations: result.citations,
+          status: "complete",
+          createdAt: Date.now(),
+        });
+        persistHomeChatTurns(turns);
+        set({ homeChatTurns: turns });
+        playDone();
+        if (get().currentId || get().homeSection !== "chat") {
+          get().pushToast("success", "Answer ready in Home Chat — click to open", () => {
+            get().openHomeSection("chat");
+          });
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const turns = appendHomeChatTurn(get().homeChatTurns, {
+          id: `home-chat-${Date.now()}`,
+          question: q,
+          answer: message,
+          citations: [],
+          status: "error",
+          createdAt: Date.now(),
+        });
+        persistHomeChatTurns(turns);
+        set({ homeChatTurns: turns });
+        if (get().currentId || get().homeSection !== "chat")
+          get().pushToast("error", `Home Chat failed: ${message}`);
+        else playError();
+      } finally {
+        homeChatTokenBuffer = "";
+        if (homeChatTokenFlushHandle !== 0) {
+          cancelAnimationFrame(homeChatTokenFlushHandle);
+          homeChatTokenFlushHandle = 0;
+        }
+        set({
+          homeChatSending: false,
+          homeChatQuestion: "",
+          homeChatStreamingText: "",
+          homeChatSteps: [],
+          homeChatWaiting: "",
+          ...(get().metaAskOwner === "home" ? { metaAskOwner: null } : {}),
+        });
+        void get().refreshModelStats();
+      }
+    },
+
+    clearHomeChat: () => {
+      if (get().homeChatSending) return;
+      try {
+        localStorage.removeItem("homeChat:v1");
+      } catch {
+        /* the in-memory clear still succeeds */
+      }
+      set({ homeChatTurns: [] });
     },
 
     navBack: () => void applyNav(-1),
@@ -2738,7 +2902,13 @@ async function applyNav(delta: 1 | -1): Promise<void> {
     useStore.setState({ nav: { stack, index: at } });
     if (target.nb !== s.currentId) {
       if (target.nb) await s.selectNotebook(target.nb);
-      else s.closeNotebook();
+      else s.openHomeSection(target.homeSection ?? "notebooks");
+    }
+    if (!target.nb) {
+      useStore.setState({
+        homeSection: target.homeSection ?? "notebooks",
+        openCardId: target.openCardId ?? null,
+      });
     }
     const st = useStore.getState();
     if (target.mode === "reader" && target.doc) {
@@ -2762,35 +2932,27 @@ useStore.subscribe((s, prev) => {
     s.currentId === prev.currentId &&
     s.ledgerOpen === prev.ledgerOpen &&
     s.galleryOpen === prev.galleryOpen &&
-    s.reader === prev.reader
+    s.reader === prev.reader &&
+    s.homeSection === prev.homeSection &&
+    s.openCardId === prev.openCardId
   )
     return;
   if (navApplying) return;
-  const mode = s.galleryOpen
-    ? ("gallery" as const)
-    : s.ledgerOpen
-      ? ("ledger" as const)
-      : s.reader.open
-        ? ("reader" as const)
-        : ("chat" as const);
   const rdoc = s.reader.open ? s.reader.history[s.reader.index] : undefined;
-  // Highlight is a one-time citation jump, not a place — drop it.
-  const doc = rdoc && { type: rdoc.type, id: rdoc.id };
+  const entry = navEntryFromSnapshot({
+    currentId: s.currentId,
+    ledgerOpen: s.ledgerOpen,
+    galleryOpen: s.galleryOpen,
+    readerOpen: s.reader.open,
+    readerDoc: rdoc,
+    homeSection: s.homeSection,
+    openCardId: s.openCardId,
+  });
   const { stack, index } = s.nav;
   const cur = stack[index];
-  if (
-    cur &&
-    cur.nb === s.currentId &&
-    cur.mode === mode &&
-    cur.doc?.type === doc?.type &&
-    cur.doc?.id === doc?.id
-  )
-    return;
+  if (sameNavEntry(cur, entry)) return;
   // A fresh navigation discards forward entries, browser-style.
-  const next: NavEntry[] = [
-    ...stack.slice(0, index + 1),
-    { nb: s.currentId, mode, doc },
-  ];
+  const next: NavEntry[] = [...stack.slice(0, index + 1), entry];
   if (next.length > 100) next.splice(0, next.length - 100);
   useStore.setState({ nav: { stack: next, index: next.length - 1 } });
 });

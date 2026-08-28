@@ -17,6 +17,7 @@ import type {
   ToastKind,
 } from "./types";
 import type { HistoryEntry } from "./history";
+import type { HomeChatTurn } from "./homeChat";
 
 export interface QueueItem {
   id: string;
@@ -43,6 +44,9 @@ export interface NavEntry {
   nb: string | null;
   mode: "chat" | "reader" | "ledger" | "gallery";
   doc?: { type: ReaderDoc["type"]; id: string };
+  /** Home is a first-class location too. Omitted on notebook entries. */
+  homeSection?: "notebooks" | "chat" | "registry";
+  openCardId?: string;
 }
 
 export interface ExternalAdd {
@@ -200,7 +204,18 @@ export interface AppState {
    *  a document). Corpus-scoped, so it fires with no notebook open. */
   registryBump: number;
   /** Home's center column: the notebook grid, or the Registry's cast. */
-  homeSection: "notebooks" | "registry";
+  homeSection: "notebooks" | "chat" | "registry";
+  /** Corpus-wide conversation owned by the store so a generation continues
+   *  while Home is unmounted and returning shows the accumulated stream. */
+  homeChatTurns: HomeChatTurn[];
+  homeChatSending: boolean;
+  homeChatQuestion: string;
+  homeChatStreamingText: string;
+  homeChatSteps: string[];
+  homeChatWaiting: string;
+  /** ask_everything broadcasts one meta stream per window. Serializing its
+   *  two consumers prevents Home Chat and the command palette mixing tokens. */
+  metaAskOwner: "home" | "palette" | null;
   /** How that column lays out. Cards are recognisable, rows are scannable
    *  and sortable — which one is "easier to find things in" depends on the
    *  collection, so it's a per-user choice, remembered. */
@@ -242,6 +257,12 @@ export interface AppState {
   refreshNotebooks: () => Promise<void>;
   selectNotebook: (id: string) => Promise<void>;
   closeNotebook: () => void;
+  /** Leave any notebook and land on one Home section in a single location
+   *  transition, so app back/forward records only the intended destination. */
+  openHomeSection: (
+    section: "notebooks" | "chat" | "registry",
+    openCardId?: string,
+  ) => void;
   navBack: () => void;
   navForward: () => void;
   /** Resolves to the new notebook's id. */
@@ -265,6 +286,8 @@ export interface AppState {
   togglePalette: () => void;
   openAddSource: (step?: "url" | "text") => void;
   closeAddSource: () => void;
+  sendHomeMessage: (question: string) => Promise<void>;
+  clearHomeChat: () => void;
 
   /** Omit the id to export the currently open notebook (palette/menu). */
   exportNotebookOkf: (notebookId?: string) => Promise<void>;

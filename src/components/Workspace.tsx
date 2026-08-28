@@ -15,6 +15,7 @@ import { ChevronLeft, Search, Settings } from "lucide-react";
 import { notebookIcon } from "@/lib/notebookIcons";
 import { DevBadge } from "./DevBadge";
 import { UpdateBadge } from "./UpdateBadge";
+import { AppNavigationControls } from "./AppNavigationControls";
 
 export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   const currentId = useStore((s) => s.currentId);
@@ -68,6 +69,8 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
         data-tauri-drag-region
         className="flex h-12 items-center gap-2 pl-[84px] pr-3"
       >
+        <AppNavigationControls />
+        <div className="mx-1 h-4 w-px bg-border" />
         <Button
           variant="ghost"
           size="sm"

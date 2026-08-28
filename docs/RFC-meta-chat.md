@@ -73,11 +73,23 @@ Expose the same capability over MCP as **`ask_everything`** (or extend
 Agents mostly want the raw passages, not our synthesized answer — so the
 MCP tool returns passages + notebook names, mirroring `search`.
 
-## Non-goals (v1)
+## As built: persistent Home Chat
 
-- Persisting meta-chat threads (ephemeral; a rerun is cheap and the corpus
-  moved anyway). Revisit if users ask to save answers as notes — likely as
-  a "Save as note" button that writes to a chosen notebook.
+The original v1 intentionally kept corpus-wide conversation inside the
+ephemeral command palette. Home Chat is the approved extension to that design:
+Home now has a first-class **Chat** section backed by the same
+`ask_everything` retrieval, progress events, and navigable citations. Its
+bounded conversation and draft persist locally, follow-up history is supplied
+to `ask_everything`, and an in-flight answer remains store-owned while the user
+navigates elsewhere. The command palette's glanceable ask mode remains
+available and unchanged; the two surfaces serialize access to the per-window
+meta stream.
+
+## Original v1 non-goals
+
+- Persisting meta-chat threads was a v1 non-goal. The Home Chat extension above
+  supersedes it with bounded local conversation history; saving an individual
+  answer as a notebook note remains future work.
 - A separate window or menu-bar popover. ⌥Space + palette is the surface.
 - Source-selection scoping (all notebooks always; per-notebook chat already
   covers the scoped case).

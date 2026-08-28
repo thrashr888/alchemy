@@ -106,6 +106,14 @@ const CMD: &[Command] = &[
         context: "",
     },
     Command {
+        id: "menu-home-chat",
+        menu_label: "Home Chat",
+        accelerator: None,
+        keys: "",
+        label: "",
+        context: "",
+    },
+    Command {
         id: "menu-back",
         menu_label: "Back",
         accelerator: None,
@@ -454,6 +462,7 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
         .item(&cmd_item(app, "menu-forward")?)
         .separator()
         .item(&cmd_item(app, "menu-search")?)
+        .item(&cmd_item(app, "menu-home-chat")?)
         .separator()
         .item(&cmd_item(app, "menu-toggle-sources")?)
         .item(&cmd_item(app, "menu-toggle-studio")?)
