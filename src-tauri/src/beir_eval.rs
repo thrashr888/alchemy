@@ -203,16 +203,34 @@ async fn nomic_ai() -> Option<Ai> {
 
 /// Built-in embedder + a small live chat model for the rerank leg.
 pub(crate) async fn rerank_ai() -> Option<Ai> {
+    // The repo's fast-local pick (tests.rs uses it for chat steps).
+    const MODEL: &str = "digitsflow/bonsai-8b:latest";
     let ai = Ai::new(
         AiConfig {
             embedder: "builtin".into(),
-            // The repo's fast-local pick (tests.rs uses it for chat steps).
-            chat_model: "digitsflow/bonsai-8b:latest".into(),
+            chat_model: MODEL.into(),
             ..Default::default()
         },
         AiRuntime::default(),
     );
-    ai.test_embed().await.ok()?;
+    // Probe the chat model, which is the thing a reranker actually needs.
+    // This used to call `test_embed`, which exercises the *built-in*
+    // embedder and therefore succeeded with Ollama stopped - so the caller
+    // got a reranker that could not rerank, every query failed quietly, and
+    // the run finished green having measured nothing.
+    if let Err(err) = ai
+        .chat(&[crate::ai::ChatTurn {
+            role: "user".into(),
+            content: "ok".into(),
+        }])
+        .await
+    {
+        eprintln!(
+            "SKIP: rerank leg needs Ollama serving {MODEL} — {err}\n\
+             \x20     start Ollama (`ollama serve`) and `ollama pull {MODEL}`, then rerun"
+        );
+        return None;
+    }
     Some(ai)
 }
 
@@ -792,10 +810,20 @@ async fn run_beir(
         vec_ndcg: vec_sum / n as f64,
         fts_ndcg: fts_sum / n as f64,
         sweep,
+        // A rerank that was asked for and produced nothing is a failed
+        // measurement, not an absent one - and it used to be reported the
+        // same way as "no rerank requested": by omitting the line.
         rerank: (rr_n > 0).then_some((rr_n, rr_sum / rr_n as f64)),
         docs: seeded_docs,
         queries: n,
     };
+    if rerank_with.is_some() && rr_n == 0 {
+        eprintln!(
+            "WARNING {name}: a rerank was requested but every call failed — \
+             the numbers below are the un-reranked pipeline. Check Ollama is \
+             serving the rerank model."
+        );
+    }
     let sweep_line = run
         .sweep
         .iter()
@@ -941,15 +969,30 @@ async fn beir_nomic_prefixed() {
 async fn beir_rerank_all() {
     let Some(ai) = builtin_ai().await else { return };
     let Some(rr) = rerank_ai().await else { return };
+    // BEIR_RERANK_DATASETS narrows the run ("scifact"), the same targeted
+    // probe BEIR_NANO_DATASETS gives the Nano sweep. Re-measuring one
+    // headline number should not cost the other two.
+    let only = std::env::var("BEIR_RERANK_DATASETS").unwrap_or_default();
     for name in ["scifact", "nfcorpus", "fiqa"] {
-        run_beir(
+        if !only.is_empty() && !only.split(',').any(|d| d.trim() == name) {
+            continue;
+        }
+        // A dataset that yields nothing used to print nothing at all, so a
+        // run that silently dropped one looked exactly like a run that
+        // covered everything - which is how scifact went missing from a
+        // 44-minute sweep without a word.
+        if run_beir(
             name,
             &ai,
             Some((&rr, RerankStrategy::Listwise)),
             EmbedStyle::default(),
             "builtin",
         )
-        .await;
+        .await
+        .is_none()
+        {
+            eprintln!("SKIPPED {name}: produced no run — see the reason above");
+        }
     }
 }
 

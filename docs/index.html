@@ -1835,7 +1835,7 @@
           <div class="feature-kicker">Benchmarks</div>
           <h3>Search, benchmarked.</h3>
           <p>Alchemy&rsquo;s search is tested against public BEIR benchmarks. The built-in engine scores 0.737 on SciFact, higher than BM25 (0.665) and TAS-B (0.643), with everything running on your Mac.</p>
-          <div class="card-meta"><span>nDCG@10, higher is better</span><span>Run them yourself: cargo test --lib beir_</span></div>
+          <div class="card-meta"><span>nDCG@10, higher is better</span><span>Run them yourself: BEIR_XENC=small cargo test --lib beir_ -- --ignored</span></div>
         </div>
         <div class="bench-rows" aria-label="BEIR benchmark results">
           <div class="bench-cell">
