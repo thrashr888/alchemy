@@ -67,6 +67,30 @@ export interface HomeChatState {
   turns: MetaTurn[];
 }
 
+/** Home's answer-in-progress. It lives in the store, keyed to the thread it
+ *  is being written into, because a run belongs to its CONVERSATION and not
+ *  to whichever view happened to start it: switching threads, or walking off
+ *  into a notebook behind a citation, leaves it running, and coming back
+ *  shows exactly where it got to — trail, partial text and all. */
+export interface HomeRun {
+  /** The conversation this answer lands in when it settles. */
+  threadId: string;
+  /** What was asked, so a view that arrives late knows what it's waiting on. */
+  question: string;
+  /** Tokens of the answer so far. */
+  streaming: string;
+  /** Completed pipeline stages, then the transient line under them. */
+  steps: string[];
+  waiting: string;
+  /** Stop (or a superseding question) was pressed: the partial still lands,
+   *  labelled "stopped". */
+  stopped: boolean;
+  /** Asked while the previous run still held the channel. The backend answers
+   *  one corpus question per window, so this one waits — and every meta://
+   *  event until it clears belongs to the run being wound down, not to this. */
+  queued: boolean;
+}
+
 export interface ExternalAdd {
   files: string[];
   url: string | null;
@@ -228,6 +252,14 @@ export interface AppState {
    *  per thread in the `meta_turns` table, so it survives a tab switch, a
    *  window close, and a relaunch. */
   homeChat: HomeChatState;
+  /** The corpus answer being written right now, or null. Not part of
+   *  `homeChat`: the run outlives the thread being *looked at*. */
+  homeRun: HomeRun | null;
+  /** Unsent composer text, per conversation ("shelf" for the ask box over the
+   *  notebook grid). A half-typed follow-up is work; switching threads to
+   *  check something shouldn't throw it away. Persisted, as the notebook
+   *  composer's draft is. */
+  homeDrafts: Record<string, string>;
   /** Every Home conversation, most recently used first — the Chat tab's
    *  thread list. Refreshed when a turn settles or a thread is deleted. */
   homeThreads: MetaThread[];
@@ -283,14 +315,28 @@ export interface AppState {
   /** Open a Home conversation and show it: its turns are loaded from the
    *  backend. `null` starts a fresh one — no row exists until it's asked. */
   openHomeThread: (threadId: string | null) => Promise<void>;
-  /** Persist a settled turn into the open thread (minting the thread id on
-   *  the first one) and keep it on screen. */
+  /** Persist a settled turn into `threadId` — defaulting to the open thread,
+   *  minting an id if there isn't one — and show it if that conversation is
+   *  the one on screen. A run that settles while you are reading elsewhere
+   *  writes into its own thread, not into what you're looking at. */
   appendHomeTurn: (
     role: "user" | "assistant",
     content: string,
     citations: MetaCitation[],
     kind: MetaTurn["kind"],
+    threadId?: string,
   ) => Promise<void>;
+  /** Ask across every notebook, into the open conversation. Resolves when the
+   *  answer has settled. A question asked while another is still being written
+   *  winds that one down first (its partial is kept, as Stop keeps it). */
+  askHome: (question: string) => Promise<void>;
+  /** Stop the run in flight, keeping whatever it had written. */
+  stopHome: () => void;
+  /** meta://token and meta://step, folded into the live run. */
+  appendHomeToken: (token: string) => void;
+  appendHomeStep: (label: string, transient: boolean) => void;
+  /** Remember unsent composer text for one conversation. */
+  setHomeDraft: (key: string, text: string) => void;
   deleteHomeThread: (threadId: string) => Promise<void>;
   /** Set Home chat's style/length; persisted for the surface. */
   setHomeChatConfig: (config: ChatConfig) => void;

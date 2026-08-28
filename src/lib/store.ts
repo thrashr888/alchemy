@@ -13,6 +13,7 @@ import { refreshEpigraph } from "./epigraph";
 import { describe } from "./errors";
 import { notify } from "./notify";
 import { dropEntry, makeEntry, pushEntry } from "./history";
+import { historyOf, mergeLoadedTurns } from "./homeChatRun";
 import { claimTextUndo } from "./textUndo";
 import { playArrival, playDone, playError } from "./sound";
 import { autoUpdateEnabled, checkForUpdatesQuietly } from "./updates";
@@ -138,6 +139,25 @@ function loadSourceSel(notebookId: string): Record<string, boolean> | null {
  *  a notebook's `chatConfig:<id>`, under the surface's own name — Home is a
  *  place you ask from, not a notebook, so it keeps its own answer voice. */
 const HOME_CHAT_CONFIG_KEY = "homeChatConfig";
+
+/** Unsent Home composer text, one map under one key rather than a key per
+ *  thread — conversations are cheap to make and the sprawl would outlive
+ *  them. Pruned when a thread is deleted. */
+const HOME_DRAFTS_KEY = "homeChatDrafts";
+
+function loadHomeDrafts(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(HOME_DRAFTS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== "object") return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>))
+      if (typeof v === "string" && v) out[k] = v;
+    return out;
+  } catch {
+    return {};
+  }
+}
 
 function loadHomeChatConfig(): ChatConfig {
   try {
@@ -284,6 +304,19 @@ let tokenFlushHandle = 0;
 // The artifact stream's twin of the chat token buffer.
 let artifactBuffer = "";
 let artifactFlushHandle = 0;
+// The Home (corpus) stream's twin of the same, and the promise of the run
+// currently holding the meta channel. The backend answers one corpus question
+// per window — `meta:<window>` is a single cancellation scope and meta://token
+// a single event channel — so a new question waits for the old one to hand the
+// channel back rather than interleaving with it.
+let metaBuffer = "";
+let metaFlushHandle = 0;
+let metaRun: Promise<void> | null = null;
+let metaSeq = 0;
+/** Conversations deleted out from under a run in flight. Its turns are
+ *  dropped rather than written — persisting them would resurrect the thread
+ *  the user just deleted. */
+const abandonedThreads = new Set<string>();
 // folder://progress arrives once per ingested file; coalesce to one store
 // write per frame so a 5,000-file import doesn't mean 5,000 full re-renders
 // of the sources panel.
@@ -459,6 +492,8 @@ export const useStore = create<AppState>((set, get) => {
     registryBump: 0,
     homeSection: "notebooks",
     homeChat: { threadId: null, turns: [] },
+    homeRun: null,
+    homeDrafts: loadHomeDrafts(),
     homeThreads: [],
     homeChatConfig: loadHomeChatConfig(),
     homeView:
@@ -681,6 +716,21 @@ export const useStore = create<AppState>((set, get) => {
       });
       void listen<{ label: string; transient: boolean }>("chat://step", (e) => {
         if (get().sending) get().appendStep(e.payload.label, e.payload.transient);
+      });
+      // Home's corpus answer streams the same way, and for the same reason
+      // lives out here rather than in the view: the run belongs to the
+      // conversation it was asked in, so leaving that conversation — for
+      // another thread, or for a notebook behind a citation — must not tear
+      // its listeners down. A queued run hasn't been sent yet; anything
+      // arriving belongs to the run it is waiting on.
+      void listen<{ content: string }>("meta://token", (e) => {
+        const run = get().homeRun;
+        if (run && !run.queued) get().appendHomeToken(e.payload.content);
+      });
+      void listen<{ label: string; transient: boolean }>("meta://step", (e) => {
+        const run = get().homeRun;
+        if (run && !run.queued)
+          get().appendHomeStep(e.payload.label, e.payload.transient);
       });
       // Verify-and-repair swaps a revised answer under the same message id
       // (backend spawn_answer_verify) — apply only when the message is in
@@ -1249,16 +1299,37 @@ export const useStore = create<AppState>((set, get) => {
 
     refreshHomeThreads: async () => {
       try {
-        set({ homeThreads: await api.listMetaThreads() });
+        const homeThreads = await api.listMetaThreads();
+        set({ homeThreads });
+        // Drop drafts for conversations that no longer exist. A New-chat id
+        // is minted before anything is asked, so an abandoned one would
+        // otherwise leave its half-typed question in storage for good; the
+        // thread being looked at is spared, since it may be exactly that.
+        const live = new Set(homeThreads.map((t) => `t:${t.id}`));
+        const open = get().homeChat.threadId;
+        if (open) live.add(`t:${open}`);
+        live.add("shelf");
+        const drafts = get().homeDrafts;
+        const kept = Object.fromEntries(
+          Object.entries(drafts).filter(([k]) => live.has(k)),
+        );
+        if (Object.keys(kept).length !== Object.keys(drafts).length) {
+          localStorage.setItem(HOME_DRAFTS_KEY, JSON.stringify(kept));
+          set({ homeDrafts: kept });
+        }
       } catch {
         /* the list is a way back in, not the conversation itself */
       }
     },
 
     openHomeThread: async (threadId) => {
-      // A fresh conversation gets its id up front, before anything is asked:
-      // the id is what an in-flight run is keyed to, so minting it mid-run
-      // would look like a thread switch and cancel the answer being written.
+      // Switching conversations never touches a run: the answer is being
+      // written into ITS thread, and walking next door to check something is
+      // not a reason to throw it away. It keeps streaming into `homeRun`,
+      // settles into its own thread, and coming back shows it mid-flight.
+      //
+      // A fresh conversation gets its id up front, before anything is asked,
+      // so the run is keyed to a conversation that can't change under it.
       if (threadId === null) {
         set({
           homeChat: { threadId: newThreadId(), turns: [] },
@@ -1274,14 +1345,28 @@ export const useStore = create<AppState>((set, get) => {
         // Switched away while it loaded — those turns belong to a thread
         // nobody is looking at any more.
         if (get().homeChat.threadId !== threadId) return;
-        set({ homeChat: { threadId, turns } });
+        // An answer that settled while the list was in flight is already on
+        // screen and newer than what the backend handed back; keep anything
+        // the fetch doesn't know about rather than blinking it away.
+        set({
+          homeChat: {
+            threadId,
+            turns: mergeLoadedTurns(turns, get().homeChat.turns),
+          },
+        });
       } catch (e) {
         set({ error: describe(e) });
       }
     },
 
-    appendHomeTurn: async (role, content, citations, kind) => {
-      const threadId = get().homeChat.threadId ?? newThreadId();
+    appendHomeTurn: async (role, content, citations, kind, intoThread) => {
+      const threadId = intoThread ?? get().homeChat.threadId ?? newThreadId();
+      // The conversation was deleted while this was being written.
+      if (abandonedThreads.has(threadId)) return;
+      // A turn lands in the conversation it was asked in. Whether it also
+      // lands ON SCREEN depends on which conversation is open — a run that
+      // settles while you're reading another thread writes into its own.
+      const showing = () => get().homeChat.threadId === threadId;
       // Optimistic: the turn is on screen before the write lands, and stays
       // there if the write fails — a lost row is worse than a lost answer,
       // but showing neither is worst.
@@ -1294,9 +1379,14 @@ export const useStore = create<AppState>((set, get) => {
         kind,
         createdAt: Date.now(),
       };
-      set((s) => ({
-        homeChat: { threadId, turns: [...s.homeChat.turns, pending] },
-      }));
+      if (showing())
+        set((s) => ({
+          homeChat: { threadId, turns: [...s.homeChat.turns, pending] },
+        }));
+      else if (get().homeChat.threadId === null)
+        // Nothing open at all (a question asked before the Chat tab was ever
+        // visited): the thread being written into becomes the open one.
+        set({ homeChat: { threadId, turns: [pending] } });
       try {
         const saved = await api.addMetaTurn(
           threadId,
@@ -1317,6 +1407,8 @@ export const useStore = create<AppState>((set, get) => {
               }
             : {},
         );
+        // The thread list's timestamp and turn count move with the write,
+        // whichever conversation is being looked at.
         void get().refreshHomeThreads();
       } catch (e) {
         get().pushToast(
@@ -1326,6 +1418,141 @@ export const useStore = create<AppState>((set, get) => {
       }
     },
 
+    askHome: async (question) => {
+      const q = question.trim();
+      if (!q) return;
+      // The thread id exists before the question does (openHomeThread mints
+      // it), so the run is keyed to a conversation that can't change under it.
+      const threadId = get().homeChat.threadId ?? newThreadId();
+      const prior = historyOf(get().homeChat.turns);
+      const previous = metaRun;
+      // `metaSeq` is what makes a superseded run stay superseded: it decides
+      // which run owns `homeRun`, so an outgoing run's settling never wipes
+      // the state of the one that displaced it.
+      const seq = ++metaSeq;
+      // One corpus answer at a time per window. A second question doesn't
+      // silently drop the first: it winds it down exactly as Stop does —
+      // cancel, keep the partial, file it under its own thread — and only
+      // then takes the channel. Until then this run is `queued`, which is
+      // also what keeps the outgoing run's tokens out of this one's buffer.
+      set({
+        homeRun: {
+          threadId,
+          question: q,
+          streaming: "",
+          steps: [],
+          waiting: previous ? "Finishing the previous answer…" : "",
+          stopped: false,
+          queued: !!previous,
+        },
+      });
+      const clear = () => {
+        if (metaSeq !== seq) return;
+        metaRun = null;
+        metaBuffer = "";
+        set({ homeRun: null });
+      };
+      const run = (async () => {
+        if (previous) {
+          void api.cancelGeneration("meta");
+          await previous.catch(() => {});
+          // Displaced in turn while waiting for the channel — the newer
+          // question owns `homeRun` now, so leave it alone.
+          if (metaSeq !== seq) return;
+          // Stop, pressed before this run ever started, means the question
+          // was withdrawn: nothing was asked and nothing is recorded.
+          if (get().homeRun?.stopped) return clear();
+          set((s) =>
+            s.homeRun
+              ? { homeRun: { ...s.homeRun, queued: false, waiting: "" } }
+              : {},
+          );
+        }
+        await get().appendHomeTurn("user", q, [], "chat", threadId);
+        try {
+          const res = await api
+            // No depth argument: the backend picks depth per model class
+            // (deep rerank on gateways where the extra call is cheap,
+            // single-pass local). The config is Home's own — Style, Length.
+            .askEverything(q, prior, undefined, get().homeChatConfig);
+          // Superseded runs settle as stopped: a question asked over the top
+          // of this one cancelled it, and the partial is what it got to.
+          const stopped =
+            metaSeq !== seq || (get().homeRun?.stopped ?? false);
+          // A stop before the first token leaves nothing to show — the user
+          // already knows they cancelled.
+          if (stopped && !res.answer.trim()) return;
+          await get().appendHomeTurn(
+            "assistant",
+            res.answer,
+            res.citations,
+            stopped ? "stopped" : "chat",
+            threadId,
+          );
+        } catch (e) {
+          await get().appendHomeTurn(
+            "assistant",
+            describe(e),
+            [],
+            "error",
+            threadId,
+          );
+        } finally {
+          clear();
+        }
+      })();
+      metaRun = run;
+      await run;
+    },
+
+    stopHome: () => {
+      const run = get().homeRun;
+      if (!run) return;
+      // Keep what arrived: the backend resolves a cancelled run with the
+      // partial answer and its citations. A queued run has nothing in flight
+      // to cancel — the flag withdraws it before it starts.
+      set({ homeRun: { ...run, stopped: true } });
+      if (!run.queued) void api.cancelGeneration("meta");
+    },
+
+    appendHomeToken: (t) => {
+      // Same per-frame commit as the notebook stream: tokens arrive faster
+      // than frames, and committing each one re-parses the whole answer.
+      metaBuffer += t;
+      if (metaFlushHandle !== 0) return;
+      metaFlushHandle = requestAnimationFrame(() => {
+        metaFlushHandle = 0;
+        const chunk = metaBuffer;
+        metaBuffer = "";
+        const run = get().homeRun;
+        if (!run || run.queued || !chunk) return;
+        set({
+          homeRun: { ...run, streaming: run.streaming + chunk, waiting: "" },
+        });
+      });
+    },
+
+    appendHomeStep: (label, transient) => {
+      const run = get().homeRun;
+      if (!run) return;
+      // A transient line is a live status, not a trail entry: it replaces the
+      // previous one and never accumulates.
+      set({
+        homeRun: transient
+          ? { ...run, waiting: label }
+          : { ...run, steps: [...run.steps, label], waiting: "" },
+      });
+    },
+
+    setHomeDraft: (key, text) => {
+      const drafts = { ...get().homeDrafts };
+      if ((drafts[key] ?? "") === text) return;
+      if (text) drafts[key] = text;
+      else delete drafts[key];
+      localStorage.setItem(HOME_DRAFTS_KEY, JSON.stringify(drafts));
+      set({ homeDrafts: drafts });
+    },
+
     deleteHomeThread: async (threadId) => {
       try {
         await api.deleteMetaThread(threadId);
@@ -1333,10 +1560,20 @@ export const useStore = create<AppState>((set, get) => {
         set({ error: describe(e) });
         return;
       }
+      // Deleting a conversation that is still being answered stops it and
+      // throws the answer away — persisting the partial would resurrect the
+      // thread the user just deleted.
+      if (get().homeRun?.threadId === threadId) {
+        abandonedThreads.add(threadId);
+        set({ homeRun: null });
+        void api.cancelGeneration("meta");
+      }
       // Deleting the conversation you're reading leaves a fresh one open,
       // not an empty screen with no way forward.
       if (get().homeChat.threadId === threadId)
         set({ homeChat: { threadId: newThreadId(), turns: [] } });
+      // Its unsent draft goes with it.
+      get().setHomeDraft(`t:${threadId}`, "");
       await get().refreshHomeThreads();
     },
 
@@ -2905,6 +3142,27 @@ async function applyNav(delta: 1 | -1): Promise<void> {
   }
 }
 
+/** Depth of an in-progress compound navigation (see `navAtomic`). */
+let navAtomicDepth = 0;
+
+/** Run a navigation that takes several store writes and record it as ONE
+ *  history entry.
+ *
+ *  A citation jump out of Home's chat selects the notebook and then opens the
+ *  reader — two writes, and so two entries, the middle one being that
+ *  notebook's chat view, which nobody asked for and nobody was ever looking
+ *  at. Back landed there instead of on the conversation. Suppress recording
+ *  for the duration and record the destination once. */
+export async function navAtomic(go: () => Promise<void> | void): Promise<void> {
+  navAtomicDepth++;
+  try {
+    await go();
+  } finally {
+    navAtomicDepth--;
+  }
+  if (navAtomicDepth === 0) recordNav(useStore.getState());
+}
+
 // Record every location change into the app-level history. All windows:
 // each window owns its own store instance and hence its own back stack.
 useStore.subscribe((s, prev) => {
@@ -2917,7 +3175,11 @@ useStore.subscribe((s, prev) => {
     s.homeChat.threadId === prev.homeChat.threadId
   )
     return;
-  if (navApplying) return;
+  recordNav(s);
+});
+
+function recordNav(s: ReturnType<typeof useStore.getState>) {
+  if (navApplying || navAtomicDepth > 0) return;
   const mode = s.galleryOpen
     ? ("gallery" as const)
     : s.ledgerOpen
@@ -2952,7 +3214,7 @@ useStore.subscribe((s, prev) => {
   ];
   if (next.length > 100) next.splice(0, next.length - 100);
   useStore.setState({ nav: { stack: next, index: next.length - 1 } });
-});
+}
 
 // Every failure cues once, wherever it surfaces — the global error banner or
 // an error toast. playError throttles, so an error that sets both cues once.

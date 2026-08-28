@@ -25,7 +25,7 @@ import {
   Pause,
   Play,
   Power,
-  Sunrise,
+  Sun,
   Zap,
 } from "lucide-react";
 
@@ -95,6 +95,10 @@ export function BriefSidebar({
           hidden behind the pointer, and the empty state keeps it visible
           because its copy points at it. */}
       <div className="group flex h-12 shrink-0 items-center gap-2 border-b border-border px-6">
+        {/* The same icon the collapsed rail shows, so folding a card down
+            and back doesn't change what it is called. Staff and Chats on the
+            left already read this way; the right pair now matches. */}
+        <Sun className="h-3.5 w-3.5 text-muted-foreground" />
         <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
           Brief
         </span>
@@ -534,15 +538,15 @@ export function SidebarRail({
   dot?: boolean;
   onClick: () => void;
 }) {
-  // Sunrise for the Brief: it is the morning read, and it answers Staff's
-  // Moon — the Night Shift wrote it while you were away.
+  // Sun for the Brief: it is the morning read, and it answers Staff's Moon —
+  // the Night Shift wrote it while you were away.
   const Icon =
     icon === "staff"
       ? Moon
       : icon === "chats"
         ? MessagesSquare
         : icon === "brief"
-          ? Sunrise
+          ? Sun
           : Newspaper;
   return (
     <button

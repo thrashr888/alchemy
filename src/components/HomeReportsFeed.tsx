@@ -3,7 +3,12 @@ import { useStore } from "@/lib/store";
 import type { Note } from "@/lib/types";
 import { cn, noteUnread, relativeTime } from "@/lib/utils";
 import { Button } from "./ui";
-import { ChevronDown, ChevronUp, PanelRightClose } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Newspaper,
+  PanelRightClose,
+} from "lucide-react";
 import { Markdown } from "./Markdown";
 
 /** One quiet line describing activity since the previous home visit. */
@@ -113,6 +118,9 @@ export function ReportsFeed({
           stepping cursor and Mark all read wait for a hover or a tab into the
           header — the same reveal the Staff rows use for Run now. */}
       <div className="group flex min-h-12 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-6 py-2">
+        {/* Same icon as the collapsed rail, and the same grammar as Staff and
+            Chats across the way: icon, then the caption. */}
+        <Newspaper className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <span className="whitespace-nowrap text-caption font-semibold uppercase tracking-wide text-muted-foreground">
           Latest reports
         </span>

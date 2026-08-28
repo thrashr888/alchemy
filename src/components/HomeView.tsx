@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { usePickList } from "@/lib/pick";
+import { homeDraftKey } from "@/lib/homeChatRun";
 import { DevBadge } from "./DevBadge";
 import { UpdateBadge } from "./UpdateBadge";
 import { HealthBanner } from "./HealthBanner";
@@ -557,13 +558,24 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   // the Chat tab (meta-chat, docs/RFC-meta-chat.md) — no notebook choice
   // needed; citations name where the answers live. ⌘K's ask mode is the same
   // pipeline in glance form; this one keeps the thread, and keeps it for good.
-  const [ask, setAsk] = useState("");
   const askRef = useRef<HTMLInputElement>(null);
   const chat = useHomeChat();
   const chatOpen = homeSection === "chat";
+  // Half-typed text belongs to the conversation it was typed in, not to the
+  // box: switching threads to check something and coming back finds it still
+  // there. The shelf keeps its own slot — a question typed over the notebook
+  // grid isn't a follow-up to anything.
+  const homeThreadId = useStore((s) => s.homeChat.threadId);
+  const draftKey = homeDraftKey(chatOpen, homeThreadId);
+  const ask = useStore((s) => s.homeDrafts[draftKey] ?? "");
+  const setHomeDraft = useStore((s) => s.setHomeDraft);
+  const setAsk = (text: string) => setHomeDraft(draftKey, text);
   async function submitAsk(e: React.FormEvent) {
     e.preventDefault();
     const q = ask.trim();
+    // A question asked over the top of a running one supersedes it (askHome
+    // winds the old one down and keeps its partial), so only a run in THIS
+    // conversation blocks the composer — that one has a Stop button instead.
     if (!q || chat.loading) return;
     setAsk("");
     // Asking from the shelf is asking to be in the conversation — a new one:

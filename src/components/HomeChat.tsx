@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
-import { api } from "@/lib/api";
+import { useEffect, useRef, useState } from "react";
 import { openMetaCitation } from "@/lib/citations";
+import { runForThread } from "@/lib/homeChatRun";
 import { useStore } from "@/lib/store";
 import { cn, chatReadingClass, relativeTime } from "@/lib/utils";
 import type { MetaCitation, MetaTurn } from "@/lib/types";
@@ -41,198 +40,40 @@ import {
  */
 export interface HomeChat {
   turns: MetaTurn[];
-  /** Tokens of the answer currently arriving. */
+  /** Tokens of the answer currently arriving into THIS conversation. */
   streaming: string;
   /** Completed pipeline stages, then the transient line under them. */
   steps: string[];
   waiting: string;
+  /** An answer is being written into the conversation on screen. */
   loading: boolean;
-  /** An answer is out there for this thread — this view's run, or one that
-   *  outlived a trip into a notebook. */
-  pending: boolean;
+  /** Asked, but still waiting for the previous answer to hand the channel
+   *  back — the backend answers one corpus question at a time. */
+  queued: boolean;
+  /** The question that run is answering, shown when the thread's turns
+   *  haven't finished loading back in. */
+  question: string;
   ask: (question: string) => void;
   stop: () => void;
 }
 
-/** One conversation per window, so the run counter is module-wide: a settling
- *  answer checks it before writing, which is how a superseded run stays
- *  superseded even though the store outlives the view. */
-let runSeq = 0;
-/** The thread a live run is answering into, or null when nothing is running.
- *  A question with no answer under it means "still working" only while this
- *  is set — after a relaunch it isn't, and a dangling question is just the
- *  last thing that happened. */
-let liveThread: string | null = null;
-
-/** What the backend sees as prior context: completed exchanges only. A
- *  provider failure leaves a dangling question that would only teach the
- *  model that answers can be error messages. */
-function historyOf(turns: MetaTurn[]): { role: string; content: string }[] {
-  const out: { role: string; content: string }[] = [];
-  for (let i = 0; i + 1 < turns.length; i++) {
-    const q = turns[i];
-    const a = turns[i + 1];
-    if (q.role === "user" && a.role === "assistant" && a.kind !== "error") {
-      out.push(
-        { role: "user", content: q.content },
-        { role: "assistant", content: a.content },
-      );
-    }
-  }
-  return out;
-}
-
-/** The conversation's state machine. The settled turns live in the store
- *  (and in the database under them); the in-flight run is local, and dies
- *  with the view that started it. */
+/** A view over the store's conversation, not a state machine.
+ *
+ *  The run used to live here, in component state, keyed to whoever was on
+ *  screen — so switching threads cancelled it and threw its trail away. It
+ *  belongs to the CONVERSATION now (`homeRun`, driven by `askHome`), and this
+ *  hook only decides how much of it the open thread is entitled to see. */
 export function useHomeChat(): HomeChat {
   const turns = useStore((s) => s.homeChat.turns);
   const threadId = useStore((s) => s.homeChat.threadId);
-  const [streaming, setStreaming] = useState("");
-  const [steps, setSteps] = useState<string[]>([]);
-  const [waiting, setWaiting] = useState("");
-  const [loading, setLoading] = useState(false);
-  // `ask` must not be rebuilt on every token of the answer, but still has to
-  // see whether a run is up; a ref carries the flag across renders.
-  const loadingRef = useRef(false);
-  loadingRef.current = loading;
-  const stopped = useRef(false);
+  const run = useStore((s) => s.homeRun);
+  const ask = useStore((s) => s.askHome);
+  const stop = useStore((s) => s.stopHome);
 
-  // Switching to another conversation supersedes the run writing into this
-  // one: its tokens would otherwise stream in under someone else's question.
-  // Compared against the previous value rather than fired on mount, because
-  // remounting Home mid-answer must NOT cancel — the answer is still coming.
-  const shownThread = useRef(threadId);
-  useEffect(() => {
-    if (shownThread.current === threadId) return;
-    shownThread.current = threadId;
-    // Only a run answering into the thread we just LEFT is superseded.
-    // Cancelling with nothing in flight (or with the run that belongs to the
-    // thread we just arrived at — asking from the shelf opens a new thread
-    // and asks into it in one move) would kill the answer being asked for.
-    if (liveThread === null || liveThread === threadId) return;
-    runSeq++;
-    liveThread = null;
-    void api.cancelGeneration("meta");
-    setLoading(false);
-    setStreaming("");
-    setSteps([]);
-    setWaiting("");
-  }, [threadId]);
-
-  // Stream tokens into the live answer — batched per frame, or every token
-  // re-parses the whole accumulated markdown.
-  useEffect(() => {
-    if (!loading) return;
-    let buffer = "";
-    let flush = 0;
-    const un = listen<{ content: string }>("meta://token", (e) => {
-      buffer += e.payload.content;
-      if (flush !== 0) return;
-      flush = requestAnimationFrame(() => {
-        flush = 0;
-        const chunk = buffer;
-        buffer = "";
-        if (chunk) setStreaming((t) => t + chunk);
-      });
-    });
-    return () => {
-      if (flush !== 0) cancelAnimationFrame(flush);
-      void un.then((f) => f());
-    };
-  }, [loading]);
-
-  // The pipeline narrates itself: routing → searching → reading → synthesizing.
-  // Transient lines replace each other ("Reading X (2 of 6)"); the rest tick
-  // off as a trail.
-  useEffect(() => {
-    if (!loading) return;
-    const un = listen<{ label: string; transient: boolean }>(
-      "meta://step",
-      (e) => {
-        if (e.payload.transient) {
-          setWaiting(e.payload.label);
-        } else {
-          setSteps((s) => [...s, e.payload.label]);
-          setWaiting("");
-        }
-      },
-    );
-    return () => void un.then((f) => f());
-  }, [loading]);
-
-  const ask = useCallback((question: string) => {
-    const q = question.trim();
-    if (!q || loadingRef.current) return;
-    const id = ++runSeq;
-    stopped.current = false;
-    const store = useStore.getState();
-    const prior = historyOf(store.homeChat.turns);
-    // The thread id exists before the question does (openHomeThread mints
-    // it), so the run is keyed to a conversation that can't change under it.
-    liveThread = store.homeChat.threadId;
-    void store.appendHomeTurn("user", q, [], "chat");
-    setStreaming("");
-    setSteps([]);
-    setWaiting("");
-    setLoading(true);
-    api
-      // No depth argument: the backend picks depth per model class (deep
-      // rerank on gateways where the extra call is cheap, single-pass local).
-      // The config is Home's own — the composer's Style and Length pills.
-      .askEverything(q, prior, undefined, store.homeChatConfig)
-      .then((res) => {
-        if (id !== runSeq) return;
-        const wasStopped = stopped.current;
-        // A stop before the first token leaves nothing to show — the user
-        // already knows they cancelled.
-        if (wasStopped && !res.answer.trim()) return;
-        void useStore
-          .getState()
-          .appendHomeTurn(
-            "assistant",
-            res.answer,
-            res.citations,
-            wasStopped ? "stopped" : "chat",
-          );
-      })
-      .catch((e) => {
-        if (id !== runSeq) return;
-        void useStore
-          .getState()
-          .appendHomeTurn(
-            "assistant",
-            e instanceof Error ? e.message : String(e),
-            [],
-            "error",
-          );
-      })
-      .finally(() => {
-        if (id !== runSeq) return;
-        liveThread = null;
-        setLoading(false);
-        setStreaming("");
-        setWaiting("");
-      });
-  }, []);
-
-  /** Stop streaming but keep what arrived: the backend resolves a cancelled
-   *  run with the partial answer and its citations. */
-  const stop = useCallback(() => {
-    if (!loadingRef.current) return;
-    stopped.current = true;
-    void api.cancelGeneration("meta");
-  }, []);
-
-  // Leaving Home mid-answer (a citation click opens its notebook) does NOT
-  // cancel: the turns land in the store and the database, not in this
-  // component, so the answer still arrives and is waiting when the
-  // conversation comes back. Only the live token stream is lost.
-  const pending =
-    loading ||
-    (liveThread !== null &&
-      liveThread === threadId &&
-      turns[turns.length - 1]?.role === "user");
+  // A run belongs to one thread. Looking at another conversation shows that
+  // conversation, not someone else's answer arriving.
+  const mine = runForThread(run, threadId);
+  const loading = !!mine;
 
   // Esc is the universal cancel: it stops a streaming answer. It no longer
   // throws the conversation away — the thread is a place now, and you leave
@@ -252,7 +93,17 @@ export function useHomeChat(): HomeChat {
     return () => window.removeEventListener("keydown", onKey);
   }, [loading, stop]);
 
-  return { turns, streaming, steps, waiting, loading, pending, ask, stop };
+  return {
+    turns,
+    streaming: mine?.streaming ?? "",
+    steps: mine?.steps ?? [],
+    waiting: mine?.waiting ?? "",
+    loading,
+    queued: !!mine?.queued,
+    question: mine?.question ?? "",
+    ask: (q: string) => void ask(q),
+    stop,
+  };
 }
 
 /** Home composer controls: how the answer is written, how long it runs, and
@@ -362,6 +213,7 @@ export function HomeThreadsSidebar({
 }) {
   const threads = useStore((s) => s.homeThreads);
   const openId = useStore((s) => s.homeChat.threadId);
+  const runningId = useStore((s) => s.homeRun?.threadId ?? null);
   const openThread = useStore((s) => s.openHomeThread);
   const removeThread = useStore((s) => s.deleteHomeThread);
   const { confirm, dialog } = useConfirm();
@@ -411,7 +263,10 @@ export function HomeThreadsSidebar({
           )}
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+      {/* Rows were flush against each other, which read as one block of text
+          rather than a list. A gap (the reports feed's idiom) separates them
+          without adding a rule between every pair. */}
+      <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-2">
         {threads.length === 0 ? (
           <p className="px-1 py-3 text-caption text-subtle-foreground">
             Past conversations are listed here.
@@ -421,7 +276,7 @@ export function HomeThreadsSidebar({
             <div
               key={t.id}
               className={cn(
-                "group relative flex items-start rounded-md transition-colors",
+                "group relative flex shrink-0 items-start rounded-md transition-colors",
                 t.id === openId ? "bg-surface-2" : "hover:bg-surface-2",
               )}
             >
@@ -430,11 +285,11 @@ export function HomeThreadsSidebar({
                 onClick={() => void openThread(t.id)}
                 title={t.title}
                 aria-current={t.id === openId}
-                className="min-w-0 flex-1 px-2 py-1.5 text-left"
+                className="min-w-0 flex-1 px-2 py-2 text-left"
               >
                 <span
                   className={cn(
-                    "block truncate text-caption",
+                    "block truncate text-body",
                     t.id === openId
                       ? "font-medium text-foreground"
                       : "text-muted-foreground",
@@ -443,8 +298,16 @@ export function HomeThreadsSidebar({
                   {t.title}
                 </span>
                 <span className="mt-0.5 block truncate text-micro text-subtle-foreground">
-                  {relativeTime(t.updatedAt)} · {t.turnCount}{" "}
-                  {t.turnCount === 1 ? "turn" : "turns"}
+                  {/* A run keeps going in the thread it was asked in, so the
+                      list says which conversation is still being answered. */}
+                  {runningId === t.id ? (
+                    <span className="text-muted-foreground">Answering…</span>
+                  ) : (
+                    <>
+                      {relativeTime(t.updatedAt)} · {t.turnCount}{" "}
+                      {t.turnCount === 1 ? "turn" : "turns"}
+                    </>
+                  )}
                 </span>
               </button>
               <div className="pr-1 pt-1">
@@ -493,7 +356,7 @@ export function HomeChatThread({ chat }: { chat: HomeChat }) {
     endRef.current?.scrollIntoView({ block: "end" });
   }, [chat.turns.length, chat.streaming, chat.steps.length, chat.waiting]);
 
-  if (chat.turns.length === 0 && !chat.pending) {
+  if (chat.turns.length === 0 && !chat.loading) {
     return (
       <div className="relative z-10 flex min-h-0 flex-1 items-center justify-center px-6 pb-10">
         <EmptyState
@@ -549,36 +412,38 @@ export function HomeChatThread({ chat }: { chat: HomeChat }) {
             </div>
           ),
         )}
-        {chat.pending && (
+        {/* A queued question hasn't been written to the thread yet — show it
+            where it will land, so the conversation doesn't stall on a
+            composer that already emptied itself. */}
+        {chat.queued && chat.question && (
+          <div className="flex justify-end">
+            <div className="max-w-[85%] min-w-0 wrap-anywhere rounded-lg rounded-br-sm border border-border bg-surface-2 px-3.5 py-2 text-body text-muted-foreground selectable">
+              {chat.question}
+            </div>
+          </div>
+        )}
+        {/* The run's own state, read from the store: leaving this thread and
+            coming back finds the trail and the partial answer where they
+            were, because neither ever belonged to this component. */}
+        {chat.loading && (
           <div className="flex flex-col gap-2" aria-busy="true">
             <AnswerLabel />
-            {chat.loading ? (
-              <>
-                {(chat.steps.length > 0 || chat.waiting) && (
-                  <StepTrail
-                    steps={chat.steps}
-                    waiting={chat.waiting}
-                    done={!!chat.streaming}
-                  />
-                )}
-                {chat.streaming ? (
-                  <Markdown>{chat.streaming}</Markdown>
-                ) : (
-                  chat.steps.length === 0 &&
-                  !chat.waiting && (
-                    <div className="text-caption text-muted-foreground">
-                      Searching every notebook…
-                    </div>
-                  )
-                )}
-              </>
+            {(chat.steps.length > 0 || chat.waiting) && (
+              <StepTrail
+                steps={chat.steps}
+                waiting={chat.waiting}
+                done={!!chat.streaming}
+              />
+            )}
+            {chat.streaming ? (
+              <Markdown>{chat.streaming}</Markdown>
             ) : (
-              // Returned to the thread while its answer was still being
-              // written: the run outlived this view, so say so rather than
-              // leave the question hanging with nothing under it.
-              <div className="text-caption text-muted-foreground">
-                Still working on this answer…
-              </div>
+              chat.steps.length === 0 &&
+              !chat.waiting && (
+                <div className="text-caption text-muted-foreground">
+                  Searching every notebook…
+                </div>
+              )
             )}
           </div>
         )}
