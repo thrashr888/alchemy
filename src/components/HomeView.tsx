@@ -52,7 +52,7 @@ import {
   Square,
 } from "lucide-react";
 import { BriefSidebar, SidebarRail, StaffSidebar } from "./HomeSections";
-import { HomeChatThread, HomeThreadList, useHomeChat } from "./HomeChat";
+import { HomeChatThread, HomeThreadsSidebar, useHomeChat } from "./HomeChat";
 import { NOTEBOOK_ICONS, notebookIcon } from "@/lib/notebookIcons";
 import { RegistrySection } from "./RegistrySection";
 import {
@@ -73,6 +73,71 @@ const NOTEBOOK_PALETTE = [
   "#4fc1c9",
   "#98a562",
 ];
+
+const clampSplit = (pct: number) => Math.min(75, Math.max(15, pct));
+
+/** The horizontal handle between two stacked side-cards. Both rails stack the
+ *  same way — Staff over Chats on the left, Brief over Latest reports on the
+ *  right — so they drag the same way too. */
+function StackSplit({
+  colRef,
+  pct,
+  onChange,
+  defaultPct,
+  label,
+}: {
+  /** The column the two cards share; the drag is a fraction of its height. */
+  colRef: React.RefObject<HTMLDivElement | null>;
+  pct: number;
+  onChange: (pct: number) => void;
+  defaultPct: number;
+  label: string;
+}) {
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const col = colRef.current;
+    if (!col) return;
+    const rect = col.getBoundingClientRect();
+    const move = (ev: PointerEvent) =>
+      onChange(clampSplit(((ev.clientY - rect.top) / rect.height) * 100));
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.style.cursor = "";
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    document.body.style.cursor = "row-resize";
+  };
+  return (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label={label}
+      tabIndex={0}
+      onPointerDown={onPointerDown}
+      onDoubleClick={() => onChange(defaultPct)}
+      onKeyDown={(e) => {
+        // Arrow keys nudge the split — the same keyboard affordance
+        // ResizeHandle gives the vertical edges.
+        const delta = e.key === "ArrowDown" ? 2 : e.key === "ArrowUp" ? -2 : 0;
+        if (!delta) return;
+        e.preventDefault();
+        onChange(clampSplit(pct + delta));
+      }}
+      className="group/resize relative h-2 shrink-0 cursor-row-resize rounded transition-colors hover:bg-ring/30 active:bg-ring/40 focus-visible:bg-ring/30"
+    >
+      <span
+        aria-hidden
+        className="absolute top-1/2 left-1/2 flex -translate-x-1/2 -translate-y-1/2 gap-0.5 opacity-40 transition-opacity group-hover/resize:opacity-100 group-focus-visible/resize:opacity-100"
+      >
+        <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
+        <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
+        <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
+      </span>
+    </div>
+  );
+}
 
 /** The scannable form of the notebook shelf. Same rows the grid shows, read
  *  down columns instead of across cards. */
@@ -298,7 +363,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [briefOpen, setBriefOpen] = useState(
     () => localStorage.getItem("homeBriefOpen") !== "0",
   );
-  const clampSplit = (pct: number) => Math.min(75, Math.max(15, pct));
   const clampStaffW = (w: number) => Math.min(440, Math.max(240, w));
   const [staffWidth, setStaffWidth] = useState(() =>
     clampStaffW(Number(localStorage.getItem("homeStaffWidth") ?? 300)),
@@ -310,7 +374,25 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [briefSplit, setBriefSplit] = useState(() =>
     clampSplit(Number(localStorage.getItem("homeBriefSplit") ?? 40)),
   );
+  // The left rail splits the same way when it stacks: Staff over Chats.
+  const [staffSplit, setStaffSplit] = useState(() =>
+    clampSplit(Number(localStorage.getItem("homeStaffSplit") ?? 55)),
+  );
+  const leftColRef = useRef<HTMLDivElement>(null);
   const rightColRef = useRef<HTMLDivElement>(null);
+  const staffResizeHandle = (
+    <ResizeHandle
+      edge="right"
+      width={staffWidth}
+      defaultWidth={300}
+      label="Resize the Staff sidebar"
+      onResize={(w) => {
+        const width = clampStaffW(w);
+        setStaffWidth(width);
+        localStorage.setItem("homeStaffWidth", String(Math.round(width)));
+      }}
+    />
+  );
   // The reading column's resize handle, rendered once per stacked card —
   // each card's left edge is the column's, so either drags the whole column.
   const rightResizeHandle = (
@@ -326,25 +408,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       }}
     />
   );
-  const onSplitDrag = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const col = rightColRef.current;
-    if (!col) return;
-    const rect = col.getBoundingClientRect();
-    const move = (ev: PointerEvent) => {
-      const pct = clampSplit(((ev.clientY - rect.top) / rect.height) * 100);
-      setBriefSplit(pct);
-      localStorage.setItem("homeBriefSplit", String(Math.round(pct)));
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      document.body.style.cursor = "";
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    document.body.style.cursor = "row-resize";
-  };
   const toggleBrief = () => {
     setBriefOpen((open) => {
       localStorage.setItem("homeBriefOpen", open ? "0" : "1");
@@ -734,45 +797,79 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           {/* Three regions, same side-card idiom as the notebook view:
             Staff rail left, notebooks center, Brief + reports column right.
             Each sidebar collapses on its own. */}
-          {staffOpen ? (
-            <aside
-              className="side-card relative mx-2 mb-2 mt-1 hidden shrink-0 flex-col lg:flex"
+          {staffOpen || chatOpen ? (
+            <div
+              ref={leftColRef}
+              className="relative mx-2 mb-2 mt-1 hidden shrink-0 flex-col lg:flex"
               style={{ width: staffWidth }}
             >
-              <ResizeHandle
-                edge="right"
-                width={staffWidth}
-                defaultWidth={300}
-                label="Resize the Staff sidebar"
-                onResize={(w) => {
-                  const width = clampStaffW(w);
-                  setStaffWidth(width);
-                  localStorage.setItem("homeStaffWidth", String(Math.round(width)));
-                }}
-              />
-              <StaffSidebar
-                schedules={allReports}
-                reports={reports}
-                recentNotes={recentNotes}
-                notebookTitle={notebookTitle}
-                notebookColor={notebookColor}
-                onOpenNote={openNote}
-                onOpenNotebook={(id) => void open(id)}
-                onOpenEvent={openEventSource}
-                onRan={refreshActivity}
-                onCollapse={toggleStaff}
-              />
-            </aside>
+              {/* One handle per stacked card, as on the right: each card's
+                  right edge is the column's, so either drags its width. */}
+              {staffOpen ? (
+                <aside
+                  className={cn(
+                    "side-card relative flex min-h-0 flex-col",
+                    chatOpen ? "shrink-0" : "flex-1",
+                  )}
+                  style={chatOpen ? { height: `${staffSplit}%` } : undefined}
+                >
+                  {staffResizeHandle}
+                  <StaffSidebar
+                    schedules={allReports}
+                    reports={reports}
+                    recentNotes={recentNotes}
+                    notebookTitle={notebookTitle}
+                    notebookColor={notebookColor}
+                    onOpenNote={openNote}
+                    onOpenNotebook={(id) => void open(id)}
+                    onOpenEvent={openEventSource}
+                    onRan={refreshActivity}
+                    onCollapse={toggleStaff}
+                  />
+                </aside>
+              ) : (
+                <div className="side-card flex w-12 shrink-0 flex-col items-center self-start py-2">
+                  <SidebarRail
+                    icon="staff"
+                    title="Show Staff"
+                    onClick={toggleStaff}
+                  />
+                </div>
+              )}
+              {/* The Chat tab's past conversations: the second card of this
+                  rail, the way Latest reports sits under the Brief. It
+                  belongs to the tab, so it arrives and leaves with it. */}
+              {chatOpen && (
+                <>
+                  {staffOpen ? (
+                    <StackSplit
+                      colRef={leftColRef}
+                      pct={staffSplit}
+                      defaultPct={55}
+                      label="Resize Staff"
+                      onChange={(pct) => {
+                        setStaffSplit(pct);
+                        localStorage.setItem(
+                          "homeStaffSplit",
+                          String(Math.round(pct)),
+                        );
+                      }}
+                    />
+                  ) : (
+                    <div className="h-2 shrink-0" />
+                  )}
+                  <HomeThreadsSidebar
+                    className="flex-1"
+                    resizeHandle={staffResizeHandle}
+                  />
+                </>
+              )}
+            </div>
           ) : (
             <div className="side-card mx-2 mt-1 hidden w-12 shrink-0 flex-col items-center self-start py-2 lg:flex">
               <SidebarRail icon="staff" title="Show Staff" onClick={toggleStaff} />
             </div>
           )}
-          <div className="relative flex min-w-0 flex-1 overflow-hidden">
-          {/* The Chat tab's past conversations, as a column of the center
-              region rather than a fourth sidebar: it belongs to the tab, not
-              to Home, and it leaves with it. */}
-          {chatOpen && <HomeThreadList />}
           <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
             {/* The dither shader from the hero, as a banner behind the heading —
             it fades into the background before the notebook grid starts. */}
@@ -1205,7 +1302,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             </div>
             )}
           </div>
-          </div>
 
           {/* Right column: the Brief card above the reports feed — the
             morning-read surface, arrival point first. */}
@@ -1254,41 +1350,19 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   }
                 />
                 {briefOpen && reportsOpen ? (
-                  <div
-                    role="separator"
-                    aria-orientation="horizontal"
-                    aria-label="Resize the brief"
-                    tabIndex={0}
-                    onPointerDown={onSplitDrag}
-                    onDoubleClick={() => {
-                      setBriefSplit(40);
-                      localStorage.setItem("homeBriefSplit", "40");
-                    }}
-                    onKeyDown={(e) => {
-                      // Arrow keys nudge the split — the same keyboard
-                      // affordance ResizeHandle gives the vertical edges.
-                      const delta =
-                        e.key === "ArrowDown" ? 2 : e.key === "ArrowUp" ? -2 : 0;
-                      if (!delta) return;
-                      e.preventDefault();
-                      const pct = clampSplit(briefSplit + delta);
+                  <StackSplit
+                    colRef={rightColRef}
+                    pct={briefSplit}
+                    defaultPct={40}
+                    label="Resize the brief"
+                    onChange={(pct) => {
                       setBriefSplit(pct);
                       localStorage.setItem(
                         "homeBriefSplit",
                         String(Math.round(pct)),
                       );
                     }}
-                    className="group/resize relative h-2 shrink-0 cursor-row-resize rounded transition-colors hover:bg-ring/30 active:bg-ring/40 focus-visible:bg-ring/30"
-                  >
-                    <span
-                      aria-hidden
-                      className="absolute top-1/2 left-1/2 flex -translate-x-1/2 -translate-y-1/2 gap-0.5 opacity-40 transition-opacity group-hover/resize:opacity-100 group-focus-visible/resize:opacity-100"
-                    >
-                      <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
-                      <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
-                      <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
-                    </span>
-                  </div>
+                  />
                 ) : (
                   <div className="h-2 shrink-0" />
                 )}

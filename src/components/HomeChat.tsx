@@ -244,9 +244,20 @@ export function useHomeChat(): HomeChat {
   return { turns, streaming, steps, waiting, loading, pending, ask, stop };
 }
 
-/** The slim column of past conversations beside the open one: what you
- *  asked, when, and how far it went. Clicking one reopens it in place. */
-export function HomeThreadList() {
+/** Past conversations, as the second card of Home's left rail — the same
+ *  stacked side-card the Brief and the reports feed make on the right, under
+ *  Staff rather than beside the answer. What you asked, when, and how far it
+ *  went; clicking one reopens it in the center column. */
+export function HomeThreadsSidebar({
+  className,
+  style,
+  resizeHandle,
+}: {
+  className?: string;
+  style?: React.CSSProperties;
+  /** The left column's width handle, rendered on this card's edge. */
+  resizeHandle?: React.ReactNode;
+}) {
   const threads = useStore((s) => s.homeThreads);
   const openId = useStore((s) => s.homeChat.threadId);
   const openThread = useStore((s) => s.openHomeThread);
@@ -259,12 +270,25 @@ export function HomeThreadList() {
   const openIsSaved = threads.some((t) => t.id === openId);
 
   return (
-    <div className="flex w-[190px] shrink-0 flex-col border-r border-border pt-6">
-      <div className="px-3 pb-2">
+    <section
+      className={cn("side-card relative flex min-h-0 flex-col", className)}
+      style={style}
+    >
+      {resizeHandle}
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
+        <MessagesSquare className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+          Chats
+        </span>
+        {threads.length > 0 && (
+          <span className="text-micro tabular-nums text-subtle-foreground">
+            {threads.length}
+          </span>
+        )}
         <Button
-          variant="secondary"
+          variant="ghost"
           size="sm"
-          className="w-full justify-start"
+          className="ml-auto"
           disabled={!openIsSaved}
           onClick={() => void openThread(null)}
           title="Start a new conversation"
@@ -273,7 +297,7 @@ export function HomeThreadList() {
           New chat
         </Button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
         {threads.length === 0 ? (
           <p className="px-1 py-3 text-caption text-subtle-foreground">
             Past conversations are listed here.
@@ -339,7 +363,7 @@ export function HomeThreadList() {
         )}
       </div>
       {dialog}
-    </div>
+    </section>
   );
 }
 
