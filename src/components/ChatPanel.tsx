@@ -1937,8 +1937,12 @@ const isAgentProvider = (kind: string) => AGENT_KINDS.has(kind);
  *  reasoning effort. Three pills rather than one nested menu — a flyout inside
  *  a popover anchored above the composer has nowhere to go, and each list is
  *  short and flat on its own. The Effort pill is absent, not disabled, for a
- *  provider with no effort control (see `ProviderModels.efforts`). */
-function ModelPill() {
+ *  provider with no effort control (see `ProviderModels.efforts`).
+ *
+ *  The choice is the app's, not the notebook's (it writes `AiConfig`), so the
+ *  same pills serve Home's corpus-wide composer — `scope` only names what the
+ *  provider is about to answer. */
+export function ModelPill({ scope = "this notebook" }: { scope?: string }) {
   const aiConfig = useStore((s) => s.aiConfig);
   const saveAiConfig = useStore((s) => s.saveAiConfig);
   const openSettings = useStore((s) => s.openSettings);
@@ -2008,7 +2012,7 @@ function ModelPill() {
         open={open === "provider"}
         onToggle={() => setOpen((o) => (o === "provider" ? null : "provider"))}
         onClose={() => setOpen(null)}
-        title="Which provider answers this notebook"
+        title={`Which provider answers ${scope}`}
         menuLabel="Answer with"
       >
         {aiConfig.providers.map((p) => {
@@ -2120,7 +2124,7 @@ function ModelPill() {
 }
 
 /** A composer pill that opens a popover menu above it. */
-function MenuPill({
+export function MenuPill({
   label,
   muted,
   open,
@@ -2144,6 +2148,9 @@ function MenuPill({
   return (
     <span className="relative">
       <button
+        // Never a submit: Home's composer is a real <form>, and an untyped
+        // button inside one sends the question on every pill click.
+        type="button"
         onClick={onToggle}
         aria-expanded={open}
         aria-haspopup="menu"
@@ -2192,7 +2199,7 @@ function MenuPill({
 }
 
 /** One row in a pill's menu. */
-function MenuRow({
+export function MenuRow({
   label,
   badge,
   note,
@@ -2280,8 +2287,16 @@ function CustomModelRow({
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
           e.stopPropagation();
-          if (e.key === "Enter") onCommit(draft.trim());
-          if (e.key === "Escape") setEditing(false);
+          // preventDefault as well: inside Home's composer <form>, Enter in
+          // a text field would otherwise ask the question too.
+          if (e.key === "Enter") {
+            e.preventDefault();
+            onCommit(draft.trim());
+          }
+          if (e.key === "Escape") {
+            e.preventDefault();
+            setEditing(false);
+          }
         }}
         onBlur={() => setEditing(false)}
         className="h-6 w-full rounded border border-input bg-surface-2 px-1.5 text-micro text-foreground focus:outline-none focus:border-border-strong"

@@ -448,7 +448,18 @@ export const api = {
     /** Deep search: 3× retrieval pool + model rerank. Omit for the smart
      *  default (on for gateway models, off for local). */
     deep?: boolean,
-  ) => run(ai<MetaAnswer>("ask_everything", { question, history, deep: deep ?? null })),
+    /** Home chat's own style and length. Omitted (⌘K's glance mode) means the
+     *  default prompt, unchanged. */
+    config?: ChatConfig | null,
+  ) =>
+    run(
+      ai<MetaAnswer>("ask_everything", {
+        question,
+        history,
+        deep: deep ?? null,
+        config: config ?? null,
+      }),
+    ),
   // Home chat threads — the persisted side of ask_everything.
   listMetaThreads: () => run(query<MetaThread[]>("list_meta_threads")),
   listMetaTurns: (threadId: string) =>

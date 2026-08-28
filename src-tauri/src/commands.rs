@@ -11247,6 +11247,10 @@ pub async fn ask_everything(
     question: String,
     history: Option<Vec<crate::ai::ChatTurn>>,
     deep: Option<bool>,
+    // Home's chat has its own style and length (the composer's pills), kept
+    // apart from any notebook's. Absent — the MCP tool, the ⌘K palette, an
+    // older front-end — is the default config, i.e. no extra guidance.
+    config: Option<ChatConfig>,
 ) -> Result<MetaAnswer, String> {
     touch_activity();
     let question = question.trim().to_string();
@@ -11342,12 +11346,14 @@ pub async fn ask_everything(
             ai.profile(crate::inference::Role::Chat),
         )
     };
+    let extra = chat_style_instruction(&config.unwrap_or_default());
     let messages = rag::build_meta_messages(
         history.as_deref().unwrap_or(&[]),
         &question,
         &passages,
         &persona,
         ctx_profile.compact_excerpts,
+        &extra,
     );
     // On-device model only: fit the prompt to its 8192-token window before
     // streaming; a no-op for larger-window engines (see notebook chat above).

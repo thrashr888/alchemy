@@ -134,6 +134,22 @@ function loadSourceSel(notebookId: string): Record<string, boolean> | null {
   }
 }
 
+/** Home chat's persisted style and length. Same shape and same key grammar as
+ *  a notebook's `chatConfig:<id>`, under the surface's own name — Home is a
+ *  place you ask from, not a notebook, so it keeps its own answer voice. */
+const HOME_CHAT_CONFIG_KEY = "homeChatConfig";
+
+function loadHomeChatConfig(): ChatConfig {
+  try {
+    const raw = localStorage.getItem(HOME_CHAT_CONFIG_KEY);
+    return raw
+      ? { ...DEFAULT_CHAT_CONFIG, ...JSON.parse(raw) }
+      : DEFAULT_CHAT_CONFIG;
+  } catch {
+    return DEFAULT_CHAT_CONFIG;
+  }
+}
+
 /** Persist a notebook's source selection; null (all selected) clears the key. */
 function saveSourceSel(
   notebookId: string | null,
@@ -444,6 +460,7 @@ export const useStore = create<AppState>((set, get) => {
     homeSection: "notebooks",
     homeChat: { threadId: null, turns: [] },
     homeThreads: [],
+    homeChatConfig: loadHomeChatConfig(),
     homeView:
       (localStorage.getItem("homeView") as "grid" | "table") || "grid",
     homeQuery: "",
@@ -1321,6 +1338,11 @@ export const useStore = create<AppState>((set, get) => {
       if (get().homeChat.threadId === threadId)
         set({ homeChat: { threadId: newThreadId(), turns: [] } });
       await get().refreshHomeThreads();
+    },
+
+    setHomeChatConfig: (config) => {
+      localStorage.setItem(HOME_CHAT_CONFIG_KEY, JSON.stringify(config));
+      set({ homeChatConfig: config });
     },
 
     setTheme: (theme) => {

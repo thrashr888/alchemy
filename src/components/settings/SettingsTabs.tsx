@@ -32,7 +32,7 @@ import {
 // These presets mirror rag::CHAT_STYLES in the backend. The specialist
 // choices compress real writing standards (ASD-STE100, GOV.UK, US Federal
 // Plain Language, and the i-have-adhd rules) to prompt size.
-const CHAT_STYLES = [
+export const CHAT_STYLES = [
   { id: "default", label: "Default", icon: Sparkles, hint: "Balanced answers, cited to your sources." },
   { id: "friendly", label: "Friendly", icon: MessageCircle, hint: "Warm and direct. No cheerleading, no filler." },
   { id: "professional", label: "Professional", icon: Briefcase, hint: "The takeaway first; evidence and caveats after, in workplace prose." },
@@ -46,7 +46,7 @@ const CHAT_STYLES = [
   { id: "custom", label: "Custom", icon: PenLine, hint: "Give your own goal, style, or role." },
 ] as const;
 
-const CHAT_LENGTHS = [
+export const CHAT_LENGTHS = [
   { id: "shorter", label: "Concise", icon: Scissors, hint: "Direct answer in up to three short paragraphs or five bullets." },
   { id: "default", label: "Balanced", icon: AlignLeft, hint: "Matches the level of detail to the question." },
   { id: "longer", label: "Thorough", icon: ScrollText, hint: "Conclusion first, then evidence, reasoning, and examples." },

@@ -16,6 +16,7 @@ import {
   BookOpen,
   Clock,
   FileText,
+  MessagesSquare,
   Moon,
   Newspaper,
   Package,
@@ -522,12 +523,13 @@ export function SidebarRail({
   dot,
   onClick,
 }: {
-  icon: "staff" | "brief" | "reports";
+  icon: "staff" | "brief" | "reports" | "chats";
   title: string;
   dot?: boolean;
   onClick: () => void;
 }) {
-  const Icon = icon === "staff" ? Moon : Newspaper;
+  const Icon =
+    icon === "staff" ? Moon : icon === "chats" ? MessagesSquare : Newspaper;
   return (
     <button
       type="button"

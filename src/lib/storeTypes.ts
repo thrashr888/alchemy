@@ -231,6 +231,10 @@ export interface AppState {
   /** Every Home conversation, most recently used first — the Chat tab's
    *  thread list. Refreshed when a turn settles or a thread is deleted. */
   homeThreads: MetaThread[];
+  /** Home chat's own style and length. Per SURFACE, not per thread: asking
+   *  across everything is a different job from asking inside one notebook,
+   *  and it shouldn't inherit — or overwrite — whatever a notebook is set to. */
+  homeChatConfig: ChatConfig;
   /** How that column lays out. Cards are recognisable, rows are scannable
    *  and sortable — which one is "easier to find things in" depends on the
    *  collection, so it's a per-user choice, remembered. */
@@ -288,6 +292,8 @@ export interface AppState {
     kind: MetaTurn["kind"],
   ) => Promise<void>;
   deleteHomeThread: (threadId: string) => Promise<void>;
+  /** Set Home chat's style/length; persisted for the surface. */
+  setHomeChatConfig: (config: ChatConfig) => void;
   /** Resolves to the new notebook's id. */
   createNotebook: (title: string) => Promise<string>;
   renameNotebook: (id: string, title: string) => Promise<void>;

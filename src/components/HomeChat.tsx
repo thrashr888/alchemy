@@ -6,12 +6,22 @@ import { useStore } from "@/lib/store";
 import { cn, chatReadingClass, relativeTime } from "@/lib/utils";
 import type { MetaCitation, MetaTurn } from "@/lib/types";
 import { Markdown } from "./Markdown";
-import { Button, EmptyState, RowMenu, StepTrail, useConfirm } from "./ui";
+import { MenuPill, MenuRow, ModelPill } from "./ChatPanel";
+import { CHAT_LENGTHS, CHAT_STYLES } from "./settings/SettingsTabs";
+import {
+  Button,
+  EmptyState,
+  RowMenu,
+  StepTrail,
+  Textarea,
+  useConfirm,
+} from "./ui";
 import {
   AlertTriangle,
   FileText,
   MessagesSquare,
   Package,
+  PanelLeftClose,
   Plus,
   Sparkles,
   SquarePen,
@@ -167,9 +177,10 @@ export function useHomeChat(): HomeChat {
     setWaiting("");
     setLoading(true);
     api
-      // No third argument: the backend picks depth per model class (deep
+      // No depth argument: the backend picks depth per model class (deep
       // rerank on gateways where the extra call is cheap, single-pass local).
-      .askEverything(q, prior)
+      // The config is Home's own — the composer's Style and Length pills.
+      .askEverything(q, prior, undefined, store.homeChatConfig)
       .then((res) => {
         if (id !== runSeq) return;
         const wasStopped = stopped.current;
@@ -244,6 +255,94 @@ export function useHomeChat(): HomeChat {
   return { turns, streaming, steps, waiting, loading, pending, ask, stop };
 }
 
+/** Home composer controls: how the answer is written, how long it runs, and
+ *  which model writes it — the same three-pill grammar the notebook composer
+ *  uses, so the two chats are operated the same way.
+ *
+ *  Style and length are Home's OWN (`homeChatConfig`, persisted per surface):
+ *  asking across everything is a different job from asking inside one
+ *  notebook, and neither should quietly reset the other. The model is the
+ *  app's single choice — `ModelPill` writes `AiConfig`, exactly as it does in
+ *  a notebook — so picking here is picking everywhere, as it already was. */
+export function HomeChatControls() {
+  const config = useStore((s) => s.homeChatConfig);
+  const setConfig = useStore((s) => s.setHomeChatConfig);
+  const [open, setOpen] = useState<null | "style" | "length">(null);
+  const style = CHAT_STYLES.find((s) => s.id === config.style);
+  const length = CHAT_LENGTHS.find((l) => l.id === config.length);
+
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      <MenuPill
+        label={style?.label ?? "Default"}
+        muted={config.style === "default"}
+        open={open === "style"}
+        onToggle={() => setOpen((o) => (o === "style" ? null : "style"))}
+        onClose={() => setOpen(null)}
+        title="How answers across your notebooks are written"
+        menuLabel="Style"
+        // The custom prompt needs a field wide enough to read back.
+        wide={config.style === "custom"}
+      >
+        {CHAT_STYLES.map((s) => (
+          <MenuRow
+            key={s.id}
+            label={s.label}
+            selected={config.style === s.id}
+            autoFocus={s.id === config.style}
+            onPick={() => {
+              setConfig({ ...config, style: s.id });
+              // Custom needs somewhere to type; every other pick is done.
+              if (s.id !== "custom") setOpen(null);
+            }}
+          />
+        ))}
+        {config.style === "custom" && (
+          <>
+            <div className="mx-2 my-1 h-px bg-border" />
+            <div className="px-2 pb-1.5">
+              <Textarea
+                rows={3}
+                aria-label="Custom conversational style"
+                placeholder="Act as a skeptical peer reviewer…"
+                value={config.customPrompt}
+                onChange={(e) =>
+                  setConfig({ ...config, customPrompt: e.target.value })
+                }
+              />
+            </div>
+          </>
+        )}
+      </MenuPill>
+
+      <MenuPill
+        label={length?.label ?? "Balanced"}
+        muted={config.length === "default"}
+        open={open === "length"}
+        onToggle={() => setOpen((o) => (o === "length" ? null : "length"))}
+        onClose={() => setOpen(null)}
+        title="How long those answers run"
+        menuLabel="Length"
+      >
+        {CHAT_LENGTHS.map((l) => (
+          <MenuRow
+            key={l.id}
+            label={l.label}
+            selected={config.length === l.id}
+            autoFocus={l.id === config.length}
+            onPick={() => {
+              setConfig({ ...config, length: l.id });
+              setOpen(null);
+            }}
+          />
+        ))}
+      </MenuPill>
+
+      <ModelPill scope="every notebook" />
+    </span>
+  );
+}
+
 /** Past conversations, as the second card of Home's left rail — the same
  *  stacked side-card the Brief and the reports feed make on the right, under
  *  Staff rather than beside the answer. What you asked, when, and how far it
@@ -252,11 +351,14 @@ export function HomeThreadsSidebar({
   className,
   style,
   resizeHandle,
+  onCollapse,
 }: {
   className?: string;
   style?: React.CSSProperties;
   /** The left column's width handle, rendered on this card's edge. */
   resizeHandle?: React.ReactNode;
+  /** Fold the card down to the rail, as Staff above it and Brief opposite. */
+  onCollapse?: () => void;
 }) {
   const threads = useStore((s) => s.homeThreads);
   const openId = useStore((s) => s.homeChat.threadId);
@@ -285,17 +387,29 @@ export function HomeThreadsSidebar({
             {threads.length}
           </span>
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="ml-auto"
-          disabled={!openIsSaved}
-          onClick={() => void openThread(null)}
-          title="Start a new conversation"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          New chat
-        </Button>
+        <div className="ml-auto flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={!openIsSaved}
+            onClick={() => void openThread(null)}
+            title="Start a new conversation"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New chat
+          </Button>
+          {onCollapse && (
+            <button
+              type="button"
+              onClick={onCollapse}
+              title="Collapse Chats"
+              aria-label="Collapse the Chats sidebar"
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+            >
+              <PanelLeftClose className="h-4 w-4" />
+            </button>
+          )}
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
         {threads.length === 0 ? (
@@ -367,7 +481,8 @@ export function HomeThreadsSidebar({
   );
 }
 
-/** The conversation itself: scrolls under Home's pinned composer. */
+/** The conversation itself: the scrolling middle, between Home's heading and
+ *  the composer docked below it. */
 export function HomeChatThread({ chat }: { chat: HomeChat }) {
   const reading = useStore((s) => s.reading);
   const endRef = useRef<HTMLDivElement>(null);

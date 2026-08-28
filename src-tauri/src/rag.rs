@@ -244,13 +244,16 @@ pub struct MetaPassage {
 /// each excerpt names its notebook and there is no per-notebook manifest.
 /// `compact` (the resolved profile's `compact_excerpts`) hard-caps excerpt
 /// bodies for tight-window tiers; false leaves the prompt byte-for-byte as it
-/// was before Phase 5.
+/// was before Phase 5. `extra_system` is the caller's presentation guidance
+/// (Home's own chat style and length), attached exactly the way
+/// `build_chat_messages` attaches a notebook's.
 pub fn build_meta_messages(
     history: &[ChatTurn],
     question: &str,
     passages: &[MetaPassage],
     persona: &str,
     compact: bool,
+    extra_system: &str,
 ) -> Vec<ChatTurn> {
     let mut context = String::new();
     if passages.is_empty() {
@@ -268,7 +271,14 @@ pub fn build_meta_messages(
         }
     }
 
-    let mut system = META_SYSTEM.to_string();
+    let mut system = if extra_system.trim().is_empty() {
+        META_SYSTEM.to_string()
+    } else {
+        format!(
+            "{META_SYSTEM}\n\nAdditional presentation guidance (apply it without weakening the grounding or citation rules above): {}",
+            extra_system.trim()
+        )
+    };
     if !persona.is_empty() {
         system.push_str(&format!("\n\n{persona}"));
     }
@@ -1329,7 +1339,7 @@ mod tests {
             snippet: long.clone(),
         }];
         let render = |compact: bool| {
-            build_meta_messages(&[], "q?", &passages, "", compact)
+            build_meta_messages(&[], "q?", &passages, "", compact, "")
                 .iter()
                 .map(|m| m.content.clone())
                 .collect::<Vec<_>>()
