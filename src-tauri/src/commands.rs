@@ -10862,7 +10862,7 @@ pub(crate) async fn retrieve_everything(
     let routed: Option<Vec<String>> = if nb_titles.len() > crate::router::MIN_NOTEBOOKS_TO_ROUTE {
         meta_step(
             app,
-            format!("Searching {} notebooks", nb_titles.len()),
+            format!("Choosing from {} notebooks", nb_titles.len()),
             false,
         );
         let ai = state.ai.read().await.clone();
