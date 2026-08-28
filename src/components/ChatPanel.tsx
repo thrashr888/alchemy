@@ -54,6 +54,7 @@ import {
   FileText,
   SlidersHorizontal,
   ChevronDown,
+  ChevronRight,
   AlertTriangle,
 } from "lucide-react";
 
@@ -1748,6 +1749,34 @@ function openCitationTarget(c: Citation) {
   }
 }
 
+/** The one control that folds an answer's citation list away: a count and a
+ *  chevron, quiet until you want the receipts. Shared with Home's corpus
+ *  chat, whose rows differ but whose disclosure should not. */
+export function CitationsToggle({
+  count,
+  open,
+  onToggle,
+}: {
+  count: number;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1 text-micro text-muted-foreground hover:text-foreground hover:border-border-strong transition-colors"
+      onClick={onToggle}
+    >
+      <Quote className="h-3 w-3" />
+      {count} {count === 1 ? "citation" : "citations"}
+      <ChevronRight
+        className={cn("h-3 w-3 transition-transform", open && "rotate-90")}
+      />
+    </button>
+  );
+}
+
 function Citations({ citations }: { citations: Citation[] }) {
   const [open, setOpen] = useState(false);
   const sources = useStore((s) => s.sources);
@@ -1759,13 +1788,11 @@ function Citations({ citations }: { citations: Citation[] }) {
   };
   return (
     <div className="mt-1">
-      <button
-        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1 text-micro text-muted-foreground hover:text-foreground hover:border-border-strong transition-colors"
-        onClick={() => setOpen((o) => !o)}
-      >
-        <Quote className="h-3 w-3" />
-        {citations.length} {citations.length === 1 ? "citation" : "citations"}
-      </button>
+      <CitationsToggle
+        count={citations.length}
+        open={open}
+        onToggle={() => setOpen((o) => !o)}
+      />
       {open && (
         <div className="mt-2 flex flex-col gap-2">
           {citations.map((c, i) => (

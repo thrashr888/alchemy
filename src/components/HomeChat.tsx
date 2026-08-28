@@ -6,7 +6,7 @@ import { useStore } from "@/lib/store";
 import { cn, chatReadingClass, relativeTime } from "@/lib/utils";
 import type { MetaCitation, MetaTurn } from "@/lib/types";
 import { Markdown } from "./Markdown";
-import { MenuPill, MenuRow, ModelPill } from "./ChatPanel";
+import { CitationsToggle, MenuPill, MenuRow, ModelPill } from "./ChatPanel";
 import { CHAT_LENGTHS, CHAT_STYLES } from "./settings/SettingsTabs";
 import {
   Button,
@@ -605,34 +605,50 @@ function openCitation(c: MetaCitation) {
 }
 
 /** The passages behind an answer, each naming the notebook it lives in and
- *  each one click from the source reader or note card that holds it. */
+ *  each one click from the source reader or note card that holds it.
+ *
+ *  Folded away by default, the way a notebook answer's citations are: a
+ *  corpus answer can cite a dozen sources, and the list was costing more
+ *  vertical space than the answer itself. The inline [n] chips in the prose
+ *  stay clickable either way, so nothing is behind the fold that a reader
+ *  needs — this is the receipts, not the route. */
 function MetaCitations({ citations }: { citations: MetaCitation[] }) {
+  const [open, setOpen] = useState(false);
   if (citations.length === 0) return null;
   return (
-    <div className="mt-1 flex flex-col gap-0.5 border-t border-border pt-2">
-      {citations.map((c, i) => (
-        <button
-          key={`${c.kind}-${c.id}-${i}`}
-          onClick={() => openCitation(c)}
-          title={c.snippet}
-          className="flex items-center gap-2 rounded-md px-1.5 py-1 text-left text-caption text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-        >
-          <span className="shrink-0 text-badge text-subtle-foreground">
-            [{i + 1}]
-          </span>
-          {c.kind === "card" ? (
-            <Package className="h-3 w-3 shrink-0" />
-          ) : c.kind === "note" ? (
-            <SquarePen className="h-3 w-3 shrink-0" />
-          ) : (
-            <FileText className="h-3 w-3 shrink-0" />
-          )}
-          <span className="min-w-0 truncate">{c.title || "Untitled"}</span>
-          <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
-            {c.notebookTitle}
-          </span>
-        </button>
-      ))}
+    <div className="mt-1">
+      <CitationsToggle
+        count={citations.length}
+        open={open}
+        onToggle={() => setOpen((o) => !o)}
+      />
+      {open && (
+        <div className="mt-2 flex flex-col gap-0.5">
+          {citations.map((c, i) => (
+            <button
+              key={`${c.kind}-${c.id}-${i}`}
+              onClick={() => openCitation(c)}
+              title={c.snippet}
+              className="flex items-center gap-2 rounded-md px-1.5 py-1 text-left text-caption text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+            >
+              <span className="shrink-0 text-badge text-subtle-foreground">
+                [{i + 1}]
+              </span>
+              {c.kind === "card" ? (
+                <Package className="h-3 w-3 shrink-0" />
+              ) : c.kind === "note" ? (
+                <SquarePen className="h-3 w-3 shrink-0" />
+              ) : (
+                <FileText className="h-3 w-3 shrink-0" />
+              )}
+              <span className="min-w-0 truncate">{c.title || "Untitled"}</span>
+              <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
+                {c.notebookTitle}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

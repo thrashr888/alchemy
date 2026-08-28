@@ -36,7 +36,6 @@ import {
   FileDown,
   ChevronRight,
   MessagesSquare,
-  PanelRight,
   PanelRightClose,
   Plus,
   Search,
@@ -1397,141 +1396,127 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   over the gap between the cards' rounded corners); both drag
                   the whole column's width. The card's left edge IS the
                   column's, so the parent-rect math is unchanged. */}
-              <>
+              {briefOpen ? (
                 <BriefSidebar
-                  open={briefOpen}
-                  onToggle={toggleBrief}
+                  onCollapse={toggleBrief}
                   briefs={briefNotes}
                   schedules={allReports}
                   unread={briefUnread}
                   onRan={refreshActivity}
                   resizeHandle={rightResizeHandle}
-                  className={cn(
-                    briefOpen && !reportsOpen && "min-h-0 flex-1",
-                    briefOpen && reportsOpen && "shrink-0",
-                  )}
+                  className={reportsOpen ? "shrink-0" : "min-h-0 flex-1"}
                   style={
-                    briefOpen && reportsOpen
-                      ? { height: `${briefSplit}%` }
-                      : undefined
+                    reportsOpen ? { height: `${briefSplit}%` } : undefined
                   }
                 />
-                {briefOpen && reportsOpen ? (
-                  <StackSplit
-                    colRef={rightColRef}
-                    pct={briefSplit}
-                    defaultPct={40}
-                    label="Resize the brief"
-                    onChange={(pct) => {
-                      setBriefSplit(pct);
-                      localStorage.setItem(
-                        "homeBriefSplit",
-                        String(Math.round(pct)),
-                      );
-                    }}
+              ) : (
+                // Collapsed to the single-icon rail, hugging the column's
+                // outer edge — the mirror of Staff and Chats on the left.
+                <div className="side-card flex w-12 shrink-0 flex-col items-center self-end py-2">
+                  <SidebarRail
+                    icon="brief"
+                    title="Show the brief"
+                    dot={briefUnread}
+                    onClick={toggleBrief}
                   />
-                ) : (
-                  <div className="h-2 shrink-0" />
-                )}
-                <aside
-                  className={cn(
-                    "side-card relative flex min-h-0 flex-col",
-                    reportsOpen && "flex-1",
-                  )}
-                >
+                </div>
+              )}
+              {briefOpen && reportsOpen ? (
+                <StackSplit
+                  colRef={rightColRef}
+                  pct={briefSplit}
+                  defaultPct={40}
+                  label="Resize the brief"
+                  onChange={(pct) => {
+                    setBriefSplit(pct);
+                    localStorage.setItem(
+                      "homeBriefSplit",
+                      String(Math.round(pct)),
+                    );
+                  }}
+                />
+              ) : (
+                <div className="h-2 shrink-0" />
+              )}
+              {reportsOpen ? (
+                <aside className="side-card relative flex min-h-0 flex-1 flex-col">
                   {rightResizeHandle}
-                  {reportsOpen ? (
-                    feedReports.length > 0 ? (
-                      <ReportsFeed
-                        onCollapse={toggleReports}
-                        reports={feedReports}
-                        notebookTitle={notebookTitle}
-                        notebookColor={notebookColor}
-                        fallbackColor={NOTEBOOK_PALETTE[0]}
-                        onOpen={openNote}
-                      />
-                    ) : (
-                      // Empty and loading states carry their own header:
-                      // ReportsFeed owns the collapse control, so without one
-                      // here an empty feed can never be closed again.
-                      <>
-                        <div className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-6 py-2">
-                          <span className="whitespace-nowrap text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-                            Latest reports
-                          </span>
-                          <button
-                            type="button"
-                            onClick={toggleReports}
-                            title="Collapse reports"
-                            aria-label="Collapse the reports feed"
-                            aria-expanded
-                            className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-                          >
-                            <PanelRightClose className="h-4 w-4" />
-                          </button>
-                        </div>
-                        {activityLoading ? (
-                          <div
-                            role="status"
-                            className="flex flex-1 items-center justify-center p-8 text-caption text-muted-foreground"
-                          >
-                            Loading reports…
-                          </div>
-                        ) : (
-                          <div className="flex flex-1 items-center justify-center p-8">
-                            <EmptyState
-                              icon={<Newspaper className="h-7 w-7" />}
-                              title={
-                                activityError
-                                  ? "Reports unavailable"
-                                  : "Reports appear here"
-                              }
-                              hint={
-                                activityError
-                                  ? "Alchemy couldn’t load recent reports."
-                                  : "Schedule a recurring report from a notebook’s Studio panel."
-                              }
-                            >
-                              {activityError && (
-                                <Button
-                                  variant="secondary"
-                                  size="sm"
-                                  onClick={() => void refreshActivity()}
-                                >
-                                  Retry
-                                </Button>
-                              )}
-                            </EmptyState>
-                          </div>
-                        )}
-                      </>
-                    )
+                  {feedReports.length > 0 ? (
+                    <ReportsFeed
+                      onCollapse={toggleReports}
+                      reports={feedReports}
+                      notebookTitle={notebookTitle}
+                      notebookColor={notebookColor}
+                      fallbackColor={NOTEBOOK_PALETTE[0]}
+                      onOpen={openNote}
+                    />
                   ) : (
-                    <div className="flex h-12 shrink-0 items-center gap-2 px-6">
-                      <span className="whitespace-nowrap text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-                        Latest reports
-                      </span>
-                      {totalUnread > 0 && (
-                        <span
-                          title={`${totalUnread} unread`}
-                          className="rounded-full bg-primary/15 px-1.5 py-0.5 text-badge font-medium tabular-nums text-citation"
-                        >
-                          {totalUnread}
+                    // Empty and loading states carry their own header:
+                    // ReportsFeed owns the collapse control, so without one
+                    // here an empty feed can never be closed again.
+                    <>
+                      <div className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-6 py-2">
+                        <span className="whitespace-nowrap text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+                          Latest reports
                         </span>
+                        <button
+                          type="button"
+                          onClick={toggleReports}
+                          title="Collapse reports"
+                          aria-label="Collapse the reports feed"
+                          aria-expanded
+                          className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+                        >
+                          <PanelRightClose className="h-4 w-4" />
+                        </button>
+                      </div>
+                      {activityLoading ? (
+                        <div
+                          role="status"
+                          className="flex flex-1 items-center justify-center p-8 text-caption text-muted-foreground"
+                        >
+                          Loading reports…
+                        </div>
+                      ) : (
+                        <div className="flex flex-1 items-center justify-center p-8">
+                          <EmptyState
+                            icon={<Newspaper className="h-7 w-7" />}
+                            title={
+                              activityError
+                                ? "Reports unavailable"
+                                : "Reports appear here"
+                            }
+                            hint={
+                              activityError
+                                ? "Alchemy couldn’t load recent reports."
+                                : "Schedule a recurring report from a notebook’s Studio panel."
+                            }
+                          >
+                            {activityError && (
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => void refreshActivity()}
+                              >
+                                Retry
+                              </Button>
+                            )}
+                          </EmptyState>
+                        </div>
                       )}
-                      <button
-                        type="button"
-                        onClick={toggleReports}
-                        title="Show latest reports"
-                        aria-expanded={false}
-                        className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-                      >
-                        <PanelRight className="h-4 w-4" />
-                      </button>
-                    </div>
+                    </>
                   )}
                 </aside>
-              </>
+              ) : (
+                <div className="side-card flex w-12 shrink-0 flex-col items-center self-end py-2">
+                  <SidebarRail
+                    icon="reports"
+                    title="Show latest reports"
+                    dot={totalUnread > 0}
+                    onClick={toggleReports}
+                  />
+                </div>
+              )}
             </div>
           )}
         </div>
