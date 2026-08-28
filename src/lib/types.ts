@@ -620,16 +620,30 @@ export interface MetaAnswer {
   citations: MetaCitation[];
 }
 
-/** One exchange in Home's corpus-wide conversation. Front-end only: the
- *  backend persists no meta-chat turns, so this mirrors nothing in Rust. */
+/** One exchange in Home's corpus-wide conversation, persisted in the
+ *  `meta_turns` table (mirrors `models::MetaTurn`). */
 export interface MetaTurn {
+  id: string;
+  threadId: string;
   role: "user" | "assistant";
   content: string;
   citations: MetaCitation[];
-  /** A provider failure, rendered as a danger wash and kept out of history. */
-  error?: boolean;
-  /** Cut short by Stop/Esc — the partial answer is still worth keeping. */
-  stopped?: boolean;
+  /** "chat" | "stopped" (cut short by Stop/Esc — the partial answer is still
+   *  worth keeping) | "error" (a provider failure: rendered as a danger wash
+   *  and kept out of the history the model sees). */
+  kind: "chat" | "stopped" | "error";
+  createdAt: number;
+}
+
+/** A Home conversation as the thread list sees it. Derived from its turns —
+ *  a thread nobody asked into never existed. */
+export interface MetaThread {
+  id: string;
+  /** The opening question, trimmed to a line. */
+  title: string;
+  turnCount: number;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface McpStatus {

@@ -4,6 +4,8 @@ import type {
   HygieneIssue,
   KokoroStatus,
   Message,
+  MetaCitation,
+  MetaThread,
   MetaTurn,
   ModelHealth,
   ModelStat,
@@ -44,6 +46,25 @@ export interface NavEntry {
   nb: string | null;
   mode: "chat" | "reader" | "ledger" | "gallery";
   doc?: { type: ReaderDoc["type"]; id: string };
+  /** Home's section, when this entry IS Home (`nb: null`). Home has tabs the
+   *  way a notebook has center modes, and a tab is a place: back should
+   *  return you to the Registry, or to the conversation, you were reading. */
+  section?: HomeSection;
+  /** The Home conversation that was open, for `section: "chat"`. */
+  thread?: string | null;
+}
+
+/** Home's center column: the notebook grid, the Registry's cast, or the
+ *  corpus-wide conversation. */
+export type HomeSection = "notebooks" | "registry" | "chat";
+
+/** Home's conversation, as the store holds it: which thread is open and the
+ *  turns already settled into it. Both come from the backend — the thread
+ *  outlives the window now (docs/RFC-meta-chat.md). */
+export interface HomeChatState {
+  /** null until the first question mints one. */
+  threadId: string | null;
+  turns: MetaTurn[];
 }
 
 export interface ExternalAdd {
@@ -200,13 +221,16 @@ export interface AppState {
   /** Bumped when the registry changes (agents, or the arrival sweep filing
    *  a document). Corpus-scoped, so it fires with no notebook open. */
   registryBump: number;
-  /** Home's center column: the notebook grid, or the Registry's cast. */
-  homeSection: "notebooks" | "registry";
-  /** Home's corpus-wide conversation (docs/RFC-meta-chat.md). Never
-   *  persisted — but it lives in the store rather than in HomeView, so
-   *  following a citation into a notebook and coming back doesn't throw the
-   *  thread away. A non-empty thread takes over Home's center column. */
-  homeChat: MetaTurn[];
+  /** Home's center column: the notebook grid, the Registry's cast, or the
+   *  Chat tab's conversation. */
+  homeSection: HomeSection;
+  /** The Home conversation currently open (docs/RFC-meta-chat.md). Persisted
+   *  per thread in the `meta_turns` table, so it survives a tab switch, a
+   *  window close, and a relaunch. */
+  homeChat: HomeChatState;
+  /** Every Home conversation, most recently used first — the Chat tab's
+   *  thread list. Refreshed when a turn settles or a thread is deleted. */
+  homeThreads: MetaThread[];
   /** How that column lays out. Cards are recognisable, rows are scannable
    *  and sortable — which one is "easier to find things in" depends on the
    *  collection, so it's a per-user choice, remembered. */
@@ -250,6 +274,20 @@ export interface AppState {
   closeNotebook: () => void;
   navBack: () => void;
   navForward: () => void;
+  /** Re-read the Chat tab's thread list. */
+  refreshHomeThreads: () => Promise<void>;
+  /** Open a Home conversation and show it: its turns are loaded from the
+   *  backend. `null` starts a fresh one — no row exists until it's asked. */
+  openHomeThread: (threadId: string | null) => Promise<void>;
+  /** Persist a settled turn into the open thread (minting the thread id on
+   *  the first one) and keep it on screen. */
+  appendHomeTurn: (
+    role: "user" | "assistant",
+    content: string,
+    citations: MetaCitation[],
+    kind: MetaTurn["kind"],
+  ) => Promise<void>;
+  deleteHomeThread: (threadId: string) => Promise<void>;
   /** Resolves to the new notebook's id. */
   createNotebook: (title: string) => Promise<string>;
   renameNotebook: (id: string, title: string) => Promise<void>;

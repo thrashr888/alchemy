@@ -22,6 +22,7 @@ import type {
   AcpEntry,
   AcpPaneState,
   AppState,
+  HomeSection,
   Migration,
   NavEntry,
   QueueItem,
@@ -31,10 +32,19 @@ export type { ExternalAdd, Migration, QueueItem } from "./storeTypes";
 import type {
   ChatConfig,
   Message,
+  MetaTurn,
   Note,
   ReadingPrefs,
   Source,
 } from "./types";
+
+/** Home conversations are identified client-side: the id has to exist before
+ *  the first question is asked, because an in-flight answer is keyed to it
+ *  (see `openHomeThread`). Nothing is written until a turn settles, so an
+ *  id nobody asks into simply never becomes a thread. */
+function newThreadId(): string {
+  return crypto.randomUUID();
+}
 
 /** Can an undo toast bring this source back by re-importing its origin?
  *  Connector types (git/notion/obsidian) carry setup state a re-add can't
@@ -432,7 +442,8 @@ export const useStore = create<AppState>((set, get) => {
     ledgerBump: 0,
     registryBump: 0,
     homeSection: "notebooks",
-    homeChat: [],
+    homeChat: { threadId: null, turns: [] },
+    homeThreads: [],
     homeView:
       (localStorage.getItem("homeView") as "grid" | "table") || "grid",
     homeQuery: "",
@@ -446,7 +457,10 @@ export const useStore = create<AppState>((set, get) => {
     reader: { open: false, history: [], index: -1 },
     // Home is always the floor of the app-level history; restores and
     // navigations stack on top of it via the location subscriber below.
-    nav: { stack: [{ nb: null, mode: "chat" }], index: 0 },
+    nav: {
+      stack: [{ nb: null, mode: "chat", section: "notebooks" }],
+      index: 0,
+    },
     folderScan: null,
     importingFolders: [],
     noteReads: loadNoteReads(),
@@ -555,6 +569,7 @@ export const useStore = create<AppState>((set, get) => {
       void get().refreshModelHealth();
       void get().refreshModelStats();
       void get().refreshKokoroStatus();
+      void get().refreshHomeThreads();
       // One-shot probe: are the Mac providers (cider) installed and reachable?
       void api
         .macAvailable()
@@ -575,8 +590,9 @@ export const useStore = create<AppState>((set, get) => {
           doc?: ReaderDoc;
           readerHistory?: ReaderDoc[];
           readerIndex?: number;
-          section?: "notebooks" | "registry";
+          section?: HomeSection;
           card?: string | null;
+          chatThread?: string | null;
         } | null = null;
         try {
           view = JSON.parse(localStorage.getItem("lastView") ?? "null");
@@ -588,6 +604,10 @@ export const useStore = create<AppState>((set, get) => {
         // that's where you were, with the same card open.
         if (view?.section)
           set({ homeSection: view.section, openCardId: view.card ?? null });
+        // The conversation survives the relaunch with the section: coming
+        // back to the Chat tab and finding it blank is the bug Paul hit.
+        if (view?.section === "chat")
+          await get().openHomeThread(view.chatThread ?? null);
         const last =
           view === null ? localStorage.getItem("lastNotebookId") : view.nb;
         if (last && notebooks.some((n) => n.id === last)) {
@@ -1204,6 +1224,104 @@ export const useStore = create<AppState>((set, get) => {
 
     navBack: () => void applyNav(-1),
     navForward: () => void applyNav(1),
+
+    // ---- Home chat threads (docs/RFC-meta-chat.md) ----------------------
+    // The conversation used to die with the view. It persists per thread now,
+    // so the Chat tab can be left and come back to — and so back/forward can
+    // land on a conversation the way it lands on a notebook.
+
+    refreshHomeThreads: async () => {
+      try {
+        set({ homeThreads: await api.listMetaThreads() });
+      } catch {
+        /* the list is a way back in, not the conversation itself */
+      }
+    },
+
+    openHomeThread: async (threadId) => {
+      // A fresh conversation gets its id up front, before anything is asked:
+      // the id is what an in-flight run is keyed to, so minting it mid-run
+      // would look like a thread switch and cancel the answer being written.
+      if (threadId === null) {
+        set({
+          homeChat: { threadId: newThreadId(), turns: [] },
+          homeSection: "chat",
+        });
+        return;
+      }
+      if (get().homeChat.threadId !== threadId)
+        set({ homeChat: { threadId, turns: [] } });
+      set({ homeSection: "chat" });
+      try {
+        const turns = await api.listMetaTurns(threadId);
+        // Switched away while it loaded — those turns belong to a thread
+        // nobody is looking at any more.
+        if (get().homeChat.threadId !== threadId) return;
+        set({ homeChat: { threadId, turns } });
+      } catch (e) {
+        set({ error: describe(e) });
+      }
+    },
+
+    appendHomeTurn: async (role, content, citations, kind) => {
+      const threadId = get().homeChat.threadId ?? newThreadId();
+      // Optimistic: the turn is on screen before the write lands, and stays
+      // there if the write fails — a lost row is worse than a lost answer,
+      // but showing neither is worst.
+      const pending: MetaTurn = {
+        id: `pending-${newThreadId()}`,
+        threadId,
+        role,
+        content,
+        citations,
+        kind,
+        createdAt: Date.now(),
+      };
+      set((s) => ({
+        homeChat: { threadId, turns: [...s.homeChat.turns, pending] },
+      }));
+      try {
+        const saved = await api.addMetaTurn(
+          threadId,
+          role,
+          content,
+          citations,
+          kind,
+        );
+        set((s) =>
+          s.homeChat.threadId === threadId
+            ? {
+                homeChat: {
+                  threadId,
+                  turns: s.homeChat.turns.map((t) =>
+                    t.id === pending.id ? saved : t,
+                  ),
+                },
+              }
+            : {},
+        );
+        void get().refreshHomeThreads();
+      } catch (e) {
+        get().pushToast(
+          "error",
+          `Couldn't save this turn: ${describe(e)}`,
+        );
+      }
+    },
+
+    deleteHomeThread: async (threadId) => {
+      try {
+        await api.deleteMetaThread(threadId);
+      } catch (e) {
+        set({ error: describe(e) });
+        return;
+      }
+      // Deleting the conversation you're reading leaves a fresh one open,
+      // not an empty screen with no way forward.
+      if (get().homeChat.threadId === threadId)
+        set({ homeChat: { threadId: newThreadId(), turns: [] } });
+      await get().refreshHomeThreads();
+    },
 
     setTheme: (theme) => {
       localStorage.setItem("theme", theme);
@@ -2751,6 +2869,15 @@ async function applyNav(delta: 1 | -1): Promise<void> {
       });
       if (st.reader.open) st.closeReader();
     }
+    // Home's tabs are places too — a notebook has center modes, Home has
+    // sections, and back should return you to the one you were reading.
+    // A chat entry names its conversation, so back lands in that thread.
+    if (target.nb === null) {
+      const section = target.section ?? "notebooks";
+      if (section === "chat")
+        await useStore.getState().openHomeThread(target.thread ?? null);
+      else useStore.setState({ homeSection: section });
+    }
   } finally {
     navApplying = false;
   }
@@ -2763,7 +2890,9 @@ useStore.subscribe((s, prev) => {
     s.currentId === prev.currentId &&
     s.ledgerOpen === prev.ledgerOpen &&
     s.galleryOpen === prev.galleryOpen &&
-    s.reader === prev.reader
+    s.reader === prev.reader &&
+    s.homeSection === prev.homeSection &&
+    s.homeChat.threadId === prev.homeChat.threadId
   )
     return;
   if (navApplying) return;
@@ -2777,6 +2906,11 @@ useStore.subscribe((s, prev) => {
   const rdoc = s.reader.open ? s.reader.history[s.reader.index] : undefined;
   // Highlight is a one-time citation jump, not a place — drop it.
   const doc = rdoc && { type: rdoc.type, id: rdoc.id };
+  // Home's section (and, in the Chat tab, which conversation) is only part
+  // of the location while Home IS the location — switching tabs behind an
+  // open notebook must not stack entries for a screen nobody is looking at.
+  const section = s.currentId ? undefined : s.homeSection;
+  const thread = section === "chat" ? (s.homeChat.threadId ?? null) : undefined;
   const { stack, index } = s.nav;
   const cur = stack[index];
   if (
@@ -2784,13 +2918,15 @@ useStore.subscribe((s, prev) => {
     cur.nb === s.currentId &&
     cur.mode === mode &&
     cur.doc?.type === doc?.type &&
-    cur.doc?.id === doc?.id
+    cur.doc?.id === doc?.id &&
+    cur.section === section &&
+    cur.thread === thread
   )
     return;
   // A fresh navigation discards forward entries, browser-style.
   const next: NavEntry[] = [
     ...stack.slice(0, index + 1),
-    { nb: s.currentId, mode, doc },
+    { nb: s.currentId, mode, doc, section, thread },
   ];
   if (next.length > 100) next.splice(0, next.length - 100);
   useStore.setState({ nav: { stack: next, index: next.length - 1 } });
@@ -2818,6 +2954,7 @@ if (getCurrentWebview().label === "main") {
       s.galleryOpen === prev.galleryOpen &&
       s.reader === prev.reader &&
       s.homeSection === prev.homeSection &&
+      s.homeChat.threadId === prev.homeChat.threadId &&
       s.openCardId === prev.openCardId
     )
       return;
@@ -2842,10 +2979,12 @@ if (getCurrentWebview().label === "main") {
           id: d.id,
         })),
         readerIndex: s.reader.index,
-        // Home is a place too: the Registry and the card you had open are
-        // as much "where you were" as a notebook's center mode.
+        // Home is a place too: the Registry and the card you had open — or
+        // the conversation you were in — are as much "where you were" as a
+        // notebook's center mode.
         section: s.homeSection,
         card: s.openCardId,
+        chatThread: s.homeChat.threadId,
       }),
     );
   });

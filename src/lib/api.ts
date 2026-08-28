@@ -23,6 +23,9 @@ import type {
   Message,
   MessagePage,
   MetaAnswer,
+  MetaCitation,
+  MetaThread,
+  MetaTurn,
   ModelHealth,
   ModelStat,
   CardFact,
@@ -446,6 +449,28 @@ export const api = {
      *  default (on for gateway models, off for local). */
     deep?: boolean,
   ) => run(ai<MetaAnswer>("ask_everything", { question, history, deep: deep ?? null })),
+  // Home chat threads — the persisted side of ask_everything.
+  listMetaThreads: () => run(query<MetaThread[]>("list_meta_threads")),
+  listMetaTurns: (threadId: string) =>
+    run(query<MetaTurn[]>("list_meta_turns", { threadId })),
+  addMetaTurn: (
+    threadId: string,
+    role: "user" | "assistant",
+    content: string,
+    citations: MetaCitation[],
+    kind: MetaTurn["kind"],
+  ) =>
+    run(
+      cmd<MetaTurn>("add_meta_turn", {
+        threadId,
+        role,
+        content,
+        citations,
+        kind,
+      }),
+    ),
+  deleteMetaThread: (threadId: string) =>
+    run(cmd<void>("delete_meta_thread", { threadId })),
   createNote: (notebookId: string, title: string, content: string) =>
     run(cmd<Note>("create_note", { notebookId, title, content })),
   /** Undo half of the note-delete toast: re-insert with kind/prompt intact. */

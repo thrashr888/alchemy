@@ -19,8 +19,8 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::Connection;
 
 use crate::models::{
-    Citation, LedgerEntry, Message, Note, NoteUsage, Notebook, RegistryCard, ReportSchedule,
-    RunReceipt, Source, SourceEvent,
+    Citation, LedgerEntry, Message, MetaThread, MetaTurn, Note, NoteUsage, Notebook, RegistryCard,
+    ReportSchedule, RunReceipt, Source, SourceEvent,
 };
 
 const T_NOTEBOOKS: &str = "notebooks";
@@ -37,6 +37,10 @@ const T_LEDGER: &str = "ledger";
 /// The Registry's cast (docs/RFC-registry.md). Corpus-scoped: no
 /// notebook_id column, unlike every other entity table here.
 const T_REGISTRY: &str = "registry";
+/// Home's corpus-wide conversations (docs/RFC-meta-chat.md). Also
+/// corpus-scoped: a turn belongs to a thread, and the thread is about
+/// everything. Threads are derived from these rows, not stored.
+const T_META_TURNS: &str = "meta_turns";
 /// Source events prune past this window — a rolling record, not an archive.
 const SOURCE_EVENT_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
@@ -308,6 +312,7 @@ impl Db {
         db.migrate_ledger().await?;
         db.ensure_table(T_REGISTRY, registry_schema()).await?;
         db.migrate_registry().await?;
+        db.ensure_table(T_META_TURNS, meta_turns_schema()).await?;
         Ok(db)
     }
 
@@ -2028,6 +2033,135 @@ impl Db {
 
     pub async fn clear_messages(&self, notebook_id: &str) -> Result<()> {
         self.delete_where(T_MESSAGES, &format!("notebook_id = '{}'", esc(notebook_id)))
+            .await
+    }
+
+    // ---- Home chat (docs/RFC-meta-chat.md) --------------------------------
+
+    pub async fn add_meta_turn(&self, turn: &MetaTurn) -> Result<()> {
+        let schema = meta_turns_schema();
+        let citations = serde_json::to_string(&turn.citations).unwrap_or_else(|_| "[]".into());
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec![turn.id.clone()])),
+                Arc::new(StringArray::from(vec![turn.thread_id.clone()])),
+                Arc::new(StringArray::from(vec![turn.role.clone()])),
+                Arc::new(StringArray::from(vec![turn.content.clone()])),
+                Arc::new(StringArray::from(vec![citations])),
+                Arc::new(StringArray::from(vec![turn.kind.clone()])),
+                Arc::new(Int64Array::from(vec![turn.created_at])),
+            ],
+        )?;
+        self.add_batch(T_META_TURNS, schema, batch).await
+    }
+
+    /// One thread's turns, oldest first — the conversation as it was read.
+    pub async fn list_meta_turns(&self, thread_id: &str) -> Result<Vec<MetaTurn>> {
+        let filter = format!("thread_id = '{}'", esc(thread_id));
+        let batches = self.collect(T_META_TURNS, Some(&filter)).await?;
+        let mut turns = meta_turns_from_batches(&batches)?;
+        turns.sort_by(|a, b| {
+            a.created_at
+                .cmp(&b.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        Ok(turns)
+    }
+
+    /// Every Home conversation, most recently used first. Threads are derived
+    /// from their turns: the metadata pass reads four small columns, and only
+    /// the opening question of each thread is hydrated for its title — the
+    /// answers are the long rows, and none of them is a title.
+    pub async fn list_meta_threads(&self) -> Result<Vec<MetaThread>> {
+        let batches = self
+            .collect_cols(
+                T_META_TURNS,
+                None,
+                &["id", "thread_id", "role", "created_at"],
+            )
+            .await?;
+        let mut acc: HashMap<String, ThreadAcc> = HashMap::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let thread = str_col(b, "thread_id")?;
+            let role = str_col(b, "role")?;
+            let created = i64_col(b, "created_at")?;
+            for i in 0..b.num_rows() {
+                let at = created.value(i);
+                let t = acc
+                    .entry(thread.value(i).to_string())
+                    .or_insert_with(|| ThreadAcc {
+                        first_user: None,
+                        count: 0,
+                        created_at: at,
+                        updated_at: at,
+                    });
+                t.count += 1;
+                t.created_at = t.created_at.min(at);
+                t.updated_at = t.updated_at.max(at);
+                let earlier = match &t.first_user {
+                    None => true,
+                    Some((_, seen)) => at < *seen,
+                };
+                if role.value(i) == "user" && earlier {
+                    t.first_user = Some((id.value(i).to_string(), at));
+                }
+            }
+        }
+        if acc.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let title_ids = acc
+            .values()
+            .filter_map(|t| {
+                t.first_user
+                    .as_ref()
+                    .map(|(id, _)| format!("'{}'", esc(id)))
+            })
+            .collect::<Vec<_>>();
+        let mut titles: HashMap<String, String> = HashMap::new();
+        if !title_ids.is_empty() {
+            let filter = format!("id IN ({})", title_ids.join(", "));
+            let batches = self
+                .collect_cols(T_META_TURNS, Some(&filter), &["id", "content"])
+                .await?;
+            for b in &batches {
+                let id = str_col(b, "id")?;
+                let content = str_col(b, "content")?;
+                for i in 0..b.num_rows() {
+                    titles.insert(id.value(i).to_string(), content.value(i).to_string());
+                }
+            }
+        }
+
+        let mut threads = acc
+            .into_iter()
+            .map(|(id, t)| MetaThread {
+                id,
+                title: thread_title(
+                    t.first_user
+                        .as_ref()
+                        .and_then(|(id, _)| titles.get(id))
+                        .map(String::as_str)
+                        .unwrap_or_default(),
+                ),
+                turn_count: t.count,
+                created_at: t.created_at,
+                updated_at: t.updated_at,
+            })
+            .collect::<Vec<_>>();
+        threads.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        Ok(threads)
+    }
+
+    pub async fn delete_meta_thread(&self, thread_id: &str) -> Result<()> {
+        self.delete_where(T_META_TURNS, &format!("thread_id = '{}'", esc(thread_id)))
             .await
     }
 
@@ -3803,6 +3937,67 @@ fn messages_schema() -> SchemaRef {
     ]))
 }
 
+/// What a scan of the turn table knows about one thread before its title is
+/// fetched: which turn opened it, and how big and how recent it is.
+struct ThreadAcc {
+    /// (turn id, created_at) of the earliest user turn.
+    first_user: Option<(String, i64)>,
+    count: i64,
+    created_at: i64,
+    updated_at: i64,
+}
+
+/// The opening question as a one-line title.
+fn thread_title(question: &str) -> String {
+    let line = question.trim().lines().next().unwrap_or("").trim();
+    if line.is_empty() {
+        return "Untitled".into();
+    }
+    if line.chars().count() > 120 {
+        format!("{}…", line.chars().take(119).collect::<String>())
+    } else {
+        line.to_string()
+    }
+}
+
+fn meta_turns_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("thread_id", DataType::Utf8, false),
+        Field::new("role", DataType::Utf8, false),
+        Field::new("content", DataType::Utf8, false),
+        Field::new("citations", DataType::Utf8, false),
+        Field::new("kind", DataType::Utf8, false),
+        Field::new("created_at", DataType::Int64, false),
+    ]))
+}
+
+/// Decode meta-turn batches into rows.
+fn meta_turns_from_batches(batches: &[RecordBatch]) -> Result<Vec<MetaTurn>> {
+    let mut turns = Vec::new();
+    for b in batches {
+        let id = str_col(b, "id")?;
+        let thread = str_col(b, "thread_id")?;
+        let role = str_col(b, "role")?;
+        let content = str_col(b, "content")?;
+        let citations = str_col(b, "citations")?;
+        let kind = str_col(b, "kind")?;
+        let created = i64_col(b, "created_at")?;
+        for i in 0..b.num_rows() {
+            turns.push(MetaTurn {
+                id: id.value(i).to_string(),
+                thread_id: thread.value(i).to_string(),
+                role: role.value(i).to_string(),
+                content: content.value(i).to_string(),
+                citations: serde_json::from_str(citations.value(i)).unwrap_or_default(),
+                kind: kind.value(i).to_string(),
+                created_at: created.value(i),
+            });
+        }
+    }
+    Ok(turns)
+}
+
 fn note_usage_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("note_id", DataType::Utf8, false),
@@ -4058,6 +4253,66 @@ fn note_batch(schema: &SchemaRef, notes: &[Note]) -> Result<RecordBatch> {
 mod tests {
     use super::*;
     use std::cmp::Ordering;
+
+    fn meta_turn(thread: &str, id: &str, role: &str, content: &str, at: i64) -> MetaTurn {
+        MetaTurn {
+            id: id.into(),
+            thread_id: thread.into(),
+            role: role.into(),
+            content: content.into(),
+            citations: Vec::new(),
+            kind: "chat".into(),
+            created_at: at,
+        }
+    }
+
+    /// A Home thread is nothing but its turns: the list is derived, titled by
+    /// the opening question, and ordered by what was used last.
+    #[tokio::test]
+    async fn meta_threads_are_derived_from_their_turns() {
+        let dir = std::env::temp_dir().join(format!("nbl-meta-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+
+        for turn in [
+            meta_turn(
+                "t1",
+                "a",
+                "user",
+                "Where is the SNDK data?\nsecond line",
+                10,
+            ),
+            meta_turn("t1", "b", "assistant", "In the Storage notebook.", 11),
+            meta_turn("t2", "c", "user", "What did I conclude?", 20),
+        ] {
+            db.add_meta_turn(&turn).await.expect("add turn");
+        }
+
+        let threads = db.list_meta_threads().await.expect("threads");
+        assert_eq!(
+            threads.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            ["t2", "t1"],
+            "most recently used first"
+        );
+        let first = threads.iter().find(|t| t.id == "t1").expect("t1");
+        assert_eq!(first.title, "Where is the SNDK data?");
+        assert_eq!(first.turn_count, 2);
+        assert_eq!(first.created_at, 10);
+        assert_eq!(first.updated_at, 11);
+
+        let turns = db.list_meta_turns("t1").await.expect("turns");
+        assert_eq!(
+            turns.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            ["a", "b"],
+            "oldest first — the conversation as it was read"
+        );
+
+        db.delete_meta_thread("t1").await.expect("delete");
+        assert!(db.list_meta_turns("t1").await.expect("turns").is_empty());
+        let threads = db.list_meta_threads().await.expect("threads");
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].id, "t2");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[tokio::test]
     async fn message_pages_are_bounded_newest_first_without_overlap() {

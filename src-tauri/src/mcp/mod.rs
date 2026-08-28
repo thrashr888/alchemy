@@ -21,6 +21,7 @@ use crate::db::NOTEBOOK_PALETTE;
 use crate::models::{Note, Notebook, Source};
 
 mod diagnostics;
+mod homechat;
 mod ledger;
 mod mac;
 mod notebooks;
@@ -256,6 +257,7 @@ impl AlchemyMcp {
     + Self::ledger_router()
     + Self::registry_router()
     + Self::settings_router()
+    + Self::homechat_router()
     + Self::diagnostics_router()))]
 impl ServerHandler for AlchemyMcp {
     fn get_info(&self) -> ServerInfo {

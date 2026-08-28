@@ -72,12 +72,14 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
         <NavButtons />
         <div className="mx-1 h-4 w-px bg-border" />
         {/* A destination, not a direction: the chevron this button used to
-            carry read as a second Back arrow next to the real one. */}
+            carry read as a second Back arrow next to the real one. The
+            Library glyph is the app's one icon for "your notebooks" — the
+            Notebooks tab on Home wears it too. */}
         <Button
           variant="ghost"
           size="sm"
           onClick={close}
-          title="Go to your notebooks"
+          title="Your notebooks"
         >
           <Library className="h-4 w-4" />
           Notebooks

@@ -75,9 +75,16 @@ MCP tool returns passages + notebook names, mirroring `search`.
 
 ## Non-goals (v1)
 
-- Persisting meta-chat threads (ephemeral; a rerun is cheap and the corpus
-  moved anyway). Revisit if users ask to save answers as notes — likely as
-  a "Save as note" button that writes to a chosen notebook.
+- ~~Persisting meta-chat threads (ephemeral; a rerun is cheap and the corpus
+  moved anyway).~~ **Superseded.** A rerun is cheap; getting back to the
+  conversation was impossible. Home's Chat tab keeps threads in a
+  corpus-scoped `meta_turns` table — one row per turn, citations serialized
+  beside it, and a thread is nothing but the turns that share a `thread_id`
+  (so a conversation nobody asked into never exists). The tab lists past
+  threads, back/forward lands on one, and a relaunch reopens the one that
+  was on screen. Agents read them over MCP with `list_home_chats` and
+  `get_home_chat`. Still open: saving an answer as a note in a chosen
+  notebook.
 - A separate window or menu-bar popover. ⌥Space + palette is the surface.
 - Source-selection scoping (all notebooks always; per-notebook chat already
   covers the scoped case).

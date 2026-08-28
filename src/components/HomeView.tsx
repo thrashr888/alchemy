@@ -33,9 +33,9 @@ import type { Note, Notebook, SourceEvent } from "@/lib/types";
 import {
   Archive,
   ArchiveRestore,
-  BookOpen,
   FileDown,
   ChevronRight,
+  MessagesSquare,
   PanelRight,
   PanelRightClose,
   Plus,
@@ -50,10 +50,9 @@ import {
   FolderInput,
   Library,
   Square,
-  X,
 } from "lucide-react";
 import { BriefSidebar, SidebarRail, StaffSidebar } from "./HomeSections";
-import { HomeChatThread, closeHomeChat, useHomeChat } from "./HomeChat";
+import { HomeChatThread, HomeThreadList, useHomeChat } from "./HomeChat";
 import { NOTEBOOK_ICONS, notebookIcon } from "@/lib/notebookIcons";
 import { RegistrySection } from "./RegistrySection";
 import {
@@ -188,14 +187,16 @@ function NotebookTable({
  *  Chat|Reader|Gallery|Ledger tabs (CenterModeTabs, ReaderPane.tsx): one
  *  control, in the title bar, choosing what the center column shows about a
  *  constant subject. There the subject is one notebook; here it's the whole
- *  corpus — its notebooks, or the cast of things they're about. Same kind of
- *  switch, so it lives in the same place and wears the same chrome. */
+ *  corpus — its notebooks, the cast of things they're about, or the
+ *  conversation you're having with all of them at once. Same kind of switch,
+ *  so it lives in the same place and wears the same chrome. */
 function HomeSectionTabs() {
   const section = useStore((s) => s.homeSection);
 
   const tabs = [
-    { id: "notebooks", label: "Notebooks", icon: BookOpen },
+    { id: "notebooks", label: "Notebooks", icon: Library },
     { id: "registry", label: "Registry", icon: Package },
+    { id: "chat", label: "Chat", icon: MessagesSquare },
   ] as const;
   return (
     <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5">
@@ -204,16 +205,23 @@ function HomeSectionTabs() {
           key={id}
           type="button"
           onClick={() => {
-            // A conversation is holding this column; asking for a section is
-            // asking to be done with it.
-            closeHomeChat();
+            if (id === "chat") {
+              // Reopens whatever conversation was last on screen, minting a
+              // fresh one only when there has never been one.
+              void useStore
+                .getState()
+                .openHomeThread(useStore.getState().homeChat.threadId);
+              return;
+            }
             useStore.setState({ homeSection: id, openCardId: null });
           }}
           aria-pressed={section === id}
           title={
             id === "registry"
               ? "The things your documents are about"
-              : "Your notebooks"
+              : id === "chat"
+                ? "Ask across every notebook"
+                : "Your notebooks"
           }
           className={cn(
             "flex items-center gap-1.5 rounded-md px-2 py-1 text-caption transition-colors",
@@ -467,25 +475,33 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     },
   ];
 
-  // The unified ask box: one input over the WHOLE corpus. Enter opens the
-  // Home conversation (meta-chat, docs/RFC-meta-chat.md) right here — no
-  // notebook choice needed; citations name where the answers live. ⌘K's ask
-  // mode is the same pipeline in glance form; this one keeps the thread.
+  // The unified ask box: one input over the WHOLE corpus. Enter lands you in
+  // the Chat tab (meta-chat, docs/RFC-meta-chat.md) — no notebook choice
+  // needed; citations name where the answers live. ⌘K's ask mode is the same
+  // pipeline in glance form; this one keeps the thread, and keeps it for good.
   const [ask, setAsk] = useState("");
   const askRef = useRef<HTMLInputElement>(null);
   const chat = useHomeChat();
-  function submitAsk(e: React.FormEvent) {
+  const chatOpen = homeSection === "chat";
+  async function submitAsk(e: React.FormEvent) {
     e.preventDefault();
     const q = ask.trim();
     if (!q || chat.loading) return;
     setAsk("");
+    // Asking from the shelf is asking to be in the conversation — a new one:
+    // a question typed over the notebook grid is a fresh subject, and
+    // grafting it onto whatever was last discussed would send that thread's
+    // history to the model as context for it. Follow-ups are asked from
+    // inside the Chat tab, where this same box is the follow-up composer.
+    // The thread must be open (and its id minted) before the run starts.
+    if (!chatOpen) await useStore.getState().openHomeThread(null);
     chat.ask(q);
   }
   // A settled answer hands the caret back: the follow-up is the next move,
   // and the composer sits in the same place it was typed in.
   useEffect(() => {
-    if (chat.active && !chat.loading) askRef.current?.focus();
-  }, [chat.active, chat.loading]);
+    if (chatOpen && !chat.loading) askRef.current?.focus();
+  }, [chatOpen, chat.loading]);
 
   // "Since you were away": what landed since the last time home was open.
   const [prevVisit] = useState<number>(() =>
@@ -633,9 +649,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       >
         <NavButtons />
         <div className="h-4 w-px bg-border" />
-        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/15 text-primary">
-          <BookOpen className="h-4 w-4" />
-        </div>
+        {/* Just the wordmark: you are already at your notebooks, so a second
+            books icon here only competed with the Notebooks tab beside it
+            (and with the go-home button in the notebook header, which wears
+            the same Library glyph). One icon, one meaning. */}
         <span className="text-section font-semibold tracking-tight">
           Alchemy
         </span>
@@ -751,6 +768,11 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               <SidebarRail icon="staff" title="Show Staff" onClick={toggleStaff} />
             </div>
           )}
+          <div className="relative flex min-w-0 flex-1 overflow-hidden">
+          {/* The Chat tab's past conversations, as a column of the center
+              region rather than a fourth sidebar: it belongs to the tab, not
+              to Home, and it leaves with it. */}
+          {chatOpen && <HomeThreadList />}
           <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
             {/* The dither shader from the hero, as a banner behind the heading —
             it fades into the background before the notebook grid starts. */}
@@ -770,13 +792,13 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 "relative z-10 mx-auto w-full shrink-0 px-6",
                 // The composer lines up with the conversation it feeds, so
                 // the column narrows to the reading measure while one is open.
-                chat.active ? "max-w-[760px] pt-6" : "max-w-[960px] pt-10",
+                chatOpen ? "max-w-[760px] pt-6" : "max-w-[960px] pt-10",
               )}
             >
-              {/* A live conversation takes the center column: the shelf's
+              {/* The conversation takes the center column: the shelf's
               heading and verbs would only compete with it, and the ask box
               below becomes the follow-up composer. */}
-              {chat.active && (
+              {chatOpen && (
                 <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1">
                   <h1 className="text-page font-semibold tracking-tight">
                     Across all notebooks
@@ -784,23 +806,13 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   <span className="text-body text-muted-foreground">
                     Answers cite the notebook and source they came from.
                   </span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="ml-auto"
-                    onClick={chat.close}
-                    title="Close the conversation (Esc)"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                    Close
-                  </Button>
                 </div>
               )}
               {/* Wraps rather than squeezes: with both sidebars open this
                   column is far narrower than its 960px cap, so the action
                   cluster drops to its own line instead of crushing the
                   heading. */}
-              {!chat.active && (
+              {!chatOpen && (
               <div className="mb-5 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
                 <div className="min-w-[260px] flex-1">
                   <h1 className="text-page font-semibold tracking-tight">
@@ -898,7 +910,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               {/* The unified ask box: one input, the whole corpus. Enter asks
               across every notebook and the answer opens as a conversation
               right here; the ⌘K chip is the same surface in search mode. */}
-              <div className={chat.active ? "mb-4" : "mb-8"}>
+              <div className={chatOpen ? "mb-4" : "mb-8"}>
                 <form
                   onSubmit={submitAsk}
                   className="flex min-w-0 items-center gap-1.5 rounded-xl border border-border bg-surface/80 p-1.5 shadow-sm backdrop-blur transition-colors focus-within:border-primary/50"
@@ -909,18 +921,18 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                     value={ask}
                     onChange={(e) => setAsk(e.target.value)}
                     placeholder={
-                      chat.active
+                      chatOpen
                         ? "Ask a follow-up…"
                         : "Ask or search across all your notebooks…"
                     }
                     aria-label={
-                      chat.active
+                      chatOpen
                         ? "Ask a follow-up across all notebooks"
                         : "Ask a question across all notebooks"
                     }
                     className="h-8 min-w-0 flex-1 bg-transparent px-1.5 text-body text-foreground outline-none placeholder:text-subtle-foreground"
                   />
-                  {!chat.active && (
+                  {!chatOpen && (
                     <button
                       type="button"
                       onClick={() => useStore.getState().setPaletteOpen(true)}
@@ -977,10 +989,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               </div>
             </div>
 
-            {chat.active ? (
+            {chatOpen ? (
               // The conversation borrows the shelf's scroll region rather
-              // than floating over it: closing it puts the notebooks back
-              // exactly where they were.
+              // than floating over it: leaving the tab puts the notebooks
+              // back exactly where they were.
               <HomeChatThread chat={chat} />
             ) : homeSection === "registry" ? (
               <RegistrySection />
@@ -1192,6 +1204,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               </div>
             </div>
             )}
+          </div>
           </div>
 
           {/* Right column: the Brief card above the reports feed — the

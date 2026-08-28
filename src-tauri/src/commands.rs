@@ -27,8 +27,8 @@ use crate::ai::{Ai, AiConfig, GenStats};
 use crate::db::Db;
 use crate::db::NOTEBOOK_PALETTE;
 use crate::models::{
-    Citation, FolderScan, Message, ModelHealth, ModelStat, ModelStatus, Note, Notebook,
-    ReportSchedule, Source,
+    Citation, FolderScan, Message, MetaThread, MetaTurn, ModelHealth, ModelStat, ModelStatus, Note,
+    Notebook, ReportSchedule, Source,
 };
 use crate::{ingest, rag};
 
@@ -10649,19 +10649,8 @@ async fn import_bundle(
 }
 
 /// One passage behind a meta-chat answer: what it is and where it lives.
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MetaCitation {
-    /// "source" (chunk passage) | "note" | "card" (registry card).
-    pub kind: String,
-    /// Empty for registry cards — they are corpus-scoped and open on Home.
-    pub notebook_id: String,
-    pub notebook_title: String,
-    /// Source id for source passages; note id for notes; card id for cards.
-    pub id: String,
-    pub title: String,
-    pub snippet: String,
-}
+/// Defined in `models` because persisted Home-chat turns carry it.
+pub use crate::models::MetaCitation;
 
 /// Does a registry card answer this query? Two shapes share one matcher:
 /// palette typing (the whole query is a fragment of the name/identifiers)
@@ -10772,6 +10761,69 @@ fn meta_step(app: Option<&AppHandle>, label: impl Into<String>, transient: bool)
 pub struct MetaAnswer {
     pub answer: String,
     pub citations: Vec<MetaCitation>,
+}
+
+// ---- Home chat threads -----------------------------------------------------
+//
+// Home's conversation used to be thrown away on close, on the theory that a
+// rerun is cheap. It isn't the rerun that matters: the thread is where the
+// thinking happened, and there was no way back to it. These four commands
+// give it the same durability a notebook's transcript has.
+
+/// Every Home conversation, most recently used first.
+#[tauri::command]
+pub async fn list_meta_threads(state: State<'_, AppState>) -> Result<Vec<MetaThread>, String> {
+    e(state.db.list_meta_threads().await)
+}
+
+/// One thread's turns, oldest first.
+#[tauri::command]
+pub async fn list_meta_turns(
+    state: State<'_, AppState>,
+    thread_id: String,
+) -> Result<Vec<MetaTurn>, String> {
+    e(state.db.list_meta_turns(&thread_id).await)
+}
+
+/// Persist one settled turn. The front end appends as each turn settles —
+/// including a cancelled partial answer, which is still worth keeping.
+#[tauri::command]
+pub async fn add_meta_turn(
+    state: State<'_, AppState>,
+    thread_id: String,
+    role: String,
+    content: String,
+    citations: Option<Vec<MetaCitation>>,
+    kind: Option<String>,
+) -> Result<MetaTurn, String> {
+    let thread_id = thread_id.trim().to_string();
+    if thread_id.is_empty() {
+        return Err("Thread id is empty".into());
+    }
+    if role != "user" && role != "assistant" {
+        return Err(format!("Unknown role \"{role}\""));
+    }
+    let turn = MetaTurn {
+        id: new_id(),
+        thread_id,
+        role,
+        content,
+        citations: citations.unwrap_or_default(),
+        kind: kind.unwrap_or_else(|| "chat".into()),
+        created_at: now(),
+    };
+    e(state.db.add_meta_turn(&turn).await)?;
+    Ok(turn)
+}
+
+/// Delete a whole Home conversation. Threads are their turns, so this is the
+/// only delete there is.
+#[tauri::command]
+pub async fn delete_meta_thread(
+    state: State<'_, AppState>,
+    thread_id: String,
+) -> Result<(), String> {
+    e(state.db.delete_meta_thread(&thread_id).await)
 }
 
 /// Retrieve corpus-wide passages for a question: hybrid chunk search across
