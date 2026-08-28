@@ -1157,7 +1157,11 @@ function HostedAgents() {
   const aiConfig = useStore((s) => s.aiConfig);
   const saveAiConfig = useStore((s) => s.saveAiConfig);
   const [agents, setAgents] = useState<AcpAgentInfo[] | null>(null);
-  const [checking, setChecking] = useState<string | null>(null);
+  // A Set, not a single slot: Claude's probe takes ~20s, and clicking Check on
+  // a second row must not steal the first row's spinner.
+  const [checking, setChecking] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
   const [results, setResults] = useState<Record<string, string | null>>({});
 
   useEffect(() => {
@@ -1172,7 +1176,7 @@ function HostedAgents() {
   const available = list.filter((a) => a.available);
 
   function check(agent: AcpAgentInfo) {
-    setChecking(agent.id);
+    setChecking((c) => new Set(c).add(agent.id));
     api
       .acpCheck(agent.id)
       .then(() => setResults((r) => ({ ...r, [agent.id]: null })))
@@ -1182,7 +1186,13 @@ function HostedAgents() {
           [agent.id]: e instanceof Error ? e.message : String(e),
         })),
       )
-      .finally(() => setChecking(null));
+      .finally(() =>
+        setChecking((c) => {
+          const next = new Set(c);
+          next.delete(agent.id);
+          return next;
+        }),
+      );
   }
 
   return (
@@ -1218,48 +1228,54 @@ function HostedAgents() {
               <div
                 key={a.id}
                 className={cn(
-                  "flex items-start gap-2 px-2.5 py-2",
+                  "flex flex-col px-2.5 py-2",
                   !a.available && "opacity-50",
                 )}
               >
-                <div className="flex min-w-0 flex-1 flex-col">
-                  <span className="text-[0.78125rem] text-foreground">
+                {/* Label and controls share one centered line; a failure
+                    message wraps underneath instead of dragging that line
+                    off-center. */}
+                <div className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-[0.78125rem] text-foreground">
                     {a.label}
                   </span>
+
+                  {passed && (
+                    <span className="flex shrink-0 items-center gap-1 text-micro text-success">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      Ready
+                    </span>
+                  )}
                   {failure && (
-                    <span className="text-[0.65625rem] text-destructive [overflow-wrap:anywhere]">
-                      {failure}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="shrink-0"
+                      onClick={() => void api.openInTerminal(a.loginCommand)}
+                    >
+                      Sign in
+                    </Button>
+                  )}
+                  {a.available ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="shrink-0"
+                      loading={checking.has(a.id)}
+                      onClick={() => check(a)}
+                    >
+                      Check
+                    </Button>
+                  ) : (
+                    <span className="shrink-0 text-micro text-subtle-foreground">
+                      Not installed
                     </span>
                   )}
                 </div>
 
-                {passed && (
-                  <span className="flex shrink-0 items-center gap-1 text-micro text-success">
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                    Ready
-                  </span>
-                )}
                 {failure && (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => void api.openInTerminal(a.loginCommand)}
-                  >
-                    Sign in
-                  </Button>
-                )}
-                {a.available ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    loading={checking === a.id}
-                    onClick={() => check(a)}
-                  >
-                    Check
-                  </Button>
-                ) : (
-                  <span className="shrink-0 text-micro text-subtle-foreground">
-                    Not installed
+                  <span className="mt-1 text-[0.65625rem] text-destructive [overflow-wrap:anywhere]">
+                    {failure}
                   </span>
                 )}
               </div>
