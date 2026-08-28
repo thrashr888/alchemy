@@ -2,6 +2,7 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import {
+  Check,
   Loader2,
   MoreHorizontal,
   X,
@@ -1265,6 +1266,60 @@ export function LoadingState({
     >
       <Spinner className="text-subtle-foreground" />
       <div className="text-caption text-muted-foreground">{label}</div>
+    </div>
+  );
+}
+
+/** The live progress of a retrieval pipeline: completed stages tick off, the
+ *  one still running spins, and a transient line (`waiting`) sits below them
+ *  without joining the trail. Shared by notebook chat (`chat://step`) and the
+ *  Home / ⌘K corpus chat (`meta://step`). */
+export function StepTrail({
+  steps,
+  waiting,
+  done,
+}: {
+  steps: string[];
+  waiting: string;
+  /** The answer has started arriving — nothing is pending any more. */
+  done: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface/60 px-3 py-2">
+      {steps.map((s, i) => {
+        // The countdown, when there is one, is the thing still running — the
+        // last completed step hands its spinner over to it.
+        const isLast = i === steps.length - 1 && !waiting;
+        const spinning = isLast && !done;
+        return (
+          <div key={i} className="flex items-center gap-2 text-caption">
+            {spinning ? (
+              <span
+                className="h-2.5 w-2.5 shrink-0 rounded-full border-[1.5px] border-primary border-t-transparent animate-spin"
+                aria-hidden
+              />
+            ) : (
+              <Check className="h-3 w-3 shrink-0 text-success" />
+            )}
+            <span
+              className={cn(
+                spinning ? "text-foreground" : "text-muted-foreground",
+              )}
+            >
+              {s}
+            </span>
+          </div>
+        );
+      })}
+      {waiting && !done && (
+        <div className="flex items-center gap-2 text-caption" aria-live="polite">
+          <span
+            className="h-2.5 w-2.5 shrink-0 rounded-full border-[1.5px] border-primary border-t-transparent animate-spin"
+            aria-hidden
+          />
+          <span className="text-muted-foreground">{waiting}</span>
+        </div>
+      )}
     </div>
   );
 }

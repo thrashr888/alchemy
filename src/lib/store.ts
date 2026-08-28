@@ -432,6 +432,7 @@ export const useStore = create<AppState>((set, get) => {
     ledgerBump: 0,
     registryBump: 0,
     homeSection: "notebooks",
+    homeChat: [],
     homeView:
       (localStorage.getItem("homeView") as "grid" | "table") || "grid",
     homeQuery: "",

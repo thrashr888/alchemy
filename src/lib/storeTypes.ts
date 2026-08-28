@@ -4,6 +4,7 @@ import type {
   HygieneIssue,
   KokoroStatus,
   Message,
+  MetaTurn,
   ModelHealth,
   ModelStat,
   Note,
@@ -201,6 +202,11 @@ export interface AppState {
   registryBump: number;
   /** Home's center column: the notebook grid, or the Registry's cast. */
   homeSection: "notebooks" | "registry";
+  /** Home's corpus-wide conversation (docs/RFC-meta-chat.md). Never
+   *  persisted — but it lives in the store rather than in HomeView, so
+   *  following a citation into a notebook and coming back doesn't throw the
+   *  thread away. A non-empty thread takes over Home's center column. */
+  homeChat: MetaTurn[];
   /** How that column lays out. Cards are recognisable, rows are scannable
    *  and sortable — which one is "easier to find things in" depends on the
    *  collection, so it's a per-user choice, remembered. */

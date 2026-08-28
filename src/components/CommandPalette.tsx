@@ -9,6 +9,7 @@ import {
 import { listen } from "@tauri-apps/api/event";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
+import { openMetaCitation } from "@/lib/citations";
 import { SYSTEM_THEME, THEMES } from "@/lib/themes";
 import { cn } from "@/lib/utils";
 import type { MetaCitation, SearchHit } from "@/lib/types";
@@ -618,25 +619,10 @@ export function CommandPalette() {
     }
   };
 
-  /** Jump to a cited passage: select the notebook, then open the note card
-   *  or the source reader at the snippet — same routing as search hits.
-   *  Registry cards are corpus-scoped and open on Home instead. */
+  /** Jump to a cited passage — shared routing with the Home chat. */
   function openCitation(c: MetaCitation) {
     setPaletteOpen(false);
-    void (async () => {
-      const s = useStore.getState();
-      if (c.kind === "card") {
-        s.closeNotebook();
-        useStore.setState({ homeSection: "registry", openCardId: c.id });
-      } else if (c.kind === "note") {
-        useStore.setState({ justCreatedNoteId: c.id });
-        if (!s.studioOpen) s.toggleStudio();
-        await s.selectNotebook(c.notebookId);
-      } else {
-        await s.selectNotebook(c.notebookId);
-        useStore.getState().openSourceViewer(c.id, c.title, c.snippet);
-      }
-    })();
+    void openMetaCitation(c);
   }
 
   const askNotebooks = useMemo(() => {

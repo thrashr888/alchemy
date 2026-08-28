@@ -49,8 +49,11 @@ import {
   Sparkles,
   FolderInput,
   Library,
+  Square,
+  X,
 } from "lucide-react";
 import { BriefSidebar, SidebarRail, StaffSidebar } from "./HomeSections";
+import { HomeChatThread, closeHomeChat, useHomeChat } from "./HomeChat";
 import { NOTEBOOK_ICONS, notebookIcon } from "@/lib/notebookIcons";
 import { RegistrySection } from "./RegistrySection";
 import {
@@ -200,9 +203,12 @@ function HomeSectionTabs() {
         <button
           key={id}
           type="button"
-          onClick={() =>
-            useStore.setState({ homeSection: id, openCardId: null })
-          }
+          onClick={() => {
+            // A conversation is holding this column; asking for a section is
+            // asking to be done with it.
+            closeHomeChat();
+            useStore.setState({ homeSection: id, openCardId: null });
+          }}
           aria-pressed={section === id}
           title={
             id === "registry"
@@ -461,17 +467,25 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     },
   ];
 
-  // The unified ask box: one input over the WHOLE corpus. Enter hands the
-  // question to the palette's ask mode (meta-chat, docs/RFC-meta-chat.md) —
-  // no notebook choice needed; citations name where answers live.
+  // The unified ask box: one input over the WHOLE corpus. Enter opens the
+  // Home conversation (meta-chat, docs/RFC-meta-chat.md) right here — no
+  // notebook choice needed; citations name where the answers live. ⌘K's ask
+  // mode is the same pipeline in glance form; this one keeps the thread.
   const [ask, setAsk] = useState("");
+  const askRef = useRef<HTMLInputElement>(null);
+  const chat = useHomeChat();
   function submitAsk(e: React.FormEvent) {
     e.preventDefault();
     const q = ask.trim();
-    if (!q) return;
+    if (!q || chat.loading) return;
     setAsk("");
-    useStore.setState({ pendingAsk: q, paletteOpen: true });
+    chat.ask(q);
   }
+  // A settled answer hands the caret back: the follow-up is the next move,
+  // and the composer sits in the same place it was typed in.
+  useEffect(() => {
+    if (chat.active && !chat.loading) askRef.current?.focus();
+  }, [chat.active, chat.loading]);
 
   // "Since you were away": what landed since the last time home was open.
   const [prevVisit] = useState<number>(() =>
@@ -749,12 +763,44 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               <div className="absolute inset-0 bg-[linear-gradient(to_bottom,transparent_55%,var(--background)_100%)]" />
             </div>
             )}
-            {/* Heading + ask box stay put; only the shelves below scroll. */}
-            <div className="relative z-10 mx-auto w-full max-w-[960px] shrink-0 px-6 pt-10">
+            {/* Heading + ask box stay put; only the shelves (or the
+            conversation) below scroll. */}
+            <div
+              className={cn(
+                "relative z-10 mx-auto w-full shrink-0 px-6",
+                // The composer lines up with the conversation it feeds, so
+                // the column narrows to the reading measure while one is open.
+                chat.active ? "max-w-[760px] pt-6" : "max-w-[960px] pt-10",
+              )}
+            >
+              {/* A live conversation takes the center column: the shelf's
+              heading and verbs would only compete with it, and the ask box
+              below becomes the follow-up composer. */}
+              {chat.active && (
+                <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <h1 className="text-page font-semibold tracking-tight">
+                    Across all notebooks
+                  </h1>
+                  <span className="text-body text-muted-foreground">
+                    Answers cite the notebook and source they came from.
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="ml-auto"
+                    onClick={chat.close}
+                    title="Close the conversation (Esc)"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                    Close
+                  </Button>
+                </div>
+              )}
               {/* Wraps rather than squeezes: with both sidebars open this
                   column is far narrower than its 960px cap, so the action
                   cluster drops to its own line instead of crushing the
                   heading. */}
+              {!chat.active && (
               <div className="mb-5 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
                 <div className="min-w-[260px] flex-1">
                   <h1 className="text-page font-semibold tracking-tight">
@@ -847,43 +893,70 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   )}
                 </div>
               </div>
+              )}
 
               {/* The unified ask box: one input, the whole corpus. Enter asks
-              across every notebook (palette ask mode); the ⌘K chip is the
-              same surface in search mode. */}
-              <div className="mb-8">
+              across every notebook and the answer opens as a conversation
+              right here; the ⌘K chip is the same surface in search mode. */}
+              <div className={chat.active ? "mb-4" : "mb-8"}>
                 <form
                   onSubmit={submitAsk}
                   className="flex min-w-0 items-center gap-1.5 rounded-xl border border-border bg-surface/80 p-1.5 shadow-sm backdrop-blur transition-colors focus-within:border-primary/50"
                 >
                   <Sparkles className="ml-2 h-4 w-4 shrink-0 text-citation" />
                   <input
+                    ref={askRef}
                     value={ask}
                     onChange={(e) => setAsk(e.target.value)}
-                    placeholder="Ask or search across all your notebooks…"
-                    aria-label="Ask a question across all notebooks"
+                    placeholder={
+                      chat.active
+                        ? "Ask a follow-up…"
+                        : "Ask or search across all your notebooks…"
+                    }
+                    aria-label={
+                      chat.active
+                        ? "Ask a follow-up across all notebooks"
+                        : "Ask a question across all notebooks"
+                    }
                     className="h-8 min-w-0 flex-1 bg-transparent px-1.5 text-body text-foreground outline-none placeholder:text-subtle-foreground"
                   />
-                  <button
-                    type="button"
-                    onClick={() => useStore.getState().setPaletteOpen(true)}
-                    title="Search notebooks, sources & notes (⌘K)"
-                    aria-label="Open search"
-                    className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-caption text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-                  >
-                    <Search className="h-3.5 w-3.5" />
-                    <kbd className="rounded border border-border bg-surface-2 px-1 py-0.5 text-badge text-subtle-foreground">
-                      ⌘K
-                    </kbd>
-                  </button>
-                  <Button
-                    type="submit"
-                    variant="primary"
-                    size="sm"
-                    disabled={!ask.trim()}
-                  >
-                    Ask
-                  </Button>
+                  {!chat.active && (
+                    <button
+                      type="button"
+                      onClick={() => useStore.getState().setPaletteOpen(true)}
+                      title="Search notebooks, sources & notes (⌘K)"
+                      aria-label="Open search"
+                      className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-caption text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+                    >
+                      <Search className="h-3.5 w-3.5" />
+                      <kbd className="rounded border border-border bg-surface-2 px-1 py-0.5 text-badge text-subtle-foreground">
+                        ⌘K
+                      </kbd>
+                    </button>
+                  )}
+                  {chat.loading ? (
+                    // Stop keeps whatever streamed — the backend resolves a
+                    // cancelled run with the partial answer and its citations.
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={chat.stop}
+                      title="Stop answering (Esc)"
+                    >
+                      <Square className="h-3 w-3 fill-current" />
+                      Stop
+                    </Button>
+                  ) : (
+                    <Button
+                      type="submit"
+                      variant="primary"
+                      size="sm"
+                      disabled={!ask.trim()}
+                    >
+                      Ask
+                    </Button>
+                  )}
                 </form>
                 {activityError && (
                   <div
@@ -904,7 +977,12 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               </div>
             </div>
 
-            {homeSection === "registry" ? (
+            {chat.active ? (
+              // The conversation borrows the shelf's scroll region rather
+              // than floating over it: closing it puts the notebooks back
+              // exactly where they were.
+              <HomeChatThread chat={chat} />
+            ) : homeSection === "registry" ? (
               <RegistrySection />
             ) : (
             <div

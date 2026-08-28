@@ -7,6 +7,7 @@ import {
   CardAction,
   LiveRegion,
   RowMenu,
+  StepTrail,
   Textarea,
   useConfirm,
 } from "./ui";
@@ -1818,49 +1819,6 @@ function Citations({ citations }: { citations: Citation[] }) {
               </p>
             </div>
           ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function StepTrail({
-  steps,
-  waiting,
-  done,
-}: {
-  steps: string[];
-  waiting: string;
-  done: boolean;
-}) {
-  return (
-    <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface/60 px-3 py-2">
-      {steps.map((s, i) => {
-        // The countdown, when there is one, is the thing still running — the
-        // last completed step hands its spinner over to it.
-        const isLast = i === steps.length - 1 && !waiting;
-        const spinning = isLast && !done;
-        return (
-          <div key={i} className="flex items-center gap-2 text-caption">
-            {spinning ? (
-              <span
-                className="h-2.5 w-2.5 shrink-0 rounded-full border-[1.5px] border-primary border-t-transparent animate-spin"
-                aria-hidden
-              />
-            ) : (
-              <Check className="h-3 w-3 shrink-0 text-success" />
-            )}
-            <span className={cn(spinning ? "text-foreground" : "text-muted-foreground")}>{s}</span>
-          </div>
-        );
-      })}
-      {waiting && !done && (
-        <div className="flex items-center gap-2 text-caption" aria-live="polite">
-          <span
-            className="h-2.5 w-2.5 shrink-0 rounded-full border-[1.5px] border-primary border-t-transparent animate-spin"
-            aria-hidden
-          />
-          <span className="text-muted-foreground">{waiting}</span>
         </div>
       )}
     </div>
