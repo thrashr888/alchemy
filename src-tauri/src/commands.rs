@@ -11258,6 +11258,11 @@ pub async fn ask_everything(
         return Err("Question is empty".into());
     }
 
+    // Claim the cancel scope before retrieval, not at synthesis: a Stop
+    // pressed during "Searching…" must bite, and a superseding ask must be
+    // able to reclaim the channel without waiting out a full answer.
+    let cancel = state.begin_generation(&format!("meta:{}", window.label()));
+
     // Deep search (wide pool + model rerank) defaults on for gateway models,
     // where the extra rerank call is fast and cheap; local models keep the
     // low-latency single-pass path unless the caller asks for deep.
@@ -11377,7 +11382,6 @@ pub async fn ask_everything(
         false,
     );
     let app_for_cb = app.clone();
-    let cancel = state.begin_generation(&format!("meta:{}", window.label()));
     let partial = Arc::new(Mutex::new(String::new()));
     let partial_cb = partial.clone();
     let ttft = TtftClock::start();
