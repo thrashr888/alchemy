@@ -109,7 +109,10 @@ export function ReportsFeed({
 
   return (
     <>
-      <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-6 py-2">
+      {/* Header chrome recedes: the unread count and collapse persist, the
+          stepping cursor and Mark all read wait for a hover or a tab into the
+          header — the same reveal the Staff rows use for Run now. */}
+      <div className="group flex min-h-12 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-6 py-2">
         <span className="whitespace-nowrap text-caption font-semibold uppercase tracking-wide text-muted-foreground">
           Latest reports
         </span>
@@ -122,46 +125,48 @@ export function ReportsFeed({
           </span>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-2">
-          {/* The cursor and chevrons only mean something over visible cards —
-              the caught-up state (nothing rendered) shows neither. */}
-          {rendered.length > 0 && (
-            <>
-              <span className="whitespace-nowrap text-micro tabular-nums text-subtle-foreground">
-                {current + 1} of {total}
-              </span>
-              <div className="flex items-center">
-                <button
-                  type="button"
-                  onClick={() => step(-1)}
-                  disabled={current <= 0}
-                  title="Previous report"
-                  aria-label="Jump to the previous report"
-                  className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
-                >
-                  <ChevronUp className="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => step(1)}
-                  disabled={current >= total - 1}
-                  title="Next report"
-                  aria-label="Jump to the next report"
-                  className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
-                >
-                  <ChevronDown className="h-4 w-4" />
-                </button>
-              </div>
-            </>
-          )}
-          {unreadCount > 0 && (
-            <button
-              type="button"
-              onClick={() => markRead(reports.filter(isUnread).map((note) => note.id))}
-              className="whitespace-nowrap text-micro text-muted-foreground transition-colors hover:text-foreground"
-            >
-              Mark all read
-            </button>
-          )}
+          <div className="flex items-center gap-2 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+            {/* The cursor and chevrons only mean something over visible cards —
+                the caught-up state (nothing rendered) shows neither. */}
+            {rendered.length > 0 && (
+              <>
+                <span className="whitespace-nowrap text-micro tabular-nums text-subtle-foreground">
+                  {current + 1} of {total}
+                </span>
+                <div className="flex items-center">
+                  <button
+                    type="button"
+                    onClick={() => step(-1)}
+                    disabled={current <= 0}
+                    title="Previous report"
+                    aria-label="Jump to the previous report"
+                    className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+                  >
+                    <ChevronUp className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => step(1)}
+                    disabled={current >= total - 1}
+                    title="Next report"
+                    aria-label="Jump to the next report"
+                    className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+                  >
+                    <ChevronDown className="h-4 w-4" />
+                  </button>
+                </div>
+              </>
+            )}
+            {unreadCount > 0 && (
+              <button
+                type="button"
+                onClick={() => markRead(reports.filter(isUnread).map((note) => note.id))}
+                className="whitespace-nowrap text-micro text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Mark all read
+              </button>
+            )}
+          </div>
           {onCollapse && (
             <button
               type="button"

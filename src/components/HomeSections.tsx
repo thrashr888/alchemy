@@ -88,7 +88,12 @@ export function BriefSidebar({
       style={style}
     >
       {resizeHandle}
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-6">
+      {/* Collapse is the one persistent affordance, as on Staff and Chats;
+          running the brief by hand is rare enough to wait for a hover or a
+          tab into the header. Running keeps it visible so the spinner isn't
+          hidden behind the pointer, and the empty state keeps it visible
+          because its copy points at it. */}
+      <div className="group flex h-12 shrink-0 items-center gap-2 border-b border-border px-6">
         <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
           Brief
         </span>
@@ -102,7 +107,10 @@ export function BriefSidebar({
               onClick={() => void runNow()}
               title="Run the brief now"
               aria-label="Run the brief now"
-              className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+              className={cn(
+                "rounded p-1 text-muted-foreground transition hover:bg-surface-2 hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100",
+                running || !brief ? "opacity-100" : "opacity-0",
+              )}
             >
               {running ? (
                 <Spinner className="h-3.5 w-3.5" />
