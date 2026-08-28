@@ -1787,7 +1787,7 @@
         <div class="feature-copy">
           <div class="feature-kicker">Studio</div>
           <h3>Create documents, decks, quizzes, and podcasts.</h3>
-          <p>Turn current notebook sources into editable documents, 16:9 decks, quizzes, mind maps, tables, or a narrated Audio Overview—without exporting your context first.</p>
+          <p>Turn current notebook sources into editable documents, 16:9 decks, quizzes, mind maps, UML diagrams, infographics, tables, or a narrated Audio Overview—without exporting your context first.</p>
           <div class="card-meta"><span>Editable output</span><span>Native PDF export</span></div>
         </div>
       </article>
@@ -1825,8 +1825,8 @@
         <div class="feature-copy">
           <div class="feature-kicker">Privacy</div>
           <h3>Your library stays on your Mac.</h3>
-          <p>Sources are extracted, embedded, and stored on your Mac. You choose what chat context reaches a provider; Ollama and Apple’s on-device model keep chat offline.</p>
-          <div class="card-meta"><span>No account</span><span>Offline with local models</span></div>
+          <p>Sources are extracted, embedded, and stored on your Mac. You choose what chat context reaches a provider; Ollama and Apple’s on-device model keep chat offline. Alchemy copies the whole library every night and keeps a week of copies plus four weekly ones, so a bad day is something you restore from rather than recover from.</p>
+          <div class="card-meta"><span>No account</span><span>Offline with local models</span><span>Nightly backups</span></div>
         </div>
       </article>
 
@@ -1834,24 +1834,24 @@
         <div class="feature-copy">
           <div class="feature-kicker">Benchmarks</div>
           <h3>Search, benchmarked.</h3>
-          <p>Alchemy&rsquo;s search is tested against public BEIR benchmarks. The built-in engine scores 0.737 on SciFact, higher than BM25 (0.665) and TAS-B (0.643), with everything running on your Mac.</p>
-          <div class="card-meta"><span>nDCG@10, higher is better</span><span>Run them yourself: cargo test --lib beir_</span></div>
+          <p>Alchemy&rsquo;s search is tested against public BEIR benchmarks. The built-in engine scores 0.737 on SciFact, higher than BM25 (0.665) and TAS-B (0.643), with everything running on your Mac. That figure includes an on-device reranking pass. Ollama embeddings score higher without one — reranking a stronger set of results makes them worse — so each row quotes the setting that wins for it.</p>
+          <div class="card-meta"><span>nDCG@10, higher is better</span><span>Run them yourself: BEIR_XENC=small cargo test --lib beir_ -- --ignored</span></div>
         </div>
         <div class="bench-rows" aria-label="BEIR benchmark results">
           <div class="bench-cell">
             <div class="bench-name">BEIR SciFact</div>
             <div class="bench-score">0.737</div>
-            <div class="bench-note">0.754 with Ollama · BM25 0.665</div>
+            <div class="bench-note">0.754 with Ollama, fusion only · BM25 0.665</div>
           </div>
           <div class="bench-cell">
             <div class="bench-name">BEIR NFCorpus</div>
             <div class="bench-score">0.352</div>
-            <div class="bench-note">0.388 with Ollama · BM25 0.325</div>
+            <div class="bench-note">0.388 with Ollama, fusion only · BM25 0.325</div>
           </div>
           <div class="bench-cell">
             <div class="bench-name">BEIR FiQA</div>
-            <div class="bench-score">0.322</div>
-            <div class="bench-note">0.429 with Ollama · BM25 0.236</div>
+            <div class="bench-score">0.318</div>
+            <div class="bench-note">0.429 with Ollama, fusion only · BM25 0.236</div>
           </div>
         </div>
       </article>
@@ -2028,14 +2028,14 @@
           <div class="staff-copy">
             <div class="staff-head"><span>Night Shift</span><span>On</span></div>
             <h3>Let Night Shift run the routine work.</h3>
-            <p>Keep scheduled refreshes moving from the menu bar.</p>
+            <p>Sources refresh while you sleep, and a page that changed overnight is weighed against the conclusions you already recorded.</p>
           </div>
           <div class="activity-track">
             <div class="activity-event"><span>Sources refreshed</span><time>02:18</time></div>
-            <div class="activity-event is-current"><span>Reports ready</span><time>Now</time></div>
+            <div class="activity-event is-current"><span>Contradiction found</span><time>03:40</time></div>
             <div class="activity-event"><span>Next check</span><time>07:00</time></div>
           </div>
-          <div class="staff-foot"><span>Review it, pause it, or run it now.</span><span>Local</span></div>
+          <div class="staff-foot"><span>One dial: Light, Standard, or Generous.</span><span>Local</span></div>
         </div>
       </article>
 

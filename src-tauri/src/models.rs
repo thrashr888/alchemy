@@ -571,4 +571,10 @@ pub struct ActivityStats {
     pub source_types: Vec<ActivityCount>,
     /// Millis of the earliest recorded activity; 0 for a fresh install.
     pub first_activity_at: i64,
+    /// What background runs cost over the receipts window (30 days), in
+    /// micro-dollars. Background work only - a user at the keyboard is not a
+    /// scheduled job - and 0 when every run was local, because local models
+    /// are free rather than unrecorded.
+    #[serde(default)]
+    pub background_cost_micros: i64,
 }
