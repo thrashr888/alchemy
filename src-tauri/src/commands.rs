@@ -5234,8 +5234,13 @@ pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u
     let total = owners.len() as u32;
 
     // Drop the old index first so the new (possibly differently-sized) vectors
-    // can recreate the table cleanly.
+    // can recreate the table cleanly. The router index is vectors too, and
+    // built by the same embedder: leaving it behind is how a store ends up
+    // with 256-d chunks and 384-d routes, after which every routed search
+    // fails on the dimension mismatch. It is derived data — the next
+    // `ensure_router` sweep rebuilds it — so it goes with the chunks.
     e(state.db.clear_all_chunks().await)?;
+    e(state.db.clear_all_routes().await)?;
 
     let ai = state.ai.read().await.clone();
     for (i, (notebook_id, owner_id, extracted)) in owners.iter().enumerate() {
@@ -6005,8 +6010,8 @@ async fn finish_tool_reply(
 //
 // Imperative chat messages ("add this url", "make a study guide", "delete the
 // spec pdf") route to tools instead of RAG. A cheap keyword gate keeps normal
-// questions on the zero-overhead path; gated messages get one small JSON
-// routing call to the chat model, then dispatch to existing commands.
+// questions on the zero-overhead path; gated messages get one JSON routing
+// call on the Small role, then dispatch to existing commands.
 
 /// Imperative signals both surfaces gate on — verbs, plus the two ways a
 /// user delegates the choice instead of naming it ("pick a random theme",
@@ -6294,6 +6299,16 @@ fn sanitize_title(t: &str) -> String {
 }
 
 /// One small LLM call to classify a gated message into a ToolAction.
+///
+/// On the Small role, not the chat model. Routing is a constrained JSON
+/// classification over a fixed vocabulary — the same shape as gists, titles
+/// and retitles, all of which run there. Running it on the chat model meant
+/// "open the ferrari notebook" inherited whatever the user configured to
+/// WRITE for them: an agent CLI takes tens of seconds to answer a one-object
+/// classification and can park indefinitely, and a router that hangs turns
+/// every imperative message into a timeout. `chat_role` falls through to the
+/// chat engine when Small is absent or errors (RFC-inference-providers §7),
+/// so this is strictly faster, never less capable.
 async fn route_tool(state: &AppState, sources: &[Source], content: &str) -> ToolAction {
     let source_list = if sources.is_empty() {
         "(none)".to_string()
@@ -6328,7 +6343,7 @@ async fn route_tool(state: &AppState, sources: &[Source], content: &str) -> Tool
     ];
     let raw = {
         let ai = state.ai.read().await.clone();
-        match ai.chat(&messages).await {
+        match ai.chat_role(crate::ai::Role::Small, &messages).await {
             Ok(o) => o.text,
             Err(_) => return ToolAction::Chat,
         }
@@ -7712,6 +7727,9 @@ fn parse_global_tool_action(raw: &str) -> GlobalToolAction {
 /// One small LLM call to classify a gated Home message. The notebook list is
 /// the context the source list is in a notebook — it is what `open_notebook`
 /// can name, and titles are sanitized for the same reason source titles are.
+///
+/// Small role, for the reasons on `route_tool` — and more sharply here, since
+/// Home's router stands between the user and every navigation verb.
 async fn route_global_tool(
     state: &AppState,
     notebooks: &[Notebook],
@@ -7735,7 +7753,7 @@ async fn route_global_tool(
     ];
     let raw = {
         let ai = state.ai.read().await.clone();
-        match ai.chat(&messages).await {
+        match ai.chat_role(crate::ai::Role::Small, &messages).await {
             Ok(o) => o.text,
             Err(_) => return GlobalToolAction::Chat,
         }
@@ -7799,37 +7817,63 @@ async fn add_urls_from_home(app: &AppHandle, state: &AppState, urls: &[String]) 
     .await
 }
 
-/// Gate → route → dispatch for Home. Some(outcome) means a tool answered and
-/// retrieval never runs; None falls through to the corpus answer.
+/// What the Home gate → route → dispatch pass decided.
+pub enum ToolRoute {
+    /// A tool answered; retrieval never runs.
+    Answered(GlobalToolOutcome),
+    /// Not a command — fall through to the corpus answer.
+    Fallthrough,
+    /// Stop landed while the router was still deciding, before any tool was
+    /// chosen. Nothing ran, so the run settles as cancelled.
+    Cancelled,
+}
+
+/// Gate → route → dispatch for Home. See `ToolRoute`.
+///
+/// `cancel` races the ROUTING call only. That call is a read — one JSON
+/// classification — so dropping its future costs nothing but the tokens
+/// already spent, and it is the one step here that can park for a long time
+/// on a slow provider; a Stop pressed during "Checking for commands" has to
+/// bite there or it bites nowhere. Dispatch is deliberately left outside the
+/// race: once a verb is chosen the arms add sources, write notes, delete
+/// threads and change settings, and a mutation abandoned halfway is worse
+/// than one the user has to wait out.
 async fn try_global_tool_route(
     app: &AppHandle,
     state: &AppState,
     thread_id: &str,
     content: &str,
-) -> Option<GlobalToolOutcome> {
+    cancel: &tokio_util::sync::CancellationToken,
+) -> ToolRoute {
     // The settings fast path first and outside the gate, exactly as a
     // notebook's chat runs it: it carries its own much tighter gate, and
     // nothing it does depends on a notebook.
     if let Some(reply) = try_settings_fast_path(app, state, content).await {
-        return Some(GlobalToolOutcome::say(reply));
+        return ToolRoute::Answered(GlobalToolOutcome::say(reply));
     }
     if !global_tool_gate(content) {
-        return None;
+        return ToolRoute::Fallthrough;
     }
 
     // Deterministic fast path: a message that plainly asks to add the URLs it
     // carries skips the router, as it does in a notebook.
     let urls = extract_urls(content);
     if !urls.is_empty() && wants_add_sources(content, &urls) && !has_non_add_verb(content) {
-        return Some(GlobalToolOutcome::say(
+        return ToolRoute::Answered(GlobalToolOutcome::say(
             add_urls_from_home(app, state, &urls).await,
         ));
     }
 
     meta_step(Some(app), "Checking for commands", false);
-    let notebooks = state.db.list_notebooks().await.ok()?;
-    let outcome = match route_global_tool(state, &notebooks, content).await {
-        GlobalToolAction::Chat => return None,
+    let Ok(notebooks) = state.db.list_notebooks().await else {
+        return ToolRoute::Fallthrough;
+    };
+    let action = tokio::select! {
+        a = route_global_tool(state, &notebooks, content) => a,
+        _ = cancel.cancelled() => return ToolRoute::Cancelled,
+    };
+    let outcome = match action {
+        GlobalToolAction::Chat => return ToolRoute::Fallthrough,
         GlobalToolAction::Shared(shared) => {
             GlobalToolOutcome::say(shared_tool_reply(app, state, shared, StyleTarget::Home).await)
         }
@@ -7898,7 +7942,7 @@ async fn try_global_tool_route(
             }
         }
     };
-    Some(outcome)
+    ToolRoute::Answered(outcome)
 }
 
 /// Save the previous Home answer as a note. Which notebook? The one the
@@ -12116,21 +12160,31 @@ pub async fn ask_everything(
     // Tools before retrieval: "add this url", "open the Japan notebook",
     // "switch chat to ollama" are commands, and answering them out of the
     // corpus would be a category error. The gate is cheap and the router is
-    // one small call — an ordinary question pays neither.
-    if let Some(outcome) = try_global_tool_route(
+    // one small call — an ordinary question pays neither. The route carries
+    // the cancel token so Stop bites during "Checking for commands" too; it
+    // races the routing call and nothing past it (see `try_global_tool_route`
+    // for why dispatch stays uncancellable).
+    match try_global_tool_route(
         &app,
         &state,
         thread_id.as_deref().unwrap_or_default(),
         &question,
+        &cancel,
     )
     .await
     {
-        return Ok(MetaAnswer {
-            answer: outcome.reply,
-            citations: vec![],
-            kind: "tool".into(),
-            effect: outcome.effect,
-        });
+        ToolRoute::Answered(outcome) => {
+            return Ok(MetaAnswer {
+                answer: outcome.reply,
+                citations: vec![],
+                kind: "tool".into(),
+                effect: outcome.effect,
+            });
+        }
+        // Same empty-handed answer the retrieval and synthesis selects
+        // produce: no text, no citations.
+        ToolRoute::Cancelled => return Ok(MetaAnswer::chat(String::new(), vec![])),
+        ToolRoute::Fallthrough => {}
     }
 
     // Retrieval runs under the cancel scope, not just synthesis. Both legs

@@ -44,7 +44,7 @@ provider:
 | `Chat` | send_message, meta-chat | streaming, quality, citations | pinned → agent CLI → Ollama → builtin MLX → gateway |
 | `Agent` | deep research, curator consolidation | tool use, multi-step | agent CLI → Chat's provider |
 | `Generate` | studio artifacts, reports, audio scripts | long-form quality | same as Chat |
-| `Small` | friendly_title, summaries, router hints | speed, cheap | builtin MLX / FM on-device → Ollama → Chat's provider |
+| `Small` | friendly_title, summaries, gists, chat/Home tool routing | speed, cheap | builtin MLX / FM on-device → Ollama → Chat's provider |
 | `Embed` | ingest, retrieval, semantic router | consistency (index-coupled) | **builtin always**, unless user opted into Ollama |
 | `Vision` | image OCR, scanned PDFs | image input | Ollama vision → gateway vision → skip (today's behavior) |
 
@@ -75,6 +75,18 @@ The immediate performance win hides in `Small`: titles and summaries
 currently queue behind the big chat model on Ollama. Routing them to a
 builtin 4B-class model (or the free FM on-device model) clears most of
 the ingest latency this laptop feels.
+
+**Tool routing belongs to `Small` too** *(corrected in code 2026-08-29;
+`route_tool` and `route_global_tool` had been calling `Ai::chat`)*. The
+routers emit one JSON object from a fixed vocabulary — the same
+constrained classification as a gist or a title, and nothing about it
+wants the model the user picked to *write* for them. On the chat model,
+routing inherits that model's worst case: an agent-CLI provider took
+more than 30s to classify "open the ferrari notebook", so an imperative
+message cost more than the answer it was standing in for, and a wedged
+provider made the router itself the hang. `chat_role` already falls
+through to the chat engine when Small is absent or errors, so the move
+is strictly faster and never less capable.
 
 ## 3. The boundary
 

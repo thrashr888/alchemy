@@ -738,6 +738,27 @@ impl Db {
             .any(|t| t == name))
     }
 
+    /// Width of a table's `vector` column as it exists on disk, or None when
+    /// the table isn't there (or has no vector column). The vector tables are
+    /// created lazily at whatever dimensionality the embedder of the day
+    /// emitted, so this is the only honest answer to "what will Lance accept
+    /// as a query vector here" — a query of any other width fails the search
+    /// with "No vector column found to match with the query vector dimension".
+    pub async fn vector_dim(&self, table: &str) -> Result<Option<usize>> {
+        if !self.table_exists(table).await? {
+            return Ok(None);
+        }
+        let tbl = self.conn.open_table(table).execute().await?;
+        let schema = tbl.schema().await?;
+        Ok(schema
+            .field_with_name("vector")
+            .ok()
+            .and_then(|f| match f.data_type() {
+                DataType::FixedSizeList(_, dim) => Some(*dim as usize),
+                _ => None,
+            }))
+    }
+
     async fn ensure_table(&self, name: &str, schema: SchemaRef) -> Result<()> {
         if !self.table_exists(name).await? {
             self.conn
@@ -2726,6 +2747,24 @@ impl Db {
         self.add_batch(T_ROUTES, schema, batch).await
     }
 
+    /// Drop the whole router index. Routes are derived data — every row is
+    /// recomputed from sources, notes, tags and gists by
+    /// `router::ensure_router` — so throwing them away costs one re-embed
+    /// sweep and never loses anything the corpus doesn't still hold. That is
+    /// what makes the dimension self-heal below safe here and NOT safe for
+    /// `chunks`, whose text is the only copy of a source's chunking.
+    pub async fn clear_all_routes(&self) -> Result<()> {
+        if self.table_exists(T_ROUTES).await? {
+            self.conn.drop_table(T_ROUTES, &[]).await?;
+        }
+        Ok(())
+    }
+
+    /// The router index's vector width, or None when it hasn't been built.
+    pub async fn routes_vector_dim(&self) -> Result<Option<usize>> {
+        self.vector_dim(T_ROUTES).await
+    }
+
     pub async fn delete_routes(&self, ids: &[String]) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
@@ -2747,7 +2786,25 @@ impl Db {
         kind: Option<&str>,
         k: usize,
     ) -> Result<Vec<(Route, f32)>> {
-        if !self.table_exists(T_ROUTES).await? {
+        let Some(stored_dim) = self.routes_vector_dim().await? else {
+            return Ok(vec![]);
+        };
+        // Dimension self-heal. The query vector is the current embedder's
+        // width by construction, so comparing it against the stored column is
+        // a free, exact drift test — and drift is real: switching embedders
+        // and running Re-embed All rebuilt `chunks` at the new width and left
+        // `routes` at the old one, after which every routed search died on
+        // "No vector column found to match with the query vector dimension".
+        // Routes are derived, so the repair is to throw the stale index away;
+        // the next `ensure_router` rebuilds it at the current width. Callers
+        // treat an empty result as "no index yet" and search flat meanwhile.
+        if stored_dim != query_vec.len() {
+            crate::note!(
+                "router index is {stored_dim}-d but the embedder emits {}-d; \
+                 dropping the stale index (it rebuilds on the next sweep)",
+                query_vec.len()
+            );
+            self.clear_all_routes().await?;
             return Ok(vec![]);
         }
         let tbl = self.conn.open_table(T_ROUTES).execute().await?;
@@ -5055,5 +5112,60 @@ mod tests {
             .await
             .expect("expand");
         assert!(none.is_empty());
+    }
+
+    /// Switching embedders leaves the router index at the old vector width,
+    /// which no summary diff can see. A routed search carries the current
+    /// width by construction, so it is the free detector: it drops the stale
+    /// index and answers empty (the caller's "no index yet" case) instead of
+    /// failing the whole search with Lance's dimension error — and the table
+    /// then rebuilds cleanly at the new width, which a stale one refuses.
+    #[tokio::test]
+    async fn route_search_heals_a_stale_vector_width() {
+        let dir = std::env::temp_dir().join(format!("nbl-routedim-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+        let routes = vec![Route {
+            id: "src:1".into(),
+            kind: "source".into(),
+            notebook_id: "nb1".into(),
+            summary: "Ferrari service history".into(),
+        }];
+
+        db.upsert_routes(&routes, &[vec![0.1, 0.2, 0.3, 0.4]])
+            .await
+            .expect("build index");
+        assert_eq!(db.routes_vector_dim().await.expect("dim"), Some(4));
+        assert_eq!(
+            db.route_search(vec![0.1, 0.2, 0.3, 0.4], None, 4)
+                .await
+                .expect("search")
+                .len(),
+            1,
+            "matching width searches normally"
+        );
+
+        let healed = db
+            .route_search(vec![0.1, 0.2], None, 4)
+            .await
+            .expect("mismatched width must not error");
+        assert!(healed.is_empty());
+        assert_eq!(
+            db.routes_vector_dim().await.expect("dim"),
+            None,
+            "the stale index is dropped, not left to fail every query"
+        );
+        assert!(db.list_routes().await.expect("routes").is_empty());
+
+        db.upsert_routes(&routes, &[vec![0.5, 0.6]])
+            .await
+            .expect("rebuild at the new width");
+        assert_eq!(db.routes_vector_dim().await.expect("dim"), Some(2));
+        assert_eq!(
+            db.route_search(vec![0.5, 0.6], None, 4)
+                .await
+                .expect("search")
+                .len(),
+            1
+        );
     }
 }

@@ -6,6 +6,12 @@
 //! `ensure_router` recomputes the cheap text summaries from current db state,
 //! diffs them against what's stored, and re-embeds only what changed —
 //! a no-op string comparison on the common path.
+//!
+//! That diff is about text, so it is deliberately paired with a check about
+//! arithmetic: an embedder swap changes no summary and leaves every stored
+//! vector the wrong width. `dim_drift` catches it here, and `Db::route_search`
+//! catches it for free at query time; either way the index is dropped and
+//! rebuilt, which is safe because routes are derived from the corpus.
 
 use anyhow::Result;
 
@@ -264,10 +270,40 @@ async fn desired_routes(db: &Db) -> Result<Vec<Route>> {
     Ok(desired)
 }
 
+/// Whether the stored router index still speaks the current embedder's
+/// dimensionality — `Some((stored, live))` when it does not.
+///
+/// The summary diff below cannot see this: an embedder swap changes no
+/// summary string, so a converged index stays "fresh" while every vector in
+/// it is the wrong width. One probe embed answers it; `ensure_router` already
+/// scans every notebook's sources and notes, so the probe is noise beside
+/// that. Unknowable (no index yet, or the embedder is down) means no drift to
+/// act on — `route_search` still catches it for free at query time.
+async fn dim_drift(db: &Db, ai: &Ai) -> Option<(usize, usize)> {
+    let stored = db.routes_vector_dim().await.ok().flatten()?;
+    let live = ai.test_embed().await.ok()?;
+    (live > 0 && live != stored).then_some((stored, live))
+}
+
 /// Bring the router index in line with the corpus. Returns
 /// (embedded, deleted) counts — (0, 0) when nothing changed.
 pub async fn ensure_router(db: &Db, ai: &Ai) -> Result<(usize, usize)> {
     let desired = desired_routes(db).await?;
+
+    // Drift first, because the diff below is about text and this is about
+    // arithmetic. Routes are derived from the corpus, so the repair for a
+    // stale-width index is simply to drop it and let the diff rebuild every
+    // row at the current width — the alternative is an index that can neither
+    // be searched (query/column mismatch) nor appended to (batch/schema
+    // mismatch), which is what a Re-embed All after an embedder switch left
+    // behind: it rebuilds `chunks` and never touched `routes`.
+    if let Some((stored_dim, live_dim)) = dim_drift(db, ai).await {
+        crate::note!(
+            "router index is {stored_dim}-d but the embedder emits {live_dim}-d; \
+             rebuilding it from scratch"
+        );
+        db.clear_all_routes().await?;
+    }
 
     let stored = db.list_routes().await?;
     let stored_by_id: std::collections::HashMap<&str, &Route> =
