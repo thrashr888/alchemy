@@ -1101,17 +1101,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             >
               {/* The conversation takes the center column: the shelf's
               heading and verbs would only compete with it, and the ask box
-              below becomes the follow-up composer. */}
-              {chatOpen && (
-                <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1">
-                  <h1 className="text-page font-semibold tracking-tight">
-                    Across all notebooks
-                  </h1>
-                  <span className="text-body text-muted-foreground">
-                    Answers cite the notebook and source they came from.
-                  </span>
-                </div>
-              )}
+              below becomes the follow-up composer. The chat gets no heading
+              of its own — the tab already names the place, and the citations
+              say where answers come from. */}
               {/* Wraps rather than squeezes: with both sidebars open this
                   column is far narrower than its 960px cap, so the action
                   cluster drops to its own line instead of crushing the
