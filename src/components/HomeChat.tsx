@@ -7,9 +7,11 @@ import type { MetaCitation, MetaTurn } from "@/lib/types";
 import { Markdown } from "./Markdown";
 import {
   CitationsToggle,
+  GrammarActions,
   MenuPill,
   MenuRow,
   ModelPill,
+  ToolRow,
   TurnActions,
   TurnModel,
   copyAction,
@@ -415,6 +417,19 @@ export function HomeChatThread({ chat }: { chat: HomeChat }) {
                 ]}
               />
             </div>
+          ) : turn.kind === "tool" ? (
+            // A command Home carried out — the same quiet row a notebook
+            // transcript gives its tools, so "switch chat to ollama" reads
+            // identically wherever it was asked.
+            <ToolRow
+              key={turn.id}
+              content={turn.content}
+              actions={
+                i === chat.turns.length - 1 && (
+                  <GrammarActions content={turn.content} surface="home" />
+                )
+              }
+            />
           ) : turn.kind === "error" ? (
             <div key={turn.id} className="group flex flex-col gap-1">
               <div

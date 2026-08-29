@@ -865,28 +865,40 @@ export const useStore = create<AppState>((set, get) => {
               .then((reportSchedules) => set({ reportSchedules }));
         },
       );
-      // The settings tool's per-notebook style verb (RFC-conversational-setup
+      // The settings tool's per-surface style verb (RFC-conversational-setup
       // §2): the validated change arrives as an event because ChatConfig is
-      // frontend state. Merge into the notebook's stored config; update the
-      // live store only when that notebook is in front here.
+      // frontend state, and every window has to agree. An empty notebookId
+      // means Home's own config — asking across everything is a different
+      // job from asking inside one notebook, and neither resets the other.
       void listen<{
         notebookId: string;
         style?: string | null;
         length?: string | null;
       }>("settings://style", (e) => {
         const { notebookId, style, length } = e.payload;
-        const key = `chatConfig:${notebookId}`;
-        let cur: ChatConfig = { ...DEFAULT_CHAT_CONFIG };
-        try {
-          const raw = localStorage.getItem(key);
-          if (raw) cur = { ...DEFAULT_CHAT_CONFIG, ...JSON.parse(raw) };
-        } catch {
-          // Unreadable stored config — rebuild from the defaults.
+        const home = !notebookId;
+        const key = home ? HOME_CHAT_CONFIG_KEY : `chatConfig:${notebookId}`;
+        let cur: ChatConfig = home
+          ? { ...get().homeChatConfig }
+          : { ...DEFAULT_CHAT_CONFIG };
+        if (!home) {
+          try {
+            const raw = localStorage.getItem(key);
+            if (raw) cur = { ...DEFAULT_CHAT_CONFIG, ...JSON.parse(raw) };
+          } catch {
+            // Unreadable stored config — rebuild from the defaults.
+          }
         }
         // The backend validated these against the same rosters this union
         // mirrors (selfheal::resolve_style / settings_style).
         if (style != null) cur.style = style as ChatConfig["style"];
         if (length != null) cur.length = length as ChatConfig["length"];
+        if (home) {
+          // One writer for Home's config, so the pills and the tool can
+          // never disagree about where it is kept.
+          get().setHomeChatConfig(cur);
+          return;
+        }
         localStorage.setItem(key, JSON.stringify(cur));
         if (get().currentId === notebookId) set({ chatConfig: cur });
       });
@@ -1488,7 +1500,14 @@ export const useStore = create<AppState>((set, get) => {
             // No depth argument: the backend picks depth per model class
             // (deep rerank on gateways where the extra call is cheap,
             // single-pass local). The config is Home's own — Style, Length.
-            .askEverything(q, prior, undefined, get().homeChatConfig);
+            .askEverything(q, prior, undefined, get().homeChatConfig, threadId);
+          // A command ("add this url", "open the Japan notebook") was carried
+          // out instead of answered. It lands as one quiet tool row, never
+          // as a stopped partial — there was no stream to cut short.
+          if (res.kind === "tool") {
+            await get().settleHomeTool(threadId, res);
+            return;
+          }
           // Superseded runs settle as stopped: a question asked over the top
           // of this one cancelled it, and the partial is what it got to.
           const stopped =
@@ -1517,6 +1536,36 @@ export const useStore = create<AppState>((set, get) => {
       })();
       metaRun = run;
       await run;
+    },
+
+    settleHomeTool: async (threadId, answer) => {
+      // Deleting this conversation is the one reply that must not be written
+      // into it: the row would resurrect the thread the user just dropped.
+      // The backend already removed the turns, so all that's left is what a
+      // sidebar delete does — abandon the run, open a fresh conversation,
+      // drop the draft — and say so where it can still be read.
+      if (answer.effect?.kind === "deleteChat") {
+        abandonedThreads.add(threadId);
+        if (get().homeChat.threadId === threadId)
+          set({ homeChat: { threadId: newThreadId(), turns: [] } });
+        get().setHomeDraft(`t:${threadId}`, "");
+        void get().refreshHomeThreads();
+        get().pushToast("success", answer.answer);
+        return;
+      }
+      await get().appendHomeTurn(
+        "assistant",
+        answer.answer,
+        [],
+        "tool",
+        threadId,
+      );
+      // The backend can't drive this window; it can only say where to go.
+      // One nav entry, exactly as clicking the notebook would make.
+      if (answer.effect?.kind === "openNotebook" && answer.effect.notebookId) {
+        const id = answer.effect.notebookId;
+        await navAtomic(() => get().selectNotebook(id));
+      }
     },
 
     stopHome: () => {

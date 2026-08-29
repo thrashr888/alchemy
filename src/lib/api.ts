@@ -451,6 +451,9 @@ export const api = {
     /** Home chat's own style and length. Omitted (⌘K's glance mode) means the
      *  default prompt, unchanged. */
     config?: ChatConfig | null,
+    /** The conversation this was asked in. Only Home's housekeeping tools
+     *  need it — rename/delete this chat, and "save that answer". */
+    threadId?: string | null,
   ) =>
     run(
       ai<MetaAnswer>("ask_everything", {
@@ -458,6 +461,7 @@ export const api = {
         history,
         deep: deep ?? null,
         config: config ?? null,
+        threadId: threadId ?? null,
       }),
     ),
   // Home chat threads — the persisted side of ask_everything.

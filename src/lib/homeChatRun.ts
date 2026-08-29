@@ -12,7 +12,10 @@ import type { HomeRun } from "./storeTypes";
 
 /** What the backend sees as prior context: completed exchanges only. A
  *  provider failure leaves a dangling question that would only teach the
- *  model that answers can be error messages. */
+ *  model that answers can be error messages — and a tool confirmation
+ *  ("Added 2 sources to Japan trip") is process, not conversation: the
+ *  notebook transcript keeps kind "tool" out of model context for the same
+ *  reason, and the question that triggered one goes with it. */
 export function historyOf(
   turns: MetaTurn[],
 ): { role: string; content: string }[] {
@@ -20,7 +23,12 @@ export function historyOf(
   for (let i = 0; i + 1 < turns.length; i++) {
     const q = turns[i];
     const a = turns[i + 1];
-    if (q.role === "user" && a.role === "assistant" && a.kind !== "error") {
+    if (
+      q.role === "user" &&
+      a.role === "assistant" &&
+      a.kind !== "error" &&
+      a.kind !== "tool"
+    ) {
       out.push(
         { role: "user", content: q.content },
         { role: "assistant", content: a.content },

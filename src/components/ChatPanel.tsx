@@ -1239,7 +1239,47 @@ function FallbackOffers({ message }: { message: Message }) {
  *  (backend-allowlisted), a Settings-tab jump, a provider switch applied
  *  through the settings tool, and the connect confirm-click — the ONLY
  *  chat-side path that writes an agent client's config. */
-function GrammarActions({ content }: { content: string }) {
+/** A tool confirmation, as both chat surfaces render it: process, not
+ *  conversation — one quiet gray row, no bubble, no role label, the
+ *  Claude-desktop "Ran …" grammar. Home shows the same row for the same
+ *  reason, so a settings change reads identically wherever it was asked. */
+export function ToolRow({
+  content,
+  actions,
+}: {
+  content: string;
+  /** The shared button grammars, on the latest row only. */
+  actions?: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-start gap-2 py-0.5 text-caption text-muted-foreground">
+      <Wrench className="mt-0.5 h-3 w-3 shrink-0 text-subtle-foreground" />
+      {/* pre-line: the settings tool's snapshot reply is multi-line. */}
+      <span className="selectable min-w-0 whitespace-pre-line">
+        {content}
+        {actions && (
+          <span className="ml-2 inline-flex flex-wrap items-center gap-2 align-middle">
+            {actions}
+          </span>
+        )}
+      </span>
+    </div>
+  );
+}
+
+/** Turn the fix/confirm grammars a tool or a diagnosis writes into buttons.
+ *
+ *  `surface` says where the resulting confirmation row goes: a notebook
+ *  transcript, or Home's conversation. A provider switch is offered only on
+ *  an error row, which Home renders without actions — so only the connect
+ *  confirm has a Home path, and it takes one that needs no notebook. */
+export function GrammarActions({
+  content,
+  surface = "notebook",
+}: {
+  content: string;
+  surface?: "notebook" | "home";
+}) {
   const fixCmd = /Fix: open Terminal, run `([^`]+)`/.exec(content)?.[1];
   const settingsTab = /Settings → (Models|General|Sources|Studio|Agents)/.exec(
     content,
@@ -1274,16 +1314,29 @@ function GrammarActions({ content }: { content: string }) {
   };
   const applyConnect = async (clientId: string) => {
     const nb = useStore.getState().currentId;
-    if (!nb) return;
     try {
-      appendToolRow(await api.applyConnectFix(nb, clientId));
+      // An empty notebook id asks the backend for the confirmation row
+      // without filing it — Home's thread is not a notebook transcript.
+      const row = await api.applyConnectFix(
+        surface === "home" ? "" : (nb ?? ""),
+        clientId,
+      );
+      if (surface === "home")
+        await useStore
+          .getState()
+          .appendHomeTurn("assistant", row.content, [], "tool");
+      else appendToolRow(row);
     } catch (e) {
       useStore
         .getState()
         .pushToast("error", e instanceof Error ? e.message : String(e));
     }
   };
-  if (!fixCmd && !settingsTab && !switchFix && !connectFix) return null;
+  // A provider switch writes its confirmation into a notebook transcript;
+  // without one there is nowhere for it to land, so it isn't offered.
+  const canSwitch = surface === "notebook" && !!useStore.getState().currentId;
+  if (!fixCmd && !settingsTab && !(switchFix && canSwitch) && !connectFix)
+    return null;
   return (
     <>
       {fixCmd && (
@@ -1296,7 +1349,7 @@ function GrammarActions({ content }: { content: string }) {
           Open Terminal: {fixCmd}
         </Button>
       )}
-      {switchFix && (
+      {switchFix && canSwitch && (
         <Button
           variant="ghost"
           size="sm"
@@ -1346,18 +1399,10 @@ const ChatMessage = memo(function ChatMessage({
   // carry the shared button grammars, parsed on the latest row only.
   if (message.kind === "tool") {
     return (
-      <div className="flex items-start gap-2 py-0.5 text-caption text-muted-foreground">
-        <Wrench className="mt-0.5 h-3 w-3 shrink-0 text-subtle-foreground" />
-        {/* pre-line: the settings tool's snapshot reply is multi-line. */}
-        <span className="selectable min-w-0 whitespace-pre-line">
-          {message.content}
-          {isLast && (
-            <span className="ml-2 inline-flex flex-wrap items-center gap-2 align-middle">
-              <GrammarActions content={message.content} />
-            </span>
-          )}
-        </span>
-      </div>
+      <ToolRow
+        content={message.content}
+        actions={isLast && <GrammarActions content={message.content} />}
+      />
     );
   }
   if (message.role === "user") {

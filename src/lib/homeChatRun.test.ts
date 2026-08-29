@@ -63,6 +63,28 @@ describe("prior context", () => {
   it("drops a question with no answer under it", () => {
     expect(historyOf([turn("user", "still running")])).toEqual([]);
   });
+
+  it("drops a command and its tool confirmation", () => {
+    expect(
+      historyOf([
+        turn("user", "switch chat to ollama"),
+        turn("assistant", "Chat provider is now Ollama.", "tool"),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("keeps the real exchanges around a tool row", () => {
+    expect(
+      historyOf([
+        turn("user", "one"),
+        turn("assistant", "first"),
+        turn("user", "add https://example.com"),
+        turn("assistant", "Added 1 source to **Japan**.", "tool"),
+        turn("user", "two"),
+        turn("assistant", "second"),
+      ]).map((m) => m.content),
+    ).toEqual(["one", "first", "two", "second"]);
+  });
 });
 
 describe("which run a conversation sees", () => {

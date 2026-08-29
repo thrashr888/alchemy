@@ -4,6 +4,7 @@ import type {
   HygieneIssue,
   KokoroStatus,
   Message,
+  MetaAnswer,
   MetaCitation,
   MetaThread,
   MetaTurn,
@@ -335,6 +336,10 @@ export interface AppState {
    *  answer has settled. A question asked while another is still being written
    *  winds that one down first (its partial is kept, as Stop keeps it). */
   askHome: (question: string) => Promise<void>;
+  /** Land a Home tool reply: the quiet transcript row, plus whatever the
+   *  backend could only ask this window to do — open a notebook, or let go
+   *  of the conversation it just deleted. */
+  settleHomeTool: (threadId: string, answer: MetaAnswer) => Promise<void>;
   /** Stop the run in flight, keeping whatever it had written. */
   stopHome: () => void;
   /** meta://token and meta://step, folded into the live run. */

@@ -614,10 +614,24 @@ export interface MetaCitation {
   snippet: string;
 }
 
+/** Something a Home tool reply asks THIS window to do, because the backend
+ *  can neither navigate the webview nor tear down the conversation the
+ *  question was asked in. */
+export interface MetaEffect {
+  kind: "openNotebook" | "deleteChat";
+  /** The notebook to open, for "openNotebook"; empty otherwise. */
+  notebookId: string;
+}
+
 /** A corpus-wide answer (docs/RFC-meta-chat.md). */
 export interface MetaAnswer {
   answer: string;
   citations: MetaCitation[];
+  /** "chat" — a synthesized answer — or "tool", a command Home carried out
+   *  (add a source, open a notebook, change a setting). Absent on answers
+   *  from a backend older than the tool router. */
+  kind?: MetaTurn["kind"];
+  effect?: MetaEffect | null;
 }
 
 /** One exchange in Home's corpus-wide conversation, persisted in the
@@ -630,8 +644,9 @@ export interface MetaTurn {
   citations: MetaCitation[];
   /** "chat" | "stopped" (cut short by Stop/Esc — the partial answer is still
    *  worth keeping) | "error" (a provider failure: rendered as a danger wash
-   *  and kept out of the history the model sees). */
-  kind: "chat" | "stopped" | "error";
+   *  and kept out of the history the model sees) | "tool" (a command Home
+   *  carried out: one quiet row, and likewise never model context). */
+  kind: "chat" | "stopped" | "error" | "tool";
   /** Which model wrote this answer. Empty on questions, and on answers
    *  stored before the backend recorded it — rendered as nothing. */
   model?: string;
