@@ -89,12 +89,10 @@ export function BriefSidebar({
       style={style}
     >
       {resizeHandle}
-      {/* Collapse is the one persistent affordance, as on Staff and Chats;
-          running the brief by hand is rare enough to wait for a hover or a
-          tab into the header. Running keeps it visible so the spinner isn't
-          hidden behind the pointer, and the empty state keeps it visible
-          because its copy points at it. */}
-      <div className="group flex h-12 shrink-0 items-center gap-2 border-b border-border px-6">
+      {/* Run and collapse both persist. Running the brief by hand is the
+          card's one verb — a brief you can only run by finding the button
+          under the pointer is a brief you re-run by waiting for tomorrow. */}
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-6">
         {/* The same icon the collapsed rail shows, so folding a card down
             and back doesn't change what it is called. Staff and Chats on the
             left already read this way; the right pair now matches. */}
@@ -112,10 +110,7 @@ export function BriefSidebar({
               onClick={() => void runNow()}
               title="Run the brief now"
               aria-label="Run the brief now"
-              className={cn(
-                "rounded p-1 text-muted-foreground transition hover:bg-surface-2 hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100",
-                running || !brief ? "opacity-100" : "opacity-0",
-              )}
+              className="rounded p-1 text-muted-foreground transition hover:bg-surface-2 hover:text-foreground"
             >
               {running ? (
                 <Spinner className="h-3.5 w-3.5" />

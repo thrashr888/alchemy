@@ -828,6 +828,13 @@ export const useStore = create<AppState>((set, get) => {
             void api.getAiConfig().then((aiConfig) => set({ aiConfig }));
             return;
           }
+          // The small model finished naming a Home conversation — the Chats
+          // list re-derives itself off the turns. Background bookkeeping, not
+          // an arrival: nothing chimes and no notebook is re-read.
+          if (scope === "homechat") {
+            void get().refreshHomeThreads();
+            return;
+          }
           playArrival();
           // Debounced: an agent looping tool calls fires one of these per
           // call, and each refresh is a notebooks read plus a native menu

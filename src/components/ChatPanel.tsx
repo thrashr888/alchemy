@@ -6,7 +6,6 @@ import {
   Button,
   CardAction,
   LiveRegion,
-  RowMenu,
   StepTrail,
   Textarea,
   useConfirm,
@@ -1424,11 +1423,7 @@ const ChatMessage = memo(function ChatMessage({
         {message.content}
       </Markdown>
       {message.citations.length > 0 && <Citations citations={message.citations} />}
-      {message.model && (
-        <div className="mt-1 text-micro text-subtle-foreground">
-          {message.model}
-        </div>
-      )}
+      <TurnModel model={message.model} />
       <MessageActions content={message.content} citations={message.citations} />
     </div>
   );
@@ -1596,72 +1591,125 @@ function SlashPicker({
   );
 }
 
-/** Hover row under a user turn: copy, re-run, and when it happened. Re-run
- *  asks the question again as a fresh turn at the end of the chat — the
- *  earlier exchange stays put, so nothing is destroyed and any question in
- *  the transcript can be re-asked. */
-function UserMessageActions({ message }: { message: Message }) {
-  const [copied, setCopied] = useState(false);
-  const sending = useStore((s) => s.sending);
+/** One verb in a turn's action row. */
+export interface TurnAction {
+  label: string;
+  /** What the button says for a moment after it worked ("Copied", "Saved").
+   *  Omitted for verbs whose effect is visible elsewhere — Re-run's answer
+   *  arrives at the bottom of the transcript, which is its own receipt. */
+  doneLabel?: string;
+  icon: React.ReactNode;
+  onClick: () => void | Promise<void>;
+  disabled?: boolean;
+  title?: string;
+}
 
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(message.content);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable */
-    }
-  }
-  function rerun() {
-    const st = useStore.getState();
-    if (st.sending) return;
-    void st.sendMessage(message.content);
-  }
+/** The row under a turn: when it happened, then what can be done with it.
+ *
+ *  One component for both chats. The notebook transcript grew copy, re-run
+ *  and a timestamp; Home's corpus conversation had none of it, and there is
+ *  no reason a turn should be operated differently depending on which chat
+ *  it is in. Quiet until the turn is hovered or tabbed into — the parent
+ *  carries `group`. */
+export function TurnActions({
+  createdAt,
+  actions,
+}: {
+  createdAt?: number;
+  actions: TurnAction[];
+}) {
+  const [done, setDone] = useState<string | null>(null);
 
-  // One literal, applied raw to both buttons: passing this through cn() would
+  // One literal, applied raw to every button: passing this through cn() would
   // run it past tailwind-merge, which reads the custom `text-micro` token as a
   // text *color*, and `text-muted-foreground` would then silently drop it.
   const btn =
     "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-micro text-muted-foreground hover:bg-surface-2 hover:text-foreground disabled:opacity-50";
   return (
     <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
-      <span
-        className="px-1 text-micro text-subtle-foreground"
-        title={fmtDateTime(message.createdAt)}
-      >
-        {relativeTime(message.createdAt)}
-      </span>
-      <button onClick={copy} className={btn} title="Copy to clipboard">
-        {copied ? (
-          <Check className="h-3.5 w-3.5 text-success" />
-        ) : (
-          <Copy className="h-3.5 w-3.5" />
-        )}
-        {copied ? "Copied" : "Copy"}
-      </button>
-      <button
-        onClick={rerun}
-        disabled={sending}
-        className={btn}
-        title="Ask this again as a new turn"
-      >
-        <RefreshCw className="h-3.5 w-3.5" />
-        Re-run
-      </button>
-      {/* Right-click parity: the same verbs from anywhere on the question. */}
-      <RowMenu
-        label="Question options"
-        items={[
-          { label: "Copy", icon: <Copy className="h-3.5 w-3.5" />, onClick: () => void copy() },
-          {
-            label: "Re-run",
-            icon: <RefreshCw className="h-3.5 w-3.5" />,
-            onClick: rerun,
-          },
-        ]}
-      />
+      {createdAt !== undefined && (
+        <span
+          className="px-1 text-micro text-subtle-foreground"
+          title={fmtDateTime(createdAt)}
+        >
+          {relativeTime(createdAt)}
+        </span>
+      )}
+      {actions.map((a) => (
+        <button
+          key={a.label}
+          type="button"
+          disabled={a.disabled}
+          className={btn}
+          title={a.title}
+          onClick={async () => {
+            try {
+              await a.onClick();
+            } catch {
+              // The clipboard can be unavailable, a note can fail to save —
+              // either way the verb didn't happen, so don't claim it did.
+              return;
+            }
+            if (!a.doneLabel) return;
+            setDone(a.label);
+            setTimeout(() => setDone((d) => (d === a.label ? null : d)), 1500);
+          }}
+        >
+          {done === a.label ? (
+            <Check className="h-3.5 w-3.5 text-success" />
+          ) : (
+            a.icon
+          )}
+          {done === a.label ? a.doneLabel : a.label}
+        </button>
+      ))}
     </div>
+  );
+}
+
+/** Copy verb, as both chats spell it. */
+export function copyAction(content: string): TurnAction {
+  return {
+    label: "Copy",
+    doneLabel: "Copied",
+    icon: <Copy className="h-3.5 w-3.5" />,
+    title: "Copy to clipboard",
+    onClick: () => navigator.clipboard.writeText(content),
+  };
+}
+
+/** Which model wrote an answer, under it. Shared so the caption reads the
+ *  same in a notebook and on Home; nothing is rendered when the turn predates
+ *  the column that records it. */
+export function TurnModel({ model }: { model?: string }) {
+  if (!model) return null;
+  return <div className="mt-1 text-micro text-subtle-foreground">{model}</div>;
+}
+
+/** Under a user turn: copy, re-run, and when it happened. Re-run asks the
+ *  question again as a fresh turn at the end of the chat — the earlier
+ *  exchange stays put, so nothing is destroyed and any question in the
+ *  transcript can be re-asked. */
+function UserMessageActions({ message }: { message: Message }) {
+  const sending = useStore((s) => s.sending);
+  return (
+    <TurnActions
+      createdAt={message.createdAt}
+      actions={[
+        copyAction(message.content),
+        {
+          label: "Re-run",
+          icon: <RefreshCw className="h-3.5 w-3.5" />,
+          disabled: sending,
+          title: "Ask this again as a new turn",
+          onClick: () => {
+            const st = useStore.getState();
+            if (st.sending) return;
+            void st.sendMessage(message.content);
+          },
+        },
+      ]}
+    />
   );
 }
 
@@ -1674,56 +1722,23 @@ function MessageActions({
 }) {
   const createNote = useStore((s) => s.createNote);
   const sources = useStore((s) => s.sources);
-  const [copied, setCopied] = useState(false);
-  const [saved, setSaved] = useState(false);
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(content);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable */
-    }
-  }
-  async function save() {
-    await createNote(noteTitleFrom(content), noteContentFrom(content, citations, sources));
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1500);
-  }
-
   return (
-    <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
-      <button
-        onClick={copy}
-        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-micro text-muted-foreground hover:bg-surface-2 hover:text-foreground"
-        title="Copy to clipboard"
-      >
-        {copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
-        {copied ? "Copied" : "Copy"}
-      </button>
-      <button
-        onClick={save}
-        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-micro text-muted-foreground hover:bg-surface-2 hover:text-foreground"
-        title="Save this response as a note"
-      >
-        {saved ? <Check className="h-3.5 w-3.5 text-success" /> : <NotebookPen className="h-3.5 w-3.5" />}
-        {saved ? "Saved" : "Save as note"}
-      </button>
-      {/* Right-click parity (DESIGN.md "objects are direct"): the same verbs
-          as the hover row, reachable from anywhere on the message. */}
-      <RowMenu
-        label="Message options"
-        items={[
-          { label: "Copy", icon: <Copy className="h-3.5 w-3.5" />, onClick: () => void copy() },
-          {
-            label: "Save as note",
-            icon: <NotebookPen className="h-3.5 w-3.5" />,
-            onClick: () => void save(),
-          },
-        ]}
-      />
-    </div>
+    <TurnActions
+      actions={[
+        copyAction(content),
+        {
+          label: "Save as note",
+          doneLabel: "Saved",
+          icon: <NotebookPen className="h-3.5 w-3.5" />,
+          title: "Save this response as a note",
+          onClick: () =>
+            createNote(
+              noteTitleFrom(content),
+              noteContentFrom(content, citations, sources),
+            ),
+        },
+      ]}
+    />
   );
 }
 

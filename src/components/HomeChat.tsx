@@ -5,7 +5,16 @@ import { useStore } from "@/lib/store";
 import { cn, chatReadingClass, relativeTime } from "@/lib/utils";
 import type { MetaCitation, MetaTurn } from "@/lib/types";
 import { Markdown } from "./Markdown";
-import { CitationsToggle, MenuPill, MenuRow, ModelPill } from "./ChatPanel";
+import {
+  CitationsToggle,
+  MenuPill,
+  MenuRow,
+  ModelPill,
+  TurnActions,
+  TurnModel,
+  copyAction,
+  type TurnAction,
+} from "./ChatPanel";
 import { CHAT_LENGTHS, CHAT_STYLES } from "./settings/SettingsTabs";
 import {
   Button,
@@ -22,6 +31,7 @@ import {
   Package,
   PanelLeftClose,
   Plus,
+  RefreshCw,
   Sparkles,
   SquarePen,
   Trash2,
@@ -283,7 +293,10 @@ export function HomeThreadsSidebar({
               <button
                 type="button"
                 onClick={() => void openThread(t.id)}
-                title={t.title}
+                // The row shows the short name the small model gave the
+                // conversation; the tooltip keeps what was actually asked,
+                // which is what a name is always a lossy stand-in for.
+                title={t.question || t.title}
                 aria-current={t.id === openId}
                 className="min-w-0 flex-1 px-2 py-2 text-left"
               >
@@ -376,28 +389,43 @@ export function HomeChatThread({ chat }: { chat: HomeChat }) {
           chatReadingClass(reading),
         )}
       >
-        {chat.turns.map((turn) =>
+        {chat.turns.map((turn, i) =>
           turn.role === "user" ? (
-            <div key={turn.id} className="flex justify-end">
+            <div key={turn.id} className="group flex flex-col items-end gap-1">
               {/* wrap-anywhere: a pasted URL has no break opportunities, so
                   without it the bubble sizes to the URL. */}
               <div className="max-w-[85%] min-w-0 wrap-anywhere rounded-lg rounded-br-sm border border-border bg-surface-2 px-3.5 py-2 text-body selectable">
                 {turn.content}
               </div>
+              <TurnActions
+                createdAt={turn.createdAt}
+                actions={[
+                  copyAction(turn.content),
+                  rerunAction(turn.content, chat),
+                ]}
+              />
             </div>
           ) : turn.kind === "error" ? (
-            <div
-              key={turn.id}
-              role="alert"
-              className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3.5 py-2.5 text-body text-foreground"
-            >
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
-              <span className="selectable min-w-0 whitespace-pre-line">
-                {turn.content}
-              </span>
+            <div key={turn.id} className="group flex flex-col gap-1">
+              <div
+                role="alert"
+                className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3.5 py-2.5 text-body text-foreground"
+              >
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
+                <span className="selectable min-w-0 whitespace-pre-line">
+                  {turn.content}
+                </span>
+              </div>
+              <TurnModel model={turn.model} />
+              {/* A failure's one useful verb is the question again — the one
+                  above it, not this row's own text. */}
+              <TurnActions
+                createdAt={turn.createdAt}
+                actions={retryActions(chat, i, turn.content)}
+              />
             </div>
           ) : (
-            <div key={turn.id} className="flex flex-col gap-2">
+            <div key={turn.id} className="group flex flex-col gap-2">
               <AnswerLabel stopped={turn.kind === "stopped"} />
               <Markdown
                 citations={turn.citations}
@@ -409,6 +437,11 @@ export function HomeChatThread({ chat }: { chat: HomeChat }) {
                 {turn.content}
               </Markdown>
               <MetaCitations citations={turn.citations} />
+              <TurnModel model={turn.model} />
+              <TurnActions
+                createdAt={turn.createdAt}
+                actions={[copyAction(turn.content)]}
+              />
             </div>
           ),
         )}
@@ -451,6 +484,41 @@ export function HomeChatThread({ chat }: { chat: HomeChat }) {
       </div>
     </div>
   );
+}
+
+/** Re-run, as the notebook transcript means it: ask the same question again
+ *  as a fresh turn at the end of this conversation. The earlier exchange
+ *  stays exactly where it is — nothing in the thread is rewritten. */
+function rerunAction(question: string, chat: HomeChat): TurnAction {
+  return {
+    label: "Re-run",
+    icon: <RefreshCw className="h-3.5 w-3.5" />,
+    disabled: chat.loading,
+    title: "Ask this again as a new turn",
+    onClick: () => chat.ask(question),
+  };
+}
+
+/** What a failed turn offers: copy the message, and retry the question it
+ *  failed to answer — which is the turn above it, since the error row's own
+ *  text is a provider complaint, not something to re-ask. */
+function retryActions(
+  chat: HomeChat,
+  i: number,
+  content: string,
+): TurnAction[] {
+  const actions = [copyAction(content)];
+  for (let j = i - 1; j >= 0; j--) {
+    const turn = chat.turns[j];
+    if (turn.role !== "user") continue;
+    actions.push({
+      ...rerunAction(turn.content, chat),
+      label: "Retry",
+      title: "Ask the question again",
+    });
+    break;
+  }
+  return actions;
 }
 
 /** Same role label the notebook chat uses — the header above already says

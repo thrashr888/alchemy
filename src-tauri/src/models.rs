@@ -499,9 +499,15 @@ pub struct MetaTurn {
     #[serde(default)]
     pub citations: Vec<MetaCitation>,
     /// "chat" | "stopped" (cut short, partial answer kept) | "error" (a
-    /// provider failure, which never re-enters model context).
+    /// provider failure, which never re-enters model context) | "title" (not
+    /// a turn at all: the name the small model gave the thread, filtered out
+    /// of every read that means "the conversation").
     #[serde(default = "default_message_kind")]
     pub kind: String,
+    /// Which model wrote this answer, as the chat surface captions it. Empty
+    /// on questions, and on answers stored before the column existed.
+    #[serde(default)]
+    pub model: String,
     pub created_at: i64,
 }
 
@@ -511,8 +517,12 @@ pub struct MetaTurn {
 #[serde(rename_all = "camelCase")]
 pub struct MetaThread {
     pub id: String,
-    /// The opening question, trimmed to a line.
+    /// What to call the conversation: the small model's short name once it
+    /// has been written, the opening question until then.
     pub title: String,
+    /// The opening question, trimmed to a line — kept alongside a generated
+    /// title so the list can still show what was actually asked.
+    pub question: String,
     pub turn_count: i64,
     pub created_at: i64,
     pub updated_at: i64,

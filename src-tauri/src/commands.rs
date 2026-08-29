@@ -10803,6 +10803,14 @@ pub async fn add_meta_turn(
     if role != "user" && role != "assistant" {
         return Err(format!("Unknown role \"{role}\""));
     }
+    // Which model answered is the backend's to know, not the caller's: the
+    // notebook transcript captions every answer this way, and Home's turns
+    // now say the same thing. Momentary read guard, no await under it.
+    let model = if role == "assistant" {
+        state.ai.read().await.active_chat_model()
+    } else {
+        String::new()
+    };
     let turn = MetaTurn {
         id: new_id(),
         thread_id,
@@ -10810,10 +10818,127 @@ pub async fn add_meta_turn(
         content,
         citations: citations.unwrap_or_default(),
         kind: kind.unwrap_or_else(|| "chat".into()),
+        model,
         created_at: now(),
     };
     e(state.db.add_meta_turn(&turn).await)?;
+    // An answer completes an exchange, which is the first moment there is
+    // enough of a conversation to name. Fire-and-forget: the chat never waits
+    // on titling, and a thread that already has a name is left alone.
+    if turn.role == "assistant" && turn.kind != "error" {
+        spawn_thread_title(&state, &turn.thread_id).await;
+    }
     Ok(turn)
+}
+
+/// Threads whose name is being generated right now. A second answer settling
+/// in the same conversation must not start a second run against the same
+/// thread; the running one will see the fuller transcript anyway.
+static TITLING: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+    std::sync::Mutex::new(None);
+
+fn claim_titling(thread_id: &str) -> bool {
+    TITLING
+        .lock()
+        .unwrap()
+        .get_or_insert_with(std::collections::HashSet::new)
+        .insert(thread_id.to_string())
+}
+
+fn release_titling(thread_id: &str) {
+    if let Some(set) = TITLING.lock().unwrap().as_mut() {
+        set.remove(thread_id);
+    }
+}
+
+/// The model leg of Home-thread naming, in the background: ask Small for a
+/// short title once a conversation has its first exchange, and store it as
+/// the thread's `kind = "title"` row.
+///
+/// Best-effort in the `spawn_retitle` mould — any failure (no small model, a
+/// refusal, a runaway answer) leaves the question-derived title in place, and
+/// the next settled answer tries again. Nothing here can block a chat.
+pub(crate) async fn spawn_thread_title(state: &AppState, thread_id: &str) {
+    let db = state.db.clone();
+    // Momentary read guard, snapshot out — never hold the Ai lock across the
+    // call itself.
+    let ai = { state.ai.read().await.clone() };
+    let thread_id = thread_id.to_string();
+    tauri::async_runtime::spawn(async move {
+        if !claim_titling(&thread_id) {
+            return;
+        }
+        let result = generate_thread_title(&db, &ai, &thread_id).await;
+        release_titling(&thread_id);
+        if let Err(err) = result {
+            crate::note!("home chat: naming thread {thread_id} failed: {err:#}");
+        }
+    });
+}
+
+/// Name one thread from its opening exchange. Returns Ok when there is
+/// nothing to do (already named, nothing asked, the model declined) — only
+/// engine trouble is an error, and even that only reaches the log.
+async fn generate_thread_title(
+    db: &crate::db::Db,
+    ai: &crate::ai::Ai,
+    thread_id: &str,
+) -> anyhow::Result<()> {
+    /// A name, not a summary: five words of slack, and a hard character cap
+    /// so a model that answers with a paragraph is simply declined.
+    const MAX_WORDS: usize = 8;
+    const MAX_CHARS: usize = 60;
+    /// How much of the opening answer the prompt sees. The question carries
+    /// the subject; the answer only has to disambiguate it.
+    const ANSWER_HEAD_CHARS: usize = 1_200;
+
+    if db.meta_thread_title(thread_id).await?.is_some() {
+        return Ok(());
+    }
+    let turns = db.list_meta_turns(thread_id).await?;
+    let question = turns
+        .iter()
+        .find(|t| t.role == "user")
+        .map(|t| t.content.trim())
+        .unwrap_or_default();
+    let answer = turns
+        .iter()
+        .find(|t| t.role == "assistant" && t.kind != "error")
+        .map(|t| t.content.trim())
+        .unwrap_or_default();
+    if question.is_empty() || answer.is_empty() {
+        return Ok(());
+    }
+    let head: String = answer.chars().take(ANSWER_HEAD_CHARS).collect();
+    let messages = [
+        crate::ai::ChatTurn::system(
+            "You name conversations for a sidebar list. Reply with ONLY the name — at most \
+             five words, no quotes, no trailing punctuation, nothing else.",
+        ),
+        crate::ai::ChatTurn::user(format!("Question: {question}\n\nAnswer:\n{head}\n\nName:")),
+    ];
+    let out = ai.chat_role(crate::ai::Role::Small, &messages).await?;
+    let title = out
+        .text
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim()
+        .trim_matches(['"', '“', '”', '*', '#'])
+        .trim()
+        .to_string();
+    if title.is_empty()
+        || title.chars().count() > MAX_CHARS
+        || title.split_whitespace().count() > MAX_WORDS
+    {
+        crate::note!("home chat: declined name for thread {thread_id}: {title:?}");
+        return Ok(());
+    }
+    db.set_meta_thread_title(thread_id, &title).await?;
+    // The Chats list re-derives itself off this, in every open window.
+    notify_changed("homechat", None);
+    Ok(())
 }
 
 /// Delete a whole Home conversation. Threads are their turns, so this is the

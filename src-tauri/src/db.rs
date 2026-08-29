@@ -41,6 +41,11 @@ const T_REGISTRY: &str = "registry";
 /// corpus-scoped: a turn belongs to a thread, and the thread is about
 /// everything. Threads are derived from these rows, not stored.
 const T_META_TURNS: &str = "meta_turns";
+/// The `kind` of the one row in a Home thread that is not a turn: the name
+/// the small model gave the conversation. It rides `meta_turns` so a thread
+/// stays exactly what it always was — the rows that share a `thread_id` —
+/// and is filtered out of every read that means "the conversation".
+pub const META_TITLE_KIND: &str = "title";
 /// Source events prune past this window — a rolling record, not an archive.
 const SOURCE_EVENT_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
@@ -313,6 +318,7 @@ impl Db {
         db.ensure_table(T_REGISTRY, registry_schema()).await?;
         db.migrate_registry().await?;
         db.ensure_table(T_META_TURNS, meta_turns_schema()).await?;
+        db.migrate_meta_turns().await?;
         Ok(db)
     }
 
@@ -2038,6 +2044,15 @@ impl Db {
 
     // ---- Home chat (docs/RFC-meta-chat.md) --------------------------------
 
+    /// Add `model` to a `meta_turns` table written before answers recorded
+    /// which model wrote them. Additive and atomic (Lance `add_columns`), so
+    /// a store the installed app is also reading is never left half-migrated
+    /// — the rows it already holds simply carry an empty model, which the UI
+    /// renders as nothing.
+    async fn migrate_meta_turns(&self) -> Result<()> {
+        self.add_string_column(T_META_TURNS, "model", "").await
+    }
+
     pub async fn add_meta_turn(&self, turn: &MetaTurn) -> Result<()> {
         let schema = meta_turns_schema();
         let citations = serde_json::to_string(&turn.citations).unwrap_or_else(|_| "[]".into());
@@ -2050,6 +2065,7 @@ impl Db {
                 Arc::new(StringArray::from(vec![turn.content.clone()])),
                 Arc::new(StringArray::from(vec![citations])),
                 Arc::new(StringArray::from(vec![turn.kind.clone()])),
+                Arc::new(StringArray::from(vec![turn.model.clone()])),
                 Arc::new(Int64Array::from(vec![turn.created_at])),
             ],
         )?;
@@ -2057,8 +2073,15 @@ impl Db {
     }
 
     /// One thread's turns, oldest first — the conversation as it was read.
+    ///
+    /// The generated-name row (`kind = "title"`) is not a turn: it never
+    /// enters the transcript, the model's history, or a turn count.
     pub async fn list_meta_turns(&self, thread_id: &str) -> Result<Vec<MetaTurn>> {
-        let filter = format!("thread_id = '{}'", esc(thread_id));
+        let filter = format!(
+            "thread_id = '{}' AND kind != '{}'",
+            esc(thread_id),
+            META_TITLE_KIND
+        );
         let batches = self.collect(T_META_TURNS, Some(&filter)).await?;
         let mut turns = meta_turns_from_batches(&batches)?;
         turns.sort_by(|a, b| {
@@ -2070,15 +2093,20 @@ impl Db {
     }
 
     /// Every Home conversation, most recently used first. Threads are derived
-    /// from their turns: the metadata pass reads four small columns, and only
-    /// the opening question of each thread is hydrated for its title — the
-    /// answers are the long rows, and none of them is a title.
+    /// from their turns: the metadata pass reads five small columns, and only
+    /// the opening question and the generated name of each thread are
+    /// hydrated — the answers are the long rows, and none of them is a title.
+    ///
+    /// A thread is named by its `kind = "title"` row when one exists (the
+    /// small model's five words, written once the first exchange settles) and
+    /// by its opening question until then. That row is bookkeeping, not
+    /// conversation: it counts for nothing and never moves `updated_at`.
     pub async fn list_meta_threads(&self) -> Result<Vec<MetaThread>> {
         let batches = self
             .collect_cols(
                 T_META_TURNS,
                 None,
-                &["id", "thread_id", "role", "created_at"],
+                &["id", "thread_id", "role", "kind", "created_at"],
             )
             .await?;
         let mut acc: HashMap<String, ThreadAcc> = HashMap::new();
@@ -2086,17 +2114,29 @@ impl Db {
             let id = str_col(b, "id")?;
             let thread = str_col(b, "thread_id")?;
             let role = str_col(b, "role")?;
+            let kind = str_col(b, "kind")?;
             let created = i64_col(b, "created_at")?;
             for i in 0..b.num_rows() {
                 let at = created.value(i);
+                let named = kind.value(i) == META_TITLE_KIND;
                 let t = acc
                     .entry(thread.value(i).to_string())
                     .or_insert_with(|| ThreadAcc {
                         first_user: None,
+                        named: None,
                         count: 0,
                         created_at: at,
                         updated_at: at,
                     });
+                if named {
+                    // Last writer wins: a re-title supersedes its predecessor
+                    // even if the old row outlived the delete.
+                    let later = t.named.as_ref().is_none_or(|(_, seen)| at >= *seen);
+                    if later {
+                        t.named = Some((id.value(i).to_string(), at));
+                    }
+                    continue;
+                }
                 t.count += 1;
                 t.created_at = t.created_at.min(at);
                 t.updated_at = t.updated_at.max(at);
@@ -2109,15 +2149,19 @@ impl Db {
                 }
             }
         }
+        // A thread that is nothing but a name isn't a conversation — a titling
+        // task that outlived its deleted thread must not resurrect it.
+        acc.retain(|_, t| t.count > 0);
         if acc.is_empty() {
             return Ok(Vec::new());
         }
 
         let title_ids = acc
             .values()
-            .filter_map(|t| {
-                t.first_user
-                    .as_ref()
+            .flat_map(|t| {
+                [t.first_user.as_ref(), t.named.as_ref()]
+                    .into_iter()
+                    .flatten()
                     .map(|(id, _)| format!("'{}'", esc(id)))
             })
             .collect::<Vec<_>>();
@@ -2138,18 +2182,29 @@ impl Db {
 
         let mut threads = acc
             .into_iter()
-            .map(|(id, t)| MetaThread {
-                id,
-                title: thread_title(
-                    t.first_user
-                        .as_ref()
+            .map(|(id, t)| {
+                let content_of = |slot: &Option<(String, i64)>| {
+                    slot.as_ref()
                         .and_then(|(id, _)| titles.get(id))
                         .map(String::as_str)
-                        .unwrap_or_default(),
-                ),
-                turn_count: t.count,
-                created_at: t.created_at,
-                updated_at: t.updated_at,
+                        .unwrap_or_default()
+                        .to_string()
+                };
+                let question = thread_title(&content_of(&t.first_user));
+                let named = content_of(&t.named);
+                let named = named.trim();
+                MetaThread {
+                    id,
+                    title: if named.is_empty() {
+                        question.clone()
+                    } else {
+                        named.to_string()
+                    },
+                    question,
+                    turn_count: t.count,
+                    created_at: t.created_at,
+                    updated_at: t.updated_at,
+                }
             })
             .collect::<Vec<_>>();
         threads.sort_by(|a, b| {
@@ -2158,6 +2213,56 @@ impl Db {
                 .then_with(|| b.id.cmp(&a.id))
         });
         Ok(threads)
+    }
+
+    /// The generated name for a thread, if one has been written yet.
+    pub async fn meta_thread_title(&self, thread_id: &str) -> Result<Option<String>> {
+        let filter = format!(
+            "thread_id = '{}' AND kind = '{}'",
+            esc(thread_id),
+            META_TITLE_KIND
+        );
+        let batches = self
+            .collect_cols(T_META_TURNS, Some(&filter), &["content", "created_at"])
+            .await?;
+        let mut best: Option<(i64, String)> = None;
+        for b in &batches {
+            let content = str_col(b, "content")?;
+            let created = i64_col(b, "created_at")?;
+            for i in 0..b.num_rows() {
+                let at = created.value(i);
+                if best.as_ref().is_none_or(|(seen, _)| at >= *seen) {
+                    best = Some((at, content.value(i).trim().to_string()));
+                }
+            }
+        }
+        Ok(best.map(|(_, t)| t).filter(|t| !t.is_empty()))
+    }
+
+    /// Name a thread. Stored as one more row in the thread's own turns —
+    /// no second table, no column migration, and deleting the conversation
+    /// takes its name with it.
+    pub async fn set_meta_thread_title(&self, thread_id: &str, title: &str) -> Result<()> {
+        self.delete_where(
+            T_META_TURNS,
+            &format!(
+                "thread_id = '{}' AND kind = '{}'",
+                esc(thread_id),
+                META_TITLE_KIND
+            ),
+        )
+        .await?;
+        self.add_meta_turn(&MetaTurn {
+            id: uuid::Uuid::new_v4().to_string(),
+            thread_id: thread_id.to_string(),
+            role: "assistant".into(),
+            content: title.trim().to_string(),
+            citations: Vec::new(),
+            kind: META_TITLE_KIND.into(),
+            model: String::new(),
+            created_at: chrono::Utc::now().timestamp_millis(),
+        })
+        .await
     }
 
     pub async fn delete_meta_thread(&self, thread_id: &str) -> Result<()> {
@@ -3942,6 +4047,8 @@ fn messages_schema() -> SchemaRef {
 struct ThreadAcc {
     /// (turn id, created_at) of the earliest user turn.
     first_user: Option<(String, i64)>,
+    /// (row id, created_at) of the newest generated-name row, if any.
+    named: Option<(String, i64)>,
     count: i64,
     created_at: i64,
     updated_at: i64,
@@ -3968,6 +4075,7 @@ fn meta_turns_schema() -> SchemaRef {
         Field::new("content", DataType::Utf8, false),
         Field::new("citations", DataType::Utf8, false),
         Field::new("kind", DataType::Utf8, false),
+        Field::new("model", DataType::Utf8, false),
         Field::new("created_at", DataType::Int64, false),
     ]))
 }
@@ -3982,6 +4090,9 @@ fn meta_turns_from_batches(batches: &[RecordBatch]) -> Result<Vec<MetaTurn>> {
         let content = str_col(b, "content")?;
         let citations = str_col(b, "citations")?;
         let kind = str_col(b, "kind")?;
+        // Written by a build that recorded which model answered; absent on
+        // rows older than that column, which render without a model name.
+        let model = opt_str_col(b, "model");
         let created = i64_col(b, "created_at")?;
         for i in 0..b.num_rows() {
             turns.push(MetaTurn {
@@ -3991,6 +4102,7 @@ fn meta_turns_from_batches(batches: &[RecordBatch]) -> Result<Vec<MetaTurn>> {
                 content: content.value(i).to_string(),
                 citations: serde_json::from_str(citations.value(i)).unwrap_or_default(),
                 kind: kind.value(i).to_string(),
+                model: model.map(|m| m.value(i).to_string()).unwrap_or_default(),
                 created_at: created.value(i),
             });
         }
@@ -4262,6 +4374,7 @@ mod tests {
             content: content.into(),
             citations: Vec::new(),
             kind: "chat".into(),
+            model: String::new(),
             created_at: at,
         }
     }
@@ -4295,6 +4408,7 @@ mod tests {
         );
         let first = threads.iter().find(|t| t.id == "t1").expect("t1");
         assert_eq!(first.title, "Where is the SNDK data?");
+        assert_eq!(first.question, "Where is the SNDK data?");
         assert_eq!(first.turn_count, 2);
         assert_eq!(first.created_at, 10);
         assert_eq!(first.updated_at, 11);
@@ -4305,6 +4419,44 @@ mod tests {
             ["a", "b"],
             "oldest first — the conversation as it was read"
         );
+
+        // The small model names the thread: the name is preferred over the
+        // opening question, the question is still reported alongside it, and
+        // the row it rides on is not a turn — it counts for nothing, never
+        // moves `updated_at`, and never enters the transcript.
+        assert_eq!(db.meta_thread_title("t1").await.expect("title"), None);
+        db.set_meta_thread_title("t1", "SNDK data location")
+            .await
+            .expect("name it");
+        assert_eq!(
+            db.meta_thread_title("t1").await.expect("title").as_deref(),
+            Some("SNDK data location")
+        );
+        let threads = db.list_meta_threads().await.expect("threads");
+        let first = threads.iter().find(|t| t.id == "t1").expect("t1");
+        assert_eq!(first.title, "SNDK data location");
+        assert_eq!(first.question, "Where is the SNDK data?");
+        assert_eq!(first.turn_count, 2, "a name is not a turn");
+        assert_eq!(first.updated_at, 11, "naming is not conversation");
+        assert_eq!(
+            db.list_meta_turns("t1")
+                .await
+                .expect("turns")
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"],
+            "the name never appears in the transcript"
+        );
+        // Re-naming replaces, never accumulates.
+        db.set_meta_thread_title("t1", "Where SNDK lives")
+            .await
+            .expect("rename");
+        assert_eq!(
+            db.meta_thread_title("t1").await.expect("title").as_deref(),
+            Some("Where SNDK lives")
+        );
+        assert_eq!(db.list_meta_turns("t1").await.expect("turns").len(), 2);
 
         db.delete_meta_thread("t1").await.expect("delete");
         assert!(db.list_meta_turns("t1").await.expect("turns").is_empty());

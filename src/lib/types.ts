@@ -632,6 +632,9 @@ export interface MetaTurn {
    *  worth keeping) | "error" (a provider failure: rendered as a danger wash
    *  and kept out of the history the model sees). */
   kind: "chat" | "stopped" | "error";
+  /** Which model wrote this answer. Empty on questions, and on answers
+   *  stored before the backend recorded it — rendered as nothing. */
+  model?: string;
   createdAt: number;
 }
 
@@ -639,8 +642,12 @@ export interface MetaTurn {
  *  a thread nobody asked into never existed. */
 export interface MetaThread {
   id: string;
-  /** The opening question, trimmed to a line. */
+  /** What to call it: the small model's short name once one has been
+   *  written, the opening question until then. */
   title: string;
+  /** The opening question, trimmed to a line — kept so the list can still
+   *  show what was actually asked. */
+  question: string;
   turnCount: number;
   createdAt: number;
   updatedAt: number;

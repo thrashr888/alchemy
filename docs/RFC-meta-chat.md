@@ -85,6 +85,24 @@ MCP tool returns passages + notebook names, mirroring `search`.
   was on screen. Agents read them over MCP with `list_home_chats` and
   `get_home_chat`. Still open: saving an answer as a note in a chosen
   notebook.
+
+  Threads name themselves. Once a conversation's first exchange settles,
+  `add_meta_turn` fires a background task that asks the **small** role for a
+  name of at most five words and stores it as one more row in `meta_turns`
+  — `kind = "title"`, same `thread_id` — so a thread stays exactly what it
+  always was (the rows that share an id), with no second table and no column
+  migration. That row is bookkeeping, not conversation: every read that
+  means "the transcript" filters it out, it counts for no turn, it never
+  moves `updated_at`, and deleting the thread takes it along. The list falls
+  back to the opening question until a name exists and keeps the question
+  beside the name either way (the row's tooltip). Naming is best-effort in
+  the `spawn_retitle` mould — no small model, a refusal, or a runaway answer
+  leaves the question-derived title in place and the next settled answer
+  tries again; nothing here can block a chat. The finished name reaches open
+  windows as `mcp://changed` with scope `homechat`.
+
+  Turns also record which model wrote them (`meta_turns.model`, added in
+  place), so a Home answer is captioned exactly as a notebook answer is.
 - A separate window or menu-bar popover. ⌥Space + palette is the surface.
 - Source-selection scoping (all notebooks always; per-notebook chat already
   covers the scoped case).

@@ -17,7 +17,7 @@ struct ThreadIdReq {
 #[tool_router(router = homechat_router, vis = "pub(super)")]
 impl AlchemyMcp {
     #[tool(
-        description = "List the user's Home conversations — the questions they asked across every notebook at once — most recently used first. Each thread: id, title (its opening question), turnCount, and timestamps. Read one with get_home_chat."
+        description = "List the user's Home conversations — the questions they asked across every notebook at once — most recently used first. Each thread: id, title (a short generated name, or the opening question until one is written), question (the opening question), turnCount, and timestamps. Read one with get_home_chat."
     )]
     async fn list_home_chats(&self) -> Result<CallToolResult, McpError> {
         let threads = self
