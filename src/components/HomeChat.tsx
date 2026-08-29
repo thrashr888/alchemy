@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { openMetaCitation } from "@/lib/citations";
 import { runForThread } from "@/lib/homeChatRun";
-import { useStore } from "@/lib/store";
+import { navAtomic, useStore } from "@/lib/store";
 import { cn, chatReadingClass, relativeTime } from "@/lib/utils";
 import type { MetaCitation, MetaTurn } from "@/lib/types";
 import { Markdown } from "./Markdown";
@@ -204,10 +204,16 @@ export function HomeChatControls() {
   );
 }
 
-/** Past conversations, as the second card of Home's left rail — the same
- *  stacked side-card the Brief and the reports feed make on the right, under
+/** Past conversations, as the first card of Home's left rail — the same
+ *  stacked side-card the Brief and the reports feed make on the right, over
  *  Staff rather than beside the answer. What you asked, when, and how far it
- *  went; clicking one reopens it in the center column. */
+ *  went; clicking one reopens it in the center column.
+ *
+ *  It stands on every section, not just the Chat tab: a conversation is about
+ *  the whole corpus, so it is as reachable from the shelf or the registry as
+ *  from the tab it opens into. Picking a row (or New chat) switches sections
+ *  on its way — `openHomeThread` does both, and `navAtomic` keeps it to one
+ *  entry in the back stack. */
 export function HomeThreadsSidebar({
   className,
   style,
@@ -218,11 +224,12 @@ export function HomeThreadsSidebar({
   style?: React.CSSProperties;
   /** The left column's width handle, rendered on this card's edge. */
   resizeHandle?: React.ReactNode;
-  /** Fold the card down to the rail, as Staff above it and Brief opposite. */
+  /** Fold the card down to the rail, as Staff below it and Brief opposite. */
   onCollapse?: () => void;
 }) {
   const threads = useStore((s) => s.homeThreads);
   const openId = useStore((s) => s.homeChat.threadId);
+  const section = useStore((s) => s.homeSection);
   const runningId = useStore((s) => s.homeRun?.threadId ?? null);
   const openThread = useStore((s) => s.openHomeThread);
   const removeThread = useStore((s) => s.deleteHomeThread);
@@ -230,8 +237,11 @@ export function HomeThreadsSidebar({
 
   // The open thread may not be in the list yet (nothing asked into it), and
   // that's the state the New-chat button leaves you in — so it reads as
-  // pressed only when there is genuinely nothing to go back to.
-  const openIsSaved = threads.some((t) => t.id === openId);
+  // pressed only when there is genuinely nothing to go back to AND that
+  // empty conversation is the thing on screen. From the shelf or the
+  // registry, New chat still has somewhere to take you.
+  const nothingNewToMint =
+    section === "chat" && !threads.some((t) => t.id === openId);
 
   return (
     <section
@@ -253,8 +263,8 @@ export function HomeThreadsSidebar({
           <Button
             variant="ghost"
             size="sm"
-            disabled={!openIsSaved}
-            onClick={() => void openThread(null)}
+            disabled={nothingNewToMint}
+            onClick={() => void navAtomic(() => openThread(null))}
             title="Start a new conversation"
           >
             <Plus className="h-3.5 w-3.5" />
@@ -292,7 +302,7 @@ export function HomeThreadsSidebar({
             >
               <button
                 type="button"
-                onClick={() => void openThread(t.id)}
+                onClick={() => void navAtomic(() => openThread(t.id))}
                 // The row shows the short name the small model gave the
                 // conversation; the tooltip keeps what was actually asked,
                 // which is what a name is always a lossy stand-in for.

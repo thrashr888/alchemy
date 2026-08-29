@@ -82,7 +82,7 @@ const NOTEBOOK_PALETTE = [
 const clampSplit = (pct: number) => Math.min(75, Math.max(15, pct));
 
 /** The horizontal handle between two stacked side-cards. Both rails stack the
- *  same way — Staff over Chats on the left, Brief over Latest reports on the
+ *  same way — Chats over Staff on the left, Brief over Latest reports on the
  *  right — so they drag the same way too. */
 function StackSplit({
   colRef,
@@ -365,7 +365,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       return !open;
     });
   };
-  // The Chats card collapses on its own, the way Staff above it and Brief
+  // The Chats card collapses on its own, the way Staff below it and Brief
   // opposite do — same key grammar, same default-open.
   const [chatsOpen, setChatsOpen] = useState(
     () => localStorage.getItem("homeChatsOpen") !== "0",
@@ -390,9 +390,11 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [briefSplit, setBriefSplit] = useState(() =>
     clampSplit(Number(localStorage.getItem("homeBriefSplit") ?? 40)),
   );
-  // The left rail splits the same way when it stacks: Staff over Chats.
-  const [staffSplit, setStaffSplit] = useState(() =>
-    clampSplit(Number(localStorage.getItem("homeStaffSplit") ?? 55)),
+  // The left rail splits the same way when it stacks: Chats over Staff. The
+  // percentage is the TOP card's height, so it names Chats — its own key,
+  // since `homeStaffSplit` measured the other card.
+  const [chatsSplit, setChatsSplit] = useState(() =>
+    clampSplit(Number(localStorage.getItem("homeChatsSplit") ?? 45)),
   );
   const leftColRef = useRef<HTMLDivElement>(null);
   const rightColRef = useRef<HTMLDivElement>(null);
@@ -588,10 +590,13 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     chat.ask(q);
   }
   // A settled answer hands the caret back: the follow-up is the next move,
-  // and the composer sits in the same place it was typed in.
+  // and the composer sits in the same place it was typed in. Arriving in a
+  // conversation is the same move — New chat, or a row in the Chats card,
+  // mints or opens a thread id, and what you do next is type into it, so the
+  // caret is already there rather than parked on the button you pressed.
   useEffect(() => {
     if (chatOpen && !chat.loading) askRef.current?.focus();
-  }, [chatOpen, chat.loading]);
+  }, [chatOpen, chat.loading, homeThreadId]);
 
   // "Since you were away": what landed since the last time home was open.
   const [prevVisit] = useState<number>(() =>
@@ -916,28 +921,57 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       ) : (
         <div className="relative flex min-h-0 flex-1">
           {/* Three regions, same side-card idiom as the notebook view:
-            Staff rail left, notebooks center, Brief + reports column right.
-            Each sidebar collapses on its own. */}
-          {staffOpen || (chatOpen && chatsOpen) ? (
+            Chats + Staff rail left, the section's own center, Brief +
+            reports column right. Each sidebar collapses on its own, and
+            neither rail depends on which section is on screen. */}
+          {chatsOpen || staffOpen ? (
             <div
               ref={leftColRef}
               className="relative mx-2 mb-2 mt-1 hidden shrink-0 flex-col lg:flex"
               style={{ width: staffWidth }}
             >
-              {/* One handle per stacked card, as on the right: each card's
-                  right edge is the column's, so either drags its width. */}
+              {/* Past conversations lead this rail, the way the Brief leads
+                  the one opposite: the thread you were in is the way back
+                  into the work, and it is reachable from every section — a
+                  conversation is not a property of the shelf you happen to
+                  be looking at. One handle per stacked card, as on the
+                  right: each card's right edge is the column's, so either
+                  drags its width. */}
+              {chatsOpen ? (
+                <HomeThreadsSidebar
+                  className={staffOpen ? "shrink-0" : "flex-1"}
+                  style={staffOpen ? { height: `${chatsSplit}%` } : undefined}
+                  resizeHandle={staffResizeHandle}
+                  onCollapse={toggleChats}
+                />
+              ) : (
+                <div className="side-card flex w-12 shrink-0 flex-col items-center self-start py-2">
+                  <SidebarRail
+                    icon="chats"
+                    title="Show Chats"
+                    onClick={toggleChats}
+                  />
+                </div>
+              )}
+              {chatsOpen && staffOpen ? (
+                <StackSplit
+                  colRef={leftColRef}
+                  pct={chatsSplit}
+                  defaultPct={45}
+                  label="Resize Chats"
+                  onChange={(pct) => {
+                    setChatsSplit(pct);
+                    localStorage.setItem(
+                      "homeChatsSplit",
+                      String(Math.round(pct)),
+                    );
+                  }}
+                />
+              ) : (
+                <div className="h-2 shrink-0" />
+              )}
               {staffOpen ? (
-                <aside
-                  className={cn(
-                    "side-card relative flex min-h-0 flex-col",
-                    chatOpen && chatsOpen ? "shrink-0" : "flex-1",
-                  )}
-                  style={
-                    chatOpen && chatsOpen
-                      ? { height: `${staffSplit}%` }
-                      : undefined
-                  }
-                >
+                <aside className="side-card relative flex min-h-0 flex-1 flex-col">
                   {staffResizeHandle}
                   <StaffSidebar
                     schedules={allReports}
@@ -961,56 +995,15 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   />
                 </div>
               )}
-              {/* The Chat tab's past conversations: the second card of this
-                  rail, the way Latest reports sits under the Brief. It
-                  belongs to the tab, so it arrives and leaves with it. */}
-              {chatOpen && (
-                <>
-                  {staffOpen && chatsOpen ? (
-                    <StackSplit
-                      colRef={leftColRef}
-                      pct={staffSplit}
-                      defaultPct={55}
-                      label="Resize Staff"
-                      onChange={(pct) => {
-                        setStaffSplit(pct);
-                        localStorage.setItem(
-                          "homeStaffSplit",
-                          String(Math.round(pct)),
-                        );
-                      }}
-                    />
-                  ) : (
-                    <div className="h-2 shrink-0" />
-                  )}
-                  {chatsOpen ? (
-                    <HomeThreadsSidebar
-                      className="flex-1"
-                      resizeHandle={staffResizeHandle}
-                      onCollapse={toggleChats}
-                    />
-                  ) : (
-                    <div className="side-card flex w-12 shrink-0 flex-col items-center self-start py-2">
-                      <SidebarRail
-                        icon="chats"
-                        title="Show Chats"
-                        onClick={toggleChats}
-                      />
-                    </div>
-                  )}
-                </>
-              )}
             </div>
           ) : (
             <div className="side-card mx-2 mt-1 hidden w-12 shrink-0 flex-col items-center gap-1 self-start py-2 lg:flex">
+              <SidebarRail
+                icon="chats"
+                title="Show Chats"
+                onClick={toggleChats}
+              />
               <SidebarRail icon="staff" title="Show Staff" onClick={toggleStaff} />
-              {chatOpen && (
-                <SidebarRail
-                  icon="chats"
-                  title="Show Chats"
-                  onClick={toggleChats}
-                />
-              )}
             </div>
           )}
           <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
