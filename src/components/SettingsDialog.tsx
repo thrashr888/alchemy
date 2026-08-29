@@ -700,6 +700,7 @@ function NotionTokenField() {
           setDraft(e.target.value);
           setCheck({ state: "idle" });
         }}
+        onFocus={(e) => e.currentTarget.select()}
         onBlur={() => {
           if (draft !== null && draft.trim() !== aiConfig.notionToken) {
             void saveAiConfig({ ...aiConfig, notionToken: draft.trim() });

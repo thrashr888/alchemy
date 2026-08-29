@@ -738,12 +738,19 @@ fn ollama_binary() -> Option<std::path::PathBuf> {
 
 /// Validate a Notion integration token against the API (Settings field's live
 /// check). Returns the workspace/bot label on success; a human error string
-/// on failure. Standalone — no app state needed.
+/// on failure. The webview only sees the redacted placeholder for a saved
+/// token (`get_ai_config`), so that arrives here and is swapped for the
+/// stored value before the probe.
 #[tauri::command]
-pub async fn notion_check(token: String) -> Result<String, String> {
+pub async fn notion_check(state: State<'_, AppState>, token: String) -> Result<String, String> {
     if token.trim().is_empty() {
         return Err("Paste a token first".into());
     }
+    let token = if token == crate::ai::REDACTED_KEY {
+        state.ai.read().await.config().notion_token.clone()
+    } else {
+        token
+    };
     crate::notion::NotionClient::new(&token)
         .check_token()
         .await
@@ -11533,9 +11540,24 @@ pub async fn search_everything(
 /// Verify the configured chat + embedding models are installed and (for embed)
 /// actually responding. Used to surface a clear status instead of a hang.
 /// List models from an OpenAI-compatible gateway using draft credentials
-/// (before they're saved), so Settings can offer model chips.
+/// (before they're saved), so Settings can offer model chips. The webview
+/// only ever holds redacted keys (`get_ai_config`), so a probe for an
+/// already-saved gateway arrives with the placeholder — resolved here
+/// against the stored config by URL.
 #[tauri::command]
-pub async fn list_gateway_models(base_url: String, api_key: String) -> Result<Vec<String>, String> {
+pub async fn list_gateway_models(
+    state: State<'_, AppState>,
+    base_url: String,
+    api_key: String,
+) -> Result<Vec<String>, String> {
+    let api_key = if api_key == crate::ai::REDACTED_KEY {
+        let ai = state.ai.read().await.clone();
+        ai.config()
+            .stored_key_for_url(&base_url)
+            .ok_or("No saved key for this URL — paste the API key again")?
+    } else {
+        api_key
+    };
     let client = crate::ai::OpenAiClient::new(&base_url, &api_key, "");
     e(client.list_models().await)
 }
@@ -11844,10 +11866,15 @@ pub async fn send_notification(app: AppHandle, title: String, body: String) -> R
     Ok(())
 }
 
+/// The config as the webview sees it: every stored secret (provider API
+/// keys, the legacy gateway key, the Notion token) replaced by the
+/// [`crate::ai::REDACTED_KEY`] placeholder. Key material never crosses IPC;
+/// `apply_ai_config` swaps the real values back in when a save round-trips
+/// the placeholder.
 #[tauri::command]
 pub async fn get_ai_config(state: State<'_, AppState>) -> Result<AiConfig, String> {
     let ai = state.ai.read().await.clone();
-    Ok(ai.config().clone())
+    Ok(ai.config().redacted())
 }
 
 #[tauri::command]
@@ -11867,6 +11894,13 @@ pub(crate) async fn apply_ai_config(
     state: &AppState,
     mut config: AiConfig,
 ) -> Result<(), String> {
+    // A config that round-tripped through the webview carries redaction
+    // placeholders where its secrets were (`get_ai_config` strips them) —
+    // swap the stored values back in before anything reads or persists it.
+    {
+        let ai = state.ai.read().await;
+        config.absorb_secrets(ai.config());
+    }
     // Keep the provider list and flat legacy fields coherent on every save.
     config.normalize();
     let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;

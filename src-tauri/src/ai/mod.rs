@@ -215,12 +215,76 @@ fn default_clip_port() -> u16 {
     41500
 }
 
+/// Placeholder standing in for any stored secret in config snapshots that
+/// leave the process (`get_ai_config`). Renders as a masked value if it ever
+/// reaches a field, and no real key can collide with it. `absorb_secrets`
+/// swaps the stored values back in on save.
+pub const REDACTED_KEY: &str = "••••••••";
+
 impl AiConfig {
     /// Is chat routed through the OpenAI-compatible gateway (large-context
     /// remote models) rather than local Ollama? Context-size budgets key off
     /// this in one place instead of scattering provider string comparisons.
     pub fn is_gateway(&self) -> bool {
         self.provider == "openai"
+    }
+
+    /// Copy with every secret replaced by [`REDACTED_KEY`] — the shape the
+    /// webview gets. Empty fields stay empty so "is a key set" remains
+    /// readable.
+    pub fn redacted(&self) -> AiConfig {
+        let mut c = self.clone();
+        for p in &mut c.providers {
+            if !p.api_key.is_empty() {
+                p.api_key = REDACTED_KEY.into();
+            }
+        }
+        if !c.openai_api_key.is_empty() {
+            c.openai_api_key = REDACTED_KEY.into();
+        }
+        if !c.notion_token.is_empty() {
+            c.notion_token = REDACTED_KEY.into();
+        }
+        c
+    }
+
+    /// Replace redaction placeholders with the stored secrets they stand for,
+    /// so a config round-tripped through the webview can't wipe keys. A
+    /// placeholder with no stored counterpart (provider deleted or re-added
+    /// under a new id) becomes empty rather than persisting the placeholder
+    /// as if it were a key; a field the user explicitly emptied stays empty,
+    /// so clearing a key still works.
+    pub fn absorb_secrets(&mut self, stored: &AiConfig) {
+        for p in &mut self.providers {
+            if p.api_key == REDACTED_KEY {
+                p.api_key = stored
+                    .provider_by_id(&p.id)
+                    .map(|s| s.api_key.clone())
+                    .unwrap_or_default();
+            }
+        }
+        if self.openai_api_key == REDACTED_KEY {
+            self.openai_api_key = stored.openai_api_key.clone();
+        }
+        if self.notion_token == REDACTED_KEY {
+            self.notion_token = stored.notion_token.clone();
+        }
+    }
+
+    /// The stored key for an OpenAI-compatible gateway at `base_url`, used to
+    /// resolve a redacted placeholder arriving from the webview on probe
+    /// commands (`list_gateway_models`), where only the URL identifies the
+    /// provider.
+    pub fn stored_key_for_url(&self, base_url: &str) -> Option<String> {
+        let url = base_url.trim();
+        self.providers
+            .iter()
+            .find(|p| p.base_url.trim() == url && !p.api_key.is_empty())
+            .map(|p| p.api_key.clone())
+            .or_else(|| {
+                (self.openai_base_url.trim() == url && !self.openai_api_key.is_empty())
+                    .then(|| self.openai_api_key.clone())
+            })
     }
 
     pub fn provider_by_id(&self, id: &str) -> Option<&ProviderEntry> {
@@ -910,5 +974,94 @@ impl Ai {
     }
     pub async fn list_models(&self) -> Result<Vec<String>> {
         self.ollama.list_models().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_with_secrets() -> AiConfig {
+        AiConfig {
+            providers: vec![ProviderEntry {
+                id: "gw1".into(),
+                kind: "gateway".into(),
+                label: "OpenAI".into(),
+                base_url: "https://api.openai.com/v1".into(),
+                api_key: "sk-real-key".into(),
+                chat_model: "gpt-5".into(),
+                effort: String::new(),
+            }],
+            openai_api_key: "sk-legacy-key".into(),
+            openai_base_url: "https://legacy.example/v1".into(),
+            notion_token: "ntn_secret".into(),
+            ..AiConfig::default()
+        }
+    }
+
+    #[test]
+    fn redacted_strips_every_secret_and_keeps_empty_fields_empty() {
+        let mut c = config_with_secrets();
+        c.providers.push(ProviderEntry {
+            id: "ollama".into(),
+            kind: "ollama".into(),
+            ..Default::default()
+        });
+        let r = c.redacted();
+        assert_eq!(r.providers[0].api_key, REDACTED_KEY);
+        assert_eq!(r.openai_api_key, REDACTED_KEY);
+        assert_eq!(r.notion_token, REDACTED_KEY);
+        // A keyless provider stays visibly keyless.
+        assert_eq!(r.providers[1].api_key, "");
+        // Nothing key-shaped survives serialization to the webview.
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(!json.contains("sk-real-key"));
+        assert!(!json.contains("sk-legacy-key"));
+        assert!(!json.contains("ntn_secret"));
+    }
+
+    #[test]
+    fn absorb_restores_secrets_on_round_trip() {
+        let stored = config_with_secrets();
+        let mut round_trip = stored.redacted();
+        round_trip.absorb_secrets(&stored);
+        assert_eq!(round_trip.providers[0].api_key, "sk-real-key");
+        assert_eq!(round_trip.openai_api_key, "sk-legacy-key");
+        assert_eq!(round_trip.notion_token, "ntn_secret");
+    }
+
+    #[test]
+    fn absorb_keeps_explicit_clears_and_new_values() {
+        let stored = config_with_secrets();
+        let mut edited = stored.redacted();
+        edited.providers[0].api_key = "sk-new-key".into();
+        edited.notion_token = String::new();
+        edited.absorb_secrets(&stored);
+        assert_eq!(edited.providers[0].api_key, "sk-new-key");
+        assert_eq!(edited.notion_token, "");
+    }
+
+    #[test]
+    fn absorb_never_persists_the_placeholder_itself() {
+        let stored = config_with_secrets();
+        let mut edited = stored.redacted();
+        // Provider re-added under a fresh id, placeholder carried along.
+        edited.providers[0].id = "gw2".into();
+        edited.absorb_secrets(&stored);
+        assert_eq!(edited.providers[0].api_key, "");
+    }
+
+    #[test]
+    fn stored_key_resolves_by_url_for_probe_commands() {
+        let c = config_with_secrets();
+        assert_eq!(
+            c.stored_key_for_url(" https://api.openai.com/v1 ".trim()),
+            Some("sk-real-key".into())
+        );
+        assert_eq!(
+            c.stored_key_for_url("https://legacy.example/v1"),
+            Some("sk-legacy-key".into())
+        );
+        assert_eq!(c.stored_key_for_url("https://elsewhere.example/v1"), None);
     }
 }

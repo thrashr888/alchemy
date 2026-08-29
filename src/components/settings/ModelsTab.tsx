@@ -1040,6 +1040,7 @@ function ProviderWizard({
                 setKey(e.target.value);
                 probeKey(baseUrl, e.target.value);
               }}
+              onFocus={(e) => e.currentTarget.select()}
               placeholder="paste your key"
             />
           </Field>

@@ -274,6 +274,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
               type="password"
               value={gwKey}
               onChange={(e) => setGwKey(e.target.value)}
+              onFocus={(e) => e.currentTarget.select()}
               placeholder="API key"
             />
             <Input
