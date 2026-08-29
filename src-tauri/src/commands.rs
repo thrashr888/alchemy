@@ -5775,16 +5775,45 @@ pub(crate) async fn settings_style_apply(
 /// as a `settings://theme` event; every window applies it through the same
 /// setTheme path the Settings dialog uses.
 pub(crate) fn settings_theme_apply(app: &AppHandle, query: &str) -> String {
-    if query.trim().is_empty() {
+    let query = query.trim();
+    if query.is_empty() {
         return crate::selfheal::theme_roster_text();
     }
-    match crate::selfheal::resolve_theme(query) {
+    let resolved = if wants_random_theme(query) {
+        Ok(random_theme())
+    } else {
+        crate::selfheal::resolve_theme(query)
+    };
+    match resolved {
         Ok((id, label)) => {
             let _ = app.emit("settings://theme", serde_json::json!({ "theme": id }));
             format!("Switched the theme to {label}.")
         }
         Err(msg) => msg,
     }
+}
+
+/// "pick a random theme", "surprise me" — the user delegating the choice.
+/// Matched on the theme argument the router (or the fast path) hands over,
+/// which is why a bare "random" counts.
+pub(crate) fn wants_random_theme(query: &str) -> bool {
+    let l = query.to_lowercase();
+    l.contains("random") || l.contains("surprise") || l.contains("whatever")
+}
+
+/// One theme, drawn uniformly. "system" is deliberately not in the draw: it
+/// is a deferral to macOS, not a look, so "surprise me" landing on it would
+/// be no answer at all.
+///
+/// There is no `rand` in the tree and adding one for a single die roll is not
+/// worth it — but `uuid` is, and a v4 UUID's bytes come from the OS CSPRNG
+/// (getrandom), which is a better source than a clock read and needs no new
+/// dependency. The modulo bias over 128 bits is unmeasurable.
+pub(crate) fn random_theme() -> (&'static str, &'static str) {
+    let roster = crate::selfheal::THEME_ROSTER;
+    let draw = u128::from_le_bytes(*uuid::Uuid::new_v4().as_bytes());
+    let (id, label, _) = roster[(draw % roster.len() as u128) as usize];
+    (id, label)
 }
 
 /// The `connect` verb's read/confirm side (RFC-conversational-setup §4).
@@ -5979,13 +6008,56 @@ async fn finish_tool_reply(
 // questions on the zero-overhead path; gated messages get one small JSON
 // routing call to the chat model, then dispatch to existing commands.
 
-/// Imperative verbs both surfaces gate on.
-const TOOL_VERBS: [&str; 41] = [
-    "add", "import", "ingest", "attach", "load", "grab", "pull in", "paste", "make", "create",
-    "generate", "write", "build", "remove", "delete", "drop", "get rid", "refresh", "re-fetch",
-    "refetch", "update", "save", "schedule", "edit", "rename", "change", "pause", "enable",
-    "disable", "resume", "switch", "use", "show", "set", "pull", "test", "download", "list",
-    "connect", "call me", "help",
+/// Imperative signals both surfaces gate on — verbs, plus the two ways a
+/// user delegates the choice instead of naming it ("pick a random theme",
+/// "surprise me with a theme"), which read as instructions even though
+/// "random" is not a verb.
+const TOOL_VERBS: [&str; 45] = [
+    "add",
+    "import",
+    "ingest",
+    "attach",
+    "load",
+    "grab",
+    "pull in",
+    "paste",
+    "make",
+    "create",
+    "generate",
+    "write",
+    "build",
+    "remove",
+    "delete",
+    "drop",
+    "get rid",
+    "refresh",
+    "re-fetch",
+    "refetch",
+    "update",
+    "save",
+    "schedule",
+    "edit",
+    "rename",
+    "change",
+    "pause",
+    "enable",
+    "disable",
+    "resume",
+    "switch",
+    "use",
+    "show",
+    "set",
+    "pull",
+    "test",
+    "download",
+    "list",
+    "connect",
+    "call me",
+    "help",
+    "pick",
+    "choose",
+    "random",
+    "surprise me",
 ];
 
 /// Nouns that mean the same thing wherever they are typed: the settings
@@ -6194,7 +6266,7 @@ const SHARED_TOOL_LINES: &str = "\
 - {\"action\":\"settings\",\"op\":\"pull\",\"model\":\"<ollama model name>\"} — stage `ollama pull <model>` as a one-click Terminal command; it is never executed automatically (\"download gemma3\", \"pull qwen3:8b\").\n\
 - {\"action\":\"settings\",\"op\":\"set\",\"field\":\"profile.name|profile.profession|profile.instructions\",\"value\":\"<free text>\"} — personalize (\"call me Paul\" → profile.name Paul; \"always answer briefly\" as a standing preference → profile.instructions).\n\
 - {\"action\":\"settings\",\"op\":\"style\",\"style\":\"default|learning|friendly|professional|scientific|adhd|ste100|govuk|plain|gdev|custom or empty\",\"length\":\"default|shorter|longer or empty\"} — set <STYLE_SCOPE> Empty keeps that half unchanged.\n\
-- {\"action\":\"settings\",\"op\":\"theme\",\"theme\":\"<theme name, or empty to list them>\"} — switch the app theme (\"use the gruvbox theme\", \"something dark\").\n\
+- {\"action\":\"settings\",\"op\":\"theme\",\"theme\":\"<theme name, the word random to have one picked, or empty to list them>\"} — switch the app theme (\"use the gruvbox theme\", \"something dark\"; \"pick a random theme\" or \"surprise me with a theme\" → theme random).\n\
 - {\"action\":\"settings\",\"op\":\"connect\",\"target\":\"<agent client name, or empty to list>\"} — connect Alchemy to an installed agent client (Claude Code, Codex, …). Always confirmed with a click before anything is written.\n\
 - {\"action\":\"settings\",\"op\":\"setup\"} — guided setup: reports the next unmet setup step (\"help me get set up\").\n";
 
@@ -6628,6 +6700,14 @@ pub(crate) fn settings_gate(content: &str) -> Option<(String, String, String)> {
     ];
     if SETUP_ASKS.contains(&l) {
         return hit("setup", "", "");
+    }
+
+    // "pick a random theme", "surprise me with a theme". Deterministic on
+    // purpose: delegating the choice is exactly the ask that must not depend
+    // on a model being reachable, and this one used to fall through the gate
+    // into corpus retrieval ("theme" is a global-query word) and hang there.
+    if l.contains("theme") && (l.contains("random") || l.contains("surprise")) {
+        return hit("theme", "random", "");
     }
 
     // Theme: "switch/set/change [the] theme to X" and "use the X theme".
@@ -12053,58 +12133,78 @@ pub async fn ask_everything(
         });
     }
 
-    // Deep search (wide pool + model rerank) defaults on for gateway models,
-    // where the extra rerank call is fast and cheap; local models keep the
-    // low-latency single-pass path unless the caller asks for deep.
-    let deep = match deep {
-        Some(d) => d,
-        None => state.ai.read().await.config().is_gateway(),
-    };
-    // Global route (RFC-infinite-context §4): enumerative/comparative
-    // questions want coverage of the gist layer, not a top-k of chunks. The
-    // classifier is pure; ANY failure inside the route degrades to None, so
-    // the pointed path below runs unchanged whenever the route doesn't fire.
-    let global = if rag::is_global_query(&question) {
-        match global_meta_route(&state, Some(&app), &question).await {
-            Ok(g) => g,
-            Err(err) => {
-                crate::note!("meta-global route failed, falling back to pointed: {err:#}");
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    // References are per SOURCE, not per chunk: several excerpts from one
-    // source share a number, and the citation list the UI shows is deduped —
-    // otherwise a source that contributed five chunks shows up five times.
-    let (mut citations, mut passages) = if let Some(g) = global {
-        g
-    } else {
-        let passages_raw = retrieve_everything(&state, Some(&app), &question, 16, deep).await?;
-        let mut citations: Vec<MetaCitation> = Vec::new();
-        let mut passages: Vec<rag::MetaPassage> = Vec::new();
-        for c in &passages_raw {
-            let number = match citations
-                .iter()
-                .position(|u| u.kind == c.kind && u.id == c.id)
-            {
-                Some(i) => i + 1,
-                None => {
-                    citations.push(c.clone());
-                    citations.len()
-                }
+    // Retrieval runs under the cancel scope, not just synthesis. Both legs
+    // below can call a model — the global route summarizes gists, and deep
+    // search reranks candidates source by source ("Reading 6 sources in
+    // depth") — and an agent-CLI provider can park a single call for minutes.
+    // Without this select, Stop had nothing to bite on until the first token
+    // of the answer, which on a wedged provider never came. Everything inside
+    // is a read, so dropping the future mid-flight costs only the work done;
+    // cancelling yields the same empty-handed answer the synthesis select
+    // produces, which here means no text and no citations.
+    let retrieved = tokio::select! {
+        r = async {
+            // Deep search (wide pool + model rerank) defaults on for gateway
+            // models, where the extra rerank call is fast and cheap; local
+            // models keep the low-latency single-pass path unless the caller
+            // asks for deep.
+            let deep = match deep {
+                Some(d) => d,
+                None => state.ai.read().await.config().is_gateway(),
             };
-            passages.push(rag::MetaPassage {
-                number,
-                kind: c.kind.clone(),
-                notebook_title: c.notebook_title.clone(),
-                title: c.title.clone(),
-                snippet: c.snippet.clone(),
-            });
-        }
-        (citations, passages)
+            // Global route (RFC-infinite-context §4): enumerative/comparative
+            // questions want coverage of the gist layer, not a top-k of chunks.
+            // The classifier is pure; ANY failure inside the route degrades to
+            // None, so the pointed path below runs unchanged whenever the route
+            // doesn't fire.
+            let global = if rag::is_global_query(&question) {
+                match global_meta_route(&state, Some(&app), &question).await {
+                    Ok(g) => g,
+                    Err(err) => {
+                        crate::note!("meta-global route failed, falling back to pointed: {err:#}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            // References are per SOURCE, not per chunk: several excerpts from
+            // one source share a number, and the citation list the UI shows is
+            // deduped — otherwise a source that contributed five chunks shows
+            // up five times.
+            if let Some(g) = global {
+                return Ok::<_, String>(g);
+            }
+            let passages_raw = retrieve_everything(&state, Some(&app), &question, 16, deep).await?;
+            let mut citations: Vec<MetaCitation> = Vec::new();
+            let mut passages: Vec<rag::MetaPassage> = Vec::new();
+            for c in &passages_raw {
+                let number = match citations
+                    .iter()
+                    .position(|u| u.kind == c.kind && u.id == c.id)
+                {
+                    Some(i) => i + 1,
+                    None => {
+                        citations.push(c.clone());
+                        citations.len()
+                    }
+                };
+                passages.push(rag::MetaPassage {
+                    number,
+                    kind: c.kind.clone(),
+                    notebook_title: c.notebook_title.clone(),
+                    title: c.title.clone(),
+                    snippet: c.snippet.clone(),
+                });
+            }
+            Ok((citations, passages))
+        } => Some(r?),
+        _ = cancel.cancelled() => None,
+    };
+    let (mut citations, mut passages) = match retrieved {
+        Some(v) => v,
+        None => return Ok(MetaAnswer::chat(String::new(), vec![])),
     };
 
     // Registry cards join the context (RFC-registry × meta-chat): a question
@@ -13107,6 +13207,67 @@ mod tool_tests {
         // Ordinary corpus questions stay on the zero-overhead path.
         assert!(!global_tool_gate("which notebook has the drive data?"));
         assert!(!global_tool_gate("what did I conclude about Japan?"));
+    }
+
+    /// Delegating the choice is still an instruction. "pick a random theme"
+    /// used to miss both gates and fall into corpus retrieval — "theme" is a
+    /// global-query word, so it bought a deep read of six sources instead of
+    /// a theme.
+    #[test]
+    fn gates_admit_delegated_choices() {
+        assert!(global_tool_gate("pick a random theme"));
+        assert!(global_tool_gate("choose a theme for me"));
+        assert!(global_tool_gate("surprise me with a theme"));
+        assert!(global_tool_gate("random theme please"));
+        // Shared verbs, so the notebook gate sees them too.
+        assert!(tool_gate("pick a random theme"));
+        assert!(tool_gate("choose a model for me"));
+        // Still not a command: no tool noun to act on.
+        assert!(!global_tool_gate("pick the strongest argument"));
+        assert!(!global_tool_gate("what are the recurring themes?"));
+    }
+
+    /// "pick a random theme" resolves without a model: the fast path names
+    /// the op, and the dispatcher draws from the same roster the empty ask
+    /// lists.
+    #[test]
+    fn random_theme_resolves_to_a_real_theme() {
+        for ask in [
+            "pick a random theme",
+            "surprise me with a theme",
+            "choose a random theme",
+            "give me a random theme",
+        ] {
+            assert_eq!(
+                settings_gate(ask),
+                Some(("theme".into(), "random".into(), String::new())),
+                "{ask}"
+            );
+        }
+        // A named theme is unaffected.
+        assert_eq!(
+            settings_gate("use the gruvbox theme"),
+            Some(("theme".into(), "gruvbox".into(), String::new()))
+        );
+
+        assert!(wants_random_theme("random"));
+        assert!(wants_random_theme("surprise me"));
+        assert!(!wants_random_theme("gruvbox"));
+
+        // Every draw is a real theme, and the draw is actually a draw: 200
+        // rolls over 23 themes landing on one is impossible short of a bug.
+        let roster = crate::selfheal::THEME_ROSTER;
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..200 {
+            let (id, label) = random_theme();
+            assert!(
+                roster.iter().any(|(i, l, _)| *i == id && *l == label),
+                "{id} is not on the roster"
+            );
+            assert_ne!(id, "system", "system is a deferral, not a look");
+            seen.insert(id);
+        }
+        assert!(seen.len() > 1, "random_theme never varies");
     }
 
     /// The notebook gate is unchanged by the split into shared/notebook
