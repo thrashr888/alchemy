@@ -20,9 +20,9 @@ const RECENT_LIMIT: usize = 6;
 ///
 /// `accelerator: None` on an item that still shows `keys` means the key is
 /// handled frontend-side on purpose: native key equivalents win over focused
-/// text fields, so context-dependent keys (⌘N) and field-respecting keys
-/// (⌘F, ⌘←/→) must stay with the frontend's shortcutBlocked guard. The menu
-/// item remains for discoverability and mouse use.
+/// text fields, so context-dependent keys (⌘N, ⌘1–4) and field-respecting
+/// keys (⌘F, ⌘←/→) must stay with the frontend's shortcutBlocked guard. The
+/// menu item remains for discoverability and mouse use.
 pub struct Command {
     pub id: &'static str,
     /// Menu item label; empty = not a menu item (documented gesture only).
@@ -133,10 +133,9 @@ const CMD: &[Command] = &[
         label: "Forward (⌘ → too)",
         context: "",
     },
-    // Home's sections are its center modes, the exact sibling of the
-    // notebook's Sources/Studio toggles below — so they sit in the same menu,
-    // as places you go rather than panels you show. Unkeyed: ⌘1/⌘2 already
-    // mean the notebook's panels, and a native key equivalent is global.
+    // Where you go, kept as its own group above the sidebar toggles below:
+    // these change the center of Home, they don't show or hide a panel.
+    // Unkeyed — ⌘1–4 belong to the sidebars.
     Command {
         id: "menu-home-notebooks",
         menu_label: "Go to Notebooks",
@@ -161,47 +160,51 @@ const CMD: &[Command] = &[
         label: "",
         context: "",
     },
-    // Home's four sidebars, the exact sibling of the notebook's panel
-    // toggles below — same plain-noun labels, same "show or hide" meaning.
-    // Unkeyed: ⌘1/⌘2 are the notebook's, and a native key equivalent is
-    // global, so it could not mean one thing on Home and another in a
-    // notebook. Enabled only on Home (`set_menu_context`).
+    // Two groups of sidebar toggles, one per view, in rail order — and ⌘1–4
+    // runs down each group the same way. The same four keys legitimately mean
+    // different sidebars in Home and in a notebook because the webview's
+    // keydown handler (App.tsx) reads the view before it dispatches, and the
+    // group that doesn't belong to that view is greyed out
+    // (`set_menu_context`). That is also why none of the eight carries a
+    // native accelerator: a key equivalent is global to the process and would
+    // fire whichever view is on screen — the `keys` column documents them for
+    // Settings → Shortcuts instead.
     Command {
         id: "menu-toggle-home-chats",
         menu_label: "Chats",
         accelerator: None,
-        keys: "",
-        label: "",
-        context: "",
+        keys: "⌘ 1",
+        label: "Show or hide Chats",
+        context: "Home",
     },
     Command {
         id: "menu-toggle-home-staff",
         menu_label: "Staff",
         accelerator: None,
-        keys: "",
-        label: "",
-        context: "",
+        keys: "⌘ 2",
+        label: "Show or hide Staff",
+        context: "Home",
     },
     Command {
         id: "menu-toggle-home-brief",
         menu_label: "Brief",
         accelerator: None,
-        keys: "",
-        label: "",
-        context: "",
+        keys: "⌘ 3",
+        label: "Show or hide Brief",
+        context: "Home",
     },
     Command {
         id: "menu-toggle-home-reports",
         menu_label: "Latest Reports",
         accelerator: None,
-        keys: "",
-        label: "",
-        context: "",
+        keys: "⌘ 4",
+        label: "Show or hide Latest Reports",
+        context: "Home",
     },
     Command {
         id: "menu-toggle-sources",
         menu_label: "Sources",
-        accelerator: Some("CmdOrCtrl+1"),
+        accelerator: None,
         keys: "⌘ 1",
         label: "Show or hide Sources",
         context: "Notebook",
@@ -209,7 +212,7 @@ const CMD: &[Command] = &[
     Command {
         id: "menu-toggle-studio",
         menu_label: "Studio",
-        accelerator: Some("CmdOrCtrl+2"),
+        accelerator: None,
         keys: "⌘ 2",
         label: "Show or hide Studio",
         context: "Notebook",
@@ -218,17 +221,17 @@ const CMD: &[Command] = &[
         id: "menu-toggle-gallery",
         menu_label: "Gallery",
         accelerator: None,
-        keys: "",
-        label: "",
-        context: "",
+        keys: "⌘ 3",
+        label: "Show or hide Gallery",
+        context: "Notebook",
     },
     Command {
         id: "menu-toggle-ledger",
         menu_label: "Ledger",
         accelerator: None,
-        keys: "",
-        label: "",
-        context: "",
+        keys: "⌘ 4",
+        label: "Show or hide Ledger",
+        context: "Notebook",
     },
     Command {
         id: "menu-toggle-glass",
@@ -565,7 +568,8 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
     // in is live: a notebook's Sources/Studio/Gallery/Ledger mean nothing on
     // Home, and Home's four cards mean nothing inside a notebook. Kept as
     // handles so `set_menu_context` can flip `enabled` as the frontend moves
-    // between views — the menu itself is never rebuilt.
+    // between views — the menu itself is never rebuilt. Each group is in rail
+    // order, which is also ⌘1–4 order (see the registry above).
     let home_toggles = [
         cmd_item(app, "menu-toggle-home-chats")?,
         cmd_item(app, "menu-toggle-home-staff")?,

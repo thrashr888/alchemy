@@ -1,5 +1,11 @@
 import { useEffect, useRef } from "react";
-import { navAtomic, useStore } from "@/lib/store";
+import {
+  NOTEBOOK_PANELS,
+  navAtomic,
+  toggleNotebookPanel,
+  useStore,
+} from "@/lib/store";
+import { HOME_CARDS, toggleHomeCard } from "@/lib/homeCards";
 import { HomeView } from "@/components/HomeView";
 import { Workspace } from "@/components/Workspace";
 import { SettingsDialog } from "@/components/SettingsDialog";
@@ -130,6 +136,27 @@ function App() {
         const s = useStore.getState();
         if (e.key === "ArrowLeft" || e.key === "[") s.navBack();
         else s.navForward();
+      } else if (e.key >= "1" && e.key <= "4" && !e.shiftKey && !e.altKey) {
+        // ⌘1–4 run down whichever set of sidebars is on screen: a notebook's
+        // Sources/Studio/Gallery/Ledger, or Home's Chats/Staff/Brief/Latest
+        // Reports — in the order the rails read, which is the View menu's
+        // order too. Context-dependent, so it can't be a native menu key
+        // equivalent (those are global to the process and would fire in the
+        // wrong view); menu.rs keeps the items accelerator-less and documents
+        // both meanings in Settings → Shortcuts.
+        //
+        // A note pop-out renders neither set of sidebars, so it leaves the
+        // keystroke alone — as it does the View menu's two groups.
+        if (window.__ALCHEMY_NOTE__ || shortcutBlocked(e)) return;
+        const i = Number(e.key) - 1;
+        if (useStore.getState().currentId) {
+          e.preventDefault();
+          toggleNotebookPanel(NOTEBOOK_PANELS[i]);
+        } else if (toggleHomeCard(HOME_CARDS[i])) {
+          // Home registers its four toggles while it is mounted; nothing
+          // registered means nothing to show or hide.
+          e.preventDefault();
+        }
       }
     };
     window.addEventListener("keydown", onKey);

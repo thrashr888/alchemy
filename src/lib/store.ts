@@ -1002,16 +1002,14 @@ export const useStore = create<AppState>((set, get) => {
         } else if (e.payload.id === "menu-find") {
           set({ findBump: get().findBump + 1 });
         } else if (e.payload.id === "menu-toggle-sources") {
-          if (get().currentId) s.toggleSources();
+          toggleNotebookPanel("sources");
         } else if (e.payload.id === "menu-toggle-studio") {
-          if (get().currentId) s.toggleStudio();
+          toggleNotebookPanel("studio");
         } else if (e.payload.id === "menu-toggle-gallery") {
-          if (get().currentId)
-            set({ galleryOpen: !get().galleryOpen, ledgerOpen: false });
+          if (get().currentId) toggleNotebookPanel("gallery");
           else s.pushToast("info", "Open a notebook to browse its gallery");
         } else if (e.payload.id === "menu-toggle-ledger") {
-          if (get().currentId)
-            set({ ledgerOpen: !get().ledgerOpen, galleryOpen: false });
+          if (get().currentId) toggleNotebookPanel("ledger");
           else s.pushToast("info", "Open a notebook to read its ledger");
         } else if (e.payload.id === "menu-toggle-glass") {
           s.setReading({ glass: !get().reading.glass });
@@ -3203,6 +3201,31 @@ async function applyNav(delta: 1 | -1): Promise<void> {
   } finally {
     navApplying = false;
   }
+}
+
+/** A notebook's four sidebars, in rail order — which is the View menu's order
+ *  and ⌘1–4's order (menu.rs keeps all three the same). */
+export const NOTEBOOK_PANELS = [
+  "sources",
+  "studio",
+  "gallery",
+  "ledger",
+] as const;
+
+export type NotebookPanel = (typeof NOTEBOOK_PANELS)[number];
+
+/** Show or hide one of them. The single owner of what each toggle means, for
+ *  the View menu, ⌘1–4 (App.tsx), and anything else that grows one. Gallery
+ *  and Ledger share the center, so opening either closes the other.
+ *  A no-op with no notebook open — callers that want to say so do it first. */
+export function toggleNotebookPanel(panel: NotebookPanel): void {
+  const s = useStore.getState();
+  if (!s.currentId) return;
+  if (panel === "sources") s.toggleSources();
+  else if (panel === "studio") s.toggleStudio();
+  else if (panel === "gallery")
+    useStore.setState({ galleryOpen: !s.galleryOpen, ledgerOpen: false });
+  else useStore.setState({ ledgerOpen: !s.ledgerOpen, galleryOpen: false });
 }
 
 /** Depth of an in-progress compound navigation (see `navAtomic`). */

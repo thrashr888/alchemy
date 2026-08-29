@@ -5,6 +5,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useStore } from "@/lib/store";
 import { usePickList } from "@/lib/pick";
 import { homeDraftKey } from "@/lib/homeChatRun";
+import { HOME_CARDS, registerHomeCards, toggleHomeCard } from "@/lib/homeCards";
 import { DevBadge } from "./DevBadge";
 import { UpdateBadge } from "./UpdateBadge";
 import { HealthBanner } from "./HealthBanner";
@@ -462,12 +463,11 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     });
   };
 
-  // View > Chats/Staff/Brief/Latest Reports (menu.rs). The four cards' open
-  // state is this component's — and this component only mounts on Home —
-  // so the listener lives here rather than in the store's menu router, and
-  // it flips exactly the state each card's own collapse button writes. The
-  // menu items are disabled off Home, so an action can't arrive with no card
-  // to toggle. Held in a ref so the subscription outlives a render.
+  // View > Chats/Staff/Brief/Latest Reports (menu.rs), and ⌘1–4 with them.
+  // The four cards' open state is this component's — and this component only
+  // mounts on Home — so the toggles live here rather than in the store's menu
+  // router, and they flip exactly the state each card's own collapse button
+  // writes. Held in a ref so a subscription outlives a render.
   const homeToggles = useRef({
     toggleChats,
     toggleStaff,
@@ -475,16 +475,29 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     toggleReports,
   });
   homeToggles.current = { toggleChats, toggleStaff, toggleBrief, toggleReports };
+  // ⌘1–4 is caught above both views (App.tsx), since the same keys mean a
+  // notebook's panels when one is open — so publish the toggles for it.
+  useEffect(() => {
+    registerHomeCards((card) => {
+      const t = homeToggles.current;
+      if (card === "chats") t.toggleChats();
+      else if (card === "staff") t.toggleStaff();
+      else if (card === "brief") t.toggleBrief();
+      else t.toggleReports();
+    });
+    return () => registerHomeCards(null);
+  }, []);
   useEffect(() => {
     if (!isTauri()) return;
     const label = getCurrentWebview().label;
+    // The menu items are disabled off Home, so an action can't arrive with no
+    // card to toggle — it goes through the same registration ⌘1–4 uses.
     const un = listen<{ target: string; id: string }>("menu://action", (e) => {
       if (e.payload.target !== label) return;
-      const t = homeToggles.current;
-      if (e.payload.id === "menu-toggle-home-chats") t.toggleChats();
-      else if (e.payload.id === "menu-toggle-home-staff") t.toggleStaff();
-      else if (e.payload.id === "menu-toggle-home-brief") t.toggleBrief();
-      else if (e.payload.id === "menu-toggle-home-reports") t.toggleReports();
+      const card = HOME_CARDS.find(
+        (c) => e.payload.id === `menu-toggle-home-${c}`,
+      );
+      if (card) toggleHomeCard(card);
     });
     return () => {
       void un.then((off) => off());
