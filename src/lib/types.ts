@@ -311,6 +311,10 @@ export interface ActivityStats {
   notebooks: ActivityCount[];
   sourceTypes: ActivityCount[];
   firstActivityAt: number;
+  /** What background runs cost over the receipts window (30 days), in
+   *  millionths of a dollar. Background work only, and 0 when every run was
+   *  local — local models are free, not unrecorded. */
+  backgroundCostMicros: number;
 }
 
 /** One exact-match window from the `/grep` chat command (Rust grep_sources). */

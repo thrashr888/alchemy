@@ -10769,7 +10769,19 @@ pub async fn activity_stats(
     let titles: std::collections::HashMap<String, String> =
         all_notebooks.into_iter().map(|n| (n.id, n.title)).collect();
     let retrievals = crate::activity::trace_times(&state.trace_dir);
-    Ok(crate::activity::aggregate(
+    // What the background actually cost, read back off the receipts rather
+    // than tallied separately, so the figure cannot drift from the record.
+    // The receipts table is a rolling 30-day window, so this is a recent
+    // total and the caption says so.
+    let background_cost_micros: i64 = state
+        .db
+        .list_receipts(0, usize::MAX)
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(|r| r.cost_micros)
+        .sum();
+    let mut stats = crate::activity::aggregate(
         &messages,
         &notes,
         &sources,
@@ -10777,7 +10789,9 @@ pub async fn activity_stats(
         &ranked_out,
         &retrievals,
         chrono::Local::now().date_naive(),
-    ))
+    );
+    stats.background_cost_micros = background_cost_micros;
+    Ok(stats)
 }
 
 // ---- OKF export ------------------------------------------------------------

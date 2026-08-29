@@ -17,6 +17,7 @@ import {
   Sun,
   Sunrise,
   Sunset,
+  Receipt,
   Trophy,
   type LucideIcon,
 } from "lucide-react";
@@ -67,6 +68,13 @@ function peakHourFace(h: number): LucideIcon {
   if (h < 11) return Sunrise;
   if (h < 17) return Sun;
   return Sunset;
+}
+
+/** Micro-dollars as money. Sub-cent spend rounds to "$0.00" rather than
+ *  being dressed up in extra decimals: the point of the tile is the order of
+ *  magnitude, and a fake precision on a cost is the thing to avoid. */
+function money(micros: number): string {
+  return `$${(Math.max(0, micros) / 1_000_000).toFixed(2)}`;
 }
 
 function Tile({
@@ -495,6 +503,11 @@ export function ActivityTab() {
           value={`${String(stats.longestStreak)}d`}
           icon={Trophy}
         />
+        <Tile
+          label="Background spend"
+          value={money(stats.backgroundCostMicros)}
+          icon={Receipt}
+        />
         {/* The sky IS the value: the sun sits where the hour puts it, or
             stars come out for a night-owl peak. */}
         <Tile
@@ -515,6 +528,12 @@ export function ActivityTab() {
             ) : undefined
           }
         />
+      </div>
+
+      <div className="text-caption text-subtle-foreground">
+        Background spend covers scheduled work over the last 30 days. Local
+        models are free, so it stays at $0.00 unless you point a role at a paid
+        provider.
       </div>
 
       <div className="flex flex-col gap-1.5">
