@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useStore } from "@/lib/store";
+import { navAtomic, useStore } from "@/lib/store";
 import { HomeView } from "@/components/HomeView";
 import { Workspace } from "@/components/Workspace";
 import { SettingsDialog } from "@/components/SettingsDialog";
@@ -15,7 +15,10 @@ import { Toaster } from "@/components/ui";
 import { FatalOverlay } from "@/components/ErrorBoundary";
 import { shortcutBlocked } from "@/lib/utils";
 import { isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "@/lib/api";
+import type { HomeSection } from "@/lib/storeTypes";
 import { THEME_LIST, SYSTEM_THEME } from "@/lib/themes";
 import { ARTIFACTS, AUDIO_OVERVIEW } from "@/components/studioArtifacts";
 
@@ -105,6 +108,47 @@ function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [openSettings]);
+
+  // Home's chat surface, from the native menu (menu.rs). The store owns the
+  // rest of `menu://action`; these ride the same broadcast — it reaches every
+  // window, and the payload's target label is what keeps only the addressed
+  // one acting on it. Each hop leaves a notebook if one is open, so they are
+  // one back-stack entry apiece (navAtomic), not two.
+  //
+  // A note pop-out mounts no Home at all; the store's listener has already
+  // handed the action to the main window, so this shell stays out of it.
+  useEffect(() => {
+    if (!isTauri() || window.__ALCHEMY_NOTE__) return;
+    const label = getCurrentWebview().label;
+    const goHome = (go: () => Promise<void> | void) =>
+      void navAtomic(async () => {
+        const s = useStore.getState();
+        if (s.currentId) s.closeNotebook();
+        await go();
+      });
+    const section = (id: HomeSection) =>
+      goHome(() => useStore.setState({ homeSection: id, openCardId: null }));
+    const un = listen<{ target: string; id: string }>("menu://action", (e) => {
+      if (e.payload.target !== label) return;
+      if (e.payload.id === "menu-new-chat") {
+        goHome(() => useStore.getState().openHomeThread(null));
+      } else if (e.payload.id === "menu-home-notebooks") {
+        section("notebooks");
+      } else if (e.payload.id === "menu-home-registry") {
+        section("registry");
+      } else if (e.payload.id === "menu-home-chat") {
+        // The conversation that was last on screen, minting one only if there
+        // has never been one — what Home's own Chat tab does.
+        goHome(() => {
+          const s = useStore.getState();
+          return s.openHomeThread(s.homeChat.threadId);
+        });
+      }
+    });
+    return () => {
+      void un.then((off) => off());
+    };
+  }, []);
 
   // Bridge the legacy `error` field into the toast stack so every error path
   // (many still `set({ error })` directly) surfaces consistently and dismisses.

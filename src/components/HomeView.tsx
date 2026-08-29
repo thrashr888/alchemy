@@ -366,9 +366,13 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     });
   };
   // The Chats card collapses on its own, the way Staff below it and Brief
-  // opposite do — same key grammar, same default-open.
+  // opposite do — same key grammar. Its default is the one that differs:
+  // before there is a first conversation the card has nothing to list, so a
+  // rail nobody has touched starts folded and opens itself the moment the
+  // first chat exists (the effect below). An ABSENT `homeChatsOpen` is what
+  // "never chose" means — every deliberate toggle writes it.
   const [chatsOpen, setChatsOpen] = useState(
-    () => localStorage.getItem("homeChatsOpen") !== "0",
+    () => (localStorage.getItem("homeChatsOpen") ?? "0") !== "0",
   );
   const toggleChats = () => {
     setChatsOpen((open) => {
@@ -376,6 +380,29 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       return !open;
     });
   };
+  // The one auto-open, on the 0 → 1 crossing of the thread list: the first
+  // conversation you ever have is what makes the card worth its width, so it
+  // shows up on its own the moment it has something to list. Writing the key
+  // as it fires is what keeps this to once, ever — a later collapse, deleting
+  // every thread and starting over, and a second window all read the same
+  // written key and leave the card where it was put.
+  //
+  // The ref starts false rather than at the current count on purpose: a first
+  // chat asked from ⌘K inside a notebook lands while this view is unmounted,
+  // and a crossing measured from the count at mount would never fire for it.
+  // "Never chose, and there is now a conversation" is the real condition; the
+  // written key, not the count, is what makes it once. (Empty threads minted
+  // by New chat or the palette aren't in `homeThreads` until a turn settles,
+  // so this means a real answer rather than an open box.)
+  const homeThreads = useStore((s) => s.homeThreads);
+  const sawThreads = useRef(false);
+  useEffect(() => {
+    if (!homeThreads.length || sawThreads.current) return;
+    sawThreads.current = true;
+    if (localStorage.getItem("homeChatsOpen") !== null) return;
+    localStorage.setItem("homeChatsOpen", "1");
+    setChatsOpen(true);
+  }, [homeThreads]);
   const [briefOpen, setBriefOpen] = useState(
     () => localStorage.getItem("homeBriefOpen") !== "0",
   );

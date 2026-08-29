@@ -25,8 +25,10 @@ import {
   FileText,
   FolderOutput,
   LayoutGrid,
+  Library,
   Link2,
   MessageSquare,
+  MessagesSquare,
   Palette,
   PanelLeft,
   PanelRight,
@@ -183,6 +185,16 @@ export function CommandPalette() {
     // changed since the palette opened.
     const state = () => useStore.getState();
     const close = () => state().setPaletteOpen(false);
+    /** A jump to Home: close the palette, leave the notebook if one is open,
+     *  then land — recorded as the single navigation it reads as. */
+    const goHome = (go: () => Promise<void> | void) => {
+      close();
+      void navAtomic(async () => {
+        const s = state();
+        if (s.currentId) s.closeNotebook();
+        await go();
+      });
+    };
     const list: Command[] = [];
 
     if (currentId) {
@@ -387,6 +399,61 @@ export function CommandPalette() {
           useStore.setState({ importOkfOpen: true });
         },
       },
+      // Home's conversations and its sections, reachable from anywhere the
+      // palette is: each hop leaves an open notebook behind, and navAtomic
+      // keeps that to one back-stack entry instead of a stop-over in the
+      // notebook's own chat.
+      {
+        id: "home-new-chat",
+        group: "Navigate",
+        label: "New chat",
+        keywords: "ask everything corpus conversation thread meta question",
+        icon: <MessageSquare className="h-3.5 w-3.5" />,
+        hint: "⌥⌘N",
+        run: () => goHome(() => state().openHomeThread(null)),
+      },
+      {
+        id: "home-chat",
+        group: "Navigate",
+        label: "Go to chats",
+        keywords: "conversations threads history ask everything meta",
+        icon: <MessagesSquare className="h-3.5 w-3.5" />,
+        // The conversation last on screen, minting one only if there has
+        // never been one — what Home's own Chat tab does.
+        run: () =>
+          goHome(() => state().openHomeThread(state().homeChat.threadId)),
+      },
+      {
+        id: "home-registry",
+        group: "Navigate",
+        label: "Go to registry",
+        keywords: "cards people places things entities identifiers",
+        icon: <Package className="h-3.5 w-3.5" />,
+        run: () =>
+          goHome(() =>
+            useStore.setState({ homeSection: "registry", openCardId: null }),
+          ),
+      },
+      // Only from Home: inside a notebook, "Back to all notebooks" above is
+      // already this row, and two ways to say it in one list is one too many.
+      ...(currentId
+        ? []
+        : [
+            {
+              id: "home-notebooks",
+              group: "Navigate",
+              label: "Go to notebooks",
+              keywords: "shelf library home grid all",
+              icon: <Library className="h-3.5 w-3.5" />,
+              run: () =>
+                goHome(() =>
+                  useStore.setState({
+                    homeSection: "notebooks",
+                    openCardId: null,
+                  }),
+                ),
+            } satisfies Command,
+          ]),
       {
         id: "new-notebook",
         group: "Navigate",

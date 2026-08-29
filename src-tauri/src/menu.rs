@@ -55,6 +55,18 @@ const CMD: &[Command] = &[
         label: "New note",
         context: "Notebook",
     },
+    // ⌥⌘N, not ⌘N or ⇧⌘N: both are spoken for (⌘N is the context-dependent
+    // new notebook/new note, ⇧⌘N is New Window). This one is NOT
+    // context-dependent — a new chat means the same thing everywhere — so it
+    // can carry a real key equivalent, and ⌥⌘N means nothing to a text field.
+    Command {
+        id: "menu-new-chat",
+        menu_label: "New Chat",
+        accelerator: Some("CmdOrCtrl+Alt+N"),
+        keys: "⌥ ⌘ N",
+        label: "New chat across every notebook",
+        context: "",
+    },
     Command {
         id: "menu-new-window",
         menu_label: "New Window",
@@ -119,6 +131,34 @@ const CMD: &[Command] = &[
         accelerator: None,
         keys: "⌘ ]",
         label: "Forward (⌘ → too)",
+        context: "",
+    },
+    // Home's sections are its center modes, the exact sibling of the
+    // notebook's Sources/Studio toggles below — so they sit in the same menu,
+    // as places you go rather than panels you show. Unkeyed: ⌘1/⌘2 already
+    // mean the notebook's panels, and a native key equivalent is global.
+    Command {
+        id: "menu-home-notebooks",
+        menu_label: "Go to Notebooks",
+        accelerator: None,
+        keys: "",
+        label: "",
+        context: "",
+    },
+    Command {
+        id: "menu-home-registry",
+        menu_label: "Go to Registry",
+        accelerator: None,
+        keys: "",
+        label: "",
+        context: "",
+    },
+    Command {
+        id: "menu-home-chat",
+        menu_label: "Go to Chats",
+        accelerator: None,
+        keys: "",
+        label: "",
         context: "",
     },
     Command {
@@ -392,6 +432,7 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
     let file_menu = SubmenuBuilder::new(app, "File")
         .item(&cmd_item(app, "menu-new-notebook")?)
         .item(&cmd_item(app, "menu-new-note")?)
+        .item(&cmd_item(app, "menu-new-chat")?)
         .item(&cmd_item(app, "menu-new-window")?)
         .item(&recent_menu)
         .separator()
@@ -454,6 +495,10 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
         .item(&cmd_item(app, "menu-forward")?)
         .separator()
         .item(&cmd_item(app, "menu-search")?)
+        .separator()
+        .item(&cmd_item(app, "menu-home-notebooks")?)
+        .item(&cmd_item(app, "menu-home-registry")?)
+        .item(&cmd_item(app, "menu-home-chat")?)
         .separator()
         .item(&cmd_item(app, "menu-toggle-sources")?)
         .item(&cmd_item(app, "menu-toggle-studio")?)
