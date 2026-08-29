@@ -3,7 +3,12 @@ import { useStore } from "@/lib/store";
 import type { Note } from "@/lib/types";
 import { cn, noteUnread, relativeTime } from "@/lib/utils";
 import { Button } from "./ui";
-import { ChevronDown, ChevronUp, PanelRightClose } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Newspaper,
+  PanelRightClose,
+} from "lucide-react";
 import { Markdown } from "./Markdown";
 
 /** One quiet line describing activity since the previous home visit. */
@@ -109,58 +114,81 @@ export function ReportsFeed({
 
   return (
     <>
-      <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-6 py-2">
-        <span className="whitespace-nowrap text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-          Latest reports
-        </span>
-        {unreadCount > 0 && (
-          <span
-            title={`${unreadCount} unread`}
-            className="rounded-full bg-primary/15 px-1.5 py-0.5 text-badge font-medium tabular-nums text-citation"
-          >
-            {unreadCount}
-          </span>
-        )}
-        <div className="ml-auto flex shrink-0 items-center gap-2">
-          {/* The cursor and chevrons only mean something over visible cards —
-              the caught-up state (nothing rendered) shows neither. */}
-          {rendered.length > 0 && (
-            <>
-              <span className="whitespace-nowrap text-micro tabular-nums text-subtle-foreground">
-                {current + 1} of {total}
+      {/* Nothing here hides until you hover it. The stepping cursor is how you
+          read the feed, not a secondary verb — "3 of 8" is the only place the
+          position is written down — and Mark all read is the way out of a
+          backlog, which is exactly when it should be in sight. A control you
+          have to hover to find is a control you don't know you have.
+          The card is user-resizable, so the wrap keys off the header's OWN
+          width rather than the window's: a container query. Wide, it is one
+          line; narrow, the identity and the collapse toggle keep line one and
+          the verbs drop to line two, which is the pair you can afford to look
+          down for. The header grows a row and the scroll region below gives
+          up the height (min-h-0 flex-1), so nothing overlaps. */}
+      <div className="@container shrink-0 border-b border-border">
+        <div className="grid min-h-12 grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1 px-6 py-2 @md:grid-cols-[1fr_auto_auto]">
+          {/* Same icon as the collapsed rail, and the same grammar as Staff and
+              Chats across the way: icon, then the caption. */}
+          <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-2">
+            <Newspaper className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+              Latest reports
+            </span>
+            {unreadCount > 0 && (
+              <span
+                title={`${unreadCount} unread`}
+                className="shrink-0 rounded-full bg-primary/15 px-1.5 py-0.5 text-badge font-medium tabular-nums text-citation"
+              >
+                {unreadCount}
               </span>
-              <div className="flex items-center">
+            )}
+          </div>
+          {/* The cursor and chevrons only mean something over visible cards —
+              the caught-up state (nothing rendered) shows neither, and with
+              nothing unread there is no second line at all. */}
+          {(rendered.length > 0 || unreadCount > 0) && (
+            <div className="col-span-2 col-start-1 row-start-2 flex items-center justify-end gap-2 @md:col-span-1 @md:col-start-2 @md:row-start-1">
+              {rendered.length > 0 && (
+                <>
+                  <span className="whitespace-nowrap text-micro tabular-nums text-subtle-foreground">
+                    {current + 1} of {total}
+                  </span>
+                  <div className="flex items-center">
+                    <button
+                      type="button"
+                      onClick={() => step(-1)}
+                      disabled={current <= 0}
+                      title="Previous report"
+                      aria-label="Jump to the previous report"
+                      className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+                    >
+                      <ChevronUp className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => step(1)}
+                      disabled={current >= total - 1}
+                      title="Next report"
+                      aria-label="Jump to the next report"
+                      className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+                    >
+                      <ChevronDown className="h-4 w-4" />
+                    </button>
+                  </div>
+                </>
+              )}
+              {unreadCount > 0 && (
                 <button
                   type="button"
-                  onClick={() => step(-1)}
-                  disabled={current <= 0}
-                  title="Previous report"
-                  aria-label="Jump to the previous report"
-                  className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+                  onClick={() =>
+                    markRead(reports.filter(isUnread).map((note) => note.id))
+                  }
+                  className="whitespace-nowrap text-micro text-muted-foreground transition-colors hover:text-foreground"
                 >
-                  <ChevronUp className="h-4 w-4" />
+                  Mark all read
                 </button>
-                <button
-                  type="button"
-                  onClick={() => step(1)}
-                  disabled={current >= total - 1}
-                  title="Next report"
-                  aria-label="Jump to the next report"
-                  className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
-                >
-                  <ChevronDown className="h-4 w-4" />
-                </button>
-              </div>
-            </>
-          )}
-          {unreadCount > 0 && (
-            <button
-              type="button"
-              onClick={() => markRead(reports.filter(isUnread).map((note) => note.id))}
-              className="whitespace-nowrap text-micro text-muted-foreground transition-colors hover:text-foreground"
-            >
-              Mark all read
-            </button>
+              )}
+            </div>
           )}
           {onCollapse && (
             <button
@@ -168,7 +196,7 @@ export function ReportsFeed({
               onClick={onCollapse}
               title="Collapse reports"
               aria-label="Collapse the reports feed"
-              className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+              className="col-start-2 row-start-1 rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground @md:col-start-3"
             >
               <PanelRightClose className="h-4 w-4" />
             </button>

@@ -19,8 +19,8 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::Connection;
 
 use crate::models::{
-    Citation, LedgerEntry, Message, Note, NoteUsage, Notebook, RegistryCard, ReportSchedule,
-    RunReceipt, Source, SourceEvent,
+    Citation, LedgerEntry, Message, MetaThread, MetaTurn, Note, NoteUsage, Notebook, RegistryCard,
+    ReportSchedule, RunReceipt, Source, SourceEvent,
 };
 
 const T_NOTEBOOKS: &str = "notebooks";
@@ -37,6 +37,15 @@ const T_LEDGER: &str = "ledger";
 /// The Registry's cast (docs/RFC-registry.md). Corpus-scoped: no
 /// notebook_id column, unlike every other entity table here.
 const T_REGISTRY: &str = "registry";
+/// Home's corpus-wide conversations (docs/RFC-meta-chat.md). Also
+/// corpus-scoped: a turn belongs to a thread, and the thread is about
+/// everything. Threads are derived from these rows, not stored.
+const T_META_TURNS: &str = "meta_turns";
+/// The `kind` of the one row in a Home thread that is not a turn: the name
+/// the small model gave the conversation. It rides `meta_turns` so a thread
+/// stays exactly what it always was — the rows that share a `thread_id` —
+/// and is filtered out of every read that means "the conversation".
+pub const META_TITLE_KIND: &str = "title";
 /// Source events prune past this window — a rolling record, not an archive.
 const SOURCE_EVENT_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
@@ -308,6 +317,8 @@ impl Db {
         db.migrate_ledger().await?;
         db.ensure_table(T_REGISTRY, registry_schema()).await?;
         db.migrate_registry().await?;
+        db.ensure_table(T_META_TURNS, meta_turns_schema()).await?;
+        db.migrate_meta_turns().await?;
         Ok(db)
     }
 
@@ -725,6 +736,27 @@ impl Db {
             .await?
             .iter()
             .any(|t| t == name))
+    }
+
+    /// Width of a table's `vector` column as it exists on disk, or None when
+    /// the table isn't there (or has no vector column). The vector tables are
+    /// created lazily at whatever dimensionality the embedder of the day
+    /// emitted, so this is the only honest answer to "what will Lance accept
+    /// as a query vector here" — a query of any other width fails the search
+    /// with "No vector column found to match with the query vector dimension".
+    pub async fn vector_dim(&self, table: &str) -> Result<Option<usize>> {
+        if !self.table_exists(table).await? {
+            return Ok(None);
+        }
+        let tbl = self.conn.open_table(table).execute().await?;
+        let schema = tbl.schema().await?;
+        Ok(schema
+            .field_with_name("vector")
+            .ok()
+            .and_then(|f| match f.data_type() {
+                DataType::FixedSizeList(_, dim) => Some(*dim as usize),
+                _ => None,
+            }))
     }
 
     async fn ensure_table(&self, name: &str, schema: SchemaRef) -> Result<()> {
@@ -2031,6 +2063,234 @@ impl Db {
             .await
     }
 
+    // ---- Home chat (docs/RFC-meta-chat.md) --------------------------------
+
+    /// Add `model` to a `meta_turns` table written before answers recorded
+    /// which model wrote them. Additive and atomic (Lance `add_columns`), so
+    /// a store the installed app is also reading is never left half-migrated
+    /// — the rows it already holds simply carry an empty model, which the UI
+    /// renders as nothing.
+    async fn migrate_meta_turns(&self) -> Result<()> {
+        self.add_string_column(T_META_TURNS, "model", "").await
+    }
+
+    pub async fn add_meta_turn(&self, turn: &MetaTurn) -> Result<()> {
+        let schema = meta_turns_schema();
+        let citations = serde_json::to_string(&turn.citations).unwrap_or_else(|_| "[]".into());
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec![turn.id.clone()])),
+                Arc::new(StringArray::from(vec![turn.thread_id.clone()])),
+                Arc::new(StringArray::from(vec![turn.role.clone()])),
+                Arc::new(StringArray::from(vec![turn.content.clone()])),
+                Arc::new(StringArray::from(vec![citations])),
+                Arc::new(StringArray::from(vec![turn.kind.clone()])),
+                Arc::new(StringArray::from(vec![turn.model.clone()])),
+                Arc::new(Int64Array::from(vec![turn.created_at])),
+            ],
+        )?;
+        self.add_batch(T_META_TURNS, schema, batch).await
+    }
+
+    /// One thread's turns, oldest first — the conversation as it was read.
+    ///
+    /// The generated-name row (`kind = "title"`) is not a turn: it never
+    /// enters the transcript, the model's history, or a turn count.
+    pub async fn list_meta_turns(&self, thread_id: &str) -> Result<Vec<MetaTurn>> {
+        let filter = format!(
+            "thread_id = '{}' AND kind != '{}'",
+            esc(thread_id),
+            META_TITLE_KIND
+        );
+        let batches = self.collect(T_META_TURNS, Some(&filter)).await?;
+        let mut turns = meta_turns_from_batches(&batches)?;
+        turns.sort_by(|a, b| {
+            a.created_at
+                .cmp(&b.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        Ok(turns)
+    }
+
+    /// Every Home conversation, most recently used first. Threads are derived
+    /// from their turns: the metadata pass reads five small columns, and only
+    /// the opening question and the generated name of each thread are
+    /// hydrated — the answers are the long rows, and none of them is a title.
+    ///
+    /// A thread is named by its `kind = "title"` row when one exists (the
+    /// small model's five words, written once the first exchange settles) and
+    /// by its opening question until then. That row is bookkeeping, not
+    /// conversation: it counts for nothing and never moves `updated_at`.
+    pub async fn list_meta_threads(&self) -> Result<Vec<MetaThread>> {
+        let batches = self
+            .collect_cols(
+                T_META_TURNS,
+                None,
+                &["id", "thread_id", "role", "kind", "created_at"],
+            )
+            .await?;
+        let mut acc: HashMap<String, ThreadAcc> = HashMap::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let thread = str_col(b, "thread_id")?;
+            let role = str_col(b, "role")?;
+            let kind = str_col(b, "kind")?;
+            let created = i64_col(b, "created_at")?;
+            for i in 0..b.num_rows() {
+                let at = created.value(i);
+                let named = kind.value(i) == META_TITLE_KIND;
+                let t = acc
+                    .entry(thread.value(i).to_string())
+                    .or_insert_with(|| ThreadAcc {
+                        first_user: None,
+                        named: None,
+                        count: 0,
+                        created_at: at,
+                        updated_at: at,
+                    });
+                if named {
+                    // Last writer wins: a re-title supersedes its predecessor
+                    // even if the old row outlived the delete.
+                    let later = t.named.as_ref().is_none_or(|(_, seen)| at >= *seen);
+                    if later {
+                        t.named = Some((id.value(i).to_string(), at));
+                    }
+                    continue;
+                }
+                t.count += 1;
+                t.created_at = t.created_at.min(at);
+                t.updated_at = t.updated_at.max(at);
+                let earlier = match &t.first_user {
+                    None => true,
+                    Some((_, seen)) => at < *seen,
+                };
+                if role.value(i) == "user" && earlier {
+                    t.first_user = Some((id.value(i).to_string(), at));
+                }
+            }
+        }
+        // A thread that is nothing but a name isn't a conversation — a titling
+        // task that outlived its deleted thread must not resurrect it.
+        acc.retain(|_, t| t.count > 0);
+        if acc.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let title_ids = acc
+            .values()
+            .flat_map(|t| {
+                [t.first_user.as_ref(), t.named.as_ref()]
+                    .into_iter()
+                    .flatten()
+                    .map(|(id, _)| format!("'{}'", esc(id)))
+            })
+            .collect::<Vec<_>>();
+        let mut titles: HashMap<String, String> = HashMap::new();
+        if !title_ids.is_empty() {
+            let filter = format!("id IN ({})", title_ids.join(", "));
+            let batches = self
+                .collect_cols(T_META_TURNS, Some(&filter), &["id", "content"])
+                .await?;
+            for b in &batches {
+                let id = str_col(b, "id")?;
+                let content = str_col(b, "content")?;
+                for i in 0..b.num_rows() {
+                    titles.insert(id.value(i).to_string(), content.value(i).to_string());
+                }
+            }
+        }
+
+        let mut threads = acc
+            .into_iter()
+            .map(|(id, t)| {
+                let content_of = |slot: &Option<(String, i64)>| {
+                    slot.as_ref()
+                        .and_then(|(id, _)| titles.get(id))
+                        .map(String::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                };
+                let question = thread_title(&content_of(&t.first_user));
+                let named = content_of(&t.named);
+                let named = named.trim();
+                MetaThread {
+                    id,
+                    title: if named.is_empty() {
+                        question.clone()
+                    } else {
+                        named.to_string()
+                    },
+                    question,
+                    turn_count: t.count,
+                    created_at: t.created_at,
+                    updated_at: t.updated_at,
+                }
+            })
+            .collect::<Vec<_>>();
+        threads.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        Ok(threads)
+    }
+
+    /// The generated name for a thread, if one has been written yet.
+    pub async fn meta_thread_title(&self, thread_id: &str) -> Result<Option<String>> {
+        let filter = format!(
+            "thread_id = '{}' AND kind = '{}'",
+            esc(thread_id),
+            META_TITLE_KIND
+        );
+        let batches = self
+            .collect_cols(T_META_TURNS, Some(&filter), &["content", "created_at"])
+            .await?;
+        let mut best: Option<(i64, String)> = None;
+        for b in &batches {
+            let content = str_col(b, "content")?;
+            let created = i64_col(b, "created_at")?;
+            for i in 0..b.num_rows() {
+                let at = created.value(i);
+                if best.as_ref().is_none_or(|(seen, _)| at >= *seen) {
+                    best = Some((at, content.value(i).trim().to_string()));
+                }
+            }
+        }
+        Ok(best.map(|(_, t)| t).filter(|t| !t.is_empty()))
+    }
+
+    /// Name a thread. Stored as one more row in the thread's own turns —
+    /// no second table, no column migration, and deleting the conversation
+    /// takes its name with it.
+    pub async fn set_meta_thread_title(&self, thread_id: &str, title: &str) -> Result<()> {
+        self.delete_where(
+            T_META_TURNS,
+            &format!(
+                "thread_id = '{}' AND kind = '{}'",
+                esc(thread_id),
+                META_TITLE_KIND
+            ),
+        )
+        .await?;
+        self.add_meta_turn(&MetaTurn {
+            id: uuid::Uuid::new_v4().to_string(),
+            thread_id: thread_id.to_string(),
+            role: "assistant".into(),
+            content: title.trim().to_string(),
+            citations: Vec::new(),
+            kind: META_TITLE_KIND.into(),
+            model: String::new(),
+            created_at: chrono::Utc::now().timestamp_millis(),
+        })
+        .await
+    }
+
+    pub async fn delete_meta_thread(&self, thread_id: &str) -> Result<()> {
+        self.delete_where(T_META_TURNS, &format!("thread_id = '{}'", esc(thread_id)))
+            .await
+    }
+
     // ---- Notes -----------------------------------------------------------
 
     pub async fn list_notes(&self, notebook_id: &str) -> Result<Vec<Note>> {
@@ -2487,6 +2747,24 @@ impl Db {
         self.add_batch(T_ROUTES, schema, batch).await
     }
 
+    /// Drop the whole router index. Routes are derived data — every row is
+    /// recomputed from sources, notes, tags and gists by
+    /// `router::ensure_router` — so throwing them away costs one re-embed
+    /// sweep and never loses anything the corpus doesn't still hold. That is
+    /// what makes the dimension self-heal below safe here and NOT safe for
+    /// `chunks`, whose text is the only copy of a source's chunking.
+    pub async fn clear_all_routes(&self) -> Result<()> {
+        if self.table_exists(T_ROUTES).await? {
+            self.conn.drop_table(T_ROUTES, &[]).await?;
+        }
+        Ok(())
+    }
+
+    /// The router index's vector width, or None when it hasn't been built.
+    pub async fn routes_vector_dim(&self) -> Result<Option<usize>> {
+        self.vector_dim(T_ROUTES).await
+    }
+
     pub async fn delete_routes(&self, ids: &[String]) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
@@ -2508,7 +2786,25 @@ impl Db {
         kind: Option<&str>,
         k: usize,
     ) -> Result<Vec<(Route, f32)>> {
-        if !self.table_exists(T_ROUTES).await? {
+        let Some(stored_dim) = self.routes_vector_dim().await? else {
+            return Ok(vec![]);
+        };
+        // Dimension self-heal. The query vector is the current embedder's
+        // width by construction, so comparing it against the stored column is
+        // a free, exact drift test — and drift is real: switching embedders
+        // and running Re-embed All rebuilt `chunks` at the new width and left
+        // `routes` at the old one, after which every routed search died on
+        // "No vector column found to match with the query vector dimension".
+        // Routes are derived, so the repair is to throw the stale index away;
+        // the next `ensure_router` rebuilds it at the current width. Callers
+        // treat an empty result as "no index yet" and search flat meanwhile.
+        if stored_dim != query_vec.len() {
+            crate::note!(
+                "router index is {stored_dim}-d but the embedder emits {}-d; \
+                 dropping the stale index (it rebuilds on the next sweep)",
+                query_vec.len()
+            );
+            self.clear_all_routes().await?;
             return Ok(vec![]);
         }
         let tbl = self.conn.open_table(T_ROUTES).execute().await?;
@@ -3803,6 +4099,74 @@ fn messages_schema() -> SchemaRef {
     ]))
 }
 
+/// What a scan of the turn table knows about one thread before its title is
+/// fetched: which turn opened it, and how big and how recent it is.
+struct ThreadAcc {
+    /// (turn id, created_at) of the earliest user turn.
+    first_user: Option<(String, i64)>,
+    /// (row id, created_at) of the newest generated-name row, if any.
+    named: Option<(String, i64)>,
+    count: i64,
+    created_at: i64,
+    updated_at: i64,
+}
+
+/// The opening question as a one-line title.
+fn thread_title(question: &str) -> String {
+    let line = question.trim().lines().next().unwrap_or("").trim();
+    if line.is_empty() {
+        return "Untitled".into();
+    }
+    if line.chars().count() > 120 {
+        format!("{}…", line.chars().take(119).collect::<String>())
+    } else {
+        line.to_string()
+    }
+}
+
+fn meta_turns_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("thread_id", DataType::Utf8, false),
+        Field::new("role", DataType::Utf8, false),
+        Field::new("content", DataType::Utf8, false),
+        Field::new("citations", DataType::Utf8, false),
+        Field::new("kind", DataType::Utf8, false),
+        Field::new("model", DataType::Utf8, false),
+        Field::new("created_at", DataType::Int64, false),
+    ]))
+}
+
+/// Decode meta-turn batches into rows.
+fn meta_turns_from_batches(batches: &[RecordBatch]) -> Result<Vec<MetaTurn>> {
+    let mut turns = Vec::new();
+    for b in batches {
+        let id = str_col(b, "id")?;
+        let thread = str_col(b, "thread_id")?;
+        let role = str_col(b, "role")?;
+        let content = str_col(b, "content")?;
+        let citations = str_col(b, "citations")?;
+        let kind = str_col(b, "kind")?;
+        // Written by a build that recorded which model answered; absent on
+        // rows older than that column, which render without a model name.
+        let model = opt_str_col(b, "model");
+        let created = i64_col(b, "created_at")?;
+        for i in 0..b.num_rows() {
+            turns.push(MetaTurn {
+                id: id.value(i).to_string(),
+                thread_id: thread.value(i).to_string(),
+                role: role.value(i).to_string(),
+                content: content.value(i).to_string(),
+                citations: serde_json::from_str(citations.value(i)).unwrap_or_default(),
+                kind: kind.value(i).to_string(),
+                model: model.map(|m| m.value(i).to_string()).unwrap_or_default(),
+                created_at: created.value(i),
+            });
+        }
+    }
+    Ok(turns)
+}
+
 fn note_usage_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("note_id", DataType::Utf8, false),
@@ -4058,6 +4422,106 @@ fn note_batch(schema: &SchemaRef, notes: &[Note]) -> Result<RecordBatch> {
 mod tests {
     use super::*;
     use std::cmp::Ordering;
+
+    fn meta_turn(thread: &str, id: &str, role: &str, content: &str, at: i64) -> MetaTurn {
+        MetaTurn {
+            id: id.into(),
+            thread_id: thread.into(),
+            role: role.into(),
+            content: content.into(),
+            citations: Vec::new(),
+            kind: "chat".into(),
+            model: String::new(),
+            created_at: at,
+        }
+    }
+
+    /// A Home thread is nothing but its turns: the list is derived, titled by
+    /// the opening question, and ordered by what was used last.
+    #[tokio::test]
+    async fn meta_threads_are_derived_from_their_turns() {
+        let dir = std::env::temp_dir().join(format!("nbl-meta-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+
+        for turn in [
+            meta_turn(
+                "t1",
+                "a",
+                "user",
+                "Where is the SNDK data?\nsecond line",
+                10,
+            ),
+            meta_turn("t1", "b", "assistant", "In the Storage notebook.", 11),
+            meta_turn("t2", "c", "user", "What did I conclude?", 20),
+        ] {
+            db.add_meta_turn(&turn).await.expect("add turn");
+        }
+
+        let threads = db.list_meta_threads().await.expect("threads");
+        assert_eq!(
+            threads.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            ["t2", "t1"],
+            "most recently used first"
+        );
+        let first = threads.iter().find(|t| t.id == "t1").expect("t1");
+        assert_eq!(first.title, "Where is the SNDK data?");
+        assert_eq!(first.question, "Where is the SNDK data?");
+        assert_eq!(first.turn_count, 2);
+        assert_eq!(first.created_at, 10);
+        assert_eq!(first.updated_at, 11);
+
+        let turns = db.list_meta_turns("t1").await.expect("turns");
+        assert_eq!(
+            turns.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            ["a", "b"],
+            "oldest first — the conversation as it was read"
+        );
+
+        // The small model names the thread: the name is preferred over the
+        // opening question, the question is still reported alongside it, and
+        // the row it rides on is not a turn — it counts for nothing, never
+        // moves `updated_at`, and never enters the transcript.
+        assert_eq!(db.meta_thread_title("t1").await.expect("title"), None);
+        db.set_meta_thread_title("t1", "SNDK data location")
+            .await
+            .expect("name it");
+        assert_eq!(
+            db.meta_thread_title("t1").await.expect("title").as_deref(),
+            Some("SNDK data location")
+        );
+        let threads = db.list_meta_threads().await.expect("threads");
+        let first = threads.iter().find(|t| t.id == "t1").expect("t1");
+        assert_eq!(first.title, "SNDK data location");
+        assert_eq!(first.question, "Where is the SNDK data?");
+        assert_eq!(first.turn_count, 2, "a name is not a turn");
+        assert_eq!(first.updated_at, 11, "naming is not conversation");
+        assert_eq!(
+            db.list_meta_turns("t1")
+                .await
+                .expect("turns")
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"],
+            "the name never appears in the transcript"
+        );
+        // Re-naming replaces, never accumulates.
+        db.set_meta_thread_title("t1", "Where SNDK lives")
+            .await
+            .expect("rename");
+        assert_eq!(
+            db.meta_thread_title("t1").await.expect("title").as_deref(),
+            Some("Where SNDK lives")
+        );
+        assert_eq!(db.list_meta_turns("t1").await.expect("turns").len(), 2);
+
+        db.delete_meta_thread("t1").await.expect("delete");
+        assert!(db.list_meta_turns("t1").await.expect("turns").is_empty());
+        let threads = db.list_meta_threads().await.expect("threads");
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].id, "t2");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[tokio::test]
     async fn message_pages_are_bounded_newest_first_without_overlap() {
@@ -4648,5 +5112,60 @@ mod tests {
             .await
             .expect("expand");
         assert!(none.is_empty());
+    }
+
+    /// Switching embedders leaves the router index at the old vector width,
+    /// which no summary diff can see. A routed search carries the current
+    /// width by construction, so it is the free detector: it drops the stale
+    /// index and answers empty (the caller's "no index yet" case) instead of
+    /// failing the whole search with Lance's dimension error — and the table
+    /// then rebuilds cleanly at the new width, which a stale one refuses.
+    #[tokio::test]
+    async fn route_search_heals_a_stale_vector_width() {
+        let dir = std::env::temp_dir().join(format!("nbl-routedim-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+        let routes = vec![Route {
+            id: "src:1".into(),
+            kind: "source".into(),
+            notebook_id: "nb1".into(),
+            summary: "Ferrari service history".into(),
+        }];
+
+        db.upsert_routes(&routes, &[vec![0.1, 0.2, 0.3, 0.4]])
+            .await
+            .expect("build index");
+        assert_eq!(db.routes_vector_dim().await.expect("dim"), Some(4));
+        assert_eq!(
+            db.route_search(vec![0.1, 0.2, 0.3, 0.4], None, 4)
+                .await
+                .expect("search")
+                .len(),
+            1,
+            "matching width searches normally"
+        );
+
+        let healed = db
+            .route_search(vec![0.1, 0.2], None, 4)
+            .await
+            .expect("mismatched width must not error");
+        assert!(healed.is_empty());
+        assert_eq!(
+            db.routes_vector_dim().await.expect("dim"),
+            None,
+            "the stale index is dropped, not left to fail every query"
+        );
+        assert!(db.list_routes().await.expect("routes").is_empty());
+
+        db.upsert_routes(&routes, &[vec![0.5, 0.6]])
+            .await
+            .expect("rebuild at the new width");
+        assert_eq!(db.routes_vector_dim().await.expect("dim"), Some(2));
+        assert_eq!(
+            db.route_search(vec![0.5, 0.6], None, 4)
+                .await
+                .expect("search")
+                .len(),
+            1
+        );
     }
 }

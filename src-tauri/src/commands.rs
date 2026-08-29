@@ -27,8 +27,8 @@ use crate::ai::{Ai, AiConfig, GenStats};
 use crate::db::Db;
 use crate::db::NOTEBOOK_PALETTE;
 use crate::models::{
-    Citation, FolderScan, Message, ModelHealth, ModelStat, ModelStatus, Note, Notebook,
-    ReportSchedule, Source,
+    Citation, FolderScan, Message, MetaThread, MetaTurn, ModelHealth, ModelStat, ModelStatus, Note,
+    Notebook, ReportSchedule, Source,
 };
 use crate::{ingest, rag};
 
@@ -546,6 +546,18 @@ pub async fn suggest_notebook(
     text: String,
     url: String,
 ) -> Result<crate::router::NotebookSuggestion, String> {
+    suggest_notebook_for(&state, title, text, url).await
+}
+
+/// The routing itself, callable from inside the process — the chat tools that
+/// file something "wherever it belongs" ask the same question the picker
+/// does, and must get the same answer.
+pub(crate) async fn suggest_notebook_for(
+    state: &AppState,
+    title: String,
+    text: String,
+    url: String,
+) -> Result<crate::router::NotebookSuggestion, String> {
     let (title, text) = if text.trim().is_empty() && !url.trim().is_empty() {
         match ingest::extract_url(&url).await {
             Ok(ex) => (
@@ -962,6 +974,14 @@ pub async fn create_notebook(
     state: State<'_, AppState>,
     title: String,
 ) -> Result<Notebook, String> {
+    new_notebook(&state, title).await
+}
+
+/// Mint a notebook. The command above is this plus the IPC signature; chat
+/// tools that file a source into a notebook the app proposed call it
+/// directly, so a chat-created notebook is indistinguishable from one made
+/// with the button (palette color, auto icon, and all).
+pub(crate) async fn new_notebook(state: &AppState, title: String) -> Result<Notebook, String> {
     let ts = now();
     let count = e(state.db.list_notebooks().await)?;
     let color = NOTEBOOK_PALETTE[count.len() % NOTEBOOK_PALETTE.len()];
@@ -5221,8 +5241,13 @@ pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u
     let total = owners.len() as u32;
 
     // Drop the old index first so the new (possibly differently-sized) vectors
-    // can recreate the table cleanly.
+    // can recreate the table cleanly. The router index is vectors too, and
+    // built by the same embedder: leaving it behind is how a store ends up
+    // with 256-d chunks and 384-d routes, after which every routed search
+    // fails on the dimension mismatch. It is derived data — the next
+    // `ensure_router` sweep rebuilds it — so it goes with the chunks.
     e(state.db.clear_all_chunks().await)?;
+    e(state.db.clear_all_routes().await)?;
 
     let ai = state.ai.read().await.clone();
     for (i, (notebook_id, owner_id, extracted)) in owners.iter().enumerate() {
@@ -5705,14 +5730,23 @@ async fn ollama_timeout_context(
     }
 }
 
-/// Apply a per-notebook chat style/length change (RFC-conversational-setup
-/// §2). The per-notebook ChatConfig lives frontend-side, so the validated
-/// change travels as a `settings://style` event every window applies to its
-/// stored config; the returned echo is the transcript row.
+/// Whose answer voice a `settings style` change is about. A style belongs to
+/// a surface, not to the app: one notebook's chat, or Home's corpus-wide one.
+pub(crate) enum StyleTarget<'a> {
+    Notebook(&'a str),
+    /// Home's own config (`homeChatConfig`), which no notebook shares.
+    Home,
+}
+
+/// Apply a per-surface chat style/length change (RFC-conversational-setup
+/// §2). Every ChatConfig lives frontend-side, so the validated change travels
+/// as a `settings://style` event each window applies to its stored config;
+/// the returned echo is the transcript row. An empty `notebookId` in the
+/// payload means Home.
 pub(crate) async fn settings_style_apply(
     app: &AppHandle,
     state: &AppState,
-    notebook_id: &str,
+    target: StyleTarget<'_>,
     style_in: &str,
     length_in: &str,
 ) -> String {
@@ -5720,17 +5754,23 @@ pub(crate) async fn settings_style_apply(
         Ok(v) => v,
         Err(msg) => return msg,
     };
-    let known = state
-        .db
-        .list_notebooks()
-        .await
-        .map(|nbs| nbs.iter().any(|n| n.id == notebook_id))
-        .unwrap_or(false);
-    if !known {
-        return "I couldn't find that notebook — styles are per notebook, so tell me which \
-                one (or ask from inside it)."
-            .to_string();
-    }
+    let notebook_id = match target {
+        StyleTarget::Home => "",
+        StyleTarget::Notebook(id) => {
+            let known = state
+                .db
+                .list_notebooks()
+                .await
+                .map(|nbs| nbs.iter().any(|n| n.id == id))
+                .unwrap_or(false);
+            if !known {
+                return "I couldn't find that notebook — styles are per notebook, so tell me which \
+                        one (or ask from inside it)."
+                    .to_string();
+            }
+            id
+        }
+    };
     let _ = app.emit(
         "settings://style",
         serde_json::json!({
@@ -5747,16 +5787,45 @@ pub(crate) async fn settings_style_apply(
 /// as a `settings://theme` event; every window applies it through the same
 /// setTheme path the Settings dialog uses.
 pub(crate) fn settings_theme_apply(app: &AppHandle, query: &str) -> String {
-    if query.trim().is_empty() {
+    let query = query.trim();
+    if query.is_empty() {
         return crate::selfheal::theme_roster_text();
     }
-    match crate::selfheal::resolve_theme(query) {
+    let resolved = if wants_random_theme(query) {
+        Ok(random_theme())
+    } else {
+        crate::selfheal::resolve_theme(query)
+    };
+    match resolved {
         Ok((id, label)) => {
             let _ = app.emit("settings://theme", serde_json::json!({ "theme": id }));
             format!("Switched the theme to {label}.")
         }
         Err(msg) => msg,
     }
+}
+
+/// "pick a random theme", "surprise me" — the user delegating the choice.
+/// Matched on the theme argument the router (or the fast path) hands over,
+/// which is why a bare "random" counts.
+pub(crate) fn wants_random_theme(query: &str) -> bool {
+    let l = query.to_lowercase();
+    l.contains("random") || l.contains("surprise") || l.contains("whatever")
+}
+
+/// One theme, drawn uniformly. "system" is deliberately not in the draw: it
+/// is a deferral to macOS, not a look, so "surprise me" landing on it would
+/// be no answer at all.
+///
+/// There is no `rand` in the tree and adding one for a single die roll is not
+/// worth it — but `uuid` is, and a v4 UUID's bytes come from the OS CSPRNG
+/// (getrandom), which is a better source than a clock read and needs no new
+/// dependency. The modulo bias over 128 bits is unmeasurable.
+pub(crate) fn random_theme() -> (&'static str, &'static str) {
+    let roster = crate::selfheal::THEME_ROSTER;
+    let draw = u128::from_le_bytes(*uuid::Uuid::new_v4().as_bytes());
+    let (id, label, _) = roster[(draw % roster.len() as u128) as usize];
+    (id, label)
 }
 
 /// The `connect` verb's read/confirm side (RFC-conversational-setup §4).
@@ -5908,7 +5977,26 @@ pub async fn apply_connect_fix(
         "Connected {} — wrote {}{skill}. Restart {} to pick up the change.",
         status.name, status.config_path, status.name
     );
+    // Home's chat has no notebook to write the confirmation into: hand the
+    // row back unpersisted and let that surface file it in its own thread.
+    if notebook_id.trim().is_empty() {
+        return Ok(tool_message("", echo));
+    }
     finish_tool_reply(&app, &state, &notebook_id, echo).await
+}
+
+/// One tool-produced assistant row, unsaved.
+fn tool_message(notebook_id: &str, content: String) -> Message {
+    Message {
+        id: new_id(),
+        notebook_id: notebook_id.to_string(),
+        role: "assistant".into(),
+        content,
+        citations: vec![],
+        kind: "tool".into(),
+        model: String::new(),
+        created_at: now(),
+    }
 }
 
 /// Persist a tool-produced assistant reply and finish the chat turn.
@@ -5918,16 +6006,7 @@ async fn finish_tool_reply(
     notebook_id: &str,
     content: String,
 ) -> Result<Message, String> {
-    let msg = Message {
-        id: new_id(),
-        notebook_id: notebook_id.to_string(),
-        role: "assistant".into(),
-        content,
-        citations: vec![],
-        kind: "tool".into(),
-        model: String::new(),
-        created_at: now(),
-    };
+    let msg = tool_message(notebook_id, content);
     e(state.db.add_message(&msg).await)?;
     e(state.db.touch_notebook(notebook_id, now()).await)?;
     let _ = app.emit("chat://done", &msg);
@@ -5938,8 +6017,134 @@ async fn finish_tool_reply(
 //
 // Imperative chat messages ("add this url", "make a study guide", "delete the
 // spec pdf") route to tools instead of RAG. A cheap keyword gate keeps normal
-// questions on the zero-overhead path; gated messages get one small JSON
-// routing call to the chat model, then dispatch to existing commands.
+// questions on the zero-overhead path; gated messages get one JSON routing
+// call on the Small role, then dispatch to existing commands.
+
+/// Imperative signals both surfaces gate on — verbs, plus the two ways a
+/// user delegates the choice instead of naming it ("pick a random theme",
+/// "surprise me with a theme"), which read as instructions even though
+/// "random" is not a verb.
+const TOOL_VERBS: [&str; 45] = [
+    "add",
+    "import",
+    "ingest",
+    "attach",
+    "load",
+    "grab",
+    "pull in",
+    "paste",
+    "make",
+    "create",
+    "generate",
+    "write",
+    "build",
+    "remove",
+    "delete",
+    "drop",
+    "get rid",
+    "refresh",
+    "re-fetch",
+    "refetch",
+    "update",
+    "save",
+    "schedule",
+    "edit",
+    "rename",
+    "change",
+    "pause",
+    "enable",
+    "disable",
+    "resume",
+    "switch",
+    "use",
+    "show",
+    "set",
+    "pull",
+    "test",
+    "download",
+    "list",
+    "connect",
+    "call me",
+    "help",
+    "pick",
+    "choose",
+    "random",
+    "surprise me",
+];
+
+/// Nouns that mean the same thing wherever they are typed: the settings
+/// family, the Night Shift, and the things a source is made of. Both routers
+/// offer tools for all of these, so both gates accept them.
+const SHARED_TOOL_NOUNS: [&str; 26] = [
+    "source",
+    "url",
+    "link",
+    "skill",
+    "note",
+    // The settings tool (RFC-self-resolve phase 3 +
+    // RFC-conversational-setup).
+    "provider",
+    "model",
+    "settings",
+    "embedder",
+    "effort",
+    "ollama",
+    "gateway",
+    "apple intelligence",
+    "theme",
+    "style",
+    "profile",
+    "agent",
+    "claude",
+    "codex",
+    "alchemy",
+    "set up",
+    "setup",
+    // Night Shift administration (docs/RFC-night-shift-area.md §4).
+    "night shift",
+    "tonight",
+    "overnight",
+    "watcher",
+];
+
+/// Nouns only the notebook router has a tool for — everything that needs a
+/// notebook to mean anything (a document to generate, a report to schedule).
+const NOTEBOOK_TOOL_NOUNS: [&str; 19] = [
+    "summary",
+    "faq",
+    "study guide",
+    "briefing",
+    "timeline",
+    "problems",
+    "prd",
+    "prfaq",
+    "pr/faq",
+    "rfc",
+    "report",
+    "document",
+    "doc",
+    "template",
+    "generator",
+    "brief",
+    "standing order",
+    "commission",
+    "receipt",
+];
+
+/// Nouns only Home's router has a tool for: the corpus's own furniture — a
+/// notebook to open, a conversation to rename or drop.
+const GLOBAL_TOOL_NOUNS: [&str; 4] = ["notebook", "chat", "conversation", "thread"];
+
+/// Navigation, which only Home has an object for: there is nowhere to go
+/// from inside the notebook you are already in. These need no noun beside
+/// them — "take me to Bayside" names the notebook and nothing else — so they
+/// count only when the message OPENS with one, which is what makes it an
+/// instruction rather than a word in a sentence.
+const GLOBAL_TOOL_VERBS: [&str; 5] = ["open", "go to", "jump to", "take me to", "switch to"];
+
+fn contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|k| haystack.contains(k))
+}
 
 /// Cheap pre-filter: only messages with a URL or an imperative verb + tool
 /// noun ever reach the LLM router.
@@ -5948,71 +6153,55 @@ fn tool_gate(content: &str) -> bool {
         return true;
     }
     let l = content.to_lowercase();
-    let verb = [
-        "add", "import", "ingest", "attach", "load", "grab", "pull in", "paste", "make", "create",
-        "generate", "write", "build", "remove", "delete", "drop", "get rid", "refresh", "re-fetch",
-        "refetch", "update", "save", "schedule", "edit", "rename", "change", "pause", "enable",
-        "disable", "resume", "switch", "use", "show", "set", "pull", "test", "download", "list",
-        "connect", "call me", "help",
-    ]
-    .iter()
-    .any(|k| l.contains(k));
-    let noun = [
-        "source",
-        "url",
-        "link",
-        "summary",
-        "faq",
-        "study guide",
-        "briefing",
-        "timeline",
-        "problems",
-        "prd",
-        "prfaq",
-        "pr/faq",
-        "rfc",
-        "skill",
-        "note",
-        "report",
-        "document",
-        "doc",
-        "template",
-        "generator",
-        // The settings tool (RFC-self-resolve phase 3 +
-        // RFC-conversational-setup).
-        "provider",
-        "model",
-        "settings",
-        "embedder",
-        "effort",
-        "ollama",
-        "gateway",
-        "apple intelligence",
-        "theme",
-        "style",
-        "profile",
-        "brief",
-        "agent",
-        "claude",
-        "codex",
-        "alchemy",
-        "set up",
-        "setup",
-        // Night Shift administration (docs/RFC-night-shift-area.md §4).
-        "night shift",
-        "tonight",
-        "overnight",
-        "watcher",
-        "standing order",
-        "commission",
-        "receipt",
-    ]
-    .iter()
-    .any(|k| l.contains(k));
-    verb && noun
+    contains_any(&l, &TOOL_VERBS)
+        && (contains_any(&l, &SHARED_TOOL_NOUNS) || contains_any(&l, &NOTEBOOK_TOOL_NOUNS))
+}
+
+/// The same filter for Home's corpus-wide chat: the shared nouns (settings,
+/// Night Shift, sources and notes) plus Home's own, and none of the
+/// notebook-scoped ones — Home has no tool for "make a study guide", so a
+/// message that only says that must not buy a routing call.
+fn global_tool_gate(content: &str) -> bool {
+    if !extract_urls(content).is_empty() {
+        return true;
+    }
+    let l = content.to_lowercase();
+    let l = l.trim();
+    if GLOBAL_TOOL_VERBS
+        .iter()
+        .any(|v| l.strip_prefix(v).is_some_and(|rest| rest.starts_with(' ')))
+    {
+        return true;
+    }
+    contains_any(l, &TOOL_VERBS)
+        && (contains_any(l, &SHARED_TOOL_NOUNS) || contains_any(l, &GLOBAL_TOOL_NOUNS))
+}
+
+/// The tools that mean the same thing on both chat surfaces, because neither
+/// of them is about a notebook: the app's own configuration, and the Night
+/// Shift. One type, one parser, one dispatcher — a notebook chat and Home
+/// answer "switch chat to ollama" identically or the feature is a lie.
+enum SharedAction {
+    /// The settings tool (RFC-self-resolve phase 3, grown by
+    /// RFC-conversational-setup phase 1). `op` is one of get | set |
+    /// models | test | pull | style | theme | connect | setup; `field`
+    /// carries set's field, test's target, pull's model, style's style,
+    /// theme's name, or connect's client; `value` is set's value and
+    /// style's length.
+    Settings {
+        op: String,
+        field: String,
+        value: String,
+    },
+    /// Ask about, pause, or resume the Night Shift.
+    NightShift {
+        /// "status" | "pause" | "resume"
+        op: String,
+    },
 }
 
 enum ToolAction {
+    Shared(SharedAction),
     AddUrls(Vec<String>),
     AddText {
         title: String,
@@ -6044,11 +6233,6 @@ enum ToolAction {
         /// "tonight" (default) or "now".
         when: String,
     },
-    /// Ask about, pause, or resume the Night Shift.
-    NightShift {
-        /// "status" | "pause" | "resume"
-        op: String,
-    },
     UpdateReport {
         /// Name fragment identifying the existing schedule.
         name: String,
@@ -6058,15 +6242,6 @@ enum ToolAction {
         interval: String,
         prompt: String,
         enabled: String,
-    },
-    /// The settings tool (RFC-self-resolve phase 3, grown by
-    /// RFC-conversational-setup phase 1). `op` is one of get | set |
-    /// models | test | pull; `field` carries set's field, test's target,
-    /// or pull's model name; `value` is set-only.
-    Settings {
-        op: String,
-        field: String,
-        value: String,
     },
     Chat,
 }
@@ -6084,21 +6259,40 @@ Tools:\n\
 - {\"action\":\"create_template\",\"name\":\"<short name>\",\"description\":\"<one line>\",\"prompt\":\"<the reusable generation instruction>\"} — save a reusable custom generator the user can run from Studio later. Compose \"prompt\" yourself from what they asked the generator to do.\n\
 - {\"action\":\"schedule_report\",\"kind\":\"<KINDS>|brief|custom, or a template name from the list below\",\"interval\":\"hourly|daily|weekly\",\"name\":\"<report name>\",\"prompt\":\"<what the report should cover, for kind custom; else empty>\"} — create a recurring report (\"make a weekly brief of this notebook\" → kind brief, interval weekly; echo the user's cadence word in \"interval\" even if unsupported).\n\
 - {\"action\":\"commission\",\"kind\":\"<KINDS>|custom, or a template name\",\"name\":\"<short job name>\",\"prompt\":\"<what to do, for kind custom>\",\"when\":\"tonight|now\"} — hand ONE job to the Night Shift instead of running it now (\"tonight, re-read the Japan sources and rebuild the summary\"). Default \"when\" is tonight; use \"now\" only when the user says so.\n\
-- {\"action\":\"night_shift\",\"op\":\"status|pause|resume\"} — report what the Night Shift has queued, or pause/resume overnight report runs (\"pause the night shift until morning\").\n\
+<SHARED>\
 - {\"action\":\"update_report\",\"name\":\"<existing report name fragment>\",\"new_name\":\"\",\"kind\":\"\",\"interval\":\"\",\"prompt\":\"\",\"enabled\":\"true|false or empty\"} — change an existing recurring report; leave fields empty to keep them.\n\
+- {\"action\":\"chat\"} — not a command; answer normally.\n\n\
+Prefer {\"action\":\"chat\"} when unsure. Questions ABOUT sources (\"what does the spec say\") are chat, \
+not tools.";
+
+/// The tool lines both routers publish word for word. Kept in one place so a
+/// settings verb can never exist on one chat surface and not the other.
+/// `<STYLE_SCOPE>` names whose voice the style verb sets — the only thing
+/// about these tools that depends on where they were typed.
+const SHARED_TOOL_LINES: &str = "\
+- {\"action\":\"night_shift\",\"op\":\"status|pause|resume\"} — report what the Night Shift has queued, or pause/resume overnight report runs (\"pause the night shift until morning\").\n\
 - {\"action\":\"settings\",\"op\":\"get\"} — show the current AI provider/model settings (always redacted; API keys are never readable).\n\
 - {\"action\":\"settings\",\"op\":\"set\",\"field\":\"chatProvider|studioProvider|chatModel|effort|baseUrl|smallModel|embedder|provider.<id>.chatModel|provider.<id>.effort|provider.<id>.baseUrl\",\"value\":\"<new value>\"} — change ONE AI setting (\"switch chat to ollama\" → field chatProvider, value ollama; bare chatModel/effort/baseUrl target the active chat provider). API keys can never be read or set through this tool.\n\
 - {\"action\":\"settings\",\"op\":\"models\"} — list installed Ollama models plus every provider's active model and readiness (\"what models do I have\").\n\
 - {\"action\":\"settings\",\"op\":\"test\",\"target\":\"<provider or model name, or empty for the active chat provider>\"} — live-probe one provider or model (one tiny chat + embed) and report latency (\"is ollama working\", \"test gemma3\").\n\
 - {\"action\":\"settings\",\"op\":\"pull\",\"model\":\"<ollama model name>\"} — stage `ollama pull <model>` as a one-click Terminal command; it is never executed automatically (\"download gemma3\", \"pull qwen3:8b\").\n\
 - {\"action\":\"settings\",\"op\":\"set\",\"field\":\"profile.name|profile.profession|profile.instructions\",\"value\":\"<free text>\"} — personalize (\"call me Paul\" → profile.name Paul; \"always answer briefly\" as a standing preference → profile.instructions).\n\
-- {\"action\":\"settings\",\"op\":\"style\",\"style\":\"default|learning|friendly|professional|scientific|adhd|ste100|govuk|plain|gdev|custom or empty\",\"length\":\"default|shorter|longer or empty\"} — set THIS notebook's answer voice/length (\"use the Google style here\", \"shorter answers in this notebook\"). Empty keeps that half unchanged.\n\
-- {\"action\":\"settings\",\"op\":\"theme\",\"theme\":\"<theme name, or empty to list them>\"} — switch the app theme (\"use the gruvbox theme\", \"something dark\").\n\
+- {\"action\":\"settings\",\"op\":\"style\",\"style\":\"default|learning|friendly|professional|scientific|adhd|ste100|govuk|plain|gdev|custom or empty\",\"length\":\"default|shorter|longer or empty\"} — set <STYLE_SCOPE> Empty keeps that half unchanged.\n\
+- {\"action\":\"settings\",\"op\":\"theme\",\"theme\":\"<theme name, the word random to have one picked, or empty to list them>\"} — switch the app theme (\"use the gruvbox theme\", \"something dark\"; \"pick a random theme\" or \"surprise me with a theme\" → theme random).\n\
 - {\"action\":\"settings\",\"op\":\"connect\",\"target\":\"<agent client name, or empty to list>\"} — connect Alchemy to an installed agent client (Claude Code, Codex, …). Always confirmed with a click before anything is written.\n\
-- {\"action\":\"settings\",\"op\":\"setup\"} — guided setup: reports the next unmet setup step (\"help me get set up\").\n\
-- {\"action\":\"chat\"} — not a command; answer normally.\n\n\
-Prefer {\"action\":\"chat\"} when unsure. Questions ABOUT sources (\"what does the spec say\") are chat, \
-not tools.";
+- {\"action\":\"settings\",\"op\":\"setup\"} — guided setup: reports the next unmet setup step (\"help me get set up\").\n";
+
+const NOTEBOOK_STYLE_SCOPE: &str =
+    "THIS notebook's answer voice/length (\"use the Google style here\", \
+     \"shorter answers in this notebook\").";
+
+/// Splice the shared tool lines into one router's prompt.
+fn with_shared_tools(template: &str, style_scope: &str) -> String {
+    template.replace(
+        "<SHARED>",
+        &SHARED_TOOL_LINES.replace("<STYLE_SCOPE>", style_scope),
+    )
+}
 
 /// Neutralize a source title before interpolating it into the router prompt:
 /// strip braces/newlines (JSON-shaped injection) and cap the length so a
@@ -6112,6 +6306,16 @@ fn sanitize_title(t: &str) -> String {
 }
 
 /// One small LLM call to classify a gated message into a ToolAction.
+///
+/// On the Small role, not the chat model. Routing is a constrained JSON
+/// classification over a fixed vocabulary — the same shape as gists, titles
+/// and retitles, all of which run there. Running it on the chat model meant
+/// "open the ferrari notebook" inherited whatever the user configured to
+/// WRITE for them: an agent CLI takes tens of seconds to answer a one-object
+/// classification and can park indefinitely, and a router that hangs turns
+/// every imperative message into a timeout. `chat_role` falls through to the
+/// chat engine when Small is absent or errors (RFC-inference-providers §7),
+/// so this is strictly faster, never less capable.
 async fn route_tool(state: &AppState, sources: &[Source], content: &str) -> ToolAction {
     let source_list = if sources.is_empty() {
         "(none)".to_string()
@@ -6125,7 +6329,8 @@ async fn route_tool(state: &AppState, sources: &[Source], content: &str) -> Tool
     // The router's kind lists come from the artifact registry (plus the
     // user's templates), so a new generator or template is routable the
     // moment it exists — no prompt edit to forget.
-    let system = TOOL_ROUTER_SYSTEM.replace("<KINDS>", &rag::ARTIFACT_KINDS.join("|"));
+    let system = with_shared_tools(TOOL_ROUTER_SYSTEM, NOTEBOOK_STYLE_SCOPE)
+        .replace("<KINDS>", &rag::ARTIFACT_KINDS.join("|"));
     let template_list = crate::templates::list_templates()
         .unwrap_or_default()
         .iter()
@@ -6145,7 +6350,7 @@ async fn route_tool(state: &AppState, sources: &[Source], content: &str) -> Tool
     ];
     let raw = {
         let ai = state.ai.read().await.clone();
-        match ai.chat(&messages).await {
+        match ai.chat_role(crate::ai::Role::Small, &messages).await {
             Ok(o) => o.text,
             Err(_) => return ToolAction::Chat,
         }
@@ -6153,42 +6358,140 @@ async fn route_tool(state: &AppState, sources: &[Source], content: &str) -> Tool
     parse_tool_action(&raw)
 }
 
-fn parse_tool_action(raw: &str) -> ToolAction {
-    let Some(json) = crate::agent::extract_json(raw) else {
-        return ToolAction::Chat;
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) else {
-        return ToolAction::Chat;
-    };
-    let s = |k: &str| {
-        v.get(k)
+/// One router call's JSON answer, once it has survived extraction and
+/// parsing. Both routers read their fields through this.
+struct RouterJson(serde_json::Value);
+
+impl RouterJson {
+    fn parse(raw: &str) -> Option<Self> {
+        let json = crate::agent::extract_json(raw)?;
+        serde_json::from_str::<serde_json::Value>(&json)
+            .ok()
+            .map(Self)
+    }
+
+    fn action(&self) -> &str {
+        self.0
+            .get("action")
+            .and_then(|a| a.as_str())
+            .unwrap_or("chat")
+    }
+
+    fn s(&self, k: &str) -> String {
+        self.0
+            .get(k)
             .and_then(|x| x.as_str())
             .unwrap_or("")
             .trim()
             .to_string()
-    };
-    match v.get("action").and_then(|a| a.as_str()).unwrap_or("chat") {
-        "add_urls" => {
-            let urls: Vec<String> = v
-                .get("urls")
-                .and_then(|u| u.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|x| x.as_str())
-                        .map(str::trim)
-                        .filter_map(|u| {
-                            if u.starts_with("http://") || u.starts_with("https://") {
-                                Some(u.to_string())
-                            } else if u.contains('.') && !u.contains(char::is_whitespace) {
-                                // Scheme-less host like "example.com/page".
-                                Some(format!("https://{u}"))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect()
+    }
+
+    /// The `urls` array, normalized: a scheme-less host the model echoed
+    /// ("example.com/page") still means a URL. Empty means "not add_urls
+    /// after all" to both callers.
+    fn urls(&self) -> Vec<String> {
+        self.0
+            .get("urls")
+            .and_then(|u| u.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str())
+                    .map(str::trim)
+                    .filter_map(|u| {
+                        if u.starts_with("http://") || u.starts_with("https://") {
+                            Some(u.to_string())
+                        } else if u.contains('.') && !u.contains(char::is_whitespace) {
+                            Some(format!("https://{u}"))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// The arms both routers parse identically. None means the model named a
+/// shared action but left it unusable — the caller answers normally.
+fn parse_shared_action(v: &RouterJson) -> Option<SharedAction> {
+    match v.action() {
+        "night_shift" => Some(SharedAction::NightShift { op: v.s("op") }),
+        "settings" => match v.s("op").as_str() {
+            "get" => Some(SharedAction::Settings {
+                op: "get".into(),
+                field: String::new(),
+                value: String::new(),
+            }),
+            "set" => {
+                let field = v.s("field");
+                (!field.is_empty()).then(|| SharedAction::Settings {
+                    op: "set".into(),
+                    field,
+                    value: v.s("value"),
                 })
-                .unwrap_or_default();
+            }
+            // Model verbs (RFC-conversational-setup phase 1). `test` with no
+            // target probes the active chat provider; `pull` without a model
+            // can't do anything and falls through to chat.
+            "models" => Some(SharedAction::Settings {
+                op: "models".into(),
+                field: String::new(),
+                value: String::new(),
+            }),
+            "test" => Some(SharedAction::Settings {
+                op: "test".into(),
+                field: v.s("target"),
+                value: String::new(),
+            }),
+            "pull" => {
+                let model = v.s("model");
+                (!model.is_empty()).then(|| SharedAction::Settings {
+                    op: "pull".into(),
+                    field: model,
+                    value: String::new(),
+                })
+            }
+            // Phase-2/3/5 verbs (RFC-conversational-setup): style carries
+            // (style, length) in (field, value); theme and connect carry
+            // their target in `field`; setup takes nothing.
+            "style" => Some(SharedAction::Settings {
+                op: "style".into(),
+                field: v.s("style"),
+                value: v.s("length"),
+            }),
+            "theme" => Some(SharedAction::Settings {
+                op: "theme".into(),
+                field: v.s("theme"),
+                value: String::new(),
+            }),
+            "connect" => Some(SharedAction::Settings {
+                op: "connect".into(),
+                field: v.s("target"),
+                value: String::new(),
+            }),
+            "setup" => Some(SharedAction::Settings {
+                op: "setup".into(),
+                field: String::new(),
+                value: String::new(),
+            }),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn parse_tool_action(raw: &str) -> ToolAction {
+    let Some(v) = RouterJson::parse(raw) else {
+        return ToolAction::Chat;
+    };
+    if matches!(v.action(), "night_shift" | "settings") {
+        return parse_shared_action(&v).map_or(ToolAction::Chat, ToolAction::Shared);
+    }
+    let s = |k: &str| v.s(k);
+    match v.action() {
+        "add_urls" => {
+            let urls = v.urls();
             if urls.is_empty() {
                 ToolAction::Chat
             } else {
@@ -6252,7 +6555,6 @@ fn parse_tool_action(raw: &str) -> ToolAction {
                 }
             }
         }
-        "night_shift" => ToolAction::NightShift { op: s("op") },
         "schedule_report" => {
             // Keep the raw kind and interval; dispatch validates both against
             // the live registry (artifact kinds + user templates) and refuses
@@ -6288,74 +6590,6 @@ fn parse_tool_action(raw: &str) -> ToolAction {
                 }
             }
         }
-        "settings" => match s("op").as_str() {
-            "get" => ToolAction::Settings {
-                op: "get".into(),
-                field: String::new(),
-                value: String::new(),
-            },
-            "set" => {
-                let field = s("field");
-                if field.is_empty() {
-                    ToolAction::Chat
-                } else {
-                    ToolAction::Settings {
-                        op: "set".into(),
-                        field,
-                        value: s("value"),
-                    }
-                }
-            }
-            // Model verbs (RFC-conversational-setup phase 1). `test` with no
-            // target probes the active chat provider; `pull` without a model
-            // can't do anything and falls through to chat.
-            "models" => ToolAction::Settings {
-                op: "models".into(),
-                field: String::new(),
-                value: String::new(),
-            },
-            "test" => ToolAction::Settings {
-                op: "test".into(),
-                field: s("target"),
-                value: String::new(),
-            },
-            "pull" => {
-                let model = s("model");
-                if model.is_empty() {
-                    ToolAction::Chat
-                } else {
-                    ToolAction::Settings {
-                        op: "pull".into(),
-                        field: model,
-                        value: String::new(),
-                    }
-                }
-            }
-            // Phase-2/3/5 verbs (RFC-conversational-setup): style carries
-            // (style, length) in (field, value); theme and connect carry
-            // their target in `field`; setup takes nothing.
-            "style" => ToolAction::Settings {
-                op: "style".into(),
-                field: s("style"),
-                value: s("length"),
-            },
-            "theme" => ToolAction::Settings {
-                op: "theme".into(),
-                field: s("theme"),
-                value: String::new(),
-            },
-            "connect" => ToolAction::Settings {
-                op: "connect".into(),
-                field: s("target"),
-                value: String::new(),
-            },
-            "setup" => ToolAction::Settings {
-                op: "setup".into(),
-                field: String::new(),
-                value: String::new(),
-            },
-            _ => ToolAction::Chat,
-        },
         _ => ToolAction::Chat,
     }
 }
@@ -6488,6 +6722,14 @@ pub(crate) fn settings_gate(content: &str) -> Option<(String, String, String)> {
     ];
     if SETUP_ASKS.contains(&l) {
         return hit("setup", "", "");
+    }
+
+    // "pick a random theme", "surprise me with a theme". Deterministic on
+    // purpose: delegating the choice is exactly the ask that must not depend
+    // on a model being reachable, and this one used to fall through the gate
+    // into corpus retrieval ("theme" is a global-query word) and hang there.
+    if l.contains("theme") && (l.contains("random") || l.contains("surprise")) {
+        return hit("theme", "random", "");
     }
 
     // Theme: "switch/set/change [the] theme to X" and "use the X theme".
@@ -6875,6 +7117,49 @@ fn has_non_add_verb(content: &str) -> bool {
     .any(|k| l.contains(k))
 }
 
+/// Run one notebook-independent tool and render its transcript row. Shared
+/// verbatim by the notebook router and Home's (RFC-self-resolve phase 3, plus
+/// the verbs of RFC-conversational-setup): the reply is always a tool row, so
+/// every applied change is a visible line in the transcript and the config
+/// never moves silently. Secrets are refused inside the core fns.
+async fn shared_tool_reply(
+    app: &AppHandle,
+    state: &AppState,
+    action: SharedAction,
+    style: StyleTarget<'_>,
+) -> String {
+    let (op, field, value) = match action {
+        SharedAction::NightShift { op } => return night_shift_reply(state, &op).await,
+        SharedAction::Settings { op, field, value } => (op, field, value),
+    };
+    let mut config = { state.ai.read().await.config().clone() };
+    match op.as_str() {
+        "get" => crate::selfheal::settings_get(&config),
+        "models" => settings_models_report(app, state).await,
+        "test" => settings_test_report(state, &field).await,
+        // `pull` stages the command as a one-click Terminal affordance — it
+        // is never executed from here.
+        "pull" => match crate::selfheal::settings_pull(&field) {
+            Ok(text) | Err(text) => text,
+        },
+        "style" => settings_style_apply(app, state, style, &field, &value).await,
+        "theme" => settings_theme_apply(app, &field),
+        // Read/confirm only — the write happens on the confirm click.
+        "connect" => settings_connect_report(app, &field).await,
+        "setup" => settings_setup_report(app, state).await,
+        _ => match crate::selfheal::settings_set(&mut config, &field, &value) {
+            Ok(echo) => match apply_ai_config(app, state, config).await {
+                Ok(()) => {
+                    notify_changed("settings", None);
+                    echo
+                }
+                Err(err) => format!("Couldn't apply that setting: {err}"),
+            },
+            Err(msg) => msg,
+        },
+    }
+}
+
 /// Gate → route → dispatch. Returns Some(reply markdown) if a tool handled the
 /// message; None falls through to normal chat. With `allow_router` false only
 /// the deterministic add-URL fast path runs (used in deep-research mode so
@@ -6908,7 +7193,17 @@ async fn try_tool_route(
     // reach the router, not re-ingest the URL.
     let urls = extract_urls(content);
     if !urls.is_empty() && wants_add_sources(content, &urls) && !has_non_add_verb(content) {
-        return Some(add_url_sources(app, state, notebook_id, &urls).await);
+        return Some(
+            add_url_sources(
+                app,
+                state,
+                notebook_id,
+                &urls,
+                "chat://step",
+                "this notebook",
+            )
+            .await,
+        );
     }
     // "Add those URLs" — resolve the referent from recent messages and
     // citation snippets. Deterministic, so it also works in deep-research mode.
@@ -6917,7 +7212,17 @@ async fn try_tool_route(
     if urls.is_empty() && wants_add_context_urls(content) && !has_non_add_verb(content) {
         let ctx = recent_context_urls(state, notebook_id).await;
         if !ctx.is_empty() {
-            return Some(add_url_sources(app, state, notebook_id, &ctx).await);
+            return Some(
+                add_url_sources(
+                    app,
+                    state,
+                    notebook_id,
+                    &ctx,
+                    "chat://step",
+                    "this notebook",
+                )
+                .await,
+            );
         }
     }
     if !allow_router {
@@ -6959,7 +7264,17 @@ async fn try_tool_route(
             if urls.is_empty() {
                 Some("I couldn't find that URL in your message — paste the full address (e.g. https://example.com/page) and I'll add it.".to_string())
             } else {
-                Some(add_url_sources(app, state, notebook_id, &urls).await)
+                Some(
+                    add_url_sources(
+                        app,
+                        state,
+                        notebook_id,
+                        &urls,
+                        "chat://step",
+                        "this notebook",
+                    )
+                    .await,
+                )
             }
         }
         ToolAction::AddText { title, text } => {
@@ -7178,41 +7493,8 @@ async fn try_tool_route(
             prompt,
             when,
         } => Some(commission_reply(state, notebook_id, &kind, &name, &prompt, &when).await),
-        ToolAction::NightShift { op } => Some(night_shift_reply(state, &op).await),
-        ToolAction::Settings { op, field, value } => {
-            // The settings tool (RFC-self-resolve phase 3, plus the model
-            // verbs of RFC-conversational-setup phase 1). The reply comes
-            // back as a tool row via finish_tool_reply, so every applied
-            // change is a visible line in the transcript — the config never
-            // moves silently. Secrets are refused inside the core fns.
-            let mut config = { state.ai.read().await.config().clone() };
-            match op.as_str() {
-                "get" => Some(crate::selfheal::settings_get(&config)),
-                "models" => Some(settings_models_report(app, state).await),
-                "test" => Some(settings_test_report(state, &field).await),
-                // `pull` stages the command as a one-click Terminal
-                // affordance — it is never executed from here.
-                "pull" => Some(match crate::selfheal::settings_pull(&field) {
-                    Ok(text) | Err(text) => text,
-                }),
-                "style" => {
-                    Some(settings_style_apply(app, state, notebook_id, &field, &value).await)
-                }
-                "theme" => Some(settings_theme_apply(app, &field)),
-                // Read/confirm only — the write happens on the confirm click.
-                "connect" => Some(settings_connect_report(app, &field).await),
-                "setup" => Some(settings_setup_report(app, state).await),
-                _ => match crate::selfheal::settings_set(&mut config, &field, &value) {
-                    Ok(echo) => match apply_ai_config(app, state, config).await {
-                        Ok(()) => {
-                            notify_changed("settings", None);
-                            Some(echo)
-                        }
-                        Err(err) => Some(format!("Couldn't apply that setting: {err}")),
-                    },
-                    Err(msg) => Some(msg),
-                },
-            }
+        ToolAction::Shared(shared) => {
+            Some(shared_tool_reply(app, state, shared, StyleTarget::Notebook(notebook_id)).await)
         }
         ToolAction::UpdateReport {
             name,
@@ -7339,18 +7621,478 @@ async fn try_tool_route(
     }
 }
 
+// ---- Home's tools ----------------------------------------------------------
+//
+// The corpus-wide chat (docs/RFC-meta-chat.md) gets the same gate → route →
+// dispatch a notebook's chat has, minus every verb that needs a notebook to
+// mean anything: generating a document, removing a source, scheduling a
+// report. What is left is the app's own configuration and the Night Shift
+// (shared verbatim — see `SharedAction`), filing something new by the app's
+// own judgment, moving around the corpus, and the two verbs only Home has an
+// object for: the conversation itself.
+
+/// A frontend effect a Home tool asks for, because the backend can neither
+/// navigate a webview nor tear down the conversation the caller is standing
+/// in. It rides back on the answer rather than as an event: only the window
+/// that asked should act on it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetaEffect {
+    /// "openNotebook" | "deleteChat"
+    pub kind: String,
+    /// The notebook to open, for "openNotebook"; empty otherwise.
+    pub notebook_id: String,
+}
+
+enum GlobalToolAction {
+    Shared(SharedAction),
+    AddUrls(Vec<String>),
+    AddText {
+        title: String,
+        text: String,
+    },
+    /// Save the previous answer as a note, filed by the app's judgment.
+    SaveNote(String),
+    /// Open a notebook by name fragment.
+    OpenNotebook(String),
+    /// Rename THIS conversation.
+    RenameChat(String),
+    /// Delete THIS conversation.
+    DeleteChat,
+    Chat,
+}
+
+const HOME_STYLE_SCOPE: &str = "HOME's own answer voice/length (\"use the Google style here\", \
+     \"shorter answers on Home\") — this is not a notebook's style.";
+
+const GLOBAL_TOOL_ROUTER_SYSTEM: &str = "You route a user's message in the corpus-wide chat of a research-notebook app. \
+This chat stands outside every notebook and can see all of them at once. \
+Decide if the message is a COMMAND to perform one of the tools below, or an ordinary question. \
+Respond with EXACTLY ONE JSON object, nothing else.\n\n\
+Tools:\n\
+- {\"action\":\"add_urls\",\"urls\":[\"https://…\"]} — add the given URL(s) as sources. The app decides which notebook they belong in.\n\
+- {\"action\":\"add_text\",\"title\":\"<short title>\",\"text\":\"<the text to add>\"} — save text from the message as a source; the app decides the notebook.\n\
+- {\"action\":\"save_note\",\"title\":\"<title or empty>\"} — save the assistant's previous answer as a note, in whichever notebook fits it.\n\
+- {\"action\":\"open_notebook\",\"name\":\"<notebook name fragment>\"} — open one of the notebooks listed below (\"open the Japan trip notebook\", \"take me to Bayside\").\n\
+- {\"action\":\"rename_chat\",\"title\":\"<new name>\"} — rename THIS conversation (\"call this chat Japan planning\").\n\
+- {\"action\":\"delete_chat\"} — delete THIS conversation and everything in it (\"delete this chat\").\n\
+<SHARED>\
+- {\"action\":\"chat\"} — not a command; answer normally.\n\n\
+Prefer {\"action\":\"chat\"} when unsure. Questions ABOUT the notebooks (\"which notebook has the drive data\", \
+\"what did I conclude about Japan\", \"compare my notebooks\") are chat, not tools — naming a notebook is not \
+asking to open it, and asking what is in one is not asking to go there.";
+
+fn parse_global_tool_action(raw: &str) -> GlobalToolAction {
+    let Some(v) = RouterJson::parse(raw) else {
+        return GlobalToolAction::Chat;
+    };
+    if matches!(v.action(), "night_shift" | "settings") {
+        return parse_shared_action(&v).map_or(GlobalToolAction::Chat, GlobalToolAction::Shared);
+    }
+    match v.action() {
+        "add_urls" => {
+            let urls = v.urls();
+            if urls.is_empty() {
+                GlobalToolAction::Chat
+            } else {
+                GlobalToolAction::AddUrls(urls)
+            }
+        }
+        "add_text" => {
+            let text = v.s("text");
+            if text.is_empty() {
+                GlobalToolAction::Chat
+            } else {
+                GlobalToolAction::AddText {
+                    title: v.s("title"),
+                    text,
+                }
+            }
+        }
+        "save_note" => GlobalToolAction::SaveNote(v.s("title")),
+        "open_notebook" => {
+            let name = v.s("name");
+            if name.is_empty() {
+                GlobalToolAction::Chat
+            } else {
+                GlobalToolAction::OpenNotebook(name)
+            }
+        }
+        "rename_chat" => {
+            let title = v.s("title");
+            if title.is_empty() {
+                GlobalToolAction::Chat
+            } else {
+                GlobalToolAction::RenameChat(title)
+            }
+        }
+        "delete_chat" => GlobalToolAction::DeleteChat,
+        _ => GlobalToolAction::Chat,
+    }
+}
+
+/// One small LLM call to classify a gated Home message. The notebook list is
+/// the context the source list is in a notebook — it is what `open_notebook`
+/// can name, and titles are sanitized for the same reason source titles are.
+///
+/// Small role, for the reasons on `route_tool` — and more sharply here, since
+/// Home's router stands between the user and every navigation verb.
+async fn route_global_tool(
+    state: &AppState,
+    notebooks: &[Notebook],
+    content: &str,
+) -> GlobalToolAction {
+    let notebook_list = if notebooks.is_empty() {
+        "(none)".to_string()
+    } else {
+        notebooks
+            .iter()
+            .map(|n| format!("- {}", sanitize_title(&n.title)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let system = with_shared_tools(GLOBAL_TOOL_ROUTER_SYSTEM, HOME_STYLE_SCOPE);
+    let messages = vec![
+        crate::ai::ChatTurn::system(system),
+        crate::ai::ChatTurn::user(format!(
+            "Notebooks:\n{notebook_list}\n\nUser message:\n{content}\n\nOne JSON object:"
+        )),
+    ];
+    let raw = {
+        let ai = state.ai.read().await.clone();
+        match ai.chat_role(crate::ai::Role::Small, &messages).await {
+            Ok(o) => o.text,
+            Err(_) => return GlobalToolAction::Chat,
+        }
+    };
+    parse_global_tool_action(&raw)
+}
+
+/// What a Home tool produced: the transcript row, and any effect the front
+/// end has to carry out.
+pub struct GlobalToolOutcome {
+    pub reply: String,
+    pub effect: Option<MetaEffect>,
+}
+
+impl GlobalToolOutcome {
+    fn say(reply: impl Into<String>) -> Self {
+        Self {
+            reply: reply.into(),
+            effect: None,
+        }
+    }
+}
+
+/// Decide which notebook something new belongs in, the way the "Add to which
+/// notebook?" picker does, and mint the proposal when nothing fits. Returns
+/// (id, title).
+async fn file_into_notebook(
+    state: &AppState,
+    title: &str,
+    text: &str,
+    url: &str,
+) -> Result<(String, String), String> {
+    let suggestion =
+        suggest_notebook_for(state, title.to_string(), text.to_string(), url.to_string()).await?;
+    if suggestion.notebook_id.is_empty() {
+        let nb = new_notebook(state, suggestion.title).await?;
+        Ok((nb.id, nb.title))
+    } else {
+        Ok((suggestion.notebook_id, suggestion.title))
+    }
+}
+
+/// Add URLs from Home: no notebook is in front, so the app files them. The
+/// batch routes as one — a single message's URLs are a single subject far
+/// more often than not, and routing each one separately would cost an extra
+/// fetch per URL to answer a question the first one already answers.
+async fn add_urls_from_home(app: &AppHandle, state: &AppState, urls: &[String]) -> String {
+    meta_step(Some(app), "Choosing a notebook", true);
+    let (nb_id, nb_title) = match file_into_notebook(state, "", "", &urls[0]).await {
+        Ok(dest) => dest,
+        Err(err) => return format!("Couldn't work out where to file that: {err}"),
+    };
+    add_url_sources(
+        app,
+        state,
+        &nb_id,
+        urls,
+        "meta://step",
+        &format!("**{nb_title}**"),
+    )
+    .await
+}
+
+/// What the Home gate → route → dispatch pass decided.
+pub enum ToolRoute {
+    /// A tool answered; retrieval never runs.
+    Answered(GlobalToolOutcome),
+    /// Not a command — fall through to the corpus answer.
+    Fallthrough,
+    /// Stop landed while the router was still deciding, before any tool was
+    /// chosen. Nothing ran, so the run settles as cancelled.
+    Cancelled,
+}
+
+/// Gate → route → dispatch for Home. See `ToolRoute`.
+///
+/// `cancel` races the ROUTING call only. That call is a read — one JSON
+/// classification — so dropping its future costs nothing but the tokens
+/// already spent, and it is the one step here that can park for a long time
+/// on a slow provider; a Stop pressed during "Checking for commands" has to
+/// bite there or it bites nowhere. Dispatch is deliberately left outside the
+/// race: once a verb is chosen the arms add sources, write notes, delete
+/// threads and change settings, and a mutation abandoned halfway is worse
+/// than one the user has to wait out.
+async fn try_global_tool_route(
+    app: &AppHandle,
+    state: &AppState,
+    thread_id: &str,
+    content: &str,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> ToolRoute {
+    // The settings fast path first and outside the gate, exactly as a
+    // notebook's chat runs it: it carries its own much tighter gate, and
+    // nothing it does depends on a notebook.
+    if let Some(reply) = try_settings_fast_path(app, state, content).await {
+        return ToolRoute::Answered(GlobalToolOutcome::say(reply));
+    }
+    if !global_tool_gate(content) {
+        return ToolRoute::Fallthrough;
+    }
+
+    // Deterministic fast path: a message that plainly asks to add the URLs it
+    // carries skips the router, as it does in a notebook.
+    let urls = extract_urls(content);
+    if !urls.is_empty() && wants_add_sources(content, &urls) && !has_non_add_verb(content) {
+        return ToolRoute::Answered(GlobalToolOutcome::say(
+            add_urls_from_home(app, state, &urls).await,
+        ));
+    }
+
+    meta_step(Some(app), "Checking for commands", false);
+    let Ok(notebooks) = state.db.list_notebooks().await else {
+        return ToolRoute::Fallthrough;
+    };
+    let action = tokio::select! {
+        a = route_global_tool(state, &notebooks, content) => a,
+        _ = cancel.cancelled() => return ToolRoute::Cancelled,
+    };
+    let outcome = match action {
+        GlobalToolAction::Chat => return ToolRoute::Fallthrough,
+        GlobalToolAction::Shared(shared) => {
+            GlobalToolOutcome::say(shared_tool_reply(app, state, shared, StyleTarget::Home).await)
+        }
+        GlobalToolAction::AddUrls(urls) => {
+            // Same trust boundary as the notebook router: only ingest URLs
+            // whose host actually appears in the user's message, so the
+            // classifier can never invent or rewrite one.
+            let l = content.to_lowercase();
+            let urls: Vec<String> = urls
+                .into_iter()
+                .filter(|u| l.contains(&host_of(u).to_lowercase()))
+                .collect();
+            if urls.is_empty() {
+                GlobalToolOutcome::say(
+                    "I couldn't find that URL in your message — paste the full address (e.g. https://example.com/page) and I'll file it.",
+                )
+            } else {
+                GlobalToolOutcome::say(add_urls_from_home(app, state, &urls).await)
+            }
+        }
+        GlobalToolAction::AddText { title, text } => {
+            let title = if title.is_empty() {
+                "Pasted from chat".to_string()
+            } else {
+                title
+            };
+            meta_step(Some(app), "Choosing a notebook", true);
+            let dest = file_into_notebook(state, &title, &text, "").await;
+            GlobalToolOutcome::say(match dest {
+                Err(err) => format!("Couldn't work out where to file that: {err}"),
+                Ok((nb_id, nb_title)) => match ingest::extract_pasted(&title, &text) {
+                    Ok(ex) => match store_extracted(state, &nb_id, ex).await {
+                        Ok(src) => format!(
+                            "Added **{}** to **{nb_title}** ({} chars).",
+                            src.title, src.char_count
+                        ),
+                        Err(err) => format!("Couldn't add that as a source: {err:#}"),
+                    },
+                    Err(err) => format!("Couldn't add that as a source: {err:#}"),
+                },
+            })
+        }
+        GlobalToolAction::SaveNote(title) => {
+            GlobalToolOutcome::say(save_home_note(app, state, thread_id, &title).await)
+        }
+        GlobalToolAction::OpenNotebook(name) => open_notebook_outcome(&notebooks, &name),
+        GlobalToolAction::RenameChat(title) => {
+            GlobalToolOutcome::say(rename_home_thread(state, thread_id, &title).await)
+        }
+        GlobalToolAction::DeleteChat => {
+            if thread_id.is_empty() {
+                GlobalToolOutcome::say("There's no conversation to delete yet.")
+            } else {
+                match state.db.delete_meta_thread(thread_id).await {
+                    Ok(()) => GlobalToolOutcome {
+                        reply: "Deleted this conversation.".into(),
+                        effect: Some(MetaEffect {
+                            kind: "deleteChat".into(),
+                            notebook_id: String::new(),
+                        }),
+                    },
+                    Err(err) => GlobalToolOutcome::say(format!(
+                        "Couldn't delete this conversation: {err:#}"
+                    )),
+                }
+            }
+        }
+    };
+    ToolRoute::Answered(outcome)
+}
+
+/// Save the previous Home answer as a note. Which notebook? The one the
+/// answer itself routes to — the text is the whole signal, and a corpus
+/// answer that draws on three notebooks has no single home otherwise.
+async fn save_home_note(app: &AppHandle, state: &AppState, thread_id: &str, title: &str) -> String {
+    if thread_id.is_empty() {
+        return "There's no previous answer to save yet — ask something first.".into();
+    }
+    let turns = match state.db.list_meta_turns(thread_id).await {
+        Ok(t) => t,
+        Err(err) => return format!("Couldn't read the conversation: {err:#}"),
+    };
+    // Skip tool confirmations — "that" means the last real answer.
+    let Some(last) = turns
+        .iter()
+        .rev()
+        .find(|t| t.role == "assistant" && t.kind != "tool" && t.kind != "error")
+    else {
+        return "There's no previous answer to save yet — ask something first.".into();
+    };
+    let title = if title.is_empty() {
+        last.content
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .map(|l| {
+                l.trim_start_matches('#')
+                    .replace(['*', '`'], "")
+                    .trim()
+                    .chars()
+                    .take(60)
+                    .collect()
+            })
+            .unwrap_or_else(|| "Chat answer".to_string())
+    } else {
+        title.to_string()
+    };
+    meta_step(Some(app), "Choosing a notebook", true);
+    let (nb_id, nb_title) = match file_into_notebook(state, &title, &last.content, "").await {
+        Ok(dest) => dest,
+        Err(err) => return format!("Couldn't work out where to file that: {err}"),
+    };
+    let ts = now();
+    let note = Note {
+        id: new_id(),
+        notebook_id: nb_id,
+        title: title.clone(),
+        content: last.content.clone(),
+        kind: "note".into(),
+        prompt: String::new(),
+        origin: String::new(),
+        status: String::new(),
+        created_at: ts,
+        updated_at: ts,
+    };
+    match add_note_indexed(state, &note).await {
+        Ok(()) => format!("Saved the previous answer as note **{title}** in **{nb_title}**."),
+        Err(err) => format!("Couldn't save the note: {err:#}"),
+    }
+}
+
+/// Resolve a notebook name fragment and ask the front end to go there. The
+/// backend cannot navigate a webview, so the answer carries the effect.
+fn open_notebook_outcome(notebooks: &[Notebook], name: &str) -> GlobalToolOutcome {
+    let needle = name.to_lowercase();
+    let matches: Vec<&Notebook> = notebooks
+        .iter()
+        .filter(|n| n.title.to_lowercase().contains(&needle))
+        .collect();
+    // An exact title beats a substring: "Japan" must open "Japan", not
+    // "Japan trip 2019" that merely contains it.
+    let chosen = matches
+        .iter()
+        .find(|n| n.title.to_lowercase() == needle)
+        .or(match matches.as_slice() {
+            [one] => Some(one),
+            _ => None,
+        })
+        .copied();
+    let listed = |rows: &[&Notebook]| {
+        rows.iter()
+            .map(|n| format!("- {}", n.title))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    match chosen {
+        Some(nb) => GlobalToolOutcome {
+            reply: format!("Opening **{}**.", nb.title),
+            effect: Some(MetaEffect {
+                kind: "openNotebook".into(),
+                notebook_id: nb.id.clone(),
+            }),
+        },
+        None if matches.is_empty() => GlobalToolOutcome::say(format!(
+            "I don't have a notebook matching “{name}”. You have:\n{}",
+            listed(&notebooks.iter().collect::<Vec<_>>())
+        )),
+        None => GlobalToolOutcome::say(format!(
+            "“{name}” matches more than one notebook — which did you mean?\n{}",
+            listed(&matches)
+        )),
+    }
+}
+
+/// Rename the conversation this message was asked in. The name is a thread
+/// title row, the same one the small model writes — so a manual name also
+/// stops the automatic naming from ever overwriting it.
+async fn rename_home_thread(state: &AppState, thread_id: &str, title: &str) -> String {
+    if thread_id.is_empty() {
+        return "There's no conversation to rename yet — ask something first.".into();
+    }
+    let title: String = title.trim().chars().take(60).collect();
+    if title.is_empty() {
+        return "Tell me what to call this conversation.".into();
+    }
+    match state.db.set_meta_thread_title(thread_id, &title).await {
+        Ok(()) => {
+            notify_changed("homechat", None);
+            format!("Renamed this conversation to **{title}**.")
+        }
+        Err(err) => format!("Couldn't rename this conversation: {err:#}"),
+    }
+}
+
 /// Ingest a list of URLs as sources, returning a markdown summary reply.
+///
+/// `step_event` is the progress channel of the surface that asked
+/// ("chat://step" inside a notebook, "meta://step" on Home), and `dest` is
+/// how the confirmation names where they landed — "this notebook" when the
+/// notebook is the room you are standing in, its bolded name when it isn't.
 async fn add_url_sources(
     app: &AppHandle,
     state: &AppState,
     notebook_id: &str,
     urls: &[String],
+    step_event: &str,
+    dest: &str,
 ) -> String {
     let mut added: Vec<Source> = Vec::new();
     let mut failed: Vec<(String, String)> = Vec::new();
     for url in urls {
         let _ = app.emit(
-            "chat://step",
+            step_event,
             StepEvent {
                 label: format!("Adding source: {}", host_of(url)),
                 transient: false,
@@ -7371,7 +8113,7 @@ async fn add_url_sources(
     let mut out = String::new();
     if !added.is_empty() {
         out.push_str(&format!(
-            "Added {} source{} to this notebook:\n",
+            "Added {} source{} to {dest}:\n",
             added.len(),
             if added.len() == 1 { "" } else { "s" }
         ));
@@ -10670,19 +11412,8 @@ async fn import_bundle(
 }
 
 /// One passage behind a meta-chat answer: what it is and where it lives.
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MetaCitation {
-    /// "source" (chunk passage) | "note" | "card" (registry card).
-    pub kind: String,
-    /// Empty for registry cards — they are corpus-scoped and open on Home.
-    pub notebook_id: String,
-    pub notebook_title: String,
-    /// Source id for source passages; note id for notes; card id for cards.
-    pub id: String,
-    pub title: String,
-    pub snippet: String,
-}
+/// Defined in `models` because persisted Home-chat turns carry it.
+pub use crate::models::MetaCitation;
 
 /// Does a registry card answer this query? Two shapes share one matcher:
 /// palette typing (the whole query is a fragment of the name/identifiers)
@@ -10793,6 +11524,214 @@ fn meta_step(app: Option<&AppHandle>, label: impl Into<String>, transient: bool)
 pub struct MetaAnswer {
     pub answer: String,
     pub citations: Vec<MetaCitation>,
+    /// "chat" — a synthesized answer — or "tool", a command Home carried out.
+    /// The front end persists the turn under this kind, which is also what
+    /// keeps tool rows out of the history the model later sees.
+    pub kind: String,
+    /// Set only on tool replies that need the window to do something the
+    /// backend can't: open a notebook, drop this conversation.
+    pub effect: Option<MetaEffect>,
+}
+
+impl MetaAnswer {
+    fn chat(answer: String, citations: Vec<MetaCitation>) -> Self {
+        Self {
+            answer,
+            citations,
+            kind: "chat".into(),
+            effect: None,
+        }
+    }
+}
+
+// ---- Home chat threads -----------------------------------------------------
+//
+// Home's conversation used to be thrown away on close, on the theory that a
+// rerun is cheap. It isn't the rerun that matters: the thread is where the
+// thinking happened, and there was no way back to it. These four commands
+// give it the same durability a notebook's transcript has.
+
+/// Every Home conversation, most recently used first.
+#[tauri::command]
+pub async fn list_meta_threads(state: State<'_, AppState>) -> Result<Vec<MetaThread>, String> {
+    e(state.db.list_meta_threads().await)
+}
+
+/// One thread's turns, oldest first.
+#[tauri::command]
+pub async fn list_meta_turns(
+    state: State<'_, AppState>,
+    thread_id: String,
+) -> Result<Vec<MetaTurn>, String> {
+    e(state.db.list_meta_turns(&thread_id).await)
+}
+
+/// Persist one settled turn. The front end appends as each turn settles —
+/// including a cancelled partial answer, which is still worth keeping.
+#[tauri::command]
+pub async fn add_meta_turn(
+    state: State<'_, AppState>,
+    thread_id: String,
+    role: String,
+    content: String,
+    citations: Option<Vec<MetaCitation>>,
+    kind: Option<String>,
+) -> Result<MetaTurn, String> {
+    let thread_id = thread_id.trim().to_string();
+    if thread_id.is_empty() {
+        return Err("Thread id is empty".into());
+    }
+    if role != "user" && role != "assistant" {
+        return Err(format!("Unknown role \"{role}\""));
+    }
+    // Which model answered is the backend's to know, not the caller's: the
+    // notebook transcript captions every answer this way, and Home's turns
+    // now say the same thing. Momentary read guard, no await under it.
+    let model = if role == "assistant" {
+        state.ai.read().await.active_chat_model()
+    } else {
+        String::new()
+    };
+    let turn = MetaTurn {
+        id: new_id(),
+        thread_id,
+        role,
+        content,
+        citations: citations.unwrap_or_default(),
+        kind: kind.unwrap_or_else(|| "chat".into()),
+        model,
+        created_at: now(),
+    };
+    e(state.db.add_meta_turn(&turn).await)?;
+    // An answer completes an exchange, which is the first moment there is
+    // enough of a conversation to name. Fire-and-forget: the chat never waits
+    // on titling, and a thread that already has a name is left alone. A tool
+    // confirmation is not an exchange — naming a thread "Switched chat to
+    // ollama" says nothing about what it is for.
+    if turn.role == "assistant" && turn.kind != "error" && turn.kind != "tool" {
+        spawn_thread_title(&state, &turn.thread_id).await;
+    }
+    Ok(turn)
+}
+
+/// Threads whose name is being generated right now. A second answer settling
+/// in the same conversation must not start a second run against the same
+/// thread; the running one will see the fuller transcript anyway.
+static TITLING: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+    std::sync::Mutex::new(None);
+
+fn claim_titling(thread_id: &str) -> bool {
+    TITLING
+        .lock()
+        .unwrap()
+        .get_or_insert_with(std::collections::HashSet::new)
+        .insert(thread_id.to_string())
+}
+
+fn release_titling(thread_id: &str) {
+    if let Some(set) = TITLING.lock().unwrap().as_mut() {
+        set.remove(thread_id);
+    }
+}
+
+/// The model leg of Home-thread naming, in the background: ask Small for a
+/// short title once a conversation has its first exchange, and store it as
+/// the thread's `kind = "title"` row.
+///
+/// Best-effort in the `spawn_retitle` mould — any failure (no small model, a
+/// refusal, a runaway answer) leaves the question-derived title in place, and
+/// the next settled answer tries again. Nothing here can block a chat.
+pub(crate) async fn spawn_thread_title(state: &AppState, thread_id: &str) {
+    let db = state.db.clone();
+    // Momentary read guard, snapshot out — never hold the Ai lock across the
+    // call itself.
+    let ai = { state.ai.read().await.clone() };
+    let thread_id = thread_id.to_string();
+    tauri::async_runtime::spawn(async move {
+        if !claim_titling(&thread_id) {
+            return;
+        }
+        let result = generate_thread_title(&db, &ai, &thread_id).await;
+        release_titling(&thread_id);
+        if let Err(err) = result {
+            crate::note!("home chat: naming thread {thread_id} failed: {err:#}");
+        }
+    });
+}
+
+/// Name one thread from its opening exchange. Returns Ok when there is
+/// nothing to do (already named, nothing asked, the model declined) — only
+/// engine trouble is an error, and even that only reaches the log.
+async fn generate_thread_title(
+    db: &crate::db::Db,
+    ai: &crate::ai::Ai,
+    thread_id: &str,
+) -> anyhow::Result<()> {
+    /// A name, not a summary: five words of slack, and a hard character cap
+    /// so a model that answers with a paragraph is simply declined.
+    const MAX_WORDS: usize = 8;
+    const MAX_CHARS: usize = 60;
+    /// How much of the opening answer the prompt sees. The question carries
+    /// the subject; the answer only has to disambiguate it.
+    const ANSWER_HEAD_CHARS: usize = 1_200;
+
+    if db.meta_thread_title(thread_id).await?.is_some() {
+        return Ok(());
+    }
+    let turns = db.list_meta_turns(thread_id).await?;
+    let question = turns
+        .iter()
+        .find(|t| t.role == "user")
+        .map(|t| t.content.trim())
+        .unwrap_or_default();
+    let answer = turns
+        .iter()
+        .find(|t| t.role == "assistant" && t.kind != "error" && t.kind != "tool")
+        .map(|t| t.content.trim())
+        .unwrap_or_default();
+    if question.is_empty() || answer.is_empty() {
+        return Ok(());
+    }
+    let head: String = answer.chars().take(ANSWER_HEAD_CHARS).collect();
+    let messages = [
+        crate::ai::ChatTurn::system(
+            "You name conversations for a sidebar list. Reply with ONLY the name — at most \
+             five words, no quotes, no trailing punctuation, nothing else.",
+        ),
+        crate::ai::ChatTurn::user(format!("Question: {question}\n\nAnswer:\n{head}\n\nName:")),
+    ];
+    let out = ai.chat_role(crate::ai::Role::Small, &messages).await?;
+    let title = out
+        .text
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim()
+        .trim_matches(['"', '“', '”', '*', '#'])
+        .trim()
+        .to_string();
+    if title.is_empty()
+        || title.chars().count() > MAX_CHARS
+        || title.split_whitespace().count() > MAX_WORDS
+    {
+        crate::note!("home chat: declined name for thread {thread_id}: {title:?}");
+        return Ok(());
+    }
+    db.set_meta_thread_title(thread_id, &title).await?;
+    // The Chats list re-derives itself off this, in every open window.
+    notify_changed("homechat", None);
+    Ok(())
+}
+
+/// Delete a whole Home conversation. Threads are their turns, so this is the
+/// only delete there is.
+#[tauri::command]
+pub async fn delete_meta_thread(
+    state: State<'_, AppState>,
+    thread_id: String,
+) -> Result<(), String> {
+    e(state.db.delete_meta_thread(&thread_id).await)
 }
 
 /// Retrieve corpus-wide passages for a question: hybrid chunk search across
@@ -10831,7 +11770,7 @@ pub(crate) async fn retrieve_everything(
     let routed: Option<Vec<String>> = if nb_titles.len() > crate::router::MIN_NOTEBOOKS_TO_ROUTE {
         meta_step(
             app,
-            format!("Searching {} notebooks", nb_titles.len()),
+            format!("Choosing from {} notebooks", nb_titles.len()),
             false,
         );
         let ai = state.ai.read().await.clone();
@@ -11208,6 +12147,9 @@ async fn global_meta_route(
 
 /// Answer a question across the ENTIRE corpus, streaming tokens as
 /// meta://token events. See docs/RFC-meta-chat.md.
+// The IPC surface is a flat argument list; the thread id is one more of
+// them, and it doesn't make the call harder to read.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn ask_everything(
     app: AppHandle,
@@ -11216,6 +12158,14 @@ pub async fn ask_everything(
     question: String,
     history: Option<Vec<crate::ai::ChatTurn>>,
     deep: Option<bool>,
+    // Home's chat has its own style and length (the composer's pills), kept
+    // apart from any notebook's. Absent — the MCP tool, the ⌘K palette, an
+    // older front-end — is the default config, i.e. no extra guidance.
+    config: Option<ChatConfig>,
+    // Which conversation this was asked in. Only the housekeeping tools need
+    // it (rename/delete this chat, and "save that answer", which reads the
+    // thread back); absent means those simply have nothing to act on.
+    thread_id: Option<String>,
 ) -> Result<MetaAnswer, String> {
     touch_activity();
     let question = question.trim().to_string();
@@ -11223,58 +12173,113 @@ pub async fn ask_everything(
         return Err("Question is empty".into());
     }
 
-    // Deep search (wide pool + model rerank) defaults on for gateway models,
-    // where the extra rerank call is fast and cheap; local models keep the
-    // low-latency single-pass path unless the caller asks for deep.
-    let deep = match deep {
-        Some(d) => d,
-        None => state.ai.read().await.config().is_gateway(),
-    };
-    // Global route (RFC-infinite-context §4): enumerative/comparative
-    // questions want coverage of the gist layer, not a top-k of chunks. The
-    // classifier is pure; ANY failure inside the route degrades to None, so
-    // the pointed path below runs unchanged whenever the route doesn't fire.
-    let global = if rag::is_global_query(&question) {
-        match global_meta_route(&state, Some(&app), &question).await {
-            Ok(g) => g,
-            Err(err) => {
-                crate::note!("meta-global route failed, falling back to pointed: {err:#}");
-                None
-            }
-        }
-    } else {
-        None
-    };
+    // Claim the cancel scope before retrieval, not at synthesis: a Stop
+    // pressed during "Searching…" must bite, and a superseding ask must be
+    // able to reclaim the channel without waiting out a full answer.
+    let cancel = state.begin_generation(&format!("meta:{}", window.label()));
 
-    // References are per SOURCE, not per chunk: several excerpts from one
-    // source share a number, and the citation list the UI shows is deduped —
-    // otherwise a source that contributed five chunks shows up five times.
-    let (mut citations, mut passages) = if let Some(g) = global {
-        g
-    } else {
-        let passages_raw = retrieve_everything(&state, Some(&app), &question, 16, deep).await?;
-        let mut citations: Vec<MetaCitation> = Vec::new();
-        let mut passages: Vec<rag::MetaPassage> = Vec::new();
-        for c in &passages_raw {
-            let number = match citations
-                .iter()
-                .position(|u| u.kind == c.kind && u.id == c.id)
-            {
-                Some(i) => i + 1,
-                None => {
-                    citations.push(c.clone());
-                    citations.len()
-                }
-            };
-            passages.push(rag::MetaPassage {
-                number,
-                kind: c.kind.clone(),
-                notebook_title: c.notebook_title.clone(),
-                title: c.title.clone(),
-                snippet: c.snippet.clone(),
+    // Tools before retrieval: "add this url", "open the Japan notebook",
+    // "switch chat to ollama" are commands, and answering them out of the
+    // corpus would be a category error. The gate is cheap and the router is
+    // one small call — an ordinary question pays neither. The route carries
+    // the cancel token so Stop bites during "Checking for commands" too; it
+    // races the routing call and nothing past it (see `try_global_tool_route`
+    // for why dispatch stays uncancellable).
+    match try_global_tool_route(
+        &app,
+        &state,
+        thread_id.as_deref().unwrap_or_default(),
+        &question,
+        &cancel,
+    )
+    .await
+    {
+        ToolRoute::Answered(outcome) => {
+            return Ok(MetaAnswer {
+                answer: outcome.reply,
+                citations: vec![],
+                kind: "tool".into(),
+                effect: outcome.effect,
             });
         }
-        (citations, passages)
+        // Same empty-handed answer the retrieval and synthesis selects
+        // produce: no text, no citations.
+        ToolRoute::Cancelled => return Ok(MetaAnswer::chat(String::new(), vec![])),
+        ToolRoute::Fallthrough => {}
+    }
+
+    // Retrieval runs under the cancel scope, not just synthesis. Both legs
+    // below can call a model — the global route summarizes gists, and deep
+    // search reranks candidates source by source ("Reading 6 sources in
+    // depth") — and an agent-CLI provider can park a single call for minutes.
+    // Without this select, Stop had nothing to bite on until the first token
+    // of the answer, which on a wedged provider never came. Everything inside
+    // is a read, so dropping the future mid-flight costs only the work done;
+    // cancelling yields the same empty-handed answer the synthesis select
+    // produces, which here means no text and no citations.
+    let retrieved = tokio::select! {
+        r = async {
+            // Deep search (wide pool + model rerank) defaults on for gateway
+            // models, where the extra rerank call is fast and cheap; local
+            // models keep the low-latency single-pass path unless the caller
+            // asks for deep.
+            let deep = match deep {
+                Some(d) => d,
+                None => state.ai.read().await.config().is_gateway(),
+            };
+            // Global route (RFC-infinite-context §4): enumerative/comparative
+            // questions want coverage of the gist layer, not a top-k of chunks.
+            // The classifier is pure; ANY failure inside the route degrades to
+            // None, so the pointed path below runs unchanged whenever the route
+            // doesn't fire.
+            let global = if rag::is_global_query(&question) {
+                match global_meta_route(&state, Some(&app), &question).await {
+                    Ok(g) => g,
+                    Err(err) => {
+                        crate::note!("meta-global route failed, falling back to pointed: {err:#}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            // References are per SOURCE, not per chunk: several excerpts from
+            // one source share a number, and the citation list the UI shows is
+            // deduped — otherwise a source that contributed five chunks shows
+            // up five times.
+            if let Some(g) = global {
+                return Ok::<_, String>(g);
+            }
+            let passages_raw = retrieve_everything(&state, Some(&app), &question, 16, deep).await?;
+            let mut citations: Vec<MetaCitation> = Vec::new();
+            let mut passages: Vec<rag::MetaPassage> = Vec::new();
+            for c in &passages_raw {
+                let number = match citations
+                    .iter()
+                    .position(|u| u.kind == c.kind && u.id == c.id)
+                {
+                    Some(i) => i + 1,
+                    None => {
+                        citations.push(c.clone());
+                        citations.len()
+                    }
+                };
+                passages.push(rag::MetaPassage {
+                    number,
+                    kind: c.kind.clone(),
+                    notebook_title: c.notebook_title.clone(),
+                    title: c.title.clone(),
+                    snippet: c.snippet.clone(),
+                });
+            }
+            Ok((citations, passages))
+        } => Some(r?),
+        _ = cancel.cancelled() => None,
+    };
+    let (mut citations, mut passages) = match retrieved {
+        Some(v) => v,
+        None => return Ok(MetaAnswer::chat(String::new(), vec![])),
     };
 
     // Registry cards join the context (RFC-registry × meta-chat): a question
@@ -11311,12 +12316,14 @@ pub async fn ask_everything(
             ai.profile(crate::inference::Role::Chat),
         )
     };
+    let extra = chat_style_instruction(&config.unwrap_or_default());
     let messages = rag::build_meta_messages(
         history.as_deref().unwrap_or(&[]),
         &question,
         &passages,
         &persona,
         ctx_profile.compact_excerpts,
+        &extra,
     );
     // On-device model only: fit the prompt to its 8192-token window before
     // streaming; a no-op for larger-window engines (see notebook chat above).
@@ -11340,7 +12347,6 @@ pub async fn ask_everything(
         false,
     );
     let app_for_cb = app.clone();
-    let cancel = state.begin_generation(&format!("meta:{}", window.label()));
     let partial = Arc::new(Mutex::new(String::new()));
     let partial_cb = partial.clone();
     let ttft = TtftClock::start();
@@ -11367,7 +12373,7 @@ pub async fn ask_everything(
     state.record_chat_stats(&model, stats);
     state.record_ttft(&model, "ask-everything", "", &ttft, None);
 
-    Ok(MetaAnswer { answer, citations })
+    Ok(MetaAnswer::chat(answer, citations))
 }
 
 /// One global-search result for the command menu.
@@ -12244,15 +13250,285 @@ mod tool_tests {
         ));
     }
 
+    /// Both prompts splice the same shared block, and neither ships a
+    /// placeholder the model would have to interpret.
+    #[test]
+    fn router_prompts_splice_cleanly() {
+        let notebook = with_shared_tools(TOOL_ROUTER_SYSTEM, NOTEBOOK_STYLE_SCOPE)
+            .replace("<KINDS>", &rag::ARTIFACT_KINDS.join("|"));
+        let home = with_shared_tools(GLOBAL_TOOL_ROUTER_SYSTEM, HOME_STYLE_SCOPE);
+        for (name, text) in [("notebook", &notebook), ("home", &home)] {
+            for placeholder in ["<SHARED>", "<STYLE_SCOPE>", "<KINDS>"] {
+                assert!(
+                    !text.contains(placeholder),
+                    "{name} prompt still has {placeholder}"
+                );
+            }
+            assert!(
+                text.contains("\"op\":\"setup\""),
+                "{name} lost the settings family"
+            );
+            assert!(text.contains("night_shift"), "{name} lost the night shift");
+        }
+        assert!(notebook.contains("THIS notebook's answer voice"));
+        assert!(home.contains("HOME's own answer voice"));
+        // Home's grammar offers nothing that needs a notebook.
+        for verb in [
+            "\"generate\"",
+            "\"remove_source\"",
+            "\"refresh_sources\"",
+            "\"schedule_report\"",
+            "\"commission\"",
+            "\"update_report\"",
+            "\"create_template\"",
+        ] {
+            assert!(!home.contains(verb), "home prompt offers {verb}");
+        }
+    }
+
+    /// Home's gate: the shared nouns and its own, and none of the
+    /// notebook-scoped ones — Home has no tool for "make a study guide", so
+    /// that message must not buy a routing call.
+    #[test]
+    fn global_gate_admits_home_commands_only() {
+        assert!(global_tool_gate("open the Japan trip notebook"));
+        // A navigation verb needs no noun, but only when it opens the
+        // message — a passing "open" in prose is not an instruction.
+        assert!(global_tool_gate("take me to Bayside"));
+        assert!(global_tool_gate("Go to Cars"));
+        assert!(!global_tool_gate("is that still an open question?"));
+        assert!(global_tool_gate("rename this chat to Japan planning"));
+        assert!(global_tool_gate("delete this conversation"));
+        assert!(global_tool_gate("save that answer as a note"));
+        assert!(global_tool_gate("switch chat to ollama"));
+        assert!(global_tool_gate("pause the night shift"));
+        assert!(global_tool_gate("add https://example.com"));
+        // Notebook-only work never reaches Home's router.
+        assert!(!global_tool_gate("make a study guide"));
+        assert!(!global_tool_gate("schedule a weekly briefing"));
+        // Ordinary corpus questions stay on the zero-overhead path.
+        assert!(!global_tool_gate("which notebook has the drive data?"));
+        assert!(!global_tool_gate("what did I conclude about Japan?"));
+    }
+
+    /// Delegating the choice is still an instruction. "pick a random theme"
+    /// used to miss both gates and fall into corpus retrieval — "theme" is a
+    /// global-query word, so it bought a deep read of six sources instead of
+    /// a theme.
+    #[test]
+    fn gates_admit_delegated_choices() {
+        assert!(global_tool_gate("pick a random theme"));
+        assert!(global_tool_gate("choose a theme for me"));
+        assert!(global_tool_gate("surprise me with a theme"));
+        assert!(global_tool_gate("random theme please"));
+        // Shared verbs, so the notebook gate sees them too.
+        assert!(tool_gate("pick a random theme"));
+        assert!(tool_gate("choose a model for me"));
+        // Still not a command: no tool noun to act on.
+        assert!(!global_tool_gate("pick the strongest argument"));
+        assert!(!global_tool_gate("what are the recurring themes?"));
+    }
+
+    /// "pick a random theme" resolves without a model: the fast path names
+    /// the op, and the dispatcher draws from the same roster the empty ask
+    /// lists.
+    #[test]
+    fn random_theme_resolves_to_a_real_theme() {
+        for ask in [
+            "pick a random theme",
+            "surprise me with a theme",
+            "choose a random theme",
+            "give me a random theme",
+        ] {
+            assert_eq!(
+                settings_gate(ask),
+                Some(("theme".into(), "random".into(), String::new())),
+                "{ask}"
+            );
+        }
+        // A named theme is unaffected.
+        assert_eq!(
+            settings_gate("use the gruvbox theme"),
+            Some(("theme".into(), "gruvbox".into(), String::new()))
+        );
+
+        assert!(wants_random_theme("random"));
+        assert!(wants_random_theme("surprise me"));
+        assert!(!wants_random_theme("gruvbox"));
+
+        // Every draw is a real theme, and the draw is actually a draw: 200
+        // rolls over 23 themes landing on one is impossible short of a bug.
+        let roster = crate::selfheal::THEME_ROSTER;
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..200 {
+            let (id, label) = random_theme();
+            assert!(
+                roster.iter().any(|(i, l, _)| *i == id && *l == label),
+                "{id} is not on the roster"
+            );
+            assert_ne!(id, "system", "system is a deferral, not a look");
+            seen.insert(id);
+        }
+        assert!(seen.len() > 1, "random_theme never varies");
+    }
+
+    /// The notebook gate is unchanged by the split into shared/notebook
+    /// noun lists.
+    #[test]
+    fn notebook_gate_keeps_its_nouns() {
+        assert!(tool_gate("make a study guide"));
+        assert!(tool_gate("schedule a weekly briefing"));
+        assert!(tool_gate("switch chat to ollama"));
+        assert!(!tool_gate("open the Japan trip notebook"));
+    }
+
+    #[test]
+    fn parses_home_only_tools() {
+        assert!(matches!(
+            parse_global_tool_action(r#"{"action":"open_notebook","name":"Japan"}"#),
+            GlobalToolAction::OpenNotebook(n) if n == "Japan"
+        ));
+        assert!(matches!(
+            parse_global_tool_action(r#"{"action":"open_notebook","name":""}"#),
+            GlobalToolAction::Chat
+        ));
+        assert!(matches!(
+            parse_global_tool_action(r#"{"action":"rename_chat","title":"Japan planning"}"#),
+            GlobalToolAction::RenameChat(t) if t == "Japan planning"
+        ));
+        assert!(matches!(
+            parse_global_tool_action(r#"{"action":"rename_chat","title":"  "}"#),
+            GlobalToolAction::Chat
+        ));
+        assert!(matches!(
+            parse_global_tool_action(r#"{"action":"delete_chat"}"#),
+            GlobalToolAction::DeleteChat
+        ));
+        assert!(matches!(
+            parse_global_tool_action(r#"{"action":"save_note","title":""}"#),
+            GlobalToolAction::SaveNote(t) if t.is_empty()
+        ));
+    }
+
+    /// Everything a notebook owns is absent from Home's grammar: a router
+    /// that hallucinated one must answer normally, not half-run it.
+    #[test]
+    fn global_router_refuses_notebook_scoped_actions() {
+        for raw in [
+            r#"{"action":"generate","kind":"study_guide"}"#,
+            r#"{"action":"remove_source","name":"spec"}"#,
+            r#"{"action":"refresh_sources","name":""}"#,
+            r#"{"action":"commission","kind":"custom","name":"Deep read"}"#,
+            r#"{"action":"schedule_report","kind":"brief","interval":"weekly","name":"x"}"#,
+            r#"{"action":"update_report","name":"x"}"#,
+            r#"{"action":"create_template","name":"x","prompt":"y"}"#,
+        ] {
+            assert!(
+                matches!(parse_global_tool_action(raw), GlobalToolAction::Chat),
+                "{raw} should not route on Home"
+            );
+        }
+    }
+
+    /// The settings family and the Night Shift parse identically on both
+    /// surfaces — one parser, so they cannot drift.
+    #[test]
+    fn shared_actions_parse_the_same_on_both_surfaces() {
+        for raw in [
+            r#"{"action":"settings","op":"get"}"#,
+            r#"{"action":"settings","op":"models"}"#,
+            r#"{"action":"settings","op":"style","style":"gdev","length":"shorter"}"#,
+            r#"{"action":"settings","op":"theme","theme":"gruvbox"}"#,
+            r#"{"action":"settings","op":"connect","target":"claude code"}"#,
+            r#"{"action":"settings","op":"setup"}"#,
+            r#"{"action":"night_shift","op":"pause"}"#,
+        ] {
+            let notebook = match parse_tool_action(raw) {
+                ToolAction::Shared(a) => a,
+                _ => panic!("{raw} should be a shared action in a notebook"),
+            };
+            let home = match parse_global_tool_action(raw) {
+                GlobalToolAction::Shared(a) => a,
+                _ => panic!("{raw} should be a shared action on Home"),
+            };
+            let describe = |a: &SharedAction| match a {
+                SharedAction::NightShift { op } => format!("night:{op}"),
+                SharedAction::Settings { op, field, value } => {
+                    format!("settings:{op}:{field}:{value}")
+                }
+            };
+            assert_eq!(describe(&notebook), describe(&home), "{raw}");
+        }
+        // A shared action the model mangled falls through on both.
+        assert!(matches!(
+            parse_global_tool_action(r#"{"action":"settings","op":"pull"}"#),
+            GlobalToolAction::Chat
+        ));
+    }
+
+    /// `open_notebook` resolves by name; an exact title wins over a longer
+    /// one that merely contains it, and ambiguity asks rather than guesses.
+    #[test]
+    fn open_notebook_resolves_by_name() {
+        let nb = |id: &str, title: &str| Notebook {
+            id: id.into(),
+            icon: String::new(),
+            title: title.into(),
+            created_at: 0,
+            updated_at: 0,
+            color: String::new(),
+            status: String::new(),
+            source_count: 0,
+            note_count: 0,
+            report_count: 0,
+        };
+        let books = vec![
+            nb("a", "Japan"),
+            nb("b", "Japan trip 2019"),
+            nb("c", "Cars"),
+        ];
+
+        let one = open_notebook_outcome(&books, "cars");
+        assert_eq!(
+            one.effect.as_ref().map(|e| e.notebook_id.as_str()),
+            Some("c")
+        );
+
+        // Exact beats the substring match it shares a prefix with.
+        let exact = open_notebook_outcome(&books, "Japan");
+        assert_eq!(
+            exact.effect.as_ref().map(|e| e.notebook_id.as_str()),
+            Some("a")
+        );
+
+        // One partial is unambiguous even when it isn't exact.
+        assert_eq!(
+            open_notebook_outcome(&books, "trip 2019")
+                .effect
+                .as_ref()
+                .map(|e| e.notebook_id.as_str()),
+            Some("b")
+        );
+
+        // Two partials and no exact: ask, don't guess.
+        let ambiguous = open_notebook_outcome(&books, "jap");
+        assert!(ambiguous.effect.is_none());
+        assert!(ambiguous.reply.contains("more than one notebook"));
+
+        let missing = open_notebook_outcome(&books, "france");
+        assert!(missing.effect.is_none());
+        assert!(missing.reply.contains("don't have a notebook"));
+    }
+
     #[test]
     fn parses_night_shift_ops() {
         assert!(matches!(
             parse_tool_action(r#"{"action":"night_shift","op":"pause"}"#),
-            ToolAction::NightShift { op } if op == "pause"
+            ToolAction::Shared(SharedAction::NightShift { op }) if op == "pause"
         ));
         assert!(matches!(
             parse_tool_action(r#"{"action":"night_shift","op":"status"}"#),
-            ToolAction::NightShift { op } if op == "status"
+            ToolAction::Shared(SharedAction::NightShift { op }) if op == "status"
         ));
     }
 
@@ -12386,12 +13662,12 @@ mod tool_tests {
     fn parses_settings_tool() {
         assert!(matches!(
             parse_tool_action(r#"{"action":"settings","op":"get"}"#),
-            ToolAction::Settings { op, .. } if op == "get"
+            ToolAction::Shared(SharedAction::Settings { op, .. }) if op == "get"
         ));
         match parse_tool_action(
             r#"{"action":"settings","op":"set","field":"chatProvider","value":"ollama"}"#,
         ) {
-            ToolAction::Settings { op, field, value } => {
+            ToolAction::Shared(SharedAction::Settings { op, field, value }) => {
                 assert_eq!(op, "set");
                 assert_eq!(field, "chatProvider");
                 assert_eq!(value, "ollama");
@@ -12415,11 +13691,11 @@ mod tool_tests {
     fn parses_model_verbs() {
         assert!(matches!(
             parse_tool_action(r#"{"action":"settings","op":"models"}"#),
-            ToolAction::Settings { op, .. } if op == "models"
+            ToolAction::Shared(SharedAction::Settings { op, .. }) if op == "models"
         ));
         // `test` carries its target in `field`; empty = active chat provider.
         match parse_tool_action(r#"{"action":"settings","op":"test","target":"gemma3"}"#) {
-            ToolAction::Settings { op, field, .. } => {
+            ToolAction::Shared(SharedAction::Settings { op, field, .. }) => {
                 assert_eq!(op, "test");
                 assert_eq!(field, "gemma3");
             }
@@ -12427,11 +13703,12 @@ mod tool_tests {
         }
         assert!(matches!(
             parse_tool_action(r#"{"action":"settings","op":"test"}"#),
-            ToolAction::Settings { op, field, .. } if op == "test" && field.is_empty()
+            ToolAction::Shared(SharedAction::Settings { op, field, .. })
+                if op == "test" && field.is_empty()
         ));
         // `pull` needs a model name; without one it falls through to chat.
         match parse_tool_action(r#"{"action":"settings","op":"pull","model":"qwen3:8b"}"#) {
-            ToolAction::Settings { op, field, .. } => {
+            ToolAction::Shared(SharedAction::Settings { op, field, .. }) => {
                 assert_eq!(op, "pull");
                 assert_eq!(field, "qwen3:8b");
             }

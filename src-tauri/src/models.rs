@@ -462,6 +462,72 @@ fn default_message_kind() -> String {
     "chat".to_string()
 }
 
+/// One passage behind a meta-chat answer: what it is and where it lives.
+/// Re-exported as `commands::MetaCitation`, where it is built; it lives here
+/// because meta-chat turns persist it and so have to read it back.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetaCitation {
+    /// "source" (chunk passage) | "note" | "card" (registry card).
+    pub kind: String,
+    /// Empty for registry cards — they are corpus-scoped and open on Home.
+    #[serde(default)]
+    pub notebook_id: String,
+    #[serde(default)]
+    pub notebook_title: String,
+    /// Source id for source passages; note id for notes; card id for cards.
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub snippet: String,
+}
+
+/// One turn of a Home conversation (docs/RFC-meta-chat.md). Corpus-scoped:
+/// there is no notebook_id, because the whole point is that the citations
+/// name the notebooks. A thread is nothing more than the turns that share a
+/// `thread_id` — its title, age, and length are read off them, so an
+/// abandoned thread that was never asked into simply doesn't exist.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetaTurn {
+    pub id: String,
+    pub thread_id: String,
+    /// "user" | "assistant"
+    pub role: String,
+    pub content: String,
+    #[serde(default)]
+    pub citations: Vec<MetaCitation>,
+    /// "chat" | "stopped" (cut short, partial answer kept) | "error" (a
+    /// provider failure, which never re-enters model context) | "title" (not
+    /// a turn at all: the name the small model gave the thread, filtered out
+    /// of every read that means "the conversation").
+    #[serde(default = "default_message_kind")]
+    pub kind: String,
+    /// Which model wrote this answer, as the chat surface captions it. Empty
+    /// on questions, and on answers stored before the column existed.
+    #[serde(default)]
+    pub model: String,
+    pub created_at: i64,
+}
+
+/// A Home conversation as the thread list sees it: derived from its turns,
+/// never stored on a row of its own.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetaThread {
+    pub id: String,
+    /// What to call the conversation: the small model's short name once it
+    /// has been written, the opening question until then.
+    pub title: String,
+    /// The opening question, trimmed to a line — kept alongside a generated
+    /// title so the list can still show what was actually asked.
+    pub question: String,
+    pub turn_count: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Note {

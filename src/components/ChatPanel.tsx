@@ -6,7 +6,7 @@ import {
   Button,
   CardAction,
   LiveRegion,
-  RowMenu,
+  StepTrail,
   Textarea,
   useConfirm,
 } from "./ui";
@@ -53,6 +53,7 @@ import {
   FileText,
   SlidersHorizontal,
   ChevronDown,
+  ChevronRight,
   AlertTriangle,
 } from "lucide-react";
 
@@ -1238,7 +1239,47 @@ function FallbackOffers({ message }: { message: Message }) {
  *  (backend-allowlisted), a Settings-tab jump, a provider switch applied
  *  through the settings tool, and the connect confirm-click — the ONLY
  *  chat-side path that writes an agent client's config. */
-function GrammarActions({ content }: { content: string }) {
+/** A tool confirmation, as both chat surfaces render it: process, not
+ *  conversation — one quiet gray row, no bubble, no role label, the
+ *  Claude-desktop "Ran …" grammar. Home shows the same row for the same
+ *  reason, so a settings change reads identically wherever it was asked. */
+export function ToolRow({
+  content,
+  actions,
+}: {
+  content: string;
+  /** The shared button grammars, on the latest row only. */
+  actions?: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-start gap-2 py-0.5 text-caption text-muted-foreground">
+      <Wrench className="mt-0.5 h-3 w-3 shrink-0 text-subtle-foreground" />
+      {/* pre-line: the settings tool's snapshot reply is multi-line. */}
+      <span className="selectable min-w-0 whitespace-pre-line">
+        {content}
+        {actions && (
+          <span className="ml-2 inline-flex flex-wrap items-center gap-2 align-middle">
+            {actions}
+          </span>
+        )}
+      </span>
+    </div>
+  );
+}
+
+/** Turn the fix/confirm grammars a tool or a diagnosis writes into buttons.
+ *
+ *  `surface` says where the resulting confirmation row goes: a notebook
+ *  transcript, or Home's conversation. A provider switch is offered only on
+ *  an error row, which Home renders without actions — so only the connect
+ *  confirm has a Home path, and it takes one that needs no notebook. */
+export function GrammarActions({
+  content,
+  surface = "notebook",
+}: {
+  content: string;
+  surface?: "notebook" | "home";
+}) {
   const fixCmd = /Fix: open Terminal, run `([^`]+)`/.exec(content)?.[1];
   const settingsTab = /Settings → (Models|General|Sources|Studio|Agents)/.exec(
     content,
@@ -1273,16 +1314,29 @@ function GrammarActions({ content }: { content: string }) {
   };
   const applyConnect = async (clientId: string) => {
     const nb = useStore.getState().currentId;
-    if (!nb) return;
     try {
-      appendToolRow(await api.applyConnectFix(nb, clientId));
+      // An empty notebook id asks the backend for the confirmation row
+      // without filing it — Home's thread is not a notebook transcript.
+      const row = await api.applyConnectFix(
+        surface === "home" ? "" : (nb ?? ""),
+        clientId,
+      );
+      if (surface === "home")
+        await useStore
+          .getState()
+          .appendHomeTurn("assistant", row.content, [], "tool");
+      else appendToolRow(row);
     } catch (e) {
       useStore
         .getState()
         .pushToast("error", e instanceof Error ? e.message : String(e));
     }
   };
-  if (!fixCmd && !settingsTab && !switchFix && !connectFix) return null;
+  // A provider switch writes its confirmation into a notebook transcript;
+  // without one there is nowhere for it to land, so it isn't offered.
+  const canSwitch = surface === "notebook" && !!useStore.getState().currentId;
+  if (!fixCmd && !settingsTab && !(switchFix && canSwitch) && !connectFix)
+    return null;
   return (
     <>
       {fixCmd && (
@@ -1295,7 +1349,7 @@ function GrammarActions({ content }: { content: string }) {
           Open Terminal: {fixCmd}
         </Button>
       )}
-      {switchFix && (
+      {switchFix && canSwitch && (
         <Button
           variant="ghost"
           size="sm"
@@ -1345,18 +1399,10 @@ const ChatMessage = memo(function ChatMessage({
   // carry the shared button grammars, parsed on the latest row only.
   if (message.kind === "tool") {
     return (
-      <div className="flex items-start gap-2 py-0.5 text-caption text-muted-foreground">
-        <Wrench className="mt-0.5 h-3 w-3 shrink-0 text-subtle-foreground" />
-        {/* pre-line: the settings tool's snapshot reply is multi-line. */}
-        <span className="selectable min-w-0 whitespace-pre-line">
-          {message.content}
-          {isLast && (
-            <span className="ml-2 inline-flex flex-wrap items-center gap-2 align-middle">
-              <GrammarActions content={message.content} />
-            </span>
-          )}
-        </span>
-      </div>
+      <ToolRow
+        content={message.content}
+        actions={isLast && <GrammarActions content={message.content} />}
+      />
     );
   }
   if (message.role === "user") {
@@ -1422,11 +1468,7 @@ const ChatMessage = memo(function ChatMessage({
         {message.content}
       </Markdown>
       {message.citations.length > 0 && <Citations citations={message.citations} />}
-      {message.model && (
-        <div className="mt-1 text-micro text-subtle-foreground">
-          {message.model}
-        </div>
-      )}
+      <TurnModel model={message.model} />
       <MessageActions content={message.content} citations={message.citations} />
     </div>
   );
@@ -1594,72 +1636,125 @@ function SlashPicker({
   );
 }
 
-/** Hover row under a user turn: copy, re-run, and when it happened. Re-run
- *  asks the question again as a fresh turn at the end of the chat — the
- *  earlier exchange stays put, so nothing is destroyed and any question in
- *  the transcript can be re-asked. */
-function UserMessageActions({ message }: { message: Message }) {
-  const [copied, setCopied] = useState(false);
-  const sending = useStore((s) => s.sending);
+/** One verb in a turn's action row. */
+export interface TurnAction {
+  label: string;
+  /** What the button says for a moment after it worked ("Copied", "Saved").
+   *  Omitted for verbs whose effect is visible elsewhere — Re-run's answer
+   *  arrives at the bottom of the transcript, which is its own receipt. */
+  doneLabel?: string;
+  icon: React.ReactNode;
+  onClick: () => void | Promise<void>;
+  disabled?: boolean;
+  title?: string;
+}
 
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(message.content);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable */
-    }
-  }
-  function rerun() {
-    const st = useStore.getState();
-    if (st.sending) return;
-    void st.sendMessage(message.content);
-  }
+/** The row under a turn: when it happened, then what can be done with it.
+ *
+ *  One component for both chats. The notebook transcript grew copy, re-run
+ *  and a timestamp; Home's corpus conversation had none of it, and there is
+ *  no reason a turn should be operated differently depending on which chat
+ *  it is in. Quiet until the turn is hovered or tabbed into — the parent
+ *  carries `group`. */
+export function TurnActions({
+  createdAt,
+  actions,
+}: {
+  createdAt?: number;
+  actions: TurnAction[];
+}) {
+  const [done, setDone] = useState<string | null>(null);
 
-  // One literal, applied raw to both buttons: passing this through cn() would
+  // One literal, applied raw to every button: passing this through cn() would
   // run it past tailwind-merge, which reads the custom `text-micro` token as a
   // text *color*, and `text-muted-foreground` would then silently drop it.
   const btn =
     "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-micro text-muted-foreground hover:bg-surface-2 hover:text-foreground disabled:opacity-50";
   return (
     <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
-      <span
-        className="px-1 text-micro text-subtle-foreground"
-        title={fmtDateTime(message.createdAt)}
-      >
-        {relativeTime(message.createdAt)}
-      </span>
-      <button onClick={copy} className={btn} title="Copy to clipboard">
-        {copied ? (
-          <Check className="h-3.5 w-3.5 text-success" />
-        ) : (
-          <Copy className="h-3.5 w-3.5" />
-        )}
-        {copied ? "Copied" : "Copy"}
-      </button>
-      <button
-        onClick={rerun}
-        disabled={sending}
-        className={btn}
-        title="Ask this again as a new turn"
-      >
-        <RefreshCw className="h-3.5 w-3.5" />
-        Re-run
-      </button>
-      {/* Right-click parity: the same verbs from anywhere on the question. */}
-      <RowMenu
-        label="Question options"
-        items={[
-          { label: "Copy", icon: <Copy className="h-3.5 w-3.5" />, onClick: () => void copy() },
-          {
-            label: "Re-run",
-            icon: <RefreshCw className="h-3.5 w-3.5" />,
-            onClick: rerun,
-          },
-        ]}
-      />
+      {createdAt !== undefined && (
+        <span
+          className="px-1 text-micro text-subtle-foreground"
+          title={fmtDateTime(createdAt)}
+        >
+          {relativeTime(createdAt)}
+        </span>
+      )}
+      {actions.map((a) => (
+        <button
+          key={a.label}
+          type="button"
+          disabled={a.disabled}
+          className={btn}
+          title={a.title}
+          onClick={async () => {
+            try {
+              await a.onClick();
+            } catch {
+              // The clipboard can be unavailable, a note can fail to save —
+              // either way the verb didn't happen, so don't claim it did.
+              return;
+            }
+            if (!a.doneLabel) return;
+            setDone(a.label);
+            setTimeout(() => setDone((d) => (d === a.label ? null : d)), 1500);
+          }}
+        >
+          {done === a.label ? (
+            <Check className="h-3.5 w-3.5 text-success" />
+          ) : (
+            a.icon
+          )}
+          {done === a.label ? a.doneLabel : a.label}
+        </button>
+      ))}
     </div>
+  );
+}
+
+/** Copy verb, as both chats spell it. */
+export function copyAction(content: string): TurnAction {
+  return {
+    label: "Copy",
+    doneLabel: "Copied",
+    icon: <Copy className="h-3.5 w-3.5" />,
+    title: "Copy to clipboard",
+    onClick: () => navigator.clipboard.writeText(content),
+  };
+}
+
+/** Which model wrote an answer, under it. Shared so the caption reads the
+ *  same in a notebook and on Home; nothing is rendered when the turn predates
+ *  the column that records it. */
+export function TurnModel({ model }: { model?: string }) {
+  if (!model) return null;
+  return <div className="mt-1 text-micro text-subtle-foreground">{model}</div>;
+}
+
+/** Under a user turn: copy, re-run, and when it happened. Re-run asks the
+ *  question again as a fresh turn at the end of the chat — the earlier
+ *  exchange stays put, so nothing is destroyed and any question in the
+ *  transcript can be re-asked. */
+function UserMessageActions({ message }: { message: Message }) {
+  const sending = useStore((s) => s.sending);
+  return (
+    <TurnActions
+      createdAt={message.createdAt}
+      actions={[
+        copyAction(message.content),
+        {
+          label: "Re-run",
+          icon: <RefreshCw className="h-3.5 w-3.5" />,
+          disabled: sending,
+          title: "Ask this again as a new turn",
+          onClick: () => {
+            const st = useStore.getState();
+            if (st.sending) return;
+            void st.sendMessage(message.content);
+          },
+        },
+      ]}
+    />
   );
 }
 
@@ -1672,56 +1767,23 @@ function MessageActions({
 }) {
   const createNote = useStore((s) => s.createNote);
   const sources = useStore((s) => s.sources);
-  const [copied, setCopied] = useState(false);
-  const [saved, setSaved] = useState(false);
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(content);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable */
-    }
-  }
-  async function save() {
-    await createNote(noteTitleFrom(content), noteContentFrom(content, citations, sources));
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1500);
-  }
-
   return (
-    <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
-      <button
-        onClick={copy}
-        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-micro text-muted-foreground hover:bg-surface-2 hover:text-foreground"
-        title="Copy to clipboard"
-      >
-        {copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
-        {copied ? "Copied" : "Copy"}
-      </button>
-      <button
-        onClick={save}
-        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-micro text-muted-foreground hover:bg-surface-2 hover:text-foreground"
-        title="Save this response as a note"
-      >
-        {saved ? <Check className="h-3.5 w-3.5 text-success" /> : <NotebookPen className="h-3.5 w-3.5" />}
-        {saved ? "Saved" : "Save as note"}
-      </button>
-      {/* Right-click parity (DESIGN.md "objects are direct"): the same verbs
-          as the hover row, reachable from anywhere on the message. */}
-      <RowMenu
-        label="Message options"
-        items={[
-          { label: "Copy", icon: <Copy className="h-3.5 w-3.5" />, onClick: () => void copy() },
-          {
-            label: "Save as note",
-            icon: <NotebookPen className="h-3.5 w-3.5" />,
-            onClick: () => void save(),
-          },
-        ]}
-      />
-    </div>
+    <TurnActions
+      actions={[
+        copyAction(content),
+        {
+          label: "Save as note",
+          doneLabel: "Saved",
+          icon: <NotebookPen className="h-3.5 w-3.5" />,
+          title: "Save this response as a note",
+          onClick: () =>
+            createNote(
+              noteTitleFrom(content),
+              noteContentFrom(content, citations, sources),
+            ),
+        },
+      ]}
+    />
   );
 }
 
@@ -1747,6 +1809,34 @@ function openCitationTarget(c: Citation) {
   }
 }
 
+/** The one control that folds an answer's citation list away: a count and a
+ *  chevron, quiet until you want the receipts. Shared with Home's corpus
+ *  chat, whose rows differ but whose disclosure should not. */
+export function CitationsToggle({
+  count,
+  open,
+  onToggle,
+}: {
+  count: number;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1 text-micro text-muted-foreground hover:text-foreground hover:border-border-strong transition-colors"
+      onClick={onToggle}
+    >
+      <Quote className="h-3 w-3" />
+      {count} {count === 1 ? "citation" : "citations"}
+      <ChevronRight
+        className={cn("h-3 w-3 transition-transform", open && "rotate-90")}
+      />
+    </button>
+  );
+}
+
 function Citations({ citations }: { citations: Citation[] }) {
   const [open, setOpen] = useState(false);
   const sources = useStore((s) => s.sources);
@@ -1758,13 +1848,11 @@ function Citations({ citations }: { citations: Citation[] }) {
   };
   return (
     <div className="mt-1">
-      <button
-        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1 text-micro text-muted-foreground hover:text-foreground hover:border-border-strong transition-colors"
-        onClick={() => setOpen((o) => !o)}
-      >
-        <Quote className="h-3 w-3" />
-        {citations.length} {citations.length === 1 ? "citation" : "citations"}
-      </button>
+      <CitationsToggle
+        count={citations.length}
+        open={open}
+        onToggle={() => setOpen((o) => !o)}
+      />
       {open && (
         <div className="mt-2 flex flex-col gap-2">
           {citations.map((c, i) => (
@@ -1818,49 +1906,6 @@ function Citations({ citations }: { citations: Citation[] }) {
               </p>
             </div>
           ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function StepTrail({
-  steps,
-  waiting,
-  done,
-}: {
-  steps: string[];
-  waiting: string;
-  done: boolean;
-}) {
-  return (
-    <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface/60 px-3 py-2">
-      {steps.map((s, i) => {
-        // The countdown, when there is one, is the thing still running — the
-        // last completed step hands its spinner over to it.
-        const isLast = i === steps.length - 1 && !waiting;
-        const spinning = isLast && !done;
-        return (
-          <div key={i} className="flex items-center gap-2 text-caption">
-            {spinning ? (
-              <span
-                className="h-2.5 w-2.5 shrink-0 rounded-full border-[1.5px] border-primary border-t-transparent animate-spin"
-                aria-hidden
-              />
-            ) : (
-              <Check className="h-3 w-3 shrink-0 text-success" />
-            )}
-            <span className={cn(spinning ? "text-foreground" : "text-muted-foreground")}>{s}</span>
-          </div>
-        );
-      })}
-      {waiting && !done && (
-        <div className="flex items-center gap-2 text-caption" aria-live="polite">
-          <span
-            className="h-2.5 w-2.5 shrink-0 rounded-full border-[1.5px] border-primary border-t-transparent animate-spin"
-            aria-hidden
-          />
-          <span className="text-muted-foreground">{waiting}</span>
         </div>
       )}
     </div>
@@ -1979,8 +2024,12 @@ const isAgentProvider = (kind: string) => AGENT_KINDS.has(kind);
  *  reasoning effort. Three pills rather than one nested menu — a flyout inside
  *  a popover anchored above the composer has nowhere to go, and each list is
  *  short and flat on its own. The Effort pill is absent, not disabled, for a
- *  provider with no effort control (see `ProviderModels.efforts`). */
-function ModelPill() {
+ *  provider with no effort control (see `ProviderModels.efforts`).
+ *
+ *  The choice is the app's, not the notebook's (it writes `AiConfig`), so the
+ *  same pills serve Home's corpus-wide composer — `scope` only names what the
+ *  provider is about to answer. */
+export function ModelPill({ scope = "this notebook" }: { scope?: string }) {
   const aiConfig = useStore((s) => s.aiConfig);
   const saveAiConfig = useStore((s) => s.saveAiConfig);
   const openSettings = useStore((s) => s.openSettings);
@@ -2050,7 +2099,7 @@ function ModelPill() {
         open={open === "provider"}
         onToggle={() => setOpen((o) => (o === "provider" ? null : "provider"))}
         onClose={() => setOpen(null)}
-        title="Which provider answers this notebook"
+        title={`Which provider answers ${scope}`}
         menuLabel="Answer with"
       >
         {aiConfig.providers.map((p) => {
@@ -2162,7 +2211,7 @@ function ModelPill() {
 }
 
 /** A composer pill that opens a popover menu above it. */
-function MenuPill({
+export function MenuPill({
   label,
   muted,
   open,
@@ -2186,6 +2235,9 @@ function MenuPill({
   return (
     <span className="relative">
       <button
+        // Never a submit: Home's composer is a real <form>, and an untyped
+        // button inside one sends the question on every pill click.
+        type="button"
         onClick={onToggle}
         aria-expanded={open}
         aria-haspopup="menu"
@@ -2234,7 +2286,7 @@ function MenuPill({
 }
 
 /** One row in a pill's menu. */
-function MenuRow({
+export function MenuRow({
   label,
   badge,
   note,
@@ -2322,8 +2374,16 @@ function CustomModelRow({
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
           e.stopPropagation();
-          if (e.key === "Enter") onCommit(draft.trim());
-          if (e.key === "Escape") setEditing(false);
+          // preventDefault as well: inside Home's composer <form>, Enter in
+          // a text field would otherwise ask the question too.
+          if (e.key === "Enter") {
+            e.preventDefault();
+            onCommit(draft.trim());
+          }
+          if (e.key === "Escape") {
+            e.preventDefault();
+            setEditing(false);
+          }
         }}
         onBlur={() => setEditing(false)}
         className="h-6 w-full rounded border border-input bg-surface-2 px-1.5 text-micro text-foreground focus:outline-none focus:border-border-strong"

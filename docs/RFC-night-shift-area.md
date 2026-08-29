@@ -33,8 +33,8 @@ More of the substrate exists than the original RFC's staging predicted:
   (scheduler.rs:205). The `source_events` table is a rolling window that
   prunes old rows (models.rs:277) — the precedent receipts reuse below.
 - **Chat tools exist.** A cheap keyword gate (`tool_gate`,
-  commands.rs:5757) routes imperative messages to one small JSON routing
-  call, then dispatches to existing commands — and `schedule_report` /
+  commands.rs:5757) routes imperative messages to one JSON routing call on
+  the Small role, then dispatches to existing commands — and `schedule_report` /
   `update_report` are already arms. Scheduling recurring work by chat works
   today; this RFC extends the arm list, it does not invent the mechanism.
 - **The V12 pillars grew commands**: `commands/brief.rs`, `ledger.rs`,

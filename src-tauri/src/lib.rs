@@ -260,6 +260,9 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             handles.window.set_as_windows_menu_for_nsapp()?;
             app.manage(menu::RecentMenu(handles.recent));
+            // View menu's per-view toggle groups; the frontend flips these
+            // with `set_menu_context` as it enters and leaves a notebook.
+            app.manage(handles.context);
             app.manage(menu::ThemeMenu(handles.themes));
             app.manage(menu::GenerateMenu(handles.generate));
 
@@ -471,6 +474,7 @@ pub fn run() {
             commands::live_view_close,
             commands::rebuild_app_menu,
             commands::fill_menu_lists,
+            menu::set_menu_context,
             commands::list_shortcuts,
             commands::search_everything,
             commands::grep_sources,
@@ -478,6 +482,10 @@ pub fn run() {
             commands::import_notebook_okf,
             commands::probe_okf,
             commands::ask_everything,
+            commands::list_meta_threads,
+            commands::list_meta_turns,
+            commands::add_meta_turn,
+            commands::delete_meta_thread,
             commands::create_note,
             commands::restore_note,
             commands::build_info,

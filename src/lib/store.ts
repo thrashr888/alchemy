@@ -13,6 +13,7 @@ import { refreshEpigraph } from "./epigraph";
 import { describe } from "./errors";
 import { notify } from "./notify";
 import { dropEntry, makeEntry, pushEntry } from "./history";
+import { historyOf, mergeLoadedTurns } from "./homeChatRun";
 import { claimTextUndo } from "./textUndo";
 import { playArrival, playDone, playError } from "./sound";
 import { autoUpdateEnabled, checkForUpdatesQuietly } from "./updates";
@@ -22,6 +23,7 @@ import type {
   AcpEntry,
   AcpPaneState,
   AppState,
+  HomeSection,
   Migration,
   NavEntry,
   QueueItem,
@@ -31,10 +33,19 @@ export type { ExternalAdd, Migration, QueueItem } from "./storeTypes";
 import type {
   ChatConfig,
   Message,
+  MetaTurn,
   Note,
   ReadingPrefs,
   Source,
 } from "./types";
+
+/** Home conversations are identified client-side: the id has to exist before
+ *  the first question is asked, because an in-flight answer is keyed to it
+ *  (see `openHomeThread`). Nothing is written until a turn settles, so an
+ *  id nobody asks into simply never becomes a thread. */
+function newThreadId(): string {
+  return crypto.randomUUID();
+}
 
 /** Can an undo toast bring this source back by re-importing its origin?
  *  Connector types (git/notion/obsidian) carry setup state a re-add can't
@@ -121,6 +132,41 @@ function loadSourceSel(notebookId: string): Record<string, boolean> | null {
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
+  }
+}
+
+/** Home chat's persisted style and length. Same shape and same key grammar as
+ *  a notebook's `chatConfig:<id>`, under the surface's own name — Home is a
+ *  place you ask from, not a notebook, so it keeps its own answer voice. */
+const HOME_CHAT_CONFIG_KEY = "homeChatConfig";
+
+/** Unsent Home composer text, one map under one key rather than a key per
+ *  thread — conversations are cheap to make and the sprawl would outlive
+ *  them. Pruned when a thread is deleted. */
+const HOME_DRAFTS_KEY = "homeChatDrafts";
+
+function loadHomeDrafts(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(HOME_DRAFTS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== "object") return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>))
+      if (typeof v === "string" && v) out[k] = v;
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function loadHomeChatConfig(): ChatConfig {
+  try {
+    const raw = localStorage.getItem(HOME_CHAT_CONFIG_KEY);
+    return raw
+      ? { ...DEFAULT_CHAT_CONFIG, ...JSON.parse(raw) }
+      : DEFAULT_CHAT_CONFIG;
+  } catch {
+    return DEFAULT_CHAT_CONFIG;
   }
 }
 
@@ -258,6 +304,19 @@ let tokenFlushHandle = 0;
 // The artifact stream's twin of the chat token buffer.
 let artifactBuffer = "";
 let artifactFlushHandle = 0;
+// The Home (corpus) stream's twin of the same, and the promise of the run
+// currently holding the meta channel. The backend answers one corpus question
+// per window — `meta:<window>` is a single cancellation scope and meta://token
+// a single event channel — so a new question waits for the old one to hand the
+// channel back rather than interleaving with it.
+let metaBuffer = "";
+let metaFlushHandle = 0;
+let metaRun: Promise<void> | null = null;
+let metaSeq = 0;
+/** Conversations deleted out from under a run in flight. Its turns are
+ *  dropped rather than written — persisting them would resurrect the thread
+ *  the user just deleted. */
+const abandonedThreads = new Set<string>();
 // folder://progress arrives once per ingested file; coalesce to one store
 // write per frame so a 5,000-file import doesn't mean 5,000 full re-renders
 // of the sources panel.
@@ -432,6 +491,11 @@ export const useStore = create<AppState>((set, get) => {
     ledgerBump: 0,
     registryBump: 0,
     homeSection: "notebooks",
+    homeChat: { threadId: null, turns: [] },
+    homeRun: null,
+    homeDrafts: loadHomeDrafts(),
+    homeThreads: [],
+    homeChatConfig: loadHomeChatConfig(),
     homeView:
       (localStorage.getItem("homeView") as "grid" | "table") || "grid",
     homeQuery: "",
@@ -445,7 +509,10 @@ export const useStore = create<AppState>((set, get) => {
     reader: { open: false, history: [], index: -1 },
     // Home is always the floor of the app-level history; restores and
     // navigations stack on top of it via the location subscriber below.
-    nav: { stack: [{ nb: null, mode: "chat" }], index: 0 },
+    nav: {
+      stack: [{ nb: null, mode: "chat", section: "notebooks" }],
+      index: 0,
+    },
     folderScan: null,
     importingFolders: [],
     noteReads: loadNoteReads(),
@@ -554,6 +621,7 @@ export const useStore = create<AppState>((set, get) => {
       void get().refreshModelHealth();
       void get().refreshModelStats();
       void get().refreshKokoroStatus();
+      void get().refreshHomeThreads();
       // One-shot probe: are the Mac providers (cider) installed and reachable?
       void api
         .macAvailable()
@@ -574,8 +642,9 @@ export const useStore = create<AppState>((set, get) => {
           doc?: ReaderDoc;
           readerHistory?: ReaderDoc[];
           readerIndex?: number;
-          section?: "notebooks" | "registry";
+          section?: HomeSection;
           card?: string | null;
+          chatThread?: string | null;
         } | null = null;
         try {
           view = JSON.parse(localStorage.getItem("lastView") ?? "null");
@@ -587,6 +656,10 @@ export const useStore = create<AppState>((set, get) => {
         // that's where you were, with the same card open.
         if (view?.section)
           set({ homeSection: view.section, openCardId: view.card ?? null });
+        // The conversation survives the relaunch with the section: coming
+        // back to the Chat tab and finding it blank is the bug Paul hit.
+        if (view?.section === "chat")
+          await get().openHomeThread(view.chatThread ?? null);
         const last =
           view === null ? localStorage.getItem("lastNotebookId") : view.nb;
         if (last && notebooks.some((n) => n.id === last)) {
@@ -643,6 +716,21 @@ export const useStore = create<AppState>((set, get) => {
       });
       void listen<{ label: string; transient: boolean }>("chat://step", (e) => {
         if (get().sending) get().appendStep(e.payload.label, e.payload.transient);
+      });
+      // Home's corpus answer streams the same way, and for the same reason
+      // lives out here rather than in the view: the run belongs to the
+      // conversation it was asked in, so leaving that conversation — for
+      // another thread, or for a notebook behind a citation — must not tear
+      // its listeners down. A queued run hasn't been sent yet; anything
+      // arriving belongs to the run it is waiting on.
+      void listen<{ content: string }>("meta://token", (e) => {
+        const run = get().homeRun;
+        if (run && !run.queued) get().appendHomeToken(e.payload.content);
+      });
+      void listen<{ label: string; transient: boolean }>("meta://step", (e) => {
+        const run = get().homeRun;
+        if (run && !run.queued)
+          get().appendHomeStep(e.payload.label, e.payload.transient);
       });
       // Verify-and-repair swaps a revised answer under the same message id
       // (backend spawn_answer_verify) — apply only when the message is in
@@ -740,6 +828,13 @@ export const useStore = create<AppState>((set, get) => {
             void api.getAiConfig().then((aiConfig) => set({ aiConfig }));
             return;
           }
+          // The small model finished naming a Home conversation — the Chats
+          // list re-derives itself off the turns. Background bookkeeping, not
+          // an arrival: nothing chimes and no notebook is re-read.
+          if (scope === "homechat") {
+            void get().refreshHomeThreads();
+            return;
+          }
           playArrival();
           // Debounced: an agent looping tool calls fires one of these per
           // call, and each refresh is a notebooks read plus a native menu
@@ -770,28 +865,40 @@ export const useStore = create<AppState>((set, get) => {
               .then((reportSchedules) => set({ reportSchedules }));
         },
       );
-      // The settings tool's per-notebook style verb (RFC-conversational-setup
+      // The settings tool's per-surface style verb (RFC-conversational-setup
       // §2): the validated change arrives as an event because ChatConfig is
-      // frontend state. Merge into the notebook's stored config; update the
-      // live store only when that notebook is in front here.
+      // frontend state, and every window has to agree. An empty notebookId
+      // means Home's own config — asking across everything is a different
+      // job from asking inside one notebook, and neither resets the other.
       void listen<{
         notebookId: string;
         style?: string | null;
         length?: string | null;
       }>("settings://style", (e) => {
         const { notebookId, style, length } = e.payload;
-        const key = `chatConfig:${notebookId}`;
-        let cur: ChatConfig = { ...DEFAULT_CHAT_CONFIG };
-        try {
-          const raw = localStorage.getItem(key);
-          if (raw) cur = { ...DEFAULT_CHAT_CONFIG, ...JSON.parse(raw) };
-        } catch {
-          // Unreadable stored config — rebuild from the defaults.
+        const home = !notebookId;
+        const key = home ? HOME_CHAT_CONFIG_KEY : `chatConfig:${notebookId}`;
+        let cur: ChatConfig = home
+          ? { ...get().homeChatConfig }
+          : { ...DEFAULT_CHAT_CONFIG };
+        if (!home) {
+          try {
+            const raw = localStorage.getItem(key);
+            if (raw) cur = { ...DEFAULT_CHAT_CONFIG, ...JSON.parse(raw) };
+          } catch {
+            // Unreadable stored config — rebuild from the defaults.
+          }
         }
         // The backend validated these against the same rosters this union
         // mirrors (selfheal::resolve_style / settings_style).
         if (style != null) cur.style = style as ChatConfig["style"];
         if (length != null) cur.length = length as ChatConfig["length"];
+        if (home) {
+          // One writer for Home's config, so the pills and the tool can
+          // never disagree about where it is kept.
+          get().setHomeChatConfig(cur);
+          return;
+        }
         localStorage.setItem(key, JSON.stringify(cur));
         if (get().currentId === notebookId) set({ chatConfig: cur });
       });
@@ -895,16 +1002,14 @@ export const useStore = create<AppState>((set, get) => {
         } else if (e.payload.id === "menu-find") {
           set({ findBump: get().findBump + 1 });
         } else if (e.payload.id === "menu-toggle-sources") {
-          if (get().currentId) s.toggleSources();
+          toggleNotebookPanel("sources");
         } else if (e.payload.id === "menu-toggle-studio") {
-          if (get().currentId) s.toggleStudio();
+          toggleNotebookPanel("studio");
         } else if (e.payload.id === "menu-toggle-gallery") {
-          if (get().currentId)
-            set({ galleryOpen: !get().galleryOpen, ledgerOpen: false });
+          if (get().currentId) toggleNotebookPanel("gallery");
           else s.pushToast("info", "Open a notebook to browse its gallery");
         } else if (e.payload.id === "menu-toggle-ledger") {
-          if (get().currentId)
-            set({ ledgerOpen: !get().ledgerOpen, galleryOpen: false });
+          if (get().currentId) toggleNotebookPanel("ledger");
           else s.pushToast("info", "Open a notebook to read its ledger");
         } else if (e.payload.id === "menu-toggle-glass") {
           s.setReading({ glass: !get().reading.glass });
@@ -1203,6 +1308,340 @@ export const useStore = create<AppState>((set, get) => {
 
     navBack: () => void applyNav(-1),
     navForward: () => void applyNav(1),
+
+    // ---- Home chat threads (docs/RFC-meta-chat.md) ----------------------
+    // The conversation used to die with the view. It persists per thread now,
+    // so the Chat tab can be left and come back to — and so back/forward can
+    // land on a conversation the way it lands on a notebook.
+
+    refreshHomeThreads: async () => {
+      try {
+        const homeThreads = await api.listMetaThreads();
+        set({ homeThreads });
+        // Drop drafts for conversations that no longer exist. A New-chat id
+        // is minted before anything is asked, so an abandoned one would
+        // otherwise leave its half-typed question in storage for good; the
+        // thread being looked at is spared, since it may be exactly that.
+        const live = new Set(homeThreads.map((t) => `t:${t.id}`));
+        const open = get().homeChat.threadId;
+        if (open) live.add(`t:${open}`);
+        live.add("shelf");
+        const drafts = get().homeDrafts;
+        const kept = Object.fromEntries(
+          Object.entries(drafts).filter(([k]) => live.has(k)),
+        );
+        if (Object.keys(kept).length !== Object.keys(drafts).length) {
+          localStorage.setItem(HOME_DRAFTS_KEY, JSON.stringify(kept));
+          set({ homeDrafts: kept });
+        }
+      } catch {
+        /* the list is a way back in, not the conversation itself */
+      }
+    },
+
+    newHomeThread: () => {
+      // A conversation gets its id before anything is asked into it, so a run
+      // is keyed to a thread that can't change under it. Nothing is written
+      // until a turn settles, so an id nobody asks into never becomes a row.
+      const threadId = newThreadId();
+      set({ homeChat: { threadId, turns: [] } });
+      return threadId;
+    },
+
+    openHomeThread: async (threadId) => {
+      // Switching conversations never touches a run: the answer is being
+      // written into ITS thread, and walking next door to check something is
+      // not a reason to throw it away. It keeps streaming into `homeRun`,
+      // settles into its own thread, and coming back shows it mid-flight.
+      //
+      // A fresh conversation gets its id up front, before anything is asked,
+      // so the run is keyed to a conversation that can't change under it.
+      if (threadId === null) {
+        get().newHomeThread();
+        set({ homeSection: "chat" });
+        return;
+      }
+      if (get().homeChat.threadId !== threadId)
+        set({ homeChat: { threadId, turns: [] } });
+      set({ homeSection: "chat" });
+      try {
+        const turns = await api.listMetaTurns(threadId);
+        // Switched away while it loaded — those turns belong to a thread
+        // nobody is looking at any more.
+        if (get().homeChat.threadId !== threadId) return;
+        // An answer that settled while the list was in flight is already on
+        // screen and newer than what the backend handed back; keep anything
+        // the fetch doesn't know about rather than blinking it away.
+        set({
+          homeChat: {
+            threadId,
+            turns: mergeLoadedTurns(turns, get().homeChat.turns),
+          },
+        });
+      } catch (e) {
+        set({ error: describe(e) });
+      }
+    },
+
+    appendHomeTurn: async (role, content, citations, kind, intoThread) => {
+      const threadId = intoThread ?? get().homeChat.threadId ?? newThreadId();
+      // The conversation was deleted while this was being written.
+      if (abandonedThreads.has(threadId)) return;
+      // A turn lands in the conversation it was asked in. Whether it also
+      // lands ON SCREEN depends on which conversation is open — a run that
+      // settles while you're reading another thread writes into its own.
+      const showing = () => get().homeChat.threadId === threadId;
+      // Optimistic: the turn is on screen before the write lands, and stays
+      // there if the write fails — a lost row is worse than a lost answer,
+      // but showing neither is worst.
+      const pending: MetaTurn = {
+        id: `pending-${newThreadId()}`,
+        threadId,
+        role,
+        content,
+        citations,
+        kind,
+        createdAt: Date.now(),
+      };
+      if (showing())
+        set((s) => ({
+          homeChat: { threadId, turns: [...s.homeChat.turns, pending] },
+        }));
+      else if (get().homeChat.threadId === null)
+        // Nothing open at all (a question asked before the Chat tab was ever
+        // visited): the thread being written into becomes the open one.
+        set({ homeChat: { threadId, turns: [pending] } });
+      try {
+        const saved = await api.addMetaTurn(
+          threadId,
+          role,
+          content,
+          citations,
+          kind,
+        );
+        set((s) =>
+          s.homeChat.threadId === threadId
+            ? {
+                homeChat: {
+                  threadId,
+                  turns: s.homeChat.turns.map((t) =>
+                    t.id === pending.id ? saved : t,
+                  ),
+                },
+              }
+            : {},
+        );
+        // The thread list's timestamp and turn count move with the write,
+        // whichever conversation is being looked at.
+        void get().refreshHomeThreads();
+      } catch (e) {
+        get().pushToast(
+          "error",
+          `Couldn't save this turn: ${describe(e)}`,
+        );
+      }
+    },
+
+    askHome: async (question) => {
+      const q = question.trim();
+      if (!q) return;
+      // The thread id exists before the question does (openHomeThread mints
+      // it), so the run is keyed to a conversation that can't change under it.
+      const threadId = get().homeChat.threadId ?? newThreadId();
+      const prior = historyOf(get().homeChat.turns);
+      const previous = metaRun;
+      // `metaSeq` is what makes a superseded run stay superseded: it decides
+      // which run owns `homeRun`, so an outgoing run's settling never wipes
+      // the state of the one that displaced it.
+      const seq = ++metaSeq;
+      // One corpus answer at a time per window. A second question doesn't
+      // silently drop the first: it winds it down exactly as Stop does —
+      // cancel, keep the partial, file it under its own thread — and only
+      // then takes the channel. Until then this run is `queued`, which is
+      // also what keeps the outgoing run's tokens out of this one's buffer.
+      set({
+        homeRun: {
+          threadId,
+          question: q,
+          streaming: "",
+          steps: [],
+          waiting: previous ? "Finishing the previous answer…" : "",
+          stopped: false,
+          queued: !!previous,
+        },
+      });
+      const clear = () => {
+        if (metaSeq !== seq) return;
+        metaRun = null;
+        metaBuffer = "";
+        set({ homeRun: null });
+      };
+      const run = (async () => {
+        if (previous) {
+          void api.cancelGeneration("meta");
+          await previous.catch(() => {});
+          // Displaced in turn while waiting for the channel — the newer
+          // question owns `homeRun` now, so leave it alone.
+          if (metaSeq !== seq) return;
+          // Stop, pressed before this run ever started, means the question
+          // was withdrawn: nothing was asked and nothing is recorded.
+          if (get().homeRun?.stopped) return clear();
+          set((s) =>
+            s.homeRun
+              ? { homeRun: { ...s.homeRun, queued: false, waiting: "" } }
+              : {},
+          );
+        }
+        await get().appendHomeTurn("user", q, [], "chat", threadId);
+        try {
+          const res = await api
+            // No depth argument: the backend picks depth per model class
+            // (deep rerank on gateways where the extra call is cheap,
+            // single-pass local). The config is Home's own — Style, Length.
+            .askEverything(q, prior, undefined, get().homeChatConfig, threadId);
+          // A command ("add this url", "open the Japan notebook") was carried
+          // out instead of answered. It lands as one quiet tool row, never
+          // as a stopped partial — there was no stream to cut short.
+          if (res.kind === "tool") {
+            await get().settleHomeTool(threadId, res);
+            return;
+          }
+          // Superseded runs settle as stopped: a question asked over the top
+          // of this one cancelled it, and the partial is what it got to.
+          const stopped =
+            metaSeq !== seq || (get().homeRun?.stopped ?? false);
+          // A stop before the first token leaves nothing to show — the user
+          // already knows they cancelled.
+          if (stopped && !res.answer.trim()) return;
+          await get().appendHomeTurn(
+            "assistant",
+            res.answer,
+            res.citations,
+            stopped ? "stopped" : "chat",
+            threadId,
+          );
+        } catch (e) {
+          await get().appendHomeTurn(
+            "assistant",
+            describe(e),
+            [],
+            "error",
+            threadId,
+          );
+        } finally {
+          clear();
+        }
+      })();
+      metaRun = run;
+      await run;
+    },
+
+    settleHomeTool: async (threadId, answer) => {
+      // Deleting this conversation is the one reply that must not be written
+      // into it: the row would resurrect the thread the user just dropped.
+      // The backend already removed the turns, so all that's left is what a
+      // sidebar delete does — abandon the run, open a fresh conversation,
+      // drop the draft — and say so where it can still be read.
+      if (answer.effect?.kind === "deleteChat") {
+        abandonedThreads.add(threadId);
+        if (get().homeChat.threadId === threadId)
+          set({ homeChat: { threadId: newThreadId(), turns: [] } });
+        get().setHomeDraft(`t:${threadId}`, "");
+        void get().refreshHomeThreads();
+        get().pushToast("success", answer.answer);
+        return;
+      }
+      await get().appendHomeTurn(
+        "assistant",
+        answer.answer,
+        [],
+        "tool",
+        threadId,
+      );
+      // The backend can't drive this window; it can only say where to go.
+      // One nav entry, exactly as clicking the notebook would make.
+      if (answer.effect?.kind === "openNotebook" && answer.effect.notebookId) {
+        const id = answer.effect.notebookId;
+        await navAtomic(() => get().selectNotebook(id));
+      }
+    },
+
+    stopHome: () => {
+      const run = get().homeRun;
+      if (!run) return;
+      // Keep what arrived: the backend resolves a cancelled run with the
+      // partial answer and its citations. A queued run has nothing in flight
+      // to cancel — the flag withdraws it before it starts.
+      set({ homeRun: { ...run, stopped: true } });
+      if (!run.queued) void api.cancelGeneration("meta");
+    },
+
+    appendHomeToken: (t) => {
+      // Same per-frame commit as the notebook stream: tokens arrive faster
+      // than frames, and committing each one re-parses the whole answer.
+      metaBuffer += t;
+      if (metaFlushHandle !== 0) return;
+      metaFlushHandle = requestAnimationFrame(() => {
+        metaFlushHandle = 0;
+        const chunk = metaBuffer;
+        metaBuffer = "";
+        const run = get().homeRun;
+        if (!run || run.queued || !chunk) return;
+        set({
+          homeRun: { ...run, streaming: run.streaming + chunk, waiting: "" },
+        });
+      });
+    },
+
+    appendHomeStep: (label, transient) => {
+      const run = get().homeRun;
+      if (!run) return;
+      // A transient line is a live status, not a trail entry: it replaces the
+      // previous one and never accumulates.
+      set({
+        homeRun: transient
+          ? { ...run, waiting: label }
+          : { ...run, steps: [...run.steps, label], waiting: "" },
+      });
+    },
+
+    setHomeDraft: (key, text) => {
+      const drafts = { ...get().homeDrafts };
+      if ((drafts[key] ?? "") === text) return;
+      if (text) drafts[key] = text;
+      else delete drafts[key];
+      localStorage.setItem(HOME_DRAFTS_KEY, JSON.stringify(drafts));
+      set({ homeDrafts: drafts });
+    },
+
+    deleteHomeThread: async (threadId) => {
+      try {
+        await api.deleteMetaThread(threadId);
+      } catch (e) {
+        set({ error: describe(e) });
+        return;
+      }
+      // Deleting a conversation that is still being answered stops it and
+      // throws the answer away — persisting the partial would resurrect the
+      // thread the user just deleted.
+      if (get().homeRun?.threadId === threadId) {
+        abandonedThreads.add(threadId);
+        set({ homeRun: null });
+        void api.cancelGeneration("meta");
+      }
+      // Deleting the conversation you're reading leaves a fresh one open,
+      // not an empty screen with no way forward.
+      if (get().homeChat.threadId === threadId)
+        set({ homeChat: { threadId: newThreadId(), turns: [] } });
+      // Its unsent draft goes with it.
+      get().setHomeDraft(`t:${threadId}`, "");
+      await get().refreshHomeThreads();
+    },
+
+    setHomeChatConfig: (config) => {
+      localStorage.setItem(HOME_CHAT_CONFIG_KEY, JSON.stringify(config));
+      set({ homeChatConfig: config });
+    },
 
     setTheme: (theme) => {
       localStorage.setItem("theme", theme);
@@ -2750,9 +3189,64 @@ async function applyNav(delta: 1 | -1): Promise<void> {
       });
       if (st.reader.open) st.closeReader();
     }
+    // Home's tabs are places too — a notebook has center modes, Home has
+    // sections, and back should return you to the one you were reading.
+    // A chat entry names its conversation, so back lands in that thread.
+    if (target.nb === null) {
+      const section = target.section ?? "notebooks";
+      if (section === "chat")
+        await useStore.getState().openHomeThread(target.thread ?? null);
+      else useStore.setState({ homeSection: section });
+    }
   } finally {
     navApplying = false;
   }
+}
+
+/** A notebook's four sidebars, in rail order — which is the View menu's order
+ *  and ⌘1–4's order (menu.rs keeps all three the same). */
+export const NOTEBOOK_PANELS = [
+  "sources",
+  "studio",
+  "gallery",
+  "ledger",
+] as const;
+
+export type NotebookPanel = (typeof NOTEBOOK_PANELS)[number];
+
+/** Show or hide one of them. The single owner of what each toggle means, for
+ *  the View menu, ⌘1–4 (App.tsx), and anything else that grows one. Gallery
+ *  and Ledger share the center, so opening either closes the other.
+ *  A no-op with no notebook open — callers that want to say so do it first. */
+export function toggleNotebookPanel(panel: NotebookPanel): void {
+  const s = useStore.getState();
+  if (!s.currentId) return;
+  if (panel === "sources") s.toggleSources();
+  else if (panel === "studio") s.toggleStudio();
+  else if (panel === "gallery")
+    useStore.setState({ galleryOpen: !s.galleryOpen, ledgerOpen: false });
+  else useStore.setState({ ledgerOpen: !s.ledgerOpen, galleryOpen: false });
+}
+
+/** Depth of an in-progress compound navigation (see `navAtomic`). */
+let navAtomicDepth = 0;
+
+/** Run a navigation that takes several store writes and record it as ONE
+ *  history entry.
+ *
+ *  A citation jump out of Home's chat selects the notebook and then opens the
+ *  reader — two writes, and so two entries, the middle one being that
+ *  notebook's chat view, which nobody asked for and nobody was ever looking
+ *  at. Back landed there instead of on the conversation. Suppress recording
+ *  for the duration and record the destination once. */
+export async function navAtomic(go: () => Promise<void> | void): Promise<void> {
+  navAtomicDepth++;
+  try {
+    await go();
+  } finally {
+    navAtomicDepth--;
+  }
+  if (navAtomicDepth === 0) recordNav(useStore.getState());
 }
 
 // Record every location change into the app-level history. All windows:
@@ -2762,10 +3256,16 @@ useStore.subscribe((s, prev) => {
     s.currentId === prev.currentId &&
     s.ledgerOpen === prev.ledgerOpen &&
     s.galleryOpen === prev.galleryOpen &&
-    s.reader === prev.reader
+    s.reader === prev.reader &&
+    s.homeSection === prev.homeSection &&
+    s.homeChat.threadId === prev.homeChat.threadId
   )
     return;
-  if (navApplying) return;
+  recordNav(s);
+});
+
+function recordNav(s: ReturnType<typeof useStore.getState>) {
+  if (navApplying || navAtomicDepth > 0) return;
   const mode = s.galleryOpen
     ? ("gallery" as const)
     : s.ledgerOpen
@@ -2776,6 +3276,11 @@ useStore.subscribe((s, prev) => {
   const rdoc = s.reader.open ? s.reader.history[s.reader.index] : undefined;
   // Highlight is a one-time citation jump, not a place — drop it.
   const doc = rdoc && { type: rdoc.type, id: rdoc.id };
+  // Home's section (and, in the Chat tab, which conversation) is only part
+  // of the location while Home IS the location — switching tabs behind an
+  // open notebook must not stack entries for a screen nobody is looking at.
+  const section = s.currentId ? undefined : s.homeSection;
+  const thread = section === "chat" ? (s.homeChat.threadId ?? null) : undefined;
   const { stack, index } = s.nav;
   const cur = stack[index];
   if (
@@ -2783,17 +3288,19 @@ useStore.subscribe((s, prev) => {
     cur.nb === s.currentId &&
     cur.mode === mode &&
     cur.doc?.type === doc?.type &&
-    cur.doc?.id === doc?.id
+    cur.doc?.id === doc?.id &&
+    cur.section === section &&
+    cur.thread === thread
   )
     return;
   // A fresh navigation discards forward entries, browser-style.
   const next: NavEntry[] = [
     ...stack.slice(0, index + 1),
-    { nb: s.currentId, mode, doc },
+    { nb: s.currentId, mode, doc, section, thread },
   ];
   if (next.length > 100) next.splice(0, next.length - 100);
   useStore.setState({ nav: { stack: next, index: next.length - 1 } });
-});
+}
 
 // Every failure cues once, wherever it surfaces — the global error banner or
 // an error toast. playError throttles, so an error that sets both cues once.
@@ -2817,6 +3324,7 @@ if (getCurrentWebview().label === "main") {
       s.galleryOpen === prev.galleryOpen &&
       s.reader === prev.reader &&
       s.homeSection === prev.homeSection &&
+      s.homeChat.threadId === prev.homeChat.threadId &&
       s.openCardId === prev.openCardId
     )
       return;
@@ -2841,10 +3349,12 @@ if (getCurrentWebview().label === "main") {
           id: d.id,
         })),
         readerIndex: s.reader.index,
-        // Home is a place too: the Registry and the card you had open are
-        // as much "where you were" as a notebook's center mode.
+        // Home is a place too: the Registry and the card you had open — or
+        // the conversation you were in — are as much "where you were" as a
+        // notebook's center mode.
         section: s.homeSection,
         card: s.openCardId,
+        chatThread: s.homeChat.threadId,
       }),
     );
   });

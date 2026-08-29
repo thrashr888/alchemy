@@ -10,8 +10,9 @@ import { AddSourceModal } from "./AddSourceModal";
 import { SourcesRail, StudioRail } from "./SidebarRails";
 import { HealthBanner } from "./HealthBanner";
 import { Button } from "./ui";
+import { NavButtons } from "./NavButtons";
 import { shortcutBlocked } from "@/lib/utils";
-import { ChevronLeft, Search, Settings } from "lucide-react";
+import { Library, Search, Settings } from "lucide-react";
 import { notebookIcon } from "@/lib/notebookIcons";
 import { DevBadge } from "./DevBadge";
 import { UpdateBadge } from "./UpdateBadge";
@@ -68,13 +69,19 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
         data-tauri-drag-region
         className="flex h-12 items-center gap-2 pl-[84px] pr-3"
       >
+        <NavButtons />
+        <div className="mx-1 h-4 w-px bg-border" />
+        {/* A destination, not a direction: the chevron this button used to
+            carry read as a second Back arrow next to the real one. The
+            Library glyph is the app's one icon for "your notebooks" — the
+            Notebooks tab on Home wears it too. */}
         <Button
           variant="ghost"
           size="sm"
           onClick={close}
-          title="Back to notebooks"
+          title="Your notebooks"
         >
-          <ChevronLeft className="h-4 w-4" />
+          <Library className="h-4 w-4" />
           Notebooks
         </Button>
         <div className="mx-1 h-4 w-px bg-border" />

@@ -16,6 +16,7 @@ import {
   BookOpen,
   Clock,
   FileText,
+  MessagesSquare,
   Moon,
   Newspaper,
   Package,
@@ -24,6 +25,7 @@ import {
   Pause,
   Play,
   Power,
+  Sun,
   Zap,
 } from "lucide-react";
 
@@ -32,10 +34,10 @@ import {
  * the Brief as the top-right card above Latest Reports. Registry joins when
  * its pillar exists. */
 
-/** The Brief card: the arrival point, collapsible to its header row. */
+/** The Brief card: the arrival point. Collapsing it swaps the whole card for
+ *  a 48px icon rail, the way Staff and Chats collapse on the other side. */
 export function BriefSidebar({
-  open,
-  onToggle,
+  onCollapse,
   briefs,
   schedules,
   unread,
@@ -44,8 +46,7 @@ export function BriefSidebar({
   style,
   resizeHandle,
 }: {
-  open: boolean;
-  onToggle: () => void;
+  onCollapse: () => void;
   /** Report-kind notes from the Briefs notebook, newest first. */
   briefs: Note[];
   schedules: ReportSchedule[];
@@ -62,11 +63,12 @@ export function BriefSidebar({
   const briefSchedule = schedules.find((s) => s.kind === "brief");
   const brief = briefs[0];
 
-  // Reading the open card is reading the brief.
+  // The card only exists while it is open, so having it on screen is reading
+  // the brief.
   useEffect(() => {
-    if (open && brief) markNotesRead([brief.id]);
+    if (brief) markNotesRead([brief.id]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, brief?.id, brief?.updatedAt]);
+  }, [brief?.id, brief?.updatedAt]);
 
   async function runNow() {
     if (!briefSchedule || running) return;
@@ -87,7 +89,14 @@ export function BriefSidebar({
       style={style}
     >
       {resizeHandle}
+      {/* Run and collapse both persist. Running the brief by hand is the
+          card's one verb — a brief you can only run by finding the button
+          under the pointer is a brief you re-run by waiting for tomorrow. */}
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-6">
+        {/* The same icon the collapsed rail shows, so folding a card down
+            and back doesn't change what it is called. Staff and Chats on the
+            left already read this way; the right pair now matches. */}
+        <Sun className="h-3.5 w-3.5 text-muted-foreground" />
         <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
           Brief
         </span>
@@ -101,7 +110,7 @@ export function BriefSidebar({
               onClick={() => void runNow()}
               title="Run the brief now"
               aria-label="Run the brief now"
-              className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+              className="rounded p-1 text-muted-foreground transition hover:bg-surface-2 hover:text-foreground"
             >
               {running ? (
                 <Spinner className="h-3.5 w-3.5" />
@@ -112,35 +121,32 @@ export function BriefSidebar({
           )}
           <button
             type="button"
-            onClick={onToggle}
-            title={open ? "Collapse the brief" : "Show the brief"}
-            aria-expanded={open}
+            onClick={onCollapse}
+            title="Collapse the brief"
+            aria-label="Collapse the brief"
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
           >
             <PanelRightClose className="h-4 w-4" />
           </button>
         </div>
       </div>
-      {open && (
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-          {!brief ? (
-            <p className="text-caption text-subtle-foreground">
-              No brief yet. It runs each morning; press play above to run it
-              now.
-            </p>
-          ) : (
-            <>
-              <div className="text-micro text-subtle-foreground">
-                {relativeTime(brief.updatedAt)}
-              </div>
-              <div className="prose-compact mt-2 flex flex-col gap-3">
-                <AudioPlayer noteId={brief.id} title={brief.title} />
-                <Markdown>{brief.content}</Markdown>
-              </div>
-            </>
-          )}
-        </div>
-      )}
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+        {!brief ? (
+          <p className="text-caption text-subtle-foreground">
+            No brief yet. It runs each morning; press play above to run it now.
+          </p>
+        ) : (
+          <>
+            <div className="text-micro text-subtle-foreground">
+              {relativeTime(brief.updatedAt)}
+            </div>
+            <div className="prose-compact mt-2 flex flex-col gap-3">
+              <AudioPlayer noteId={brief.id} title={brief.title} />
+              <Markdown>{brief.content}</Markdown>
+            </div>
+          </>
+        )}
+      </div>
     </section>
   );
 }
@@ -522,12 +528,21 @@ export function SidebarRail({
   dot,
   onClick,
 }: {
-  icon: "staff" | "brief" | "reports";
+  icon: "staff" | "brief" | "reports" | "chats";
   title: string;
   dot?: boolean;
   onClick: () => void;
 }) {
-  const Icon = icon === "staff" ? Moon : Newspaper;
+  // Sun for the Brief: it is the morning read, and it answers Staff's Moon —
+  // the Night Shift wrote it while you were away.
+  const Icon =
+    icon === "staff"
+      ? Moon
+      : icon === "chats"
+        ? MessagesSquare
+        : icon === "brief"
+          ? Sun
+          : Newspaper;
   return (
     <button
       type="button"

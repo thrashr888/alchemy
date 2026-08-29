@@ -20,9 +20,9 @@ const RECENT_LIMIT: usize = 6;
 ///
 /// `accelerator: None` on an item that still shows `keys` means the key is
 /// handled frontend-side on purpose: native key equivalents win over focused
-/// text fields, so context-dependent keys (⌘N) and field-respecting keys
-/// (⌘F, ⌘←/→) must stay with the frontend's shortcutBlocked guard. The menu
-/// item remains for discoverability and mouse use.
+/// text fields, so context-dependent keys (⌘N, ⌘1–4) and field-respecting
+/// keys (⌘F, ⌘←/→) must stay with the frontend's shortcutBlocked guard. The
+/// menu item remains for discoverability and mouse use.
 pub struct Command {
     pub id: &'static str,
     /// Menu item label; empty = not a menu item (documented gesture only).
@@ -54,6 +54,18 @@ const CMD: &[Command] = &[
         keys: "⌘ N",
         label: "New note",
         context: "Notebook",
+    },
+    // ⌥⌘N, not ⌘N or ⇧⌘N: both are spoken for (⌘N is the context-dependent
+    // new notebook/new note, ⇧⌘N is New Window). This one is NOT
+    // context-dependent — a new chat means the same thing everywhere — so it
+    // can carry a real key equivalent, and ⌥⌘N means nothing to a text field.
+    Command {
+        id: "menu-new-chat",
+        menu_label: "New Chat",
+        accelerator: Some("CmdOrCtrl+Alt+N"),
+        keys: "⌥ ⌘ N",
+        label: "New chat across every notebook",
+        context: "",
     },
     Command {
         id: "menu-new-window",
@@ -109,22 +121,90 @@ const CMD: &[Command] = &[
         id: "menu-back",
         menu_label: "Back",
         accelerator: None,
-        keys: "⌘ ←",
-        label: "Back",
+        keys: "⌘ [",
+        label: "Back (⌘ ← too)",
         context: "",
     },
     Command {
         id: "menu-forward",
         menu_label: "Forward",
         accelerator: None,
-        keys: "⌘ →",
-        label: "Forward",
+        keys: "⌘ ]",
+        label: "Forward (⌘ → too)",
         context: "",
+    },
+    // Where you go, kept as its own group above the sidebar toggles below:
+    // these change the center of Home, they don't show or hide a panel.
+    // Unkeyed — ⌘1–4 belong to the sidebars.
+    Command {
+        id: "menu-home-notebooks",
+        menu_label: "Go to Notebooks",
+        accelerator: None,
+        keys: "",
+        label: "",
+        context: "",
+    },
+    Command {
+        id: "menu-home-chat",
+        menu_label: "Go to Chats",
+        accelerator: None,
+        keys: "",
+        label: "",
+        context: "",
+    },
+    Command {
+        id: "menu-home-registry",
+        menu_label: "Go to Registry",
+        accelerator: None,
+        keys: "",
+        label: "",
+        context: "",
+    },
+    // Two groups of sidebar toggles, one per view, in rail order — and ⌘1–4
+    // runs down each group the same way. The same four keys legitimately mean
+    // different sidebars in Home and in a notebook because the webview's
+    // keydown handler (App.tsx) reads the view before it dispatches, and the
+    // group that doesn't belong to that view is greyed out
+    // (`set_menu_context`). That is also why none of the eight carries a
+    // native accelerator: a key equivalent is global to the process and would
+    // fire whichever view is on screen — the `keys` column documents them for
+    // Settings → Shortcuts instead.
+    Command {
+        id: "menu-toggle-home-chats",
+        menu_label: "Chats",
+        accelerator: None,
+        keys: "⌘ 1",
+        label: "Show or hide Chats",
+        context: "Home",
+    },
+    Command {
+        id: "menu-toggle-home-staff",
+        menu_label: "Staff",
+        accelerator: None,
+        keys: "⌘ 2",
+        label: "Show or hide Staff",
+        context: "Home",
+    },
+    Command {
+        id: "menu-toggle-home-brief",
+        menu_label: "Brief",
+        accelerator: None,
+        keys: "⌘ 3",
+        label: "Show or hide Brief",
+        context: "Home",
+    },
+    Command {
+        id: "menu-toggle-home-reports",
+        menu_label: "Latest Reports",
+        accelerator: None,
+        keys: "⌘ 4",
+        label: "Show or hide Latest Reports",
+        context: "Home",
     },
     Command {
         id: "menu-toggle-sources",
         menu_label: "Sources",
-        accelerator: Some("CmdOrCtrl+1"),
+        accelerator: None,
         keys: "⌘ 1",
         label: "Show or hide Sources",
         context: "Notebook",
@@ -132,7 +212,7 @@ const CMD: &[Command] = &[
     Command {
         id: "menu-toggle-studio",
         menu_label: "Studio",
-        accelerator: Some("CmdOrCtrl+2"),
+        accelerator: None,
         keys: "⌘ 2",
         label: "Show or hide Studio",
         context: "Notebook",
@@ -141,17 +221,17 @@ const CMD: &[Command] = &[
         id: "menu-toggle-gallery",
         menu_label: "Gallery",
         accelerator: None,
-        keys: "",
-        label: "",
-        context: "",
+        keys: "⌘ 3",
+        label: "Show or hide Gallery",
+        context: "Notebook",
     },
     Command {
         id: "menu-toggle-ledger",
         menu_label: "Ledger",
         accelerator: None,
-        keys: "",
-        label: "",
-        context: "",
+        keys: "⌘ 4",
+        label: "Show or hide Ledger",
+        context: "Notebook",
     },
     Command {
         id: "menu-toggle-glass",
@@ -332,6 +412,40 @@ pub struct AppMenu {
     pub window: Submenu<Wry>,
     pub themes: Submenu<Wry>,
     pub generate: Submenu<Wry>,
+    pub context: ViewContextMenu,
+}
+
+/// The View menu's two view-specific groups, held so their `enabled` can
+/// follow the frontend's current view. Home's sidebar toggles and a
+/// notebook's panel toggles are each dead in the other view, and a menu item
+/// that does nothing is worse than one that is visibly unavailable.
+pub struct ViewContextMenu {
+    home: Vec<MenuItem<Wry>>,
+    notebook: Vec<MenuItem<Wry>>,
+}
+
+impl ViewContextMenu {
+    /// Enable exactly the group that belongs to the view now on screen.
+    pub fn apply(&self, in_notebook: bool) -> tauri::Result<()> {
+        for it in &self.home {
+            it.set_enabled(!in_notebook)?;
+        }
+        for it in &self.notebook {
+            it.set_enabled(in_notebook)?;
+        }
+        Ok(())
+    }
+}
+
+/// Tell the native menu which view the frontend is showing, so the View
+/// menu's Home-only and notebook-only toggles enable and disable with it.
+/// Idempotent — the frontend calls it whenever the open notebook changes.
+#[tauri::command]
+pub fn set_menu_context(
+    ctx: tauri::State<'_, ViewContextMenu>,
+    in_notebook: bool,
+) -> Result<(), String> {
+    ctx.apply(in_notebook).map_err(|err| err.to_string())
 }
 
 /// Managed handles for the frontend-filled submenus (theme names and studio
@@ -392,6 +506,7 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
     let file_menu = SubmenuBuilder::new(app, "File")
         .item(&cmd_item(app, "menu-new-notebook")?)
         .item(&cmd_item(app, "menu-new-note")?)
+        .item(&cmd_item(app, "menu-new-chat")?)
         .item(&cmd_item(app, "menu-new-window")?)
         .item(&recent_menu)
         .separator()
@@ -443,22 +558,48 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
             .enabled(false)
             .build(app)?,
     )?;
-    // No ⌘←/⌘→ accelerators on Back/Forward: the menu's key equivalents
+    // No ⌘[/⌘]/⌘←/⌘→ accelerators on Back/Forward: the menu's key equivalents
     // actually WIN over a focused text field (regression: ⌘→ stopped jumping
     // to line end while editing), so the frontend keydown handler in App.tsx
     // owns the shortcut — it guards with shortcutBlocked so text fields keep
     // the line-start/line-end meaning. The menu items stay for
     // discoverability and mouse use.
-    let view_menu = SubmenuBuilder::new(app, "View")
+    // Two groups of sidebar toggles, one per view, and only the view you are
+    // in is live: a notebook's Sources/Studio/Gallery/Ledger mean nothing on
+    // Home, and Home's four cards mean nothing inside a notebook. Kept as
+    // handles so `set_menu_context` can flip `enabled` as the frontend moves
+    // between views — the menu itself is never rebuilt. Each group is in rail
+    // order, which is also ⌘1–4 order (see the registry above).
+    let home_toggles = [
+        cmd_item(app, "menu-toggle-home-chats")?,
+        cmd_item(app, "menu-toggle-home-staff")?,
+        cmd_item(app, "menu-toggle-home-brief")?,
+        cmd_item(app, "menu-toggle-home-reports")?,
+    ];
+    let notebook_toggles = [
+        cmd_item(app, "menu-toggle-sources")?,
+        cmd_item(app, "menu-toggle-studio")?,
+        cmd_item(app, "menu-toggle-gallery")?,
+        cmd_item(app, "menu-toggle-ledger")?,
+    ];
+    let mut view = SubmenuBuilder::new(app, "View")
         .item(&cmd_item(app, "menu-back")?)
         .item(&cmd_item(app, "menu-forward")?)
         .separator()
         .item(&cmd_item(app, "menu-search")?)
         .separator()
-        .item(&cmd_item(app, "menu-toggle-sources")?)
-        .item(&cmd_item(app, "menu-toggle-studio")?)
-        .item(&cmd_item(app, "menu-toggle-gallery")?)
-        .item(&cmd_item(app, "menu-toggle-ledger")?)
+        .item(&cmd_item(app, "menu-home-notebooks")?)
+        .item(&cmd_item(app, "menu-home-chat")?)
+        .item(&cmd_item(app, "menu-home-registry")?)
+        .separator();
+    for it in &home_toggles {
+        view = view.item(it);
+    }
+    view = view.separator();
+    for it in &notebook_toggles {
+        view = view.item(it);
+    }
+    let view_menu = view
         .separator()
         .item(&theme_menu)
         .item(&cmd_item(app, "menu-toggle-glass")?)
@@ -504,12 +645,20 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
             &help_menu,
         ],
     )?;
+    let context = ViewContextMenu {
+        home: home_toggles.into(),
+        notebook: notebook_toggles.into(),
+    };
+    // The app opens on Home, so start there rather than with both groups
+    // live for the one frame before the frontend reports in.
+    context.apply(false)?;
     Ok(AppMenu {
         menu,
         recent: recent_menu,
         window: window_menu,
         themes: theme_menu,
         generate: generate_menu,
+        context,
     })
 }
 

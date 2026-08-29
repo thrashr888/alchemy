@@ -23,6 +23,9 @@ import type {
   Message,
   MessagePage,
   MetaAnswer,
+  MetaCitation,
+  MetaThread,
+  MetaTurn,
   ModelHealth,
   ModelStat,
   CardFact,
@@ -409,6 +412,10 @@ export const api = {
     currentTheme: string,
   ) =>
     run(cmd<void>("fill_menu_lists", { themes, generators, currentTheme })),
+  /** Tell the native menu which view is on screen, so the View menu's
+   *  Home-only and notebook-only toggles enable and disable with it. */
+  setMenuContext: (inNotebook: boolean) =>
+    run(cmd<void>("set_menu_context", { inNotebook })),
   /** Settings → Shortcuts rows from the menu's command registry. */
   listShortcuts: () =>
     run(
@@ -445,7 +452,44 @@ export const api = {
     /** Deep search: 3× retrieval pool + model rerank. Omit for the smart
      *  default (on for gateway models, off for local). */
     deep?: boolean,
-  ) => run(ai<MetaAnswer>("ask_everything", { question, history, deep: deep ?? null })),
+    /** Home chat's own style and length. Omitted (⌘K's glance mode) means the
+     *  default prompt, unchanged. */
+    config?: ChatConfig | null,
+    /** The conversation this was asked in. Only Home's housekeeping tools
+     *  need it — rename/delete this chat, and "save that answer". */
+    threadId?: string | null,
+  ) =>
+    run(
+      ai<MetaAnswer>("ask_everything", {
+        question,
+        history,
+        deep: deep ?? null,
+        config: config ?? null,
+        threadId: threadId ?? null,
+      }),
+    ),
+  // Home chat threads — the persisted side of ask_everything.
+  listMetaThreads: () => run(query<MetaThread[]>("list_meta_threads")),
+  listMetaTurns: (threadId: string) =>
+    run(query<MetaTurn[]>("list_meta_turns", { threadId })),
+  addMetaTurn: (
+    threadId: string,
+    role: "user" | "assistant",
+    content: string,
+    citations: MetaCitation[],
+    kind: MetaTurn["kind"],
+  ) =>
+    run(
+      cmd<MetaTurn>("add_meta_turn", {
+        threadId,
+        role,
+        content,
+        citations,
+        kind,
+      }),
+    ),
+  deleteMetaThread: (threadId: string) =>
+    run(cmd<void>("delete_meta_thread", { threadId })),
   createNote: (notebookId: string, title: string, content: string) =>
     run(cmd<Note>("create_note", { notebookId, title, content })),
   /** Undo half of the note-delete toast: re-insert with kind/prompt intact. */

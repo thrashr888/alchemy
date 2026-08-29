@@ -81,6 +81,23 @@ Two design decisions the eval forced:
   routed recall@10 equals flat (1.00) even in a top-2-of-3 stress test;
   without it, 0.93.
 
+**Self-healing covers width, not just text** *(added 2026-08-29)*. The
+summary diff cannot see an embedder swap: no summary changes, so a
+converged index stays "fresh" while every vector in it is the wrong
+width, and the table can then be neither searched nor appended to
+("No vector column found to match with the query vector dimension" —
+observed live after a Re-embed All, which rebuilt `chunks` and left
+`routes` at the old width). Two seams close it. `ensure_router` compares
+the stored column width against a probe embed and drops the index when
+they disagree, so the diff rebuilds every row; `Db::route_search`
+compares the query vector it was handed — free, exact — and drops the
+index rather than failing the search, answering empty, which every
+caller already reads as "no index yet". Both are safe only because
+routes are derived: `chunks` carries the same risk and must NOT be
+auto-dropped, since its rows are the only copy of a source's chunking —
+that path still surfaces the raw Lance error and wants an explicit
+re-embed.
+
 ## Phase 5: deep-search profile (done)
 
 `retrieve_everything(deep)` retrieves a 3× pool and asks the chat model

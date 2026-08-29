@@ -4,6 +4,10 @@ import type {
   HygieneIssue,
   KokoroStatus,
   Message,
+  MetaAnswer,
+  MetaCitation,
+  MetaThread,
+  MetaTurn,
   ModelHealth,
   ModelStat,
   Note,
@@ -43,6 +47,49 @@ export interface NavEntry {
   nb: string | null;
   mode: "chat" | "reader" | "ledger" | "gallery";
   doc?: { type: ReaderDoc["type"]; id: string };
+  /** Home's section, when this entry IS Home (`nb: null`). Home has tabs the
+   *  way a notebook has center modes, and a tab is a place: back should
+   *  return you to the Registry, or to the conversation, you were reading. */
+  section?: HomeSection;
+  /** The Home conversation that was open, for `section: "chat"`. */
+  thread?: string | null;
+}
+
+/** Home's center column: the notebook grid, the Registry's cast, or the
+ *  corpus-wide conversation. */
+export type HomeSection = "notebooks" | "registry" | "chat";
+
+/** Home's conversation, as the store holds it: which thread is open and the
+ *  turns already settled into it. Both come from the backend — the thread
+ *  outlives the window now (docs/RFC-meta-chat.md). */
+export interface HomeChatState {
+  /** null until the first question mints one. */
+  threadId: string | null;
+  turns: MetaTurn[];
+}
+
+/** Home's answer-in-progress. It lives in the store, keyed to the thread it
+ *  is being written into, because a run belongs to its CONVERSATION and not
+ *  to whichever view happened to start it: switching threads, or walking off
+ *  into a notebook behind a citation, leaves it running, and coming back
+ *  shows exactly where it got to — trail, partial text and all. */
+export interface HomeRun {
+  /** The conversation this answer lands in when it settles. */
+  threadId: string;
+  /** What was asked, so a view that arrives late knows what it's waiting on. */
+  question: string;
+  /** Tokens of the answer so far. */
+  streaming: string;
+  /** Completed pipeline stages, then the transient line under them. */
+  steps: string[];
+  waiting: string;
+  /** Stop (or a superseding question) was pressed: the partial still lands,
+   *  labelled "stopped". */
+  stopped: boolean;
+  /** Asked while the previous run still held the channel. The backend answers
+   *  one corpus question per window, so this one waits — and every meta://
+   *  event until it clears belongs to the run being wound down, not to this. */
+  queued: boolean;
 }
 
 export interface ExternalAdd {
@@ -199,8 +246,28 @@ export interface AppState {
   /** Bumped when the registry changes (agents, or the arrival sweep filing
    *  a document). Corpus-scoped, so it fires with no notebook open. */
   registryBump: number;
-  /** Home's center column: the notebook grid, or the Registry's cast. */
-  homeSection: "notebooks" | "registry";
+  /** Home's center column: the notebook grid, the Registry's cast, or the
+   *  Chat tab's conversation. */
+  homeSection: HomeSection;
+  /** The Home conversation currently open (docs/RFC-meta-chat.md). Persisted
+   *  per thread in the `meta_turns` table, so it survives a tab switch, a
+   *  window close, and a relaunch. */
+  homeChat: HomeChatState;
+  /** The corpus answer being written right now, or null. Not part of
+   *  `homeChat`: the run outlives the thread being *looked at*. */
+  homeRun: HomeRun | null;
+  /** Unsent composer text, per conversation ("shelf" for the ask box over the
+   *  notebook grid). A half-typed follow-up is work; switching threads to
+   *  check something shouldn't throw it away. Persisted, as the notebook
+   *  composer's draft is. */
+  homeDrafts: Record<string, string>;
+  /** Every Home conversation, most recently used first — the Chat tab's
+   *  thread list. Refreshed when a turn settles or a thread is deleted. */
+  homeThreads: MetaThread[];
+  /** Home chat's own style and length. Per SURFACE, not per thread: asking
+   *  across everything is a different job from asking inside one notebook,
+   *  and it shouldn't inherit — or overwrite — whatever a notebook is set to. */
+  homeChatConfig: ChatConfig;
   /** How that column lays out. Cards are recognisable, rows are scannable
    *  and sortable — which one is "easier to find things in" depends on the
    *  collection, so it's a per-user choice, remembered. */
@@ -244,6 +311,45 @@ export interface AppState {
   closeNotebook: () => void;
   navBack: () => void;
   navForward: () => void;
+  /** Re-read the Chat tab's thread list. */
+  refreshHomeThreads: () => Promise<void>;
+  /** Mint a fresh Home conversation and make it the open one, without moving
+   *  anybody to the Chat tab. Returns its id. The ⌘K palette asks into one of
+   *  these: a question typed at the launcher is a fresh subject, not a
+   *  follow-up to whatever conversation Home happened to have open. */
+  newHomeThread: () => string;
+  /** Open a Home conversation and show it: its turns are loaded from the
+   *  backend. `null` starts a fresh one — no row exists until it's asked. */
+  openHomeThread: (threadId: string | null) => Promise<void>;
+  /** Persist a settled turn into `threadId` — defaulting to the open thread,
+   *  minting an id if there isn't one — and show it if that conversation is
+   *  the one on screen. A run that settles while you are reading elsewhere
+   *  writes into its own thread, not into what you're looking at. */
+  appendHomeTurn: (
+    role: "user" | "assistant",
+    content: string,
+    citations: MetaCitation[],
+    kind: MetaTurn["kind"],
+    threadId?: string,
+  ) => Promise<void>;
+  /** Ask across every notebook, into the open conversation. Resolves when the
+   *  answer has settled. A question asked while another is still being written
+   *  winds that one down first (its partial is kept, as Stop keeps it). */
+  askHome: (question: string) => Promise<void>;
+  /** Land a Home tool reply: the quiet transcript row, plus whatever the
+   *  backend could only ask this window to do — open a notebook, or let go
+   *  of the conversation it just deleted. */
+  settleHomeTool: (threadId: string, answer: MetaAnswer) => Promise<void>;
+  /** Stop the run in flight, keeping whatever it had written. */
+  stopHome: () => void;
+  /** meta://token and meta://step, folded into the live run. */
+  appendHomeToken: (token: string) => void;
+  appendHomeStep: (label: string, transient: boolean) => void;
+  /** Remember unsent composer text for one conversation. */
+  setHomeDraft: (key: string, text: string) => void;
+  deleteHomeThread: (threadId: string) => Promise<void>;
+  /** Set Home chat's style/length; persisted for the surface. */
+  setHomeChatConfig: (config: ChatConfig) => void;
   /** Resolves to the new notebook's id. */
   createNotebook: (title: string) => Promise<string>;
   renameNotebook: (id: string, title: string) => Promise<void>;

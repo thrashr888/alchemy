@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState } from "react";
+import { isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useStore } from "@/lib/store";
 import { usePickList } from "@/lib/pick";
+import { homeDraftKey } from "@/lib/homeChatRun";
+import { HOME_CARDS, registerHomeCards, toggleHomeCard } from "@/lib/homeCards";
 import { DevBadge } from "./DevBadge";
 import { UpdateBadge } from "./UpdateBadge";
 import { HealthBanner } from "./HealthBanner";
+import { NavButtons } from "./NavButtons";
 import {
   Badge,
   Button,
@@ -32,10 +38,9 @@ import type { Note, Notebook, SourceEvent } from "@/lib/types";
 import {
   Archive,
   ArchiveRestore,
-  BookOpen,
   FileDown,
   ChevronRight,
-  PanelRight,
+  MessagesSquare,
   PanelRightClose,
   Plus,
   Search,
@@ -45,11 +50,17 @@ import {
   FileText,
   Newspaper,
   Package,
-  Sparkles,
   FolderInput,
   Library,
+  Square,
 } from "lucide-react";
 import { BriefSidebar, SidebarRail, StaffSidebar } from "./HomeSections";
+import {
+  HomeChatControls,
+  HomeChatThread,
+  HomeThreadsSidebar,
+  useHomeChat,
+} from "./HomeChat";
 import { NOTEBOOK_ICONS, notebookIcon } from "@/lib/notebookIcons";
 import { RegistrySection } from "./RegistrySection";
 import {
@@ -70,6 +81,71 @@ const NOTEBOOK_PALETTE = [
   "#4fc1c9",
   "#98a562",
 ];
+
+const clampSplit = (pct: number) => Math.min(75, Math.max(15, pct));
+
+/** The horizontal handle between two stacked side-cards. Both rails stack the
+ *  same way — Chats over Staff on the left, Brief over Latest reports on the
+ *  right — so they drag the same way too. */
+function StackSplit({
+  colRef,
+  pct,
+  onChange,
+  defaultPct,
+  label,
+}: {
+  /** The column the two cards share; the drag is a fraction of its height. */
+  colRef: React.RefObject<HTMLDivElement | null>;
+  pct: number;
+  onChange: (pct: number) => void;
+  defaultPct: number;
+  label: string;
+}) {
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const col = colRef.current;
+    if (!col) return;
+    const rect = col.getBoundingClientRect();
+    const move = (ev: PointerEvent) =>
+      onChange(clampSplit(((ev.clientY - rect.top) / rect.height) * 100));
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.style.cursor = "";
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    document.body.style.cursor = "row-resize";
+  };
+  return (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label={label}
+      tabIndex={0}
+      onPointerDown={onPointerDown}
+      onDoubleClick={() => onChange(defaultPct)}
+      onKeyDown={(e) => {
+        // Arrow keys nudge the split — the same keyboard affordance
+        // ResizeHandle gives the vertical edges.
+        const delta = e.key === "ArrowDown" ? 2 : e.key === "ArrowUp" ? -2 : 0;
+        if (!delta) return;
+        e.preventDefault();
+        onChange(clampSplit(pct + delta));
+      }}
+      className="group/resize relative h-2 shrink-0 cursor-row-resize rounded transition-colors hover:bg-ring/30 active:bg-ring/40 focus-visible:bg-ring/30"
+    >
+      <span
+        aria-hidden
+        className="absolute top-1/2 left-1/2 flex -translate-x-1/2 -translate-y-1/2 gap-0.5 opacity-40 transition-opacity group-hover/resize:opacity-100 group-focus-visible/resize:opacity-100"
+      >
+        <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
+        <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
+        <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
+      </span>
+    </div>
+  );
+}
 
 /** The scannable form of the notebook shelf. Same rows the grid shows, read
  *  down columns instead of across cards. */
@@ -184,13 +260,15 @@ function NotebookTable({
  *  Chat|Reader|Gallery|Ledger tabs (CenterModeTabs, ReaderPane.tsx): one
  *  control, in the title bar, choosing what the center column shows about a
  *  constant subject. There the subject is one notebook; here it's the whole
- *  corpus — its notebooks, or the cast of things they're about. Same kind of
- *  switch, so it lives in the same place and wears the same chrome. */
+ *  corpus — its notebooks, the cast of things they're about, or the
+ *  conversation you're having with all of them at once. Same kind of switch,
+ *  so it lives in the same place and wears the same chrome. */
 function HomeSectionTabs() {
   const section = useStore((s) => s.homeSection);
 
   const tabs = [
-    { id: "notebooks", label: "Notebooks", icon: BookOpen },
+    { id: "notebooks", label: "Notebooks", icon: Library },
+    { id: "chat", label: "Chat", icon: MessagesSquare },
     { id: "registry", label: "Registry", icon: Package },
   ] as const;
   return (
@@ -199,14 +277,24 @@ function HomeSectionTabs() {
         <button
           key={id}
           type="button"
-          onClick={() =>
-            useStore.setState({ homeSection: id, openCardId: null })
-          }
+          onClick={() => {
+            if (id === "chat") {
+              // Reopens whatever conversation was last on screen, minting a
+              // fresh one only when there has never been one.
+              void useStore
+                .getState()
+                .openHomeThread(useStore.getState().homeChat.threadId);
+              return;
+            }
+            useStore.setState({ homeSection: id, openCardId: null });
+          }}
           aria-pressed={section === id}
           title={
             id === "registry"
               ? "The things your documents are about"
-              : "Your notebooks"
+              : id === "chat"
+                ? "Ask across every notebook"
+                : "Your notebooks"
           }
           className={cn(
             "flex items-center gap-1.5 rounded-md px-2 py-1 text-caption transition-colors",
@@ -280,10 +368,47 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       return !open;
     });
   };
+  // The Chats card collapses on its own, the way Staff below it and Brief
+  // opposite do — same key grammar. Its default is the one that differs:
+  // before there is a first conversation the card has nothing to list, so a
+  // rail nobody has touched starts folded and opens itself the moment the
+  // first chat exists (the effect below). An ABSENT `homeChatsOpen` is what
+  // "never chose" means — every deliberate toggle writes it.
+  const [chatsOpen, setChatsOpen] = useState(
+    () => (localStorage.getItem("homeChatsOpen") ?? "0") !== "0",
+  );
+  const toggleChats = () => {
+    setChatsOpen((open) => {
+      localStorage.setItem("homeChatsOpen", open ? "0" : "1");
+      return !open;
+    });
+  };
+  // The one auto-open, on the 0 → 1 crossing of the thread list: the first
+  // conversation you ever have is what makes the card worth its width, so it
+  // shows up on its own the moment it has something to list. Writing the key
+  // as it fires is what keeps this to once, ever — a later collapse, deleting
+  // every thread and starting over, and a second window all read the same
+  // written key and leave the card where it was put.
+  //
+  // The ref starts false rather than at the current count on purpose: a first
+  // chat asked from ⌘K inside a notebook lands while this view is unmounted,
+  // and a crossing measured from the count at mount would never fire for it.
+  // "Never chose, and there is now a conversation" is the real condition; the
+  // written key, not the count, is what makes it once. (Empty threads minted
+  // by New chat or the palette aren't in `homeThreads` until a turn settles,
+  // so this means a real answer rather than an open box.)
+  const homeThreads = useStore((s) => s.homeThreads);
+  const sawThreads = useRef(false);
+  useEffect(() => {
+    if (!homeThreads.length || sawThreads.current) return;
+    sawThreads.current = true;
+    if (localStorage.getItem("homeChatsOpen") !== null) return;
+    localStorage.setItem("homeChatsOpen", "1");
+    setChatsOpen(true);
+  }, [homeThreads]);
   const [briefOpen, setBriefOpen] = useState(
     () => localStorage.getItem("homeBriefOpen") !== "0",
   );
-  const clampSplit = (pct: number) => Math.min(75, Math.max(15, pct));
   const clampStaffW = (w: number) => Math.min(440, Math.max(240, w));
   const [staffWidth, setStaffWidth] = useState(() =>
     clampStaffW(Number(localStorage.getItem("homeStaffWidth") ?? 300)),
@@ -295,7 +420,27 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [briefSplit, setBriefSplit] = useState(() =>
     clampSplit(Number(localStorage.getItem("homeBriefSplit") ?? 40)),
   );
+  // The left rail splits the same way when it stacks: Chats over Staff. The
+  // percentage is the TOP card's height, so it names Chats — its own key,
+  // since `homeStaffSplit` measured the other card.
+  const [chatsSplit, setChatsSplit] = useState(() =>
+    clampSplit(Number(localStorage.getItem("homeChatsSplit") ?? 45)),
+  );
+  const leftColRef = useRef<HTMLDivElement>(null);
   const rightColRef = useRef<HTMLDivElement>(null);
+  const staffResizeHandle = (
+    <ResizeHandle
+      edge="right"
+      width={staffWidth}
+      defaultWidth={300}
+      label="Resize the Staff sidebar"
+      onResize={(w) => {
+        const width = clampStaffW(w);
+        setStaffWidth(width);
+        localStorage.setItem("homeStaffWidth", String(Math.round(width)));
+      }}
+    />
+  );
   // The reading column's resize handle, rendered once per stacked card —
   // each card's left edge is the column's, so either drags the whole column.
   const rightResizeHandle = (
@@ -311,31 +456,54 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       }}
     />
   );
-  const onSplitDrag = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const col = rightColRef.current;
-    if (!col) return;
-    const rect = col.getBoundingClientRect();
-    const move = (ev: PointerEvent) => {
-      const pct = clampSplit(((ev.clientY - rect.top) / rect.height) * 100);
-      setBriefSplit(pct);
-      localStorage.setItem("homeBriefSplit", String(Math.round(pct)));
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      document.body.style.cursor = "";
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    document.body.style.cursor = "row-resize";
-  };
   const toggleBrief = () => {
     setBriefOpen((open) => {
       localStorage.setItem("homeBriefOpen", open ? "0" : "1");
       return !open;
     });
   };
+
+  // View > Chats/Staff/Brief/Latest Reports (menu.rs), and ⌘1–4 with them.
+  // The four cards' open state is this component's — and this component only
+  // mounts on Home — so the toggles live here rather than in the store's menu
+  // router, and they flip exactly the state each card's own collapse button
+  // writes. Held in a ref so a subscription outlives a render.
+  const homeToggles = useRef({
+    toggleChats,
+    toggleStaff,
+    toggleBrief,
+    toggleReports,
+  });
+  homeToggles.current = { toggleChats, toggleStaff, toggleBrief, toggleReports };
+  // ⌘1–4 is caught above both views (App.tsx), since the same keys mean a
+  // notebook's panels when one is open — so publish the toggles for it.
+  useEffect(() => {
+    registerHomeCards((card) => {
+      const t = homeToggles.current;
+      if (card === "chats") t.toggleChats();
+      else if (card === "staff") t.toggleStaff();
+      else if (card === "brief") t.toggleBrief();
+      else t.toggleReports();
+    });
+    return () => registerHomeCards(null);
+  }, []);
+  useEffect(() => {
+    if (!isTauri()) return;
+    const label = getCurrentWebview().label;
+    // The menu items are disabled off Home, so an action can't arrive with no
+    // card to toggle — it goes through the same registration ⌘1–4 uses.
+    const un = listen<{ target: string; id: string }>("menu://action", (e) => {
+      if (e.payload.target !== label) return;
+      const card = HOME_CARDS.find(
+        (c) => e.payload.id === `menu-toggle-home-${c}`,
+      );
+      if (card) toggleHomeCard(card);
+    });
+    return () => {
+      void un.then((off) => off());
+    };
+  }, []);
+
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   // ---- Shelf selection (docs/RFC-multi-select.md) ----------------------
@@ -460,17 +628,47 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     },
   ];
 
-  // The unified ask box: one input over the WHOLE corpus. Enter hands the
-  // question to the palette's ask mode (meta-chat, docs/RFC-meta-chat.md) —
-  // no notebook choice needed; citations name where answers live.
-  const [ask, setAsk] = useState("");
-  function submitAsk(e: React.FormEvent) {
+  // The unified ask box: one input over the WHOLE corpus. Enter lands you in
+  // the Chat tab (meta-chat, docs/RFC-meta-chat.md) — no notebook choice
+  // needed; citations name where the answers live. ⌘K's ask mode is the same
+  // pipeline in glance form; this one keeps the thread, and keeps it for good.
+  const askRef = useRef<HTMLInputElement>(null);
+  const chat = useHomeChat();
+  const chatOpen = homeSection === "chat";
+  // Half-typed text belongs to the conversation it was typed in, not to the
+  // box: switching threads to check something and coming back finds it still
+  // there. The shelf keeps its own slot — a question typed over the notebook
+  // grid isn't a follow-up to anything.
+  const homeThreadId = useStore((s) => s.homeChat.threadId);
+  const draftKey = homeDraftKey(chatOpen, homeThreadId);
+  const ask = useStore((s) => s.homeDrafts[draftKey] ?? "");
+  const setHomeDraft = useStore((s) => s.setHomeDraft);
+  const setAsk = (text: string) => setHomeDraft(draftKey, text);
+  async function submitAsk(e: React.FormEvent) {
     e.preventDefault();
     const q = ask.trim();
-    if (!q) return;
+    // A question asked over the top of a running one supersedes it (askHome
+    // winds the old one down and keeps its partial), so only a run in THIS
+    // conversation blocks the composer — that one has a Stop button instead.
+    if (!q || chat.loading) return;
     setAsk("");
-    useStore.setState({ pendingAsk: q, paletteOpen: true });
+    // Asking from the shelf is asking to be in the conversation — a new one:
+    // a question typed over the notebook grid is a fresh subject, and
+    // grafting it onto whatever was last discussed would send that thread's
+    // history to the model as context for it. Follow-ups are asked from
+    // inside the Chat tab, where this same box is the follow-up composer.
+    // The thread must be open (and its id minted) before the run starts.
+    if (!chatOpen) await useStore.getState().openHomeThread(null);
+    chat.ask(q);
   }
+  // A settled answer hands the caret back: the follow-up is the next move,
+  // and the composer sits in the same place it was typed in. Arriving in a
+  // conversation is the same move — New chat, or a row in the Chats card,
+  // mints or opens a thread id, and what you do next is type into it, so the
+  // caret is already there rather than parked on the button you pressed.
+  useEffect(() => {
+    if (chatOpen && !chat.loading) askRef.current?.focus();
+  }, [chatOpen, chat.loading, homeThreadId]);
 
   // "Since you were away": what landed since the last time home was open.
   const [prevVisit] = useState<number>(() =>
@@ -609,6 +807,99 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     noteUnread(r, noteReads, noteReadsBaseline),
   );
 
+  /** The unified ask box: one input, the whole corpus. On the shelf it sits
+   *  under the heading and starts a thread; inside the Chat tab it is the
+   *  follow-up composer, docked at the bottom under the conversation the way
+   *  a notebook's composer sits under its transcript. One markup either way —
+   *  only its place, its placeholder, and its controls row differ. */
+  const askComposer = (
+    <>
+      <form
+        onSubmit={submitAsk}
+        className="min-w-0 rounded-xl border border-border bg-surface/80 p-1.5 shadow-sm backdrop-blur transition-colors focus-within:border-primary/50"
+      >
+        <div className="flex min-w-0 items-center gap-1.5">
+          <input
+            ref={askRef}
+            value={ask}
+            onChange={(e) => setAsk(e.target.value)}
+            placeholder={
+              chatOpen
+                ? "Ask a follow-up…"
+                : "Ask or search across all your notebooks…"
+            }
+            aria-label={
+              chatOpen
+                ? "Ask a follow-up across all notebooks"
+                : "Ask a question across all notebooks"
+            }
+            className="h-8 min-w-0 flex-1 bg-transparent pl-2.5 pr-1.5 text-body text-foreground outline-none placeholder:text-subtle-foreground"
+          />
+          {!chatOpen && (
+            <button
+              type="button"
+              onClick={() => useStore.getState().setPaletteOpen(true)}
+              title="Search notebooks, sources & notes (⌘K)"
+              aria-label="Open search"
+              className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-caption text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+            >
+              <Search className="h-3.5 w-3.5" />
+              <kbd className="rounded border border-border bg-surface-2 px-1 py-0.5 text-badge text-subtle-foreground">
+                ⌘K
+              </kbd>
+            </button>
+          )}
+          {chat.loading ? (
+            // Stop keeps whatever streamed — the backend resolves a
+            // cancelled run with the partial answer and its citations.
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={chat.stop}
+              title="Stop answering (Esc)"
+            >
+              <Square className="h-3 w-3 fill-current" />
+              Stop
+            </Button>
+          ) : (
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              disabled={!ask.trim()}
+            >
+              Ask
+            </Button>
+          )}
+        </div>
+        {/* Style, length, and model — only where the conversation is, since
+            they describe the answer being written rather than the shelf. */}
+        {chatOpen && (
+          <div className="flex items-center gap-1.5 px-1 pt-1.5">
+            <HomeChatControls />
+          </div>
+        )}
+      </form>
+      {activityError && (
+        <div
+          role="alert"
+          className="mt-2 flex items-center gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-caption text-destructive"
+        >
+          <span className="min-w-0 flex-1">{activityError}</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void refreshActivity()}
+            loading={activityLoading}
+          >
+            Retry
+          </Button>
+        </div>
+      )}
+    </>
+  );
+
   // Backend already returns notebooks sorted by most-recently-updated.
   return (
     <div className="app-root flex h-dvh w-screen flex-col overflow-hidden text-foreground">
@@ -616,9 +907,12 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         data-tauri-drag-region
         className="flex h-12 items-center gap-2.5 pl-[84px] pr-5"
       >
-        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/15 text-primary">
-          <BookOpen className="h-4 w-4" />
-        </div>
+        <NavButtons />
+        <div className="h-4 w-px bg-border" />
+        {/* Just the wordmark: you are already at your notebooks, so a second
+            books icon here only competed with the Notebooks tab beside it
+            (and with the go-home button in the notebook header, which wears
+            the same Library glyph). One icon, one meaning. */}
         <span className="text-section font-semibold tracking-tight">
           Alchemy
         </span>
@@ -698,39 +992,88 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       ) : (
         <div className="relative flex min-h-0 flex-1">
           {/* Three regions, same side-card idiom as the notebook view:
-            Staff rail left, notebooks center, Brief + reports column right.
-            Each sidebar collapses on its own. */}
-          {staffOpen ? (
-            <aside
-              className="side-card relative mx-2 mb-2 mt-1 hidden shrink-0 flex-col lg:flex"
+            Chats + Staff rail left, the section's own center, Brief +
+            reports column right. Each sidebar collapses on its own, and
+            neither rail depends on which section is on screen. */}
+          {chatsOpen || staffOpen ? (
+            <div
+              ref={leftColRef}
+              className="relative mx-2 mb-2 mt-1 hidden shrink-0 flex-col lg:flex"
               style={{ width: staffWidth }}
             >
-              <ResizeHandle
-                edge="right"
-                width={staffWidth}
-                defaultWidth={300}
-                label="Resize the Staff sidebar"
-                onResize={(w) => {
-                  const width = clampStaffW(w);
-                  setStaffWidth(width);
-                  localStorage.setItem("homeStaffWidth", String(Math.round(width)));
-                }}
-              />
-              <StaffSidebar
-                schedules={allReports}
-                reports={reports}
-                recentNotes={recentNotes}
-                notebookTitle={notebookTitle}
-                notebookColor={notebookColor}
-                onOpenNote={openNote}
-                onOpenNotebook={(id) => void open(id)}
-                onOpenEvent={openEventSource}
-                onRan={refreshActivity}
-                onCollapse={toggleStaff}
-              />
-            </aside>
+              {/* Past conversations lead this rail, the way the Brief leads
+                  the one opposite: the thread you were in is the way back
+                  into the work, and it is reachable from every section — a
+                  conversation is not a property of the shelf you happen to
+                  be looking at. One handle per stacked card, as on the
+                  right: each card's right edge is the column's, so either
+                  drags its width. */}
+              {chatsOpen ? (
+                <HomeThreadsSidebar
+                  className={staffOpen ? "shrink-0" : "flex-1"}
+                  style={staffOpen ? { height: `${chatsSplit}%` } : undefined}
+                  resizeHandle={staffResizeHandle}
+                  onCollapse={toggleChats}
+                />
+              ) : (
+                <div className="side-card flex w-12 shrink-0 flex-col items-center self-start py-2">
+                  <SidebarRail
+                    icon="chats"
+                    title="Show Chats"
+                    onClick={toggleChats}
+                  />
+                </div>
+              )}
+              {chatsOpen && staffOpen ? (
+                <StackSplit
+                  colRef={leftColRef}
+                  pct={chatsSplit}
+                  defaultPct={45}
+                  label="Resize Chats"
+                  onChange={(pct) => {
+                    setChatsSplit(pct);
+                    localStorage.setItem(
+                      "homeChatsSplit",
+                      String(Math.round(pct)),
+                    );
+                  }}
+                />
+              ) : (
+                <div className="h-2 shrink-0" />
+              )}
+              {staffOpen ? (
+                <aside className="side-card relative flex min-h-0 flex-1 flex-col">
+                  {staffResizeHandle}
+                  <StaffSidebar
+                    schedules={allReports}
+                    reports={reports}
+                    recentNotes={recentNotes}
+                    notebookTitle={notebookTitle}
+                    notebookColor={notebookColor}
+                    onOpenNote={openNote}
+                    onOpenNotebook={(id) => void open(id)}
+                    onOpenEvent={openEventSource}
+                    onRan={refreshActivity}
+                    onCollapse={toggleStaff}
+                  />
+                </aside>
+              ) : (
+                <div className="side-card flex w-12 shrink-0 flex-col items-center self-start py-2">
+                  <SidebarRail
+                    icon="staff"
+                    title="Show Staff"
+                    onClick={toggleStaff}
+                  />
+                </div>
+              )}
+            </div>
           ) : (
-            <div className="side-card mx-2 mt-1 hidden w-12 shrink-0 flex-col items-center self-start py-2 lg:flex">
+            <div className="side-card mx-2 mt-1 hidden w-12 shrink-0 flex-col items-center gap-1 self-start py-2 lg:flex">
+              <SidebarRail
+                icon="chats"
+                title="Show Chats"
+                onClick={toggleChats}
+              />
               <SidebarRail icon="staff" title="Show Staff" onClick={toggleStaff} />
             </div>
           )}
@@ -746,12 +1089,26 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               <div className="absolute inset-0 bg-[linear-gradient(to_bottom,transparent_55%,var(--background)_100%)]" />
             </div>
             )}
-            {/* Heading + ask box stay put; only the shelves below scroll. */}
-            <div className="relative z-10 mx-auto w-full max-w-[960px] shrink-0 px-6 pt-10">
+            {/* Heading + ask box stay put; only the shelves (or the
+            conversation) below scroll. */}
+            <div
+              className={cn(
+                "relative z-10 mx-auto w-full shrink-0 px-6",
+                // The composer lines up with the conversation it feeds, so
+                // the column narrows to the reading measure while one is open.
+                chatOpen ? "max-w-[760px] pt-6" : "max-w-[960px] pt-10",
+              )}
+            >
+              {/* The conversation takes the center column: the shelf's
+              heading and verbs would only compete with it, and the ask box
+              below becomes the follow-up composer. The chat gets no heading
+              of its own — the tab already names the place, and the citations
+              say where answers come from. */}
               {/* Wraps rather than squeezes: with both sidebars open this
                   column is far narrower than its 960px cap, so the action
                   cluster drops to its own line instead of crushing the
                   heading. */}
+              {!chatOpen && (
               <div className="mb-5 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
                 <div className="min-w-[260px] flex-1">
                   <h1 className="text-page font-semibold tracking-tight">
@@ -844,64 +1201,21 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   )}
                 </div>
               </div>
+              )}
 
-              {/* The unified ask box: one input, the whole corpus. Enter asks
-              across every notebook (palette ask mode); the ⌘K chip is the
-              same surface in search mode. */}
-              <div className="mb-8">
-                <form
-                  onSubmit={submitAsk}
-                  className="flex min-w-0 items-center gap-1.5 rounded-xl border border-border bg-surface/80 p-1.5 shadow-sm backdrop-blur transition-colors focus-within:border-primary/50"
-                >
-                  <Sparkles className="ml-2 h-4 w-4 shrink-0 text-citation" />
-                  <input
-                    value={ask}
-                    onChange={(e) => setAsk(e.target.value)}
-                    placeholder="Ask or search across all your notebooks…"
-                    aria-label="Ask a question across all notebooks"
-                    className="h-8 min-w-0 flex-1 bg-transparent px-1.5 text-body text-foreground outline-none placeholder:text-subtle-foreground"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => useStore.getState().setPaletteOpen(true)}
-                    title="Search notebooks, sources & notes (⌘K)"
-                    aria-label="Open search"
-                    className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-caption text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-                  >
-                    <Search className="h-3.5 w-3.5" />
-                    <kbd className="rounded border border-border bg-surface-2 px-1 py-0.5 text-badge text-subtle-foreground">
-                      ⌘K
-                    </kbd>
-                  </button>
-                  <Button
-                    type="submit"
-                    variant="primary"
-                    size="sm"
-                    disabled={!ask.trim()}
-                  >
-                    Ask
-                  </Button>
-                </form>
-                {activityError && (
-                  <div
-                    role="alert"
-                    className="mt-2 flex items-center gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-caption text-destructive"
-                  >
-                    <span className="min-w-0 flex-1">{activityError}</span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => void refreshActivity()}
-                      loading={activityLoading}
-                    >
-                      Retry
-                    </Button>
-                  </div>
-                )}
-              </div>
+              {/* On the shelf the ask box lives here, under the heading:
+              Enter asks across every notebook and opens the answer as a
+              conversation. In the Chat tab it moves to the bottom of the
+              pane, below the conversation it feeds. */}
+              {!chatOpen && <div className="mb-8">{askComposer}</div>}
             </div>
 
-            {homeSection === "registry" ? (
+            {chatOpen ? (
+              // The conversation borrows the shelf's scroll region rather
+              // than floating over it: leaving the tab puts the notebooks
+              // back exactly where they were.
+              <HomeChatThread chat={chat} />
+            ) : homeSection === "registry" ? (
               <RegistrySection />
             ) : (
             <div
@@ -1111,6 +1425,16 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               </div>
             </div>
             )}
+
+            {/* The follow-up composer, docked under the conversation the way
+            a notebook's is: the thread scrolls, this stays. */}
+            {chatOpen && (
+              <div className="relative z-10 w-full shrink-0 px-6 pb-5 pt-2">
+                <div className="mx-auto w-full max-w-[760px]">
+                  {askComposer}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Right column: the Brief card above the reports feed — the
@@ -1140,163 +1464,127 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   over the gap between the cards' rounded corners); both drag
                   the whole column's width. The card's left edge IS the
                   column's, so the parent-rect math is unchanged. */}
-              <>
+              {briefOpen ? (
                 <BriefSidebar
-                  open={briefOpen}
-                  onToggle={toggleBrief}
+                  onCollapse={toggleBrief}
                   briefs={briefNotes}
                   schedules={allReports}
                   unread={briefUnread}
                   onRan={refreshActivity}
                   resizeHandle={rightResizeHandle}
-                  className={cn(
-                    briefOpen && !reportsOpen && "min-h-0 flex-1",
-                    briefOpen && reportsOpen && "shrink-0",
-                  )}
+                  className={reportsOpen ? "shrink-0" : "min-h-0 flex-1"}
                   style={
-                    briefOpen && reportsOpen
-                      ? { height: `${briefSplit}%` }
-                      : undefined
+                    reportsOpen ? { height: `${briefSplit}%` } : undefined
                   }
                 />
-                {briefOpen && reportsOpen ? (
-                  <div
-                    role="separator"
-                    aria-orientation="horizontal"
-                    aria-label="Resize the brief"
-                    tabIndex={0}
-                    onPointerDown={onSplitDrag}
-                    onDoubleClick={() => {
-                      setBriefSplit(40);
-                      localStorage.setItem("homeBriefSplit", "40");
-                    }}
-                    onKeyDown={(e) => {
-                      // Arrow keys nudge the split — the same keyboard
-                      // affordance ResizeHandle gives the vertical edges.
-                      const delta =
-                        e.key === "ArrowDown" ? 2 : e.key === "ArrowUp" ? -2 : 0;
-                      if (!delta) return;
-                      e.preventDefault();
-                      const pct = clampSplit(briefSplit + delta);
-                      setBriefSplit(pct);
-                      localStorage.setItem(
-                        "homeBriefSplit",
-                        String(Math.round(pct)),
-                      );
-                    }}
-                    className="group/resize relative h-2 shrink-0 cursor-row-resize rounded transition-colors hover:bg-ring/30 active:bg-ring/40 focus-visible:bg-ring/30"
-                  >
-                    <span
-                      aria-hidden
-                      className="absolute top-1/2 left-1/2 flex -translate-x-1/2 -translate-y-1/2 gap-0.5 opacity-40 transition-opacity group-hover/resize:opacity-100 group-focus-visible/resize:opacity-100"
-                    >
-                      <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
-                      <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
-                      <span className="h-0.5 w-0.5 rounded-full bg-muted-foreground" />
-                    </span>
-                  </div>
-                ) : (
-                  <div className="h-2 shrink-0" />
-                )}
-                <aside
-                  className={cn(
-                    "side-card relative flex min-h-0 flex-col",
-                    reportsOpen && "flex-1",
-                  )}
-                >
+              ) : (
+                // Collapsed to the single-icon rail, hugging the column's
+                // outer edge — the mirror of Staff and Chats on the left.
+                <div className="side-card flex w-12 shrink-0 flex-col items-center self-end py-2">
+                  <SidebarRail
+                    icon="brief"
+                    title="Show the brief"
+                    dot={briefUnread}
+                    onClick={toggleBrief}
+                  />
+                </div>
+              )}
+              {briefOpen && reportsOpen ? (
+                <StackSplit
+                  colRef={rightColRef}
+                  pct={briefSplit}
+                  defaultPct={40}
+                  label="Resize the brief"
+                  onChange={(pct) => {
+                    setBriefSplit(pct);
+                    localStorage.setItem(
+                      "homeBriefSplit",
+                      String(Math.round(pct)),
+                    );
+                  }}
+                />
+              ) : (
+                <div className="h-2 shrink-0" />
+              )}
+              {reportsOpen ? (
+                <aside className="side-card relative flex min-h-0 flex-1 flex-col">
                   {rightResizeHandle}
-                  {reportsOpen ? (
-                    feedReports.length > 0 ? (
-                      <ReportsFeed
-                        onCollapse={toggleReports}
-                        reports={feedReports}
-                        notebookTitle={notebookTitle}
-                        notebookColor={notebookColor}
-                        fallbackColor={NOTEBOOK_PALETTE[0]}
-                        onOpen={openNote}
-                      />
-                    ) : (
-                      // Empty and loading states carry their own header:
-                      // ReportsFeed owns the collapse control, so without one
-                      // here an empty feed can never be closed again.
-                      <>
-                        <div className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-6 py-2">
-                          <span className="whitespace-nowrap text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-                            Latest reports
-                          </span>
-                          <button
-                            type="button"
-                            onClick={toggleReports}
-                            title="Collapse reports"
-                            aria-label="Collapse the reports feed"
-                            aria-expanded
-                            className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-                          >
-                            <PanelRightClose className="h-4 w-4" />
-                          </button>
-                        </div>
-                        {activityLoading ? (
-                          <div
-                            role="status"
-                            className="flex flex-1 items-center justify-center p-8 text-caption text-muted-foreground"
-                          >
-                            Loading reports…
-                          </div>
-                        ) : (
-                          <div className="flex flex-1 items-center justify-center p-8">
-                            <EmptyState
-                              icon={<Newspaper className="h-7 w-7" />}
-                              title={
-                                activityError
-                                  ? "Reports unavailable"
-                                  : "Reports appear here"
-                              }
-                              hint={
-                                activityError
-                                  ? "Alchemy couldn’t load recent reports."
-                                  : "Schedule a recurring report from a notebook’s Studio panel."
-                              }
-                            >
-                              {activityError && (
-                                <Button
-                                  variant="secondary"
-                                  size="sm"
-                                  onClick={() => void refreshActivity()}
-                                >
-                                  Retry
-                                </Button>
-                              )}
-                            </EmptyState>
-                          </div>
-                        )}
-                      </>
-                    )
+                  {feedReports.length > 0 ? (
+                    <ReportsFeed
+                      onCollapse={toggleReports}
+                      reports={feedReports}
+                      notebookTitle={notebookTitle}
+                      notebookColor={notebookColor}
+                      fallbackColor={NOTEBOOK_PALETTE[0]}
+                      onOpen={openNote}
+                    />
                   ) : (
-                    <div className="flex h-12 shrink-0 items-center gap-2 px-6">
-                      <span className="whitespace-nowrap text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-                        Latest reports
-                      </span>
-                      {totalUnread > 0 && (
-                        <span
-                          title={`${totalUnread} unread`}
-                          className="rounded-full bg-primary/15 px-1.5 py-0.5 text-badge font-medium tabular-nums text-citation"
-                        >
-                          {totalUnread}
+                    // Empty and loading states carry their own header:
+                    // ReportsFeed owns the collapse control, so without one
+                    // here an empty feed can never be closed again.
+                    <>
+                      <div className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-6 py-2">
+                        <span className="whitespace-nowrap text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+                          Latest reports
                         </span>
+                        <button
+                          type="button"
+                          onClick={toggleReports}
+                          title="Collapse reports"
+                          aria-label="Collapse the reports feed"
+                          aria-expanded
+                          className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+                        >
+                          <PanelRightClose className="h-4 w-4" />
+                        </button>
+                      </div>
+                      {activityLoading ? (
+                        <div
+                          role="status"
+                          className="flex flex-1 items-center justify-center p-8 text-caption text-muted-foreground"
+                        >
+                          Loading reports…
+                        </div>
+                      ) : (
+                        <div className="flex flex-1 items-center justify-center p-8">
+                          <EmptyState
+                            icon={<Newspaper className="h-7 w-7" />}
+                            title={
+                              activityError
+                                ? "Reports unavailable"
+                                : "Reports appear here"
+                            }
+                            hint={
+                              activityError
+                                ? "Alchemy couldn’t load recent reports."
+                                : "Schedule a recurring report from a notebook’s Studio panel."
+                            }
+                          >
+                            {activityError && (
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => void refreshActivity()}
+                              >
+                                Retry
+                              </Button>
+                            )}
+                          </EmptyState>
+                        </div>
                       )}
-                      <button
-                        type="button"
-                        onClick={toggleReports}
-                        title="Show latest reports"
-                        aria-expanded={false}
-                        className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-                      >
-                        <PanelRight className="h-4 w-4" />
-                      </button>
-                    </div>
+                    </>
                   )}
                 </aside>
-              </>
+              ) : (
+                <div className="side-card flex w-12 shrink-0 flex-col items-center self-end py-2">
+                  <SidebarRail
+                    icon="reports"
+                    title="Show latest reports"
+                    dot={totalUnread > 0}
+                    onClick={toggleReports}
+                  />
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -110,7 +110,7 @@ impl AlchemyMcp {
                 let reply = commands::settings_style_apply(
                     &self.app,
                     &state,
-                    notebook_id.trim(),
+                    commands::StyleTarget::Notebook(notebook_id.trim()),
                     &style,
                     &length,
                 )
