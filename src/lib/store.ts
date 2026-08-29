@@ -1329,6 +1329,15 @@ export const useStore = create<AppState>((set, get) => {
       }
     },
 
+    newHomeThread: () => {
+      // A conversation gets its id before anything is asked into it, so a run
+      // is keyed to a thread that can't change under it. Nothing is written
+      // until a turn settles, so an id nobody asks into never becomes a row.
+      const threadId = newThreadId();
+      set({ homeChat: { threadId, turns: [] } });
+      return threadId;
+    },
+
     openHomeThread: async (threadId) => {
       // Switching conversations never touches a run: the answer is being
       // written into ITS thread, and walking next door to check something is
@@ -1338,10 +1347,8 @@ export const useStore = create<AppState>((set, get) => {
       // A fresh conversation gets its id up front, before anything is asked,
       // so the run is keyed to a conversation that can't change under it.
       if (threadId === null) {
-        set({
-          homeChat: { threadId: newThreadId(), turns: [] },
-          homeSection: "chat",
-        });
+        get().newHomeThread();
+        set({ homeSection: "chat" });
         return;
       }
       if (get().homeChat.threadId !== threadId)

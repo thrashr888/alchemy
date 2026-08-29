@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  citedNotebooks,
   historyOf,
   homeDraftKey,
   mergeLoadedTurns,
   runForThread,
 } from "./homeChatRun";
 import type { HomeRun } from "./storeTypes";
-import type { MetaTurn } from "./types";
+import type { MetaCitation, MetaTurn } from "./types";
 
 let seq = 0;
 function turn(
@@ -91,6 +92,40 @@ describe("composer draft slots", () => {
 
   it("keeps the shelf apart from every thread", () => {
     expect(homeDraftKey(false, "t1")).toBe("shelf");
+  });
+});
+
+describe("the notebooks behind an answer", () => {
+  function cite(
+    notebookId: string,
+    notebookTitle: string,
+    kind: MetaCitation["kind"] = "source",
+  ): MetaCitation {
+    return {
+      kind,
+      notebookId,
+      notebookTitle,
+      id: `c-${++seq}`,
+      title: "A source",
+      snippet: "…",
+    };
+  }
+
+  it("names each notebook once, in citation order", () => {
+    expect(
+      citedNotebooks([
+        cite("n2", "Stocks"),
+        cite("n1", "Alchemy"),
+        cite("n2", "Stocks"),
+      ]),
+    ).toEqual([
+      ["n2", "Stocks"],
+      ["n1", "Alchemy"],
+    ]);
+  });
+
+  it("leaves the registry out — a card lives in no notebook", () => {
+    expect(citedNotebooks([cite("", "", "card")])).toEqual([]);
   });
 });
 

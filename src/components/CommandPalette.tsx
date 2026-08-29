@@ -6,17 +6,18 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { listen } from "@tauri-apps/api/event";
-import { useStore } from "@/lib/store";
+import { navAtomic, useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { openMetaCitation } from "@/lib/citations";
+import { citedNotebooks, runForThread } from "@/lib/homeChatRun";
 import { SYSTEM_THEME, THEMES } from "@/lib/themes";
 import { cn } from "@/lib/utils";
-import type { MetaCitation, SearchHit } from "@/lib/types";
+import type { MetaCitation, MetaTurn, SearchHit } from "@/lib/types";
 import { ARTIFACTS, AUDIO_OVERVIEW } from "./studioArtifacts";
 import { Markdown } from "./Markdown";
 import { Spinner, useConfirm } from "./ui";
 import {
+  AlertTriangle,
   AppWindow,
   BookOpen,
   ChevronLeft,
@@ -71,20 +72,34 @@ export function CommandPalette() {
   // Ask mode (docs/RFC-meta-chat.md): the palette flips into a lightweight
   // corpus-wide chat. `query` is preserved underneath so Esc returns to the
   // search results exactly as they were.
+  //
+  // The answer is NOT this component's to run. There is one corpus channel per
+  // window, and the store owns it (`askHome`/`stopHome`, app-lifetime meta://
+  // listeners): the palette used to listen for the same tokens and cancel the
+  // same scope on its own, so a palette question asked over a live Home answer
+  // put two owners on one stream. A palette ask is a Home conversation now —
+  // it supersedes whatever was running exactly as asking from another thread
+  // does, it persists, and it keeps going if the palette closes.
   const [mode, setMode] = useState<"search" | "ask">("search");
   const [followup, setFollowup] = useState("");
-  const [askQuestion, setAskQuestion] = useState("");
-  const [askText, setAskText] = useState("");
-  const [askCitations, setAskCitations] = useState<MetaCitation[]>([]);
-  const [askLoading, setAskLoading] = useState(false);
-  // The ask pipeline's live progress (meta://step, the chat step-trail
-  // grammar): `askSteps` is the trail of completed stages, `askWaiting` the
-  // current transient line (replaces, never accumulates — one "Reading X
-  // (2 of 6)" at a time). The palette renders only the current line plus a
-  // subtle done-count; it is a status, not a log.
-  const [askSteps, setAskSteps] = useState<string[]>([]);
-  const [askWaiting, setAskWaiting] = useState("");
-  const askThread = useRef<{ role: string; content: string }[]>([]);
+  // The conversation this palette session is asking into, minted on the first
+  // question. A ref, not state: `startAsk` has to know within the same tick
+  // whether it is opening a conversation or continuing one, and every change
+  // to it rides along with a store change that re-renders anyway.
+  const askThread = useRef<string | null>(null);
+  const askBodyRef = useRef<HTMLDivElement>(null);
+
+  const homeThreadId = useStore((s) => s.homeChat.threadId);
+  const homeTurns = useStore((s) => s.homeChat.turns);
+  const homeRun = useStore((s) => s.homeRun);
+  // Only ever the palette's own conversation: if something moved the open
+  // thread out from under us, this shows nothing rather than someone else's.
+  const askThreadId =
+    askThread.current && homeThreadId === askThread.current
+      ? homeThreadId
+      : null;
+  const askTurns = askThreadId ? homeTurns : [];
+  const askRun = runForThread(homeRun, askThreadId);
 
   useEffect(() => {
     if (!paletteOpen) return;
@@ -92,10 +107,10 @@ export function CommandPalette() {
     setSelected(0);
     setMode("search");
     setFollowup("");
-    setAskText("");
-    setAskCitations([]);
-    setAskLoading(false);
-    askThread.current = [];
+    // A reopened palette starts a new session — and hence, on the next
+    // question, a new conversation. Any answer still being written keeps
+    // going in the thread it was asked in.
+    askThread.current = null;
     // The homepage's unified ask box seeds a question — open straight into
     // ask mode with it (Esc still drops back to search with it as the query).
     const pending = useStore.getState().pendingAsk;
@@ -111,82 +126,56 @@ export function CommandPalette() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paletteOpen]);
 
-  // Stream tokens into the answer while a question is in flight — batched
-  // per frame, or every token re-parses the accumulated markdown answer.
+  // Follow the answer down as it arrives, the way the Chat tab's thread does.
   useEffect(() => {
-    if (!askLoading) return;
-    let buffer = "";
-    let flush = 0;
-    const un = listen<{ content: string }>("meta://token", (e) => {
-      buffer += e.payload.content;
-      if (flush !== 0) return;
-      flush = requestAnimationFrame(() => {
-        flush = 0;
-        const chunk = buffer;
-        buffer = "";
-        if (chunk) setAskText((t) => t + chunk);
-      });
-    });
-    return () => {
-      if (flush !== 0) cancelAnimationFrame(flush);
-      void un.then((f) => f());
-    };
-  }, [askLoading]);
-
-  // Progress steps while a question is in flight — same gating as the token
-  // stream: events broadcast to every window, only the one asking listens.
-  useEffect(() => {
-    if (!askLoading) return;
-    const un = listen<{ label: string; transient: boolean }>(
-      "meta://step",
-      (e) => {
-        if (e.payload.transient) {
-          setAskWaiting(e.payload.label);
-        } else {
-          setAskSteps((s) => [...s, e.payload.label]);
-          setAskWaiting("");
-        }
-      },
-    );
-    return () => void un.then((f) => f());
-  }, [askLoading]);
+    const body = askBodyRef.current;
+    if (body) body.scrollTop = body.scrollHeight;
+  }, [
+    askTurns.length,
+    askRun?.streaming,
+    askRun?.steps.length,
+    askRun?.waiting,
+  ]);
 
   function startAsk(question: string) {
     const q = question.trim();
-    if (!q || askLoading) return;
+    if (!q) return;
+    const s = useStore.getState();
+    // A run in the palette's own conversation blocks the follow-up; Stop is
+    // the way out of it. (A run in ANY OTHER thread doesn't: asking here
+    // supersedes it, and the store keeps its partial under its own thread.)
+    if (askThread.current && s.homeRun?.threadId === askThread.current) return;
     setMode("ask");
-    setAskQuestion(q);
-    setAskText("");
-    setAskCitations([]);
-    setAskSteps([]);
-    setAskWaiting("");
-    setAskLoading(true);
     setFollowup("");
-    const history = [...askThread.current];
-    api
-      // No third argument: the backend picks depth per model class (deep
-      // rerank on gateways where the extra call is cheap, single-pass local).
-      .askEverything(q, history)
-      .then((res) => {
-        setAskText(res.answer);
-        setAskCitations(res.citations);
-        askThread.current = [
-          ...history,
-          { role: "user", content: q },
-          { role: "assistant", content: res.answer },
-        ];
-      })
-      .catch((e) => {
-        setAskText(e instanceof Error ? e.message : String(e));
-      })
-      .finally(() => setAskLoading(false));
+    // The first question of a session opens a conversation of its own: asked
+    // at the launcher, it is a fresh subject, and grafting it onto whatever
+    // Home had open would feed that thread's history to the model as context.
+    // Follow-ups typed here continue this one, history and all.
+    if (!askThread.current || s.homeChat.threadId !== askThread.current)
+      askThread.current = s.newHomeThread();
+    void s.askHome(q);
   }
 
+  /** Esc out of ask mode. A live answer is stopped the way Home's Stop stops
+   *  it — cancelled, and whatever it had written kept as a stopped turn.
+   *  Closing the palette any other way leaves it running in its thread. */
   function exitAsk() {
-    if (askLoading) void api.cancelGeneration("meta");
+    if (askRun) useStore.getState().stopHome();
+    askThread.current = null;
     setMode("search");
-    setAskLoading(false);
     requestAnimationFrame(() => inputRef.current?.focus());
+  }
+
+  /** The whole conversation, in the place built for reading it. */
+  function openInChat() {
+    const threadId = askThread.current;
+    if (!threadId) return;
+    setPaletteOpen(false);
+    void navAtomic(async () => {
+      const s = useStore.getState();
+      if (s.currentId) s.closeNotebook();
+      await useStore.getState().openHomeThread(threadId);
+    });
   }
 
   const commands = useMemo<Command[]>(() => {
@@ -625,16 +614,6 @@ export function CommandPalette() {
     void openMetaCitation(c);
   }
 
-  const askNotebooks = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const c of askCitations) {
-      // Card citations carry no notebook — the Registry isn't a chip.
-      if (c.notebookId && !seen.has(c.notebookId))
-        seen.set(c.notebookId, c.notebookTitle);
-    }
-    return [...seen.entries()];
-  }, [askCitations]);
-
   return (
     <>
       {paletteOpen && (
@@ -702,89 +681,87 @@ export function CommandPalette() {
             {mode === "ask" ? (
               // Keyed so React swaps the container instead of reconciling the
               // listbox's keyed children into this branch's unkeyed ones.
+              //
+              // Everything below is read from the store's conversation: the
+              // settled turns of this palette's thread, then whatever its run
+              // has written so far. The palette displays a conversation now;
+              // it doesn't run one.
               <div
                 key="ask-body"
-                className="flex-1 overflow-y-auto px-4 py-3.5"
+                ref={askBodyRef}
+                className="flex flex-1 flex-col gap-3.5 overflow-y-auto px-4 py-3.5"
               >
-                <div className="mb-2.5 text-body font-medium text-foreground">
-                  {askQuestion}
-                </div>
-                {askNotebooks.length > 0 && (
-                  <div className="mb-2.5 flex flex-wrap gap-1.5">
-                    {askNotebooks.map(([id, title]) => (
-                      <button
-                        key={id}
-                        onClick={() => {
-                          setPaletteOpen(false);
-                          void useStore.getState().selectNotebook(id);
-                        }}
-                        className="rounded-full border border-border bg-surface-2/60 px-2 py-0.5 text-micro text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
-                      >
-                        {title || "Untitled"}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {askText ? (
-                  <div className="text-body leading-relaxed">
-                    {/* Citations arrive with the completed answer, so inline
-                        [n] markers turn into clickable chips once streaming
-                        ends; while streaming they render as plain text. */}
-                    <Markdown
-                      citations={askCitations}
-                      onCitation={openCitation}
-                      citationLabel={(c) =>
-                        `${c.title || "Untitled"} · ${c.notebookTitle}`
-                      }
+                {askTurns.map((turn) =>
+                  turn.role === "user" ? (
+                    <div
+                      key={turn.id}
+                      className="text-body font-medium text-foreground"
                     >
-                      {askText}
-                    </Markdown>
-                  </div>
-                ) : (
-                  // Live stage, not a static spinner: the backend narrates
-                  // the real pipeline (routing → searching → reading →
-                  // synthesizing). One quiet line — the current step plus a
-                  // subtle count of finished stages, never a log dump.
-                  <div className="flex items-center gap-2 py-4 text-caption text-muted-foreground">
-                    <Spinner className="h-3.5 w-3.5 shrink-0" />
-                    <span className="min-w-0 truncate">
-                      {askWaiting ||
-                        askSteps[askSteps.length - 1] ||
-                        "Searching every notebook…"}
-                    </span>
-                    {askSteps.length > 1 && (
-                      <span className="ml-auto shrink-0 text-micro tabular-nums text-subtle-foreground">
-                        {askSteps.length} steps
+                      {turn.content}
+                    </div>
+                  ) : turn.kind === "error" ? (
+                    <div
+                      key={turn.id}
+                      role="alert"
+                      className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-body text-foreground"
+                    >
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
+                      <span className="min-w-0 whitespace-pre-line">
+                        {turn.content}
                       </span>
-                    )}
+                    </div>
+                  ) : (
+                    <AskAnswer
+                      key={turn.id}
+                      turn={turn}
+                      onCitation={openCitation}
+                      onNotebook={(id) => {
+                        setPaletteOpen(false);
+                        void useStore.getState().selectNotebook(id);
+                      }}
+                    />
+                  ),
+                )}
+                {/* Queued behind the answer it displaced: the question isn't
+                    in the thread yet, so show it where it will land. */}
+                {askRun?.queued && askRun.question && (
+                  <div className="text-body font-medium text-muted-foreground">
+                    {askRun.question}
                   </div>
                 )}
-                {!askLoading && askCitations.length > 0 && (
-                  <div className="mt-3 flex flex-col gap-0.5 border-t border-border pt-2.5">
-                    {askCitations.map((c, i) => (
+                {askRun && (
+                  <div className="flex flex-col gap-2" aria-busy="true">
+                    {askRun.streaming && (
+                      <div className="text-body leading-relaxed">
+                        {/* Citations arrive with the settled answer, so inline
+                            [n] markers are plain text until then. */}
+                        <Markdown>{askRun.streaming}</Markdown>
+                      </div>
+                    )}
+                    {/* Live stage, not a static spinner: the backend narrates
+                        the real pipeline (routing → searching → reading →
+                        synthesizing). One quiet line — the current step plus a
+                        subtle count of finished stages, never a log dump. */}
+                    <div className="flex items-center gap-2 text-caption text-muted-foreground">
+                      <Spinner className="h-3.5 w-3.5 shrink-0" />
+                      <span className="min-w-0 truncate">
+                        {askRun.waiting ||
+                          askRun.steps[askRun.steps.length - 1] ||
+                          "Searching every notebook…"}
+                      </span>
+                      {askRun.steps.length > 1 && (
+                        <span className="shrink-0 text-micro tabular-nums text-subtle-foreground">
+                          {askRun.steps.length} steps
+                        </span>
+                      )}
                       <button
-                        key={`${c.kind}-${c.id}-${i}`}
-                        onClick={() => openCitation(c)}
-                        className="flex items-center gap-2 rounded-md px-1.5 py-1 text-left text-caption text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+                        type="button"
+                        onClick={() => useStore.getState().stopHome()}
+                        className="ml-auto shrink-0 rounded border border-border-strong px-1.5 py-px text-micro text-muted-foreground transition-colors hover:text-foreground"
                       >
-                        <span className="shrink-0 text-badge text-subtle-foreground">
-                          [{i + 1}]
-                        </span>
-                        {c.kind === "card" ? (
-                          <Package className="h-3 w-3 shrink-0" />
-                        ) : c.kind === "note" ? (
-                          <SquarePen className="h-3 w-3 shrink-0" />
-                        ) : (
-                          <FileText className="h-3 w-3 shrink-0" />
-                        )}
-                        <span className="min-w-0 truncate">
-                          {c.title || "Untitled"}
-                        </span>
-                        <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
-                          {c.notebookTitle}
-                        </span>
+                        Stop
                       </button>
-                    ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -842,10 +819,96 @@ export function CommandPalette() {
                 )}
               </div>
             )}
+            {/* A palette answer is a real conversation now — kept, listed, and
+                continuable somewhere with room to read it. */}
+            {mode === "ask" && (
+              <div className="flex items-center gap-2 border-t border-border px-3.5 py-2">
+                <span className="min-w-0 truncate text-micro text-subtle-foreground">
+                  Kept in your chats
+                </span>
+                <button
+                  type="button"
+                  onClick={openInChat}
+                  className="ml-auto flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-caption text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+                >
+                  <MessageSquare className="h-3.5 w-3.5" />
+                  Open in Chat
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
       {confirmDialog}
     </>
+  );
+}
+
+/** One settled corpus answer, as the palette shows it: the notebooks it drew
+ *  from, the prose with its inline [n] chips, then the passages behind it. */
+function AskAnswer({
+  turn,
+  onCitation,
+  onNotebook,
+}: {
+  turn: MetaTurn;
+  onCitation: (c: MetaCitation) => void;
+  onNotebook: (notebookId: string) => void;
+}) {
+  const notebooks = citedNotebooks(turn.citations);
+  return (
+    <div className="flex flex-col gap-2.5">
+      {notebooks.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {notebooks.map(([id, title]) => (
+            <button
+              key={id}
+              onClick={() => onNotebook(id)}
+              className="rounded-full border border-border bg-surface-2/60 px-2 py-0.5 text-micro text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
+            >
+              {title || "Untitled"}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="text-body leading-relaxed">
+        <Markdown
+          citations={turn.citations}
+          onCitation={onCitation}
+          citationLabel={(c) => `${c.title || "Untitled"} · ${c.notebookTitle}`}
+        >
+          {turn.content}
+        </Markdown>
+      </div>
+      {turn.kind === "stopped" && (
+        <div className="text-micro text-subtle-foreground">stopped</div>
+      )}
+      {turn.citations.length > 0 && (
+        <div className="flex flex-col gap-0.5 border-t border-border pt-2.5">
+          {turn.citations.map((c, i) => (
+            <button
+              key={`${c.kind}-${c.id}-${i}`}
+              onClick={() => onCitation(c)}
+              className="flex items-center gap-2 rounded-md px-1.5 py-1 text-left text-caption text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+            >
+              <span className="shrink-0 text-badge text-subtle-foreground">
+                [{i + 1}]
+              </span>
+              {c.kind === "card" ? (
+                <Package className="h-3 w-3 shrink-0" />
+              ) : c.kind === "note" ? (
+                <SquarePen className="h-3 w-3 shrink-0" />
+              ) : (
+                <FileText className="h-3 w-3 shrink-0" />
+              )}
+              <span className="min-w-0 truncate">{c.title || "Untitled"}</span>
+              <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
+                {c.notebookTitle}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

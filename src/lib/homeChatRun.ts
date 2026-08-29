@@ -1,4 +1,4 @@
-import type { MetaTurn } from "./types";
+import type { MetaCitation, MetaTurn } from "./types";
 import type { HomeRun } from "./storeTypes";
 
 /**
@@ -48,6 +48,19 @@ export function homeDraftKey(
   threadId: string | null,
 ): string {
   return chatOpen ? `t:${threadId ?? "new"}` : "shelf";
+}
+
+/** The notebooks an answer drew from, in the order it first cited them — the
+ *  palette's notebook chips. A citation into the Registry names no notebook,
+ *  so the cast isn't a chip. */
+export function citedNotebooks(
+  citations: MetaCitation[],
+): [id: string, title: string][] {
+  const seen = new Map<string, string>();
+  for (const c of citations)
+    if (c.notebookId && !seen.has(c.notebookId))
+      seen.set(c.notebookId, c.notebookTitle);
+  return [...seen.entries()];
 }
 
 /** Turns just fetched for a thread, merged with what is already on screen for

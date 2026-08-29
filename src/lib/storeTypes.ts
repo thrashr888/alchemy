@@ -312,6 +312,11 @@ export interface AppState {
   navForward: () => void;
   /** Re-read the Chat tab's thread list. */
   refreshHomeThreads: () => Promise<void>;
+  /** Mint a fresh Home conversation and make it the open one, without moving
+   *  anybody to the Chat tab. Returns its id. The ⌘K palette asks into one of
+   *  these: a question typed at the launcher is a fresh subject, not a
+   *  follow-up to whatever conversation Home happened to have open. */
+  newHomeThread: () => string;
   /** Open a Home conversation and show it: its turns are loaded from the
    *  backend. `null` starts a fresh one — no row exists until it's asked. */
   openHomeThread: (threadId: string | null) => Promise<void>;
