@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useStore } from "@/lib/store";
 import { usePickList } from "@/lib/pick";
 import { homeDraftKey } from "@/lib/homeChatRun";
@@ -46,7 +49,6 @@ import {
   FileText,
   Newspaper,
   Package,
-  Sparkles,
   FolderInput,
   Library,
   Square,
@@ -265,8 +267,8 @@ function HomeSectionTabs() {
 
   const tabs = [
     { id: "notebooks", label: "Notebooks", icon: Library },
-    { id: "registry", label: "Registry", icon: Package },
     { id: "chat", label: "Chat", icon: MessagesSquare },
+    { id: "registry", label: "Registry", icon: Package },
   ] as const;
   return (
     <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5">
@@ -459,6 +461,36 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       return !open;
     });
   };
+
+  // View > Chats/Staff/Brief/Latest Reports (menu.rs). The four cards' open
+  // state is this component's — and this component only mounts on Home —
+  // so the listener lives here rather than in the store's menu router, and
+  // it flips exactly the state each card's own collapse button writes. The
+  // menu items are disabled off Home, so an action can't arrive with no card
+  // to toggle. Held in a ref so the subscription outlives a render.
+  const homeToggles = useRef({
+    toggleChats,
+    toggleStaff,
+    toggleBrief,
+    toggleReports,
+  });
+  homeToggles.current = { toggleChats, toggleStaff, toggleBrief, toggleReports };
+  useEffect(() => {
+    if (!isTauri()) return;
+    const label = getCurrentWebview().label;
+    const un = listen<{ target: string; id: string }>("menu://action", (e) => {
+      if (e.payload.target !== label) return;
+      const t = homeToggles.current;
+      if (e.payload.id === "menu-toggle-home-chats") t.toggleChats();
+      else if (e.payload.id === "menu-toggle-home-staff") t.toggleStaff();
+      else if (e.payload.id === "menu-toggle-home-brief") t.toggleBrief();
+      else if (e.payload.id === "menu-toggle-home-reports") t.toggleReports();
+    });
+    return () => {
+      void un.then((off) => off());
+    };
+  }, []);
+
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   // ---- Shelf selection (docs/RFC-multi-select.md) ----------------------
@@ -774,7 +806,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         className="min-w-0 rounded-xl border border-border bg-surface/80 p-1.5 shadow-sm backdrop-blur transition-colors focus-within:border-primary/50"
       >
         <div className="flex min-w-0 items-center gap-1.5">
-          <Sparkles className="ml-2 h-4 w-4 shrink-0 text-citation" />
           <input
             ref={askRef}
             value={ask}
@@ -789,7 +820,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 ? "Ask a follow-up across all notebooks"
                 : "Ask a question across all notebooks"
             }
-            className="h-8 min-w-0 flex-1 bg-transparent px-1.5 text-body text-foreground outline-none placeholder:text-subtle-foreground"
+            className="h-8 min-w-0 flex-1 bg-transparent pl-2.5 pr-1.5 text-body text-foreground outline-none placeholder:text-subtle-foreground"
           />
           {!chatOpen && (
             <button

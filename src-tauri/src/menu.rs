@@ -146,6 +146,14 @@ const CMD: &[Command] = &[
         context: "",
     },
     Command {
+        id: "menu-home-chat",
+        menu_label: "Go to Chats",
+        accelerator: None,
+        keys: "",
+        label: "",
+        context: "",
+    },
+    Command {
         id: "menu-home-registry",
         menu_label: "Go to Registry",
         accelerator: None,
@@ -153,9 +161,38 @@ const CMD: &[Command] = &[
         label: "",
         context: "",
     },
+    // Home's four sidebars, the exact sibling of the notebook's panel
+    // toggles below — same plain-noun labels, same "show or hide" meaning.
+    // Unkeyed: ⌘1/⌘2 are the notebook's, and a native key equivalent is
+    // global, so it could not mean one thing on Home and another in a
+    // notebook. Enabled only on Home (`set_menu_context`).
     Command {
-        id: "menu-home-chat",
-        menu_label: "Go to Chats",
+        id: "menu-toggle-home-chats",
+        menu_label: "Chats",
+        accelerator: None,
+        keys: "",
+        label: "",
+        context: "",
+    },
+    Command {
+        id: "menu-toggle-home-staff",
+        menu_label: "Staff",
+        accelerator: None,
+        keys: "",
+        label: "",
+        context: "",
+    },
+    Command {
+        id: "menu-toggle-home-brief",
+        menu_label: "Brief",
+        accelerator: None,
+        keys: "",
+        label: "",
+        context: "",
+    },
+    Command {
+        id: "menu-toggle-home-reports",
+        menu_label: "Latest Reports",
         accelerator: None,
         keys: "",
         label: "",
@@ -372,6 +409,40 @@ pub struct AppMenu {
     pub window: Submenu<Wry>,
     pub themes: Submenu<Wry>,
     pub generate: Submenu<Wry>,
+    pub context: ViewContextMenu,
+}
+
+/// The View menu's two view-specific groups, held so their `enabled` can
+/// follow the frontend's current view. Home's sidebar toggles and a
+/// notebook's panel toggles are each dead in the other view, and a menu item
+/// that does nothing is worse than one that is visibly unavailable.
+pub struct ViewContextMenu {
+    home: Vec<MenuItem<Wry>>,
+    notebook: Vec<MenuItem<Wry>>,
+}
+
+impl ViewContextMenu {
+    /// Enable exactly the group that belongs to the view now on screen.
+    pub fn apply(&self, in_notebook: bool) -> tauri::Result<()> {
+        for it in &self.home {
+            it.set_enabled(!in_notebook)?;
+        }
+        for it in &self.notebook {
+            it.set_enabled(in_notebook)?;
+        }
+        Ok(())
+    }
+}
+
+/// Tell the native menu which view the frontend is showing, so the View
+/// menu's Home-only and notebook-only toggles enable and disable with it.
+/// Idempotent — the frontend calls it whenever the open notebook changes.
+#[tauri::command]
+pub fn set_menu_context(
+    ctx: tauri::State<'_, ViewContextMenu>,
+    in_notebook: bool,
+) -> Result<(), String> {
+    ctx.apply(in_notebook).map_err(|err| err.to_string())
 }
 
 /// Managed handles for the frontend-filled submenus (theme names and studio
@@ -490,20 +561,41 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
     // owns the shortcut — it guards with shortcutBlocked so text fields keep
     // the line-start/line-end meaning. The menu items stay for
     // discoverability and mouse use.
-    let view_menu = SubmenuBuilder::new(app, "View")
+    // Two groups of sidebar toggles, one per view, and only the view you are
+    // in is live: a notebook's Sources/Studio/Gallery/Ledger mean nothing on
+    // Home, and Home's four cards mean nothing inside a notebook. Kept as
+    // handles so `set_menu_context` can flip `enabled` as the frontend moves
+    // between views — the menu itself is never rebuilt.
+    let home_toggles = [
+        cmd_item(app, "menu-toggle-home-chats")?,
+        cmd_item(app, "menu-toggle-home-staff")?,
+        cmd_item(app, "menu-toggle-home-brief")?,
+        cmd_item(app, "menu-toggle-home-reports")?,
+    ];
+    let notebook_toggles = [
+        cmd_item(app, "menu-toggle-sources")?,
+        cmd_item(app, "menu-toggle-studio")?,
+        cmd_item(app, "menu-toggle-gallery")?,
+        cmd_item(app, "menu-toggle-ledger")?,
+    ];
+    let mut view = SubmenuBuilder::new(app, "View")
         .item(&cmd_item(app, "menu-back")?)
         .item(&cmd_item(app, "menu-forward")?)
         .separator()
         .item(&cmd_item(app, "menu-search")?)
         .separator()
         .item(&cmd_item(app, "menu-home-notebooks")?)
-        .item(&cmd_item(app, "menu-home-registry")?)
         .item(&cmd_item(app, "menu-home-chat")?)
-        .separator()
-        .item(&cmd_item(app, "menu-toggle-sources")?)
-        .item(&cmd_item(app, "menu-toggle-studio")?)
-        .item(&cmd_item(app, "menu-toggle-gallery")?)
-        .item(&cmd_item(app, "menu-toggle-ledger")?)
+        .item(&cmd_item(app, "menu-home-registry")?)
+        .separator();
+    for it in &home_toggles {
+        view = view.item(it);
+    }
+    view = view.separator();
+    for it in &notebook_toggles {
+        view = view.item(it);
+    }
+    let view_menu = view
         .separator()
         .item(&theme_menu)
         .item(&cmd_item(app, "menu-toggle-glass")?)
@@ -549,12 +641,20 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
             &help_menu,
         ],
     )?;
+    let context = ViewContextMenu {
+        home: home_toggles.into(),
+        notebook: notebook_toggles.into(),
+    };
+    // The app opens on Home, so start there rather than with both groups
+    // live for the one frame before the frontend reports in.
+    context.apply(false)?;
     Ok(AppMenu {
         menu,
         recent: recent_menu,
         window: window_menu,
         themes: theme_menu,
         generate: generate_menu,
+        context,
     })
 }
 

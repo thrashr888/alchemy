@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { navAtomic, useStore } from "@/lib/store";
 import { HomeView } from "@/components/HomeView";
 import { Workspace } from "@/components/Workspace";
@@ -61,6 +61,33 @@ function App() {
       /* older backend without the command — menu just keeps its placeholder */
     });
   }, [theme]);
+
+  // The View menu carries two groups of sidebar toggles — Home's four cards
+  // and a notebook's four panels — and only one view can act on either. Tell
+  // the menu which view is on screen so the other group greys out instead of
+  // offering a click that does nothing. The app menu is global to the
+  // process, so this follows the focused window: a background window's
+  // notebook must not grey out the menu over the Home window in front.
+  // (A note pop-out has neither set of sidebars and stays out of it.)
+  const inNotebook = !!currentId;
+  const reportedContext = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (!isTauri() || window.__ALCHEMY_NOTE__) return;
+    const report = (force: boolean) => {
+      // Notebook to notebook is the same context; only the crossing matters.
+      if (!force && reportedContext.current === inNotebook) return;
+      reportedContext.current = inNotebook;
+      void api.setMenuContext(inNotebook).catch(() => {
+        /* older backend without the command — items just stay enabled */
+      });
+    };
+    if (document.hasFocus()) report(false);
+    // Taking focus back means re-asserting this window's context over
+    // whatever the window that had it last reported.
+    const onFocus = () => report(true);
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [inNotebook]);
 
   // Cmd/Ctrl+, opens Settings (standard desktop convention); Cmd/Ctrl+K
   // toggles the command menu — from anywhere, including inputs.

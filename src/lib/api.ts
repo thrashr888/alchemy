@@ -412,6 +412,10 @@ export const api = {
     currentTheme: string,
   ) =>
     run(cmd<void>("fill_menu_lists", { themes, generators, currentTheme })),
+  /** Tell the native menu which view is on screen, so the View menu's
+   *  Home-only and notebook-only toggles enable and disable with it. */
+  setMenuContext: (inNotebook: boolean) =>
+    run(cmd<void>("set_menu_context", { inNotebook })),
   /** Settings → Shortcuts rows from the menu's command registry. */
   listShortcuts: () =>
     run(
