@@ -50,6 +50,26 @@ agent-driven imports, registry for entities) already lives here.
 | MCP server | agents can add/organize sources programmatically |
 | Background-refresh collapse guard | refuses gutted refetches |
 
+## Prior art & outside ingredients
+
+- **Firecrawl Research Index** (docs.firecrawl.dev/features/research) —
+  keyless academic search API (~43M abstracts: PubMed, bioRxiv, medRxiv,
+  arXiv) with paper search, passage reading, and citation-network
+  navigation; no API key to start (advertised ~1000 credits/month
+  keyless). A ready-made frontier for Pillar 2's open-web tier: standing
+  queries → paper search → proposal tray, without running a crawler of
+  our own. Research-flavored notebooks get real primary sources.
+- **Atlas for Mac** (atlasformac.com) — the scale-UX bar for Pillar 1:
+  "zoom out and see a thousand things at once, zoom in and look at one
+  properly." Its grid/canvas/infinity triad and connected-folders-at-
+  library-speed are the right instincts for a 5k-source panel: density
+  zoom on the existing gallery, spatial grouping as a curation surface.
+- **OpenKnowledge** (openknowledge.ai) — markdown + git knowledge base
+  with hierarchical RAG and native MCP, built for humans and agents in
+  one loop. Alchemy already imports/exports OKF; the Pillar 3 wiki view
+  should emit OKF-compatible markdown pages so the generated wiki is
+  portable and agent-editable rather than a bespoke render.
+
 ## Design
 
 ### Pillar 1 — UX at scale (the prerequisite)
