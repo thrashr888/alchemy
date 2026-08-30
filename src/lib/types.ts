@@ -375,6 +375,8 @@ export interface ActivityStats {
    *  millionths of a dollar. Background work only, and 0 when every run was
    *  local — local models are free, not unrecorded. */
   backgroundCostMicros: number;
+  /** Measured output tokens across every recorded generation, lifetime. */
+  tokensGenerated: number;
 }
 
 /** One exact-match window from the `/grep` chat command (Rust grep_sources). */
