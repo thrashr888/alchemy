@@ -433,18 +433,36 @@ export function GrowPane() {
                   </div>
                 </div>
               )}
-              {section(
-                <FileText className="h-3.5 w-3.5 text-muted-foreground" />,
-                "On this Mac",
-                "Spotlight matches for the questions above",
-                locals,
-                localTier === null && queries.length > 0,
-              )}
-              {section(
-                <Globe className="h-3.5 w-3.5 text-muted-foreground" />,
-                "From your sources",
-                "pages your sources keep citing",
-                mined,
+              {/* Sections keep their provenance (a local file, your own
+                  sources' citations, and a web search are different levels
+                  of trust — Spotlight groups by kind for the same reason),
+                  but empty groups don't earn boxes: both free tiers quiet
+                  down to one line when neither found anything. */}
+              {locals.length === 0 &&
+              mined.length === 0 &&
+              localTier !== null ? (
+                <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption text-subtle-foreground">
+                  Nothing new on this Mac or in your sources right now.
+                </div>
+              ) : (
+                <>
+                  {(locals.length > 0 ||
+                    (localTier === null && queries.length > 0)) &&
+                    section(
+                      <FileText className="h-3.5 w-3.5 text-muted-foreground" />,
+                      "On this Mac",
+                      "Spotlight matches for the questions above",
+                      locals,
+                      localTier === null && queries.length > 0,
+                    )}
+                  {mined.length > 0 &&
+                    section(
+                      <Globe className="h-3.5 w-3.5 text-muted-foreground" />,
+                      "From your sources",
+                      "pages your sources keep citing",
+                      mined,
+                    )}
+                </>
               )}
               {/* The open-web tier: the consent line. Enabling it sends the
                   standing queries to Firecrawl's keyless search — search

@@ -320,15 +320,13 @@ pub fn set_web_enabled(trace_dir: &Path, notebook_id: &str, on: bool) {
     let _ = std::fs::write(trace_dir.join(WEB_ENABLED), map.to_string());
 }
 
-/// One Firecrawl round per notebook per day is plenty: standing queries
-/// move slowly, and reopening the pane must not spend credits. The cache
-/// keys on the query set too, so new hunger busts it early.
-fn day_of(now_ms: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(now_ms)
-        .unwrap_or_default()
-        .format("%Y-%m-%d")
-        .to_string()
-}
+/// One Firecrawl round per notebook per WEEK: at 4 credits per fresh
+/// refresh (2 queries × 2 credits), daily cadence costs ~120
+/// credits/month per notebook — the 1,000-credit free tier tops out
+/// near 8 notebooks. Weekly is ~17/month, 45+ notebooks of headroom.
+/// The cache also keys on the query set, so new hunger still busts it
+/// immediately — the calendar is only the backstop for stable questions.
+const WEB_CACHE_TTL_MS: i64 = 7 * 86_400_000;
 
 fn read_web_cache(trace_dir: &Path) -> serde_json::Value {
     std::fs::read_to_string(trace_dir.join(WEB_CACHE))
@@ -345,7 +343,8 @@ fn cached_web(
 ) -> Option<Vec<GrowthProposal>> {
     let cache = read_web_cache(trace_dir);
     let entry = cache.get(notebook_id)?;
-    if entry.get("day")?.as_str()? != day_of(now_ms) {
+    let ts = entry.get("ts").and_then(|v| v.as_i64())?;
+    if now_ms - ts > WEB_CACHE_TTL_MS {
         return None;
     }
     if entry.get("key")?.as_str()? != queries.join("\n") {
@@ -363,7 +362,7 @@ fn store_web_cache(
 ) {
     let mut cache = read_web_cache(trace_dir);
     cache[notebook_id] = serde_json::json!({
-        "day": day_of(now_ms),
+        "ts": now_ms,
         "key": queries.join("\n"),
         "proposals": proposals,
     });
@@ -859,7 +858,7 @@ pub async fn upsert_wiki(
 
 /// The nightly web warm (the last deferred phase-5 piece): notebooks
 /// whose owner enabled web search get their standing queries run through
-/// Firecrawl during the sweep, so the Grow pane opens warm. The per-day
+/// Firecrawl during the sweep, so the Grow pane opens warm. The weekly
 /// cache makes repeat sweeps free and the monthly cap still governs.
 pub async fn sweep_web_searches(db: &crate::db::Db) -> anyhow::Result<usize> {
     let Some(trace_dir) = crate::trace::dir() else {
