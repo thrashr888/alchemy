@@ -173,10 +173,12 @@ pub fn run() {
             let config_path = data_dir.join("ai_config.json");
             let stats_path = data_dir.join("model_stats.json");
 
+            // First run (no config on disk) sizes the default chat model to
+            // this Mac's unified memory; a config that exists keeps its own.
             let mut config = std::fs::read_to_string(&config_path)
                 .ok()
                 .and_then(|s| serde_json::from_str::<ai::AiConfig>(&s).ok())
-                .unwrap_or_default();
+                .unwrap_or_else(ai::AiConfig::fresh);
             // Legacy flat configs become provider lists; flat fields stay
             // mirrored for the call sites that key off them.
             config.normalize();
