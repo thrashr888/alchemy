@@ -1468,8 +1468,11 @@ const ChatMessage = memo(function ChatMessage({
         {message.content}
       </Markdown>
       {message.citations.length > 0 && <Citations citations={message.citations} />}
-      <TurnModel model={message.model} />
-      <MessageActions content={message.content} citations={message.citations} />
+      <MessageActions
+        content={message.content}
+        citations={message.citations}
+        model={message.model}
+      />
     </div>
   );
 });
@@ -1659,9 +1662,14 @@ export interface TurnAction {
 export function TurnActions({
   createdAt,
   actions,
+  model,
 }: {
   createdAt?: number;
   actions: TurnAction[];
+  /** Which model wrote the turn, trailing the verbs. Lives in the hover row
+   *  rather than as its own always-visible line — the caption is provenance,
+   *  not content. Nothing renders for turns predating the column. */
+  model?: string;
 }) {
   const [done, setDone] = useState<string | null>(null);
 
@@ -1708,6 +1716,9 @@ export function TurnActions({
           {done === a.label ? a.doneLabel : a.label}
         </button>
       ))}
+      {model && (
+        <span className="px-1 text-micro text-subtle-foreground">{model}</span>
+      )}
     </div>
   );
 }
@@ -1721,14 +1732,6 @@ export function copyAction(content: string): TurnAction {
     title: "Copy to clipboard",
     onClick: () => navigator.clipboard.writeText(content),
   };
-}
-
-/** Which model wrote an answer, under it. Shared so the caption reads the
- *  same in a notebook and on Home; nothing is rendered when the turn predates
- *  the column that records it. */
-export function TurnModel({ model }: { model?: string }) {
-  if (!model) return null;
-  return <div className="mt-1 text-micro text-subtle-foreground">{model}</div>;
 }
 
 /** Under a user turn: copy, re-run, and when it happened. Re-run asks the
@@ -1761,14 +1764,17 @@ function UserMessageActions({ message }: { message: Message }) {
 function MessageActions({
   content,
   citations,
+  model,
 }: {
   content: string;
   citations: Citation[];
+  model?: string;
 }) {
   const createNote = useStore((s) => s.createNote);
   const sources = useStore((s) => s.sources);
   return (
     <TurnActions
+      model={model}
       actions={[
         copyAction(content),
         {

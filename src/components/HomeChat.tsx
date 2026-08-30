@@ -13,7 +13,6 @@ import {
   ModelPill,
   ToolRow,
   TurnActions,
-  TurnModel,
   copyAction,
   type TurnAction,
 } from "./ChatPanel";
@@ -441,12 +440,12 @@ export function HomeChatThread({ chat }: { chat: HomeChat }) {
                   {turn.content}
                 </span>
               </div>
-              <TurnModel model={turn.model} />
               {/* A failure's one useful verb is the question again — the one
                   above it, not this row's own text. */}
               <TurnActions
                 createdAt={turn.createdAt}
                 actions={retryActions(chat, i, turn.content)}
+                model={turn.model}
               />
             </div>
           ) : (
@@ -462,10 +461,10 @@ export function HomeChatThread({ chat }: { chat: HomeChat }) {
                 {turn.content}
               </Markdown>
               <MetaCitations citations={turn.citations} />
-              <TurnModel model={turn.model} />
               <TurnActions
                 createdAt={turn.createdAt}
                 actions={[copyAction(turn.content)]}
+                model={turn.model}
               />
             </div>
           ),
