@@ -37,6 +37,43 @@ export function saveGrowthDismissed(
   }
 }
 
+// "Keep" decisions from the hygiene review (RFC-source-hygiene), keyed
+// `${sourceId}:${bucket}` per notebook. Local suppression on purpose:
+// unreachable keeps reset real backend state, but a kept duplicate or
+// missing file is a viewing preference — the signal itself stays true and
+// agents still see it in the MCP report.
+export function loadHygieneKept(
+  notebookId: string | null,
+): Record<string, boolean> {
+  if (!notebookId) return {};
+  try {
+    const raw = localStorage.getItem(`hygieneKept:${notebookId}`);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function saveHygieneKept(
+  notebookId: string | null,
+  kept: Record<string, boolean>,
+) {
+  if (!notebookId) return;
+  try {
+    localStorage.setItem(`hygieneKept:${notebookId}`, JSON.stringify(kept));
+  } catch {
+    /* best-effort */
+  }
+}
+
+export const HYGIENE_LABEL: Record<string, string> = {
+  unreachable: "unreachable",
+  "missing-file": "missing",
+  duplicate: "duplicate",
+  husk: "failed import",
+  stale: "stale",
+};
+
 /** The open-web tier is opt-in per notebook (the RFC's consent line):
  *  enabling it means this notebook's standing queries go to Firecrawl. */
 export function webSearchEnabled(notebookId: string | null): boolean {

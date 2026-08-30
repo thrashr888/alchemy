@@ -2,15 +2,18 @@ import { useEffect, useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import {
+  HYGIENE_LABEL,
   loadGrowthDismissed,
+  loadHygieneKept,
   saveGrowthDismissed,
+  saveHygieneKept,
   setWebSearchEnabled,
   webSearchEnabled,
 } from "@/lib/growth";
 import type { GrowthProposal } from "@/lib/types";
 import { Button, EmptyState, LoadingState, Spinner } from "./ui";
 import { Favicon } from "./SourcesPanel";
-import { FileText, Globe, Search, Sprout } from "lucide-react";
+import { AlertCircle, FileText, Globe, Search, Sprout } from "lucide-react";
 
 /** Center-pane growth review (RFC-living-notebook Pillar 2): what the
  *  notebook is hungry for, and everything the free tiers found — files on
@@ -22,6 +25,46 @@ export function GrowPane() {
   const sources = useStore((s) => s.sources);
   const addSourceUrl = useStore((s) => s.addSourceUrl);
   const addSourceFiles = useStore((s) => s.addSourceFiles);
+  const hygiene = useStore((s) => s.hygiene);
+  const refreshHygiene = useStore((s) => s.refreshHygiene);
+  const hygieneKeep = useStore((s) => s.hygieneKeep);
+  const refreshSource = useStore((s) => s.refreshSource);
+  const deleteSourcesBatch = useStore((s) => s.deleteSourcesBatch);
+  const [retrying, setRetrying] = useState<string | null>(null);
+
+  // Needs-attention flags (RFC-source-hygiene) — merged into Grow: tending
+  // what's broken is the other half of growing (and where Pillar 3's
+  // curation passes will land). Keeps live in localStorage; refreshing
+  // hygiene afterwards re-runs this against the fresh keeps.
+  const attention = useMemo(() => {
+    const kept = loadHygieneKept(currentId);
+    const seen = new Map<string, (typeof hygiene)[number]>();
+    for (const h of hygiene) {
+      if (h.bucket === "stale") continue;
+      if (kept[`${h.sourceId}:${h.bucket}`]) continue;
+      if (!seen.has(h.sourceId)) seen.set(h.sourceId, h);
+    }
+    return [...seen.values()];
+  }, [hygiene, currentId]);
+  const keepIssue = (h: { sourceId: string; bucket: string }) => {
+    if (h.bucket === "unreachable") {
+      void hygieneKeep(h.sourceId).then(() => refreshHygiene());
+      return;
+    }
+    const kept = loadHygieneKept(currentId);
+    kept[`${h.sourceId}:${h.bucket}`] = true;
+    saveHygieneKept(currentId, kept);
+    void refreshHygiene();
+  };
+  const retryIssue = async (h: { sourceId: string }) => {
+    setRetrying(h.sourceId);
+    try {
+      await refreshSource(h.sourceId);
+    } finally {
+      setRetrying(null);
+    }
+    await refreshHygiene();
+  };
 
   const [queries, setQueries] = useState<string[]>([]);
   const [proposals, setProposals] = useState<GrowthProposal[] | null>(null);
@@ -43,6 +86,7 @@ export function GrowPane() {
     setDismissed(loadGrowthDismissed(currentId));
     setWebOn(webSearchEnabled(currentId));
     if (!currentId) return;
+    void refreshHygiene();
     let stale = false;
     api
       .growthProposals(currentId)
@@ -114,7 +158,7 @@ export function GrowPane() {
         <div className="truncate text-body text-foreground" title={p.url}>
           {p.anchor || p.url.replace(/^https?:\/\//, "")}
         </div>
-        <div className="truncate text-micro text-muted-foreground">
+        <div className="truncate text-caption text-muted-foreground">
           {p.kind === "local" ? (
             <>{p.url}</>
           ) : (
@@ -131,7 +175,7 @@ export function GrowPane() {
           )}
         </div>
         {p.matchedQuery && (
-          <div className="truncate text-micro text-subtle-foreground">
+          <div className="truncate text-caption text-subtle-foreground">
             asked: “{p.matchedQuery}”
           </div>
         )}
@@ -169,10 +213,10 @@ export function GrowPane() {
         <span className="text-caption font-semibold text-foreground">
           {title}
         </span>
-        <span className="text-micro text-subtle-foreground">{hint}</span>
+        <span className="text-caption text-subtle-foreground">{hint}</span>
       </div>
       {items.length === 0 ? (
-        <div className="rounded-md border border-dashed border-border px-3 py-2 text-micro text-subtle-foreground">
+        <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption text-subtle-foreground">
           Nothing right now.
         </div>
       ) : (
@@ -211,7 +255,7 @@ export function GrowPane() {
                     {queries.map((q) => (
                       <span
                         key={q}
-                        className="max-w-full truncate rounded-full border border-border px-2.5 py-0.5 text-micro text-muted-foreground"
+                        className="max-w-full truncate rounded-full border border-border px-2.5 py-1 text-caption text-muted-foreground"
                         title="A recent question this notebook answered thinly"
                       >
                         {q}
@@ -242,13 +286,13 @@ export function GrowPane() {
                     From the web
                   </span>
                   {web && (
-                    <span className="ml-auto text-micro text-subtle-foreground">
+                    <span className="ml-auto text-caption text-subtle-foreground">
                       {web.credits} of 1,000 free credits used this month
                     </span>
                   )}
                 </div>
                 {queries.length === 0 ? (
-                  <div className="rounded-md border border-dashed border-border px-3 py-2 text-micro text-subtle-foreground">
+                  <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption text-subtle-foreground">
                     Ask this notebook something it can’t answer yet — thin
                     answers become the questions the web search runs.
                   </div>
@@ -278,16 +322,82 @@ export function GrowPane() {
                     <Spinner className="h-3.5 w-3.5" /> Searching the web…
                   </div>
                 ) : web?.capped ? (
-                  <div className="rounded-md border border-dashed border-border px-3 py-2 text-micro text-subtle-foreground">
+                  <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption text-subtle-foreground">
                     This month’s free search budget is spent — the meter
                     resets next month.
                   </div>
                 ) : found.length === 0 ? (
-                  <div className="rounded-md border border-dashed border-border px-3 py-2 text-micro text-subtle-foreground">
+                  <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption text-subtle-foreground">
                     Nothing new found for these questions.
                   </div>
                 ) : (
                   found.map(row)
+                )}
+              </div>
+              {/* Needs attention (RFC-source-hygiene), merged in from the
+                  Sources panel: tending what's broken is the other half of
+                  growing. Nothing is removed unless you say so. */}
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-caption font-semibold text-foreground">
+                    Needs attention
+                  </span>
+                  <span className="text-caption text-subtle-foreground">
+                    broken or outdated sources — Keep dismisses the flag
+                  </span>
+                </div>
+                {attention.length === 0 ? (
+                  <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption text-subtle-foreground">
+                    All clean.
+                  </div>
+                ) : (
+                  attention.map((h) => (
+                    <div
+                      key={`${h.sourceId}:${h.bucket}`}
+                      className="flex items-center gap-2 rounded-md border border-border px-3 py-2"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div
+                          className="truncate text-body text-foreground"
+                          title={h.title}
+                        >
+                          {h.title || "Untitled"}
+                        </div>
+                        <div
+                          className="truncate text-caption text-muted-foreground"
+                          title={h.detail}
+                        >
+                          {HYGIENE_LABEL[h.bucket] ?? h.bucket} · {h.detail}
+                        </div>
+                      </div>
+                      {h.bucket !== "duplicate" && (
+                        <Button
+                          variant="ghost"
+                          disabled={retrying === h.sourceId}
+                          onClick={() => void retryIssue(h)}
+                          title="Fetch it again now"
+                        >
+                          {retrying === h.sourceId ? "Retrying…" : "Retry"}
+                        </Button>
+                      )}
+                      <Button
+                        variant="ghost"
+                        onClick={() => keepIssue(h)}
+                        title="Dismiss this flag and keep the source"
+                      >
+                        Keep
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        className="text-destructive hover:bg-destructive/10"
+                        onClick={() => void deleteSourcesBatch([h.sourceId])}
+                        title="Remove the source and its chunks"
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  ))
                 )}
               </div>
             </>

@@ -497,18 +497,18 @@ export function CenterModeTabs() {
           growOpen: false,
         }),
       )}
-      {tab("ledger", <Logs className="h-3.5 w-3.5" />, "Ledger", () =>
-        useStore.setState({
-          ledgerOpen: true,
-          galleryOpen: false,
-          growOpen: false,
-        }),
-      )}
       {tab("grow", <Sprout className="h-3.5 w-3.5" />, "Grow", () =>
         useStore.setState({
           growOpen: true,
           galleryOpen: false,
           ledgerOpen: false,
+        }),
+      )}
+      {tab("ledger", <Logs className="h-3.5 w-3.5" />, "Ledger", () =>
+        useStore.setState({
+          ledgerOpen: true,
+          galleryOpen: false,
+          growOpen: false,
         }),
       )}
     </div>

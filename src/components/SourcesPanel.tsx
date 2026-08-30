@@ -29,7 +29,11 @@ import {
   visibleTitle,
 } from "@/lib/utils";
 import { sourceIcon } from "@/lib/sourceIcon";
-import { loadGrowthDismissed } from "@/lib/growth";
+import {
+  HYGIENE_LABEL,
+  loadGrowthDismissed,
+  loadHygieneKept,
+} from "@/lib/growth";
 import { AttachToCardModal } from "./RegistrySection";
 import {
   SourceMetaModals,
@@ -55,6 +59,7 @@ import {
   MessageSquare,
   Package,
   Search,
+  Sprout,
   Tag,
 } from "lucide-react";
 
@@ -86,38 +91,6 @@ function saveFoldersCollapsed(state: Record<string, boolean>) {
     /* storage full or unavailable — collapse state is best-effort */
   }
 }
-
-// "Keep" decisions from the hygiene review (RFC-source-hygiene), keyed
-// `${sourceId}:${bucket}` per notebook. Local suppression on purpose:
-// unreachable keeps reset real backend state, but a kept duplicate or
-// missing file is a viewing preference — the signal itself stays true and
-// agents still see it in the MCP report.
-function loadHygieneKept(notebookId: string | null): Record<string, boolean> {
-  if (!notebookId) return {};
-  try {
-    const raw = localStorage.getItem(`hygieneKept:${notebookId}`);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-
-function saveHygieneKept(notebookId: string | null, kept: Record<string, boolean>) {
-  if (!notebookId) return;
-  try {
-    localStorage.setItem(`hygieneKept:${notebookId}`, JSON.stringify(kept));
-  } catch {
-    /* best-effort */
-  }
-}
-
-const HYGIENE_LABEL: Record<string, string> = {
-  unreachable: "unreachable",
-  "missing-file": "missing",
-  duplicate: "duplicate",
-  husk: "failed import",
-  stale: "stale",
-};
 
 /** Source-domain favicon with a Globe fallback (kept local — no third party). */
 /** The hover card: type, size, freshness, status — rows and gallery cards
@@ -300,10 +273,8 @@ export function SourcesPanel() {
   const pickSet = useStore((s) => s.pickSet);
   const clearPicked = useStore((s) => s.clearPicked);
   const refreshSourcesBatch = useStore((s) => s.refreshSourcesBatch);
-  const deleteSourcesBatch = useStore((s) => s.deleteSourcesBatch);
   const hygiene = useStore((s) => s.hygiene);
   const refreshHygiene = useStore((s) => s.refreshHygiene);
-  const hygieneKeep = useStore((s) => s.hygieneKeep);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [editing, setEditing] = useState<{
@@ -680,10 +651,6 @@ export function SourcesPanel() {
     return () => clearTimeout(t);
   }, [currentId, sources, refreshHygiene]);
 
-  const [reviewOpen, setReviewOpen] = useState(false);
-  /** Source id currently being re-fetched from the review modal. */
-  const [retrying, setRetrying] = useState<string | null>(null);
-  const [keptVersion, setKeptVersion] = useState(0);
   const issueBySource = useMemo(() => {
     const kept = loadHygieneKept(currentId);
     const m = new Map<string, (typeof hygiene)[number]>();
@@ -693,37 +660,10 @@ export function SourcesPanel() {
       if (!m.has(h.sourceId)) m.set(h.sourceId, h);
     }
     return m;
-    // keptVersion invalidates after a "Keep" writes localStorage.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hygiene, currentId, keptVersion]);
+    // Keeps write localStorage; refreshHygiene() afterwards replaces the
+    // store array, which re-runs this memo against the fresh keeps.
+  }, [hygiene, currentId]);
   const proposals = [...issueBySource.values()];
-
-  /** Fetch a flagged source again, right now. This is the user-initiated
-   *  path on purpose — someone is watching, so it keeps the hard-fail
-   *  semantics the background sweep deliberately avoids, and a success
-   *  clears the strike count (reingest stamps it), dropping the flag.
-   *  Duplicates get no Retry: re-fetching says nothing about them. */
-  async function retryIssue(h: { sourceId: string; bucket: string }) {
-    setRetrying(h.sourceId);
-    try {
-      await refreshSource(h.sourceId);
-    } finally {
-      setRetrying(null);
-    }
-    await refreshHygiene();
-  }
-
-  function keepIssue(h: { sourceId: string; bucket: string }) {
-    if (h.bucket === "unreachable") {
-      // Real backend state: clear the strike count, restart the cadence.
-      void hygieneKeep(h.sourceId);
-      return;
-    }
-    const kept = loadHygieneKept(currentId);
-    kept[`${h.sourceId}:${h.bucket}`] = true;
-    saveHygieneKept(currentId, kept);
-    setKeptVersion((v) => v + 1);
-  }
 
   return (
     <div
@@ -1013,10 +953,10 @@ export function SourcesPanel() {
                 />
               </div>
             </div>
-            {/* Growth tray (RFC-living-notebook Pillar 2): related pages
-                the notebook's own sources point at. Review to add — no
-                unattended fetches, ever. */}
-            {growthVisible.length > 0 && (
+            {/* One door to the Grow surface (RFC-living-notebook):
+                growth proposals and needs-attention flags together, with
+                an activity dot when anything is waiting. */}
+            {growthVisible.length + proposals.length > 0 && (
               <button
                 type="button"
                 onClick={() =>
@@ -1028,33 +968,16 @@ export function SourcesPanel() {
                 }
                 className="mb-1 flex w-full items-center gap-2 rounded-md border border-border bg-surface-2/60 px-2 py-1.5 text-left hover:bg-surface-2"
               >
-                <Globe className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <Sprout className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 <span className="truncate text-caption text-foreground">
-                  {growthVisible.length === 1
-                    ? "1 related page or file found"
-                    : `${growthVisible.length} related pages & files found`}
+                  Grow this notebook
                 </span>
-                <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
-                  Review
-                </span>
-              </button>
-            )}
-            {/* Hygiene proposals (RFC-source-hygiene): flagged, never
-                auto-removed — the review modal decides. */}
-            {proposals.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setReviewOpen(true)}
-                className="mb-1 flex w-full items-center gap-2 rounded-md border border-border bg-surface-2/60 px-2 py-1.5 text-left hover:bg-surface-2"
-              >
-                <AlertCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <span className="truncate text-caption text-foreground">
-                  {proposals.length === 1
-                    ? "1 source needs attention"
-                    : `${proposals.length} sources need attention`}
-                </span>
-                <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
-                  Review
+                <span
+                  aria-hidden
+                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+                />
+                <span className="ml-auto shrink-0 text-caption text-subtle-foreground">
+                  {growthVisible.length + proposals.length} · Review
                 </span>
               </button>
             )}
@@ -1585,72 +1508,6 @@ export function SourcesPanel() {
         noteEdit={noteEdit}
         setNoteEdit={setNoteEdit}
       />
-
-      {/* Hygiene review (RFC-source-hygiene): every removal is a human
-          decision — per-item Keep / Remove, nothing automatic. */}
-      <Modal
-        open={reviewOpen}
-        onClose={() => setReviewOpen(false)}
-        title="Needs attention"
-        width="max-w-md"
-      >
-        <div className="flex flex-col gap-2">
-          <p className="text-micro leading-relaxed text-subtle-foreground">
-            These sources look broken or outdated. Nothing is removed unless
-            you say so — Keep dismisses the flag.
-          </p>
-          {proposals.length === 0 ? (
-            <EmptyState title="All clean" />
-          ) : (
-            proposals.map((h) => (
-              <div
-                key={`${h.sourceId}:${h.bucket}`}
-                className="flex items-center gap-2 rounded-md border border-border px-2.5 py-2"
-              >
-                <div className="min-w-0 flex-1">
-                  <div
-                    className="truncate text-body text-foreground"
-                    title={h.title}
-                  >
-                    {visibleTitle(h.title) || "Untitled"}
-                  </div>
-                  <div
-                    className="truncate text-micro text-muted-foreground"
-                    title={h.detail}
-                  >
-                    {HYGIENE_LABEL[h.bucket] ?? h.bucket} · {h.detail}
-                  </div>
-                </div>
-                {h.bucket !== "duplicate" && (
-                  <Button
-                    variant="ghost"
-                    disabled={retrying === h.sourceId}
-                    onClick={() => void retryIssue(h)}
-                    title="Fetch it again now"
-                  >
-                    {retrying === h.sourceId ? "Retrying…" : "Retry"}
-                  </Button>
-                )}
-                <Button
-                  variant="ghost"
-                  onClick={() => keepIssue(h)}
-                  title="Dismiss this flag and keep the source"
-                >
-                  Keep
-                </Button>
-                <Button
-                  variant="ghost"
-                  className="text-destructive hover:bg-destructive/10"
-                  onClick={() => void deleteSourcesBatch([h.sourceId])}
-                  title="Remove the source and its chunks"
-                >
-                  Remove
-                </Button>
-              </div>
-            ))
-          )}
-        </div>
-      </Modal>
 
       {marquee}
       {confirmDialog}
