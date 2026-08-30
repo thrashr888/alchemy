@@ -121,11 +121,32 @@ two-host podcast voiced on-device.*
   characters. The retrieval budget adapts to corpus size, and a scale fence keeps
   recall flat from 1M to 10M chars (verified) — a large source list stays fully
   searchable instead of diluting every answer.
+- **Sources at scale** — the Sources panel stays fast past 5,000 sources:
+  windowed rendering, a filter box with kind, tag, and freshness facets
+  (including "uncited" — sources retrieval has never used), and busy web
+  domains folding into collapsible groups.
+- **Grow** — a center pane (Chat ⇄ Reader ⇄ Gallery ⇄ Grow ⇄ Ledger) that
+  proposes ways a notebook could grow. Questions it answered thinly become
+  standing questions; Alchemy then suggests files already on your Mac
+  (Spotlight), pages your sources keep citing, and — per-notebook opt-in,
+  metered inside Firecrawl's free tier — results from the web. Every
+  addition is an explicit Add; dismissals decay after 30 days.
+- **Tidy & organize** — old sources retrieval has never cited are proposed
+  for muting or removal (never automatic), and near-duplicate tags
+  (`vessel` / `vessels`) get one-click merges.
+- **Wiki index & entity pages** — one click writes a "Notebook index" note
+  mapping every source by tag with clickable title links, plus a page per
+  registry entity filed in the notebook. The wiki re-derives itself with
+  background work, and it's all ordinary notes — portable through OKF,
+  editable by agents.
 - **Source gists** — every source gets a short distilled overview in the background,
   so corpus-wide questions ("what's in here?", "which source covers X?") find the
   right document even when no single passage is an obvious match. Captured web pages
   also get a per-chunk context pass and shed navigation cruft, so search over clipped
   articles reads much closer to search over clean documents.
+- **Live view nav** — web sources opened as the actual page get back/forward
+  buttons, the current address, and an "Add as source" offer when you wander
+  onto a page the notebook doesn't have yet.
 - **Reader** — sources and notes open in a center-column reader (Chat ⇄ Reader
   tabs in the toolbar), never a modal: click through the rails to swap
   documents, with browser-style **back/forward** (⌘[ / ⌘]), **j/k** to step

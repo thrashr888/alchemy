@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::models::Source;
+use crate::models::{Note, RegistryCard, Source};
 
 /// One proposed addition: a URL the notebook's own sources keep pointing
 /// at, or a local file Spotlight matched against a standing query.
@@ -538,6 +538,64 @@ pub fn retire_candidates(
 
 const FOLDER_TYPES: [&str; 4] = ["folder", "git", "notion", "obsidian"];
 
+/// One proposed tag merge (phase 5): two tags that are almost certainly
+/// the same word — plural/singular or separator variants. Proposal only;
+/// apply rewrites the `from` tag to `to` on every source carrying it.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagMergeProposal {
+    pub from: String,
+    pub to: String,
+    pub from_count: u32,
+    pub to_count: u32,
+}
+
+pub fn tag_merge_proposals(sources: &[Source]) -> Vec<TagMergeProposal> {
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    for s in sources {
+        for t in s.tags.split_whitespace() {
+            *counts.entry(t.to_string()).or_default() += 1;
+        }
+    }
+    let canon = |t: &str| t.replace(['-', '_'], "");
+    let mut tags: Vec<&String> = counts.keys().collect();
+    tags.sort();
+    let mut out: Vec<TagMergeProposal> = Vec::new();
+    let mut taken: HashSet<String> = HashSet::new();
+    for a in &tags {
+        for b in &tags {
+            if a == b || taken.contains(*a) || taken.contains(*b) {
+                continue;
+            }
+            // Plural folds into singular; separator variants fold into the
+            // more common spelling (ties: the shorter one).
+            let (from, to) = if a.as_str() == format!("{b}s") || a.as_str() == format!("{b}es") {
+                ((*a).clone(), (*b).clone())
+            } else if canon(a) == canon(b) {
+                let (ca, cb) = (counts[*a], counts[*b]);
+                if cb > ca || (cb == ca && b.len() < a.len()) {
+                    ((*a).clone(), (*b).clone())
+                } else {
+                    continue; // the mirrored iteration handles it
+                }
+            } else {
+                continue;
+            };
+            taken.insert(from.clone());
+            taken.insert(to.clone());
+            out.push(TagMergeProposal {
+                from_count: counts[&from],
+                to_count: counts[&to],
+                from,
+                to,
+            });
+        }
+    }
+    out.sort_by_key(|m| std::cmp::Reverse(m.from_count + m.to_count));
+    out.truncate(8);
+    out
+}
+
 /// The wiki index (Pillar 3's north star, deterministic v1): one generated
 /// note that maps the notebook — sources grouped by tag, linked by title
 /// (the reader resolves title links), untagged and never-cited called out. Plain
@@ -545,7 +603,82 @@ const FOLDER_TYPES: [&str; 4] = ["folder", "git", "notion", "obsidian"];
 /// agent can edit it; no model call, so it always works and costs nothing.
 pub const WIKI_INDEX_TITLE: &str = "Notebook index";
 
-pub fn build_wiki_index(sources: &[Source], cited: &HashSet<String>, now_ms: i64) -> String {
+/// Confirmed registry cards with confirmed attachments in this notebook —
+/// the entities whose pages the wiki carries.
+pub fn notebook_entities<'c>(
+    cards: &'c [RegistryCard],
+    sources: &[Source],
+    notebook_id: &str,
+) -> Vec<(&'c RegistryCard, Vec<String>)> {
+    let ids: HashSet<&str> = sources.iter().map(|s| s.id.as_str()).collect();
+    cards
+        .iter()
+        .filter(|c| c.origin.is_empty())
+        .filter_map(|c| {
+            let attached: Vec<String> = c
+                .attachments
+                .iter()
+                .filter(|a| {
+                    a.status == "confirmed"
+                        && a.notebook_id == notebook_id
+                        && ids.contains(a.source_id.as_str())
+                })
+                .map(|a| a.source_id.clone())
+                .collect();
+            (!attached.is_empty()).then_some((c, attached))
+        })
+        .collect()
+}
+
+pub fn entity_page_title(card: &RegistryCard) -> String {
+    format!("Entity: {}", card.name)
+}
+
+/// One entity page: the card's registry facts plus the documents filed
+/// under it in this notebook, linked by title. Deterministic, like the
+/// index — the registry is the source of truth, this is its wiki face.
+pub fn build_entity_page(card: &RegistryCard, attached: &[&Source]) -> String {
+    let mut md = format!("{} · from the registry\n", card.kind);
+    if !card.identifiers.trim().is_empty() {
+        md.push_str(&format!("\nIdentifiers: `{}`\n", card.identifiers.trim()));
+    }
+    if !card.note.trim().is_empty() {
+        md.push_str(&format!("\n{}\n", card.note.trim()));
+    }
+    if !card.facts.is_empty() {
+        md.push_str("\n## Facts\n\n");
+        for f in &card.facts {
+            if f.value.is_empty() {
+                md.push_str(&format!("- {}\n", f.label));
+            } else {
+                md.push_str(&format!("- {}: {}\n", f.label, f.value));
+            }
+        }
+    }
+    md.push_str("\n## Documents\n\n");
+    for s in attached {
+        md.push_str(&title_link_line(s, &format!("{} chars", s.char_count)));
+    }
+    md
+}
+
+/// `- [Title](<Title>) — extra`, falling back to plain text when the title
+/// can't be a link destination (see build_wiki_index).
+fn title_link_line(s: &Source, extra: &str) -> String {
+    let text = s.title.replace('[', "(").replace(']', ")");
+    if s.title.contains(['<', '>']) {
+        format!("- {text} — {extra}\n")
+    } else {
+        format!("- [{text}](<{}>) — {extra}\n", s.title)
+    }
+}
+
+pub fn build_wiki_index(
+    sources: &[Source],
+    cited: &HashSet<String>,
+    entities: &[(&RegistryCard, Vec<String>)],
+    now_ms: i64,
+) -> String {
     let content: Vec<&Source> = sources
         .iter()
         .filter(|s| !FOLDER_TYPES.contains(&s.source_type.as_str()) && s.char_count > 0)
@@ -598,6 +731,18 @@ pub fn build_wiki_index(sources: &[Source], cited: &HashSet<String>, now_ms: i64
             md.push_str(&line(s));
         }
     }
+    if !entities.is_empty() {
+        md.push_str("\n## Entities\n\n");
+        for (card, attached) in entities {
+            let title = entity_page_title(card);
+            md.push_str(&format!(
+                "- [{title}](<{title}>) — {} · {} document{}\n",
+                card.kind,
+                attached.len(),
+                if attached.len() == 1 { "" } else { "s" },
+            ));
+        }
+    }
     if !untagged.is_empty() {
         md.push_str("\n## Untagged\n\n");
         untagged.sort_by_key(|s| std::cmp::Reverse(s.char_count));
@@ -608,11 +753,93 @@ pub fn build_wiki_index(sources: &[Source], cited: &HashSet<String>, now_ms: i64
     md
 }
 
+/// Create-or-refresh a notebook's wiki: the index note plus one page per
+/// entity the registry files here. Upserts by title, write-skipping
+/// unchanged bodies; returns the index note (None when the notebook has
+/// no index and `create` is false — having one IS the opt-in) and how
+/// many notes actually changed.
+pub async fn upsert_wiki(
+    db: &crate::db::Db,
+    notebook_id: &str,
+    cards: &[RegistryCard],
+    cited: &HashSet<String>,
+    now_ms: i64,
+    create: bool,
+) -> anyhow::Result<(Option<Note>, usize)> {
+    let notes = db.list_notes(notebook_id).await?;
+    let existing_index = notes.iter().find(|n| n.title == WIKI_INDEX_TITLE);
+    if existing_index.is_none() && !create {
+        return Ok((None, 0));
+    }
+    let sources = db.list_sources(notebook_id).await?;
+    let entities = notebook_entities(cards, &sources, notebook_id);
+    let mut changed = 0usize;
+
+    let upsert = |title: String, body: String| {
+        let found = notes.iter().find(|n| n.title == title).cloned();
+        (title, body, found)
+    };
+    let mut writes: Vec<(String, String, Option<Note>)> = Vec::new();
+    writes.push(upsert(
+        WIKI_INDEX_TITLE.to_string(),
+        build_wiki_index(&sources, cited, &entities, now_ms),
+    ));
+    let by_id: HashMap<&str, &Source> = sources.iter().map(|s| (s.id.as_str(), s)).collect();
+    for (card, attached_ids) in &entities {
+        let attached: Vec<&Source> = attached_ids
+            .iter()
+            .filter_map(|id| by_id.get(id.as_str()).copied())
+            .collect();
+        writes.push(upsert(
+            entity_page_title(card),
+            build_entity_page(card, &attached),
+        ));
+    }
+
+    let mut index_note: Option<Note> = None;
+    for (title, body, found) in writes {
+        let is_index = title == WIKI_INDEX_TITLE;
+        let note = match found {
+            Some(mut note) => {
+                if note.content != body {
+                    db.update_note(&note.id, &note.title, &body, now_ms).await?;
+                    note.content = body;
+                    note.updated_at = now_ms;
+                    changed += 1;
+                }
+                note
+            }
+            None => {
+                let note = Note {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    notebook_id: notebook_id.to_string(),
+                    title,
+                    content: body,
+                    kind: "note".into(),
+                    prompt: String::new(),
+                    origin: String::new(),
+                    status: String::new(),
+                    created_at: now_ms,
+                    updated_at: now_ms,
+                };
+                db.add_note(&note).await?;
+                changed += 1;
+                note
+            }
+        };
+        if is_index {
+            index_note = Some(note);
+        }
+    }
+    Ok((index_note, changed))
+}
+
 /// Continuous consolidation (RFC-living-notebook phase 5, WikiSkill's
 /// argument made real): notebooks that HAVE an index note — creating one
-/// is the opt-in — get it re-derived on every gist sweep, so the map
-/// tracks the shelf without anyone pressing Refresh. Deterministic and
-/// write-skipping: an unchanged body costs a read, never a commit.
+/// is the opt-in — get their whole wiki (index + entity pages) re-derived
+/// on every gist sweep, so the map tracks the shelf without anyone
+/// pressing Refresh. Deterministic and write-skipping: an unchanged wiki
+/// costs reads, never a commit.
 pub async fn refresh_wiki_indexes(db: &crate::db::Db) -> anyhow::Result<usize> {
     let Some(trace_dir) = crate::trace::dir() else {
         // No traces handle (tests, early boot): a refresh without citation
@@ -621,23 +848,11 @@ pub async fn refresh_wiki_indexes(db: &crate::db::Db) -> anyhow::Result<usize> {
     };
     let now_ms = chrono::Utc::now().timestamp_millis();
     let cited = cited_ids(trace_dir);
+    let cards = db.list_registry().await?;
     let mut refreshed = 0usize;
     for nb in db.list_notebooks().await? {
-        let Some(note) = db
-            .list_notes(&nb.id)
-            .await?
-            .into_iter()
-            .find(|n| n.title == WIKI_INDEX_TITLE)
-        else {
-            continue;
-        };
-        let sources = db.list_sources(&nb.id).await?;
-        let body = build_wiki_index(&sources, &cited, now_ms);
-        if body == note.content {
-            continue;
-        }
-        db.update_note(&note.id, &note.title, &body, now_ms).await?;
-        refreshed += 1;
+        let (_, changed) = upsert_wiki(db, &nb.id, &cards, &cited, now_ms, false).await?;
+        refreshed += changed;
     }
     Ok(refreshed)
 }

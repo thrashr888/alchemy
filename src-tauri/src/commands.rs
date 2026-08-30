@@ -9951,43 +9951,60 @@ pub async fn growth_retire(
     Ok(crate::growth::retire_candidates(&sources, &cited, now()))
 }
 
-/// Create or refresh the notebook's wiki index note (Pillar 3's north
-/// star, deterministic v1): sources grouped by tag, linked by title, in an
-/// ordinary note so it round-trips through OKF and agents can edit it.
-/// Refreshing finds the existing note by its fixed title and rewrites the
-/// body in place, keeping the note's id (and any reader history to it).
+/// Create or refresh the notebook's wiki (Pillar 3 + phase 5): the index
+/// note plus one page per entity the registry files here — deterministic
+/// ordinary notes that round-trip through OKF and agents can edit.
+/// Upserts by title, so ids (and reader history to them) survive.
 #[tauri::command]
 pub async fn generate_wiki_index(
     state: State<'_, AppState>,
     notebook_id: String,
 ) -> Result<Note, String> {
-    let sources = e(state.db.list_sources(&notebook_id).await)?;
     let cited = crate::growth::cited_ids(&state.trace_dir);
-    let body = crate::growth::build_wiki_index(&sources, &cited, now());
-    let existing = e(state.db.list_notes(&notebook_id).await)?
-        .into_iter()
-        .find(|n| n.title == crate::growth::WIKI_INDEX_TITLE);
-    let ts = now();
-    if let Some(mut note) = existing {
-        e(state.db.update_note(&note.id, &note.title, &body, ts).await)?;
-        note.content = body;
-        note.updated_at = ts;
-        return Ok(note);
+    let cards = e(state.db.list_registry().await)?;
+    let (note, _) =
+        e(crate::growth::upsert_wiki(&state.db, &notebook_id, &cards, &cited, now(), true).await)?;
+    note.ok_or_else(|| "index note not created".to_string())
+}
+
+/// Tag-merge proposals (phase 5): plural/singular and separator variants
+/// of the same word. Proposals only — apply is its own explicit command.
+#[tauri::command]
+pub async fn growth_tag_merges(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<Vec<crate::growth::TagMergeProposal>, String> {
+    let sources = e(state.db.list_sources(&notebook_id).await)?;
+    Ok(crate::growth::tag_merge_proposals(&sources))
+}
+
+/// Rewrite one tag into another on every source carrying it. Goes through
+/// the same per-source tag write the editor uses, so routing and the
+/// manifest stay coherent. Returns how many sources changed.
+#[tauri::command]
+pub async fn apply_tag_merge(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    from: String,
+    to: String,
+) -> Result<u32, String> {
+    let sources = e(state.db.list_sources(&notebook_id).await)?;
+    let mut changed = 0u32;
+    for s in sources {
+        let tags: Vec<&str> = s.tags.split_whitespace().collect();
+        if !tags.contains(&from.as_str()) {
+            continue;
+        }
+        let mut seen = std::collections::HashSet::new();
+        let next: Vec<&str> = tags
+            .into_iter()
+            .map(|t| if t == from { to.as_str() } else { t })
+            .filter(|t| seen.insert(t.to_string()))
+            .collect();
+        e(set_source_tags_impl(&state, &s.id, &next.join(" ")).await)?;
+        changed += 1;
     }
-    let note = Note {
-        id: new_id(),
-        notebook_id,
-        title: crate::growth::WIKI_INDEX_TITLE.into(),
-        content: body,
-        kind: "note".into(),
-        prompt: String::new(),
-        origin: String::new(),
-        status: String::new(),
-        created_at: ts,
-        updated_at: ts,
-    };
-    e(state.db.add_note(&note).await)?;
-    Ok(note)
+    Ok(changed)
 }
 
 /// Seed a synthetic notebook for the scale gate (docs/RFC-living-notebook.md

@@ -10,13 +10,18 @@ import {
   setWebSearchEnabled,
   webSearchEnabled,
 } from "@/lib/growth";
-import type { GrowthProposal, RetireProposal } from "@/lib/types";
+import type {
+  GrowthProposal,
+  RetireProposal,
+  TagMergeProposal,
+} from "@/lib/types";
 import { Button, EmptyState, LoadingState, Spinner, Switch } from "./ui";
 import { Favicon } from "./SourcesPanel";
 import {
   AlertCircle,
   Archive,
   BookOpen,
+  Tags,
   FileText,
   Globe,
   Search,
@@ -85,6 +90,8 @@ export function GrowPane() {
   // The retirement pass (Pillar 3): old, never-cited sources — proposals
   // only, computed from local traces, loaded alongside the other tiers.
   const [retire, setRetire] = useState<RetireProposal[] | null>(null);
+  // Tag-merge proposals (phase 5): near-duplicate tags, deterministic.
+  const [merges, setMerges] = useState<TagMergeProposal[]>([]);
   const [indexBusy, setIndexBusy] = useState(false);
   const [dismissed, setDismissed] = useState<Record<string, number>>({});
   // The open-web tier: per-notebook opt-in; results and meter arrive
@@ -128,6 +135,13 @@ export function GrowPane() {
         if (!stale) setRetire(rows);
       })
       .catch(() => setRetire([]));
+    setMerges([]);
+    api
+      .growthTagMerges(currentId)
+      .then((rows) => {
+        if (!stale) setMerges(rows);
+      })
+      .catch(() => undefined);
     return () => {
       stale = true;
     };
@@ -179,6 +193,22 @@ export function GrowPane() {
     (r) => !dismissed[`retire:${r.sourceId}`],
   );
   const dismissRetire = (id: string) => dismiss(`retire:${id}`);
+  const mergesVisible = merges.filter(
+    (m) => !dismissed[`merge:${m.from}>${m.to}`],
+  );
+  const applyMerge = (m: TagMergeProposal) => {
+    if (!currentId) return;
+    dismiss(`merge:${m.from}>${m.to}`);
+    void api
+      .applyTagMerge(currentId, m.from, m.to)
+      .then((count) => {
+        useStore
+          .getState()
+          .pushToast("success", `Merged #${m.from} into #${m.to} on ${count} sources`);
+        setMerges((rows) => rows.filter((r) => r.from !== m.from));
+      })
+      .catch(() => undefined);
+  };
   const indexNote = notes.find((nt) => nt.title === "Notebook index");
   const makeIndex = () => {
     if (!currentId) return;
@@ -538,6 +568,51 @@ export function GrowPane() {
                   ))
                 )}
               </div>
+              {/* Tag merges (phase 5): near-duplicate tags fold together —
+                  plural into singular, separator variants into the common
+                  spelling. Proposal only; Merge rewrites every carrier. */}
+              {mergesVisible.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    <Tags className="h-3.5 w-3.5 text-muted-foreground" />
+                    <span className="text-caption font-semibold text-foreground">
+                      Organize
+                    </span>
+                    <span className="text-caption text-subtle-foreground">
+                      tags that look like the same word
+                    </span>
+                  </div>
+                  {mergesVisible.map((m) => (
+                    <div
+                      key={`${m.from}>${m.to}`}
+                      className="flex items-center gap-2 rounded-md border border-border px-3 py-2"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-body text-foreground">
+                          #{m.from} → #{m.to}
+                        </div>
+                        <div className="truncate text-caption text-muted-foreground">
+                          {m.fromCount} + {m.toCount} sources
+                        </div>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        onClick={() => applyMerge(m)}
+                        title={`Rewrite #${m.from} to #${m.to} everywhere`}
+                      >
+                        Merge
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        onClick={() => dismiss(`merge:${m.from}>${m.to}`)}
+                        title="They're different — hide for 30 days"
+                      >
+                        Keep both
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
               {/* The wiki index (Pillar 3's north star, deterministic v1):
                   one generated note mapping the notebook — tags, title links,
                   dust called out. An ordinary note, so it round-trips

@@ -13,6 +13,7 @@ import type {
   GrowthProposal,
   GrowthWebSearch,
   RetireProposal,
+  TagMergeProposal,
   ReleaseNote,
   ChatConfig,
   CloudFolder,
@@ -539,9 +540,15 @@ export const api = {
   /** The retirement pass: old, never-cited sources, proposals only. */
   growthRetire: (notebookId: string) =>
     run(query<RetireProposal[]>("growth_retire", { notebookId })),
-  /** Create or refresh the notebook's wiki index note (deterministic). */
+  /** Create or refresh the notebook's wiki (index + entity pages). */
   generateWikiIndex: (notebookId: string) =>
     run(cmd<Note>("generate_wiki_index", { notebookId })),
+  /** Tag-merge proposals: near-duplicate tags, proposals only. */
+  growthTagMerges: (notebookId: string) =>
+    run(query<TagMergeProposal[]>("growth_tag_merges", { notebookId })),
+  /** Rewrite `from` into `to` on every source carrying it. */
+  applyTagMerge: (notebookId: string, from: string, to: string) =>
+    run(cmd<number>("apply_tag_merge", { notebookId, from, to })),
   convertNoteToSource: (noteId: string) =>
     run(ai<Source>("convert_note_to_source", { noteId })),
   generateArtifact: (

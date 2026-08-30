@@ -197,13 +197,14 @@ pass.
    half was already live as gist.rs's ensure_tags sweep), and the wiki
    index — a deterministic generated note grouping sources by tag with
    title links the reader resolves, refreshed in place, OKF-portable.
-5. ~~Index refresh on the background cadence~~ — shipped: every gist
-   sweep re-derives existing wiki indexes first (WikiSkill's continuous
-   consolidation), write-skipping when nothing changed; the Grow pane
-   links the Nightly settings that govern the cadence. Still open:
-   nightly growth sweeps for web-enabled notebooks (the opt-in flag
-   lives client-side today), tag-cluster merge proposals, and registry
-   entity pages as the wiki grows beyond one index note.
+5. ~~Phase 5~~ — shipped: the wiki re-derives on every gist sweep
+   (WikiSkill's continuous consolidation, write-skipping), and it grew
+   beyond one note — a page per registry entity filed in the notebook
+   (facts + documents, title-linked both ways), plus tag-merge
+   proposals (plural/singular and separator variants) in the Grow
+   pane's Organize section. Notes link notes by title now, so the
+   wiki cross-references itself. Still open: nightly growth sweeps for
+   web-enabled notebooks (the opt-in flag lives client-side today).
 
 At 1M+ sources the answer is "many notebooks + meta-chat", not one
 table: the router already federates across notebooks, and per-notebook

@@ -293,6 +293,15 @@ export interface RetireProposal {
   charCount: number;
 }
 
+/** One proposed tag merge (RFC-living-notebook phase 5): plural/singular
+ *  or separator variants of the same word. Proposal only. */
+export interface TagMergeProposal {
+  from: string;
+  to: string;
+  fromCount: number;
+  toCount: number;
+}
+
 /** One GitHub release, read live for Settings → About's What's new. */
 export interface ReleaseNote {
   version: string;

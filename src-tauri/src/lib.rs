@@ -501,6 +501,8 @@ pub fn run() {
             commands::growth_local,
             commands::growth_retire,
             commands::generate_wiki_index,
+            commands::growth_tag_merges,
+            commands::apply_tag_merge,
             commands::live_view_back,
             commands::live_view_forward,
             commands::live_view_url,

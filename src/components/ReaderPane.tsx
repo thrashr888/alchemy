@@ -216,6 +216,22 @@ function routeDocLink(rawHref: string, origin: string | undefined): boolean {
     state.openInReader({ type: "source", id: hit.id });
     return true;
   }
+  // A note can be the target too — the wiki index and entity pages link
+  // each other by title, the same way they link sources.
+  let decodedNote = rawHref;
+  try {
+    decodedNote = decodeURIComponent(rawHref);
+  } catch {
+    /* stray % — compare raw */
+  }
+  const wantedNote = decodedNote.trim().toLowerCase();
+  const noteHit = state.notes.find(
+    (n) => n.title.trim().toLowerCase() === wantedNote,
+  );
+  if (noteHit) {
+    state.openInReader({ type: "note", id: noteHit.id });
+    return true;
+  }
   if (/^https?:\/\//.test(rawHref)) {
     void openUrl(rawHref);
     return true;
