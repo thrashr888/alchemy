@@ -68,6 +68,37 @@ function peakHourFace(h: number): LucideIcon {
   return Sunset;
 }
 
+/** Cumulative growth series for the spark tiles: per-day counts summed
+ *  over calendar time (inactive days hold flat — a gap is a plateau, not
+ *  a cliff), bucketed to the shader's 48-point uniform and normalized so
+ *  the curve always ends at 1. Empty when there's nothing to draw. */
+function growthSeries(
+  days: ActivityStats["days"],
+  pick: (d: ActivityStats["days"][number]) => number,
+): number[] {
+  if (days.length < 2) return [];
+  const by = new Map(days.map((d) => [d.date, pick(d)]));
+  const cursor = new Date(days[0].date + "T00:00");
+  const last = days[days.length - 1].date;
+  const daily: number[] = [];
+  let cum = 0;
+  for (let guard = 0; guard < 3660; guard++) {
+    const key = dayKey(cursor);
+    cum += by.get(key) ?? 0;
+    daily.push(cum);
+    if (key === last) break;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  const total = daily[daily.length - 1];
+  if (total <= 0) return [];
+  const stride = Math.ceil(daily.length / 48);
+  const out: number[] = [];
+  for (let i = stride - 1; i < daily.length; i += stride)
+    out.push(daily[i] / total);
+  if (out[out.length - 1] !== 1) out.push(1);
+  return out.length >= 2 ? out : [];
+}
+
 /** Micro-dollars as money. Sub-cent spend rounds to "$0.00" rather than
  *  being dressed up in extra decimals: the point of the tile is the order of
  *  magnitude, and a fake precision on a cost is the thing to avoid. */
@@ -425,6 +456,12 @@ export function ActivityTab() {
     : null;
   // chars/6 ≈ words; the ~ in the tile keeps the estimate honest.
   const sourceWords = Math.round(stats.corpusChars / 6);
+  // Growth curves for the spark tiles. Sources/day genuinely shapes the
+  // corpus curve; messages/day stands in for token history (tokens are
+  // only kept as a running total), so that curve is the right shape drawn
+  // from a correlated record, not a measurement.
+  const corpusCurve = growthSeries(stats.days, (d) => d.sources);
+  const tokensCurve = growthSeries(stats.days, (d) => d.messages);
 
   return (
     <div className="flex flex-col gap-4 pb-2">
@@ -461,11 +498,31 @@ export function ActivityTab() {
           label="Sources"
           value={compact.format(ranged.sources)}
           icon={Library}
+          shader={
+            corpusCurve.length > 0 ? (
+              <TileShader
+                mode="spark"
+                series={corpusCurve}
+                tintVar="--primary"
+                intensity={0.8}
+              />
+            ) : undefined
+          }
         />
         <Tile
           label="Words in sources"
           value={`~${compact.format(sourceWords)}`}
           icon={BookOpen}
+          shader={
+            corpusCurve.length > 0 ? (
+              <TileShader
+                mode="spark"
+                series={corpusCurve}
+                tintVar="--primary"
+                intensity={0.8}
+              />
+            ) : undefined
+          }
         />
         <Tile
           label="Notes"
@@ -486,11 +543,31 @@ export function ActivityTab() {
           label="Tokens generated"
           value={compact.format(stats.tokensGenerated || 0)}
           icon={Zap}
+          shader={
+            tokensCurve.length > 0 ? (
+              <TileShader
+                mode="spark"
+                series={tokensCurve}
+                tintVar="--primary"
+                intensity={0.8}
+              />
+            ) : undefined
+          }
         />
         <Tile
           label="Words written"
           value={compact.format(stats.assistantWords)}
           icon={PenLine}
+          shader={
+            tokensCurve.length > 0 ? (
+              <TileShader
+                mode="spark"
+                series={tokensCurve}
+                tintVar="--primary"
+                intensity={0.8}
+              />
+            ) : undefined
+          }
         />
         <Tile
           label="Active days"

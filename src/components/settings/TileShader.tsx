@@ -12,20 +12,28 @@ import { useReducedMotion } from "../DitherBackground";
  *   sky   — the peak-hour tile's weather: a soft sun whose position across
  *           the tile IS the hour (dawn left, noon high, dusk right), or a
  *           sparse twinkling starfield at night.
+ *   spark — a cumulative growth chart as weather: `series` (0–1, left to
+ *           right in time) becomes a dithered area fill rising toward the
+ *           right. The data IS the field.
  */
+const MAX_SERIES = 48;
+
 export function TileShader({
   mode,
   hour = 12,
   intensity = 1,
   tintVar,
+  series,
 }: {
-  mode: "ember" | "sky";
+  mode: "ember" | "sky" | "spark";
   /** Local hour 0–23; only the sky reads it. */
   hour?: number;
   /** 0–1 luminance multiplier. */
   intensity?: number;
   /** CSS custom property to tint with, e.g. "--artifact-template". */
   tintVar: string;
+  /** Normalized cumulative values, oldest first; only spark reads it. */
+  series?: number[];
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const reducedMotion = useReducedMotion();
@@ -66,9 +74,22 @@ export function TileShader({
     const uGain = gl.getUniformLocation(program, "u_gain");
     const uMode = gl.getUniformLocation(program, "u_mode");
     const uHour = gl.getUniformLocation(program, "u_hour");
+    // "u_series[0]" is the array's canonical name — some GL stacks return
+    // null for the bare name, and uniform1fv on null is a silent no-op.
+    const uSeries =
+      gl.getUniformLocation(program, "u_series[0]") ??
+      gl.getUniformLocation(program, "u_series");
+    const uN = gl.getUniformLocation(program, "u_n");
     gl.uniform1f(uGain, intensity);
-    gl.uniform1f(uMode, mode === "ember" ? 0 : 1);
+    gl.uniform1f(uMode, mode === "ember" ? 0 : mode === "sky" ? 1 : 2);
     gl.uniform1f(uHour, hour);
+    // The series rides a fixed-size uniform array (GLSL ES 1.0 has no
+    // dynamic arrays); downsampling past MAX_SERIES is the caller's job.
+    const pts = (series ?? []).slice(-MAX_SERIES);
+    const packed = new Float32Array(MAX_SERIES);
+    packed.set(pts.map((v) => Math.max(0, Math.min(1, v))));
+    gl.uniform1fv(uSeries, packed);
+    gl.uniform1f(uN, Math.max(2, pts.length));
     const tint = hexToRgb(
       getComputedStyle(document.documentElement)
         .getPropertyValue(tintVar)
@@ -118,7 +139,8 @@ export function TileShader({
       gl.deleteBuffer(buf);
       gl.deleteProgram(program);
     };
-  }, [mode, hour, intensity, tintVar, reducedMotion]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- series compared by content
+  }, [mode, hour, intensity, tintVar, reducedMotion, (series ?? []).join(",")]);
 
   return (
     <canvas
@@ -149,6 +171,8 @@ uniform vec3 u_tint;
 uniform float u_gain;
 uniform float u_mode;
 uniform float u_hour;
+uniform float u_series[48];
+uniform float u_n;
 
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
 float vnoise(vec2 p){
@@ -213,9 +237,44 @@ float skyField(vec2 uv){
   return clamp(disc * 0.95 + glow + haze, 0.0, 1.0);
 }
 
+// spark — the growth chart. Linear interpolation across the series (the
+// constant-index loop is GLSL ES 1.0's price for array access), then an
+// area fill that brightens toward its own top edge, a soft crest line,
+// and a slow shimmer inside the fill so the chart reads as weather, not
+// chrome. gl_FragCoord's bottom-left origin means the area rises from
+// the tile floor for free.
+float seriesAt(float x){
+  float fi = clamp(x, 0.0, 1.0) * (u_n - 1.0);
+  float i0 = floor(fi);
+  float v0 = 0.0; float v1 = 0.0;
+  for (int i = 0; i < 48; i++) {
+    float f = float(i);
+    if (f == i0) v0 = u_series[i];
+    if (f == i0 + 1.0) v1 = u_series[i];
+  }
+  if (i0 >= u_n - 1.0) v1 = v0;
+  return mix(v0, v1, fi - i0);
+}
+
+float sparkField(vec2 uv){
+  float t = mod(u_time, 2048.0);
+  // Ceiling at 0.55: the curve lives under the tile's label block, never
+  // behind it — the chart is weather for the number, not a rival.
+  float h = 0.05 + 0.50 * seriesAt(uv.x);
+  float inside = step(uv.y, h);
+  // Thin fill, bright crest: it should read as a chart line with a wash
+  // under it, not a flood.
+  float fill = inside * (0.12 + 0.22 * smoothstep(0.0, h, uv.y));
+  float crest = smoothstep(0.035, 0.0, abs(uv.y - h));
+  float shimmer = 0.08 * vnoise(vec2(uv.x * 5.0 + t * 0.12, uv.y * 4.0 - t * 0.05));
+  return clamp(fill + crest + shimmer * inside, 0.0, 1.0);
+}
+
 void main(){
   vec2 uv = gl_FragCoord.xy / u_res;
-  float L = u_mode < 0.5 ? emberField(uv) : skyField(uv);
+  float L = u_mode < 0.5 ? emberField(uv)
+          : u_mode < 1.5 ? skyField(uv)
+          : sparkField(uv);
   float d = bayer4(gl_FragCoord.xy) - 0.5;
   // 6 levels (vs the backdrops' 5): tile features are small, so a step more
   // tonal resolution keeps the sun's edge from dissolving.
