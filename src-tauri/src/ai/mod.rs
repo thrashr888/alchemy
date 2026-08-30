@@ -482,24 +482,36 @@ impl AiConfig {
 /// plus KV cache plus the embedder must fit under it, so each tier picks
 /// the best model whose weights stay near half of RAM.
 ///
-/// - <16GB: lfm2.5:8b — 5.2GB MoE (1B active), built for edge tool calling;
-///   the only current-generation model that fits at all.
-/// - 16GB: gemma4:12b — 7.6GB, well-rounded chat. (Plain GGUF tag: the
-///   -mlx build has no vision projector and hallucinates on images.)
-/// - 24GB: gpt-oss:20b — 13GB; the long-standing default, and the citation
-///   style verify.rs parses is tuned around this family.
-/// - 32GB: qwen3.8:27b — 18GB, 256K context; the first tier that can hold
-///   a genuinely strong model.
-/// - 96GB: gpt-oss:120b — 65GB; same family as 20b, so prompt tuning holds.
-/// - 192GB+: qwen3.8-flash-next:125b-mlx — 105GB MoE (6B active), fast
-///   even at this size and its KV cache stays small.
+/// Picks are gated on the judged evals (judged_eval.rs, 2026-08-29 run —
+/// evidence cited / two-source / faithfulness / abstention) and the
+/// grounded-chat contract in `evals::eval_chat_grounding_across_models`:
+///
+/// - <16GB: lfm2.5:8b — 5.2GB MoE (1B active), 77 tok/s. 52%/44%,
+///   0.85/0.98, abstains on all unanswerables. Watch: sometimes emits
+///   fullwidth 【n】 markers, which verify.rs cannot parse.
+/// - 16-31GB: gemma4:12b — 7.6GB. 64%/72%, 0.80/0.95, abstains on all
+///   unanswerables — the honest small default. Nothing q4 between 8 and
+///   16GB beats it, so the 24GB tier gets the same pick. (Plain GGUF tag:
+///   the -mlx build has no vision projector and hallucinates on images.)
+///   gpt-oss:20b, the old default here, left the table with its family:
+///   gpt-oss:120b measured 24% evidence cited and answered 4 grounded
+///   questions with zero [n] markers.
+/// - 32GB: qwen3.8:27b — 18GB, 256K context. 76%/88% with the densest
+///   citations measured; the verify pass covers its 0.69 faithfulness.
+/// - 96GB: gemma4:31b — 20GB. 68%/80% with the best faithfulness of the
+///   large models (0.91/0.98).
+/// - 192GB+: qwen3.8-flash-next:125b-mlx — 105GB MoE (6B active), fast at
+///   this size with a small KV cache. Unmeasured: nothing else
+///   current-generation exists locally at this scale.
+///
+/// Ornith-1.5:9b cites best in class (76%/84%) but abstained on only 10%
+/// of unanswerable questions — a fabrication risk no default should carry.
 pub fn recommended_chat_model(ram_gib: u64) -> &'static str {
     match ram_gib {
         0..=15 => "lfm2.5:8b",
-        16..=23 => "gemma4:12b",
-        24..=31 => "gpt-oss:20b",
+        16..=31 => "gemma4:12b",
         32..=95 => "qwen3.8:27b",
-        96..=191 => "gpt-oss:120b",
+        96..=191 => "gemma4:31b",
         _ => "qwen3.8-flash-next:125b-mlx",
     }
 }
@@ -1061,10 +1073,10 @@ mod tests {
     fn chat_model_tiers_follow_unified_memory() {
         assert_eq!(recommended_chat_model(8), "lfm2.5:8b");
         assert_eq!(recommended_chat_model(16), "gemma4:12b");
-        assert_eq!(recommended_chat_model(24), "gpt-oss:20b");
+        assert_eq!(recommended_chat_model(24), "gemma4:12b");
         assert_eq!(recommended_chat_model(32), "qwen3.8:27b");
         assert_eq!(recommended_chat_model(64), "qwen3.8:27b");
-        assert_eq!(recommended_chat_model(128), "gpt-oss:120b");
+        assert_eq!(recommended_chat_model(128), "gemma4:31b");
         assert_eq!(recommended_chat_model(192), "qwen3.8-flash-next:125b-mlx");
         assert_eq!(recommended_chat_model(512), "qwen3.8-flash-next:125b-mlx");
     }

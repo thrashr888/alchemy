@@ -491,3 +491,131 @@ async fn eval_rerank_surfaces_buried_hit() {
         "reranker failed to surface the buried relevant passage"
     );
 }
+
+/// Ollama-gated: the grounded-chat contract across candidate default chat
+/// models. Each model gets the fixture corpus as numbered excerpts through
+/// the real prompt (`rag::build_chat_messages`) and must state the fact AND
+/// carry bracketed markers `verify::strip_markers` parses — the contract a
+/// model has to clear before `ai::recommended_chat_model` may name it,
+/// because switching model families is exactly when citation style breaks.
+///
+/// Models come from ALCHEMY_EVAL_CHAT_MODELS (comma-separated Ollama tags);
+/// unset, it evaluates the tier table's picks that are actually installed.
+#[tokio::test]
+#[ignore = "needs live Ollama; run explicitly — this measures candidate models, it does not guard correctness"]
+async fn eval_chat_grounding_across_models() {
+    use crate::ai::{Ollama, OllamaConfig};
+
+    let probe = Ollama::new(OllamaConfig {
+        base_url: "http://localhost:11434".into(),
+        ..Default::default()
+    });
+    let installed = probe
+        .list_models()
+        .await
+        .expect("Ollama not reachable on localhost:11434 — start it, then rerun");
+
+    let models: Vec<String> = match std::env::var("ALCHEMY_EVAL_CHAT_MODELS") {
+        Ok(v) if !v.trim().is_empty() => v.split(',').map(|s| s.trim().to_string()).collect(),
+        _ => [8u64, 16, 24, 32, 96, 192]
+            .iter()
+            .map(|gib| crate::ai::recommended_chat_model(*gib).to_string())
+            .filter(|m| installed.iter().any(|i| i == m))
+            .collect(),
+    };
+    assert!(
+        !models.is_empty(),
+        "no candidate models installed — pull one or set ALCHEMY_EVAL_CHAT_MODELS"
+    );
+
+    // (question, any-of answer substrings, 1-based excerpt holding the fact)
+    let qa: &[(&str, &[&str], usize)] = &[
+        (
+            "what should happen after an ERR-503-BACKOFF error?",
+            &["sixty", "60 second"],
+            1,
+        ),
+        ("what service uses port 32400?", &["plex"], 2),
+        (
+            "how much paid time off do employees accrue per month?",
+            &["one and a half", "1.5"],
+            4,
+        ),
+        (
+            "how hot should the dutch oven be preheated for bread?",
+            &["four hundred fifty", "450"],
+            5,
+        ),
+    ];
+
+    let citations: Vec<Citation> = CORPUS
+        .iter()
+        .enumerate()
+        .map(|(i, (title, body))| Citation {
+            chunk_id: format!("doc{i}"),
+            source_id: format!("src{i}"),
+            source_title: title.to_string(),
+            source_path: String::new(),
+            note_id: String::new(),
+            gist: false,
+            snote: false,
+            ordinal: i as i32,
+            snippet: body.to_string(),
+            distance: 0.1,
+        })
+        .collect();
+    let sources: Vec<(String, String, String)> = CORPUS
+        .iter()
+        .map(|(title, _)| (title.to_string(), String::new(), String::new()))
+        .collect();
+    let no_expansion = std::collections::HashMap::new();
+
+    let mut failures: Vec<String> = Vec::new();
+    for model in &models {
+        let ai = Ollama::new(OllamaConfig {
+            base_url: "http://localhost:11434".into(),
+            chat_model: model.clone(),
+            ..Default::default()
+        });
+        let (mut facts, mut marked, mut cited, mut tok_s) = (0, 0, 0, Vec::new());
+        for (question, expects, excerpt) in qa {
+            let messages = crate::rag::build_chat_messages(
+                &[],
+                question,
+                crate::rag::Excerpts {
+                    citations: &citations,
+                    expanded: &no_expansion,
+                },
+                &sources,
+                "",
+                "",
+                &crate::inference::ContextProfile::default(),
+            );
+            let out = ai.chat(&messages).await.expect("chat");
+            if let Some(s) = &out.stats {
+                tok_s.push(s.tokens_per_sec());
+            }
+            let lower = out.text.to_lowercase();
+            let (_, markers) = crate::verify::strip_markers(&out.text);
+            facts += expects.iter().any(|e| lower.contains(e)) as u32;
+            marked += !markers.is_empty() as u32;
+            cited += markers.contains(excerpt) as u32;
+        }
+        let speed = tok_s.iter().sum::<f64>() / tok_s.len().max(1) as f64;
+        eprintln!(
+            "{model}: facts {facts}/{n}, cited-at-all {marked}/{n}, cited-right-excerpt {cited}/{n}, {speed:.0} tok/s",
+            n = qa.len()
+        );
+        // A default has to ground reliably: near-perfect facts with markers
+        // present. Right-excerpt is reported, not gated — several excerpts
+        // legitimately touch some answers.
+        if facts < 3 || marked < 3 {
+            failures.push(format!("{model} (facts {facts}/4, markers {marked}/4)"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "models below the grounded-chat floor: {}",
+        failures.join(", ")
+    );
+}
