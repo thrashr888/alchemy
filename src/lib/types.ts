@@ -254,6 +254,56 @@ export interface BuildInfo {
   profile: string;
 }
 
+/** One growth proposal (RFC-living-notebook Pillar 2): a URL the
+ *  notebook's own sources keep pointing at, ranked against standing
+ *  queries mined from thin retrievals. Nothing fetches until Add. */
+/** The Grow surface payload: what the notebook is hungry for, plus the
+ *  free tiers' proposals (local Spotlight + links mined from sources). */
+export interface GrowthOverview {
+  queries: string[];
+  proposals: GrowthProposal[];
+}
+
+/** The open-web tier's result (Firecrawl keyless search, metered). */
+export interface GrowthWebSearch {
+  proposals: GrowthProposal[];
+  creditsThisMonth: number;
+  capped: boolean;
+  /** Days between fresh searches at the current budget pace. */
+  refreshEveryDays: number;
+}
+
+export interface GrowthProposal {
+  /** "web" (link mined from sources) | "local" (on-disk path) |
+   *  "search" (found on the open web via Firecrawl). */
+  kind: "web" | "local" | "search";
+  url: string;
+  /** Best anchor text seen for the link, or the file's name. */
+  anchor: string;
+  mentions: number;
+  sourceCount: number;
+  matchedQuery: string;
+  score: number;
+}
+
+/** One retirement candidate (RFC-living-notebook Pillar 3): old enough to
+ *  have had its chance, never once cited. Proposal only. */
+export interface RetireProposal {
+  sourceId: string;
+  title: string;
+  ageDays: number;
+  charCount: number;
+}
+
+/** One proposed tag merge (RFC-living-notebook phase 5): plural/singular
+ *  or separator variants of the same word. Proposal only. */
+export interface TagMergeProposal {
+  from: string;
+  to: string;
+  fromCount: number;
+  toCount: number;
+}
+
 /** One GitHub release, read live for Settings → About's What's new. */
 export interface ReleaseNote {
   version: string;

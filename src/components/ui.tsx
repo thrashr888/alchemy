@@ -78,6 +78,13 @@ export function Input({
         "focus:border-ring/70 focus:ring-1 focus:ring-ring/40 transition-colors",
         className,
       )}
+      // Inputs here hold titles, URLs, tags, and filters — not prose. macOS
+      // autocorrect mangles identifiers and Writing Tools' popover button is
+      // noise in chrome; both default off (callers can re-enable per field).
+      autoComplete="off"
+      autoCorrect="off"
+      spellCheck={false}
+      {...({ writingsuggestions: "false" } as Record<string, string>)}
       {...props}
     />
   );
@@ -97,6 +104,10 @@ export function Textarea({
         "focus:border-ring/70 focus:ring-1 focus:ring-ring/40 transition-colors",
         className,
       )}
+      // Prose fields keep spellcheck, but the macOS Writing Tools popover
+      // button (the "Siri" affordance in every focused field) stays out.
+      autoComplete="off"
+      {...({ writingsuggestions: "false" } as Record<string, string>)}
       {...props}
     />
   );
@@ -246,7 +257,11 @@ export function Switch({
         role="switch"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        className="peer absolute inset-0 cursor-pointer rounded-full opacity-0"
+        // h/w-full is load-bearing: a checkbox keeps its intrinsic ~12px
+        // box under `inset-0` alone (form controls don't stretch), which
+        // left the real hit area a corner of the pill. No halo padding —
+        // any box past the pill overflows edge-flush scroll containers.
+        className="peer absolute inset-0 h-full w-full cursor-pointer rounded-full opacity-0"
       />
       {/* Native NSSwitch geometry, measured off a rendered control (dark
           aqua): 2.25:1 pill, knob a 1.6:1 capsule spanning 59% of the track

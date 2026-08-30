@@ -36,12 +36,12 @@ import {
   isWebUrl,
   scrollMemory,
   shortcutBlocked,
-  urlHost,
 } from "@/lib/utils";
 import {
   AppWindow,
   ArrowLeft,
   ArrowRight,
+  Sprout,
   BookOpen,
   ChevronDown,
   ChevronUp,
@@ -162,6 +162,20 @@ function resolveInCorpus(
   const byKey = (key: string) =>
     sources.find((src) => docKey(src.url) === docKey(key)) ?? null;
   if (/^https?:\/\//.test(rawHref)) return byKey(rawHref);
+  // Title match: notes link to sources by name (the wiki index writes
+  // `[Title](<Title>)`), and a bare title is also what a hand-typed
+  // wikilink means. Exact, case-insensitive.
+  let decoded = rawHref;
+  try {
+    decoded = decodeURIComponent(rawHref);
+  } catch {
+    /* stray % — compare raw */
+  }
+  const wanted = decoded.trim().toLowerCase();
+  const byTitle = sources.find(
+    (src) => src.title.trim().toLowerCase() === wanted,
+  );
+  if (byTitle) return byTitle;
   if (!origin) return null;
   if (/^https?:\/\//.test(origin)) {
     try {
@@ -200,6 +214,22 @@ function routeDocLink(rawHref: string, origin: string | undefined): boolean {
   const hit = resolveInCorpus(rawHref, origin);
   if (hit) {
     state.openInReader({ type: "source", id: hit.id });
+    return true;
+  }
+  // A note can be the target too — the wiki index and entity pages link
+  // each other by title, the same way they link sources.
+  let decodedNote = rawHref;
+  try {
+    decodedNote = decodeURIComponent(rawHref);
+  } catch {
+    /* stray % — compare raw */
+  }
+  const wantedNote = decodedNote.trim().toLowerCase();
+  const noteHit = state.notes.find(
+    (n) => n.title.trim().toLowerCase() === wantedNote,
+  );
+  if (noteHit) {
+    state.openInReader({ type: "note", id: noteHit.id });
     return true;
   }
   if (/^https?:\/\//.test(rawHref)) {
@@ -431,16 +461,18 @@ export function useElementWidth(ref: React.RefObject<HTMLElement | null>): numbe
 export function CenterModeTabs() {
   const hasDocs = useStore((s) => s.reader.history.length > 0);
   const active = useStore((s) =>
-    s.galleryOpen
-      ? "gallery"
-      : s.ledgerOpen
-        ? "ledger"
-        : s.reader.open
-          ? "reader"
-          : "chat",
+    s.growOpen
+      ? "grow"
+      : s.galleryOpen
+        ? "gallery"
+        : s.ledgerOpen
+          ? "ledger"
+          : s.reader.open
+            ? "reader"
+            : "chat",
   );
   const tab = (
-    id: "chat" | "reader" | "gallery" | "ledger",
+    id: "chat" | "reader" | "gallery" | "ledger" | "grow",
     icon: React.ReactNode,
     label: string,
     onClick: () => void,
@@ -468,7 +500,11 @@ export function CenterModeTabs() {
   return (
     <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5">
       {tab("chat", <MessageSquare className="h-3.5 w-3.5" />, "Chat", () => {
-        useStore.setState({ ledgerOpen: false, galleryOpen: false });
+        useStore.setState({
+          ledgerOpen: false,
+          galleryOpen: false,
+          growOpen: false,
+        });
         s.closeReader();
       })}
       {tab(
@@ -479,15 +515,31 @@ export function CenterModeTabs() {
           useStore.setState((st) => ({
             ledgerOpen: false,
             galleryOpen: false,
+            growOpen: false,
             reader: { ...st.reader, open: true },
           })),
         !hasDocs,
       )}
       {tab("gallery", <LayoutGrid className="h-3.5 w-3.5" />, "Gallery", () =>
-        useStore.setState({ galleryOpen: true, ledgerOpen: false }),
+        useStore.setState({
+          galleryOpen: true,
+          ledgerOpen: false,
+          growOpen: false,
+        }),
+      )}
+      {tab("grow", <Sprout className="h-3.5 w-3.5" />, "Grow", () =>
+        useStore.setState({
+          growOpen: true,
+          galleryOpen: false,
+          ledgerOpen: false,
+        }),
       )}
       {tab("ledger", <Logs className="h-3.5 w-3.5" />, "Ledger", () =>
-        useStore.setState({ ledgerOpen: true, galleryOpen: false }),
+        useStore.setState({
+          ledgerOpen: true,
+          galleryOpen: false,
+          growOpen: false,
+        }),
       )}
     </div>
   );
@@ -1604,7 +1656,7 @@ function DocProperties({
   note?: Note;
   git?: ReturnType<typeof parseGitProvenance>;
 }) {
-  const rows: { label: string; value: string }[] = [];
+  const rows: { label: string; value: string; href?: string }[] = [];
   if (source) {
     // A cloud-synced folder says which service it came from — "Folder" alone
     // can't distinguish a Box mount from a plain local directory.
@@ -1615,8 +1667,10 @@ function DocProperties({
         ? `${SOURCE_TYPE_LABEL[source.sourceType]} · ${provider}`
         : SOURCE_TYPE_LABEL[source.sourceType],
     });
-    const host = isWebUrl(source.url) ? urlHost(source.url) : null;
-    if (host) rows.push({ label: "Site", value: host });
+    // The actual URL, not just its host — the address is the provenance,
+    // and clicking it opens the page in the browser.
+    if (isWebUrl(source.url))
+      rows.push({ label: "URL", value: source.url, href: source.url });
     // Embedded document authorship (PDF /Author, Office dc:creator, EXIF
     // Artist) — present only when the file actually carries it.
     if (source.author) rows.push({ label: "Author", value: source.author });
@@ -1653,9 +1707,20 @@ function DocProperties({
         {rows.map((r) => (
           <Fragment key={r.label}>
             <span className="text-subtle-foreground">{r.label}</span>
-            <span className="min-w-0 truncate text-muted-foreground" title={r.value}>
-              {r.value}
-            </span>
+            {r.href ? (
+              <button
+                type="button"
+                onClick={() => void openUrl(r.href!)}
+                className="min-w-0 truncate text-left text-citation hover:underline"
+                title={`Open ${r.value}`}
+              >
+                {r.value}
+              </button>
+            ) : (
+              <span className="min-w-0 truncate text-muted-foreground" title={r.value}>
+                {r.value}
+              </span>
+            )}
           </Fragment>
         ))}
         {/* User metadata (RFC-source-tags): always present for sources —
@@ -1881,6 +1946,10 @@ function SourceReader({
   // never painted over — a native child webview sits above every HTML
   // layer, so z-index cannot win this fight.
   const liveRef = useRef<HTMLDivElement>(null);
+  // Where the live view actually is — polled, since navigation happens
+  // inside the native child where no DOM event reaches us. Drives the
+  // toolbar's address line and its "Add as source" offer.
+  const [liveUrl, setLiveUrl] = useState<string | null>(null);
   useEffect(() => {
     if (!live) return;
     const el = liveRef.current;
@@ -1900,10 +1969,18 @@ function SourceReader({
       );
     const mo = new MutationObserver(overlayCheck);
     mo.observe(document.body, { childList: true, subtree: true });
+    const poll = window.setInterval(() => {
+      api
+        .liveViewUrl()
+        .then((u) => setLiveUrl(u))
+        .catch(() => undefined);
+    }, 1000);
     return () => {
       ro.disconnect();
       mo.disconnect();
       window.removeEventListener("resize", update);
+      window.clearInterval(poll);
+      setLiveUrl(null);
       void api.liveViewClose();
     };
   }, [live, source.url]);
@@ -2294,11 +2371,56 @@ function SourceReader({
   }
 
   if (live) {
+    // "Same page" tolerates the fragment and a trailing slash; a changed
+    // path or query is a different page and earns the Add offer.
+    const normPage = (u: string) => u.split("#")[0].replace(/\/$/, "");
+    const wandered = !!liveUrl && normPage(liveUrl) !== normPage(source.url);
     return (
-      <div className="min-h-0 flex-1 p-3">
+      <div className="flex min-h-0 flex-1 flex-col p-3">
+        {/* Nav chrome: the page's own context menu is suppressed (this is
+            a convenience surface, not a browser), so back/forward live
+            here — and a page the user wandered to can join the notebook. */}
+        <div className="mb-2 flex min-w-0 items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => void api.liveViewBack()}
+            title="Back"
+            aria-label="Live view back"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => void api.liveViewForward()}
+            title="Forward"
+            aria-label="Live view forward"
+          >
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Button>
+          <span
+            className="min-w-0 flex-1 truncate text-micro text-subtle-foreground"
+            title={liveUrl ?? source.url}
+          >
+            {liveUrl ?? source.url}
+          </span>
+          {wandered && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                if (liveUrl) void useStore.getState().addSourceUrl(liveUrl);
+              }}
+              title="Add the page you're viewing to this notebook"
+            >
+              Add as source
+            </Button>
+          )}
+        </div>
         <div
           ref={liveRef}
-          className="flex h-full w-full items-center justify-center rounded-md border border-border bg-surface-2/40 text-caption text-muted-foreground"
+          className="flex min-h-0 flex-1 items-center justify-center rounded-md border border-border bg-surface-2/40 text-caption text-muted-foreground"
         >
           Loading live page…
         </div>

@@ -618,6 +618,21 @@ pub fn spawn_sweep(db: std::sync::Arc<Db>, ai: Ai) {
         return;
     }
     tauri::async_runtime::spawn(async move {
+        // Consolidation first (RFC-living-notebook phase 5): wiki indexes
+        // track the shelf on every sweep, before any model work runs —
+        // deterministic, and a no-change pass costs reads only.
+        match crate::growth::refresh_wiki_indexes(&db).await {
+            Ok(n) if n > 0 => crate::note!("sweep: refreshed {n} wiki index(es)"),
+            Ok(_) => {}
+            Err(err) => crate::note!("sweep: wiki index refresh failed: {err:#}"),
+        }
+        // Web-enabled notebooks get their standing queries warmed too —
+        // day-cached, so at most one metered search per notebook per day.
+        match crate::growth::sweep_web_searches(&db).await {
+            Ok(n) if n > 0 => crate::note!("sweep: warmed web proposals for {n} notebook(s)"),
+            Ok(_) => {}
+            Err(err) => crate::note!("sweep: web warm failed: {err:#}"),
+        }
         for _ in 0..MAX_SWEEP_BATCHES {
             match ensure_gists(&db, &ai).await {
                 // Gists converged; spend the batch on chunk enrichment (RFC §2

@@ -5,6 +5,7 @@ import { ChatPanel } from "./ChatPanel";
 import { CenterModeTabs, ReaderPane } from "./ReaderPane";
 import { LedgerPane } from "./LedgerPane";
 import { GalleryPane } from "./GalleryPane";
+import { GrowPane } from "./GrowPane";
 import { StudioPanel } from "./StudioPanel";
 import { AddSourceModal } from "./AddSourceModal";
 import { SourcesRail, StudioRail } from "./SidebarRails";
@@ -23,6 +24,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   const readerOpen = useStore((s) => s.reader.open);
   const ledgerOpen = useStore((s) => s.ledgerOpen);
   const galleryOpen = useStore((s) => s.galleryOpen);
+  const growOpen = useStore((s) => s.growOpen);
   const notebooks = useStore((s) => s.notebooks);
   const close = useStore((s) => s.closeNotebook);
   const sourcesOpen = useStore((s) => s.sourcesOpen);
@@ -146,7 +148,12 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
         {/* Blank-chat shader as the window's backdrop: full width, behind
             the side panels — their cards sit on top, the gutters reveal it.
             The panels' roots are positioned, so they paint above this. */}
-        {chatBlank && !readerOpen && !ledgerOpen && !galleryOpen && !glassOn && (
+        {chatBlank &&
+          !readerOpen &&
+          !ledgerOpen &&
+          !galleryOpen &&
+          !growOpen &&
+          !glassOn && (
           <>
             <div className="glass-mist pointer-events-none absolute inset-0">
               <DitherBackground
@@ -159,7 +166,9 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
         )}
         {sourcesOpen ? <SourcesPanel /> : <SourcesRail />}
         <div className="flex min-w-0 flex-1 overflow-hidden pt-1">
-          {galleryOpen ? (
+          {growOpen ? (
+            <GrowPane />
+          ) : galleryOpen ? (
             <GalleryPane />
           ) : ledgerOpen ? (
             <LedgerPane />

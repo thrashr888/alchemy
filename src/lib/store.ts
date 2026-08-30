@@ -487,6 +487,7 @@ export const useStore = create<AppState>((set, get) => {
     // the pane watches so agent writes appear live (mcp://changed).
     ledgerOpen: false,
     galleryOpen: false,
+    growOpen: false,
     readerEditIntent: null,
     ledgerBump: 0,
     registryBump: 0,
@@ -638,7 +639,7 @@ export const useStore = create<AppState>((set, get) => {
         // notebook reopens in its center mode — chat, reader, or ledger.
         let view: {
           nb: string | null;
-          mode: "chat" | "reader" | "ledger" | "gallery";
+          mode: "chat" | "reader" | "ledger" | "gallery" | "grow";
           doc?: ReaderDoc;
           readerHistory?: ReaderDoc[];
           readerIndex?: number;
@@ -678,6 +679,7 @@ export const useStore = create<AppState>((set, get) => {
           }
           if (view?.mode === "ledger") set({ ledgerOpen: true });
           else if (view?.mode === "gallery") set({ galleryOpen: true });
+          else if (view?.mode === "grow") set({ growOpen: true });
           else if (view?.mode === "reader" && hist.length === 0 && view.doc)
             get().openInReader(view.doc);
         }
@@ -998,6 +1000,9 @@ export const useStore = create<AppState>((set, get) => {
         } else if (e.payload.id === "menu-toggle-gallery") {
           if (get().currentId) toggleNotebookPanel("gallery");
           else s.pushToast("info", "Open a notebook to browse its gallery");
+        } else if (e.payload.id === "menu-toggle-grow") {
+          if (get().currentId) toggleNotebookPanel("grow");
+          else s.pushToast("info", "Open a notebook to grow it");
         } else if (e.payload.id === "menu-toggle-ledger") {
           if (get().currentId) toggleNotebookPanel("ledger");
           else s.pushToast("info", "Open a notebook to read its ledger");
@@ -2291,6 +2296,7 @@ export const useStore = create<AppState>((set, get) => {
         pendingInput: "",
         galleryOpen: false,
         ledgerOpen: false,
+        growOpen: false,
       });
       if (get().reader.open) get().closeReader();
       get().pushToast(
@@ -2482,6 +2488,7 @@ export const useStore = create<AppState>((set, get) => {
         set({
           ledgerOpen: false,
           galleryOpen: false,
+          growOpen: false,
           reader: { open: true, history: next, index },
         });
         return;
@@ -2490,6 +2497,7 @@ export const useStore = create<AppState>((set, get) => {
       set({
         ledgerOpen: false,
         galleryOpen: false,
+        growOpen: false,
         reader: { open: true, history: next, index: next.length - 1 },
       });
     },
@@ -3176,6 +3184,7 @@ async function applyNav(delta: 1 | -1): Promise<void> {
       useStore.setState({
         galleryOpen: target.mode === "gallery",
         ledgerOpen: target.mode === "ledger",
+        growOpen: target.mode === "grow",
       });
       if (st.reader.open) st.closeReader();
     }
@@ -3193,12 +3202,13 @@ async function applyNav(delta: 1 | -1): Promise<void> {
   }
 }
 
-/** A notebook's four sidebars, in rail order — which is the View menu's order
- *  and ⌘1–4's order (menu.rs keeps all three the same). */
+/** A notebook's five panels, in rail order — which is the View menu's order
+ *  and ⌘1–5's order (menu.rs keeps all three the same). */
 export const NOTEBOOK_PANELS = [
   "sources",
   "studio",
   "gallery",
+  "grow",
   "ledger",
 ] as const;
 
@@ -3214,8 +3224,23 @@ export function toggleNotebookPanel(panel: NotebookPanel): void {
   if (panel === "sources") s.toggleSources();
   else if (panel === "studio") s.toggleStudio();
   else if (panel === "gallery")
-    useStore.setState({ galleryOpen: !s.galleryOpen, ledgerOpen: false });
-  else useStore.setState({ ledgerOpen: !s.ledgerOpen, galleryOpen: false });
+    useStore.setState({
+      galleryOpen: !s.galleryOpen,
+      ledgerOpen: false,
+      growOpen: false,
+    });
+  else if (panel === "grow")
+    useStore.setState({
+      growOpen: !s.growOpen,
+      galleryOpen: false,
+      ledgerOpen: false,
+    });
+  else
+    useStore.setState({
+      ledgerOpen: !s.ledgerOpen,
+      galleryOpen: false,
+      growOpen: false,
+    });
 }
 
 /** Depth of an in-progress compound navigation (see `navAtomic`). */
@@ -3246,6 +3271,7 @@ useStore.subscribe((s, prev) => {
     s.currentId === prev.currentId &&
     s.ledgerOpen === prev.ledgerOpen &&
     s.galleryOpen === prev.galleryOpen &&
+    s.growOpen === prev.growOpen &&
     s.reader === prev.reader &&
     s.homeSection === prev.homeSection &&
     s.homeChat.threadId === prev.homeChat.threadId
@@ -3256,13 +3282,15 @@ useStore.subscribe((s, prev) => {
 
 function recordNav(s: ReturnType<typeof useStore.getState>) {
   if (navApplying || navAtomicDepth > 0) return;
-  const mode = s.galleryOpen
-    ? ("gallery" as const)
-    : s.ledgerOpen
-      ? ("ledger" as const)
-      : s.reader.open
-        ? ("reader" as const)
-        : ("chat" as const);
+  const mode = s.growOpen
+    ? ("grow" as const)
+    : s.galleryOpen
+      ? ("gallery" as const)
+      : s.ledgerOpen
+        ? ("ledger" as const)
+        : s.reader.open
+          ? ("reader" as const)
+          : ("chat" as const);
   const rdoc = s.reader.open ? s.reader.history[s.reader.index] : undefined;
   // Highlight is a one-time citation jump, not a place — drop it.
   const doc = rdoc && { type: rdoc.type, id: rdoc.id };
@@ -3312,6 +3340,7 @@ if (getCurrentWebview().label === "main") {
       s.currentId === prev.currentId &&
       s.ledgerOpen === prev.ledgerOpen &&
       s.galleryOpen === prev.galleryOpen &&
+      s.growOpen === prev.growOpen &&
       s.reader === prev.reader &&
       s.homeSection === prev.homeSection &&
       s.homeChat.threadId === prev.homeChat.threadId &&
@@ -3323,13 +3352,15 @@ if (getCurrentWebview().label === "main") {
       "lastView",
       JSON.stringify({
         nb: s.currentId,
-        mode: s.galleryOpen
-          ? "gallery"
-          : s.ledgerOpen
-            ? "ledger"
-            : s.reader.open
-              ? "reader"
-              : "chat",
+        mode: s.growOpen
+          ? "grow"
+          : s.galleryOpen
+            ? "gallery"
+            : s.ledgerOpen
+              ? "ledger"
+              : s.reader.open
+                ? "reader"
+                : "chat",
         // Highlight is a one-time citation jump, not a place — drop it.
         doc: doc && { type: doc.type, id: doc.id },
         // The whole back/forward stack (doc refs only), so ⌘[ still works

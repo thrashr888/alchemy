@@ -1314,6 +1314,20 @@ impl Db {
     /// Stamp a source's normalized tag string (docs/RFC-source-tags.md)
     /// without touching content or chunks. Routes pick the change up on the
     /// next self-healing sweep (the summary string diff re-embeds).
+    /// Point a source at a new on-disk origin (the file moved) and clear
+    /// its failure count so hygiene stops flagging it. Content untouched —
+    /// the caller re-ingests through the normal refresh path.
+    pub async fn set_source_path(&self, source_id: &str, path: &str) -> Result<()> {
+        let tbl = self.conn.open_table(T_SOURCES).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(source_id)))
+            .column("url", format!("'{}'", esc(path)))
+            .column("fetch_failures", "0".to_string())
+            .execute()
+            .await?;
+        Ok(())
+    }
+
     pub async fn set_source_tags(&self, source_id: &str, tags: &str) -> Result<()> {
         let tbl = self.conn.open_table(T_SOURCES).execute().await?;
         tbl.update()
@@ -1374,6 +1388,18 @@ impl Db {
             .execute()
             .await?;
         Ok(())
+    }
+
+    /// Bulk-append source rows in one Lance commit. Fixture seeding (and any
+    /// future bulk importer) must not pay one commit per row — at thousands
+    /// of rows that is both slow and a fragment storm for later scans.
+    pub async fn insert_sources_bulk(&self, sources: &[Source]) -> Result<()> {
+        if sources.is_empty() {
+            return Ok(());
+        }
+        let schema = sources_schema();
+        let batch = source_batch(&schema, sources)?;
+        self.add_batch(T_SOURCES, schema, batch).await
     }
 
     /// Insert a source row plus all of its embedded chunks atomically-ish.

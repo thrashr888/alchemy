@@ -9,6 +9,11 @@ import type {
   Citation,
   AiConfig,
   BuildInfo,
+  GrowthOverview,
+  GrowthProposal,
+  GrowthWebSearch,
+  RetireProposal,
+  TagMergeProposal,
   ReleaseNote,
   ChatConfig,
   CloudFolder,
@@ -248,6 +253,10 @@ export const api = {
   liveViewVisible: (visible: boolean) =>
     run(query<void>("live_view_visible", { visible })),
   liveViewClose: () => run(query<void>("live_view_close")),
+  liveViewBack: () => run(query<void>("live_view_back")),
+  liveViewForward: () => run(query<void>("live_view_forward")),
+  /** Where the live view actually is right now (null when closed). */
+  liveViewUrl: () => run(query<string | null>("live_view_url")),
   relatedPassages: (notebookId: string, text: string, limit?: number) =>
     run(query<Citation[]>("related_passages", { notebookId, text, limit })),
   sourceBacklinks: (sourceId: string) =>
@@ -517,6 +526,40 @@ export const api = {
   buildInfo: () => run(cmd<BuildInfo>("build_info", {})),
   /** The GitHub release feed, for About's What's new. */
   releaseHistory: () => run(query<ReleaseNote[]>("release_history", {})),
+  /** Source ids ever cited in retrieval traces — the "uncited" facet. */
+  citedSourceIds: () => run(query<string[]>("cited_source_ids", {})),
+  /** The Grow surface: standing queries + the free tiers' proposals. */
+  growthProposals: (notebookId: string) =>
+    run(query<GrowthOverview>("growth_proposals", { notebookId })),
+  /** The Spotlight tier — mdfind is the slow part, loaded separately. */
+  growthLocal: (notebookId: string) =>
+    run(query<GrowthProposal[]>("growth_local", { notebookId })),
+  /** The open-web tier — explicit, per-notebook opt-in (Firecrawl). */
+  growthWebSearch: (notebookId: string) =>
+    run(slow<GrowthWebSearch>("growth_web_search", { notebookId })),
+  /** The retirement pass: old, never-cited sources, proposals only. */
+  growthRetire: (notebookId: string) =>
+    run(query<RetireProposal[]>("growth_retire", { notebookId })),
+  /** Create or refresh the notebook's wiki (index + entity pages). */
+  generateWikiIndex: (notebookId: string) =>
+    run(cmd<Note>("generate_wiki_index", { notebookId })),
+  /** Tag-merge proposals: near-duplicate tags, proposals only. */
+  growthTagMerges: (notebookId: string) =>
+    run(query<TagMergeProposal[]>("growth_tag_merges", { notebookId })),
+  /** The backend-owned per-notebook web-search opt-in. */
+  growthWebEnabled: (notebookId: string) =>
+    run(query<boolean>("growth_web_enabled", { notebookId })),
+  setGrowthWebEnabled: (notebookId: string, enabled: boolean) =>
+    run(cmd<void>("set_growth_web_enabled", { notebookId, enabled })),
+  /** Point a moved file source at its new path (caller refreshes after). */
+  relocateSource: (sourceId: string, path: string) =>
+    run(cmd<void>("relocate_source", { sourceId, path })),
+  /** Spotlight candidates for a missing file, exact name match. */
+  findMovedFile: (sourceId: string) =>
+    run(query<string[]>("find_moved_file", { sourceId })),
+  /** Rewrite `from` into `to` on every source carrying it. */
+  applyTagMerge: (notebookId: string, from: string, to: string) =>
+    run(cmd<number>("apply_tag_merge", { notebookId, from, to })),
   convertNoteToSource: (noteId: string) =>
     run(ai<Source>("convert_note_to_source", { noteId })),
   generateArtifact: (

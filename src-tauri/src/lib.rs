@@ -21,6 +21,7 @@ mod gist;
 mod git;
 mod graph;
 mod grepsearch;
+mod growth;
 mod hygiene;
 mod inference;
 mod ingest;
@@ -167,6 +168,9 @@ pub fn run() {
             }
             // Boot-phase stamps -> traces/startup.jsonl (docs/RFC-professional-grade.md
             // Pillar 2). See trace::Startup for exactly what the clock covers.
+            // The global handle serves background work spawned without State
+            // (the gist sweep's wiki-index refresh reads retrieval history).
+            trace::set_dir(data_dir.join("traces"));
             let startup = trace::Startup::begin(data_dir.join("traces"));
 
             let db_dir = data_dir.join("lancedb");
@@ -492,6 +496,22 @@ pub fn run() {
             commands::restore_note,
             commands::build_info,
             commands::release_history,
+            commands::cited_source_ids,
+            commands::seed_scale_fixture,
+            commands::growth_proposals,
+            commands::growth_web_search,
+            commands::growth_local,
+            commands::growth_retire,
+            commands::generate_wiki_index,
+            commands::growth_tag_merges,
+            commands::growth_web_enabled,
+            commands::set_growth_web_enabled,
+            commands::relocate_source,
+            commands::find_moved_file,
+            commands::apply_tag_merge,
+            commands::live_view_back,
+            commands::live_view_forward,
+            commands::live_view_url,
             commands::update_note,
             commands::note_opened,
             commands::convert_note_to_source,

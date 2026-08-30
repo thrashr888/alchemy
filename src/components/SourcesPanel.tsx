@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { removeSourcesGuarded, useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import {
@@ -28,13 +29,18 @@ import {
   visibleTitle,
 } from "@/lib/utils";
 import { sourceIcon } from "@/lib/sourceIcon";
+import {
+  HYGIENE_LABEL,
+  loadGrowthDismissed,
+  loadHygieneKept,
+} from "@/lib/growth";
 import { AttachToCardModal } from "./RegistrySection";
 import {
   SourceMetaModals,
   sourceMetaItems,
   sourceOriginItems,
 } from "./SourceMetaModals";
-import type { Source } from "@/lib/types";
+import type { GrowthProposal, Source } from "@/lib/types";
 import {
   ChevronRight,
   FileText,
@@ -52,6 +58,8 @@ import {
   Cloud,
   MessageSquare,
   Package,
+  Search,
+  Sprout,
   Tag,
 } from "lucide-react";
 
@@ -83,38 +91,6 @@ function saveFoldersCollapsed(state: Record<string, boolean>) {
     /* storage full or unavailable — collapse state is best-effort */
   }
 }
-
-// "Keep" decisions from the hygiene review (RFC-source-hygiene), keyed
-// `${sourceId}:${bucket}` per notebook. Local suppression on purpose:
-// unreachable keeps reset real backend state, but a kept duplicate or
-// missing file is a viewing preference — the signal itself stays true and
-// agents still see it in the MCP report.
-function loadHygieneKept(notebookId: string | null): Record<string, boolean> {
-  if (!notebookId) return {};
-  try {
-    const raw = localStorage.getItem(`hygieneKept:${notebookId}`);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-
-function saveHygieneKept(notebookId: string | null, kept: Record<string, boolean>) {
-  if (!notebookId) return;
-  try {
-    localStorage.setItem(`hygieneKept:${notebookId}`, JSON.stringify(kept));
-  } catch {
-    /* best-effort */
-  }
-}
-
-const HYGIENE_LABEL: Record<string, string> = {
-  unreachable: "unreachable",
-  "missing-file": "missing",
-  duplicate: "duplicate",
-  husk: "failed import",
-  stale: "stale",
-};
 
 /** Source-domain favicon with a Globe fallback (kept local — no third party). */
 /** The hover card: type, size, freshness, status — rows and gallery cards
@@ -173,6 +149,32 @@ export function Favicon({ url }: { url: string }) {
   );
 }
 
+const FOLDER_TYPES = ["folder", "git", "notion", "obsidian"];
+
+/** Facet kinds: coarse buckets a narrow panel can offer as chips. */
+type SourceKind = "web" | "files" | "images" | "apple" | "folders";
+type FreshFacet = "week" | "month" | "stale" | "uncited";
+function sourceKind(s: Source): SourceKind {
+  if (FOLDER_TYPES.includes(s.sourceType)) return "folders";
+  if (s.sourceType === "url" || s.sourceType === "html") return "web";
+  if (s.sourceType === "image") return "images";
+  if (s.sourceType === "mac") return "apple";
+  return "files";
+}
+const KIND_LABEL: Record<SourceKind, string> = {
+  web: "Web",
+  files: "Files",
+  images: "Images",
+  apple: "Apple",
+  folders: "Folders",
+};
+
+/** One row of the panel: a source (folder children indent) or a domain
+ *  rollup grouping loose web sources from one busy host. */
+type SourceRow =
+  | { kind: "source"; s: Source; indent: boolean }
+  | { kind: "group"; host: string; kids: Source[] };
+
 function hostname(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -183,6 +185,36 @@ function hostname(url: string): string {
 
 /** Compact selection checkbox; supports the folder/master indeterminate state.
  *  Clicks stop propagating so the row's open-reader handler never fires. */
+/** One compact facet toggle under the filter box. */
+function FacetChip({
+  active,
+  onClick,
+  title,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-pressed={active}
+      className={cn(
+        "rounded-full border px-2 py-0.5 text-micro transition-colors",
+        active
+          ? "border-primary/50 bg-primary/15 text-citation"
+          : "border-border text-muted-foreground hover:bg-surface-2",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
 function SelectBox({
   checked,
   indeterminate = false,
@@ -241,10 +273,8 @@ export function SourcesPanel() {
   const pickSet = useStore((s) => s.pickSet);
   const clearPicked = useStore((s) => s.clearPicked);
   const refreshSourcesBatch = useStore((s) => s.refreshSourcesBatch);
-  const deleteSourcesBatch = useStore((s) => s.deleteSourcesBatch);
   const hygiene = useStore((s) => s.hygiene);
   const refreshHygiene = useStore((s) => s.refreshHygiene);
-  const hygieneKeep = useStore((s) => s.hygieneKeep);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [editing, setEditing] = useState<{
@@ -326,18 +356,144 @@ export function SourcesPanel() {
     }
     return m;
   }, [sources]);
-  const rows: { s: Source; indent: boolean }[] = [];
-  for (const s of sources) {
-    if (s.parentId) continue;
-    rows.push({ s, indent: false });
-    if (["folder", "git", "notion", "obsidian"].includes(s.sourceType)) {
-      const kids = childrenOf.get(s.id) ?? [];
-      if (!isCollapsed(s.id, kids.length)) {
-        for (const c of kids) {
-          rows.push({ s: c, indent: true });
-        }
+
+  // Growth tray (RFC-living-notebook Pillar 2): frontier links mined from
+  // the notebook's own sources, loaded once per notebook. Nothing fetches
+  // until the user accepts a proposal.
+  const [growth, setGrowth] = useState<GrowthProposal[]>([]);
+  const [growthDismissed, setGrowthDismissed] = useState<
+    Record<string, number>
+  >({});
+  useEffect(() => {
+    setGrowth([]);
+    setGrowthDismissed(loadGrowthDismissed(currentId));
+    if (!currentId) return;
+    let stale = false;
+    api
+      .growthProposals(currentId)
+      .then((overview) => {
+        if (!stale) setGrowth(overview.proposals);
+      })
+      .catch(() => undefined);
+    return () => {
+      stale = true;
+    };
+  }, [currentId]);
+  const existingUrls = useMemo(
+    () => new Set(sources.map((s) => s.url).filter(Boolean)),
+    [sources],
+  );
+  const growthVisible = growth.filter(
+    (p) => !growthDismissed[p.url] && !existingUrls.has(p.url),
+  );
+
+  // Search-first navigation (RFC-living-notebook Pillar 1): past a handful
+  // of sources the filter box is the way in. Facets narrow by kind, tag,
+  // and freshness; everything applies before rows are built.
+  const [query, setQuery] = useState("");
+  const [kindFacet, setKindFacet] = useState<SourceKind | null>(null);
+  const [tagFacet, setTagFacet] = useState<string | null>(null);
+  const [freshFacet, setFreshFacet] = useState<FreshFacet | null>(null);
+  // The uncited facet's data loads on first use: source ids that have ever
+  // come back as citations (retrieval traces, months of history).
+  const [citedIds, setCitedIds] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    if (freshFacet !== "uncited" || citedIds) return;
+    api
+      .citedSourceIds()
+      .then((ids) => setCitedIds(new Set(ids)))
+      .catch(() => setCitedIds(new Set()));
+  }, [freshFacet, citedIds]);
+
+  const q = query.trim().toLowerCase();
+  const filterActive = !!q || !!kindFacet || !!tagFacet || !!freshFacet;
+  const matchesFilters = (s: Source): boolean => {
+    if (kindFacet && sourceKind(s) !== kindFacet) return false;
+    if (tagFacet && !s.tags.split(" ").includes(tagFacet)) return false;
+    if (freshFacet) {
+      if (freshFacet === "uncited") {
+        // Folder containers carry no chunks, so "uncited" would flag every
+        // one of them; the facet is about content sources.
+        if (FOLDER_TYPES.includes(s.sourceType)) return false;
+        if (!citedIds || citedIds.has(s.id)) return false;
+      } else {
+        const age = Date.now() - (s.fetchedAt || s.createdAt);
+        if (freshFacet === "week" && age > 7 * 86_400_000) return false;
+        if (freshFacet === "month" && age > 30 * 86_400_000) return false;
+        if (freshFacet === "stale" && age <= 30 * 86_400_000) return false;
       }
     }
+    if (q) {
+      const hay =
+        `${s.title} ${s.url} ${s.tags} ${s.author}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  };
+
+  // Facet chips only offer what the notebook holds, with counts.
+  const kindCounts = useMemo(() => {
+    const m = new Map<SourceKind, number>();
+    for (const s of sources)
+      m.set(sourceKind(s), (m.get(sourceKind(s)) ?? 0) + 1);
+    return m;
+  }, [sources]);
+  const tagCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of sources)
+      for (const t of s.tags.split(" "))
+        if (t) m.set(t, (m.get(t) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
+  }, [sources]);
+
+  // Rows: folder children indent under their parent; loose web sources from
+  // a busy domain fold into a group row (Pillar 1 rollups) at rest —
+  // an active filter answers its own question, so it shows flat matches.
+  const rows: SourceRow[] = [];
+  const looseByHost = new Map<string, Source[]>();
+  if (!filterActive) {
+    for (const s of sources) {
+      if (s.parentId || s.sourceType !== "url" || !s.url) continue;
+      const host = hostname(s.url);
+      if (!host) continue;
+      const list = looseByHost.get(host);
+      if (list) list.push(s);
+      else looseByHost.set(host, [s]);
+    }
+  }
+  const hostEmitted = new Set<string>();
+  for (const s of sources) {
+    if (s.parentId) continue;
+    if (FOLDER_TYPES.includes(s.sourceType)) {
+      const kids = childrenOf.get(s.id) ?? [];
+      const matchKids = filterActive ? kids.filter(matchesFilters) : kids;
+      if (filterActive && !matchesFilters(s) && matchKids.length === 0)
+        continue;
+      rows.push({ kind: "source", s, indent: false });
+      // Filtering auto-expands: a match hidden under a collapsed folder
+      // reads as no match at all.
+      const expanded = filterActive
+        ? matchKids.length > 0
+        : !isCollapsed(s.id, kids.length);
+      if (expanded)
+        for (const c of filterActive ? matchKids : kids)
+          rows.push({ kind: "source", s: c, indent: true });
+      continue;
+    }
+    const host =
+      !filterActive && s.sourceType === "url" && s.url ? hostname(s.url) : "";
+    const hostKids = host ? (looseByHost.get(host) ?? []) : [];
+    if (hostKids.length >= 5) {
+      if (hostEmitted.has(host)) continue;
+      hostEmitted.add(host);
+      rows.push({ kind: "group", host, kids: hostKids });
+      if (!isCollapsed(`domain:${host}`, hostKids.length))
+        for (const c of hostKids)
+          rows.push({ kind: "source", s: c, indent: true });
+      continue;
+    }
+    if (filterActive && !matchesFilters(s)) continue;
+    rows.push({ kind: "source", s, indent: false });
   }
   const childCount = (folderId: string) =>
     (childrenOf.get(folderId) ?? []).length;
@@ -373,11 +529,25 @@ export function SourcesPanel() {
     () => new Set(picked?.kind === "sources" ? picked.ids : []),
     [picked],
   );
-  const rowIds = rows.map((r) => r.s.id);
+  const rowIds = rows.flatMap((r) => (r.kind === "source" ? [r.s.id] : []));
+
   const rowIdsRef = useRef(rowIds);
   rowIdsRef.current = rowIds;
 
   const listRef = useRef<HTMLDivElement>(null);
+  // Windowed rendering (Pillar 1): only the visible slice of rows mounts —
+  // a 10k-source notebook renders dozens of row components, not thousands.
+  // Heights are measured (error rows and folder meta run taller than 44px).
+  const rowVirtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => listRef.current,
+    estimateSize: () => 44,
+    overscan: 12,
+    getItemKey: (i) => {
+      const r = rows[i];
+      return r.kind === "group" ? `domain:${r.host}` : r.s.id;
+    },
+  });
   // An additive drag unions against the selection as it stood when the drag
   // began — unioning against the live selection would ratchet (rows swept
   // over once could never leave).
@@ -481,10 +651,6 @@ export function SourcesPanel() {
     return () => clearTimeout(t);
   }, [currentId, sources, refreshHygiene]);
 
-  const [reviewOpen, setReviewOpen] = useState(false);
-  /** Source id currently being re-fetched from the review modal. */
-  const [retrying, setRetrying] = useState<string | null>(null);
-  const [keptVersion, setKeptVersion] = useState(0);
   const issueBySource = useMemo(() => {
     const kept = loadHygieneKept(currentId);
     const m = new Map<string, (typeof hygiene)[number]>();
@@ -494,37 +660,10 @@ export function SourcesPanel() {
       if (!m.has(h.sourceId)) m.set(h.sourceId, h);
     }
     return m;
-    // keptVersion invalidates after a "Keep" writes localStorage.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hygiene, currentId, keptVersion]);
+    // Keeps write localStorage; refreshHygiene() afterwards replaces the
+    // store array, which re-runs this memo against the fresh keeps.
+  }, [hygiene, currentId]);
   const proposals = [...issueBySource.values()];
-
-  /** Fetch a flagged source again, right now. This is the user-initiated
-   *  path on purpose — someone is watching, so it keeps the hard-fail
-   *  semantics the background sweep deliberately avoids, and a success
-   *  clears the strike count (reingest stamps it), dropping the flag.
-   *  Duplicates get no Retry: re-fetching says nothing about them. */
-  async function retryIssue(h: { sourceId: string; bucket: string }) {
-    setRetrying(h.sourceId);
-    try {
-      await refreshSource(h.sourceId);
-    } finally {
-      setRetrying(null);
-    }
-    await refreshHygiene();
-  }
-
-  function keepIssue(h: { sourceId: string; bucket: string }) {
-    if (h.bucket === "unreachable") {
-      // Real backend state: clear the strike count, restart the cadence.
-      void hygieneKeep(h.sourceId);
-      return;
-    }
-    const kept = loadHygieneKept(currentId);
-    kept[`${h.sourceId}:${h.bucket}`] = true;
-    saveHygieneKept(currentId, kept);
-    setKeptVersion((v) => v + 1);
-  }
 
   return (
     <div
@@ -611,7 +750,9 @@ export function SourcesPanel() {
             <div
               className={cn(
                 "h-full rounded-full transition-all",
-                pct > 90 && "bg-destructive",
+                // Fallback fill: a notebook with no color (imports, fixtures)
+                // must still draw a bar — primary, not transparent.
+                pct > 90 ? "bg-destructive" : !notebookColor && "bg-primary",
               )}
               style={{
                 width: `${Math.max(2, pct)}%`,
@@ -620,6 +761,81 @@ export function SourcesPanel() {
                   : {}),
               }}
             />
+          </div>
+        </div>
+      )}
+
+      {/* Search-first navigation: past a handful of sources the filter box
+          is the primary way in; chips narrow by kind, tag, freshness, and
+          citation history. Hidden in small notebooks — eight rows filter
+          themselves. */}
+      {currentId && sources.length > 8 && (
+        <div className="flex flex-col gap-1.5 border-b border-border px-3 py-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-subtle-foreground" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Filter sources…"
+              aria-label="Filter sources"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              {...({ writingsuggestions: "false" } as Record<string, string>)}
+              className="w-full rounded-md border border-input bg-transparent py-1 pl-7 pr-6 text-caption text-foreground outline-none placeholder:text-subtle-foreground focus:border-ring/60"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                aria-label="Clear filter"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-subtle-foreground hover:text-foreground"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {[...kindCounts.entries()]
+              .filter(([, n]) => n > 0)
+              .map(([kind, n]) => (
+                <FacetChip
+                  key={kind}
+                  active={kindFacet === kind}
+                  onClick={() =>
+                    setKindFacet(kindFacet === kind ? null : kind)
+                  }
+                >
+                  {KIND_LABEL[kind]} {n}
+                </FacetChip>
+              ))}
+            {tagCounts.map(([tag, n]) => (
+              <FacetChip
+                key={`#${tag}`}
+                active={tagFacet === tag}
+                onClick={() => setTagFacet(tagFacet === tag ? null : tag)}
+              >
+                #{tag} {n}
+              </FacetChip>
+            ))}
+            {(
+              [
+                ["week", "7d", "Fetched or added this week"],
+                ["month", "30d", "Fetched or added this month"],
+                ["stale", "Stale", "Untouched for over 30 days"],
+                ["uncited", "Uncited", "Never came back as a citation"],
+              ] as const
+            ).map(([id, label, title]) => (
+              <FacetChip
+                key={id}
+                active={freshFacet === id}
+                title={title}
+                onClick={() => setFreshFacet(freshFacet === id ? null : id)}
+              >
+                {label}
+              </FacetChip>
+            ))}
           </div>
         </div>
       )}
@@ -737,33 +953,123 @@ export function SourcesPanel() {
                 />
               </div>
             </div>
-            {/* Hygiene proposals (RFC-source-hygiene): flagged, never
-                auto-removed — the review modal decides. */}
-            {proposals.length > 0 && (
+            {/* One door to the Grow surface (RFC-living-notebook):
+                growth proposals and needs-attention flags together, with
+                an activity dot when anything is waiting. */}
+            {growthVisible.length + proposals.length > 0 && (
               <button
                 type="button"
-                onClick={() => setReviewOpen(true)}
+                onClick={() =>
+                  useStore.setState({
+                    growOpen: true,
+                    galleryOpen: false,
+                    ledgerOpen: false,
+                  })
+                }
                 className="mb-1 flex w-full items-center gap-2 rounded-md border border-border bg-surface-2/60 px-2 py-1.5 text-left hover:bg-surface-2"
               >
-                <AlertCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <Sprout className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 <span className="truncate text-caption text-foreground">
-                  {proposals.length === 1
-                    ? "1 source needs attention"
-                    : `${proposals.length} sources need attention`}
+                  Grow this notebook
                 </span>
-                <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
-                  Review
+                <span
+                  aria-hidden
+                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+                />
+                <span className="ml-auto shrink-0 text-caption text-subtle-foreground">
+                  {growthVisible.length + proposals.length} · Review
                 </span>
               </button>
             )}
-            <div className="flex flex-col gap-0.5">
-              {rows.map(({ s, indent }) => {
-                const isFolder = [
-                  "folder",
-                  "git",
-                  "notion",
-                  "obsidian",
-                ].includes(s.sourceType);
+            {filterActive && rows.length === 0 && (
+              <EmptyState
+                title="No sources match"
+                hint="Clear the search or facet chips."
+              />
+            )}
+            <div
+              className="relative"
+              style={{ height: rowVirtualizer.getTotalSize() }}
+            >
+              {rowVirtualizer.getVirtualItems().map((vi) => {
+                const row = rows[vi.index];
+                const itemStyle = {
+                  position: "absolute" as const,
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  transform: `translateY(${vi.start}px)`,
+                };
+                if (row.kind === "group") {
+                  const { host, kids: groupKids } = row;
+                  const gid = `domain:${host}`;
+                  const onCount = groupKids.filter((k) =>
+                    isSelected(k.id),
+                  ).length;
+                  const collapsed = isCollapsed(gid, groupKids.length);
+                  return (
+                    <div
+                      key={vi.key}
+                      data-index={vi.index}
+                      ref={rowVirtualizer.measureElement}
+                      style={itemStyle}
+                      className="pb-0.5"
+                    >
+                      <div className="group relative flex items-center gap-2 rounded-md px-2 py-2 hover:bg-surface-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            toggleCollapsed(gid, groupKids.length)
+                          }
+                          aria-expanded={!collapsed}
+                          aria-label={
+                            collapsed
+                              ? `Show ${groupKids.length} sources from ${host}`
+                              : `Hide sources from ${host}`
+                          }
+                          className="relative z-20 shrink-0 cursor-pointer"
+                        >
+                          <span className="group-hover:hidden group-focus-within:hidden">
+                            <Favicon url={`https://${host}`} />
+                          </span>
+                          <ChevronRight
+                            className={cn(
+                              "hidden h-3.5 w-3.5 text-muted-foreground transition-transform duration-150 group-hover:block group-focus-within:block",
+                              !collapsed && "rotate-90",
+                            )}
+                          />
+                        </button>
+                        <span
+                          className="min-w-0 flex-1 truncate text-body text-foreground"
+                          title={`${groupKids.length} sources from ${host}`}
+                        >
+                          {host}
+                        </span>
+                        <span className="shrink-0 text-micro text-subtle-foreground">
+                          {groupKids.length}
+                        </span>
+                        <SelectBox
+                          checked={
+                            groupKids.length > 0 &&
+                            onCount === groupKids.length
+                          }
+                          indeterminate={
+                            onCount > 0 && onCount < groupKids.length
+                          }
+                          onToggle={() => {
+                            const want = onCount !== groupKids.length;
+                            for (const k of groupKids)
+                              if (isSelected(k.id) !== want)
+                                toggleSourceSelected(k.id);
+                          }}
+                          label={`Include ${host} sources in chat & generation`}
+                        />
+                      </div>
+                    </div>
+                  );
+                }
+                const { s, indent } = row;
+                const isFolder = FOLDER_TYPES.includes(s.sourceType);
                 const isMacNote = s.url.startsWith("cider://notes/note/");
                 const isMacReminders = s.url.startsWith(
                   "cider://reminders/list/",
@@ -786,7 +1092,13 @@ export function SourcesPanel() {
                 const isPicked = pickedIds.has(s.id);
                 return (
                   <div
-                    key={s.id}
+                    key={vi.key}
+                    data-index={vi.index}
+                    ref={rowVirtualizer.measureElement}
+                    style={itemStyle}
+                    className="pb-0.5"
+                  >
+                  <div
                     data-pick-id={s.id}
                     // Row content is pointer-events-none (clicks go to the
                     // CardAction), so the row carries the hover detail the
@@ -1092,6 +1404,7 @@ export function SourcesPanel() {
                       )}
                     </div>
                   </div>
+                  </div>
                 );
               })}
             </div>
@@ -1195,72 +1508,6 @@ export function SourcesPanel() {
         noteEdit={noteEdit}
         setNoteEdit={setNoteEdit}
       />
-
-      {/* Hygiene review (RFC-source-hygiene): every removal is a human
-          decision — per-item Keep / Remove, nothing automatic. */}
-      <Modal
-        open={reviewOpen}
-        onClose={() => setReviewOpen(false)}
-        title="Needs attention"
-        width="max-w-md"
-      >
-        <div className="flex flex-col gap-2">
-          <p className="text-micro leading-relaxed text-subtle-foreground">
-            These sources look broken or outdated. Nothing is removed unless
-            you say so — Keep dismisses the flag.
-          </p>
-          {proposals.length === 0 ? (
-            <EmptyState title="All clean" />
-          ) : (
-            proposals.map((h) => (
-              <div
-                key={`${h.sourceId}:${h.bucket}`}
-                className="flex items-center gap-2 rounded-md border border-border px-2.5 py-2"
-              >
-                <div className="min-w-0 flex-1">
-                  <div
-                    className="truncate text-body text-foreground"
-                    title={h.title}
-                  >
-                    {visibleTitle(h.title) || "Untitled"}
-                  </div>
-                  <div
-                    className="truncate text-micro text-muted-foreground"
-                    title={h.detail}
-                  >
-                    {HYGIENE_LABEL[h.bucket] ?? h.bucket} · {h.detail}
-                  </div>
-                </div>
-                {h.bucket !== "duplicate" && (
-                  <Button
-                    variant="ghost"
-                    disabled={retrying === h.sourceId}
-                    onClick={() => void retryIssue(h)}
-                    title="Fetch it again now"
-                  >
-                    {retrying === h.sourceId ? "Retrying…" : "Retry"}
-                  </Button>
-                )}
-                <Button
-                  variant="ghost"
-                  onClick={() => keepIssue(h)}
-                  title="Dismiss this flag and keep the source"
-                >
-                  Keep
-                </Button>
-                <Button
-                  variant="ghost"
-                  className="text-destructive hover:bg-destructive/10"
-                  onClick={() => void deleteSourcesBatch([h.sourceId])}
-                  title="Remove the source and its chunks"
-                >
-                  Remove
-                </Button>
-              </div>
-            ))
-          )}
-        </div>
-      </Modal>
 
       {marquee}
       {confirmDialog}

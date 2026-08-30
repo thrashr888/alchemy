@@ -45,7 +45,7 @@ export interface ReaderDoc {
  *  highlight — a citation jump is an event, not a place). */
 export interface NavEntry {
   nb: string | null;
-  mode: "chat" | "reader" | "ledger" | "gallery";
+  mode: "chat" | "reader" | "ledger" | "gallery" | "grow";
   doc?: { type: ReaderDoc["type"]; id: string };
   /** Home's section, when this entry IS Home (`nb: null`). Home has tabs the
    *  way a notebook has center modes, and a tab is a place: back should
@@ -238,6 +238,9 @@ export interface AppState {
   ledgerOpen: boolean;
   /** Center-column source Gallery mode; wins above Ledger. */
   galleryOpen: boolean;
+  /** Center-column Grow mode (RFC-living-notebook Pillar 2) — the growth
+   *  review surface; wins above Gallery. */
+  growOpen: boolean;
   /** Source id the Reader should open straight into edit mode (gallery's
    *  "Edit text" action); the Reader consumes and clears it. */
   readerEditIntent: string | null;

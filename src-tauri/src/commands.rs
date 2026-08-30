@@ -9926,6 +9926,301 @@ pub async fn release_history() -> Result<Vec<ReleaseNote>, String> {
         .collect())
 }
 
+/// Every source id that has appeared as a citation in the retrieval traces
+/// (current JSONL plus the one rotated generation — months of history at the
+/// 5 MB rotation size). Powers the Sources panel's "uncited" facet: absence
+/// from this set is the signal a source never earns retrieval
+/// (docs/RFC-living-notebook.md, Pillar 1 hygiene).
+#[tauri::command]
+pub fn cited_source_ids(state: State<'_, AppState>) -> Vec<String> {
+    crate::growth::cited_ids(&state.trace_dir)
+        .into_iter()
+        .collect()
+}
+
+/// The retirement pass (docs/RFC-living-notebook.md Pillar 3): sources old
+/// enough to have had their chance that no retrieval has ever cited.
+/// Proposals only — the Grow pane offers Mute or Remove, never acts alone.
+#[tauri::command]
+pub async fn growth_retire(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<Vec<crate::growth::RetireProposal>, String> {
+    let sources = e(state.db.list_sources(&notebook_id).await)?;
+    let cited = crate::growth::cited_ids(&state.trace_dir);
+    Ok(crate::growth::retire_candidates(&sources, &cited, now()))
+}
+
+/// Create or refresh the notebook's wiki (Pillar 3 + phase 5): the index
+/// note plus one page per entity the registry files here — deterministic
+/// ordinary notes that round-trip through OKF and agents can edit.
+/// Upserts by title, so ids (and reader history to them) survive.
+#[tauri::command]
+pub async fn generate_wiki_index(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<Note, String> {
+    let cited = crate::growth::cited_ids(&state.trace_dir);
+    let cards = e(state.db.list_registry().await)?;
+    let (note, _) =
+        e(crate::growth::upsert_wiki(&state.db, &notebook_id, &cards, &cited, now(), true).await)?;
+    note.ok_or_else(|| "index note not created".to_string())
+}
+
+/// The per-notebook web-search opt-in, backend-owned so the sweep can
+/// act on it (growth.rs::web_enabled).
+#[tauri::command]
+pub fn growth_web_enabled(state: State<'_, AppState>, notebook_id: String) -> bool {
+    crate::growth::web_enabled(&state.trace_dir, &notebook_id)
+}
+
+#[tauri::command]
+pub fn set_growth_web_enabled(state: State<'_, AppState>, notebook_id: String, enabled: bool) {
+    crate::growth::set_web_enabled(&state.trace_dir, &notebook_id, enabled);
+}
+
+/// Point a file source at its new location (the file moved). Verifies the
+/// path, updates the origin, clears the failure count; the caller
+/// re-ingests through the normal refresh path, which restamps fetched_at.
+#[tauri::command]
+pub async fn relocate_source(
+    state: State<'_, AppState>,
+    source_id: String,
+    path: String,
+) -> Result<(), String> {
+    if !std::path::Path::new(&path).is_file() {
+        return Err(format!("No file at {path}"));
+    }
+    let source =
+        e(state.db.get_source(&source_id).await)?.ok_or_else(|| "source not found".to_string())?;
+    e(state.db.set_source_path(&source_id, &path).await)?;
+    notify_changed("sources", Some(&source.notebook_id));
+    Ok(())
+}
+
+/// Spotlight candidates for a missing file, by exact name — the proactive
+/// half of relocation. Paths only; relocation stays an explicit click.
+#[tauri::command]
+pub async fn find_moved_file(
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<Vec<String>, String> {
+    let source =
+        e(state.db.get_source(&source_id).await)?.ok_or_else(|| "source not found".to_string())?;
+    let name = std::path::Path::new(&source.url)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or_default()
+        .to_string();
+    if name.is_empty() {
+        return Ok(Vec::new());
+    }
+    let wanted = name.to_lowercase();
+    Ok(crate::filesearch::search(&name, 12)
+        .await
+        .into_iter()
+        .filter(|hit| !hit.is_dir && hit.name.to_lowercase() == wanted && hit.path != source.url)
+        .map(|hit| hit.path)
+        .take(3)
+        .collect())
+}
+
+/// Tag-merge proposals (phase 5): plural/singular and separator variants
+/// of the same word. Proposals only — apply is its own explicit command.
+#[tauri::command]
+pub async fn growth_tag_merges(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<Vec<crate::growth::TagMergeProposal>, String> {
+    let sources = e(state.db.list_sources(&notebook_id).await)?;
+    Ok(crate::growth::tag_merge_proposals(&sources))
+}
+
+/// Rewrite one tag into another on every source carrying it. Goes through
+/// the same per-source tag write the editor uses, so routing and the
+/// manifest stay coherent. Returns how many sources changed.
+#[tauri::command]
+pub async fn apply_tag_merge(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    from: String,
+    to: String,
+) -> Result<u32, String> {
+    let sources = e(state.db.list_sources(&notebook_id).await)?;
+    let mut changed = 0u32;
+    for s in sources {
+        let tags: Vec<&str> = s.tags.split_whitespace().collect();
+        if !tags.contains(&from.as_str()) {
+            continue;
+        }
+        let mut seen = std::collections::HashSet::new();
+        let next: Vec<&str> = tags
+            .into_iter()
+            .map(|t| if t == from { to.as_str() } else { t })
+            .filter(|t| seen.insert(t.to_string()))
+            .collect();
+        e(set_source_tags_impl(&state, &s.id, &next.join(" ")).await)?;
+        changed += 1;
+    }
+    Ok(changed)
+}
+
+/// Seed a synthetic notebook for the scale gate (docs/RFC-living-notebook.md
+/// Pillar 1): thousands of source rows — busy web domains for the rollup
+/// fold, folders with children, tagged files at varied ages — inserted in
+/// one bulk commit with no chunks, so it exercises the panel, not the
+/// embedder. The notebook stays around afterwards as a worked example, per
+/// house convention on fixtures.
+#[tauri::command]
+pub async fn seed_scale_fixture(
+    state: State<'_, AppState>,
+    count: Option<usize>,
+) -> Result<String, String> {
+    let total = count.unwrap_or(5_000).clamp(100, 20_000);
+    let ts = now();
+    let nb = Notebook {
+        id: new_id(),
+        icon: auto_notebook_icon("Scale fixture"),
+        title: format!("Scale fixture ({total} sources)"),
+        created_at: ts,
+        updated_at: ts,
+        color: "#4cb782".into(),
+        status: String::new(),
+        source_count: 0,
+        note_count: 0,
+        report_count: 0,
+    };
+    e(state.db.create_notebook(&nb).await)?;
+
+    const HOSTS: [&str; 6] = [
+        "arxiv.org",
+        "github.com",
+        "en.wikipedia.org",
+        "news.ycombinator.com",
+        "developer.apple.com",
+        "docs.rs",
+    ];
+    const TAGS: [&str; 5] = ["research", "todo", "reference", "draft", "archive"];
+    const TOPICS: [&str; 8] = [
+        "Field Notes",
+        "Survey",
+        "Interview",
+        "Benchmark",
+        "Design Review",
+        "Postmortem",
+        "Reading",
+        "Spec",
+    ];
+    let doc_title = |i: usize| format!("{} {:05}", TOPICS[i % TOPICS.len()], i);
+    let day = 86_400_000i64;
+    let mut sources: Vec<Source> = Vec::with_capacity(total);
+    let blank = |i: usize, title: String, source_type: &str| Source {
+        id: format!("fx-scale-{i:05}"),
+        notebook_id: nb.id.clone(),
+        title,
+        source_type: source_type.into(),
+        url: String::new(),
+        content: String::new(),
+        char_count: 1_200,
+        chunk_count: 0,
+        created_at: ts - (i as i64 % 90) * day,
+        status: "ready".into(),
+        error: String::new(),
+        parent_id: String::new(),
+        mtime: 0,
+        author: String::new(),
+        image_url: String::new(),
+        tags: TAGS[i % TAGS.len()].to_string(),
+        note: String::new(),
+        fetched_at: ts - (i as i64 % 90) * day,
+        fetch_failures: 0,
+    };
+    // Three folders holding a third of the rows between them, so collapse
+    // and indent carry real weight.
+    let folder_kids = total / 3;
+    for f in 0..3 {
+        let mut folder = blank(total + f, format!("Project {}", doc_title(f)), "folder");
+        folder.id = format!("fx-scale-folder-{f}");
+        folder.url = format!("/tmp/fixtures/{f}");
+        folder.char_count = 0;
+        sources.push(folder);
+    }
+    for i in 0..total {
+        if i < folder_kids {
+            let mut s = blank(i, format!("{}.md", doc_title(i)), "markdown");
+            s.parent_id = format!("fx-scale-folder-{}", i % 3);
+            sources.push(s);
+        } else if i < folder_kids * 2 {
+            // Loose web sources clustered on a few hosts — the rollup case.
+            let host = HOSTS[i % HOSTS.len()];
+            let mut s = blank(i, doc_title(i), "url");
+            s.url = format!("https://{host}/item/{i}");
+            sources.push(s);
+        } else {
+            sources.push(blank(i, doc_title(i), "text"));
+        }
+    }
+    e(state.db.insert_sources_bulk(&sources).await)?;
+    e(state.db.touch_notebook(&nb.id, ts).await)?;
+    Ok(nb.id)
+}
+
+/// One payload for the Grow surface (docs/RFC-living-notebook.md Pillar 2).
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GrowthOverview {
+    /// What this notebook is hungry for — recent thin retrievals.
+    pub queries: Vec<String>,
+    pub proposals: Vec<crate::growth::GrowthProposal>,
+}
+
+/// The growth surface's contents (docs/RFC-living-notebook.md Pillar 2,
+/// phase 2): the notebook's standing queries, plus proposals from the
+/// tiers that cost nothing — Spotlight matches on this Mac and outbound
+/// links the notebook's own sources keep pointing at. Computed on demand
+/// from stored content and local traces — no model call, no network;
+/// fetching happens only when the user accepts a proposal. The open-web
+/// tier is a separate, explicit call (growth_web_search).
+#[tauri::command]
+pub async fn growth_proposals(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<GrowthOverview, String> {
+    // With content: the frontier lives in the text (list_sources strips it).
+    // The Spotlight tier is NOT here — mdfind subprocesses are the slow
+    // part, so the pane loads it separately (growth_local) and this call
+    // returns as fast as a text scan.
+    let sources = e(state.db.sources_with_content(&notebook_id).await)?;
+    let queries = crate::growth::standing_queries(&state.trace_dir, &notebook_id, now());
+    let proposals = crate::growth::proposals(&sources, &queries);
+    Ok(GrowthOverview { queries, proposals })
+}
+
+/// The Spotlight tier alone — mdfind subprocesses make it the slow section,
+/// so the Grow pane fills it in asynchronously.
+#[tauri::command]
+pub async fn growth_local(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<Vec<crate::growth::GrowthProposal>, String> {
+    let sources = e(state.db.list_sources(&notebook_id).await)?;
+    let queries = crate::growth::standing_queries(&state.trace_dir, &notebook_id, now());
+    Ok(crate::growth::local_proposals(&sources, &queries).await)
+}
+
+/// The open-web tier, run only from the Grow pane after the user enables
+/// it for a notebook: standing queries through Firecrawl's keyless search,
+/// metered against a soft monthly cap inside the free tier.
+#[tauri::command]
+pub async fn growth_web_search(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<crate::growth::GrowthWebSearch, String> {
+    let sources = e(state.db.list_sources(&notebook_id).await)?;
+    let queries = crate::growth::standing_queries(&state.trace_dir, &notebook_id, now());
+    Ok(crate::growth::web_search(&state.trace_dir, &notebook_id, &sources, &queries, now()).await)
+}
+
 #[tauri::command]
 pub fn get_model_stats(state: State<'_, AppState>) -> Vec<ModelStat> {
     state.model_stats_snapshot()
@@ -10152,6 +10447,12 @@ pub fn live_view_open(
     let builder = tauri::webview::WebviewBuilder::new(
         live_label(&window),
         tauri::WebviewUrl::External(parsed),
+    )
+    // A convenience surface, not a browser: suppress the page's context
+    // menu (Inspect Element, Search with Google, the works). Navigation
+    // gets real buttons in the reader chrome instead — see live_view_back.
+    .initialization_script(
+        "window.addEventListener('contextmenu', e => e.preventDefault(), true);",
     );
     window
         .add_child(
@@ -10208,6 +10509,34 @@ pub fn live_view_visible(window: tauri::Window, visible: bool) -> Result<(), Str
         }
     }
     Ok(())
+}
+
+/// Live-view history nav: the child is a plain webview, so back/forward
+/// are one eval away. The reader's toolbar drives these — the page's own
+/// context menu (which used to be the only way back) is suppressed.
+#[tauri::command]
+pub fn live_view_back(window: tauri::Window) -> Result<(), String> {
+    if let Some(child) = live_child(&window) {
+        child.eval("history.back()").map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn live_view_forward(window: tauri::Window) -> Result<(), String> {
+    if let Some(child) = live_child(&window) {
+        child.eval("history.forward()").map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// The child's current address, polled by the reader so it can show where
+/// the user has wandered and offer "Add as source" for a new page.
+#[tauri::command]
+pub fn live_view_url(window: tauri::Window) -> Option<String> {
+    live_child(&window)
+        .and_then(|child| child.url().ok())
+        .map(|u| u.to_string())
 }
 
 #[tauri::command]

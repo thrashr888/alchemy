@@ -52,6 +52,18 @@ agent-driven imports, registry for entities) already lives here.
 
 ## Prior art & outside ingredients (researched)
 
+### WikiSkill (arXiv:2608.27454) — the loop, validated
+
+WikiSkill separates raw execution experience, accumulated knowledge, and
+executable skills, continuously consolidating experience into a wiki;
+ablations show the persistent wiki is what makes skill evolution work,
+and it lets small models beat much larger ones. That is this RFC's loop
+with benchmarks behind it: retrieval traces are the raw experience,
+standing queries and gists the accumulated knowledge, and Pillar 3's
+generated wiki pages the consolidated layer the next retrieval builds
+on. It argues for consolidation being *continuous* (night shift), not
+on-demand only.
+
 ### Firecrawl — the frontier fetcher we don't have to build
 
 Verified against docs.firecrawl.dev and the pricing page:
@@ -130,6 +142,12 @@ A per-notebook **growth agenda**, default-on but budgeted like reports:
   outbound links in web sources, references in PDFs, siblings in watched
   folders, backlinks in Notes/Obsidian. Rank frontier items against the
   standing queries with the existing embedder; propose the top few.
+- **Local tier via Spotlight and cider**: standing queries also run
+  through `filesearch.rs` (mdfind, already ranked and junk-filtered) and
+  the cider integrations, so the frontier includes files already on this
+  Mac and notes/reminders in Apple apps — the sources that need no
+  network consent at all. These proposals rank above web ones: the
+  cheapest fetch is the one that never leaves the machine.
 - **Open-web tier via Firecrawl**: standing queries run through
   `/v2/search` (Research/PDF/Developer categories, domain filters) and
   the Research Index for academic notebooks; accepted proposals scrape
@@ -163,11 +181,30 @@ pass.
 
 ## Phasing
 
-1. Pillar 1 (UX) — pure frontend, unblocks everything, no model cost.
-2. Pillar 2 gap detection + frontier from *existing* sources (no new
-   origins), proposal tray.
-3. Pillar 3 cluster + retirement passes on night shift.
-4. Wiki view; open-web frontier behind explicit per-notebook opt-in.
+1. ~~Pillar 1 (UX)~~ — shipped: virtualized panel, facets, rollups,
+   uncited filter, 5k fixture (12ms filter keystrokes, 21–35 mounted
+   rows at any scroll position).
+2. ~~Pillar 2 free tiers + tray~~ — shipped: standing queries from thin
+   retrievals, Spotlight tier (two-token name matches), mined-link tier,
+   Sources-panel tray.
+3. ~~Grow center pane + open-web tier~~ — shipped: a Grow mode beside
+   Chat/Reader/Gallery/Ledger showing the hungry-for queries and all
+   tiers; Firecrawl keyless search behind a per-notebook enable, metered
+   in traces/growth.jsonl against an 800-credit soft cap (measured: 2
+   credits per query).
+4. ~~Pillar 3 v1~~ — shipped: the retirement pass (old + never-cited →
+   Mute/Keep/Remove proposals in Grow's Tidy section; the cluster/tag
+   half was already live as gist.rs's ensure_tags sweep), and the wiki
+   index — a deterministic generated note grouping sources by tag with
+   title links the reader resolves, refreshed in place, OKF-portable.
+5. ~~Phase 5~~ — shipped: the wiki re-derives on every gist sweep
+   (WikiSkill's continuous consolidation, write-skipping), and it grew
+   beyond one note — a page per registry entity filed in the notebook
+   (facts + documents, title-linked both ways), plus tag-merge
+   proposals (plural/singular and separator variants) in the Grow
+   pane's Organize section. Notes link notes by title now, so the
+   wiki cross-references itself. Still open: nightly growth sweeps for
+   web-enabled notebooks (the opt-in flag lives client-side today).
 
 At 1M+ sources the answer is "many notebooks + meta-chat", not one
 table: the router already federates across notebooks, and per-notebook
@@ -185,7 +222,12 @@ proves otherwise.
 
 ## Open questions
 
-- Does the proposal tray live in the Sources panel or the Brief?
+- ~~Does the proposal tray live in the Sources panel or the Brief?~~
+  Decided: the tray row lives in the Sources panel, but review graduates
+  from a modal to a center-pane "Grow" surface (a `CenterModeTabs` mode
+  beside Chat/Reader/Gallery/Ledger) once local + web tiers land — a
+  review workflow deserves real estate, and the center pane is where
+  this app puts workflows.
 - Should standing queries be visible/editable (a "what this notebook is
   hungry for" list), or stay implicit from traces?
 - Frontier ranking: embedder-only first — Firecrawl's search already
