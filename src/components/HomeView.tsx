@@ -991,6 +991,26 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         </div>
       ) : (
         <div className="relative flex min-h-0 flex-1">
+          {/* The dither shader from the hero, as a banner behind the heading —
+          full window width, running behind the sidebar cards, fading into
+          the background before the notebook grid starts. */}
+          {!glassOn && (
+            <div
+              className="glass-mist pointer-events-none absolute inset-x-0 top-0 h-64 overflow-hidden"
+              aria-hidden="true"
+            >
+              <DitherBackground
+                themeKey={theme}
+                intensity={2}
+                // Home reads the whole corpus: ~200 sources is a full field.
+                density={Math.min(
+                  1,
+                  notebooks.reduce((n, nb) => n + nb.sourceCount, 0) / 200,
+                )}
+              />
+              <div className="absolute inset-0 bg-[linear-gradient(to_bottom,transparent_55%,var(--background)_100%)]" />
+            </div>
+          )}
           {/* Three regions, same side-card idiom as the notebook view:
             Chats + Staff rail left, the section's own center, Brief +
             reports column right. Each sidebar collapses on its own, and
@@ -1016,7 +1036,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   onCollapse={toggleChats}
                 />
               ) : (
-                <div className="side-card flex w-12 shrink-0 flex-col items-center self-start py-2">
+                <div className="side-card relative flex w-12 shrink-0 flex-col items-center self-start py-2">
                   <SidebarRail
                     icon="chats"
                     title="Show Chats"
@@ -1058,7 +1078,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   />
                 </aside>
               ) : (
-                <div className="side-card flex w-12 shrink-0 flex-col items-center self-start py-2">
+                <div className="side-card relative flex w-12 shrink-0 flex-col items-center self-start py-2">
                   <SidebarRail
                     icon="staff"
                     title="Show Staff"
@@ -1068,7 +1088,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               )}
             </div>
           ) : (
-            <div className="side-card mx-2 mt-1 hidden w-12 shrink-0 flex-col items-center gap-1 self-start py-2 lg:flex">
+            <div className="side-card relative mx-2 mt-1 hidden w-12 shrink-0 flex-col items-center gap-1 self-start py-2 lg:flex">
               <SidebarRail
                 icon="chats"
                 title="Show Chats"
@@ -1078,17 +1098,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             </div>
           )}
           <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
-            {/* The dither shader from the hero, as a banner behind the heading —
-            it fades into the background before the notebook grid starts. */}
-            {!glassOn && (
-            <div
-              className="glass-mist pointer-events-none absolute inset-x-0 top-0 h-64 overflow-hidden"
-              aria-hidden="true"
-            >
-              <DitherBackground themeKey={theme} intensity={2} />
-              <div className="absolute inset-0 bg-[linear-gradient(to_bottom,transparent_55%,var(--background)_100%)]" />
-            </div>
-            )}
             {/* Heading + ask box stay put; only the shelves (or the
             conversation) below scroll. */}
             <div
@@ -1440,7 +1449,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           {/* Right column: the Brief card above the reports feed — the
             morning-read surface, arrival point first. */}
           {!briefOpen && !reportsOpen ? (
-            <div className="side-card mx-2 mt-1 hidden w-12 shrink-0 flex-col items-center gap-1 self-start py-2 lg:flex">
+            <div className="side-card relative mx-2 mt-1 hidden w-12 shrink-0 flex-col items-center gap-1 self-start py-2 lg:flex">
               <SidebarRail
                 icon="brief"
                 title="Show the brief"
@@ -1480,7 +1489,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               ) : (
                 // Collapsed to the single-icon rail, hugging the column's
                 // outer edge — the mirror of Staff and Chats on the left.
-                <div className="side-card flex w-12 shrink-0 flex-col items-center self-end py-2">
+                <div className="side-card relative flex w-12 shrink-0 flex-col items-center self-end py-2">
                   <SidebarRail
                     icon="brief"
                     title="Show the brief"
@@ -1576,7 +1585,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   )}
                 </aside>
               ) : (
-                <div className="side-card flex w-12 shrink-0 flex-col items-center self-end py-2">
+                <div className="side-card relative flex w-12 shrink-0 flex-col items-center self-end py-2">
                   <SidebarRail
                     icon="reports"
                     title="Show latest reports"

@@ -366,8 +366,8 @@ async function runQueued(
 
 /** One-shot guard for `init`. React StrictMode double-invokes the mount
  *  effect in dev, so without this the whole boot (notebook select, schedulers,
- *  global listeners, the update check) ran twice — hence two "update available"
- *  toasts. Module scope, so it survives the StrictMode remount. */
+ *  global listeners, the update check) ran twice. Module scope, so it
+ *  survives the StrictMode remount. */
 let initStarted = false;
 
 /** Resolves once init's first `listNotebooks` has landed. OS entry points
@@ -686,20 +686,10 @@ export const useStore = create<AppState>((set, get) => {
       // Quiet update check, once per launch, main window only.
       if (getCurrentWebview().label === "main" && autoUpdateEnabled()) {
         setTimeout(() => {
-          // Clicking the notice lands on Settings → General with the check
-          // already run, so the Install button is right there. The version
-          // is also remembered so General/About show it on their own.
-          void checkForUpdatesQuietly((v) => {
-            set({ updateAvailable: v });
-            get().pushToast(
-              "info",
-              `Alchemy ${v} is available. Click to review and install.`,
-              () => {
-                set({ pendingUpdateCheck: true });
-                get().openSettings("general");
-              },
-            );
-          });
+          // The title-bar UpdateBadge is the notice — it stays put, and
+          // clicking it lands on Settings → General with the check already
+          // run. No toast: a transient nag on top of a persistent badge.
+          void checkForUpdatesQuietly((v) => set({ updateAvailable: v }));
         }, 4000);
       }
     },

@@ -16,6 +16,7 @@ import { Library, Search, Settings } from "lucide-react";
 import { notebookIcon } from "@/lib/notebookIcons";
 import { DevBadge } from "./DevBadge";
 import { UpdateBadge } from "./UpdateBadge";
+import { DitherBackground } from "./DitherBackground";
 
 export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   const currentId = useStore((s) => s.currentId);
@@ -26,6 +27,12 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   const close = useStore((s) => s.closeNotebook);
   const sourcesOpen = useStore((s) => s.sourcesOpen);
   const studioOpen = useStore((s) => s.studioOpen);
+  const theme = useStore((s) => s.theme);
+  const glassOn = useStore((s) => s.reading.glass);
+  // Blank chat = no messages and nothing streaming (ChatPanel's own test).
+  const chatBlank = useStore((s) => s.messages.length === 0 && !s.sending);
+  // The backdrop's population tracks the notebook: ~40 sources reads full.
+  const sourceCount = useStore((s) => s.sources.length);
 
   const notebook = notebooks.find((n) => n.id === currentId);
 
@@ -135,7 +142,21 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
         onOpenSettings={() => useStore.getState().openSettings("models")}
       />
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 overflow-hidden">
+        {/* Blank-chat shader as the window's backdrop: full width, behind
+            the side panels — their cards sit on top, the gutters reveal it.
+            The panels' roots are positioned, so they paint above this. */}
+        {chatBlank && !readerOpen && !ledgerOpen && !galleryOpen && !glassOn && (
+          <>
+            <div className="glass-mist pointer-events-none absolute inset-0">
+              <DitherBackground
+                themeKey={theme}
+                density={Math.min(1, sourceCount / 40)}
+              />
+            </div>
+            <div className="chat-mist-fade glass-mist pointer-events-none absolute inset-0" />
+          </>
+        )}
         {sourcesOpen ? <SourcesPanel /> : <SourcesRail />}
         <div className="flex min-w-0 flex-1 overflow-hidden pt-1">
           {galleryOpen ? (

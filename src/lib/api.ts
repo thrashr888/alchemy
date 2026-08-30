@@ -9,6 +9,7 @@ import type {
   Citation,
   AiConfig,
   BuildInfo,
+  ReleaseNote,
   ChatConfig,
   CloudFolder,
   ConnectorStatus,
@@ -514,6 +515,8 @@ export const api = {
   noteOpened: (id: string) => run(cmd<void>("note_opened", { id })),
   /** Version, commit, and dev/release profile for Settings → About. */
   buildInfo: () => run(cmd<BuildInfo>("build_info", {})),
+  /** The GitHub release feed, for About's What's new. */
+  releaseHistory: () => run(query<ReleaseNote[]>("release_history", {})),
   convertNoteToSource: (noteId: string) =>
     run(ai<Source>("convert_note_to_source", { noteId })),
   generateArtifact: (

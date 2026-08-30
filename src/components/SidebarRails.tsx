@@ -23,7 +23,7 @@ export function SourcesRail() {
   const openAddSource = useStore((s) => s.openAddSource);
 
   return (
-    <div className="side-card mx-2 mb-2 mt-1 flex w-12 shrink-0 flex-col items-center self-start py-2">
+    <div className="side-card relative mx-2 mb-2 mt-1 flex w-12 shrink-0 flex-col items-center self-start py-2">
       <button
         onClick={toggleSources}
         title="Show sources"
@@ -76,7 +76,7 @@ export function StudioRail() {
   const notes = useStore((s) => s.notes);
   const toggleStudio = useStore((s) => s.toggleStudio);
   return (
-    <div className="side-card mx-2 mb-2 mt-1 flex w-12 shrink-0 flex-col items-center self-start py-2">
+    <div className="side-card relative mx-2 mb-2 mt-1 flex w-12 shrink-0 flex-col items-center self-start py-2">
       <button
         onClick={toggleStudio}
         title="Show studio"

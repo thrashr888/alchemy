@@ -85,7 +85,7 @@ Releases go through `scripts/release.sh` (see `RELEASE.md`). pnpm 11 quirks (`al
 
 ## Design system
 
-`DESIGN.md` is the source of truth for all visual/interaction decisions. Key rules: 23 themes (dark + light) driven by semantic CSS tokens in `src/index.css` and `src/lib/themes.ts` — **never hardcode a hex in a component**. Linear-inspired: hairline borders instead of tonal fills, color only when it means something, no colored left-border accents. Shared primitives live in `src/components/ui.tsx`.
+`DESIGN.md` is the source of truth for all visual/interaction decisions. Key rules: 27 themes (dark + light) driven by semantic CSS tokens in `src/index.css` and `src/lib/themes.ts` — **never hardcode a hex in a component**. Linear-inspired: hairline borders instead of tonal fills, color only when it means something, no colored left-border accents. Shared primitives live in `src/components/ui.tsx`.
 
 `WRITING.md` is the source of truth for all user-facing words (website, release notes, in-app copy). Register scales with the surface: Apple-terse headlines, Google-plain body prose, HashiCorp-sober methodology, Vercel-clipped table cells. Translate internal vocabulary before publishing, claim only measured numbers, and run the tell check before shipping copy.
 

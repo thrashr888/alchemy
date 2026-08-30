@@ -491,6 +491,7 @@ pub fn run() {
             commands::create_note,
             commands::restore_note,
             commands::build_info,
+            commands::release_history,
             commands::update_note,
             commands::note_opened,
             commands::convert_note_to_source,
