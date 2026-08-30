@@ -1861,7 +1861,7 @@
   <section class="models wrap" id="model-guide" aria-labelledby="models-title">
     <div class="models-intro">
       <h2 id="models-title">Which model should you run?</h2>
-      <p>Each model is evaluated against the full pipeline: retrieval, citation of the known-correct evidence, and per-claim support. The test suite is reproducible from the repository.</p>
+      <p>A fresh install picks its starting model by how much memory your Mac has, from 8GB up to a 512GB Studio. The table is for choosing your own: each model is evaluated against the full pipeline, meaning retrieval, citation of the known-correct evidence, and per-claim support. The test suite is reproducible from the repository.</p>
     </div>
     <div class="models-table-wrap">
       <table class="models-table" aria-label="Measured chat model results">
@@ -1876,6 +1876,20 @@
         </thead>
         <tbody>
           <tr>
+            <td class="m-name">qwen3.8:27b-mlx</td>
+            <td>76%</td>
+            <td>88%</td>
+            <td>0.69 / 0.95</td>
+            <td class="m-note">Fast, precise citations, but it overstates what sources say. The verify pass corrects it.</td>
+          </tr>
+          <tr>
+            <td class="m-name">ornith-1.5:9b</td>
+            <td>76%</td>
+            <td>84%</td>
+            <td>0.69 / 0.99</td>
+            <td class="m-note">Best citations of the small models. Never declines, so its misses arrive confident.</td>
+          </tr>
+          <tr>
             <td class="m-name">muse-glimmer<span class="m-pick">two-source pick</span></td>
             <td>68%</td>
             <td>88%</td>
@@ -1883,18 +1897,25 @@
             <td class="m-note">Best at two-source citations. The 30B variant costs more, scores the same.</td>
           </tr>
           <tr>
-            <td class="m-name">gemma4:31b-mlx<span class="m-pick">balanced pick</span></td>
+            <td class="m-name">nemotron-3.5-lightning</td>
+            <td>68%</td>
+            <td>84%</td>
+            <td>0.62 / 0.96</td>
+            <td class="m-note">Answers everything. A third of its cited claims don&rsquo;t hold up. Skip it for work you’ll cite.</td>
+          </tr>
+          <tr>
+            <td class="m-name">gemma4:31b-mlx<span class="m-pick">large-Mac pick</span></td>
             <td>68%</td>
             <td>80%</td>
             <td>0.91 / 0.98</td>
             <td class="m-note">Highest faithfulness of the large models. Shortest answers.</td>
           </tr>
           <tr>
-            <td class="m-name">qwen3.8:27b-mlx</td>
-            <td>76%</td>
-            <td>88%</td>
-            <td>0.69 / 0.95</td>
-            <td class="m-note">Fast, precise citations, but it overstates what sources say. The verify pass corrects it.</td>
+            <td class="m-name">gemma4:12b-mlx<span class="m-pick">small-Mac pick</span></td>
+            <td>64%</td>
+            <td>72%</td>
+            <td>0.80 / 0.95</td>
+            <td class="m-note">The default under 32GB. Declines cleanly when the sources don&rsquo;t answer.</td>
           </tr>
           <tr>
             <td class="m-name">bonsai-8b<span class="m-pick">speed pick</span></td>
@@ -1904,23 +1925,23 @@
             <td class="m-note">1.2&nbsp;GB, 4&ndash;20&times; faster than the rest. The follow-up search covers its two-source gap.</td>
           </tr>
           <tr>
+            <td class="m-name">lfm2.5:8b</td>
+            <td>52%</td>
+            <td>44%</td>
+            <td>0.85 / 0.98</td>
+            <td class="m-note">5&nbsp;GB and quick. Occasionally writes citation brackets the checker can&rsquo;t read.</td>
+          </tr>
+          <tr>
             <td class="m-name">gpt-oss:120b</td>
             <td>24%</td>
             <td>12%</td>
             <td>1.00 / 0.83</td>
-            <td class="m-note">Declines often. Perfect when it commits.</td>
-          </tr>
-          <tr>
-            <td class="m-name">nemotron-3.5-lightning</td>
-            <td>68%</td>
-            <td>84%</td>
-            <td>0.62 / 0.96</td>
-            <td class="m-note">Answers everything. A third of its cited claims don&rsquo;t hold up. Skip it for work you’ll cite.</td>
+            <td class="m-note">Declines often, and cites in a bracket format the app cannot parse.</td>
           </tr>
         </tbody>
       </table>
     </div>
-    <p class="models-foot">SciFact claims and HotpotQA two-source questions, 25–50 per model, run through the same pipeline the app ships, on the built-in search engine. Faithfulness is the share of cited sentences the source actually supports, checked on your Mac and calibrated against a stronger cloud model (shown SciFact&nbsp;/&nbsp;HotpotQA). Every number is reproducible: <code>cargo test --lib judged_</code>.</p>
+    <p class="models-foot">Rows sort by evidence cited, then two-source score. SciFact claims and HotpotQA two-source questions, 25–50 per model, run through the same pipeline the app ships, on the built-in search engine. Faithfulness is the share of cited sentences the source actually supports, checked on your Mac and calibrated against a stronger cloud model (shown SciFact&nbsp;/&nbsp;HotpotQA). Every number is reproducible: <code>cargo test --lib judged_</code>.</p>
   </section>
 
   <section class="etc" aria-labelledby="more-title">
