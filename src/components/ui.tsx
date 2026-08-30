@@ -1246,6 +1246,23 @@ export function Badge({
   );
 }
 
+/** True only once `active` has held for `delayMs`. Gates loading indicators
+ *  so fast loads render nothing at all — a spinner that flashes for 100ms
+ *  reads as a glitch, while one that appears at 250ms reads as "this is a
+ *  big file" (PDFs, large repos). */
+export function useDelayedFlag(active: boolean, delayMs = 250): boolean {
+  const [shown, setShown] = React.useState(false);
+  React.useEffect(() => {
+    if (!active) {
+      setShown(false);
+      return;
+    }
+    const t = window.setTimeout(() => setShown(true), delayMs);
+    return () => window.clearTimeout(t);
+  }, [active, delayMs]);
+  return shown;
+}
+
 /** EmptyState's twin for the moment before an answer exists. Same rhythm and
  *  the same slot in a pane, so a list that is still loading doesn't reflow
  *  into its empty state the instant data lands. */

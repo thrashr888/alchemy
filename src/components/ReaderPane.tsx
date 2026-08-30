@@ -27,7 +27,7 @@ import { StreamingBody } from "./StudioNoteViewer";
 import { KIND_LABEL } from "./studioArtifacts";
 import { Favicon } from "./SourcesPanel";
 import { sourceIcon } from "@/lib/sourceIcon";
-import { Button, Input, RowMenu, Spinner, Textarea } from "./ui";
+import { Button, Input, RowMenu, Spinner, Textarea, useDelayedFlag } from "./ui";
 import {
   chatReadingClass,
   cn,
@@ -1847,6 +1847,9 @@ function SourceReader({
   const [hydrating, setHydrating] = useState(false);
   const [hydrateTick, setHydrateTick] = useState(0);
   const [content, setContent] = useState<string | null>(null);
+  // Most sources land in well under 250ms — flashing a spinner for that
+  // blink is distracting. Only slow loads (PDFs) earn the indicator.
+  const showLoading = useDelayedFlag(content === null);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const [sel, setSel] = useState<{ text: string; top: number; left: number } | null>(
@@ -2447,9 +2450,11 @@ function SourceReader({
             <DocProperties source={source} git={parseGitProvenance(content)} />
           )}
           {content === null ? (
-            <div className="flex items-center gap-2 text-body text-muted-foreground">
-              <Spinner className="h-3.5 w-3.5" /> Loading source…
-            </div>
+            showLoading && (
+              <div className="flex items-center gap-2 text-body text-muted-foreground">
+                <Spinner className="h-3.5 w-3.5" /> Loading source…
+              </div>
+            )
           ) : content === "" ? (
             <div className="flex flex-col gap-1.5 text-body text-muted-foreground">
               {source.status === "placeholder" ? (
@@ -3335,6 +3340,9 @@ function RepoView({ source, map }: { source: Source; map: string | null }) {
   }, [pairs]);
   const [sel, setSel] = useState<Source | null>(null);
   const [selContent, setSelContent] = useState<string | null>(null);
+  // Same 250ms grace as the text reader: no spinner flash on fast loads.
+  const showMapLoading = useDelayedFlag(map === null);
+  const showFileLoading = useDelayedFlag(selContent === null);
   const [readmeContent, setReadmeContent] = useState<string | null>(null);
   const [closed, setClosed] = useState<Set<string>>(new Set());
   const [lineNums, setLineNums] = useState(true);
@@ -3525,9 +3533,11 @@ function RepoView({ source, map }: { source: Source; map: string | null }) {
           )}
           {sel === null ? (
             map === null ? (
-              <div className="flex items-center gap-2 text-body text-muted-foreground">
-                <Spinner className="h-3.5 w-3.5" /> Loading…
-              </div>
+              showMapLoading && (
+                <div className="flex items-center gap-2 text-body text-muted-foreground">
+                  <Spinner className="h-3.5 w-3.5" /> Loading…
+                </div>
+              )
             ) : (
               <div className="selectable">
                 {readme && readmeContent && (
@@ -3621,9 +3631,11 @@ function RepoView({ source, map }: { source: Source; map: string | null }) {
                 )}
               </div>
               {selContent === null ? (
-                <div className="flex items-center gap-2 text-body text-muted-foreground">
-                  <Spinner className="h-3.5 w-3.5" /> Loading file…
-                </div>
+                showFileLoading && (
+                  <div className="flex items-center gap-2 text-body text-muted-foreground">
+                    <Spinner className="h-3.5 w-3.5" /> Loading file…
+                  </div>
+                )
               ) : selIsCode ? (
                 <CodeView
                   path={selRel ?? ""}

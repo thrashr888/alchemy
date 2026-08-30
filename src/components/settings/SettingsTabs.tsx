@@ -211,7 +211,7 @@ export function AppearanceTab() {
   const setReading = useStore((state) => state.setReading);
   return (
     <div className="flex flex-col gap-4">
-      <Field label="Theme" hint="Applies immediately.">
+      <Field label="Theme">
         <ThemePicker />
       </Field>
       <div className="h-px bg-border" />
