@@ -87,7 +87,12 @@ function App() {
         /* older backend without the command — items just stay enabled */
       });
     };
-    if (document.hasFocus()) report(false);
+    // Unconditional first report: an app restored straight into a notebook
+    // may not have focus yet, and waiting for a focus event left the menu
+    // stuck on its built-in Home default — notebook items greyed out inside
+    // a notebook. Idempotent, and the focus re-assert below still
+    // arbitrates between windows.
+    report(false);
     // Taking focus back means re-asserting this window's context over
     // whatever the window that had it last reported.
     const onFocus = () => report(true);
@@ -136,9 +141,9 @@ function App() {
         const s = useStore.getState();
         if (e.key === "ArrowLeft" || e.key === "[") s.navBack();
         else s.navForward();
-      } else if (e.key >= "1" && e.key <= "4" && !e.shiftKey && !e.altKey) {
-        // ⌘1–4 run down whichever set of sidebars is on screen: a notebook's
-        // Sources/Studio/Gallery/Ledger, or Home's Chats/Staff/Brief/Latest
+      } else if (e.key >= "1" && e.key <= "5" && !e.shiftKey && !e.altKey) {
+        // ⌘1–5 run down whichever set of sidebars is on screen: a notebook's
+        // Sources/Studio/Gallery/Grow/Ledger, or Home's Chats/Staff/Brief/Latest
         // Reports — in the order the rails read, which is the View menu's
         // order too. Context-dependent, so it can't be a native menu key
         // equivalent (those are global to the process and would fire in the
@@ -150,6 +155,7 @@ function App() {
         if (window.__ALCHEMY_NOTE__ || shortcutBlocked(e)) return;
         const i = Number(e.key) - 1;
         if (useStore.getState().currentId) {
+          if (i >= NOTEBOOK_PANELS.length) return;
           e.preventDefault();
           toggleNotebookPanel(NOTEBOOK_PANELS[i]);
         } else if (toggleHomeCard(HOME_CARDS[i])) {

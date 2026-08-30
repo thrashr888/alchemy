@@ -226,10 +226,18 @@ const CMD: &[Command] = &[
         context: "Notebook",
     },
     Command {
+        id: "menu-toggle-grow",
+        menu_label: "Grow",
+        accelerator: None,
+        keys: "⌘ 4",
+        label: "Show or hide Grow",
+        context: "Notebook",
+    },
+    Command {
         id: "menu-toggle-ledger",
         menu_label: "Ledger",
         accelerator: None,
-        keys: "⌘ 4",
+        keys: "⌘ 5",
         label: "Show or hide Ledger",
         context: "Notebook",
     },
@@ -580,6 +588,7 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
         cmd_item(app, "menu-toggle-sources")?,
         cmd_item(app, "menu-toggle-studio")?,
         cmd_item(app, "menu-toggle-gallery")?,
+        cmd_item(app, "menu-toggle-grow")?,
         cmd_item(app, "menu-toggle-ledger")?,
     ];
     let mut view = SubmenuBuilder::new(app, "View")
