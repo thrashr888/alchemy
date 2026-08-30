@@ -126,7 +126,9 @@ export function AlchemyHero({
       <div className="absolute inset-0">
         <DitherBackground themeKey={themeKey} />
       </div>
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_45%,var(--background)_100%)]" />
+      {/* Soft focus toward the centre — the gradient tops out past the box
+          edge so the shader stays visible across the whole surface. */}
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_60%,var(--background)_140%)]" />
 
       <div className="relative z-10 flex flex-col items-center px-6 text-center">
         <AlchemySymbol

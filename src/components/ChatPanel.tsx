@@ -12,7 +12,6 @@ import {
 } from "./ui";
 import { Markdown } from "./Markdown";
 import { cn, chatReadingClass, fmtDateTime, isWebUrl, relativeTime } from "@/lib/utils";
-import { DitherBackground } from "./DitherBackground";
 import { AgentPane } from "./AgentPane";
 import { AlchemySymbol } from "./AlchemyHero";
 import { DEFAULT_VERBS, THEMES, resolveThemeId } from "@/lib/themes";
@@ -152,10 +151,8 @@ export function ChatPanel() {
   const cancelGeneration = useStore((s) => s.cancelGeneration);
   const reading = useStore((s) => s.reading);
   const clearChat = useStore((s) => s.clearChat);
-  const theme = useStore((s) => s.theme);
   // Under glass the material is the ambience — the shader must not mount
   // (display:none alone leaves its rAF/WebGL loop running invisibly).
-  const glassOn = useStore((s) => s.reading.glass);
   const followups = useStore((s) => s.followups);
   const summary = useStore((s) => s.summary);
   const summaryLoading = useStore((s) => s.summaryLoading);
@@ -687,14 +684,8 @@ export function ChatPanel() {
   return (
     <div className="relative flex h-full flex-1 flex-col min-w-0">
       <LiveRegion announcements={announcements} />
-      {isBlank && !glassOn && (
-        <>
-          <div className="glass-mist pointer-events-none absolute inset-0 z-0">
-            <DitherBackground themeKey={theme} />
-          </div>
-          <div className="chat-mist-fade glass-mist pointer-events-none absolute inset-0 z-0" />
-        </>
-      )}
+      {/* The blank-state shader lives in Workspace now — behind the side
+          panels, not just this column. */}
       <div className="relative z-10 flex items-center px-5 h-12 border-b border-border">
         {hostedAgent ? (
           <Bot className="h-4 w-4 text-muted-foreground" />
@@ -787,7 +778,15 @@ export function ChatPanel() {
       {!(hostedAgent && currentId) && (
       <>
       <div ref={scrollRef} onScroll={updateAtBottom} className="relative z-10 flex-1 overflow-y-auto">
-        <div className={cn("mx-auto flex max-w-[720px] flex-col gap-6 px-5 py-6", chatReadingClass(reading))}>
+        <div
+          className={cn(
+            "mx-auto flex max-w-[720px] flex-col gap-6 px-5 py-6",
+            // Blank state: fill the scroll area exactly so the centered hero
+            // never overflows it by a hair and summons a scrollbar.
+            isBlank && "min-h-full",
+            chatReadingClass(reading),
+          )}
+        >
           {canChat && (
             <SummaryBanner
               summary={summary}
@@ -1959,7 +1958,10 @@ function ChatHero({
     <div
       className={cn(
         "flex flex-col items-center gap-4 text-center transition-all duration-200",
-        compact ? "pt-1" : "min-h-[62vh] justify-center",
+        // Non-compact fills the column's spare height (the wrapper is
+        // min-h-full on a blank notebook) instead of guessing with vh —
+        // a guess that overflowed short windows into a scrollbar.
+        compact ? "pt-1" : "flex-1 justify-center",
       )}
     >
       <AlchemySymbol

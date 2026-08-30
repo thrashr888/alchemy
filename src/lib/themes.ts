@@ -10,7 +10,17 @@ export type ShaderVariant =
   | "grain"
   | "dial"
   | "slipstream"
-  | "trellis";
+  | "trellis"
+  | "bars"
+  | "network"
+  | "snow"
+  | "moon"
+  | "glitch"
+  | "orbit"
+  | "contrib"
+  | "corona"
+  | "steam"
+  | "phosphor";
 
 export interface Theme {
   id: string;
@@ -99,6 +109,17 @@ export const THEMES: Record<string, Theme> = {
     id: "dracula",
     label: "Dracula",
     dark: true,
+    shader: "moon", // a gibbous moon behind drifting fog
+    sigil: 2, // pentagram — the old wards
+    mood: "a candlelit Carpathian castle, velvet drapes, something at the window",
+    verbs: [
+      "Rising from the crypt",
+      "Drawing the curtains",
+      "Listening to the children of the night",
+      "Crossing the Carpathians",
+      "Decanting the vintage",
+      "Awaiting an invitation",
+    ],
     vars: {
       background: "#21222c", surface: "#282a36", "surface-2": "#343746", elevated: "#3a3d4d",
       foreground: "#f8f8f2", muted: "#343746", "muted-foreground": "#a6abc7",
@@ -138,6 +159,17 @@ export const THEMES: Record<string, Theme> = {
     id: "nord",
     label: "Nord",
     dark: true,
+    shader: "snow", // three flake layers, parallax-deep
+    sigil: 1, // hexagram — the snowflake's six arms
+    mood: "an arctic night, snow falling on hushed fjords, aurora behind the clouds",
+    verbs: [
+      "Watching the aurora",
+      "Breaking trail",
+      "Reading the snowdrifts",
+      "Waiting out the storm",
+      "Stoking the stove",
+      "Counting the flakes",
+    ],
     vars: {
       background: "#2e3440", surface: "#3b4252", "surface-2": "#434c5e", elevated: "#4c566a",
       foreground: "#eceff4", muted: "#434c5e", "muted-foreground": "#c8cfdd",
@@ -151,6 +183,17 @@ export const THEMES: Record<string, Theme> = {
     id: "gruvbox",
     label: "Gruvbox",
     dark: true,
+    shader: "phosphor", // an amber CRT at rest
+    sigil: 3, // transmutation array — the character grid
+    mood: "an amber terminal humming in a dark room, phosphor and patience",
+    verbs: [
+      "Blinking the cursor",
+      "Scrolling the buffer",
+      "Compiling in the dark",
+      "Reading the man pages",
+      "Warming the phosphor",
+      "Waiting on the modem",
+    ],
     vars: {
       background: "#1d2021", surface: "#282828", "surface-2": "#3c3836", elevated: "#504945",
       foreground: "#ebdbb2", muted: "#3c3836", "muted-foreground": "#c4baac",
@@ -164,6 +207,17 @@ export const THEMES: Record<string, Theme> = {
     id: "github",
     label: "GitHub",
     dark: true,
+    shader: "contrib", // the contribution wall, density-driven
+    sigil: 3, // transmutation array — the graph grid
+    mood: "a year of little squares, midnight commits, the graph never sleeps",
+    verbs: [
+      "Committing",
+      "Rebasing gently",
+      "Opening the PR",
+      "Squashing the history",
+      "Greening the graph",
+      "Merging at midnight",
+    ],
     vars: {
       background: "#0d1117", surface: "#11151c", "surface-2": "#161b22", elevated: "#1c2128",
       foreground: "#c9d1d9", muted: "#161b22", "muted-foreground": "#8b949e",
@@ -173,10 +227,75 @@ export const THEMES: Record<string, Theme> = {
       citation: "#58a6ff", selection: "rgba(47,129,247,0.30)", ...darkBorder,
     },
   },
+  carbon: {
+    id: "carbon",
+    label: "IBM Carbon",
+    dark: true,
+    shader: "bars",
+    sigil: 3, // transmutation array — the punched-card grid
+    mood: "Big Blue: the eight-bar rebus, punched cards, THINK signs, mainframe hum",
+    verbs: [
+      "Thinking",
+      "Punching the cards",
+      "Spooling the tape",
+      "Batching the jobs",
+      "Warming the mainframe",
+      "Waking Watson",
+    ],
+    vars: {
+      // Carbon v11 Gray 100 tokens, verified against @carbon/themes:
+      // layer-01/02 gray-90/80, text-secondary gray-30, helper gray-40,
+      // button blue-60 (hover #0050e6), links blue-40, focus white.
+      background: "#161616", surface: "#262626", "surface-2": "#393939", elevated: "#474747",
+      foreground: "#f4f4f4", muted: "#393939", "muted-foreground": "#c6c6c6",
+      "subtle-foreground": "#a8a8a8", ring: "#ffffff", primary: "#0f62fe",
+      "primary-hover": "#0050e6", "primary-foreground": "#ffffff", accent: "#393939",
+      "accent-foreground": "#f4f4f4", destructive: "#fa4d56", success: "#42be65",
+      citation: "#78a9ff", selection: "rgba(69,137,255,0.35)", ...darkBorder,
+    },
+  },
+  "carbon-light": {
+    id: "carbon-light",
+    label: "IBM Carbon Light",
+    dark: false,
+    shader: "bars",
+    sigil: 3, // transmutation array — the punched-card grid
+    mood: "Big Blue: the eight-bar rebus, punched cards, THINK signs, mainframe hum",
+    verbs: [
+      "Thinking",
+      "Punching the cards",
+      "Spooling the tape",
+      "Batching the jobs",
+      "Warming the mainframe",
+      "Waking Watson",
+    ],
+    vars: {
+      // Carbon v11 White tokens, verified against @carbon/themes:
+      // layer-01 gray-10, accents gray-20, text-secondary gray-70, helper
+      // gray-60, button + links blue-60 (hover #0050e6), success green-50.
+      background: "#ffffff", surface: "#f4f4f4", "surface-2": "#e0e0e0", elevated: "#ffffff",
+      foreground: "#161616", muted: "#e0e0e0", "muted-foreground": "#525252",
+      "subtle-foreground": "#6f6f6f", ring: "#0f62fe", primary: "#0f62fe",
+      "primary-hover": "#0050e6", "primary-foreground": "#ffffff", accent: "#e0e0e0",
+      "accent-foreground": "#161616", destructive: "#da1e28", success: "#24a148",
+      citation: "#0f62fe", selection: "rgba(15,98,254,0.20)", ...lightBorder,
+    },
+  },
   "github-light": {
     id: "github-light",
     label: "GitHub Light",
     dark: false,
+    shader: "contrib", // the contribution wall, density-driven
+    sigil: 3, // transmutation array — the graph grid
+    mood: "a year of little squares, midnight commits, the graph never sleeps",
+    verbs: [
+      "Committing",
+      "Rebasing gently",
+      "Opening the PR",
+      "Squashing the history",
+      "Greening the graph",
+      "Merging at midnight",
+    ],
     vars: {
       background: "#ffffff", surface: "#f6f8fa", "surface-2": "#eaeef2", elevated: "#ffffff",
       foreground: "#1f2328", muted: "#eaeef2", "muted-foreground": "#57606a",
@@ -190,6 +309,17 @@ export const THEMES: Record<string, Theme> = {
     id: "solarized",
     label: "Solarized",
     dark: true,
+    shader: "corona", // the sun itself, prominences breathing
+    sigil: 4, // celestial descent — the measured sun
+    mood: "low sun over still water, measured light, the lab notebook of color",
+    verbs: [
+      "Tracking the sun",
+      "Balancing the contrast",
+      "Reading the analemma",
+      "Measuring the light",
+      "Waiting for golden hour",
+      "Charting the ecliptic",
+    ],
     vars: {
       background: "#002b36", surface: "#073642", "surface-2": "#0a4351", elevated: "#0e4b5a",
       foreground: "#93a1a1", muted: "#073642", "muted-foreground": "#abb7b7",
@@ -203,6 +333,17 @@ export const THEMES: Record<string, Theme> = {
     id: "solarized-light",
     label: "Solarized Light",
     dark: false,
+    shader: "corona", // the sun itself, prominences breathing
+    sigil: 4, // celestial descent — the measured sun
+    mood: "low sun over still water, measured light, the lab notebook of color",
+    verbs: [
+      "Tracking the sun",
+      "Balancing the contrast",
+      "Reading the analemma",
+      "Measuring the light",
+      "Waiting for golden hour",
+      "Charting the ecliptic",
+    ],
     vars: {
       background: "#fdf6e3", surface: "#f5eeda", "surface-2": "#eee8d5", elevated: "#fffbf0",
       foreground: "#586e75", muted: "#eee8d5", "muted-foreground": "#55686e",
@@ -216,6 +357,17 @@ export const THEMES: Record<string, Theme> = {
     id: "tokyo-night",
     label: "Tokyo Night",
     dark: true,
+    shader: "network", // city lights as a drifting plexus
+    sigil: 3, // transmutation array — the node grid
+    mood: "a neon-lit Tokyo night, rain-slick streets, city lights networked to the horizon",
+    verbs: [
+      "Crossing at Shibuya",
+      "Riding the Yamanote",
+      "Reading the neon",
+      "Waiting for the last train",
+      "Tracing the network",
+      "Chasing the vending-machine glow",
+    ],
     vars: {
       background: "#1a1b26", surface: "#1f2335", "surface-2": "#24283b", elevated: "#2a2e42",
       foreground: "#c0caf5", muted: "#24283b", "muted-foreground": "#9aa5ce",
@@ -307,6 +459,17 @@ export const THEMES: Record<string, Theme> = {
     id: "latte",
     label: "Catppuccin Latte",
     dark: false,
+    shader: "steam", // two wisps off a fresh cup
+    sigil: 0, // squared circle — the cup on its saucer
+    mood: "morning light in a quiet café, crema and steam, an unhurried first sip",
+    verbs: [
+      "Pulling the shot",
+      "Steaming the milk",
+      "Pouring the rosetta",
+      "Warming the cup",
+      "Grinding the beans",
+      "Savoring the crema",
+    ],
     vars: {
       background: "#eff1f5", surface: "#e6e9ef", "surface-2": "#dce0e8", elevated: "#ffffff",
       foreground: "#4c4f69", muted: "#e6e9ef", "muted-foreground": "#5e6174",
@@ -411,6 +574,62 @@ export const THEMES: Record<string, Theme> = {
       "primary-hover": "#ea3a2c", "primary-foreground": "#ffffff", accent: "#282c2f",
       "accent-foreground": "#c6ced4", destructive: "#ff7d8a", success: "#3fb56b",
       citation: "#eef4f8", selection: "rgba(218,41,28,0.30)", ...darkBorder,
+    },
+  },
+  "night-city": {
+    id: "night-city",
+    label: "Night City",
+    dark: true,
+    shader: "glitch", // the feed tears and re-locks
+    sigil: 3, // transmutation array — the netrunner grid
+    mood: "Night City at 3 a.m., chrome and brand yellow, a ghost in the net",
+    verbs: [
+      "Jacking in",
+      "Breaching the ICE",
+      "Scanning the net",
+      "Flatlining the daemon",
+      "Burning eddies",
+      "Waking the samurai",
+    ],
+    vars: {
+      // CP2077 brand: warning-label yellow on soot black, netrunner cyan
+      // for citations. Yellow carries the UI; cyan only ever means a link.
+      background: "#0b0b09", surface: "#12120e", "surface-2": "#1a1a13", elevated: "#211f16",
+      foreground: "#f1efdc", muted: "#1a1a13", "muted-foreground": "#a6a486",
+      "subtle-foreground": "#98977e", ring: "#fcee0a", primary: "#f3e600",
+      "primary-hover": "#fff23d", "primary-foreground": "#0b0b09", accent: "#1a1a13",
+      "accent-foreground": "#f1efdc", destructive: "#ff2e55", success: "#3ce6a3",
+      citation: "#37ebf3", selection: "rgba(243,230,0,0.28)",
+      border: "rgba(243,230,0,0.11)", "border-strong": "rgba(243,230,0,0.19)",
+      input: "rgba(243,230,0,0.14)", scrollbar: "rgba(243,230,0,0.15)",
+    },
+  },
+  durandal: {
+    id: "durandal",
+    label: "Durandal",
+    dark: true,
+    shader: "orbit", // satellites riding concentric paths
+    sigil: 0, // squared circle — the orbital seal
+    mood: "acid decals on hull grey, orbital relays, a rogue AI whispering in the static",
+    verbs: [
+      "Entering the stream",
+      "Pinging the relay",
+      "Tracing the orbit",
+      "Compiling the runner",
+      "Listening for Durandal",
+      "Respawning",
+    ],
+    vars: {
+      // Marathon's graphic-design brutalism: acid green over cool hull
+      // greys, off-white text, everything vector-flat.
+      background: "#0b0d0e", surface: "#111417", "surface-2": "#181c20", elevated: "#1f2429",
+      foreground: "#e8edea", muted: "#181c20", "muted-foreground": "#93a09a",
+      "subtle-foreground": "#89948e", ring: "#c8f542", primary: "#b6e32f",
+      "primary-hover": "#c8f542", "primary-foreground": "#0b0d0e", accent: "#181c20",
+      "accent-foreground": "#e8edea", destructive: "#ff5265", success: "#54d98c",
+      citation: "#cdf76a", selection: "rgba(200,245,66,0.25)",
+      border: "rgba(200,245,66,0.10)", "border-strong": "rgba(200,245,66,0.18)",
+      input: "rgba(200,245,66,0.13)", scrollbar: "rgba(200,245,66,0.14)",
     },
   },
   sepia: {

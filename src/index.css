@@ -573,10 +573,12 @@ html[data-glass="clear"] .side-card {
    layers go away entirely — the window material IS the ambience, and
    the shader canvas would otherwise repaint an opaque center. */
 .chat-mist-fade {
+  /* Tops out past the box edge so the shader reads across the whole
+     surface, not as a centred blob. */
   background: radial-gradient(
     ellipse at center,
-    transparent 45%,
-    var(--background) 100%
+    transparent 60%,
+    var(--background) 140%
   );
 }
 .glass .glass-mist {
