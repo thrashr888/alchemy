@@ -251,13 +251,21 @@ export function Switch({
   className?: string;
 }) {
   return (
-    <span className={cn("relative inline-flex shrink-0", className)}>
+    // The pill is 36×16 — an uncomfortably small target on its own, so the
+    // wrapper pads a hit halo around it (negative margin keeps layout
+    // unchanged) and the invisible input covers the padded box. Padding
+    // beats a negative-inset input: the box the browser hit-tests is the
+    // wrapper's own, reliable in every stacking context.
+    <span className={cn("relative inline-flex shrink-0 p-2 -m-2", className)}>
       <input
         type="checkbox"
         role="switch"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        className="peer absolute inset-0 cursor-pointer rounded-full opacity-0"
+        // h/w-full is load-bearing: a checkbox keeps its intrinsic ~12px
+        // box under `inset-0` alone (form controls don't stretch), which
+        // left the real hit area a corner of the pill.
+        className="peer absolute inset-0 h-full w-full cursor-pointer rounded-full opacity-0"
       />
       {/* Native NSSwitch geometry, measured off a rendered control (dark
           aqua): 2.25:1 pill, knob a 1.6:1 capsule spanning 59% of the track

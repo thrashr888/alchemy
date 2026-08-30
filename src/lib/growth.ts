@@ -74,21 +74,15 @@ export const HYGIENE_LABEL: Record<string, string> = {
   stale: "stale",
 };
 
-/** The open-web tier is opt-in per notebook (the RFC's consent line):
- *  enabling it means this notebook's standing queries go to Firecrawl. */
-export function webSearchEnabled(notebookId: string | null): boolean {
-  return (
-    !!notebookId &&
-    localStorage.getItem(`growthWebSearch:${notebookId}`) === "on"
-  );
-}
-
-export function setWebSearchEnabled(notebookId: string | null, on: boolean) {
-  if (!notebookId) return;
+/** The open-web tier's opt-in lives backend-side now (the sweep acts on
+ *  it) — this migrates the old localStorage flag once, then forgets it. */
+export function takeLegacyWebFlag(notebookId: string): boolean {
   try {
-    if (on) localStorage.setItem(`growthWebSearch:${notebookId}`, "on");
-    else localStorage.removeItem(`growthWebSearch:${notebookId}`);
+    const key = `growthWebSearch:${notebookId}`;
+    const on = localStorage.getItem(key) === "on";
+    localStorage.removeItem(key);
+    return on;
   } catch {
-    /* fine — the user just gets asked again next time */
+    return false;
   }
 }

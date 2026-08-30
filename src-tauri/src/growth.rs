@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::models::{Note, RegistryCard, Source};
+use crate::models::{Note, RegistryCard, Source, SourceEvent};
 
 /// One proposed addition: a URL the notebook's own sources keep pointing
 /// at, or a local file Spotlight matched against a standing query.
@@ -296,6 +296,29 @@ pub const WEB_CREDIT_CAP: u32 = 800;
 const CREDITS_PER_SEARCH: u32 = 2;
 const GROWTH_TRACE: &str = "growth.jsonl";
 const WEB_CACHE: &str = "growth-web-cache.json";
+const WEB_ENABLED: &str = "growth-web.json";
+
+/// The per-notebook web-search opt-in, backend-owned (a JSON map beside
+/// the growth ledger) so the background sweep can act on it — a Lance
+/// column would need a schema migration on the store the installed app
+/// shares. The frontend migrates its old localStorage flag on first read.
+pub fn web_enabled(trace_dir: &Path, notebook_id: &str) -> bool {
+    std::fs::read_to_string(trace_dir.join(WEB_ENABLED))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get(notebook_id)?.as_bool())
+        .unwrap_or(false)
+}
+
+pub fn set_web_enabled(trace_dir: &Path, notebook_id: &str, on: bool) {
+    let mut map = std::fs::read_to_string(trace_dir.join(WEB_ENABLED))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    map[notebook_id] = serde_json::Value::Bool(on);
+    let _ = std::fs::create_dir_all(trace_dir);
+    let _ = std::fs::write(trace_dir.join(WEB_ENABLED), map.to_string());
+}
 
 /// One Firecrawl round per notebook per day is plenty: standing queries
 /// move slowly, and reopening the pane must not spend credits. The cache
@@ -834,6 +857,54 @@ pub async fn upsert_wiki(
     Ok((index_note, changed))
 }
 
+/// The nightly web warm (the last deferred phase-5 piece): notebooks
+/// whose owner enabled web search get their standing queries run through
+/// Firecrawl during the sweep, so the Grow pane opens warm. The per-day
+/// cache makes repeat sweeps free and the monthly cap still governs.
+pub async fn sweep_web_searches(db: &crate::db::Db) -> anyhow::Result<usize> {
+    let Some(trace_dir) = crate::trace::dir() else {
+        return Ok(0);
+    };
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let mut warmed = 0usize;
+    for nb in db.list_notebooks().await? {
+        if !web_enabled(trace_dir, &nb.id) {
+            continue;
+        }
+        let queries = standing_queries(trace_dir, &nb.id, now_ms);
+        if queries.is_empty() {
+            continue;
+        }
+        let sources = db.list_sources(&nb.id).await?;
+        let before = credits_this_month(trace_dir, now_ms);
+        let result = web_search(trace_dir, &nb.id, &sources, &queries, now_ms).await;
+        if !result.proposals.is_empty() {
+            warmed += 1;
+            // Only a FRESH search (credits moved) earns a feed line — the
+            // day-cached rerun every sweep would repeat itself otherwise.
+            if result.credits_this_month > before {
+                let _ = db
+                    .add_source_event(&SourceEvent {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        notebook_id: nb.id.clone(),
+                        source_id: String::new(),
+                        source_title: "Grow".into(),
+                        kind: "growth".into(),
+                        detail: format!(
+                            "{} web proposal{} waiting",
+                            result.proposals.len(),
+                            if result.proposals.len() == 1 { "" } else { "s" }
+                        ),
+                        diff: String::new(),
+                        at: now_ms,
+                    })
+                    .await;
+            }
+        }
+    }
+    Ok(warmed)
+}
+
 /// Continuous consolidation (RFC-living-notebook phase 5, WikiSkill's
 /// argument made real): notebooks that HAVE an index note — creating one
 /// is the opt-in — get their whole wiki (index + entity pages) re-derived
@@ -851,8 +922,29 @@ pub async fn refresh_wiki_indexes(db: &crate::db::Db) -> anyhow::Result<usize> {
     let cards = db.list_registry().await?;
     let mut refreshed = 0usize;
     for nb in db.list_notebooks().await? {
-        let (_, changed) = upsert_wiki(db, &nb.id, &cards, &cited, now_ms, false).await?;
+        let (index, changed) = upsert_wiki(db, &nb.id, &cards, &cited, now_ms, false).await?;
         refreshed += changed;
+        // Autonomous work announces itself: one Staff-feed event per
+        // notebook whose wiki actually moved (the Brief reads these too).
+        if changed > 0 {
+            if let Some(index) = index {
+                let _ = db
+                    .add_source_event(&SourceEvent {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        notebook_id: nb.id.clone(),
+                        source_id: index.id,
+                        source_title: WIKI_INDEX_TITLE.into(),
+                        kind: "wiki".into(),
+                        detail: format!(
+                            "wiki refreshed · {changed} note{}",
+                            if changed == 1 { "" } else { "s" }
+                        ),
+                        diff: String::new(),
+                        at: now_ms,
+                    })
+                    .await;
+            }
+        }
     }
     Ok(refreshed)
 }

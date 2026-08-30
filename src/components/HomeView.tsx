@@ -778,7 +778,20 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   // the reader on the source (same shape as the alchemy:// deep links).
   function openEventSource(event: SourceEvent) {
     void open(event.notebookId).then(() => {
-      useStore.getState().openInReader({ type: "source", id: event.sourceId });
+      // Growth events are places, not documents: the wiki event opens its
+      // index note, a growth event opens the Grow pane itself.
+      if (event.kind === "wiki")
+        useStore.getState().openInReader({ type: "note", id: event.sourceId });
+      else if (event.kind === "growth")
+        useStore.setState({
+          growOpen: true,
+          galleryOpen: false,
+          ledgerOpen: false,
+        });
+      else
+        useStore
+          .getState()
+          .openInReader({ type: "source", id: event.sourceId });
     });
   }
 

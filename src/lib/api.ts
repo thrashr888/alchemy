@@ -546,6 +546,17 @@ export const api = {
   /** Tag-merge proposals: near-duplicate tags, proposals only. */
   growthTagMerges: (notebookId: string) =>
     run(query<TagMergeProposal[]>("growth_tag_merges", { notebookId })),
+  /** The backend-owned per-notebook web-search opt-in. */
+  growthWebEnabled: (notebookId: string) =>
+    run(query<boolean>("growth_web_enabled", { notebookId })),
+  setGrowthWebEnabled: (notebookId: string, enabled: boolean) =>
+    run(cmd<void>("set_growth_web_enabled", { notebookId, enabled })),
+  /** Point a moved file source at its new path (caller refreshes after). */
+  relocateSource: (sourceId: string, path: string) =>
+    run(cmd<void>("relocate_source", { sourceId, path })),
+  /** Spotlight candidates for a missing file, exact name match. */
+  findMovedFile: (sourceId: string) =>
+    run(query<string[]>("find_moved_file", { sourceId })),
   /** Rewrite `from` into `to` on every source carrying it. */
   applyTagMerge: (notebookId: string, from: string, to: string) =>
     run(cmd<number>("apply_tag_merge", { notebookId, from, to })),

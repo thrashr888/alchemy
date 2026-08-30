@@ -1,21 +1,28 @@
 import { useEffect, useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import {
   HYGIENE_LABEL,
   loadGrowthDismissed,
   loadHygieneKept,
   saveGrowthDismissed,
   saveHygieneKept,
-  setWebSearchEnabled,
-  webSearchEnabled,
+  takeLegacyWebFlag,
 } from "@/lib/growth";
 import type {
   GrowthProposal,
   RetireProposal,
   TagMergeProposal,
 } from "@/lib/types";
-import { Button, EmptyState, LoadingState, Spinner, Switch } from "./ui";
+import {
+  Button,
+  EmptyState,
+  LoadingState,
+  Spinner,
+  Switch,
+  useConfirm,
+} from "./ui";
 import { Favicon } from "./SourcesPanel";
 import {
   AlertCircle,
@@ -46,7 +53,25 @@ export function GrowPane() {
   const selectedSourceIds = useStore((s) => s.selectedSourceIds);
   const toggleSourceSelected = useStore((s) => s.toggleSourceSelected);
   const notes = useStore((s) => s.notes);
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [retrying, setRetrying] = useState<string | null>(null);
+  // Proactive relocation for missing files: Spotlight candidates by exact
+  // name, looked up per flagged source. null = still looking.
+  const [foundPaths, setFoundPaths] = useState<Record<string, string[]>>({});
+  const relocate = async (sourceId: string, path: string) => {
+    try {
+      await api.relocateSource(sourceId, path);
+      useStore.getState().pushToast("success", "Source moved — re-reading it");
+      await refreshSource(sourceId);
+      await refreshHygiene();
+    } catch {
+      /* surfaced by the api layer's toast path */
+    }
+  };
+  const locate = async (sourceId: string) => {
+    const picked = await openFileDialog({ multiple: false });
+    if (typeof picked === "string") void relocate(sourceId, picked);
+  };
 
   // Needs-attention flags (RFC-source-hygiene) — merged into Grow: tending
   // what's broken is the other half of growing (and where Pillar 3's
@@ -72,6 +97,23 @@ export function GrowPane() {
     saveHygieneKept(currentId, kept);
     void refreshHygiene();
   };
+  // Look up move candidates for the missing-file flags on view.
+  useEffect(() => {
+    const missing = attention.filter((h) => h.bucket === "missing-file");
+    for (const h of missing.slice(0, 5)) {
+      if (foundPaths[h.sourceId] !== undefined) continue;
+      api
+        .findMovedFile(h.sourceId)
+        .then((paths) =>
+          setFoundPaths((m) => ({ ...m, [h.sourceId]: paths })),
+        )
+        .catch(() =>
+          setFoundPaths((m) => ({ ...m, [h.sourceId]: [] })),
+        );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attention]);
+
   const retryIssue = async (h: { sourceId: string }) => {
     setRetrying(h.sourceId);
     try {
@@ -109,8 +151,16 @@ export function GrowPane() {
     setProposals(null);
     setWeb(null);
     setDismissed(loadGrowthDismissed(currentId));
-    setWebOn(webSearchEnabled(currentId));
+    setWebOn(false);
     if (!currentId) return;
+    // Backend-owned opt-in (the sweep acts on it); the old localStorage
+    // flag migrates over the first time this notebook's pane opens.
+    if (takeLegacyWebFlag(currentId))
+      void api.setGrowthWebEnabled(currentId, true);
+    api
+      .growthWebEnabled(currentId)
+      .then((on) => setWebOn(on))
+      .catch(() => undefined);
     void refreshHygiene();
     let stale = false;
     api
@@ -161,12 +211,12 @@ export function GrowPane() {
       .catch(() => setWeb({ proposals: [], credits: 0, capped: false }))
       .finally(() => setWebBusy(false));
   };
-  // Already-enabled notebooks refresh their web results on open.
+  // Already-enabled notebooks refresh their web results on open (the
+  // sweep keeps the day cache warm, so this is usually instant).
   useEffect(() => {
-    if (currentId && webSearchEnabled(currentId) && queries.length > 0)
-      runWebSearch(currentId);
+    if (currentId && webOn && queries.length > 0) runWebSearch(currentId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentId, queries.length]);
+  }, [currentId, webOn, queries.length]);
 
   const existingUrls = useMemo(
     () => new Set(sources.map((s) => s.url).filter(Boolean)),
@@ -193,6 +243,26 @@ export function GrowPane() {
     (r) => !dismissed[`retire:${r.sourceId}`],
   );
   const dismissRetire = (id: string) => dismiss(`retire:${id}`);
+  const muteAllRetire = () => {
+    for (const r of retireVisible) {
+      if (isSourceSelected(r.sourceId)) toggleSourceSelected(r.sourceId);
+      dismissRetire(r.sourceId);
+    }
+  };
+  const keepAllRetire = () => {
+    for (const r of retireVisible) dismissRetire(r.sourceId);
+  };
+  const removeAllRetire = async () => {
+    const ids = retireVisible.map((r) => r.sourceId);
+    const ok = await confirm({
+      title: `Remove ${ids.length} sources?`,
+      message: "Each one is deleted with its chunks.",
+      items: retireVisible.map((r) => r.title),
+      confirmLabel: "Remove all",
+      danger: true,
+    });
+    if (ok) void deleteSourcesBatch(ids);
+  };
   const mergesVisible = merges.filter(
     (m) => !dismissed[`merge:${m.from}>${m.to}`],
   );
@@ -395,7 +465,7 @@ export function GrowPane() {
                     checked={webOn}
                     onChange={(on) => {
                       if (!currentId) return;
-                      setWebSearchEnabled(currentId, on);
+                      void api.setGrowthWebEnabled(currentId, on);
                       setWebOn(on);
                       if (on) runWebSearch(currentId);
                       else setWeb(null);
@@ -468,6 +538,31 @@ export function GrowPane() {
                           {HYGIENE_LABEL[h.bucket] ?? h.bucket} · {h.detail}
                         </div>
                       </div>
+                      {h.bucket === "missing-file" &&
+                        (foundPaths[h.sourceId]?.length ?? 0) > 0 && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() =>
+                              void relocate(
+                                h.sourceId,
+                                foundPaths[h.sourceId][0],
+                              )
+                            }
+                            title={`Found at ${foundPaths[h.sourceId][0]} — point the source there and re-read it`}
+                          >
+                            Found it — move
+                          </Button>
+                        )}
+                      {h.bucket === "missing-file" && (
+                        <Button
+                          variant="ghost"
+                          onClick={() => void locate(h.sourceId)}
+                          title="Pick the file's new location yourself"
+                        >
+                          Locate…
+                        </Button>
+                      )}
                       {h.bucket !== "duplicate" && (
                         <Button
                           variant="ghost"
@@ -509,6 +604,35 @@ export function GrowPane() {
                   <span className="text-caption text-subtle-foreground">
                     old sources no retrieval has ever cited
                   </span>
+                  {retireVisible.length > 1 && (
+                    <div className="ml-auto flex gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={muteAllRetire}
+                        title="Drop every proposal below from chat & generation"
+                      >
+                        Mute all
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={keepAllRetire}
+                        title="Keep everything — hide these proposals for 30 days"
+                      >
+                        Keep all
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive hover:bg-destructive/10"
+                        onClick={() => void removeAllRetire()}
+                        title="Remove every source below"
+                      >
+                        Remove all
+                      </Button>
+                    </div>
+                  )}
                 </div>
                 {retire === null ? (
                   <div className="flex items-center gap-2 px-1 py-2 text-caption text-muted-foreground">
@@ -581,6 +705,17 @@ export function GrowPane() {
                     <span className="text-caption text-subtle-foreground">
                       tags that look like the same word
                     </span>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="ml-auto"
+                      onClick={() => {
+                        for (const m of mergesVisible) applyMerge(m);
+                      }}
+                      title="Apply every merge below"
+                    >
+                      Merge all
+                    </Button>
                   </div>
                   {mergesVisible.map((m) => (
                     <div
@@ -669,6 +804,7 @@ export function GrowPane() {
           )}
         </div>
       </div>
+      {confirmDialog}
     </div>
   );
 }

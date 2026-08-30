@@ -9967,6 +9967,64 @@ pub async fn generate_wiki_index(
     note.ok_or_else(|| "index note not created".to_string())
 }
 
+/// The per-notebook web-search opt-in, backend-owned so the sweep can
+/// act on it (growth.rs::web_enabled).
+#[tauri::command]
+pub fn growth_web_enabled(state: State<'_, AppState>, notebook_id: String) -> bool {
+    crate::growth::web_enabled(&state.trace_dir, &notebook_id)
+}
+
+#[tauri::command]
+pub fn set_growth_web_enabled(state: State<'_, AppState>, notebook_id: String, enabled: bool) {
+    crate::growth::set_web_enabled(&state.trace_dir, &notebook_id, enabled);
+}
+
+/// Point a file source at its new location (the file moved). Verifies the
+/// path, updates the origin, clears the failure count; the caller
+/// re-ingests through the normal refresh path, which restamps fetched_at.
+#[tauri::command]
+pub async fn relocate_source(
+    state: State<'_, AppState>,
+    source_id: String,
+    path: String,
+) -> Result<(), String> {
+    if !std::path::Path::new(&path).is_file() {
+        return Err(format!("No file at {path}"));
+    }
+    let source =
+        e(state.db.get_source(&source_id).await)?.ok_or_else(|| "source not found".to_string())?;
+    e(state.db.set_source_path(&source_id, &path).await)?;
+    notify_changed("sources", Some(&source.notebook_id));
+    Ok(())
+}
+
+/// Spotlight candidates for a missing file, by exact name — the proactive
+/// half of relocation. Paths only; relocation stays an explicit click.
+#[tauri::command]
+pub async fn find_moved_file(
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<Vec<String>, String> {
+    let source =
+        e(state.db.get_source(&source_id).await)?.ok_or_else(|| "source not found".to_string())?;
+    let name = std::path::Path::new(&source.url)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or_default()
+        .to_string();
+    if name.is_empty() {
+        return Ok(Vec::new());
+    }
+    let wanted = name.to_lowercase();
+    Ok(crate::filesearch::search(&name, 12)
+        .await
+        .into_iter()
+        .filter(|hit| !hit.is_dir && hit.name.to_lowercase() == wanted && hit.path != source.url)
+        .map(|hit| hit.path)
+        .take(3)
+        .collect())
+}
+
 /// Tag-merge proposals (phase 5): plural/singular and separator variants
 /// of the same word. Proposals only — apply is its own explicit command.
 #[tauri::command]

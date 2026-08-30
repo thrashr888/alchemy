@@ -1314,6 +1314,20 @@ impl Db {
     /// Stamp a source's normalized tag string (docs/RFC-source-tags.md)
     /// without touching content or chunks. Routes pick the change up on the
     /// next self-healing sweep (the summary string diff re-embeds).
+    /// Point a source at a new on-disk origin (the file moved) and clear
+    /// its failure count so hygiene stops flagging it. Content untouched —
+    /// the caller re-ingests through the normal refresh path.
+    pub async fn set_source_path(&self, source_id: &str, path: &str) -> Result<()> {
+        let tbl = self.conn.open_table(T_SOURCES).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(source_id)))
+            .column("url", format!("'{}'", esc(path)))
+            .column("fetch_failures", "0".to_string())
+            .execute()
+            .await?;
+        Ok(())
+    }
+
     pub async fn set_source_tags(&self, source_id: &str, tags: &str) -> Result<()> {
         let tbl = self.conn.open_table(T_SOURCES).execute().await?;
         tbl.update()
