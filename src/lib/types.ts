@@ -269,6 +269,8 @@ export interface GrowthWebSearch {
   proposals: GrowthProposal[];
   creditsThisMonth: number;
   capped: boolean;
+  /** Days between fresh searches at the current budget pace. */
+  refreshEveryDays: number;
 }
 
 export interface GrowthProposal {

@@ -144,6 +144,7 @@ export function GrowPane() {
     proposals: GrowthProposal[];
     credits: number;
     capped: boolean;
+    refreshDays: number;
   } | null>(null);
 
   useEffect(() => {
@@ -206,9 +207,12 @@ export function GrowPane() {
           proposals: r.proposals,
           credits: r.creditsThisMonth,
           capped: r.capped,
+          refreshDays: r.refreshEveryDays,
         }),
       )
-      .catch(() => setWeb({ proposals: [], credits: 0, capped: false }))
+      .catch(() =>
+        setWeb({ proposals: [], credits: 0, capped: false, refreshDays: 1 }),
+      )
       .finally(() => setWebBusy(false));
   };
   // Already-enabled notebooks refresh their web results on open (the
@@ -476,6 +480,10 @@ export function GrowPane() {
                   {web && (
                     <span className="ml-auto text-caption text-subtle-foreground">
                       {web.credits} of 1,000 free credits used this month
+                      {" · refreshes "}
+                      {web.refreshDays >= 2
+                        ? `every ${web.refreshDays} days`
+                        : "daily"}
                     </span>
                   )}
                   <Switch

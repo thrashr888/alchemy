@@ -290,6 +290,9 @@ pub struct GrowthWebSearch {
     pub proposals: Vec<GrowthProposal>,
     pub credits_this_month: u32,
     pub capped: bool,
+    /// Current pacing: days between fresh Firecrawl rounds for this
+    /// notebook, derived from budget and enabled-notebook count.
+    pub refresh_every_days: u32,
 }
 
 pub const WEB_CREDIT_CAP: u32 = 800;
@@ -320,13 +323,53 @@ pub fn set_web_enabled(trace_dir: &Path, notebook_id: &str, on: bool) {
     let _ = std::fs::write(trace_dir.join(WEB_ENABLED), map.to_string());
 }
 
-/// One Firecrawl round per notebook per WEEK: at 4 credits per fresh
-/// refresh (2 queries × 2 credits), daily cadence costs ~120
-/// credits/month per notebook — the 1,000-credit free tier tops out
-/// near 8 notebooks. Weekly is ~17/month, 45+ notebooks of headroom.
-/// The cache also keys on the query set, so new hunger still busts it
-/// immediately — the calendar is only the backstop for stable questions.
-const WEB_CACHE_TTL_MS: i64 = 7 * 86_400_000;
+/// Refresh as fast as the budget allows: spread the credits left this
+/// month evenly across the enabled notebooks over the days left in the
+/// month. One notebook on a full budget hits the 1-day floor; forty
+/// notebooks — or a nearly spent budget — stretch toward the 30-day
+/// ceiling on their own. The cache also keys on the query set, so new
+/// hunger still busts it immediately; the pacer only governs repeats.
+const WEB_CACHE_TTL_MIN_MS: i64 = 86_400_000;
+const WEB_CACHE_TTL_MAX_MS: i64 = 30 * 86_400_000;
+
+fn web_enabled_count(trace_dir: &Path) -> usize {
+    std::fs::read_to_string(trace_dir.join(WEB_ENABLED))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| {
+            v.as_object()
+                .map(|m| m.values().filter(|b| b.as_bool() == Some(true)).count())
+        })
+        .unwrap_or(0)
+        .max(1)
+}
+
+fn ms_left_in_month(now_ms: i64) -> i64 {
+    use chrono::{Datelike, TimeZone};
+    let now = chrono::DateTime::from_timestamp_millis(now_ms).unwrap_or_default();
+    let (y, m) = if now.month() == 12 {
+        (now.year() + 1, 1)
+    } else {
+        (now.year(), now.month() + 1)
+    };
+    chrono::Utc
+        .with_ymd_and_hms(y, m, 1, 0, 0, 0)
+        .single()
+        .map(|d| d.timestamp_millis() - now_ms)
+        .unwrap_or(0)
+        .max(0)
+}
+
+fn web_cache_ttl_ms(trace_dir: &Path, queries: &[String], spent: u32, now_ms: i64) -> i64 {
+    let remaining = WEB_CREDIT_CAP.saturating_sub(spent) as i64;
+    let cost = CREDITS_PER_SEARCH as i64 * queries.len().clamp(1, 2) as i64;
+    if remaining < cost {
+        return WEB_CACHE_TTL_MAX_MS;
+    }
+    let notebooks = web_enabled_count(trace_dir) as i64;
+    (ms_left_in_month(now_ms) * cost * notebooks / remaining)
+        .clamp(WEB_CACHE_TTL_MIN_MS, WEB_CACHE_TTL_MAX_MS)
+}
 
 fn read_web_cache(trace_dir: &Path) -> serde_json::Value {
     std::fs::read_to_string(trace_dir.join(WEB_CACHE))
@@ -339,12 +382,13 @@ fn cached_web(
     trace_dir: &Path,
     notebook_id: &str,
     queries: &[String],
+    ttl_ms: i64,
     now_ms: i64,
 ) -> Option<Vec<GrowthProposal>> {
     let cache = read_web_cache(trace_dir);
     let entry = cache.get(notebook_id)?;
     let ts = entry.get("ts").and_then(|v| v.as_i64())?;
-    if now_ms - ts > WEB_CACHE_TTL_MS {
+    if now_ms - ts > ttl_ms {
         return None;
     }
     if entry.get("key")?.as_str()? != queries.join("\n") {
@@ -398,11 +442,14 @@ pub async fn web_search(
     now_ms: i64,
 ) -> GrowthWebSearch {
     let mut spent = credits_this_month(trace_dir, now_ms);
-    if let Some(cached) = cached_web(trace_dir, notebook_id, queries, now_ms) {
+    let ttl_ms = web_cache_ttl_ms(trace_dir, queries, spent, now_ms);
+    let refresh_every_days = (ttl_ms / 86_400_000).max(1) as u32;
+    if let Some(cached) = cached_web(trace_dir, notebook_id, queries, ttl_ms, now_ms) {
         return GrowthWebSearch {
             proposals: cached,
             credits_this_month: spent,
             capped: false,
+            refresh_every_days,
         };
     }
     if spent >= WEB_CREDIT_CAP {
@@ -410,6 +457,7 @@ pub async fn web_search(
             proposals: Vec::new(),
             credits_this_month: spent,
             capped: true,
+            refresh_every_days,
         };
     }
     let existing: HashSet<String> = sources
@@ -426,6 +474,7 @@ pub async fn web_search(
             proposals: Vec::new(),
             credits_this_month: spent,
             capped: false,
+            refresh_every_days,
         };
     };
     let mut out: Vec<GrowthProposal> = Vec::new();
@@ -486,6 +535,7 @@ pub async fn web_search(
         proposals: out,
         credits_this_month: spent,
         capped: false,
+        refresh_every_days,
     }
 }
 
@@ -951,6 +1001,44 @@ pub async fn refresh_wiki_indexes(db: &crate::db::Db) -> anyhow::Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn web_cache_ttl_paces_budget_across_notebooks() {
+        let dir = std::env::temp_dir().join(format!("alchemy-ttl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let queries = vec!["a".to_string(), "b".to_string()];
+        // 2026-08-16T00:00Z — 16 days left in August.
+        let now = 1_786_838_400_000i64;
+
+        // One notebook, full budget: refresh at the 1-day floor.
+        set_web_enabled(&dir, "nb1", true);
+        assert_eq!(
+            web_cache_ttl_ms(&dir, &queries, 0, now),
+            WEB_CACHE_TTL_MIN_MS
+        );
+
+        // More notebooks split the same budget: TTL scales linearly once
+        // above the floor (16d × 4cr × 40nb / 800cr = 3.2 days).
+        for i in 2..=40 {
+            set_web_enabled(&dir, &format!("nb{i}"), true);
+        }
+        let ttl = web_cache_ttl_ms(&dir, &queries, 0, now);
+        assert!(
+            ttl > 3 * 86_400_000 && ttl < 4 * 86_400_000,
+            "40 notebooks should pace near 3.2 days, got {ttl}"
+        );
+
+        // A nearly spent budget stretches toward the ceiling.
+        let ttl = web_cache_ttl_ms(&dir, &queries, WEB_CREDIT_CAP - 8, now);
+        assert!(ttl > 20 * 86_400_000, "thin budget should slow way down");
+        // A budget that can't fund one refresh parks at the ceiling.
+        assert_eq!(
+            web_cache_ttl_ms(&dir, &queries, WEB_CREDIT_CAP, now),
+            WEB_CACHE_TTL_MAX_MS
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn src(id: &str, url: &str, content: &str) -> Source {
         Source {
