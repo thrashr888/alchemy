@@ -33,6 +33,15 @@ if [ "${RELEASE_APPROVED:-}" != "yes" ]; then
 fi
 TAG="v$VERSION"
 TARGET="aarch64-apple-darwin"
+
+# Milestone lines carry elapsed time plus a typical duration, so a watcher
+# can tell "slow but normal" from "stuck". Warm means target/ survived since
+# the last release; a toolchain or dependency bump makes the next build cold.
+START_TS="$(date +%s)"
+phase() {
+  _e="$(( $(date +%s) - START_TS ))"
+  printf '==> [%dm%02ds] %s\n' "$(( _e / 60 ))" "$(( _e % 60 ))" "$1"
+}
 NOTARY_PROFILE="${NOTARY_PROFILE:-alchemy-notary}"
 SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-$(
   security find-identity -v -p codesigning |
@@ -86,7 +95,7 @@ git commit -m "$TAG"
 trap 'echo "release: failed after the bump commit -- local main carries an unpushed $TAG bump; rerun per RELEASE.md (reset to origin/main first)." >&2' ERR
 
 # --- Quality gate (fast dev feature set) ------------------------------------
-echo "==> Quality gate"
+phase "Quality gate  (typical: ~2 min warm, ~10 min cold)"
 # Releases run from an isolated clone (no node_modules yet); without this,
 # `pnpm exec tsc` silently falls through to whatever global tsc is on PATH.
 pnpm install --frozen-lockfile --ignore-scripts
@@ -108,7 +117,7 @@ pnpm exec tsc --noEmit
 # them (idempotent) then give each our Developer ID + secure timestamp so
 # notarization accepts them. Both are gitignored, so signing never touches
 # the working tree.
-echo "==> Signing PDFium dylib + FM sidecar + building"
+phase "Signing PDFium dylib + FM sidecar + building  (typical: ~5 min warm, ~40 min cold)"
 scripts/fetch-pdfium.sh
 scripts/build-fm-sidecar.sh
 codesign --force --timestamp --options runtime --sign "$SIGNING_IDENTITY" "$DYLIB"
@@ -119,16 +128,16 @@ APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY" pnpm tauri build --target "$TARGET"
 [ -f "$UPDATER_TGZ.sig" ] || { echo "Updater signature not produced: $UPDATER_TGZ.sig" >&2; exit 1; }
 
 # --- Notarize + staple + verify ---------------------------------------------
-echo "==> Notarize start: $(date -u +%FT%TZ)"
+phase "Notarize start: $(date -u +%FT%TZ)  (typical: 2-10 min at Apple)"
 xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
 xcrun stapler staple "$DMG"
-echo "==> Notarize done:  $(date -u +%FT%TZ)"
+phase "Notarize done:  $(date -u +%FT%TZ)"
 spctl -a -t open --context context:primary-signature -vv "$DMG"
 
 # --- Tag, publish ------------------------------------------------------------
 # The bump commit already exists (made up top, while the vault was open);
 # guard that the build didn't dirty the tracked tree, then tag it and push.
-echo "==> Tagging, publishing"
+phase "Tagging, publishing  (typical: ~1 min)"
 [ -z "$(git status --porcelain)" ] || { echo "Build dirtied the tracked tree -- investigate before tagging:" >&2; git status --porcelain >&2; exit 1; }
 git tag "$TAG"
 git push origin main "$TAG"
@@ -152,5 +161,5 @@ PYEOF
 gh release create "$TAG" "$DMG" "$UPDATER_TGZ" "$UPDATER_TGZ.sig" "$LATEST_JSON" \
   --title "Alchemy $TAG" --generate-notes
 
-echo "==> Done. Released $TAG -- https://github.com/thrashr888/alchemy/releases/tag/$TAG"
+phase "Done. Released $TAG -- https://github.com/thrashr888/alchemy/releases/tag/$TAG"
 echo "    (edit the notes on GitHub if you want more than the auto-generated changelog.)"
