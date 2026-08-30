@@ -182,6 +182,7 @@ export function GrowPane() {
   const indexNote = notes.find((nt) => nt.title === "Notebook index");
   const makeIndex = () => {
     if (!currentId) return;
+    const refreshing = !!indexNote;
     setIndexBusy(true);
     api
       .generateWikiIndex(currentId)
@@ -189,7 +190,17 @@ export function GrowPane() {
         useStore.setState((st) => ({
           notes: [note, ...st.notes.filter((x) => x.id !== note.id)],
         }));
-        useStore.getState().openInReader({ type: "note", id: note.id });
+        const st = useStore.getState();
+        // Say what happened — a refresh rewrites in place, which is
+        // otherwise invisible — and don't stack a duplicate reader entry
+        // when the index is already the open document.
+        st.pushToast(
+          "success",
+          refreshing ? "Notebook index refreshed" : "Notebook index created",
+        );
+        const viewing =
+          st.reader.open && st.reader.history[st.reader.index]?.id === note.id;
+        if (!viewing) st.openInReader({ type: "note", id: note.id });
       })
       .catch(() => undefined)
       .finally(() => setIndexBusy(false));

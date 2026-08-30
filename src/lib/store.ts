@@ -3271,6 +3271,7 @@ useStore.subscribe((s, prev) => {
     s.currentId === prev.currentId &&
     s.ledgerOpen === prev.ledgerOpen &&
     s.galleryOpen === prev.galleryOpen &&
+    s.growOpen === prev.growOpen &&
     s.reader === prev.reader &&
     s.homeSection === prev.homeSection &&
     s.homeChat.threadId === prev.homeChat.threadId
