@@ -9,6 +9,7 @@ import type {
   Citation,
   AiConfig,
   BuildInfo,
+  GrowthProposal,
   ReleaseNote,
   ChatConfig,
   CloudFolder,
@@ -519,6 +520,9 @@ export const api = {
   releaseHistory: () => run(query<ReleaseNote[]>("release_history", {})),
   /** Source ids ever cited in retrieval traces — the "uncited" facet. */
   citedSourceIds: () => run(query<string[]>("cited_source_ids", {})),
+  /** The growth tray: frontier links ranked against standing queries. */
+  growthProposals: (notebookId: string) =>
+    run(query<GrowthProposal[]>("growth_proposals", { notebookId })),
   convertNoteToSource: (noteId: string) =>
     run(ai<Source>("convert_note_to_source", { noteId })),
   generateArtifact: (

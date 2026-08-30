@@ -254,6 +254,19 @@ export interface BuildInfo {
   profile: string;
 }
 
+/** One growth proposal (RFC-living-notebook Pillar 2): a URL the
+ *  notebook's own sources keep pointing at, ranked against standing
+ *  queries mined from thin retrievals. Nothing fetches until Add. */
+export interface GrowthProposal {
+  url: string;
+  /** Best anchor text seen for the link ("" when only bare URLs appear). */
+  anchor: string;
+  mentions: number;
+  sourceCount: number;
+  matchedQuery: string;
+  score: number;
+}
+
 /** One GitHub release, read live for Settings → About's What's new. */
 export interface ReleaseNote {
   version: string;

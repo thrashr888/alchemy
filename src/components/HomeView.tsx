@@ -823,6 +823,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             ref={askRef}
             value={ask}
             onChange={(e) => setAsk(e.target.value)}
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+            {...({ writingsuggestions: "false" } as Record<string, string>)}
             placeholder={
               chatOpen
                 ? "Ask a follow-up…"

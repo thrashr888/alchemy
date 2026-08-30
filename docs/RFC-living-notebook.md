@@ -130,6 +130,12 @@ A per-notebook **growth agenda**, default-on but budgeted like reports:
   outbound links in web sources, references in PDFs, siblings in watched
   folders, backlinks in Notes/Obsidian. Rank frontier items against the
   standing queries with the existing embedder; propose the top few.
+- **Local tier via Spotlight and cider**: standing queries also run
+  through `filesearch.rs` (mdfind, already ranked and junk-filtered) and
+  the cider integrations, so the frontier includes files already on this
+  Mac and notes/reminders in Apple apps — the sources that need no
+  network consent at all. These proposals rank above web ones: the
+  cheapest fetch is the one that never leaves the machine.
 - **Open-web tier via Firecrawl**: standing queries run through
   `/v2/search` (Research/PDF/Developer categories, domain filters) and
   the Research Index for academic notebooks; accepted proposals scrape
@@ -185,7 +191,12 @@ proves otherwise.
 
 ## Open questions
 
-- Does the proposal tray live in the Sources panel or the Brief?
+- ~~Does the proposal tray live in the Sources panel or the Brief?~~
+  Decided: the tray row lives in the Sources panel, but review graduates
+  from a modal to a center-pane "Grow" surface (a `CenterModeTabs` mode
+  beside Chat/Reader/Gallery/Ledger) once local + web tiers land — a
+  review workflow deserves real estate, and the center pane is where
+  this app puts workflows.
 - Should standing queries be visible/editable (a "what this notebook is
   hungry for" list), or stay implicit from traces?
 - Frontier ranking: embedder-only first — Firecrawl's search already

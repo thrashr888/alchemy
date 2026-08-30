@@ -21,6 +21,7 @@ mod gist;
 mod git;
 mod graph;
 mod grepsearch;
+mod growth;
 mod hygiene;
 mod inference;
 mod ingest;
@@ -492,6 +493,7 @@ pub fn run() {
             commands::release_history,
             commands::cited_source_ids,
             commands::seed_scale_fixture,
+            commands::growth_proposals,
             commands::update_note,
             commands::note_opened,
             commands::convert_note_to_source,

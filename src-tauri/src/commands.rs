@@ -9976,7 +9976,7 @@ pub async fn seed_scale_fixture(
         title: format!("Scale fixture ({total} sources)"),
         created_at: ts,
         updated_at: ts,
-        color: String::new(),
+        color: "#4cb782".into(),
         status: String::new(),
         source_count: 0,
         note_count: 0,
@@ -10055,6 +10055,22 @@ pub async fn seed_scale_fixture(
     e(state.db.insert_sources_bulk(&sources).await)?;
     e(state.db.touch_notebook(&nb.id, ts).await)?;
     Ok(nb.id)
+}
+
+/// The growth tray's contents (docs/RFC-living-notebook.md Pillar 2,
+/// phase 2): outbound links the notebook's own sources keep pointing at,
+/// ranked against standing queries mined from thin retrievals. Computed on
+/// demand from stored content and local traces — no model call, no network;
+/// fetching happens only when the user accepts a proposal.
+#[tauri::command]
+pub async fn growth_proposals(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<Vec<crate::growth::GrowthProposal>, String> {
+    // With content: the frontier lives in the text (list_sources strips it).
+    let sources = e(state.db.sources_with_content(&notebook_id).await)?;
+    let queries = crate::growth::standing_queries(&state.trace_dir, &notebook_id, now());
+    Ok(crate::growth::proposals(&sources, &queries))
 }
 
 #[tauri::command]

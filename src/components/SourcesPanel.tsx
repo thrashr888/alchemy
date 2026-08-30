@@ -35,7 +35,7 @@ import {
   sourceMetaItems,
   sourceOriginItems,
 } from "./SourceMetaModals";
-import type { Source } from "@/lib/types";
+import type { GrowthProposal, Source } from "@/lib/types";
 import {
   ChevronRight,
   FileText,
@@ -91,6 +91,38 @@ function saveFoldersCollapsed(state: Record<string, boolean>) {
 // unreachable keeps reset real backend state, but a kept duplicate or
 // missing file is a viewing preference — the signal itself stays true and
 // agents still see it in the MCP report.
+/** Dismissed growth proposals, per notebook, with a 30-day decay so a
+ *  once-rejected link can earn a second look if it keeps accumulating
+ *  mentions (RFC-living-notebook Pillar 2 — decay stale proposals). */
+function loadGrowthDismissed(notebookId: string | null): Record<string, number> {
+  if (!notebookId) return {};
+  try {
+    const raw = JSON.parse(
+      localStorage.getItem(`growthDismissed:${notebookId}`) ?? "{}",
+    ) as Record<string, number>;
+    const cutoff = Date.now() - 30 * 86_400_000;
+    return Object.fromEntries(
+      Object.entries(raw).filter(([, ts]) => ts > cutoff),
+    );
+  } catch {
+    return {};
+  }
+}
+function saveGrowthDismissed(
+  notebookId: string | null,
+  dismissed: Record<string, number>,
+) {
+  if (!notebookId) return;
+  try {
+    localStorage.setItem(
+      `growthDismissed:${notebookId}`,
+      JSON.stringify(dismissed),
+    );
+  } catch {
+    /* storage full or unavailable — the dismissal just won't stick */
+  }
+}
+
 function loadHygieneKept(notebookId: string | null): Record<string, boolean> {
   if (!notebookId) return {};
   try {
@@ -384,6 +416,45 @@ export function SourcesPanel() {
     }
     return m;
   }, [sources]);
+
+  // Growth tray (RFC-living-notebook Pillar 2): frontier links mined from
+  // the notebook's own sources, loaded once per notebook. Nothing fetches
+  // until the user accepts a proposal.
+  const [growth, setGrowth] = useState<GrowthProposal[]>([]);
+  const [growthOpen, setGrowthOpen] = useState(false);
+  const [growthDismissed, setGrowthDismissed] = useState<
+    Record<string, number>
+  >({});
+  const addSourceUrl = useStore((s) => s.addSourceUrl);
+  useEffect(() => {
+    setGrowth([]);
+    setGrowthDismissed(loadGrowthDismissed(currentId));
+    if (!currentId) return;
+    let stale = false;
+    api
+      .growthProposals(currentId)
+      .then((props) => {
+        if (!stale) setGrowth(props);
+      })
+      .catch(() => undefined);
+    return () => {
+      stale = true;
+    };
+  }, [currentId]);
+  const existingUrls = useMemo(
+    () => new Set(sources.map((s) => s.url).filter(Boolean)),
+    [sources],
+  );
+  const growthVisible = growth.filter(
+    (p) => !growthDismissed[p.url] && !existingUrls.has(p.url),
+  );
+  const dismissGrowth = (url: string) => {
+    setGrowthDismissed((m) => {
+      const next = { ...m, [url]: Date.now() };
+      saveGrowthDismissed(currentId, next);
+      return next;
+    });
+  };
 
   // Search-first navigation (RFC-living-notebook Pillar 1): past a handful
   // of sources the filter box is the way in. Facets narrow by kind, tag,
@@ -779,7 +850,9 @@ export function SourcesPanel() {
             <div
               className={cn(
                 "h-full rounded-full transition-all",
-                pct > 90 && "bg-destructive",
+                // Fallback fill: a notebook with no color (imports, fixtures)
+                // must still draw a bar — primary, not transparent.
+                pct > 90 ? "bg-destructive" : !notebookColor && "bg-primary",
               )}
               style={{
                 width: `${Math.max(2, pct)}%`,
@@ -805,6 +878,11 @@ export function SourcesPanel() {
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Filter sources…"
               aria-label="Filter sources"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              {...({ writingsuggestions: "false" } as Record<string, string>)}
               className="w-full rounded-md border border-input bg-transparent py-1 pl-7 pr-6 text-caption text-foreground outline-none placeholder:text-subtle-foreground focus:border-ring/60"
             />
             {query && (
@@ -975,6 +1053,26 @@ export function SourcesPanel() {
                 />
               </div>
             </div>
+            {/* Growth tray (RFC-living-notebook Pillar 2): related pages
+                the notebook's own sources point at. Review to add — no
+                unattended fetches, ever. */}
+            {growthVisible.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setGrowthOpen(true)}
+                className="mb-1 flex w-full items-center gap-2 rounded-md border border-border bg-surface-2/60 px-2 py-1.5 text-left hover:bg-surface-2"
+              >
+                <Globe className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate text-caption text-foreground">
+                  {growthVisible.length === 1
+                    ? "1 related page found in your sources"
+                    : `${growthVisible.length} related pages found in your sources`}
+                </span>
+                <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
+                  Review
+                </span>
+              </button>
+            )}
             {/* Hygiene proposals (RFC-source-hygiene): flagged, never
                 auto-removed — the review modal decides. */}
             {proposals.length > 0 && (
@@ -1521,6 +1619,68 @@ export function SourcesPanel() {
         noteEdit={noteEdit}
         setNoteEdit={setNoteEdit}
       />
+
+      {/* Growth review (RFC-living-notebook Pillar 2): the consent tier —
+          every fetch of a new origin is an explicit Add here. */}
+      <Modal
+        open={growthOpen}
+        onClose={() => setGrowthOpen(false)}
+        title="Grow this notebook"
+        width="max-w-md"
+      >
+        <div className="flex flex-col gap-2">
+          <p className="text-micro leading-relaxed text-subtle-foreground">
+            Pages your sources keep pointing at
+            {growthVisible.some((p) => p.matchedQuery)
+              ? ", ranked against questions this notebook answered thinly"
+              : ""}
+            . Nothing is fetched unless you add it.
+          </p>
+          {growthVisible.length === 0 ? (
+            <EmptyState title="Nothing to add right now" />
+          ) : (
+            growthVisible.map((p) => (
+              <div
+                key={p.url}
+                className="flex items-center gap-2 rounded-md border border-border px-2.5 py-2"
+              >
+                <div className="min-w-0 flex-1">
+                  <div
+                    className="truncate text-body text-foreground"
+                    title={p.url}
+                  >
+                    {p.anchor || p.url.replace(/^https?:\/\//, "")}
+                  </div>
+                  <div className="truncate text-micro text-muted-foreground">
+                    {hostname(p.url)} · seen {p.mentions}×
+                    {p.sourceCount > 1 ? ` in ${p.sourceCount} sources` : ""}
+                    {p.matchedQuery && (
+                      <> · asked: “{p.matchedQuery}”</>
+                    )}
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    dismissGrowth(p.url);
+                    void addSourceUrl(p.url);
+                  }}
+                  title="Fetch this page and add it as a source"
+                >
+                  Add
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => dismissGrowth(p.url)}
+                  title="Hide this proposal for 30 days"
+                >
+                  Dismiss
+                </Button>
+              </div>
+            ))
+          )}
+        </div>
+      </Modal>
 
       {/* Hygiene review (RFC-source-hygiene): every removal is a human
           decision — per-item Keep / Remove, nothing automatic. */}

@@ -1,0 +1,292 @@
+//! Proactive growth (docs/RFC-living-notebook.md Pillar 2, phase 2): the
+//! frontier already inside the notebook. Standing queries come from
+//! retrieval traces that returned thin evidence; candidates are outbound
+//! links found in existing sources' extracted text; ranking is
+//! deterministic — mention count, spread across sources, and overlap with
+//! the standing queries' tokens. No model call, no network: the proposal
+//! tray is the only thing that ever fetches, and only on an explicit Add.
+
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+
+use crate::models::Source;
+
+/// One proposed addition: a URL the notebook's own sources keep pointing at.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrowthProposal {
+    pub url: String,
+    /// Best anchor text seen for the link ("" when only bare URLs appear).
+    pub anchor: String,
+    /// Total times the URL appears across the notebook.
+    pub mentions: u32,
+    /// Distinct sources that point at it.
+    pub source_count: u32,
+    /// The standing query it best matches ("" when ranked on spread alone).
+    pub matched_query: String,
+    pub score: f32,
+}
+
+/// A retrieval that came back thin: the notebook was asked and had little
+/// to say. Recent ones become standing queries the frontier ranks against.
+const THIN_CITATIONS: usize = 3;
+const QUERY_WINDOW_MS: i64 = 45 * 86_400_000;
+const MAX_QUERIES: usize = 8;
+
+pub fn standing_queries(trace_dir: &Path, notebook_id: &str, now_ms: i64) -> Vec<String> {
+    let mut out: Vec<(i64, String)> = Vec::new();
+    let mut seen = HashSet::new();
+    for file in ["retrieval.jsonl", "retrieval.1.jsonl"] {
+        let Ok(text) = std::fs::read_to_string(trace_dir.join(file)) else {
+            continue;
+        };
+        for line in text.lines() {
+            let Ok(rec) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if rec.get("notebookId").and_then(|v| v.as_str()) != Some(notebook_id) {
+                continue;
+            }
+            let ts = rec.get("ts").and_then(|v| v.as_i64()).unwrap_or(0);
+            if now_ms - ts > QUERY_WINDOW_MS {
+                continue;
+            }
+            let cites = rec
+                .get("citations")
+                .and_then(|c| c.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            if cites >= THIN_CITATIONS {
+                continue;
+            }
+            let Some(query) = rec.get("query").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let key = query.trim().to_lowercase();
+            if key.len() < 8 || !seen.insert(key) {
+                continue;
+            }
+            out.push((ts, query.trim().to_string()));
+        }
+    }
+    // Most recent hunger first.
+    out.sort_by_key(|(ts, _)| -*ts);
+    out.into_iter().take(MAX_QUERIES).map(|(_, q)| q).collect()
+}
+
+/// Outbound links in extracted text: markdown `[anchor](https://…)` plus
+/// bare URLs. Returned as (normalized url, anchor).
+fn extract_links(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while let Some(pos) = text[i..].find("http") {
+        let start = i + pos;
+        let rest = &text[start..];
+        if !rest.starts_with("http://") && !rest.starts_with("https://") {
+            i = start + 4;
+            continue;
+        }
+        let end = rest
+            .find(|c: char| c.is_whitespace() || c == ')' || c == '"' || c == '<' || c == '\'')
+            .unwrap_or(rest.len());
+        let raw = rest[..end].trim_end_matches(['.', ',', ';', ']', '}']);
+        // Markdown anchor: the "](url" shape puts "[anchor]" just before.
+        let anchor = if start >= 2 && &bytes[start - 2..start] == b"](" {
+            text[..start - 2]
+                .rfind('[')
+                .map(|open| text[open + 1..start - 2].to_string())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        if let Some(url) = normalize_url(raw) {
+            out.push((url, anchor));
+        }
+        i = start + end.max(1);
+    }
+    out
+}
+
+/// Strip fragments and tracking params; drop obvious non-documents. None
+/// means "not worth proposing" (media files, localhost, too short).
+fn normalize_url(raw: &str) -> Option<String> {
+    let no_frag = raw.split('#').next().unwrap_or(raw);
+    if no_frag.len() < 12 || no_frag.contains("localhost") || no_frag.contains("127.0.0.1") {
+        return None;
+    }
+    // Keep the query string minus tracking params.
+    let (base, query) = no_frag.split_once('?').unwrap_or((no_frag, ""));
+    const SKIP_EXT: [&str; 8] = [
+        ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".css", ".js",
+    ];
+    let path = base.to_lowercase();
+    if SKIP_EXT.iter().any(|ext| path.ends_with(ext)) {
+        return None;
+    }
+    let kept: Vec<&str> = query
+        .split('&')
+        .filter(|kv| !kv.is_empty() && !kv.starts_with("utm_") && !kv.starts_with("ref="))
+        .collect();
+    let mut url = base.trim_end_matches('/').to_string();
+    if !kept.is_empty() {
+        url.push('?');
+        url.push_str(&kept.join("&"));
+    }
+    Some(url)
+}
+
+fn tokens(text: &str) -> HashSet<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() > 3)
+        .map(|w| w.to_string())
+        .collect()
+}
+
+/// Rank the notebook's outbound links against its standing queries.
+pub fn proposals(sources: &[Source], queries: &[String]) -> Vec<GrowthProposal> {
+    let existing: HashSet<String> = sources
+        .iter()
+        .filter(|s| !s.url.is_empty())
+        .filter_map(|s| normalize_url(&s.url))
+        .collect();
+    struct Cand {
+        anchor: String,
+        mentions: u32,
+        sources: HashSet<String>,
+    }
+    let mut cands: HashMap<String, Cand> = HashMap::new();
+    for s in sources {
+        if s.content.is_empty() {
+            continue;
+        }
+        for (url, anchor) in extract_links(&s.content) {
+            if existing.contains(&url) {
+                continue;
+            }
+            // A source linking to itself under a variant URL is noise.
+            if !s.url.is_empty() && url.contains(s.url.trim_end_matches('/')) {
+                continue;
+            }
+            let c = cands.entry(url).or_insert(Cand {
+                anchor: String::new(),
+                mentions: 0,
+                sources: HashSet::new(),
+            });
+            c.mentions += 1;
+            c.sources.insert(s.id.clone());
+            if anchor.len() > c.anchor.len() && anchor.len() < 120 {
+                c.anchor = anchor;
+            }
+        }
+    }
+    let query_tokens: Vec<(String, HashSet<String>)> =
+        queries.iter().map(|q| (q.clone(), tokens(q))).collect();
+    let mut out: Vec<GrowthProposal> = cands
+        .into_iter()
+        .map(|(url, c)| {
+            let cand_tokens = tokens(&format!("{} {}", c.anchor, url));
+            let (matched_query, overlap) = query_tokens
+                .iter()
+                .map(|(q, qt)| (q.clone(), qt.intersection(&cand_tokens).count()))
+                .max_by_key(|(_, n)| *n)
+                .filter(|(_, n)| *n > 0)
+                .unwrap_or_default();
+            let score = c.mentions as f32 + 2.0 * c.sources.len() as f32 + 3.0 * overlap as f32;
+            GrowthProposal {
+                url,
+                anchor: c.anchor,
+                mentions: c.mentions,
+                source_count: c.sources.len() as u32,
+                matched_query,
+                score,
+            }
+        })
+        // A link one source mentions once, matching nothing, is not a
+        // signal — 1 mention + 1 source scores exactly 3.0 and stays out.
+        .filter(|p| p.score > 3.0)
+        .collect();
+    out.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.url.cmp(&b.url)));
+    out.truncate(12);
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn src(id: &str, url: &str, content: &str) -> Source {
+        Source {
+            id: id.into(),
+            notebook_id: "nb".into(),
+            title: id.into(),
+            source_type: "url".into(),
+            url: url.into(),
+            content: content.into(),
+            char_count: content.len() as i64,
+            chunk_count: 0,
+            created_at: 0,
+            status: "ready".into(),
+            error: String::new(),
+            parent_id: String::new(),
+            mtime: 0,
+            author: String::new(),
+            image_url: String::new(),
+            tags: String::new(),
+            note: String::new(),
+            fetched_at: 0,
+            fetch_failures: 0,
+        }
+    }
+
+    #[test]
+    fn frontier_ranks_spread_and_query_overlap() {
+        let sources = vec![
+            src(
+                "a",
+                "https://one.test/a",
+                "See [Rust async book](https://rust-lang.github.io/async-book) and \
+                 https://tokio.rs/tutorial for background.",
+            ),
+            src(
+                "b",
+                "https://two.test/b",
+                "The async book (https://rust-lang.github.io/async-book) again.",
+            ),
+        ];
+        let queries = vec!["how does async cancellation work".to_string()];
+        let props = proposals(&sources, &queries);
+        assert_eq!(props[0].url, "https://rust-lang.github.io/async-book");
+        assert_eq!(props[0].source_count, 2);
+        assert_eq!(props[0].matched_query, queries[0]);
+        // The single-mention tokio link scores below the threshold bar
+        // unless boosted by a query match ("tutorial" ∉ query tokens).
+        assert!(props.iter().all(|p| p.url != "https://tokio.rs/tutorial"));
+    }
+
+    #[test]
+    fn existing_sources_and_media_links_are_excluded() {
+        let sources = vec![
+            src(
+                "a",
+                "https://one.test/a",
+                "Links: https://two.test/b https://two.test/b \
+                 https://img.test/pic.png?utm_source=x",
+            ),
+            src("b", "https://two.test/b", ""),
+        ];
+        let props = proposals(&sources, &[]);
+        assert!(props.iter().all(|p| p.url != "https://two.test/b"));
+        assert!(props.iter().all(|p| !p.url.contains("pic.png")));
+    }
+
+    #[test]
+    fn normalize_strips_fragments_and_tracking() {
+        assert_eq!(
+            normalize_url("https://a.test/page?utm_source=tw&x=1#sec"),
+            Some("https://a.test/page?x=1".into())
+        );
+        assert_eq!(normalize_url("https://a.test/logo.svg"), None);
+    }
+}
