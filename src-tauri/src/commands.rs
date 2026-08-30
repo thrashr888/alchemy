@@ -10079,13 +10079,25 @@ pub async fn growth_proposals(
     notebook_id: String,
 ) -> Result<GrowthOverview, String> {
     // With content: the frontier lives in the text (list_sources strips it).
+    // The Spotlight tier is NOT here — mdfind subprocesses are the slow
+    // part, so the pane loads it separately (growth_local) and this call
+    // returns as fast as a text scan.
     let sources = e(state.db.sources_with_content(&notebook_id).await)?;
     let queries = crate::growth::standing_queries(&state.trace_dir, &notebook_id, now());
-    // Local hits lead — Spotlight matches for the notebook's open questions
-    // cost nothing to add — then the web frontier mined from the text.
-    let mut proposals = crate::growth::local_proposals(&sources, &queries).await;
-    proposals.extend(crate::growth::proposals(&sources, &queries));
+    let proposals = crate::growth::proposals(&sources, &queries);
     Ok(GrowthOverview { queries, proposals })
+}
+
+/// The Spotlight tier alone — mdfind subprocesses make it the slow section,
+/// so the Grow pane fills it in asynchronously.
+#[tauri::command]
+pub async fn growth_local(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<Vec<crate::growth::GrowthProposal>, String> {
+    let sources = e(state.db.list_sources(&notebook_id).await)?;
+    let queries = crate::growth::standing_queries(&state.trace_dir, &notebook_id, now());
+    Ok(crate::growth::local_proposals(&sources, &queries).await)
 }
 
 /// The open-web tier, run only from the Grow pane after the user enables
@@ -10098,7 +10110,7 @@ pub async fn growth_web_search(
 ) -> Result<crate::growth::GrowthWebSearch, String> {
     let sources = e(state.db.list_sources(&notebook_id).await)?;
     let queries = crate::growth::standing_queries(&state.trace_dir, &notebook_id, now());
-    Ok(crate::growth::web_search(&state.trace_dir, &sources, &queries, now()).await)
+    Ok(crate::growth::web_search(&state.trace_dir, &notebook_id, &sources, &queries, now()).await)
 }
 
 #[tauri::command]

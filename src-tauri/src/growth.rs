@@ -13,7 +13,7 @@ use crate::models::Source;
 
 /// One proposed addition: a URL the notebook's own sources keep pointing
 /// at, or a local file Spotlight matched against a standing query.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GrowthProposal {
     /// "web" (url points at the network) | "local" (url is an on-disk path).
@@ -295,6 +295,58 @@ pub struct GrowthWebSearch {
 pub const WEB_CREDIT_CAP: u32 = 800;
 const CREDITS_PER_SEARCH: u32 = 2;
 const GROWTH_TRACE: &str = "growth.jsonl";
+const WEB_CACHE: &str = "growth-web-cache.json";
+
+/// One Firecrawl round per notebook per day is plenty: standing queries
+/// move slowly, and reopening the pane must not spend credits. The cache
+/// keys on the query set too, so new hunger busts it early.
+fn day_of(now_ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(now_ms)
+        .unwrap_or_default()
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+fn read_web_cache(trace_dir: &Path) -> serde_json::Value {
+    std::fs::read_to_string(trace_dir.join(WEB_CACHE))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+fn cached_web(
+    trace_dir: &Path,
+    notebook_id: &str,
+    queries: &[String],
+    now_ms: i64,
+) -> Option<Vec<GrowthProposal>> {
+    let cache = read_web_cache(trace_dir);
+    let entry = cache.get(notebook_id)?;
+    if entry.get("day")?.as_str()? != day_of(now_ms) {
+        return None;
+    }
+    if entry.get("key")?.as_str()? != queries.join("\n") {
+        return None;
+    }
+    serde_json::from_value(entry.get("proposals")?.clone()).ok()
+}
+
+fn store_web_cache(
+    trace_dir: &Path,
+    notebook_id: &str,
+    queries: &[String],
+    proposals: &[GrowthProposal],
+    now_ms: i64,
+) {
+    let mut cache = read_web_cache(trace_dir);
+    cache[notebook_id] = serde_json::json!({
+        "day": day_of(now_ms),
+        "key": queries.join("\n"),
+        "proposals": proposals,
+    });
+    let _ = std::fs::create_dir_all(trace_dir);
+    let _ = std::fs::write(trace_dir.join(WEB_CACHE), cache.to_string());
+}
 
 pub fn credits_this_month(trace_dir: &Path, now_ms: i64) -> u32 {
     use chrono::Datelike;
@@ -318,11 +370,19 @@ pub fn credits_this_month(trace_dir: &Path, now_ms: i64) -> u32 {
 
 pub async fn web_search(
     trace_dir: &Path,
+    notebook_id: &str,
     sources: &[Source],
     queries: &[String],
     now_ms: i64,
 ) -> GrowthWebSearch {
     let mut spent = credits_this_month(trace_dir, now_ms);
+    if let Some(cached) = cached_web(trace_dir, notebook_id, queries, now_ms) {
+        return GrowthWebSearch {
+            proposals: cached,
+            credits_this_month: spent,
+            capped: false,
+        };
+    }
     if spent >= WEB_CREDIT_CAP {
         return GrowthWebSearch {
             proposals: Vec::new(),
@@ -399,6 +459,7 @@ pub async fn web_search(
             });
         }
     }
+    store_web_cache(trace_dir, notebook_id, queries, &out, now_ms);
     GrowthWebSearch {
         proposals: out,
         credits_this_month: spent,

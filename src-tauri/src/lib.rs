@@ -495,6 +495,7 @@ pub fn run() {
             commands::seed_scale_fixture,
             commands::growth_proposals,
             commands::growth_web_search,
+            commands::growth_local,
             commands::live_view_back,
             commands::live_view_forward,
             commands::live_view_url,

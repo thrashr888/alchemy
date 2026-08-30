@@ -10,6 +10,7 @@ import type {
   AiConfig,
   BuildInfo,
   GrowthOverview,
+  GrowthProposal,
   GrowthWebSearch,
   ReleaseNote,
   ChatConfig,
@@ -528,6 +529,9 @@ export const api = {
   /** The Grow surface: standing queries + the free tiers' proposals. */
   growthProposals: (notebookId: string) =>
     run(query<GrowthOverview>("growth_proposals", { notebookId })),
+  /** The Spotlight tier — mdfind is the slow part, loaded separately. */
+  growthLocal: (notebookId: string) =>
+    run(query<GrowthProposal[]>("growth_local", { notebookId })),
   /** The open-web tier — explicit, per-notebook opt-in (Firecrawl). */
   growthWebSearch: (notebookId: string) =>
     run(slow<GrowthWebSearch>("growth_web_search", { notebookId })),

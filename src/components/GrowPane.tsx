@@ -68,6 +68,9 @@ export function GrowPane() {
 
   const [queries, setQueries] = useState<string[]>([]);
   const [proposals, setProposals] = useState<GrowthProposal[] | null>(null);
+  // The Spotlight tier arrives on its own clock — mdfind subprocesses are
+  // the slow part, so the section fills in async instead of gating the pane.
+  const [localTier, setLocalTier] = useState<GrowthProposal[] | null>(null);
   const [dismissed, setDismissed] = useState<Record<string, number>>({});
   // The open-web tier: per-notebook opt-in; results and meter arrive
   // together. null = not run this visit.
@@ -96,6 +99,13 @@ export function GrowPane() {
         setProposals(overview.proposals);
       })
       .catch(() => setProposals([]));
+    setLocalTier(null);
+    api
+      .growthLocal(currentId)
+      .then((hits) => {
+        if (!stale) setLocalTier(hits);
+      })
+      .catch(() => setLocalTier([]));
     return () => {
       stale = true;
     };
@@ -140,7 +150,7 @@ export function GrowPane() {
     else void addSourceUrl(p.url);
   };
 
-  const locals = visible(proposals ?? []).filter((p) => p.kind === "local");
+  const locals = visible(localTier ?? []);
   const mined = visible(proposals ?? []).filter((p) => p.kind === "web");
   const found = visible(web?.proposals ?? []);
 
@@ -206,6 +216,7 @@ export function GrowPane() {
     title: string,
     hint: string,
     items: GrowthProposal[],
+    busy = false,
   ) => (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
@@ -215,7 +226,11 @@ export function GrowPane() {
         </span>
         <span className="text-caption text-subtle-foreground">{hint}</span>
       </div>
-      {items.length === 0 ? (
+      {busy ? (
+        <div className="flex items-center gap-2 px-1 py-2 text-caption text-muted-foreground">
+          <Spinner className="h-3.5 w-3.5" /> Searching this Mac…
+        </div>
+      ) : items.length === 0 ? (
         <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption text-subtle-foreground">
           Nothing right now.
         </div>
@@ -269,6 +284,7 @@ export function GrowPane() {
                 "On this Mac",
                 "Spotlight matches for the questions above",
                 locals,
+                localTier === null && queries.length > 0,
               )}
               {section(
                 <Globe className="h-3.5 w-3.5 text-muted-foreground" />,
@@ -289,6 +305,23 @@ export function GrowPane() {
                     <span className="ml-auto text-caption text-subtle-foreground">
                       {web.credits} of 1,000 free credits used this month
                     </span>
+                  )}
+                  {webOn && (
+                    <button
+                      type="button"
+                      className={
+                        (web ? "" : "ml-auto ") +
+                        "text-caption text-subtle-foreground hover:text-foreground hover:underline"
+                      }
+                      onClick={() => {
+                        setWebSearchEnabled(currentId, false);
+                        setWebOn(false);
+                        setWeb(null);
+                      }}
+                      title="Stop sending this notebook's questions to Firecrawl"
+                    >
+                      Turn off
+                    </button>
                   )}
                 </div>
                 {queries.length === 0 ? (

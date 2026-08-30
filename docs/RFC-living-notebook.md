@@ -52,6 +52,18 @@ agent-driven imports, registry for entities) already lives here.
 
 ## Prior art & outside ingredients (researched)
 
+### WikiSkill (arXiv:2608.27454) — the loop, validated
+
+WikiSkill separates raw execution experience, accumulated knowledge, and
+executable skills, continuously consolidating experience into a wiki;
+ablations show the persistent wiki is what makes skill evolution work,
+and it lets small models beat much larger ones. That is this RFC's loop
+with benchmarks behind it: retrieval traces are the raw experience,
+standing queries and gists the accumulated knowledge, and Pillar 3's
+generated wiki pages the consolidated layer the next retrieval builds
+on. It argues for consolidation being *continuous* (night shift), not
+on-demand only.
+
 ### Firecrawl — the frontier fetcher we don't have to build
 
 Verified against docs.firecrawl.dev and the pricing page:
