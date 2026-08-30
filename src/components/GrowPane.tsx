@@ -11,8 +11,7 @@ import {
   webSearchEnabled,
 } from "@/lib/growth";
 import type { GrowthProposal, RetireProposal } from "@/lib/types";
-import { Button, EmptyState, LoadingState, Spinner } from "./ui";
-import { Pill } from "./settings/SettingsTabs";
+import { Button, EmptyState, LoadingState, Spinner, Switch } from "./ui";
 import { Favicon } from "./SourcesPanel";
 import {
   AlertCircle,
@@ -350,29 +349,17 @@ export function GrowPane() {
                       {web.credits} of 1,000 free credits used this month
                     </span>
                   )}
-                  <div className={(web ? "" : "ml-auto ") + "flex gap-1"}>
-                    <Pill
-                      active={!webOn}
-                      onClick={() => {
-                        setWebSearchEnabled(currentId, false);
-                        setWebOn(false);
-                        setWeb(null);
-                      }}
-                    >
-                      Off
-                    </Pill>
-                    <Pill
-                      active={webOn}
-                      onClick={() => {
-                        if (webOn || !currentId) return;
-                        setWebSearchEnabled(currentId, true);
-                        setWebOn(true);
-                        runWebSearch(currentId);
-                      }}
-                    >
-                      On
-                    </Pill>
-                  </div>
+                  <Switch
+                    className={web ? "" : "ml-auto"}
+                    checked={webOn}
+                    onChange={(on) => {
+                      if (!currentId) return;
+                      setWebSearchEnabled(currentId, on);
+                      setWebOn(on);
+                      if (on) runWebSearch(currentId);
+                      else setWeb(null);
+                    }}
+                  />
                 </div>
                 {queries.length === 0 ? (
                   <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption text-subtle-foreground">
