@@ -7,6 +7,8 @@ import type { ActivityStats, ModelStat } from "@/lib/types";
 import {
   BookOpen,
   CalendarDays,
+  NotebookText,
+  PenLine,
   Clock,
   Flame,
   Library,
@@ -451,31 +453,44 @@ export function ActivityTab() {
 
       <div className="grid grid-cols-4 gap-2">
         <Tile
-          label="Messages"
-          value={compact.format(ranged.messages)}
-          icon={MessageSquare}
+          label="Notebooks"
+          value={compact.format(stats.totalNotebooks)}
+          icon={NotebookText}
         />
         <Tile
           label="Sources"
           value={compact.format(ranged.sources)}
           icon={Library}
         />
-        {sourceWords >= 1000 && (
-          <Tile
-            label="Words in sources"
-            value={`~${compact.format(sourceWords)}`}
-            icon={BookOpen}
-          />
-        )}
+        <Tile
+          label="Words in sources"
+          value={`~${compact.format(sourceWords)}`}
+          icon={BookOpen}
+        />
         <Tile
           label="Notes"
           value={compact.format(ranged.notes)}
           icon={StickyNote}
         />
         <Tile
+          label="Messages"
+          value={compact.format(ranged.messages)}
+          icon={MessageSquare}
+        />
+        <Tile
           label="Retrievals"
           value={compact.format(ranged.retrievals)}
           icon={Search}
+        />
+        <Tile
+          label="Tokens generated"
+          value={compact.format(stats.tokensGenerated || 0)}
+          icon={Zap}
+        />
+        <Tile
+          label="Words written"
+          value={compact.format(stats.assistantWords)}
+          icon={PenLine}
         />
         <Tile
           label="Active days"
@@ -506,11 +521,6 @@ export function ActivityTab() {
           label="Longest streak"
           value={`${String(stats.longestStreak)}d`}
           icon={Trophy}
-        />
-        <Tile
-          label="Tokens generated"
-          value={compact.format(stats.tokensGenerated || 0)}
-          icon={Zap}
         />
         {/* The spend tile earns its spot only once something actually cost
             money — an eternal $0.00 is the least interesting number here. */}
