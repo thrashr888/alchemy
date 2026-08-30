@@ -11,6 +11,7 @@ import {
   RowMenu,
   useConfirm,
   useHoverCard,
+  useMarquee,
 } from "./ui";
 import { cn, isWebUrl, relativeTime, scrollMemory, shortcutBlocked, urlHost } from "@/lib/utils";
 import { FilterBar } from "./FilterBar";
@@ -350,6 +351,35 @@ export function GalleryPane() {
     ro.observe(scrollerEl);
     return () => ro.disconnect();
   }, [scrollerEl]);
+  // Multi-select, same model as the sources sidebar: the shared "sources"
+  // pick, so a selection made here is the same selection there. Cmd-click
+  // toggles, shift-click ranges, and a rubber-band drag sweeps cards.
+  const picked = useStore((st) => st.picked);
+  const pickedIds = useMemo(
+    () => new Set(picked?.kind === "sources" ? picked.ids : []),
+    [picked],
+  );
+  const pickToggle = useStore((st) => st.pickToggle);
+  const pickRange = useStore((st) => st.pickRange);
+  const pickSet = useStore((st) => st.pickSet);
+  const clearPicked = useStore((st) => st.clearPicked);
+  const refreshSourcesBatch = useStore((st) => st.refreshSourcesBatch);
+  const marqueeBase = useRef<string[]>([]);
+  const { onPointerDown: marqueeDown, marquee, justEnded } = useMarquee({
+    containerRef: scrollerRef,
+    onStart: (additive) => {
+      const pk = useStore.getState().picked;
+      marqueeBase.current = additive && pk?.kind === "sources" ? pk.ids : [];
+    },
+    onSelect: (ids) =>
+      pickSet(
+        "sources",
+        [...new Set([...marqueeBase.current, ...ids])],
+        false,
+      ),
+    onClearBackground: clearPicked,
+  });
+
   const colCount = Math.min(4, Math.max(1, Math.floor((width + 12) / 232)));
   // Shortest-column-first, not round-robin: cards range from a two-line title
   // to a 256px image plus a four-line snippet, so dealing them out in order
@@ -398,6 +428,38 @@ export function GalleryPane() {
 
   // The same actions the Sources panel rows carry, on the card's ⋯ menu —
   // and on plain right-click (RowMenu opens from the nearest .group).
+  /** Batch variants of the card verbs when this card sits in a
+   *  multi-selection — counts in the labels, same as the sidebar. */
+  const batchMenuItems = (ids: string[]): ReturnType<typeof cardMenuItems> => {
+    const count = ids.length;
+    const refreshable = ids.filter(
+      (id) => !!sources.find((x) => x.id === id)?.url,
+    );
+    return [
+      ...(refreshable.length
+        ? [
+            {
+              label: `Refresh ${refreshable.length} sources`,
+              icon: <RefreshCw className="h-3.5 w-3.5" />,
+              onClick: () => void refreshSourcesBatch(refreshable),
+            },
+          ]
+        : []),
+      {
+        label: `Tag ${count} sources…`,
+        icon: <Pencil className="h-3.5 w-3.5" />,
+        onClick: () =>
+          meta.setTagEdit({ ids, title: `${count} sources`, value: "" }),
+      },
+      {
+        label: `Remove ${count} sources…`,
+        icon: <Trash2 className="h-3.5 w-3.5" />,
+        danger: true,
+        onClick: () => void removeSourcesGuarded(ids, confirm),
+      },
+    ];
+  };
+
   const cardMenuItems = (s: Source) => {
     const st = useStore.getState();
     const editable =
@@ -595,6 +657,7 @@ export function GalleryPane() {
       ) : (
         <div
           ref={attachScroller}
+          onPointerDown={marqueeDown}
           onScroll={(e) =>
             scrollMemory.set(scrollKey, e.currentTarget.scrollTop)
           }
@@ -605,28 +668,66 @@ export function GalleryPane() {
             <div className="flex items-start gap-3">
               {columns.map((col, i) => (
                 <div key={i} className="flex min-w-0 flex-1 flex-col gap-3">
-                  {col.map((s) =>
-                    GROUP_OF[s.sourceType] === "folders" ? (
-                      <FolderCard
-                        key={s.id}
-                        source={s}
-                        childrenSources={childrenIndex.get(s.id) ?? []}
-                        onOpen={() => setFolderId(s.id)}
-                        menuItems={cardMenuItems(s)}
-                        onHover={(e) => showCard(e, sourceHoverData(s))}
-                        onLeave={hideCard}
-                      />
-                    ) : (
-                      <GalleryCard
-                        key={s.id}
-                        source={s}
-                        snippet={snippets[s.id]}
-                        menuItems={cardMenuItems(s)}
-                        onHover={(e) => showCard(e, sourceHoverData(s))}
-                        onLeave={hideCard}
-                      />
-                    ),
-                  )}
+                  {col.map((s) => (
+                    <div
+                      key={s.id}
+                      data-pick-id={s.id}
+                      className={cn(
+                        "rounded-lg",
+                        pickedIds.has(s.id) &&
+                          "ring-1 ring-primary ring-offset-1 ring-offset-background",
+                      )}
+                      onClickCapture={(e) => {
+                        // A rubber-band drag ends in a click — that click
+                        // is the drag's tail, not an open.
+                        if (justEnded()) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          return;
+                        }
+                        if (e.metaKey || e.ctrlKey) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          pickToggle("sources", s.id);
+                        } else if (e.shiftKey) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          pickRange(
+                            "sources",
+                            cards.map((c) => c.id),
+                            s.id,
+                          );
+                        }
+                      }}
+                    >
+                      {GROUP_OF[s.sourceType] === "folders" ? (
+                        <FolderCard
+                          source={s}
+                          childrenSources={childrenIndex.get(s.id) ?? []}
+                          onOpen={() => setFolderId(s.id)}
+                          menuItems={
+                            pickedIds.has(s.id) && pickedIds.size > 1
+                              ? batchMenuItems([...pickedIds])
+                              : cardMenuItems(s)
+                          }
+                          onHover={(e) => showCard(e, sourceHoverData(s))}
+                          onLeave={hideCard}
+                        />
+                      ) : (
+                        <GalleryCard
+                          source={s}
+                          snippet={snippets[s.id]}
+                          menuItems={
+                            pickedIds.has(s.id) && pickedIds.size > 1
+                              ? batchMenuItems([...pickedIds])
+                              : cardMenuItems(s)
+                          }
+                          onHover={(e) => showCard(e, sourceHoverData(s))}
+                          onLeave={hideCard}
+                        />
+                      )}
+                    </div>
+                  ))}
                 </div>
               ))}
             </div>
@@ -638,6 +739,7 @@ export function GalleryPane() {
         sourceTitle={attaching?.title ?? ""}
         onClose={() => setAttaching(null)}
       />
+      {marquee}
       {confirmDialog}
       {meta.modals}
       {hoverCard}

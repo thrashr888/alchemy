@@ -685,14 +685,17 @@ export const useStore = create<AppState>((set, get) => {
         }
       }
       void api.rebuildAppMenu();
-      // Quiet update check, once per launch, main window only.
+      // Quiet update check on launch, then daily — the app lives open for
+      // days at a time, and a launch-only check never sees those releases.
       if (getCurrentWebview().label === "main" && autoUpdateEnabled()) {
-        setTimeout(() => {
+        const quietCheck = () => {
           // The title-bar UpdateBadge is the notice — it stays put, and
           // clicking it lands on Settings → General with the check already
           // run. No toast: a transient nag on top of a persistent badge.
           void checkForUpdatesQuietly((v) => set({ updateAvailable: v }));
-        }, 4000);
+        };
+        setTimeout(quietCheck, 4000);
+        setInterval(quietCheck, 24 * 60 * 60 * 1000);
       }
     },
 

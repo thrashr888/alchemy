@@ -81,6 +81,57 @@ const TINT_DISCLOSURE: Tint = {
   icon: "text-muted-foreground",
 };
 
+/** Wiki entity pages are numerous by design — one per registry entity —
+ *  and would drown the handful of notes a person actually wrote. The
+ *  "Notebook index" note stays in the main list as the wiki's front door;
+ *  its entity pages live behind this fold. */
+const isEntityPage = (n: Note) => n.title.startsWith("Entity: ");
+
+function WikiNotes({
+  notes,
+  onOpen,
+}: {
+  notes: Note[];
+  onOpen: (n: Note) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  if (notes.length === 0) return null;
+  return (
+    <div className="mt-2 border-t border-border pt-2">
+      <button
+        className="flex w-full items-center gap-1.5 rounded px-1 py-1 text-micro font-medium text-subtle-foreground hover:text-foreground transition-colors"
+        onClick={() => setOpen((o) => !o)}
+      >
+        {open ? (
+          <ChevronUp className="h-3 w-3" />
+        ) : (
+          <ChevronDown className="h-3 w-3" />
+        )}
+        Wiki pages ({notes.length})
+      </button>
+      {open && (
+        <div className="mt-1 flex flex-col gap-1.5">
+          {notes.map((n) => (
+            <button
+              type="button"
+              key={n.id}
+              onClick={() => onOpen(n)}
+              className="group w-full rounded-md border border-border bg-surface-2/40 px-3 py-2 text-left transition-colors hover:border-border-strong"
+            >
+              <span className="block truncate text-caption font-medium text-foreground">
+                {n.title.replace(/^Entity: /, "")}
+              </span>
+              <span className="text-micro text-subtle-foreground">
+                {relativeTime(n.updatedAt)} · linked from the notebook index
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Notes the curator archived: out of retrieval, collapsed but never gone.
  *  Opening one still works; editing it revives it (see RFC-note-curator). */
 function ArchivedNotes({
@@ -172,7 +223,7 @@ export function StudioPanel() {
     [picked],
   );
   const visibleNoteIds = notes
-    .filter((n) => n.status !== "archived")
+    .filter((n) => n.status !== "archived" && !isEntityPage(n))
     .map((n) => n.id);
   const visibleNoteIdsRef = useRef(visibleNoteIds);
   visibleNoteIdsRef.current = visibleNoteIds;
@@ -581,7 +632,9 @@ export function StudioPanel() {
             />
           ) : (
             <div className="flex flex-col gap-1.5">
-              {notes.filter((n) => n.status !== "archived").map((n) => (
+              {notes
+                .filter((n) => n.status !== "archived" && !isEntityPage(n))
+                .map((n) => (
                 <div
                   key={n.id}
                   data-pick-id={n.id}
@@ -733,6 +786,12 @@ export function StudioPanel() {
               ))}
             </div>
           )}
+          <WikiNotes
+            notes={notes.filter(
+              (n) => n.status !== "archived" && isEntityPage(n),
+            )}
+            onOpen={openNoteCard}
+          />
           <ArchivedNotes
             notes={notes.filter((n) => n.status === "archived")}
             onOpen={openNoteCard}
