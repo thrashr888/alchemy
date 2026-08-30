@@ -608,6 +608,40 @@ pub fn build_wiki_index(sources: &[Source], cited: &HashSet<String>, now_ms: i64
     md
 }
 
+/// Continuous consolidation (RFC-living-notebook phase 5, WikiSkill's
+/// argument made real): notebooks that HAVE an index note — creating one
+/// is the opt-in — get it re-derived on every gist sweep, so the map
+/// tracks the shelf without anyone pressing Refresh. Deterministic and
+/// write-skipping: an unchanged body costs a read, never a commit.
+pub async fn refresh_wiki_indexes(db: &crate::db::Db) -> anyhow::Result<usize> {
+    let Some(trace_dir) = crate::trace::dir() else {
+        // No traces handle (tests, early boot): a refresh without citation
+        // data would strip the dust markers and churn every body — skip.
+        return Ok(0);
+    };
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let cited = cited_ids(trace_dir);
+    let mut refreshed = 0usize;
+    for nb in db.list_notebooks().await? {
+        let Some(note) = db
+            .list_notes(&nb.id)
+            .await?
+            .into_iter()
+            .find(|n| n.title == WIKI_INDEX_TITLE)
+        else {
+            continue;
+        };
+        let sources = db.list_sources(&nb.id).await?;
+        let body = build_wiki_index(&sources, &cited, now_ms);
+        if body == note.content {
+            continue;
+        }
+        db.update_note(&note.id, &note.title, &body, now_ms).await?;
+        refreshed += 1;
+    }
+    Ok(refreshed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

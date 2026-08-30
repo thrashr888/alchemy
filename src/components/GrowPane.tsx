@@ -562,18 +562,32 @@ export function GrowPane() {
                   </Button>
                 </div>
                 {indexNote && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      useStore
-                        .getState()
-                        .openInReader({ type: "note", id: indexNote.id })
-                    }
-                    className="rounded-md border border-border px-3 py-2 text-left text-caption text-muted-foreground hover:bg-surface-2"
-                  >
-                    Open “Notebook index” — updated{" "}
-                    {new Date(indexNote.updatedAt).toLocaleDateString()}
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        useStore
+                          .getState()
+                          .openInReader({ type: "note", id: indexNote.id })
+                      }
+                      className="rounded-md border border-border px-3 py-2 text-left text-caption text-muted-foreground hover:bg-surface-2"
+                    >
+                      Open “Notebook index” — updated{" "}
+                      {new Date(indexNote.updatedAt).toLocaleDateString()}
+                    </button>
+                    <span className="text-caption text-subtle-foreground">
+                      Refreshes on its own with background work —{" "}
+                      <button
+                        type="button"
+                        className="text-citation hover:underline"
+                        onClick={() =>
+                          useStore.getState().openSettings("background")
+                        }
+                      >
+                        Nightly settings
+                      </button>
+                    </span>
+                  </>
                 )}
               </div>
             </>

@@ -9,7 +9,21 @@
 //! swallowed after a stderr note.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// The traces directory, set once at startup (the same value
+/// `AppState::trace_dir` carries) so background work spawned without a
+/// `State` handle — the gist sweep's wiki-index refresh — can still read
+/// the retrieval history.
+static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+pub fn set_dir(dir: PathBuf) {
+    let _ = DIR.set(dir);
+}
+
+pub fn dir() -> Option<&'static PathBuf> {
+    DIR.get()
+}
 
 /// Rotate at ~5 MB, keeping one previous generation. At a few hundred bytes
 /// per retrieval that is months of history without unbounded growth.

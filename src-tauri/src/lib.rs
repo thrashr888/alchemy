@@ -168,6 +168,9 @@ pub fn run() {
             }
             // Boot-phase stamps -> traces/startup.jsonl (docs/RFC-professional-grade.md
             // Pillar 2). See trace::Startup for exactly what the clock covers.
+            // The global handle serves background work spawned without State
+            // (the gist sweep's wiki-index refresh reads retrieval history).
+            trace::set_dir(data_dir.join("traces"));
             let startup = trace::Startup::begin(data_dir.join("traces"));
 
             let db_dir = data_dir.join("lancedb");
