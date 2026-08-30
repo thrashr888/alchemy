@@ -219,8 +219,13 @@ export function SettingsDialog({
             {TABS.find((t) => t.id === tab)?.label}
           </h2>
           {/* The scroll cap MUST stay a definite height on this column (see
-              the note above); 11rem additionally clears the pane header. */}
-          <div className="flex max-h-[calc(92vh-11rem)] min-w-0 flex-col gap-4 overflow-y-auto px-1">
+              the note above); 11rem additionally clears the pane header.
+              key={tab}: the scroll position lives on this div, so switching
+              tabs would otherwise keep the old tab's scroll offset. */}
+          <div
+            key={tab}
+            className="flex max-h-[calc(92vh-11rem)] min-w-0 flex-col gap-4 overflow-y-auto px-1"
+          >
           {tab === "general" && <GeneralTab />}
           {tab === "background" && <BackgroundTab />}
           {tab === "sources" && <SourcesTab />}
