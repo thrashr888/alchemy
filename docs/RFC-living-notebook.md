@@ -50,31 +50,65 @@ agent-driven imports, registry for entities) already lives here.
 | MCP server | agents can add/organize sources programmatically |
 | Background-refresh collapse guard | refuses gutted refetches |
 
-## Prior art & outside ingredients
+## Prior art & outside ingredients (researched)
 
-- **Firecrawl Research Index** (docs.firecrawl.dev/features/research) —
-  keyless academic search API (~43M abstracts: PubMed, bioRxiv, medRxiv,
-  arXiv) with paper search, passage reading, and citation-network
-  navigation; no API key to start (advertised ~1000 credits/month
-  keyless). A ready-made frontier for Pillar 2's open-web tier: standing
-  queries → paper search → proposal tray, without running a crawler of
-  our own. Research-flavored notebooks get real primary sources.
-- **Atlas for Mac** (atlasformac.com) — the scale-UX bar for Pillar 1:
-  "zoom out and see a thousand things at once, zoom in and look at one
-  properly." Its grid/canvas/infinity triad and connected-folders-at-
-  library-speed are the right instincts for a 5k-source panel: density
-  zoom on the existing gallery, spatial grouping as a curation surface.
-- **OpenKnowledge** (openknowledge.ai) — markdown + git knowledge base
-  with hierarchical RAG and native MCP, built for humans and agents in
-  one loop. Alchemy already imports/exports OKF; the Pillar 3 wiki view
-  should emit OKF-compatible markdown pages so the generated wiki is
-  portable and agent-editable rather than a bespoke render.
+### Firecrawl — the frontier fetcher we don't have to build
+
+Verified against docs.firecrawl.dev and the pricing page:
+
+- **Free tier: 1,000 credits/month, no card.** Search, scrape, and
+  interact work **keyless** at low rate limits (2 concurrent); an API
+  key only raises limits. Costs: scrape/crawl/map = 1 credit/page,
+  search = 2 credits per 10 results (+1/result to also return scraped
+  markdown).
+- **`POST /v2/search`** takes a query plus `categories` — including
+  **Research** (academic sites), **PDF**, and **Developer** (repos +
+  docs) — `includeDomains`/`excludeDomains`, and time filters, and can
+  return each hit's content as markdown in the same call. That output
+  drops straight into the existing ingest pipeline.
+- **Research Index** (`GET /search/research/papers[...]`): ~43M
+  abstracts (PubMed, bioRxiv, medRxiv, arXiv) with passage reading and
+  citation-network navigation (`/similar` with citers/references
+  modes) — real primary sources for research notebooks, and the
+  citation graph is a frontier in itself.
+
+Budget sketch at nightly cadence, all keyless: 2 standing queries ×
+2 credits + 5 accepted scrapes ≈ 9 credits/night ≈ 270/month — inside
+the free tier with 3× headroom. The growth agenda should meter itself
+against this (per-notebook credit ledger, stop at a soft cap) the same
+way night shift meters model work.
+
+### Atlas for Mac — the scale-UX bar
+
+"Zoom out and see a thousand things at once, zoom in and look at one
+properly." Atlas handles thousands of visual items with three views
+(dense grid / spatial canvas / drift), nested collections, and
+connected external folders browsed "at library speed." Concrete takes
+for Pillar 1: a density-zoomable grid on the existing gallery (zoom
+level = information per row), group rows as first-class objects, and
+treating watched folders as browse-in-place rather than import-then-
+browse.
+
+### OpenKnowledge — the wiki's format, not a competitor
+
+OK is markdown/MDX + git as source of truth, a WYSIWYG editor over it,
+and an MCP server + skills so agents search, edit, and reorganize the
+same files humans do; hierarchical RAG and wiki-link graph views sit on
+top. Alchemy already speaks the relevant dialect: OKF export/import
+ships today (`export_notebook_okf`/`_zip`, `probe_okf`,
+`import_notebook_okf`), and the reader already renders Obsidian-style
+`[[wikilinks]]`. So Pillar 3's wiki view is not a new surface: generate
+cluster/entity index pages as ordinary notes with wikilinks, and the
+whole wiki round-trips through OKF for free — portable, git-syncable,
+editable by OK's own agents or ours over MCP.
 
 ## Design
 
 ### Pillar 1 — UX at scale (the prerequisite)
 
-- **Virtualize the Sources list** (windowed rendering); target 10k rows.
+- **Virtualize the Sources list** (windowed rendering — the panel maps
+  every row today; @tanstack/react-virtual is the current standard);
+  target 10k rows.
 - **Search-first navigation**: the filter box becomes the primary way in;
   add type/tag/freshness facets. Cmd+P-style jump already exists for
   notebooks; extend to sources.
@@ -96,11 +130,18 @@ A per-notebook **growth agenda**, default-on but budgeted like reports:
   outbound links in web sources, references in PDFs, siblings in watched
   folders, backlinks in Notes/Obsidian. Rank frontier items against the
   standing queries with the existing embedder; propose the top few.
+- **Open-web tier via Firecrawl**: standing queries run through
+  `/v2/search` (Research/PDF/Developer categories, domain filters) and
+  the Research Index for academic notebooks; accepted proposals scrape
+  to markdown through the same API. Keyless free tier first; an API key
+  in Settings only raises limits.
 - **Consent tiers**: local files and already-subscribed feeds import
   automatically; anything that fetches a *new* network origin lands in a
   proposal tray ("Found 6 related pages — add?") rather than importing
   silently. The collapse guard applies to every unattended fetch.
-- Runs inside night shift's budget dial; nothing new to configure.
+- Runs inside night shift's budget dial, plus a per-notebook Firecrawl
+  credit ledger with a soft cap, so a month of nightly sweeps stays
+  inside the 1,000-credit free tier.
 
 Gate: on a seeded topic notebook, the tray proposes ≥5 relevant new
 sources within one night cycle, with zero silent network imports.
@@ -147,4 +188,9 @@ proves otherwise.
 - Does the proposal tray live in the Sources panel or the Brief?
 - Should standing queries be visible/editable (a "what this notebook is
   hungry for" list), or stay implicit from traces?
-- Frontier ranking: embedder-only, or is a Small-role rerank worth it?
+- Frontier ranking: embedder-only first — Firecrawl's search already
+  ranks, so our embedder only re-ranks against the standing query; add a
+  Small-role rerank only if the eval fixture shows it earns its cost.
+- Wiki pages as notes round-trip through OKF today; do we also want OK's
+  own MCP registered as a peer (their agents editing our wiki), or is
+  export enough?
