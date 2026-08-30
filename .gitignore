@@ -36,3 +36,8 @@ src-tauri/binaries/
 extension/chrome/*.zip
 .pnpm-store/
 .playwright-mcp/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key

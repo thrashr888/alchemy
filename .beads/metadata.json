@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "alchemy_release",
+  "project_id": "7e61f14a-79c9-4d39-8638-28dc3d2030cd"
+}
