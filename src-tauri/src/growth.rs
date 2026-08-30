@@ -467,6 +467,147 @@ pub async fn web_search(
     }
 }
 
+/// Every source id that has appeared as a citation in the retrieval traces
+/// (current + one rotated generation — months of history at the 5 MB
+/// rotation size). Shared by the uncited facet and the retirement pass.
+pub fn cited_ids(trace_dir: &Path) -> HashSet<String> {
+    let mut ids = HashSet::new();
+    for file in ["retrieval.jsonl", "retrieval.1.jsonl"] {
+        let Ok(text) = std::fs::read_to_string(trace_dir.join(file)) else {
+            continue;
+        };
+        for line in text.lines() {
+            let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let Some(cites) = record.get("citations").and_then(|c| c.as_array()) else {
+                continue;
+            };
+            for cite in cites {
+                if let Some(id) = cite.get("sourceId").and_then(|s| s.as_str()) {
+                    if !id.is_empty() {
+                        ids.insert(id.to_string());
+                    }
+                }
+            }
+        }
+    }
+    ids
+}
+
+/// One retirement candidate (Pillar 3): old enough to have had its chance,
+/// never once cited. A proposal, never an action — the pane offers Mute
+/// (drop from chat scope, reversible) or Remove.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetireProposal {
+    pub source_id: String,
+    pub title: String,
+    pub age_days: i64,
+    pub char_count: i64,
+}
+
+const RETIRE_MIN_AGE_DAYS: i64 = 45;
+
+pub fn retire_candidates(
+    sources: &[Source],
+    cited: &HashSet<String>,
+    now_ms: i64,
+) -> Vec<RetireProposal> {
+    let mut out: Vec<RetireProposal> = sources
+        .iter()
+        .filter(|s| s.status == "ready" && !FOLDER_TYPES.contains(&s.source_type.as_str()))
+        .filter(|s| s.char_count > 0 && !cited.contains(&s.id))
+        .filter_map(|s| {
+            // A source only counts as passed-over after it has been around
+            // (and fresh) long enough to have had its chance.
+            let last_alive = s.created_at.max(s.fetched_at);
+            let age_days = (now_ms - last_alive) / 86_400_000;
+            (age_days >= RETIRE_MIN_AGE_DAYS).then(|| RetireProposal {
+                source_id: s.id.clone(),
+                title: s.title.clone(),
+                age_days,
+                char_count: s.char_count,
+            })
+        })
+        .collect();
+    out.sort_by_key(|p| std::cmp::Reverse(p.age_days));
+    out.truncate(15);
+    out
+}
+
+const FOLDER_TYPES: [&str; 4] = ["folder", "git", "notion", "obsidian"];
+
+/// The wiki index (Pillar 3's north star, deterministic v1): one generated
+/// note that maps the notebook — sources grouped by tag, linked by title
+/// (the reader resolves title links), untagged and never-cited called out. Plain
+/// markdown in an ordinary note, so it round-trips through OKF and any
+/// agent can edit it; no model call, so it always works and costs nothing.
+pub const WIKI_INDEX_TITLE: &str = "Notebook index";
+
+pub fn build_wiki_index(sources: &[Source], cited: &HashSet<String>, now_ms: i64) -> String {
+    let content: Vec<&Source> = sources
+        .iter()
+        .filter(|s| !FOLDER_TYPES.contains(&s.source_type.as_str()) && s.char_count > 0)
+        .collect();
+    let total_chars: i64 = content.iter().map(|s| s.char_count).sum();
+    let mut by_tag: HashMap<&str, Vec<&Source>> = HashMap::new();
+    let mut untagged: Vec<&Source> = Vec::new();
+    for s in &content {
+        let mut any = false;
+        for tag in s.tags.split_whitespace() {
+            by_tag.entry(tag).or_default().push(s);
+            any = true;
+        }
+        if !any {
+            untagged.push(s);
+        }
+    }
+    let mut tags: Vec<(&str, Vec<&Source>)> = by_tag.into_iter().collect();
+    tags.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(b.0)));
+
+    let line = |s: &Source| {
+        let age_days = (now_ms - s.created_at.max(s.fetched_at)) / 86_400_000;
+        let mut extra = format!("{} chars", s.char_count);
+        if age_days > RETIRE_MIN_AGE_DAYS && !cited.contains(&s.id) {
+            extra.push_str(" · never cited");
+        }
+        // Standard markdown links, not [[wikilinks]]: the note editor's
+        // link routing resolves the href against the corpus by title
+        // (ReaderPane::resolveInCorpus), and TipTap parses `[t](<dest>)`
+        // where wikilink syntax would stay literal text. Angle-bracket
+        // destinations carry spaces and parens; titles holding <> can't
+        // be a destination and fall back to plain text.
+        let text = s.title.replace('[', "(").replace(']', ")");
+        if s.title.contains(['<', '>']) {
+            format!("- {text} — {extra}\n")
+        } else {
+            format!("- [{text}](<{}>) — {extra}\n", s.title)
+        }
+    };
+    let mut md = format!(
+        "A living map of this notebook — {} sources, {} characters, grouped \
+         by tag. Regenerate it from the Grow pane; links open the source.\n",
+        content.len(),
+        total_chars,
+    );
+    for (tag, mut list) in tags {
+        list.sort_by_key(|s| std::cmp::Reverse(s.char_count));
+        md.push_str(&format!("\n## #{tag}\n\n"));
+        for s in list {
+            md.push_str(&line(s));
+        }
+    }
+    if !untagged.is_empty() {
+        md.push_str("\n## Untagged\n\n");
+        untagged.sort_by_key(|s| std::cmp::Reverse(s.char_count));
+        for s in untagged {
+            md.push_str(&line(s));
+        }
+    }
+    md
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

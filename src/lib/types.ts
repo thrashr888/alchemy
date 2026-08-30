@@ -284,6 +284,15 @@ export interface GrowthProposal {
   score: number;
 }
 
+/** One retirement candidate (RFC-living-notebook Pillar 3): old enough to
+ *  have had its chance, never once cited. Proposal only. */
+export interface RetireProposal {
+  sourceId: string;
+  title: string;
+  ageDays: number;
+  charCount: number;
+}
+
 /** One GitHub release, read live for Settings → About's What's new. */
 export interface ReleaseNote {
   version: string;

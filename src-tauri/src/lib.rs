@@ -496,6 +496,8 @@ pub fn run() {
             commands::growth_proposals,
             commands::growth_web_search,
             commands::growth_local,
+            commands::growth_retire,
+            commands::generate_wiki_index,
             commands::live_view_back,
             commands::live_view_forward,
             commands::live_view_url,

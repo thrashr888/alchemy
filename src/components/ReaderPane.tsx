@@ -162,6 +162,20 @@ function resolveInCorpus(
   const byKey = (key: string) =>
     sources.find((src) => docKey(src.url) === docKey(key)) ?? null;
   if (/^https?:\/\//.test(rawHref)) return byKey(rawHref);
+  // Title match: notes link to sources by name (the wiki index writes
+  // `[Title](<Title>)`), and a bare title is also what a hand-typed
+  // wikilink means. Exact, case-insensitive.
+  let decoded = rawHref;
+  try {
+    decoded = decodeURIComponent(rawHref);
+  } catch {
+    /* stray % — compare raw */
+  }
+  const wanted = decoded.trim().toLowerCase();
+  const byTitle = sources.find(
+    (src) => src.title.trim().toLowerCase() === wanted,
+  );
+  if (byTitle) return byTitle;
   if (!origin) return null;
   if (/^https?:\/\//.test(origin)) {
     try {

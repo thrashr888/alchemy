@@ -12,6 +12,7 @@ import type {
   GrowthOverview,
   GrowthProposal,
   GrowthWebSearch,
+  RetireProposal,
   ReleaseNote,
   ChatConfig,
   CloudFolder,
@@ -535,6 +536,12 @@ export const api = {
   /** The open-web tier — explicit, per-notebook opt-in (Firecrawl). */
   growthWebSearch: (notebookId: string) =>
     run(slow<GrowthWebSearch>("growth_web_search", { notebookId })),
+  /** The retirement pass: old, never-cited sources, proposals only. */
+  growthRetire: (notebookId: string) =>
+    run(query<RetireProposal[]>("growth_retire", { notebookId })),
+  /** Create or refresh the notebook's wiki index note (deterministic). */
+  generateWikiIndex: (notebookId: string) =>
+    run(cmd<Note>("generate_wiki_index", { notebookId })),
   convertNoteToSource: (noteId: string) =>
     run(ai<Source>("convert_note_to_source", { noteId })),
   generateArtifact: (

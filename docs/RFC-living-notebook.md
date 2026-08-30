@@ -192,8 +192,15 @@ pass.
    tiers; Firecrawl keyless search behind a per-notebook enable, metered
    in traces/growth.jsonl against an 800-credit soft cap (measured: 2
    credits per query).
-4. Night-shift scheduling for the sweeps; Pillar 3 cluster + retirement
-   passes; the wiki view (OKF pages).
+4. ~~Pillar 3 v1~~ — shipped: the retirement pass (old + never-cited →
+   Mute/Keep/Remove proposals in Grow's Tidy section; the cluster/tag
+   half was already live as gist.rs's ensure_tags sweep), and the wiki
+   index — a deterministic generated note grouping sources by tag with
+   title links the reader resolves, refreshed in place, OKF-portable.
+5. Night-shift scheduling: the growth sweeps and index refresh join the
+   background cadence (WikiSkill's argument for continuous
+   consolidation); tag-cluster merge proposals; entity pages from the
+   registry as the wiki grows beyond one index note.
 
 At 1M+ sources the answer is "many notebooks + meta-chat", not one
 table: the router already federates across notebooks, and per-notebook

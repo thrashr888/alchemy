@@ -9933,28 +9933,61 @@ pub async fn release_history() -> Result<Vec<ReleaseNote>, String> {
 /// (docs/RFC-living-notebook.md, Pillar 1 hygiene).
 #[tauri::command]
 pub fn cited_source_ids(state: State<'_, AppState>) -> Vec<String> {
-    let mut ids = std::collections::HashSet::new();
-    for file in ["retrieval.jsonl", "retrieval.1.jsonl"] {
-        let Ok(text) = std::fs::read_to_string(state.trace_dir.join(file)) else {
-            continue;
-        };
-        for line in text.lines() {
-            let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
-                continue;
-            };
-            let Some(cites) = record.get("citations").and_then(|c| c.as_array()) else {
-                continue;
-            };
-            for cite in cites {
-                if let Some(id) = cite.get("sourceId").and_then(|s| s.as_str()) {
-                    if !id.is_empty() {
-                        ids.insert(id.to_string());
-                    }
-                }
-            }
-        }
+    crate::growth::cited_ids(&state.trace_dir)
+        .into_iter()
+        .collect()
+}
+
+/// The retirement pass (docs/RFC-living-notebook.md Pillar 3): sources old
+/// enough to have had their chance that no retrieval has ever cited.
+/// Proposals only — the Grow pane offers Mute or Remove, never acts alone.
+#[tauri::command]
+pub async fn growth_retire(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<Vec<crate::growth::RetireProposal>, String> {
+    let sources = e(state.db.list_sources(&notebook_id).await)?;
+    let cited = crate::growth::cited_ids(&state.trace_dir);
+    Ok(crate::growth::retire_candidates(&sources, &cited, now()))
+}
+
+/// Create or refresh the notebook's wiki index note (Pillar 3's north
+/// star, deterministic v1): sources grouped by tag, linked by title, in an
+/// ordinary note so it round-trips through OKF and agents can edit it.
+/// Refreshing finds the existing note by its fixed title and rewrites the
+/// body in place, keeping the note's id (and any reader history to it).
+#[tauri::command]
+pub async fn generate_wiki_index(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<Note, String> {
+    let sources = e(state.db.list_sources(&notebook_id).await)?;
+    let cited = crate::growth::cited_ids(&state.trace_dir);
+    let body = crate::growth::build_wiki_index(&sources, &cited, now());
+    let existing = e(state.db.list_notes(&notebook_id).await)?
+        .into_iter()
+        .find(|n| n.title == crate::growth::WIKI_INDEX_TITLE);
+    let ts = now();
+    if let Some(mut note) = existing {
+        e(state.db.update_note(&note.id, &note.title, &body, ts).await)?;
+        note.content = body;
+        note.updated_at = ts;
+        return Ok(note);
     }
-    ids.into_iter().collect()
+    let note = Note {
+        id: new_id(),
+        notebook_id,
+        title: crate::growth::WIKI_INDEX_TITLE.into(),
+        content: body,
+        kind: "note".into(),
+        prompt: String::new(),
+        origin: String::new(),
+        status: String::new(),
+        created_at: ts,
+        updated_at: ts,
+    };
+    e(state.db.add_note(&note).await)?;
+    Ok(note)
 }
 
 /// Seed a synthetic notebook for the scale gate (docs/RFC-living-notebook.md

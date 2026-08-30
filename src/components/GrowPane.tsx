@@ -10,10 +10,19 @@ import {
   setWebSearchEnabled,
   webSearchEnabled,
 } from "@/lib/growth";
-import type { GrowthProposal } from "@/lib/types";
+import type { GrowthProposal, RetireProposal } from "@/lib/types";
 import { Button, EmptyState, LoadingState, Spinner } from "./ui";
+import { Pill } from "./settings/SettingsTabs";
 import { Favicon } from "./SourcesPanel";
-import { AlertCircle, FileText, Globe, Search, Sprout } from "lucide-react";
+import {
+  AlertCircle,
+  Archive,
+  BookOpen,
+  FileText,
+  Globe,
+  Search,
+  Sprout,
+} from "lucide-react";
 
 /** Center-pane growth review (RFC-living-notebook Pillar 2): what the
  *  notebook is hungry for, and everything the free tiers found — files on
@@ -30,6 +39,9 @@ export function GrowPane() {
   const hygieneKeep = useStore((s) => s.hygieneKeep);
   const refreshSource = useStore((s) => s.refreshSource);
   const deleteSourcesBatch = useStore((s) => s.deleteSourcesBatch);
+  const selectedSourceIds = useStore((s) => s.selectedSourceIds);
+  const toggleSourceSelected = useStore((s) => s.toggleSourceSelected);
+  const notes = useStore((s) => s.notes);
   const [retrying, setRetrying] = useState<string | null>(null);
 
   // Needs-attention flags (RFC-source-hygiene) — merged into Grow: tending
@@ -71,6 +83,10 @@ export function GrowPane() {
   // The Spotlight tier arrives on its own clock — mdfind subprocesses are
   // the slow part, so the section fills in async instead of gating the pane.
   const [localTier, setLocalTier] = useState<GrowthProposal[] | null>(null);
+  // The retirement pass (Pillar 3): old, never-cited sources — proposals
+  // only, computed from local traces, loaded alongside the other tiers.
+  const [retire, setRetire] = useState<RetireProposal[] | null>(null);
+  const [indexBusy, setIndexBusy] = useState(false);
   const [dismissed, setDismissed] = useState<Record<string, number>>({});
   // The open-web tier: per-notebook opt-in; results and meter arrive
   // together. null = not run this visit.
@@ -106,6 +122,13 @@ export function GrowPane() {
         if (!stale) setLocalTier(hits);
       })
       .catch(() => setLocalTier([]));
+    setRetire(null);
+    api
+      .growthRetire(currentId)
+      .then((rows) => {
+        if (!stale) setRetire(rows);
+      })
+      .catch(() => setRetire([]));
     return () => {
       stale = true;
     };
@@ -151,6 +174,27 @@ export function GrowPane() {
   };
 
   const locals = visible(localTier ?? []);
+  const isSourceSelected = (id: string) =>
+    !selectedSourceIds || selectedSourceIds[id] !== false;
+  const retireVisible = (retire ?? []).filter(
+    (r) => !dismissed[`retire:${r.sourceId}`],
+  );
+  const dismissRetire = (id: string) => dismiss(`retire:${id}`);
+  const indexNote = notes.find((nt) => nt.title === "Notebook index");
+  const makeIndex = () => {
+    if (!currentId) return;
+    setIndexBusy(true);
+    api
+      .generateWikiIndex(currentId)
+      .then((note) => {
+        useStore.setState((st) => ({
+          notes: [note, ...st.notes.filter((x) => x.id !== note.id)],
+        }));
+        useStore.getState().openInReader({ type: "note", id: note.id });
+      })
+      .catch(() => undefined)
+      .finally(() => setIndexBusy(false));
+  };
   const mined = visible(proposals ?? []).filter((p) => p.kind === "web");
   const found = visible(web?.proposals ?? []);
 
@@ -306,23 +350,29 @@ export function GrowPane() {
                       {web.credits} of 1,000 free credits used this month
                     </span>
                   )}
-                  {webOn && (
-                    <button
-                      type="button"
-                      className={
-                        (web ? "" : "ml-auto ") +
-                        "text-caption text-subtle-foreground hover:text-foreground hover:underline"
-                      }
+                  <div className={(web ? "" : "ml-auto ") + "flex gap-1"}>
+                    <Pill
+                      active={!webOn}
                       onClick={() => {
                         setWebSearchEnabled(currentId, false);
                         setWebOn(false);
                         setWeb(null);
                       }}
-                      title="Stop sending this notebook's questions to Firecrawl"
                     >
-                      Turn off
-                    </button>
-                  )}
+                      Off
+                    </Pill>
+                    <Pill
+                      active={webOn}
+                      onClick={() => {
+                        if (webOn || !currentId) return;
+                        setWebSearchEnabled(currentId, true);
+                        setWebOn(true);
+                        runWebSearch(currentId);
+                      }}
+                    >
+                      On
+                    </Pill>
+                  </div>
                 </div>
                 {queries.length === 0 ? (
                   <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption text-subtle-foreground">
@@ -330,25 +380,11 @@ export function GrowPane() {
                     answers become the questions the web search runs.
                   </div>
                 ) : !webOn ? (
-                  <div className="flex flex-col gap-2 rounded-md border border-border px-3 py-2.5">
-                    <span className="text-caption leading-relaxed text-muted-foreground">
-                      Search the web for the questions above via Firecrawl’s
-                      free tier. Only the questions are sent; results are
-                      proposals, and pages are fetched only when you add
-                      them.
-                    </span>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      className="self-start"
-                      onClick={() => {
-                        setWebSearchEnabled(currentId, true);
-                        setWebOn(true);
-                        runWebSearch(currentId);
-                      }}
-                    >
-                      Enable web search for this notebook
-                    </Button>
+                  <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption leading-relaxed text-subtle-foreground">
+                    Off for this notebook. Turning it on sends the questions
+                    above (nothing else) to Firecrawl’s free search tier;
+                    results are proposals, and pages are fetched only when
+                    you add them.
                   </div>
                 ) : webBusy ? (
                   <div className="flex items-center gap-2 px-1 py-2 text-caption text-muted-foreground">
@@ -431,6 +467,115 @@ export function GrowPane() {
                       </Button>
                     </div>
                   ))
+                )}
+              </div>
+              {/* The retirement pass (Pillar 3): the corpus stays sharp by
+                  proposing, never acting — Mute drops a source from chat
+                  scope (reversible in the Sources panel), Remove deletes. */}
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <Archive className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-caption font-semibold text-foreground">
+                    Tidy
+                  </span>
+                  <span className="text-caption text-subtle-foreground">
+                    old sources no retrieval has ever cited
+                  </span>
+                </div>
+                {retire === null ? (
+                  <div className="flex items-center gap-2 px-1 py-2 text-caption text-muted-foreground">
+                    <Spinner className="h-3.5 w-3.5" /> Checking the shelves…
+                  </div>
+                ) : retireVisible.length === 0 ? (
+                  <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption text-subtle-foreground">
+                    Nothing gathering dust.
+                  </div>
+                ) : (
+                  retireVisible.map((r) => (
+                    <div
+                      key={r.sourceId}
+                      className="flex items-center gap-2 rounded-md border border-border px-3 py-2"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div
+                          className="truncate text-body text-foreground"
+                          title={r.title}
+                        >
+                          {r.title || "Untitled"}
+                        </div>
+                        <div className="truncate text-caption text-muted-foreground">
+                          {r.ageDays} days old · never cited ·{" "}
+                          {r.charCount.toLocaleString()} chars
+                          {!isSourceSelected(r.sourceId) && " · muted"}
+                        </div>
+                      </div>
+                      {isSourceSelected(r.sourceId) && (
+                        <Button
+                          variant="ghost"
+                          onClick={() => {
+                            toggleSourceSelected(r.sourceId);
+                            dismissRetire(r.sourceId);
+                          }}
+                          title="Drop from chat & generation — reversible in the Sources panel"
+                        >
+                          Mute
+                        </Button>
+                      )}
+                      <Button
+                        variant="ghost"
+                        onClick={() => dismissRetire(r.sourceId)}
+                        title="Keep it — hide this proposal for 30 days"
+                      >
+                        Keep
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        className="text-destructive hover:bg-destructive/10"
+                        onClick={() => void deleteSourcesBatch([r.sourceId])}
+                        title="Remove the source and its chunks"
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  ))
+                )}
+              </div>
+              {/* The wiki index (Pillar 3's north star, deterministic v1):
+                  one generated note mapping the notebook — tags, title links,
+                  dust called out. An ordinary note, so it round-trips
+                  through OKF and agents can edit it. */}
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-caption font-semibold text-foreground">
+                    Wiki index
+                  </span>
+                  <span className="text-caption text-subtle-foreground">
+                    a living map of this notebook, as a note
+                  </span>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="ml-auto"
+                    loading={indexBusy}
+                    onClick={makeIndex}
+                  >
+                    {indexNote ? "Refresh index" : "Create index note"}
+                  </Button>
+                </div>
+                {indexNote && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      useStore
+                        .getState()
+                        .openInReader({ type: "note", id: indexNote.id })
+                    }
+                    className="rounded-md border border-border px-3 py-2 text-left text-caption text-muted-foreground hover:bg-surface-2"
+                  >
+                    Open “Notebook index” — updated{" "}
+                    {new Date(indexNote.updatedAt).toLocaleDateString()}
+                  </button>
                 )}
               </div>
             </>
