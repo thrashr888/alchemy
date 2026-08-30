@@ -284,6 +284,12 @@ impl Ollama {
         })
     }
 
+    /// The chat model this engine answers with — the name a loading status
+    /// should show.
+    pub fn chat_model_name(&self) -> &str {
+        self.config.chat_model.trim()
+    }
+
     /// List locally available model names (from `/api/tags`).
     pub async fn list_models(&self) -> Result<Vec<String>> {
         let resp = self

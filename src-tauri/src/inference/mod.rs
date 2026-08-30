@@ -295,13 +295,16 @@ impl ChatEngine {
         })
     }
 
-    /// Streaming with progress: only agent CLIs have anything to narrate
-    /// (tool calls, planning) — every other engine ignores `on_step`.
+    /// Streaming with progress: agent CLIs narrate their work (tool calls,
+    /// planning), and Ollama announces a cold model load — a 65GB model pages
+    /// into memory for a minute or more before the first token, and that
+    /// silence otherwise reads as a hang. Every other engine ignores
+    /// `on_step`.
     pub async fn chat_stream_steps<F, S>(
         &self,
         messages: &[ChatTurn],
         on_token: F,
-        on_step: S,
+        mut on_step: S,
     ) -> Result<ChatOutcome>
     where
         F: FnMut(&str),
@@ -312,6 +315,22 @@ impl ChatEngine {
             // agent path needs its own call, and agent CLIs are the engines
             // that actually report a price.
             ChatEngine::Agent(a) => metered(a.chat_stream_steps(messages, on_token, on_step).await),
+            ChatEngine::Ollama(o) => {
+                // `ps` answers in milliseconds when the daemon is up; if it
+                // errors, skip the status and let the chat call report the
+                // real failure. Transient: the line is replaced the moment
+                // tokens arrive.
+                let model = o.chat_model_name().to_string();
+                if !model.is_empty() {
+                    if let Ok(loaded) = o.ps().await {
+                        if !loaded.iter().any(|m| m == &model) {
+                            let label = format!("Loading {model} into memory…");
+                            on_step(Step::transient(&label));
+                        }
+                    }
+                }
+                self.chat_stream(messages, on_token).await
+            }
             _ => self.chat_stream(messages, on_token).await,
         }
     }
