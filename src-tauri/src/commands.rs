@@ -11183,6 +11183,12 @@ pub async fn activity_stats(
         chrono::Local::now().date_naive(),
     );
     stats.background_cost_micros = background_cost_micros;
+    // Lifetime output tokens, straight off the persisted throughput
+    // accumulators — the same record the model-speed ranking reads.
+    stats.tokens_generated = {
+        let map = state.model_stats.lock().unwrap();
+        map.values().map(|a| a.total_tokens as i64).sum()
+    };
     Ok(stats)
 }
 

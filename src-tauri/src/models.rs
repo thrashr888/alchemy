@@ -643,4 +643,10 @@ pub struct ActivityStats {
     /// are free rather than unrecorded.
     #[serde(default)]
     pub background_cost_micros: i64,
+    /// Measured output tokens across every recorded generation (chat,
+    /// meta-chat, background runs) — the lifetime sum of the per-model
+    /// throughput accumulators, so it counts what the engines reported,
+    /// not an estimate.
+    #[serde(default)]
+    pub tokens_generated: i64,
 }

@@ -5,7 +5,10 @@ import { Spinner } from "../ui";
 import { TileShader } from "./TileShader";
 import type { ActivityStats, ModelStat } from "@/lib/types";
 import {
+  BookOpen,
   CalendarDays,
+  NotebookText,
+  PenLine,
   Clock,
   Flame,
   Library,
@@ -53,11 +56,6 @@ function dayKey(d: Date): string {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${d.getFullYear()}-${m}-${day}`;
-}
-
-function wordsLine(words: number): string | null {
-  if (words < 1000) return null;
-  return `Your sources hold ~${compact.format(words)} words.`;
 }
 
 /** Time-of-day identity for the peak-hour tile — the icon IS the value,
@@ -425,7 +423,8 @@ export function ActivityTab() {
         year: "numeric",
       })
     : null;
-  const book = wordsLine(Math.round(stats.corpusChars / 6));
+  // chars/6 ≈ words; the ~ in the tile keeps the estimate honest.
+  const sourceWords = Math.round(stats.corpusChars / 6);
 
   return (
     <div className="flex flex-col gap-4 pb-2">
@@ -454,9 +453,9 @@ export function ActivityTab() {
 
       <div className="grid grid-cols-4 gap-2">
         <Tile
-          label="Messages"
-          value={compact.format(ranged.messages)}
-          icon={MessageSquare}
+          label="Notebooks"
+          value={compact.format(stats.totalNotebooks)}
+          icon={NotebookText}
         />
         <Tile
           label="Sources"
@@ -464,14 +463,34 @@ export function ActivityTab() {
           icon={Library}
         />
         <Tile
+          label="Words in sources"
+          value={`~${compact.format(sourceWords)}`}
+          icon={BookOpen}
+        />
+        <Tile
           label="Notes"
           value={compact.format(ranged.notes)}
           icon={StickyNote}
         />
         <Tile
+          label="Messages"
+          value={compact.format(ranged.messages)}
+          icon={MessageSquare}
+        />
+        <Tile
           label="Retrievals"
           value={compact.format(ranged.retrievals)}
           icon={Search}
+        />
+        <Tile
+          label="Tokens generated"
+          value={compact.format(stats.tokensGenerated || 0)}
+          icon={Zap}
+        />
+        <Tile
+          label="Words written"
+          value={compact.format(stats.assistantWords)}
+          icon={PenLine}
         />
         <Tile
           label="Active days"
@@ -503,11 +522,15 @@ export function ActivityTab() {
           value={`${String(stats.longestStreak)}d`}
           icon={Trophy}
         />
-        <Tile
-          label="Background spend"
-          value={money(stats.backgroundCostMicros)}
-          icon={Receipt}
-        />
+        {/* The spend tile earns its spot only once something actually cost
+            money — an eternal $0.00 is the least interesting number here. */}
+        {stats.backgroundCostMicros > 0 && (
+          <Tile
+            label="Background spend"
+            value={money(stats.backgroundCostMicros)}
+            icon={Receipt}
+          />
+        )}
         {/* The sky IS the value: the sun sits where the hour puts it, or
             stars come out for a night-owl peak. */}
         <Tile
@@ -530,18 +553,14 @@ export function ActivityTab() {
         />
       </div>
 
-      <div className="text-caption text-subtle-foreground">
-        Background spend covers scheduled work over the last 30 days. Local
-        models are free, so it stays at $0.00 unless you point a role at a paid
-        provider.
-      </div>
+      {stats.backgroundCostMicros > 0 && (
+        <div className="text-caption text-subtle-foreground">
+          Background spend covers scheduled work over the last 30 days. Local
+          models are free, so only paid-provider runs show up here.
+        </div>
+      )}
 
-      <div className="flex flex-col gap-1.5">
-        <Heatmap stats={stats} />
-        {book && (
-          <div className="text-caption text-subtle-foreground">{book}</div>
-        )}
-      </div>
+      <Heatmap stats={stats} />
 
       <div className="grid grid-cols-2 gap-5">
         <CountList title="Most used models" rows={stats.models} />
