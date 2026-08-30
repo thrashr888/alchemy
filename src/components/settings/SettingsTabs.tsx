@@ -363,7 +363,7 @@ export function AboutTab() {
       } else setLatest(flow.status === "none" ? "current" : "offline");
     });
   }, []);
-  const shownReleases = showAllReleases ? releases : releases.slice(0, 3);
+  const shownReleases = showAllReleases ? releases : releases.slice(0, 1);
   return (
     <div className="flex flex-col items-center gap-1 py-6 text-center">
       <AlchemySymbol className="h-16 w-16 text-citation/70" />
@@ -423,13 +423,13 @@ export function AboutTab() {
               </div>
             ))}
           </div>
-          {!showAllReleases && releases.length > 3 && (
+          {!showAllReleases && releases.length > 1 && (
             <button
               type="button"
               className="mt-3 text-caption text-citation hover:underline"
               onClick={() => setShowAllReleases(true)}
             >
-              Show all {releases.length} releases
+              Show {releases.length - 1} earlier releases
             </button>
           )}
         </div>
