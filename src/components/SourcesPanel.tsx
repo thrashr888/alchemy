@@ -426,6 +426,7 @@ export function SourcesPanel() {
     Record<string, number>
   >({});
   const addSourceUrl = useStore((s) => s.addSourceUrl);
+  const addSourceFiles = useStore((s) => s.addSourceFiles);
   useEffect(() => {
     setGrowth([]);
     setGrowthDismissed(loadGrowthDismissed(currentId));
@@ -1065,8 +1066,8 @@ export function SourcesPanel() {
                 <Globe className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 <span className="truncate text-caption text-foreground">
                   {growthVisible.length === 1
-                    ? "1 related page found in your sources"
-                    : `${growthVisible.length} related pages found in your sources`}
+                    ? "1 related page or file found"
+                    : `${growthVisible.length} related pages & files found`}
                 </span>
                 <span className="ml-auto shrink-0 text-micro text-subtle-foreground">
                   Review
@@ -1652,20 +1653,31 @@ export function SourcesPanel() {
                     {p.anchor || p.url.replace(/^https?:\/\//, "")}
                   </div>
                   <div className="truncate text-micro text-muted-foreground">
-                    {hostname(p.url)} · seen {p.mentions}×
-                    {p.sourceCount > 1 ? ` in ${p.sourceCount} sources` : ""}
-                    {p.matchedQuery && (
-                      <> · asked: “{p.matchedQuery}”</>
+                    {p.kind === "local" ? (
+                      <>On this Mac · {p.url}</>
+                    ) : (
+                      <>
+                        {hostname(p.url)} · seen {p.mentions}×
+                        {p.sourceCount > 1
+                          ? ` in ${p.sourceCount} sources`
+                          : ""}
+                      </>
                     )}
+                    {p.matchedQuery && <> · asked: “{p.matchedQuery}”</>}
                   </div>
                 </div>
                 <Button
                   variant="ghost"
                   onClick={() => {
                     dismissGrowth(p.url);
-                    void addSourceUrl(p.url);
+                    if (p.kind === "local") void addSourceFiles([p.url]);
+                    else void addSourceUrl(p.url);
                   }}
-                  title="Fetch this page and add it as a source"
+                  title={
+                    p.kind === "local"
+                      ? "Add this file as a source"
+                      : "Fetch this page and add it as a source"
+                  }
                 >
                   Add
                 </Button>

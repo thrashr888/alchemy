@@ -36,7 +36,6 @@ import {
   isWebUrl,
   scrollMemory,
   shortcutBlocked,
-  urlHost,
 } from "@/lib/utils";
 import {
   AppWindow,
@@ -1604,7 +1603,7 @@ function DocProperties({
   note?: Note;
   git?: ReturnType<typeof parseGitProvenance>;
 }) {
-  const rows: { label: string; value: string }[] = [];
+  const rows: { label: string; value: string; href?: string }[] = [];
   if (source) {
     // A cloud-synced folder says which service it came from — "Folder" alone
     // can't distinguish a Box mount from a plain local directory.
@@ -1615,8 +1614,10 @@ function DocProperties({
         ? `${SOURCE_TYPE_LABEL[source.sourceType]} · ${provider}`
         : SOURCE_TYPE_LABEL[source.sourceType],
     });
-    const host = isWebUrl(source.url) ? urlHost(source.url) : null;
-    if (host) rows.push({ label: "Site", value: host });
+    // The actual URL, not just its host — the address is the provenance,
+    // and clicking it opens the page in the browser.
+    if (isWebUrl(source.url))
+      rows.push({ label: "URL", value: source.url, href: source.url });
     // Embedded document authorship (PDF /Author, Office dc:creator, EXIF
     // Artist) — present only when the file actually carries it.
     if (source.author) rows.push({ label: "Author", value: source.author });
@@ -1653,9 +1654,20 @@ function DocProperties({
         {rows.map((r) => (
           <Fragment key={r.label}>
             <span className="text-subtle-foreground">{r.label}</span>
-            <span className="min-w-0 truncate text-muted-foreground" title={r.value}>
-              {r.value}
-            </span>
+            {r.href ? (
+              <button
+                type="button"
+                onClick={() => void openUrl(r.href!)}
+                className="min-w-0 truncate text-left text-citation hover:underline"
+                title={`Open ${r.value}`}
+              >
+                {r.value}
+              </button>
+            ) : (
+              <span className="min-w-0 truncate text-muted-foreground" title={r.value}>
+                {r.value}
+              </span>
+            )}
           </Fragment>
         ))}
         {/* User metadata (RFC-source-tags): always present for sources —
@@ -1881,6 +1893,10 @@ function SourceReader({
   // never painted over — a native child webview sits above every HTML
   // layer, so z-index cannot win this fight.
   const liveRef = useRef<HTMLDivElement>(null);
+  // Where the live view actually is — polled, since navigation happens
+  // inside the native child where no DOM event reaches us. Drives the
+  // toolbar's address line and its "Add as source" offer.
+  const [liveUrl, setLiveUrl] = useState<string | null>(null);
   useEffect(() => {
     if (!live) return;
     const el = liveRef.current;
@@ -1900,10 +1916,18 @@ function SourceReader({
       );
     const mo = new MutationObserver(overlayCheck);
     mo.observe(document.body, { childList: true, subtree: true });
+    const poll = window.setInterval(() => {
+      api
+        .liveViewUrl()
+        .then((u) => setLiveUrl(u))
+        .catch(() => undefined);
+    }, 1000);
     return () => {
       ro.disconnect();
       mo.disconnect();
       window.removeEventListener("resize", update);
+      window.clearInterval(poll);
+      setLiveUrl(null);
       void api.liveViewClose();
     };
   }, [live, source.url]);
@@ -2294,11 +2318,56 @@ function SourceReader({
   }
 
   if (live) {
+    // "Same page" tolerates the fragment and a trailing slash; a changed
+    // path or query is a different page and earns the Add offer.
+    const normPage = (u: string) => u.split("#")[0].replace(/\/$/, "");
+    const wandered = !!liveUrl && normPage(liveUrl) !== normPage(source.url);
     return (
-      <div className="min-h-0 flex-1 p-3">
+      <div className="flex min-h-0 flex-1 flex-col p-3">
+        {/* Nav chrome: the page's own context menu is suppressed (this is
+            a convenience surface, not a browser), so back/forward live
+            here — and a page the user wandered to can join the notebook. */}
+        <div className="mb-2 flex min-w-0 items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => void api.liveViewBack()}
+            title="Back"
+            aria-label="Live view back"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => void api.liveViewForward()}
+            title="Forward"
+            aria-label="Live view forward"
+          >
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Button>
+          <span
+            className="min-w-0 flex-1 truncate text-micro text-subtle-foreground"
+            title={liveUrl ?? source.url}
+          >
+            {liveUrl ?? source.url}
+          </span>
+          {wandered && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                if (liveUrl) void useStore.getState().addSourceUrl(liveUrl);
+              }}
+              title="Add the page you're viewing to this notebook"
+            >
+              Add as source
+            </Button>
+          )}
+        </div>
         <div
           ref={liveRef}
-          className="flex h-full w-full items-center justify-center rounded-md border border-border bg-surface-2/40 text-caption text-muted-foreground"
+          className="flex min-h-0 flex-1 items-center justify-center rounded-md border border-border bg-surface-2/40 text-caption text-muted-foreground"
         >
           Loading live page…
         </div>

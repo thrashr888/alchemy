@@ -11,16 +11,19 @@ use std::path::Path;
 
 use crate::models::Source;
 
-/// One proposed addition: a URL the notebook's own sources keep pointing at.
+/// One proposed addition: a URL the notebook's own sources keep pointing
+/// at, or a local file Spotlight matched against a standing query.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GrowthProposal {
+    /// "web" (url points at the network) | "local" (url is an on-disk path).
+    pub kind: String,
     pub url: String,
-    /// Best anchor text seen for the link ("" when only bare URLs appear).
+    /// Best anchor text seen for the link, or the file's name.
     pub anchor: String,
-    /// Total times the URL appears across the notebook.
+    /// Total times the URL appears across the notebook (0 for local hits).
     pub mentions: u32,
-    /// Distinct sources that point at it.
+    /// Distinct sources that point at it (0 for local hits).
     pub source_count: u32,
     /// The standing query it best matches ("" when ranked on spread alone).
     pub matched_query: String,
@@ -195,6 +198,7 @@ pub fn proposals(sources: &[Source], queries: &[String]) -> Vec<GrowthProposal> 
                 .unwrap_or_default();
             let score = c.mentions as f32 + 2.0 * c.sources.len() as f32 + 3.0 * overlap as f32;
             GrowthProposal {
+                kind: "web".into(),
                 url,
                 anchor: c.anchor,
                 mentions: c.mentions,
@@ -209,6 +213,68 @@ pub fn proposals(sources: &[Source], queries: &[String]) -> Vec<GrowthProposal> 
         .collect();
     out.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.url.cmp(&b.url)));
     out.truncate(12);
+    out
+}
+
+/// The local tier (RFC-living-notebook Pillar 2): standing queries swept
+/// through Spotlight via filesearch — files already on this Mac that speak
+/// to what the notebook was asked and couldn't answer. No network at all,
+/// and they rank above web proposals: the cheapest fetch never leaves the
+/// machine. At most three queries run (mdfind is a subprocess) and six
+/// hits return.
+pub async fn local_proposals(sources: &[Source], queries: &[String]) -> Vec<GrowthProposal> {
+    let existing: HashSet<&str> = sources.iter().map(|s| s.url.as_str()).collect();
+    let mut out: Vec<GrowthProposal> = Vec::new();
+    let mut seen_names = HashSet::new();
+    for query in queries.iter().take(4) {
+        let qt = tokens(query);
+        // Spotlight ANDs bare-query words, so a whole question matches
+        // nothing. Sweep the two longest tokens separately ("temperature",
+        // "gaggia") and let the name-overlap filter below supply precision.
+        let mut kw: Vec<&String> = qt.iter().collect();
+        kw.sort_by_key(|w| std::cmp::Reverse(w.len()));
+        let mut kept = 0;
+        for token in kw.into_iter().take(2) {
+            for hit in crate::filesearch::search(token, 6).await {
+                if hit.is_dir || !hit.ingestible || existing.contains(hit.path.as_str()) {
+                    continue;
+                }
+                // Only files whose NAME shares words with the query — two
+                // of them when the query has two to give. One shared token
+                // proposed roof invoices for an autopilot question; a
+                // content-only match is worse still. Same-named copies
+                // across the disk collapse to one hit.
+                let need = 2.min(qt.len());
+                if tokens(&hit.name).intersection(&qt).count() < need {
+                    continue;
+                }
+                if !seen_names.insert(hit.name.to_lowercase()) {
+                    continue;
+                }
+                out.push(GrowthProposal {
+                    kind: "local".into(),
+                    // Above every web score; earlier queries (more recent
+                    // hunger) rank first, then Spotlight's order holds.
+                    score: 100.0 - out.len() as f32,
+                    url: hit.path,
+                    anchor: hit.name,
+                    mentions: 0,
+                    source_count: 0,
+                    matched_query: query.clone(),
+                });
+                kept += 1;
+                if kept >= 2 || out.len() >= 6 {
+                    break;
+                }
+            }
+            if kept >= 2 || out.len() >= 6 {
+                break;
+            }
+        }
+        if out.len() >= 6 {
+            break;
+        }
+    }
     out
 }
 

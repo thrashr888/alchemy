@@ -10070,7 +10070,11 @@ pub async fn growth_proposals(
     // With content: the frontier lives in the text (list_sources strips it).
     let sources = e(state.db.sources_with_content(&notebook_id).await)?;
     let queries = crate::growth::standing_queries(&state.trace_dir, &notebook_id, now());
-    Ok(crate::growth::proposals(&sources, &queries))
+    // Local hits lead — Spotlight matches for the notebook's open questions
+    // cost nothing to add — then the web frontier mined from the text.
+    let mut out = crate::growth::local_proposals(&sources, &queries).await;
+    out.extend(crate::growth::proposals(&sources, &queries));
+    Ok(out)
 }
 
 #[tauri::command]
@@ -10299,6 +10303,12 @@ pub fn live_view_open(
     let builder = tauri::webview::WebviewBuilder::new(
         live_label(&window),
         tauri::WebviewUrl::External(parsed),
+    )
+    // A convenience surface, not a browser: suppress the page's context
+    // menu (Inspect Element, Search with Google, the works). Navigation
+    // gets real buttons in the reader chrome instead — see live_view_back.
+    .initialization_script(
+        "window.addEventListener('contextmenu', e => e.preventDefault(), true);",
     );
     window
         .add_child(
@@ -10355,6 +10365,34 @@ pub fn live_view_visible(window: tauri::Window, visible: bool) -> Result<(), Str
         }
     }
     Ok(())
+}
+
+/// Live-view history nav: the child is a plain webview, so back/forward
+/// are one eval away. The reader's toolbar drives these — the page's own
+/// context menu (which used to be the only way back) is suppressed.
+#[tauri::command]
+pub fn live_view_back(window: tauri::Window) -> Result<(), String> {
+    if let Some(child) = live_child(&window) {
+        child.eval("history.back()").map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn live_view_forward(window: tauri::Window) -> Result<(), String> {
+    if let Some(child) = live_child(&window) {
+        child.eval("history.forward()").map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// The child's current address, polled by the reader so it can show where
+/// the user has wandered and offer "Add as source" for a new page.
+#[tauri::command]
+pub fn live_view_url(window: tauri::Window) -> Option<String> {
+    live_child(&window)
+        .and_then(|child| child.url().ok())
+        .map(|u| u.to_string())
 }
 
 #[tauri::command]

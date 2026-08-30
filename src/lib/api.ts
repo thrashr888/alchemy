@@ -249,6 +249,10 @@ export const api = {
   liveViewVisible: (visible: boolean) =>
     run(query<void>("live_view_visible", { visible })),
   liveViewClose: () => run(query<void>("live_view_close")),
+  liveViewBack: () => run(query<void>("live_view_back")),
+  liveViewForward: () => run(query<void>("live_view_forward")),
+  /** Where the live view actually is right now (null when closed). */
+  liveViewUrl: () => run(query<string | null>("live_view_url")),
   relatedPassages: (notebookId: string, text: string, limit?: number) =>
     run(query<Citation[]>("related_passages", { notebookId, text, limit })),
   sourceBacklinks: (sourceId: string) =>

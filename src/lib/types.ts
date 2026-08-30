@@ -258,8 +258,10 @@ export interface BuildInfo {
  *  notebook's own sources keep pointing at, ranked against standing
  *  queries mined from thin retrievals. Nothing fetches until Add. */
 export interface GrowthProposal {
+  /** "web" (url is a link) | "local" (url is an on-disk path). */
+  kind: "web" | "local";
   url: string;
-  /** Best anchor text seen for the link ("" when only bare URLs appear). */
+  /** Best anchor text seen for the link, or the file's name. */
   anchor: string;
   mentions: number;
   sourceCount: number;
