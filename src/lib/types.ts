@@ -254,6 +254,16 @@ export interface BuildInfo {
   profile: string;
 }
 
+/** One GitHub release, read live for Settings → About's What's new. */
+export interface ReleaseNote {
+  version: string;
+  name: string;
+  /** Release body, GitHub-flavored Markdown. */
+  body: string;
+  publishedAt: string;
+  url: string;
+}
+
 /** A custom Studio generator: one ~/Documents/Alchemy/templates/*.md file. */
 export interface Template {
   /** Filename stem, e.g. "swot-analysis". */

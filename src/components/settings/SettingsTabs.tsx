@@ -6,9 +6,10 @@ import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { SYSTEM_THEME, THEME_LIST, THEMES, resolveThemeId } from "@/lib/themes";
 import { SLASH_COMMANDS } from "@/lib/slashCommands";
-import type { BuildInfo, ChatConfig } from "@/lib/types";
+import type { BuildInfo, ChatConfig, ReleaseNote } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { AlchemySymbol } from "../AlchemyHero";
+import { Markdown } from "../Markdown";
 import { Input, Textarea } from "../ui";
 import {
   AlignLeft,
@@ -346,10 +347,15 @@ export function AboutTab() {
   // Fresh look at the release feed every time About opens — "am I current?"
   // is the question this page exists to answer.
   const [latest, setLatest] = useState<"checking" | "current" | "offline" | string>("checking");
+  // What's new: the hand-written notes each GitHub release carries, read
+  // live from the feed rather than re-bundled into the app's artifacts.
+  const [releases, setReleases] = useState<ReleaseNote[]>([]);
+  const [showAllReleases, setShowAllReleases] = useState(false);
   const openSettings = useStore((s) => s.openSettings);
   useEffect(() => {
     getVersion().then(setVersion).catch(() => setVersion(""));
     api.buildInfo().then(setBuild).catch(() => setBuild(null));
+    api.releaseHistory().then(setReleases).catch(() => setReleases([]));
     void checkForUpdates().then((flow) => {
       if (flow.status === "available") {
         useStore.setState({ updateAvailable: flow.version });
@@ -357,6 +363,7 @@ export function AboutTab() {
       } else setLatest(flow.status === "none" ? "current" : "offline");
     });
   }, []);
+  const shownReleases = showAllReleases ? releases : releases.slice(0, 3);
   return (
     <div className="flex flex-col items-center gap-1 py-6 text-center">
       <AlchemySymbol className="h-16 w-16 text-citation/70" />
@@ -383,6 +390,50 @@ export function AboutTab() {
         <Globe className="h-3.5 w-3.5" />
         github.com/thrashr888/alchemy
       </button>
+      {shownReleases.length > 0 && (
+        <div className="mt-6 w-full text-left">
+          <div className="mb-2 text-micro font-semibold uppercase tracking-wide text-subtle-foreground">
+            What&rsquo;s new
+          </div>
+          <div className="flex flex-col gap-4">
+            {shownReleases.map((release) => (
+              <div key={release.version} className="rounded-md border border-border p-3">
+                <div className="mb-1.5 flex items-baseline gap-2">
+                  <button
+                    type="button"
+                    className="text-body font-semibold hover:underline"
+                    onClick={() => void openUrl(release.url)}
+                  >
+                    {release.name || `v${release.version}`}
+                  </button>
+                  {release.version === version && (
+                    <span className="rounded bg-primary/15 px-1.5 py-0.5 text-micro font-medium text-citation">
+                      installed
+                    </span>
+                  )}
+                  {release.publishedAt && (
+                    <span className="ml-auto text-micro text-subtle-foreground">
+                      {new Date(release.publishedAt).toLocaleDateString()}
+                    </span>
+                  )}
+                </div>
+                <div className="text-caption leading-relaxed text-muted-foreground">
+                  <Markdown>{release.body}</Markdown>
+                </div>
+              </div>
+            ))}
+          </div>
+          {!showAllReleases && releases.length > 3 && (
+            <button
+              type="button"
+              className="mt-3 text-caption text-citation hover:underline"
+              onClick={() => setShowAllReleases(true)}
+            >
+              Show all {releases.length} releases
+            </button>
+          )}
+        </div>
+      )}
       <div className="mt-4 text-caption text-subtle-foreground">© {new Date().getFullYear()} Paul Thrasher</div>
     </div>
   );

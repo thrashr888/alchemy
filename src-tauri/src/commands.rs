@@ -9870,6 +9870,62 @@ pub fn build_info() -> BuildInfo {
     }
 }
 
+/// One entry of the GitHub releases feed. The hand-written release notes
+/// live in each release's body, so About reads them live instead of the
+/// app re-bundling them into its own artifacts.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseNote {
+    /// Tag with any leading `v` trimmed, matching the app's own version.
+    pub version: String,
+    pub name: String,
+    /// Release body, GitHub-flavored Markdown.
+    pub body: String,
+    pub published_at: String,
+    pub url: String,
+}
+
+#[tauri::command]
+pub async fn release_history() -> Result<Vec<ReleaseNote>, String> {
+    #[derive(serde::Deserialize)]
+    struct GhRelease {
+        tag_name: String,
+        name: Option<String>,
+        body: Option<String>,
+        published_at: Option<String>,
+        html_url: String,
+        draft: bool,
+        prerelease: bool,
+    }
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("alchemy/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|err| err.to_string())?;
+    let releases: Vec<GhRelease> = client
+        .get("https://api.github.com/repos/thrashr888/alchemy/releases?per_page=30")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|err| format!("could not fetch the release feed: {err}"))?
+        .error_for_status()
+        .map_err(|err| format!("release feed: {err}"))?
+        .json()
+        .await
+        .map_err(|err| format!("could not parse the release feed: {err}"))?;
+    Ok(releases
+        .into_iter()
+        .filter(|release| !release.draft && !release.prerelease)
+        .map(|release| ReleaseNote {
+            version: release.tag_name.trim_start_matches('v').to_string(),
+            name: release.name.unwrap_or_default(),
+            body: release.body.unwrap_or_default(),
+            published_at: release.published_at.unwrap_or_default(),
+            url: release.html_url,
+        })
+        .collect())
+}
+
 #[tauri::command]
 pub fn get_model_stats(state: State<'_, AppState>) -> Vec<ModelStat> {
     state.model_stats_snapshot()
