@@ -661,7 +661,10 @@ export function GalleryPane() {
           onScroll={(e) =>
             scrollMemory.set(scrollKey, e.currentTarget.scrollTop)
           }
-          className="min-h-0 flex-1 overflow-y-auto px-6 py-4"
+          // select-none: cards are a browse surface, not prose — and the
+          // marquee's own userSelect guard only lands after the 4px drag
+          // threshold, so selectable card text paints a highlight first.
+          className="min-h-0 flex-1 select-none overflow-y-auto px-6 py-4"
         >
           {/* Skip the one-column flash while the first measure lands. */}
           {width > 0 && (
