@@ -257,9 +257,24 @@ export interface BuildInfo {
 /** One growth proposal (RFC-living-notebook Pillar 2): a URL the
  *  notebook's own sources keep pointing at, ranked against standing
  *  queries mined from thin retrievals. Nothing fetches until Add. */
+/** The Grow surface payload: what the notebook is hungry for, plus the
+ *  free tiers' proposals (local Spotlight + links mined from sources). */
+export interface GrowthOverview {
+  queries: string[];
+  proposals: GrowthProposal[];
+}
+
+/** The open-web tier's result (Firecrawl keyless search, metered). */
+export interface GrowthWebSearch {
+  proposals: GrowthProposal[];
+  creditsThisMonth: number;
+  capped: boolean;
+}
+
 export interface GrowthProposal {
-  /** "web" (url is a link) | "local" (url is an on-disk path). */
-  kind: "web" | "local";
+  /** "web" (link mined from sources) | "local" (on-disk path) |
+   *  "search" (found on the open web via Firecrawl). */
+  kind: "web" | "local" | "search";
   url: string;
   /** Best anchor text seen for the link, or the file's name. */
   anchor: string;

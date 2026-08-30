@@ -278,6 +278,134 @@ pub async fn local_proposals(sources: &[Source], queries: &[String]) -> Vec<Grow
     out
 }
 
+/// The open-web tier: standing queries through Firecrawl's keyless search
+/// (docs.firecrawl.dev — free tier is 1,000 credits/month, search costs 2
+/// credits per query at our result size). Only search metadata comes back;
+/// the page itself is fetched by the existing import path when the user
+/// accepts a proposal. Usage is metered in traces/growth.jsonl against a
+/// soft cap kept well inside the free tier.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrowthWebSearch {
+    pub proposals: Vec<GrowthProposal>,
+    pub credits_this_month: u32,
+    pub capped: bool,
+}
+
+pub const WEB_CREDIT_CAP: u32 = 800;
+const CREDITS_PER_SEARCH: u32 = 2;
+const GROWTH_TRACE: &str = "growth.jsonl";
+
+pub fn credits_this_month(trace_dir: &Path, now_ms: i64) -> u32 {
+    use chrono::Datelike;
+    let now = chrono::DateTime::from_timestamp_millis(now_ms).unwrap_or_default();
+    let mut total = 0u32;
+    let Ok(text) = std::fs::read_to_string(trace_dir.join(GROWTH_TRACE)) else {
+        return 0;
+    };
+    for line in text.lines() {
+        let Ok(rec) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let ts = rec.get("ts").and_then(|v| v.as_i64()).unwrap_or(0);
+        let then = chrono::DateTime::from_timestamp_millis(ts).unwrap_or_default();
+        if (then.year(), then.month()) == (now.year(), now.month()) {
+            total += rec.get("credits").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        }
+    }
+    total
+}
+
+pub async fn web_search(
+    trace_dir: &Path,
+    sources: &[Source],
+    queries: &[String],
+    now_ms: i64,
+) -> GrowthWebSearch {
+    let mut spent = credits_this_month(trace_dir, now_ms);
+    if spent >= WEB_CREDIT_CAP {
+        return GrowthWebSearch {
+            proposals: Vec::new(),
+            credits_this_month: spent,
+            capped: true,
+        };
+    }
+    let existing: HashSet<String> = sources
+        .iter()
+        .filter(|s| !s.url.is_empty())
+        .filter_map(|s| normalize_url(&s.url))
+        .collect();
+    let Ok(client) = reqwest::Client::builder()
+        .user_agent(concat!("alchemy/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+    else {
+        return GrowthWebSearch {
+            proposals: Vec::new(),
+            credits_this_month: spent,
+            capped: false,
+        };
+    };
+    let mut out: Vec<GrowthProposal> = Vec::new();
+    let mut seen = HashSet::new();
+    for query in queries.iter().take(2) {
+        if spent + CREDITS_PER_SEARCH > WEB_CREDIT_CAP {
+            break;
+        }
+        // Keyless request — no Authorization header; the free tier answers
+        // at low rate limits, which one search per pane-open never troubles.
+        let resp = client
+            .post("https://api.firecrawl.dev/v2/search")
+            .json(&serde_json::json!({ "query": query, "limit": 5 }))
+            .send()
+            .await;
+        let Ok(resp) = resp else { continue };
+        let Ok(body) = resp.json::<serde_json::Value>().await else {
+            continue;
+        };
+        spent += CREDITS_PER_SEARCH;
+        crate::trace::log_file(
+            trace_dir,
+            GROWTH_TRACE,
+            serde_json::json!({ "ts": now_ms, "credits": CREDITS_PER_SEARCH, "query": query }),
+        );
+        let hits = body
+            .pointer("/data/web")
+            .and_then(|w| w.as_array())
+            .cloned()
+            .unwrap_or_default();
+        for (rank, hit) in hits.into_iter().enumerate() {
+            let Some(raw) = hit.get("url").and_then(|u| u.as_str()) else {
+                continue;
+            };
+            let Some(url) = normalize_url(raw) else {
+                continue;
+            };
+            if existing.contains(&url) || !seen.insert(url.clone()) {
+                continue;
+            }
+            out.push(GrowthProposal {
+                kind: "search".into(),
+                url,
+                anchor: hit
+                    .get("title")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                mentions: 0,
+                source_count: 0,
+                matched_query: query.clone(),
+                score: 10.0 - rank as f32,
+            });
+        }
+    }
+    GrowthWebSearch {
+        proposals: out,
+        credits_this_month: spent,
+        capped: false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

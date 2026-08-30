@@ -9,7 +9,8 @@ import type {
   Citation,
   AiConfig,
   BuildInfo,
-  GrowthProposal,
+  GrowthOverview,
+  GrowthWebSearch,
   ReleaseNote,
   ChatConfig,
   CloudFolder,
@@ -524,9 +525,12 @@ export const api = {
   releaseHistory: () => run(query<ReleaseNote[]>("release_history", {})),
   /** Source ids ever cited in retrieval traces — the "uncited" facet. */
   citedSourceIds: () => run(query<string[]>("cited_source_ids", {})),
-  /** The growth tray: frontier links ranked against standing queries. */
+  /** The Grow surface: standing queries + the free tiers' proposals. */
   growthProposals: (notebookId: string) =>
-    run(query<GrowthProposal[]>("growth_proposals", { notebookId })),
+    run(query<GrowthOverview>("growth_proposals", { notebookId })),
+  /** The open-web tier — explicit, per-notebook opt-in (Firecrawl). */
+  growthWebSearch: (notebookId: string) =>
+    run(slow<GrowthWebSearch>("growth_web_search", { notebookId })),
   convertNoteToSource: (noteId: string) =>
     run(ai<Source>("convert_note_to_source", { noteId })),
   generateArtifact: (

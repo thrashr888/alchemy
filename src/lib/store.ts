@@ -487,6 +487,7 @@ export const useStore = create<AppState>((set, get) => {
     // the pane watches so agent writes appear live (mcp://changed).
     ledgerOpen: false,
     galleryOpen: false,
+    growOpen: false,
     readerEditIntent: null,
     ledgerBump: 0,
     registryBump: 0,
@@ -2291,6 +2292,7 @@ export const useStore = create<AppState>((set, get) => {
         pendingInput: "",
         galleryOpen: false,
         ledgerOpen: false,
+        growOpen: false,
       });
       if (get().reader.open) get().closeReader();
       get().pushToast(
@@ -2482,6 +2484,7 @@ export const useStore = create<AppState>((set, get) => {
         set({
           ledgerOpen: false,
           galleryOpen: false,
+          growOpen: false,
           reader: { open: true, history: next, index },
         });
         return;
@@ -2490,6 +2493,7 @@ export const useStore = create<AppState>((set, get) => {
       set({
         ledgerOpen: false,
         galleryOpen: false,
+        growOpen: false,
         reader: { open: true, history: next, index: next.length - 1 },
       });
     },
@@ -3176,6 +3180,7 @@ async function applyNav(delta: 1 | -1): Promise<void> {
       useStore.setState({
         galleryOpen: target.mode === "gallery",
         ledgerOpen: target.mode === "ledger",
+        growOpen: false,
       });
       if (st.reader.open) st.closeReader();
     }
@@ -3214,8 +3219,17 @@ export function toggleNotebookPanel(panel: NotebookPanel): void {
   if (panel === "sources") s.toggleSources();
   else if (panel === "studio") s.toggleStudio();
   else if (panel === "gallery")
-    useStore.setState({ galleryOpen: !s.galleryOpen, ledgerOpen: false });
-  else useStore.setState({ ledgerOpen: !s.ledgerOpen, galleryOpen: false });
+    useStore.setState({
+      galleryOpen: !s.galleryOpen,
+      ledgerOpen: false,
+      growOpen: false,
+    });
+  else
+    useStore.setState({
+      ledgerOpen: !s.ledgerOpen,
+      galleryOpen: false,
+      growOpen: false,
+    });
 }
 
 /** Depth of an in-progress compound navigation (see `navAtomic`). */

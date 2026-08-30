@@ -29,6 +29,7 @@ import {
   visibleTitle,
 } from "@/lib/utils";
 import { sourceIcon } from "@/lib/sourceIcon";
+import { loadGrowthDismissed } from "@/lib/growth";
 import { AttachToCardModal } from "./RegistrySection";
 import {
   SourceMetaModals,
@@ -91,38 +92,6 @@ function saveFoldersCollapsed(state: Record<string, boolean>) {
 // unreachable keeps reset real backend state, but a kept duplicate or
 // missing file is a viewing preference — the signal itself stays true and
 // agents still see it in the MCP report.
-/** Dismissed growth proposals, per notebook, with a 30-day decay so a
- *  once-rejected link can earn a second look if it keeps accumulating
- *  mentions (RFC-living-notebook Pillar 2 — decay stale proposals). */
-function loadGrowthDismissed(notebookId: string | null): Record<string, number> {
-  if (!notebookId) return {};
-  try {
-    const raw = JSON.parse(
-      localStorage.getItem(`growthDismissed:${notebookId}`) ?? "{}",
-    ) as Record<string, number>;
-    const cutoff = Date.now() - 30 * 86_400_000;
-    return Object.fromEntries(
-      Object.entries(raw).filter(([, ts]) => ts > cutoff),
-    );
-  } catch {
-    return {};
-  }
-}
-function saveGrowthDismissed(
-  notebookId: string | null,
-  dismissed: Record<string, number>,
-) {
-  if (!notebookId) return;
-  try {
-    localStorage.setItem(
-      `growthDismissed:${notebookId}`,
-      JSON.stringify(dismissed),
-    );
-  } catch {
-    /* storage full or unavailable — the dismissal just won't stick */
-  }
-}
-
 function loadHygieneKept(notebookId: string | null): Record<string, boolean> {
   if (!notebookId) return {};
   try {
@@ -421,12 +390,9 @@ export function SourcesPanel() {
   // the notebook's own sources, loaded once per notebook. Nothing fetches
   // until the user accepts a proposal.
   const [growth, setGrowth] = useState<GrowthProposal[]>([]);
-  const [growthOpen, setGrowthOpen] = useState(false);
   const [growthDismissed, setGrowthDismissed] = useState<
     Record<string, number>
   >({});
-  const addSourceUrl = useStore((s) => s.addSourceUrl);
-  const addSourceFiles = useStore((s) => s.addSourceFiles);
   useEffect(() => {
     setGrowth([]);
     setGrowthDismissed(loadGrowthDismissed(currentId));
@@ -434,8 +400,8 @@ export function SourcesPanel() {
     let stale = false;
     api
       .growthProposals(currentId)
-      .then((props) => {
-        if (!stale) setGrowth(props);
+      .then((overview) => {
+        if (!stale) setGrowth(overview.proposals);
       })
       .catch(() => undefined);
     return () => {
@@ -449,13 +415,6 @@ export function SourcesPanel() {
   const growthVisible = growth.filter(
     (p) => !growthDismissed[p.url] && !existingUrls.has(p.url),
   );
-  const dismissGrowth = (url: string) => {
-    setGrowthDismissed((m) => {
-      const next = { ...m, [url]: Date.now() };
-      saveGrowthDismissed(currentId, next);
-      return next;
-    });
-  };
 
   // Search-first navigation (RFC-living-notebook Pillar 1): past a handful
   // of sources the filter box is the way in. Facets narrow by kind, tag,
@@ -1060,7 +1019,13 @@ export function SourcesPanel() {
             {growthVisible.length > 0 && (
               <button
                 type="button"
-                onClick={() => setGrowthOpen(true)}
+                onClick={() =>
+                  useStore.setState({
+                    growOpen: true,
+                    galleryOpen: false,
+                    ledgerOpen: false,
+                  })
+                }
                 className="mb-1 flex w-full items-center gap-2 rounded-md border border-border bg-surface-2/60 px-2 py-1.5 text-left hover:bg-surface-2"
               >
                 <Globe className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -1620,79 +1585,6 @@ export function SourcesPanel() {
         noteEdit={noteEdit}
         setNoteEdit={setNoteEdit}
       />
-
-      {/* Growth review (RFC-living-notebook Pillar 2): the consent tier —
-          every fetch of a new origin is an explicit Add here. */}
-      <Modal
-        open={growthOpen}
-        onClose={() => setGrowthOpen(false)}
-        title="Grow this notebook"
-        width="max-w-md"
-      >
-        <div className="flex flex-col gap-2">
-          <p className="text-micro leading-relaxed text-subtle-foreground">
-            Pages your sources keep pointing at
-            {growthVisible.some((p) => p.matchedQuery)
-              ? ", ranked against questions this notebook answered thinly"
-              : ""}
-            . Nothing is fetched unless you add it.
-          </p>
-          {growthVisible.length === 0 ? (
-            <EmptyState title="Nothing to add right now" />
-          ) : (
-            growthVisible.map((p) => (
-              <div
-                key={p.url}
-                className="flex items-center gap-2 rounded-md border border-border px-2.5 py-2"
-              >
-                <div className="min-w-0 flex-1">
-                  <div
-                    className="truncate text-body text-foreground"
-                    title={p.url}
-                  >
-                    {p.anchor || p.url.replace(/^https?:\/\//, "")}
-                  </div>
-                  <div className="truncate text-micro text-muted-foreground">
-                    {p.kind === "local" ? (
-                      <>On this Mac · {p.url}</>
-                    ) : (
-                      <>
-                        {hostname(p.url)} · seen {p.mentions}×
-                        {p.sourceCount > 1
-                          ? ` in ${p.sourceCount} sources`
-                          : ""}
-                      </>
-                    )}
-                    {p.matchedQuery && <> · asked: “{p.matchedQuery}”</>}
-                  </div>
-                </div>
-                <Button
-                  variant="ghost"
-                  onClick={() => {
-                    dismissGrowth(p.url);
-                    if (p.kind === "local") void addSourceFiles([p.url]);
-                    else void addSourceUrl(p.url);
-                  }}
-                  title={
-                    p.kind === "local"
-                      ? "Add this file as a source"
-                      : "Fetch this page and add it as a source"
-                  }
-                >
-                  Add
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => dismissGrowth(p.url)}
-                  title="Hide this proposal for 30 days"
-                >
-                  Dismiss
-                </Button>
-              </div>
-            ))
-          )}
-        </div>
-      </Modal>
 
       {/* Hygiene review (RFC-source-hygiene): every removal is a human
           decision — per-item Keep / Remove, nothing automatic. */}

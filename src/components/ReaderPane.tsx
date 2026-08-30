@@ -41,6 +41,7 @@ import {
   AppWindow,
   ArrowLeft,
   ArrowRight,
+  Sprout,
   BookOpen,
   ChevronDown,
   ChevronUp,
@@ -430,16 +431,18 @@ export function useElementWidth(ref: React.RefObject<HTMLElement | null>): numbe
 export function CenterModeTabs() {
   const hasDocs = useStore((s) => s.reader.history.length > 0);
   const active = useStore((s) =>
-    s.galleryOpen
-      ? "gallery"
-      : s.ledgerOpen
-        ? "ledger"
-        : s.reader.open
-          ? "reader"
-          : "chat",
+    s.growOpen
+      ? "grow"
+      : s.galleryOpen
+        ? "gallery"
+        : s.ledgerOpen
+          ? "ledger"
+          : s.reader.open
+            ? "reader"
+            : "chat",
   );
   const tab = (
-    id: "chat" | "reader" | "gallery" | "ledger",
+    id: "chat" | "reader" | "gallery" | "ledger" | "grow",
     icon: React.ReactNode,
     label: string,
     onClick: () => void,
@@ -467,7 +470,11 @@ export function CenterModeTabs() {
   return (
     <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5">
       {tab("chat", <MessageSquare className="h-3.5 w-3.5" />, "Chat", () => {
-        useStore.setState({ ledgerOpen: false, galleryOpen: false });
+        useStore.setState({
+          ledgerOpen: false,
+          galleryOpen: false,
+          growOpen: false,
+        });
         s.closeReader();
       })}
       {tab(
@@ -478,15 +485,31 @@ export function CenterModeTabs() {
           useStore.setState((st) => ({
             ledgerOpen: false,
             galleryOpen: false,
+            growOpen: false,
             reader: { ...st.reader, open: true },
           })),
         !hasDocs,
       )}
       {tab("gallery", <LayoutGrid className="h-3.5 w-3.5" />, "Gallery", () =>
-        useStore.setState({ galleryOpen: true, ledgerOpen: false }),
+        useStore.setState({
+          galleryOpen: true,
+          ledgerOpen: false,
+          growOpen: false,
+        }),
       )}
       {tab("ledger", <Logs className="h-3.5 w-3.5" />, "Ledger", () =>
-        useStore.setState({ ledgerOpen: true, galleryOpen: false }),
+        useStore.setState({
+          ledgerOpen: true,
+          galleryOpen: false,
+          growOpen: false,
+        }),
+      )}
+      {tab("grow", <Sprout className="h-3.5 w-3.5" />, "Grow", () =>
+        useStore.setState({
+          growOpen: true,
+          galleryOpen: false,
+          ledgerOpen: false,
+        }),
       )}
     </div>
   );

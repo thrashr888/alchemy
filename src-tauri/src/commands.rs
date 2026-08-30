@@ -10057,24 +10057,48 @@ pub async fn seed_scale_fixture(
     Ok(nb.id)
 }
 
-/// The growth tray's contents (docs/RFC-living-notebook.md Pillar 2,
-/// phase 2): outbound links the notebook's own sources keep pointing at,
-/// ranked against standing queries mined from thin retrievals. Computed on
-/// demand from stored content and local traces — no model call, no network;
-/// fetching happens only when the user accepts a proposal.
+/// One payload for the Grow surface (docs/RFC-living-notebook.md Pillar 2).
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GrowthOverview {
+    /// What this notebook is hungry for — recent thin retrievals.
+    pub queries: Vec<String>,
+    pub proposals: Vec<crate::growth::GrowthProposal>,
+}
+
+/// The growth surface's contents (docs/RFC-living-notebook.md Pillar 2,
+/// phase 2): the notebook's standing queries, plus proposals from the
+/// tiers that cost nothing — Spotlight matches on this Mac and outbound
+/// links the notebook's own sources keep pointing at. Computed on demand
+/// from stored content and local traces — no model call, no network;
+/// fetching happens only when the user accepts a proposal. The open-web
+/// tier is a separate, explicit call (growth_web_search).
 #[tauri::command]
 pub async fn growth_proposals(
     state: State<'_, AppState>,
     notebook_id: String,
-) -> Result<Vec<crate::growth::GrowthProposal>, String> {
+) -> Result<GrowthOverview, String> {
     // With content: the frontier lives in the text (list_sources strips it).
     let sources = e(state.db.sources_with_content(&notebook_id).await)?;
     let queries = crate::growth::standing_queries(&state.trace_dir, &notebook_id, now());
     // Local hits lead — Spotlight matches for the notebook's open questions
     // cost nothing to add — then the web frontier mined from the text.
-    let mut out = crate::growth::local_proposals(&sources, &queries).await;
-    out.extend(crate::growth::proposals(&sources, &queries));
-    Ok(out)
+    let mut proposals = crate::growth::local_proposals(&sources, &queries).await;
+    proposals.extend(crate::growth::proposals(&sources, &queries));
+    Ok(GrowthOverview { queries, proposals })
+}
+
+/// The open-web tier, run only from the Grow pane after the user enables
+/// it for a notebook: standing queries through Firecrawl's keyless search,
+/// metered against a soft monthly cap inside the free tier.
+#[tauri::command]
+pub async fn growth_web_search(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<crate::growth::GrowthWebSearch, String> {
+    let sources = e(state.db.list_sources(&notebook_id).await)?;
+    let queries = crate::growth::standing_queries(&state.trace_dir, &notebook_id, now());
+    Ok(crate::growth::web_search(&state.trace_dir, &sources, &queries, now()).await)
 }
 
 #[tauri::command]

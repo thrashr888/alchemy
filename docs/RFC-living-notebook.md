@@ -169,11 +169,19 @@ pass.
 
 ## Phasing
 
-1. Pillar 1 (UX) — pure frontend, unblocks everything, no model cost.
-2. Pillar 2 gap detection + frontier from *existing* sources (no new
-   origins), proposal tray.
-3. Pillar 3 cluster + retirement passes on night shift.
-4. Wiki view; open-web frontier behind explicit per-notebook opt-in.
+1. ~~Pillar 1 (UX)~~ — shipped: virtualized panel, facets, rollups,
+   uncited filter, 5k fixture (12ms filter keystrokes, 21–35 mounted
+   rows at any scroll position).
+2. ~~Pillar 2 free tiers + tray~~ — shipped: standing queries from thin
+   retrievals, Spotlight tier (two-token name matches), mined-link tier,
+   Sources-panel tray.
+3. ~~Grow center pane + open-web tier~~ — shipped: a Grow mode beside
+   Chat/Reader/Gallery/Ledger showing the hungry-for queries and all
+   tiers; Firecrawl keyless search behind a per-notebook enable, metered
+   in traces/growth.jsonl against an 800-credit soft cap (measured: 2
+   credits per query).
+4. Night-shift scheduling for the sweeps; Pillar 3 cluster + retirement
+   passes; the wiki view (OKF pages).
 
 At 1M+ sources the answer is "many notebooks + meta-chat", not one
 table: the router already federates across notebooks, and per-notebook
