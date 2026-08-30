@@ -490,6 +490,8 @@ pub fn run() {
             commands::restore_note,
             commands::build_info,
             commands::release_history,
+            commands::cited_source_ids,
+            commands::seed_scale_fixture,
             commands::update_note,
             commands::note_opened,
             commands::convert_note_to_source,

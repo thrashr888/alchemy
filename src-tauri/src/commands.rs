@@ -9926,6 +9926,137 @@ pub async fn release_history() -> Result<Vec<ReleaseNote>, String> {
         .collect())
 }
 
+/// Every source id that has appeared as a citation in the retrieval traces
+/// (current JSONL plus the one rotated generation — months of history at the
+/// 5 MB rotation size). Powers the Sources panel's "uncited" facet: absence
+/// from this set is the signal a source never earns retrieval
+/// (docs/RFC-living-notebook.md, Pillar 1 hygiene).
+#[tauri::command]
+pub fn cited_source_ids(state: State<'_, AppState>) -> Vec<String> {
+    let mut ids = std::collections::HashSet::new();
+    for file in ["retrieval.jsonl", "retrieval.1.jsonl"] {
+        let Ok(text) = std::fs::read_to_string(state.trace_dir.join(file)) else {
+            continue;
+        };
+        for line in text.lines() {
+            let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let Some(cites) = record.get("citations").and_then(|c| c.as_array()) else {
+                continue;
+            };
+            for cite in cites {
+                if let Some(id) = cite.get("sourceId").and_then(|s| s.as_str()) {
+                    if !id.is_empty() {
+                        ids.insert(id.to_string());
+                    }
+                }
+            }
+        }
+    }
+    ids.into_iter().collect()
+}
+
+/// Seed a synthetic notebook for the scale gate (docs/RFC-living-notebook.md
+/// Pillar 1): thousands of source rows — busy web domains for the rollup
+/// fold, folders with children, tagged files at varied ages — inserted in
+/// one bulk commit with no chunks, so it exercises the panel, not the
+/// embedder. The notebook stays around afterwards as a worked example, per
+/// house convention on fixtures.
+#[tauri::command]
+pub async fn seed_scale_fixture(
+    state: State<'_, AppState>,
+    count: Option<usize>,
+) -> Result<String, String> {
+    let total = count.unwrap_or(5_000).clamp(100, 20_000);
+    let ts = now();
+    let nb = Notebook {
+        id: new_id(),
+        icon: auto_notebook_icon("Scale fixture"),
+        title: format!("Scale fixture ({total} sources)"),
+        created_at: ts,
+        updated_at: ts,
+        color: String::new(),
+        status: String::new(),
+        source_count: 0,
+        note_count: 0,
+        report_count: 0,
+    };
+    e(state.db.create_notebook(&nb).await)?;
+
+    const HOSTS: [&str; 6] = [
+        "arxiv.org",
+        "github.com",
+        "en.wikipedia.org",
+        "news.ycombinator.com",
+        "developer.apple.com",
+        "docs.rs",
+    ];
+    const TAGS: [&str; 5] = ["research", "todo", "reference", "draft", "archive"];
+    const TOPICS: [&str; 8] = [
+        "Field Notes",
+        "Survey",
+        "Interview",
+        "Benchmark",
+        "Design Review",
+        "Postmortem",
+        "Reading",
+        "Spec",
+    ];
+    let doc_title = |i: usize| format!("{} {:05}", TOPICS[i % TOPICS.len()], i);
+    let day = 86_400_000i64;
+    let mut sources: Vec<Source> = Vec::with_capacity(total);
+    let blank = |i: usize, title: String, source_type: &str| Source {
+        id: format!("fx-scale-{i:05}"),
+        notebook_id: nb.id.clone(),
+        title,
+        source_type: source_type.into(),
+        url: String::new(),
+        content: String::new(),
+        char_count: 1_200,
+        chunk_count: 0,
+        created_at: ts - (i as i64 % 90) * day,
+        status: "ready".into(),
+        error: String::new(),
+        parent_id: String::new(),
+        mtime: 0,
+        author: String::new(),
+        image_url: String::new(),
+        tags: TAGS[i % TAGS.len()].to_string(),
+        note: String::new(),
+        fetched_at: ts - (i as i64 % 90) * day,
+        fetch_failures: 0,
+    };
+    // Three folders holding a third of the rows between them, so collapse
+    // and indent carry real weight.
+    let folder_kids = total / 3;
+    for f in 0..3 {
+        let mut folder = blank(total + f, format!("Project {}", doc_title(f)), "folder");
+        folder.id = format!("fx-scale-folder-{f}");
+        folder.url = format!("/tmp/fixtures/{f}");
+        folder.char_count = 0;
+        sources.push(folder);
+    }
+    for i in 0..total {
+        if i < folder_kids {
+            let mut s = blank(i, format!("{}.md", doc_title(i)), "markdown");
+            s.parent_id = format!("fx-scale-folder-{}", i % 3);
+            sources.push(s);
+        } else if i < folder_kids * 2 {
+            // Loose web sources clustered on a few hosts — the rollup case.
+            let host = HOSTS[i % HOSTS.len()];
+            let mut s = blank(i, doc_title(i), "url");
+            s.url = format!("https://{host}/item/{i}");
+            sources.push(s);
+        } else {
+            sources.push(blank(i, doc_title(i), "text"));
+        }
+    }
+    e(state.db.insert_sources_bulk(&sources).await)?;
+    e(state.db.touch_notebook(&nb.id, ts).await)?;
+    Ok(nb.id)
+}
+
 #[tauri::command]
 pub fn get_model_stats(state: State<'_, AppState>) -> Vec<ModelStat> {
     state.model_stats_snapshot()

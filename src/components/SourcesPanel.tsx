@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { removeSourcesGuarded, useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import {
@@ -52,6 +53,7 @@ import {
   Cloud,
   MessageSquare,
   Package,
+  Search,
   Tag,
 } from "lucide-react";
 
@@ -173,6 +175,32 @@ export function Favicon({ url }: { url: string }) {
   );
 }
 
+const FOLDER_TYPES = ["folder", "git", "notion", "obsidian"];
+
+/** Facet kinds: coarse buckets a narrow panel can offer as chips. */
+type SourceKind = "web" | "files" | "images" | "apple" | "folders";
+type FreshFacet = "week" | "month" | "stale" | "uncited";
+function sourceKind(s: Source): SourceKind {
+  if (FOLDER_TYPES.includes(s.sourceType)) return "folders";
+  if (s.sourceType === "url" || s.sourceType === "html") return "web";
+  if (s.sourceType === "image") return "images";
+  if (s.sourceType === "mac") return "apple";
+  return "files";
+}
+const KIND_LABEL: Record<SourceKind, string> = {
+  web: "Web",
+  files: "Files",
+  images: "Images",
+  apple: "Apple",
+  folders: "Folders",
+};
+
+/** One row of the panel: a source (folder children indent) or a domain
+ *  rollup grouping loose web sources from one busy host. */
+type SourceRow =
+  | { kind: "source"; s: Source; indent: boolean }
+  | { kind: "group"; host: string; kids: Source[] };
+
 function hostname(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -183,6 +211,36 @@ function hostname(url: string): string {
 
 /** Compact selection checkbox; supports the folder/master indeterminate state.
  *  Clicks stop propagating so the row's open-reader handler never fires. */
+/** One compact facet toggle under the filter box. */
+function FacetChip({
+  active,
+  onClick,
+  title,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-pressed={active}
+      className={cn(
+        "rounded-full border px-2 py-0.5 text-micro transition-colors",
+        active
+          ? "border-primary/50 bg-primary/15 text-citation"
+          : "border-border text-muted-foreground hover:bg-surface-2",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
 function SelectBox({
   checked,
   indeterminate = false,
@@ -326,18 +384,114 @@ export function SourcesPanel() {
     }
     return m;
   }, [sources]);
-  const rows: { s: Source; indent: boolean }[] = [];
-  for (const s of sources) {
-    if (s.parentId) continue;
-    rows.push({ s, indent: false });
-    if (["folder", "git", "notion", "obsidian"].includes(s.sourceType)) {
-      const kids = childrenOf.get(s.id) ?? [];
-      if (!isCollapsed(s.id, kids.length)) {
-        for (const c of kids) {
-          rows.push({ s: c, indent: true });
-        }
+
+  // Search-first navigation (RFC-living-notebook Pillar 1): past a handful
+  // of sources the filter box is the way in. Facets narrow by kind, tag,
+  // and freshness; everything applies before rows are built.
+  const [query, setQuery] = useState("");
+  const [kindFacet, setKindFacet] = useState<SourceKind | null>(null);
+  const [tagFacet, setTagFacet] = useState<string | null>(null);
+  const [freshFacet, setFreshFacet] = useState<FreshFacet | null>(null);
+  // The uncited facet's data loads on first use: source ids that have ever
+  // come back as citations (retrieval traces, months of history).
+  const [citedIds, setCitedIds] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    if (freshFacet !== "uncited" || citedIds) return;
+    api
+      .citedSourceIds()
+      .then((ids) => setCitedIds(new Set(ids)))
+      .catch(() => setCitedIds(new Set()));
+  }, [freshFacet, citedIds]);
+
+  const q = query.trim().toLowerCase();
+  const filterActive = !!q || !!kindFacet || !!tagFacet || !!freshFacet;
+  const matchesFilters = (s: Source): boolean => {
+    if (kindFacet && sourceKind(s) !== kindFacet) return false;
+    if (tagFacet && !s.tags.split(" ").includes(tagFacet)) return false;
+    if (freshFacet) {
+      if (freshFacet === "uncited") {
+        // Folder containers carry no chunks, so "uncited" would flag every
+        // one of them; the facet is about content sources.
+        if (FOLDER_TYPES.includes(s.sourceType)) return false;
+        if (!citedIds || citedIds.has(s.id)) return false;
+      } else {
+        const age = Date.now() - (s.fetchedAt || s.createdAt);
+        if (freshFacet === "week" && age > 7 * 86_400_000) return false;
+        if (freshFacet === "month" && age > 30 * 86_400_000) return false;
+        if (freshFacet === "stale" && age <= 30 * 86_400_000) return false;
       }
     }
+    if (q) {
+      const hay =
+        `${s.title} ${s.url} ${s.tags} ${s.author}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  };
+
+  // Facet chips only offer what the notebook holds, with counts.
+  const kindCounts = useMemo(() => {
+    const m = new Map<SourceKind, number>();
+    for (const s of sources)
+      m.set(sourceKind(s), (m.get(sourceKind(s)) ?? 0) + 1);
+    return m;
+  }, [sources]);
+  const tagCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of sources)
+      for (const t of s.tags.split(" "))
+        if (t) m.set(t, (m.get(t) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
+  }, [sources]);
+
+  // Rows: folder children indent under their parent; loose web sources from
+  // a busy domain fold into a group row (Pillar 1 rollups) at rest —
+  // an active filter answers its own question, so it shows flat matches.
+  const rows: SourceRow[] = [];
+  const looseByHost = new Map<string, Source[]>();
+  if (!filterActive) {
+    for (const s of sources) {
+      if (s.parentId || s.sourceType !== "url" || !s.url) continue;
+      const host = hostname(s.url);
+      if (!host) continue;
+      const list = looseByHost.get(host);
+      if (list) list.push(s);
+      else looseByHost.set(host, [s]);
+    }
+  }
+  const hostEmitted = new Set<string>();
+  for (const s of sources) {
+    if (s.parentId) continue;
+    if (FOLDER_TYPES.includes(s.sourceType)) {
+      const kids = childrenOf.get(s.id) ?? [];
+      const matchKids = filterActive ? kids.filter(matchesFilters) : kids;
+      if (filterActive && !matchesFilters(s) && matchKids.length === 0)
+        continue;
+      rows.push({ kind: "source", s, indent: false });
+      // Filtering auto-expands: a match hidden under a collapsed folder
+      // reads as no match at all.
+      const expanded = filterActive
+        ? matchKids.length > 0
+        : !isCollapsed(s.id, kids.length);
+      if (expanded)
+        for (const c of filterActive ? matchKids : kids)
+          rows.push({ kind: "source", s: c, indent: true });
+      continue;
+    }
+    const host =
+      !filterActive && s.sourceType === "url" && s.url ? hostname(s.url) : "";
+    const hostKids = host ? (looseByHost.get(host) ?? []) : [];
+    if (hostKids.length >= 5) {
+      if (hostEmitted.has(host)) continue;
+      hostEmitted.add(host);
+      rows.push({ kind: "group", host, kids: hostKids });
+      if (!isCollapsed(`domain:${host}`, hostKids.length))
+        for (const c of hostKids)
+          rows.push({ kind: "source", s: c, indent: true });
+      continue;
+    }
+    if (filterActive && !matchesFilters(s)) continue;
+    rows.push({ kind: "source", s, indent: false });
   }
   const childCount = (folderId: string) =>
     (childrenOf.get(folderId) ?? []).length;
@@ -373,11 +527,25 @@ export function SourcesPanel() {
     () => new Set(picked?.kind === "sources" ? picked.ids : []),
     [picked],
   );
-  const rowIds = rows.map((r) => r.s.id);
+  const rowIds = rows.flatMap((r) => (r.kind === "source" ? [r.s.id] : []));
+
   const rowIdsRef = useRef(rowIds);
   rowIdsRef.current = rowIds;
 
   const listRef = useRef<HTMLDivElement>(null);
+  // Windowed rendering (Pillar 1): only the visible slice of rows mounts —
+  // a 10k-source notebook renders dozens of row components, not thousands.
+  // Heights are measured (error rows and folder meta run taller than 44px).
+  const rowVirtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => listRef.current,
+    estimateSize: () => 44,
+    overscan: 12,
+    getItemKey: (i) => {
+      const r = rows[i];
+      return r.kind === "group" ? `domain:${r.host}` : r.s.id;
+    },
+  });
   // An additive drag unions against the selection as it stood when the drag
   // began — unioning against the live selection would ratchet (rows swept
   // over once could never leave).
@@ -624,6 +792,76 @@ export function SourcesPanel() {
         </div>
       )}
 
+      {/* Search-first navigation: past a handful of sources the filter box
+          is the primary way in; chips narrow by kind, tag, freshness, and
+          citation history. Hidden in small notebooks — eight rows filter
+          themselves. */}
+      {currentId && sources.length > 8 && (
+        <div className="flex flex-col gap-1.5 border-b border-border px-3 py-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-subtle-foreground" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Filter sources…"
+              aria-label="Filter sources"
+              className="w-full rounded-md border border-input bg-transparent py-1 pl-7 pr-6 text-caption text-foreground outline-none placeholder:text-subtle-foreground focus:border-ring/60"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                aria-label="Clear filter"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-subtle-foreground hover:text-foreground"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {[...kindCounts.entries()]
+              .filter(([, n]) => n > 0)
+              .map(([kind, n]) => (
+                <FacetChip
+                  key={kind}
+                  active={kindFacet === kind}
+                  onClick={() =>
+                    setKindFacet(kindFacet === kind ? null : kind)
+                  }
+                >
+                  {KIND_LABEL[kind]} {n}
+                </FacetChip>
+              ))}
+            {tagCounts.map(([tag, n]) => (
+              <FacetChip
+                key={`#${tag}`}
+                active={tagFacet === tag}
+                onClick={() => setTagFacet(tagFacet === tag ? null : tag)}
+              >
+                #{tag} {n}
+              </FacetChip>
+            ))}
+            {(
+              [
+                ["week", "7d", "Fetched or added this week"],
+                ["month", "30d", "Fetched or added this month"],
+                ["stale", "Stale", "Untouched for over 30 days"],
+                ["uncited", "Uncited", "Never came back as a citation"],
+              ] as const
+            ).map(([id, label, title]) => (
+              <FacetChip
+                key={id}
+                active={freshFacet === id}
+                title={title}
+                onClick={() => setFreshFacet(freshFacet === id ? null : id)}
+              >
+                {label}
+              </FacetChip>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div
         ref={listRef}
         onPointerDown={marqueeDown}
@@ -756,14 +994,95 @@ export function SourcesPanel() {
                 </span>
               </button>
             )}
-            <div className="flex flex-col gap-0.5">
-              {rows.map(({ s, indent }) => {
-                const isFolder = [
-                  "folder",
-                  "git",
-                  "notion",
-                  "obsidian",
-                ].includes(s.sourceType);
+            {filterActive && rows.length === 0 && (
+              <EmptyState
+                title="No sources match"
+                hint="Clear the search or facet chips."
+              />
+            )}
+            <div
+              className="relative"
+              style={{ height: rowVirtualizer.getTotalSize() }}
+            >
+              {rowVirtualizer.getVirtualItems().map((vi) => {
+                const row = rows[vi.index];
+                const itemStyle = {
+                  position: "absolute" as const,
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  transform: `translateY(${vi.start}px)`,
+                };
+                if (row.kind === "group") {
+                  const { host, kids: groupKids } = row;
+                  const gid = `domain:${host}`;
+                  const onCount = groupKids.filter((k) =>
+                    isSelected(k.id),
+                  ).length;
+                  const collapsed = isCollapsed(gid, groupKids.length);
+                  return (
+                    <div
+                      key={vi.key}
+                      data-index={vi.index}
+                      ref={rowVirtualizer.measureElement}
+                      style={itemStyle}
+                      className="pb-0.5"
+                    >
+                      <div className="group relative flex items-center gap-2 rounded-md px-2 py-2 hover:bg-surface-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            toggleCollapsed(gid, groupKids.length)
+                          }
+                          aria-expanded={!collapsed}
+                          aria-label={
+                            collapsed
+                              ? `Show ${groupKids.length} sources from ${host}`
+                              : `Hide sources from ${host}`
+                          }
+                          className="relative z-20 shrink-0 cursor-pointer"
+                        >
+                          <span className="group-hover:hidden group-focus-within:hidden">
+                            <Favicon url={`https://${host}`} />
+                          </span>
+                          <ChevronRight
+                            className={cn(
+                              "hidden h-3.5 w-3.5 text-muted-foreground transition-transform duration-150 group-hover:block group-focus-within:block",
+                              !collapsed && "rotate-90",
+                            )}
+                          />
+                        </button>
+                        <span
+                          className="min-w-0 flex-1 truncate text-body text-foreground"
+                          title={`${groupKids.length} sources from ${host}`}
+                        >
+                          {host}
+                        </span>
+                        <span className="shrink-0 text-micro text-subtle-foreground">
+                          {groupKids.length}
+                        </span>
+                        <SelectBox
+                          checked={
+                            groupKids.length > 0 &&
+                            onCount === groupKids.length
+                          }
+                          indeterminate={
+                            onCount > 0 && onCount < groupKids.length
+                          }
+                          onToggle={() => {
+                            const want = onCount !== groupKids.length;
+                            for (const k of groupKids)
+                              if (isSelected(k.id) !== want)
+                                toggleSourceSelected(k.id);
+                          }}
+                          label={`Include ${host} sources in chat & generation`}
+                        />
+                      </div>
+                    </div>
+                  );
+                }
+                const { s, indent } = row;
+                const isFolder = FOLDER_TYPES.includes(s.sourceType);
                 const isMacNote = s.url.startsWith("cider://notes/note/");
                 const isMacReminders = s.url.startsWith(
                   "cider://reminders/list/",
@@ -786,7 +1105,13 @@ export function SourcesPanel() {
                 const isPicked = pickedIds.has(s.id);
                 return (
                   <div
-                    key={s.id}
+                    key={vi.key}
+                    data-index={vi.index}
+                    ref={rowVirtualizer.measureElement}
+                    style={itemStyle}
+                    className="pb-0.5"
+                  >
+                  <div
                     data-pick-id={s.id}
                     // Row content is pointer-events-none (clicks go to the
                     // CardAction), so the row carries the hover detail the
@@ -1091,6 +1416,7 @@ export function SourcesPanel() {
                         />
                       )}
                     </div>
+                  </div>
                   </div>
                 );
               })}

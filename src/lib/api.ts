@@ -517,6 +517,8 @@ export const api = {
   buildInfo: () => run(cmd<BuildInfo>("build_info", {})),
   /** The GitHub release feed, for About's What's new. */
   releaseHistory: () => run(query<ReleaseNote[]>("release_history", {})),
+  /** Source ids ever cited in retrieval traces — the "uncited" facet. */
+  citedSourceIds: () => run(query<string[]>("cited_source_ids", {})),
   convertNoteToSource: (noteId: string) =>
     run(ai<Source>("convert_note_to_source", { noteId })),
   generateArtifact: (

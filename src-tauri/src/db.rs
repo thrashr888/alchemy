@@ -1376,6 +1376,18 @@ impl Db {
         Ok(())
     }
 
+    /// Bulk-append source rows in one Lance commit. Fixture seeding (and any
+    /// future bulk importer) must not pay one commit per row — at thousands
+    /// of rows that is both slow and a fragment storm for later scans.
+    pub async fn insert_sources_bulk(&self, sources: &[Source]) -> Result<()> {
+        if sources.is_empty() {
+            return Ok(());
+        }
+        let schema = sources_schema();
+        let batch = source_batch(&schema, sources)?;
+        self.add_batch(T_SOURCES, schema, batch).await
+    }
+
     /// Insert a source row plus all of its embedded chunks atomically-ish.
     pub async fn insert_source(
         &self,
