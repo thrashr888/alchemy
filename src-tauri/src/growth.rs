@@ -299,28 +299,56 @@ pub const WEB_CREDIT_CAP: u32 = 800;
 const CREDITS_PER_SEARCH: u32 = 2;
 const GROWTH_TRACE: &str = "growth.jsonl";
 const WEB_CACHE: &str = "growth-web-cache.json";
-const WEB_ENABLED: &str = "growth-web.json";
 
-/// The per-notebook web-search opt-in, backend-owned (a JSON map beside
-/// the growth ledger) so the background sweep can act on it — a Lance
-/// column would need a schema migration on the store the installed app
-/// shares. The frontend migrates its old localStorage flag on first read.
-pub fn web_enabled(trace_dir: &Path, notebook_id: &str) -> bool {
-    std::fs::read_to_string(trace_dir.join(WEB_ENABLED))
+/// The per-notebook web-search opt-in is a real column on the notebook
+/// row (`growth_web`), so it travels with the data and the background
+/// sweep can act on it. It began life as a growth-web.json sidecar;
+/// migrate_web_flags moves old installs over once at boot.
+pub async fn web_enabled(db: &crate::db::Db, notebook_id: &str) -> bool {
+    db.list_notebooks()
+        .await
         .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .and_then(|v| v.get(notebook_id)?.as_bool())
+        .and_then(|nbs| nbs.into_iter().find(|n| n.id == notebook_id))
+        .map(|n| n.growth_web)
         .unwrap_or(false)
 }
 
-pub fn set_web_enabled(trace_dir: &Path, notebook_id: &str, on: bool) {
-    let mut map = std::fs::read_to_string(trace_dir.join(WEB_ENABLED))
+pub async fn set_web_enabled(
+    db: &crate::db::Db,
+    notebook_id: &str,
+    on: bool,
+) -> anyhow::Result<()> {
+    db.set_notebook_growth_web(notebook_id, on).await
+}
+
+/// Web-enabled notebooks, floored at 1 so the budget pacer never
+/// divides the month by zero notebooks.
+pub async fn web_enabled_count(db: &crate::db::Db) -> usize {
+    db.list_notebooks()
+        .await
+        .map(|nbs| nbs.iter().filter(|n| n.growth_web).count())
+        .unwrap_or(0)
+        .max(1)
+}
+
+/// One-time migration off the growth-web.json sidecar into prefs; the
+/// file is renamed so the copy never runs twice.
+pub async fn migrate_web_flags(db: &crate::db::Db, trace_dir: &Path) {
+    let path = trace_dir.join("growth-web.json");
+    let Some(map) = std::fs::read_to_string(&path)
         .ok()
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    map[notebook_id] = serde_json::Value::Bool(on);
-    let _ = std::fs::create_dir_all(trace_dir);
-    let _ = std::fs::write(trace_dir.join(WEB_ENABLED), map.to_string());
+    else {
+        return;
+    };
+    if let Some(obj) = map.as_object() {
+        for (id, v) in obj {
+            if let Some(b) = v.as_bool() {
+                let _ = set_web_enabled(db, id, b).await;
+            }
+        }
+    }
+    let _ = std::fs::rename(&path, trace_dir.join("growth-web.json.migrated"));
 }
 
 /// Refresh as fast as the budget allows: spread the credits left this
@@ -331,18 +359,6 @@ pub fn set_web_enabled(trace_dir: &Path, notebook_id: &str, on: bool) {
 /// hunger still busts it immediately; the pacer only governs repeats.
 const WEB_CACHE_TTL_MIN_MS: i64 = 86_400_000;
 const WEB_CACHE_TTL_MAX_MS: i64 = 30 * 86_400_000;
-
-fn web_enabled_count(trace_dir: &Path) -> usize {
-    std::fs::read_to_string(trace_dir.join(WEB_ENABLED))
-        .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .and_then(|v| {
-            v.as_object()
-                .map(|m| m.values().filter(|b| b.as_bool() == Some(true)).count())
-        })
-        .unwrap_or(0)
-        .max(1)
-}
 
 fn ms_left_in_month(now_ms: i64) -> i64 {
     use chrono::{Datelike, TimeZone};
@@ -360,14 +376,13 @@ fn ms_left_in_month(now_ms: i64) -> i64 {
         .max(0)
 }
 
-fn web_cache_ttl_ms(trace_dir: &Path, queries: &[String], spent: u32, now_ms: i64) -> i64 {
+fn web_cache_ttl_ms(queries: &[String], spent: u32, enabled_notebooks: usize, now_ms: i64) -> i64 {
     let remaining = WEB_CREDIT_CAP.saturating_sub(spent) as i64;
     let cost = CREDITS_PER_SEARCH as i64 * queries.len().clamp(1, 2) as i64;
     if remaining < cost {
         return WEB_CACHE_TTL_MAX_MS;
     }
-    let notebooks = web_enabled_count(trace_dir) as i64;
-    (ms_left_in_month(now_ms) * cost * notebooks / remaining)
+    (ms_left_in_month(now_ms) * cost * enabled_notebooks as i64 / remaining)
         .clamp(WEB_CACHE_TTL_MIN_MS, WEB_CACHE_TTL_MAX_MS)
 }
 
@@ -439,10 +454,11 @@ pub async fn web_search(
     notebook_id: &str,
     sources: &[Source],
     queries: &[String],
+    enabled_notebooks: usize,
     now_ms: i64,
 ) -> GrowthWebSearch {
     let mut spent = credits_this_month(trace_dir, now_ms);
-    let ttl_ms = web_cache_ttl_ms(trace_dir, queries, spent, now_ms);
+    let ttl_ms = web_cache_ttl_ms(queries, spent, enabled_notebooks, now_ms);
     let refresh_every_days = (ttl_ms / 86_400_000).max(1) as u32;
     if let Some(cached) = cached_web(trace_dir, notebook_id, queries, ttl_ms, now_ms) {
         return GrowthWebSearch {
@@ -916,8 +932,10 @@ pub async fn sweep_web_searches(db: &crate::db::Db) -> anyhow::Result<usize> {
     };
     let now_ms = chrono::Utc::now().timestamp_millis();
     let mut warmed = 0usize;
-    for nb in db.list_notebooks().await? {
-        if !web_enabled(trace_dir, &nb.id) {
+    let notebooks = db.list_notebooks().await?;
+    let enabled = notebooks.iter().filter(|n| n.growth_web).count().max(1);
+    for nb in notebooks {
+        if !nb.growth_web {
             continue;
         }
         let queries = standing_queries(trace_dir, &nb.id, now_ms);
@@ -926,7 +944,7 @@ pub async fn sweep_web_searches(db: &crate::db::Db) -> anyhow::Result<usize> {
         }
         let sources = db.list_sources(&nb.id).await?;
         let before = credits_this_month(trace_dir, now_ms);
-        let result = web_search(trace_dir, &nb.id, &sources, &queries, now_ms).await;
+        let result = web_search(trace_dir, &nb.id, &sources, &queries, enabled, now_ms).await;
         if !result.proposals.is_empty() {
             warmed += 1;
             // Only a FRESH search (credits moved) earns a feed line — the
@@ -1004,40 +1022,29 @@ mod tests {
 
     #[test]
     fn web_cache_ttl_paces_budget_across_notebooks() {
-        let dir = std::env::temp_dir().join(format!("alchemy-ttl-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
         let queries = vec!["a".to_string(), "b".to_string()];
         // 2026-08-16T00:00Z — 16 days left in August.
         let now = 1_786_838_400_000i64;
 
         // One notebook, full budget: refresh at the 1-day floor.
-        set_web_enabled(&dir, "nb1", true);
-        assert_eq!(
-            web_cache_ttl_ms(&dir, &queries, 0, now),
-            WEB_CACHE_TTL_MIN_MS
-        );
+        assert_eq!(web_cache_ttl_ms(&queries, 0, 1, now), WEB_CACHE_TTL_MIN_MS);
 
         // More notebooks split the same budget: TTL scales linearly once
         // above the floor (16d × 4cr × 40nb / 800cr = 3.2 days).
-        for i in 2..=40 {
-            set_web_enabled(&dir, &format!("nb{i}"), true);
-        }
-        let ttl = web_cache_ttl_ms(&dir, &queries, 0, now);
+        let ttl = web_cache_ttl_ms(&queries, 0, 40, now);
         assert!(
             ttl > 3 * 86_400_000 && ttl < 4 * 86_400_000,
             "40 notebooks should pace near 3.2 days, got {ttl}"
         );
 
         // A nearly spent budget stretches toward the ceiling.
-        let ttl = web_cache_ttl_ms(&dir, &queries, WEB_CREDIT_CAP - 8, now);
+        let ttl = web_cache_ttl_ms(&queries, WEB_CREDIT_CAP - 8, 40, now);
         assert!(ttl > 20 * 86_400_000, "thin budget should slow way down");
         // A budget that can't fund one refresh parks at the ceiling.
         assert_eq!(
-            web_cache_ttl_ms(&dir, &queries, WEB_CREDIT_CAP, now),
+            web_cache_ttl_ms(&queries, WEB_CREDIT_CAP, 1, now),
             WEB_CACHE_TTL_MAX_MS
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn src(id: &str, url: &str, content: &str) -> Source {

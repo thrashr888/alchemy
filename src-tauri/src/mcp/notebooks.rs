@@ -100,6 +100,7 @@ impl AlchemyMcp {
             color: NOTEBOOK_PALETTE[0].to_string(),
             icon,
             status: String::new(),
+            growth_web: false,
             source_count: 0,
             note_count: 0,
             report_count: 0,

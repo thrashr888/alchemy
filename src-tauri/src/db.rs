@@ -365,6 +365,17 @@ impl Db {
         Ok(())
     }
 
+    /// Flip one notebook's web-search opt-in in place.
+    pub async fn set_notebook_growth_web(&self, id: &str, on: bool) -> Result<()> {
+        let tbl = self.conn.open_table(T_NOTEBOOKS).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(id)))
+            .column("growth_web", if on { "1" } else { "0" })
+            .execute()
+            .await?;
+        Ok(())
+    }
+
     /// Add the `origin` and `triage` columns ("") to pre-existing registry
     /// tables.
     async fn migrate_registry(&self) -> Result<()> {
@@ -398,11 +409,14 @@ impl Db {
         self.add_string_column(T_SOURCE_EVENTS, "diff", "").await
     }
 
-    /// Backfill the `color` column on pre-existing `notebooks` tables.
+    /// Backfill the `color` column on pre-existing `notebooks` tables,
+    /// and the `growth_web` opt-in (0) on tables from before Grow's web
+    /// tier moved off its JSON sidecar.
     async fn migrate_notebooks(&self) -> Result<()> {
         if !self.table_exists(T_NOTEBOOKS).await? {
             return Ok(());
         }
+        self.add_i64_column(T_NOTEBOOKS, "growth_web", "0").await?;
         let schema = self
             .conn
             .open_table(T_NOTEBOOKS)
@@ -431,6 +445,7 @@ impl Db {
                     color: NOTEBOOK_PALETTE[idx % NOTEBOOK_PALETTE.len()].to_string(),
                     icon: String::new(),
                     status: String::new(),
+                    growth_web: false,
                     source_count: 0,
                     note_count: 0,
                     report_count: 0,
@@ -870,6 +885,7 @@ impl Db {
             let color = opt_str_col(b, "color");
             let icon = opt_str_col(b, "icon");
             let status = opt_str_col(b, "status");
+            let growth_web = i64_col(b, "growth_web")?;
             for i in 0..b.num_rows() {
                 notebooks.push(Notebook {
                     id: id.value(i).to_string(),
@@ -879,6 +895,7 @@ impl Db {
                     color: color.map(|c| c.value(i).to_string()).unwrap_or_default(),
                     icon: icon.map(|c| c.value(i).to_string()).unwrap_or_default(),
                     status: status.map(|s| s.value(i).to_string()).unwrap_or_default(),
+                    growth_web: growth_web.value(i) != 0,
                     source_count: 0,
                     note_count: 0,
                     report_count: 0,
@@ -3924,6 +3941,7 @@ fn notebook_batch(schema: &SchemaRef, notebooks: &[Notebook]) -> Result<RecordBa
             s(|x| x.color.clone()),
             s(|x| x.icon.clone()),
             s(|x| x.status.clone()),
+            i(|x| x.growth_web as i64),
         ],
     )?)
 }
@@ -4056,6 +4074,7 @@ fn notebooks_schema() -> SchemaRef {
         Field::new("color", DataType::Utf8, false),
         Field::new("icon", DataType::Utf8, false),
         Field::new("status", DataType::Utf8, false),
+        Field::new("growth_web", DataType::Int64, false),
     ]))
 }
 

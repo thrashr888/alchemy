@@ -21,6 +21,9 @@ pub struct Notebook {
     /// system notebooks (Briefs) never appear on the shelf at all.
     #[serde(default)]
     pub status: String,
+    /// Per-notebook web-search opt-in (Grow's Firecrawl tier).
+    #[serde(default)]
+    pub growth_web: bool,
     /// Populated on list queries; not stored on the row.
     #[serde(default)]
     pub source_count: i64,

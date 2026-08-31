@@ -1001,6 +1001,7 @@ pub(crate) async fn new_notebook(state: &AppState, title: String) -> Result<Note
         updated_at: ts,
         color: color.to_string(),
         status: String::new(),
+        growth_web: false,
         source_count: 0,
         note_count: 0,
         report_count: 0,
@@ -10033,13 +10034,20 @@ pub async fn generate_wiki_index(
 /// The per-notebook web-search opt-in, backend-owned so the sweep can
 /// act on it (growth.rs::web_enabled).
 #[tauri::command]
-pub fn growth_web_enabled(state: State<'_, AppState>, notebook_id: String) -> bool {
-    crate::growth::web_enabled(&state.trace_dir, &notebook_id)
+pub async fn growth_web_enabled(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<bool, String> {
+    Ok(crate::growth::web_enabled(&state.db, &notebook_id).await)
 }
 
 #[tauri::command]
-pub fn set_growth_web_enabled(state: State<'_, AppState>, notebook_id: String, enabled: bool) {
-    crate::growth::set_web_enabled(&state.trace_dir, &notebook_id, enabled);
+pub async fn set_growth_web_enabled(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    e(crate::growth::set_web_enabled(&state.db, &notebook_id, enabled).await)
 }
 
 /// Point a file source at its new location (the file moved). Verifies the
@@ -10149,6 +10157,7 @@ pub async fn seed_scale_fixture(
         updated_at: ts,
         color: "#4cb782".into(),
         status: String::new(),
+        growth_web: false,
         source_count: 0,
         note_count: 0,
         report_count: 0,
@@ -10281,7 +10290,16 @@ pub async fn growth_web_search(
 ) -> Result<crate::growth::GrowthWebSearch, String> {
     let sources = e(state.db.list_sources(&notebook_id).await)?;
     let queries = crate::growth::standing_queries(&state.trace_dir, &notebook_id, now());
-    Ok(crate::growth::web_search(&state.trace_dir, &notebook_id, &sources, &queries, now()).await)
+    let enabled = crate::growth::web_enabled_count(&state.db).await;
+    Ok(crate::growth::web_search(
+        &state.trace_dir,
+        &notebook_id,
+        &sources,
+        &queries,
+        enabled,
+        now(),
+    )
+    .await)
 }
 
 #[tauri::command]
@@ -11750,6 +11768,7 @@ async fn import_bundle(
                 color: NOTEBOOK_PALETTE[count.len() % NOTEBOOK_PALETTE.len()].to_string(),
                 icon,
                 status: String::new(),
+                growth_web: false,
                 source_count: 0,
                 note_count: 0,
                 report_count: 0,
@@ -13933,6 +13952,7 @@ mod tool_tests {
             updated_at: 0,
             color: String::new(),
             status: String::new(),
+            growth_web: false,
             source_count: 0,
             note_count: 0,
             report_count: 0,

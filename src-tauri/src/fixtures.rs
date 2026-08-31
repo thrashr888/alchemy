@@ -127,6 +127,7 @@ async fn seed(ai: &Ai, db: &Db, notebook_id: &str, sources: usize) -> usize {
         color: "#eb5757".into(),
         icon: String::new(),
         status: String::new(),
+        growth_web: false,
         source_count: 0,
         note_count: 0,
         report_count: 0,

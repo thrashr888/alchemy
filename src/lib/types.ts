@@ -13,6 +13,8 @@ export interface Toast {
 export interface Notebook {
   id: string;
   title: string;
+  /** Per-notebook web-search opt-in (Grow's Firecrawl tier). */
+  growthWeb?: boolean;
   createdAt: number;
   updatedAt: number;
   color: string;
