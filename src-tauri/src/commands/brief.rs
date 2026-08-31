@@ -32,6 +32,7 @@ async fn ensure_briefs_notebook(state: &AppState) -> Result<Notebook, String> {
         // because a permanently source-less notebook in the grid reads as
         // clutter, not a feature.
         status: "system".into(),
+        growth_web: false,
         source_count: 0,
         note_count: 0,
         report_count: 0,

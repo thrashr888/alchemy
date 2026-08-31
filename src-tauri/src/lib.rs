@@ -291,6 +291,15 @@ pub fn run() {
             // The queue worker drains generations the webview only watches;
             // jobs interrupted by the last shutdown are already re-queued.
             genqueue::spawn_worker(app.handle().clone());
+            // Move any growth-web.json sidecar flags into the prefs table
+            // (renames the file, so it runs once per install).
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let st = handle.state::<commands::AppState>();
+                    growth::migrate_web_flags(&st.db, &st.trace_dir).await;
+                });
+            }
 
             // Studio templates: write the default pack on first run so
             // ~/Documents/Alchemy/templates exists before anything lists it.
