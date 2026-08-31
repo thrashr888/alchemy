@@ -188,6 +188,8 @@ export function StudioPanel() {
   // preview belongs to ONE notebook. Other notebooks keep the tiles disabled
   // (the backend runs one generation per window) but paint no stream.
   const generatingKind = useStore((s) => s.generatingKind);
+  const genProgress = useStore((s) => s.genProgress);
+  const genStatus = useStore((s) => s.genStatus);
   const generatingHere = useStore(
     (s) => s.generatingFor === null || s.generatingFor === s.currentId,
   );
@@ -502,7 +504,7 @@ export function StudioPanel() {
                       label={a.label}
                       category={a.family}
                       tint={TINT_BY_FAMILY[a.family]}
-                      disabled={!hasSources || !!generatingKind}
+                      disabled={!hasSources}
                       onClick={() => generate(a.kind, instructions)}
                     />
                   ))}
@@ -519,7 +521,7 @@ export function StudioPanel() {
                     label={a.label}
                     category={a.family}
                     tint={TINT_BY_FAMILY[a.family]}
-                    disabled={!hasSources || !!generatingKind}
+                    disabled={!hasSources}
                     onClick={() => generate(a.kind, instructions)}
                   />
                 ))}
@@ -537,7 +539,7 @@ export function StudioPanel() {
                     title={`${t.description || t.name} — right-click to edit`}
                     category="template"
                     tint={TINT_TEMPLATES}
-                    disabled={!hasSources || !!generatingKind}
+                    disabled={!hasSources}
                     onClick={() => generateFromTemplate(t)}
                     onContextMenu={(e) => {
                       e.preventDefault();
@@ -666,6 +668,7 @@ export function StudioPanel() {
                     label={`Open note ${n.title}`}
                     onClick={(e) => {
                       if (justEnded()) return;
+                      if (n.status === "generating") return;
                       if (e.metaKey || e.ctrlKey) {
                         pickToggle("notes", n.id);
                         return;
@@ -686,7 +689,11 @@ export function StudioPanel() {
                       )}
                       title={KIND_LABEL[n.kind]}
                     >
-                      {kindIcon(n.kind)}
+                      {n.status === "generating" ? (
+                        <Spinner className="h-4 w-4" />
+                      ) : (
+                        kindIcon(n.kind)
+                      )}
                     </span>
                     <span className="min-w-0 flex-1 truncate text-body font-medium text-foreground">
                       {n.title}
@@ -711,7 +718,18 @@ export function StudioPanel() {
                         pickOne("notes", n.id);
                         return null;
                       }}
-                      items={[
+                      items={
+                        n.status === "generating"
+                          ? [
+                              {
+                                label: "Stop generating",
+                                icon: <Square className="h-3.5 w-3.5" />,
+                                danger: true,
+                                onClick: () =>
+                                  void api.cancelGenerationJob(n.id),
+                              },
+                            ]
+                          : [
                         {
                           label: "Copy text",
                           icon: <Copy className="h-3.5 w-3.5" />,
@@ -755,7 +773,8 @@ export function StudioPanel() {
                           danger: true,
                           onClick: () => void deleteNote(n.id),
                         },
-                      ]}
+                      ]
+                      }
                     />
                   </div>
                   <div className="pointer-events-none relative z-10 mt-1 flex items-center gap-1.5 pl-[22px]">
@@ -778,9 +797,49 @@ export function StudioPanel() {
                         <Badge>stale</Badge>
                       </span>
                     )}
-                    <span className="text-micro text-subtle-foreground">
-                      {relativeTime(n.updatedAt)}
-                    </span>
+                    {n.status === "generating" ? (
+                      <span className="pointer-events-auto flex items-center gap-1.5 text-micro text-subtle-foreground">
+                        {genStatus[n.id]?.status === "waiting"
+                          ? "Waiting for the model engine…"
+                          : n.kind === "audio_overview" && audioProgress
+                            ? `Voicing ${audioProgress.done}/${audioProgress.total}`
+                            : genProgress[n.id]
+                              ? `Generating — ${(genProgress[n.id] / 1000).toFixed(1)}k chars`
+                              : "Queued"}
+                        <button
+                          type="button"
+                          onClick={() => void api.cancelGenerationJob(n.id)}
+                          className="flex items-center gap-0.5 rounded px-1 py-0.5 text-destructive hover:bg-destructive/10"
+                          title="Stop this generation"
+                        >
+                          <Square className="h-2.5 w-2.5" />
+                          Stop
+                        </button>
+                      </span>
+                    ) : n.status === "error" ? (
+                      <span className="pointer-events-auto flex items-center gap-1.5 text-micro">
+                        <Badge>failed</Badge>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void (async () => {
+                              await deleteNote(n.id);
+                              await useStore
+                                .getState()
+                                .generateArtifact(n.kind, n.prompt);
+                            })();
+                          }}
+                          className="rounded px-1 py-0.5 text-subtle-foreground hover:text-foreground"
+                          title="Delete this attempt and generate again"
+                        >
+                          Retry
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="text-micro text-subtle-foreground">
+                        {relativeTime(n.updatedAt)}
+                      </span>
+                    )}
                   </div>
                 </div>
               ))}

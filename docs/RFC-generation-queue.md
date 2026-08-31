@@ -1,6 +1,6 @@
 # RFC: The Generation Queue
 
-**Status:** Draft, awaiting review
+**Status:** Shipped (v1 — mid-stream checkpoints and a cross-notebook queue view remain out of scope)
 **Owner:** Paul
 **Prior art:** NotebookLM's studio queue; docs/RFC-diagnostics.md (Staff events); docs/RFC-living-notebook.md (background sweeps)
 

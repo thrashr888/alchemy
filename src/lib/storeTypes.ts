@@ -285,6 +285,10 @@ export interface AppState {
   pendingNewNote: boolean;
   artifactStreamText: string;
   audioProgress: { done: number; total: number } | null;
+  /** Streamed chars per pending note (generation queue). */
+  genProgress: Record<string, number>;
+  /** Latest queue status per pending note. */
+  genStatus: Record<string, { status: string; detail: string }>;
   kokoroStatus: KokoroStatus | null;
   kokoroBusy: boolean;
   /** Center-column reader: current doc + browser-style history. `open`

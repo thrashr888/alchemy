@@ -328,7 +328,7 @@ pub(crate) async fn run_brief(
     };
     let _ = app.emit("report://step", "Writing the brief".to_string());
     let messages = rag::build_artifact_messages(&instruction, &corpus, &persona);
-    let content = run_generation_chat(state, None, &messages, None)
+    let content = run_generation_chat(state, None, &messages, None, None)
         .await
         .map_err(|e| format!("{e:#}"))?;
 

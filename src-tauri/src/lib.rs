@@ -17,6 +17,7 @@ mod examples;
 mod export;
 mod filesearch;
 mod freshness;
+mod genqueue;
 mod gist;
 mod git;
 mod graph;
@@ -285,7 +286,11 @@ pub fn run() {
                 cancel: std::sync::Mutex::new(std::collections::HashMap::new()),
                 folder_scan_lock: tokio::sync::Mutex::new(()),
                 glass_applied: std::sync::Mutex::new(std::collections::HashMap::new()),
+                gen_queue: genqueue::GenQueue::load(&data_dir),
             });
+            // The queue worker drains generations the webview only watches;
+            // jobs interrupted by the last shutdown are already re-queued.
+            genqueue::spawn_worker(app.handle().clone());
 
             // Studio templates: write the default pack on first run so
             // ~/Documents/Alchemy/templates exists before anything lists it.
@@ -516,6 +521,9 @@ pub fn run() {
             commands::note_opened,
             commands::convert_note_to_source,
             commands::generate_artifact,
+            commands::enqueue_generation,
+            commands::cancel_generation_job,
+            commands::list_generations,
             commands::rebuild_note,
             commands::get_ai_config,
             commands::set_ai_config,
