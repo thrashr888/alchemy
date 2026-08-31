@@ -267,6 +267,36 @@ What each clause means here:
 
 When a rule here conflicts with a web idiom, the Mac wins.
 
+### Multi-select — the Finder pattern
+
+Any surface listing selectable objects (source rows, gallery cards, note
+rows, registry index) speaks one selection dialect, implemented once:
+
+- **One shared selection.** Rows/cards carry `data-pick-id`; selection
+  lives in the store's `picked` (kind + ids). The same objects shown on
+  two surfaces (sidebar rows, gallery cards) share one selection — pick
+  in either, both show it.
+- **The gestures.** Plain click acts on the object (open). ⌘-click
+  toggles. Shift-click ranges over the surface's visible order. A drag on
+  the background rubber-bands (`useMarquee`); ⇧/⌘-drag unions against the
+  selection as it stood when the drag began. Escape/background-click
+  clears.
+- **Selection is chrome.** The list container is `select-none` — object
+  text never becomes a native text selection under a band. (The marquee's
+  own `userSelect` guard only lands after the 4px drag threshold, so the
+  container class is load-bearing, not belt-and-braces.) Prose surfaces
+  (reader, chat) never host marquees; they keep real text selection.
+- **The click after a band is the band's tail** — suppress it
+  (`justEnded()`), or the drag "opens" whatever it ended on.
+- **Selected look**: `ring-1 ring-primary` (offset on cards), never a
+  tonal fill — hairlines over washes, §1.
+- **Batch verbs ride the object menu.** Right-clicking a selected object
+  shows the batch variants with counts ("Remove 4 sources…") in place of
+  the singular menu; no separate toolbar appears.
+- **Drag-out beats band** on surfaces whose rows export as files
+  (`data-drag-out`): pressing an item means "take this file"; bands begin
+  on background only — Finder draws the same line.
+
 ## 10. Agent Prompt Guide
 
 Quick reference for agents building UI here:

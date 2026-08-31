@@ -576,6 +576,22 @@ export const api = {
         sourceIds,
       }),
     ),
+  enqueueGeneration: (
+    notebookId: string,
+    kind: NoteKind,
+    prompt?: string,
+    sourceIds?: string[] | null,
+  ) =>
+    run(
+      cmd<Note>("enqueue_generation", {
+        notebookId,
+        kind,
+        prompt: prompt ?? "",
+        sourceIds,
+      }),
+    ),
+  cancelGenerationJob: (noteId: string) =>
+    run(cmd<void>("cancel_generation_job", { noteId })),
   rebuildNote: (
     noteId: string,
     notebookId: string,

@@ -174,6 +174,7 @@ pub(crate) async fn run_report_inner(
         None,
         prior_content.as_deref(),
         None,
+        None,
     )
     .await)?;
 

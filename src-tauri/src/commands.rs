@@ -155,6 +155,9 @@ pub struct AppState {
     /// Last successfully applied glass state per window label
     /// (enabled, dark, pinned) — evicted on window destroy in lib.rs.
     pub glass_applied: Mutex<HashMap<String, (bool, bool, bool)>>,
+    /// The generation queue (genqueue.rs): pending-note jobs the backend
+    /// worker drains independently of any window.
+    pub gen_queue: crate::genqueue::GenQueue,
 }
 
 /// Background sweeps outlive any one command and hold no Tauri handle (the
@@ -7305,7 +7308,18 @@ async fn try_tool_route(
                     transient: false,
                 },
             );
-            match generate_content(state, None, notebook_id, &kind, &prompt, None, None, None).await
+            match generate_content(
+                state,
+                None,
+                notebook_id,
+                &kind,
+                &prompt,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
             {
                 Ok((title, body)) => {
                     let ts = now();
@@ -9350,6 +9364,10 @@ async fn generate_content(
     source_ids: Option<&[String]>,
     prior_report: Option<&str>,
     provider: Option<&str>,
+    // When set, tokens emit as note-tagged `generation://token` events
+    // (the queue's per-job stream) instead of the window-global
+    // `artifact://token`.
+    stream_note: Option<&str>,
 ) -> anyhow::Result<(String, String)> {
     // Instruction base by kind precedence: "template:<id>" resolves the
     // template at RUN time (a schedule tracks the template's current body,
@@ -9495,7 +9513,7 @@ async fn generate_content(
         rag::persona_block(&ai.config().profile)
     };
     let messages = rag::build_artifact_messages(&instruction, &corpus, &persona);
-    let mut content = run_generation_chat(state, app, &messages, provider).await?;
+    let mut content = run_generation_chat(state, app, &messages, provider, stream_note).await?;
 
     // A twenty-minute episode is ~3,000 words, and chat models routinely fade
     // early. Continue the episode (dropping any premature outro) until it's
@@ -9509,7 +9527,7 @@ async fn generate_content(
             }
             let trimmed = strip_outro(&content);
             let messages = rag::build_audio_continuation(&instruction, &corpus, &persona, &trimmed);
-            let more = run_generation_chat(state, app, &messages, provider).await?;
+            let more = run_generation_chat(state, app, &messages, provider, stream_note).await?;
             // A tiny continuation means the model considers the episode done.
             if more.split_whitespace().count() < 100 {
                 break;
@@ -9527,7 +9545,27 @@ async fn run_generation_chat(
     app: Option<&AppHandle>,
     messages: &[crate::ai::ChatTurn],
     provider: Option<&str>,
+    stream_note: Option<&str>,
 ) -> anyhow::Result<String> {
+    let emit_tok = {
+        let note_id = stream_note.map(|s| s.to_string());
+        move |app: &AppHandle, tok: &str| match &note_id {
+            Some(nid) => {
+                let _ = app.emit(
+                    "generation://token",
+                    serde_json::json!({ "noteId": nid, "content": tok }),
+                );
+            }
+            None => {
+                let _ = app.emit(
+                    "artifact://token",
+                    TokenEvent {
+                        content: tok.to_string(),
+                    },
+                );
+            }
+        }
+    };
     let (text, stats, model) = {
         let ai = state.ai.read().await.clone();
         // A per-call provider override (the MCP generate tool's optional
@@ -9563,27 +9601,17 @@ async fn run_generation_chat(
         let out = match (&overridden, app) {
             (Some((engine, _)), Some(app)) => {
                 let app = app.clone();
+                let emit_tok = emit_tok.clone();
                 engine
-                    .chat_stream(messages, move |tok| {
-                        let _ = app.emit(
-                            "artifact://token",
-                            TokenEvent {
-                                content: tok.to_string(),
-                            },
-                        );
-                    })
+                    .chat_stream(messages, move |tok| emit_tok(&app, tok))
                     .await?
             }
             (Some((engine, _)), None) => engine.chat(messages).await?,
             (None, Some(app)) => {
                 let app = app.clone();
+                let emit_tok = emit_tok.clone();
                 ai.chat_role_stream(crate::inference::Role::Generate, messages, move |tok| {
-                    let _ = app.emit(
-                        "artifact://token",
-                        TokenEvent {
-                            content: tok.to_string(),
-                        },
-                    );
+                    emit_tok(&app, tok)
                 })
                 .await?
             }
@@ -9623,6 +9651,154 @@ pub(crate) fn strip_outro(script: &str) -> String {
     lines[..end].join("\n")
 }
 
+/// The pending note's display title for a queued generation — also the
+/// kind validation: an unknown kind errors at the call, not twenty
+/// seconds into a background job.
+pub(crate) fn placeholder_title(kind: &str, prompt: &str) -> anyhow::Result<String> {
+    if let Some(id) = kind.strip_prefix("template:") {
+        return crate::templates::list_templates()
+            .map_err(|e| anyhow::anyhow!(e))?
+            .into_iter()
+            .find(|t| t.id == id)
+            .map(|t| t.name)
+            .ok_or_else(|| anyhow::anyhow!("no template with id {id}"));
+    }
+    match rag::artifact_spec(kind) {
+        Some((t, _)) => Ok(format!("{t} (generating…)")),
+        None if !prompt.trim().is_empty() => Ok("Report (generating…)".to_string()),
+        None => anyhow::bail!(
+            "unknown kind \"{kind}\" — use one of {}, template:<id>, or \"custom\" with a prompt",
+            rag::ARTIFACT_KINDS.join(", ")
+        ),
+    }
+}
+
+/// Queue a generation (docs/RFC-generation-queue.md): the pending note
+/// exists the moment this returns, and the queue worker does the rest —
+/// the caller never blocks on the model.
+pub(crate) async fn enqueue_generation_impl(
+    state: &AppState,
+    notebook_id: &str,
+    kind: &str,
+    prompt: &str,
+    source_ids: Option<Vec<String>>,
+    provider: Option<String>,
+    origin: &str,
+) -> anyhow::Result<Note> {
+    // Fail fast on an unknown provider id — a typo should error at the
+    // call, not as a dead pending note discovered later.
+    if let Some(id) = provider.as_deref() {
+        let ai = state.ai.read().await.clone();
+        ai.engine_for_provider(id)?;
+    }
+    let title = placeholder_title(kind, prompt)?;
+    let ts = now();
+    let note = Note {
+        id: new_id(),
+        notebook_id: notebook_id.to_string(),
+        title,
+        content: String::new(),
+        kind: kind.to_string(),
+        prompt: prompt.to_string(),
+        origin: origin.to_string(),
+        status: "generating".to_string(),
+        created_at: ts,
+        updated_at: ts,
+    };
+    // Stored but NOT indexed: an empty in-flight note has nothing for
+    // retrieval yet; indexing happens on completion.
+    state.db.add_note(&note).await?;
+    state.gen_queue.enqueue(crate::genqueue::GenJob {
+        id: new_id(),
+        notebook_id: notebook_id.to_string(),
+        kind: kind.to_string(),
+        prompt: prompt.to_string(),
+        source_ids,
+        note_id: note.id.clone(),
+        status: "queued".to_string(),
+        error: String::new(),
+        provider,
+        engine_key: String::new(),
+        created_at: ts,
+        updated_at: ts,
+    });
+    Ok(note)
+}
+
+/// One queued job's full production: content, then synthesis for audio
+/// kinds — a failed synthesis is a failed job, never a half artifact.
+pub(crate) async fn generate_content_for_job(
+    state: &AppState,
+    app: &AppHandle,
+    job: &crate::genqueue::GenJob,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> anyhow::Result<(String, String)> {
+    let (title, content) = generate_content(
+        state,
+        Some(app),
+        &job.notebook_id,
+        &job.kind,
+        &job.prompt,
+        job.source_ids.as_deref(),
+        None,
+        job.provider.as_deref(),
+        Some(&job.note_id),
+    )
+    .await?;
+    if job.kind == "audio_overview" {
+        synthesize_audio(app, &job.note_id, &content, cancel).await?;
+    }
+    Ok((title, content))
+}
+
+#[tauri::command]
+pub async fn enqueue_generation(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    kind: String,
+    prompt: Option<String>,
+    source_ids: Option<Vec<String>>,
+) -> Result<Note, String> {
+    e(enqueue_generation_impl(
+        &state,
+        &notebook_id,
+        &kind,
+        &prompt.unwrap_or_default(),
+        source_ids,
+        None,
+        "",
+    )
+    .await)
+}
+
+#[tauri::command]
+pub async fn cancel_generation_job(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    note_id: String,
+) -> Result<(), String> {
+    if let Some((job, was_running)) = state.gen_queue.cancel_by_note(&note_id) {
+        // A running job's token fires and its task cleans up; a job that
+        // never started has no task, so its pending note goes here.
+        if !was_running {
+            let _ = state.db.delete_note(&job.note_id).await;
+            crate::genqueue::emit_status(&app, &job, "", "");
+            let _ = app.emit(
+                "mcp://changed",
+                serde_json::json!({ "scope": "notes", "notebookId": job.notebook_id }),
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn list_generations(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::genqueue::GenJob>, String> {
+    Ok(state.gen_queue.list())
+}
+
 #[tauri::command]
 pub async fn generate_artifact(
     app: AppHandle,
@@ -9636,7 +9812,7 @@ pub async fn generate_artifact(
     let prompt = prompt.unwrap_or_default();
     let cancel = state.begin_generation(&format!("artifact:{}", window.label()));
     let produced = tokio::select! {
-        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt, source_ids.as_deref(), None, None) => Some(e(r)?),
+        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt, source_ids.as_deref(), None, None, None) => Some(e(r)?),
         _ = cancel.cancelled() => None,
     };
     let (title, content) = match produced {
@@ -9679,126 +9855,13 @@ pub async fn start_generation_detached(
     prompt: &str,
     provider: Option<String>,
 ) -> anyhow::Result<Note> {
-    // Fail fast on an unknown provider id: the whole point of the override is
-    // an agent steering one call, and a typo should error at the tool call,
-    // not as a dead "generating" note discovered by polling.
-    if let Some(id) = provider.as_deref() {
-        let state = app.state::<AppState>();
-        let ai = state.ai.read().await.clone();
-        ai.engine_for_provider(id)?;
-    }
-    // Fail fast on kinds the async path can't honor: audio synthesis needs
-    // the window-side player anyway, and a wrong kind should error at the
-    // tool call, not twenty seconds into a background task.
+    // Fail fast on kinds the queue can't honor over MCP: audio synthesis
+    // wants the window-side player and voice-model download UI.
     if kind == "audio_overview" {
         anyhow::bail!("audio_overview can't be generated over MCP — use the app's Studio panel");
     }
     let state = app.state::<AppState>();
-    let title = if let Some(id) = kind.strip_prefix("template:") {
-        crate::templates::list_templates()
-            .map_err(|e| anyhow::anyhow!(e))?
-            .into_iter()
-            .find(|t| t.id == id)
-            .map(|t| t.name)
-            .ok_or_else(|| anyhow::anyhow!("no template with id {id}"))?
-    } else {
-        match rag::artifact_spec(kind) {
-            Some((t, _)) => format!("{t} (generating…)"),
-            None if !prompt.trim().is_empty() => "Report (generating…)".to_string(),
-            None => anyhow::bail!(
-                "unknown kind \"{kind}\" — use one of {}, template:<id>, or \"custom\" with a prompt",
-                rag::ARTIFACT_KINDS.join(", ")
-            ),
-        }
-    };
-    let ts = now();
-    let note = Note {
-        id: new_id(),
-        notebook_id: notebook_id.to_string(),
-        title,
-        content: String::new(),
-        kind: kind.to_string(),
-        prompt: prompt.to_string(),
-        origin: "mcp".to_string(),
-        status: "generating".to_string(),
-        created_at: ts,
-        updated_at: ts,
-    };
-    // Stored but NOT indexed: an empty in-flight note has nothing for
-    // retrieval yet; indexing happens on completion.
-    state.db.add_note(&note).await?;
-
-    // Hard deadline over the whole background generation. "generating" must
-    // be a bounded state: a polling agent has no other signal, and live
-    // verification found a slow headless-CLI provider holding a note in
-    // "generating" past twenty minutes. Providers carry their own request
-    // timeouts; this is the belt over corpus assembly + provider + retries.
-    const DETACHED_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20 * 60);
-
-    let app = app.clone();
-    let spawned = note.clone();
-    tauri::async_runtime::spawn(async move {
-        let state = app.state::<AppState>();
-        let result = match tokio::time::timeout(
-            DETACHED_DEADLINE,
-            generate_content(
-                &state,
-                None, // no window streaming — the poller reads the stored note
-                &spawned.notebook_id,
-                &spawned.kind,
-                &spawned.prompt,
-                None,
-                None,
-                provider.as_deref(),
-            ),
-        )
-        .await
-        {
-            Ok(r) => r,
-            Err(_) => Err(anyhow::anyhow!(
-                "generation exceeded {} minutes — the model provider may be \
-                 overloaded; try again or switch providers",
-                DETACHED_DEADLINE.as_secs() / 60
-            )),
-        };
-        let ts = now();
-        let outcome = match result {
-            Ok((title, content)) => {
-                let title = if spawned.kind.starts_with("template:") {
-                    spawned.title.clone()
-                } else {
-                    title
-                };
-                if let Err(err) = state
-                    .db
-                    .update_note(&spawned.id, &title, &content, ts)
-                    .await
-                {
-                    crate::note!("mcp generate: persisting result failed: {err:#}");
-                    return;
-                }
-                let _ = state.db.set_note_status(&spawned.id, "").await;
-                if let Ok(Some(done)) = state.db.get_note(&spawned.id).await {
-                    index_note(&state, &done).await;
-                }
-                "done"
-            }
-            Err(err) => {
-                let msg = format!("Generation failed: {err:#}");
-                let _ = state
-                    .db
-                    .update_note(&spawned.id, &spawned.title, &msg, ts)
-                    .await;
-                let _ = state.db.set_note_status(&spawned.id, "error").await;
-                "error"
-            }
-        };
-        let _ = app.emit(
-            "mcp://changed",
-            serde_json::json!({ "scope": "notes", "notebookId": spawned.notebook_id, "outcome": outcome }),
-        );
-    });
-    Ok(note)
+    enqueue_generation_impl(&state, notebook_id, kind, prompt, None, provider, "mcp").await
 }
 
 #[tauri::command]
@@ -9813,7 +9876,7 @@ pub async fn rebuild_note(
 ) -> Result<Note, String> {
     let cancel = state.begin_generation(&format!("artifact:{}", window.label()));
     let produced = tokio::select! {
-        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt, None, None, None) => Some(e(r)?),
+        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt, None, None, None, None) => Some(e(r)?),
         _ = cancel.cancelled() => None,
     };
     let (title, content) = match produced {
@@ -10312,6 +10375,7 @@ pub async fn generate_notebook_summary(
         "custom",
         "Write a 2-4 sentence plain-prose overview of what these sources collectively cover. \
          No lists, headings, or preamble — just the overview.",
+        None,
         None,
         None,
         None,

@@ -35,6 +35,7 @@ import type {
   Message,
   MetaTurn,
   Note,
+  NoteKind,
   ReadingPrefs,
   Source,
 } from "./types";
@@ -444,6 +445,8 @@ export const useStore = create<AppState>((set, get) => {
     generatingKind: null,
     generatingFor: null,
     generatingTemplateId: null,
+    genProgress: {},
+    genStatus: {},
     ingestQueue: [],
     migration: null,
     draggingFiles: false,
@@ -685,14 +688,17 @@ export const useStore = create<AppState>((set, get) => {
         }
       }
       void api.rebuildAppMenu();
-      // Quiet update check, once per launch, main window only.
+      // Quiet update check on launch, then daily — the app lives open for
+      // days at a time, and a launch-only check never sees those releases.
       if (getCurrentWebview().label === "main" && autoUpdateEnabled()) {
-        setTimeout(() => {
+        const quietCheck = () => {
           // The title-bar UpdateBadge is the notice — it stays put, and
           // clicking it lands on Settings → General with the check already
           // run. No toast: a transient nag on top of a persistent badge.
           void checkForUpdatesQuietly((v) => set({ updateAvailable: v }));
-        }, 4000);
+        };
+        setTimeout(quietCheck, 4000);
+        setInterval(quietCheck, 24 * 60 * 60 * 1000);
       }
     },
 
@@ -762,9 +768,78 @@ export const useStore = create<AppState>((set, get) => {
           set({ artifactStreamText: get().artifactStreamText + chunk });
         });
       });
+      // Queue generations stream note-tagged tokens; only the char count
+      // reaches state (the pending card shows progress, not prose), batched
+      // per frame like the artifact buffer above.
+      let genBuffer: Record<string, number> = {};
+      let genFlush = 0;
+      void listen<{ noteId: string; content: string }>(
+        "generation://token",
+        (e) => {
+          genBuffer[e.payload.noteId] =
+            (genBuffer[e.payload.noteId] ?? 0) + e.payload.content.length;
+          if (genFlush !== 0) return;
+          genFlush = requestAnimationFrame(() => {
+            genFlush = 0;
+            const add = genBuffer;
+            genBuffer = {};
+            const cur = { ...get().genProgress };
+            for (const [nid, chars] of Object.entries(add))
+              cur[nid] = (cur[nid] ?? 0) + chars;
+            set({ genProgress: cur });
+          });
+        },
+      );
+      // Queue lifecycle: keep the pending note's row truthful and announce
+      // the endings. done upserts arrive separately via generate://done.
+      void listen<{
+        noteId: string;
+        notebookId: string;
+        status: string;
+        detail: string;
+        title: string;
+      }>("generation://status", (e) => {
+        const p = e.payload;
+        const prev = get().genStatus[p.noteId]?.status;
+        set({
+          genStatus: {
+            ...get().genStatus,
+            [p.noteId]: { status: p.status, detail: p.detail },
+          },
+        });
+        if (p.status === "cancelled") {
+          set({
+            notes: get().notes.filter((x) => x.id !== p.noteId),
+            audioProgress: null,
+          });
+          return;
+        }
+        if (get().currentId === p.notebookId && p.status === "error") {
+          set({
+            notes: get().notes.map((x) =>
+              x.id === p.noteId ? { ...x, status: "error", content: p.detail } : x,
+            ),
+          });
+        }
+        if (p.status === "done" && prev !== "done") {
+          set({ audioProgress: null });
+          get().pushToast("success", `${p.title} ready`);
+          playDone();
+          void notify("Document ready", `“${p.title}” finished generating.`);
+        }
+        if (p.status === "error" && prev !== "error") {
+          set({ audioProgress: null });
+          get().pushToast("error", p.detail || "Generation failed");
+        }
+        if (p.status === "waiting" && prev !== "waiting")
+          get().pushToast(
+            "info",
+            p.detail || "Waiting for the model engine to come back",
+          );
+      });
       // Audio Overview synthesis reports per-line progress after the script.
       void listen<{ done: number; total: number }>("audio://progress", (e) => {
-        if (get().generatingKind) set({ audioProgress: e.payload });
+        set({ audioProgress: e.payload });
       });
       // Folder scans report per-file ingest progress; the Sources panel shows it
       // on the active queue item. The final tick (done === total) clears it.
@@ -2677,112 +2752,49 @@ export const useStore = create<AppState>((set, get) => {
       }),
 
     generateArtifact: async (kind, prompt) => {
+      // Queue, don't block (docs/RFC-generation-queue.md): the pending
+      // note IS the result surface — it appears at once, progress lands on
+      // it, and the backend worker owns the run, so several can cook and a
+      // reload changes nothing.
       const id = get().currentId;
-      if (!id || get().generatingKind) return;
-      set({
-        generatingKind: kind,
-        generatingFor: id,
-        artifactStreamText: "",
-        error: null,
-      });
+      if (!id) return;
       try {
-        const note = await api.generateArtifact(
+        const note = await api.enqueueGeneration(
           id,
           kind,
           prompt,
           selectedIdsForIpc(),
         );
-        // Auto-open the new note so the outcome is visible where the user acted,
-        // not just appended to the Notes list below the fold.
-        // Filter by id before prepending: the note:// event listener may have
-        // upserted this note already, and an unfiltered prepend rendered the
-        // same note twice (deleting "one" then removed both cards — they were
-        // one row shown twice).
-        // The user may have navigated away while it generated — never write
-        // another notebook's note into the open one. The note is persisted;
-        // the toast is the way back.
         if (get().currentId === id) {
           set({
             notes: [note, ...get().notes.filter((n) => n.id !== note.id)],
-            justCreatedNoteId: note.id,
           });
-          get().pushToast("success", `${note.title} ready`);
-        } else {
-          get().pushToast(
-            "success",
-            `${note.title} ready — click to open`,
-            () =>
-              void get()
-                .selectNotebook(id)
-                .then(() => set({ justCreatedNoteId: note.id })),
-          );
         }
-        void get().refreshModelStats();
-        playDone();
-        void notify("Document ready", `“${note.title}” finished generating.`);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        // A user-initiated Stop isn't an error — surface it quietly.
-        if (msg.includes("Generation stopped"))
-          get().pushToast("info", "Generation stopped");
-        else set({ error: msg });
-      } finally {
-        set({
-          generatingKind: null,
-          generatingFor: null,
-          artifactStreamText: "",
-          audioProgress: null,
-        });
+        set({ error: e instanceof Error ? e.message : String(e) });
       }
     },
 
     generateFromTemplate: async (t) => {
+      // Templates ride the queue like every other kind: `template:<id>`
+      // resolves name and prompt at run time on the backend, so the
+      // pending note is born with the template's own title.
       const id = get().currentId;
-      if (!id || get().generatingKind) return;
-      set({
-        generatingKind: "template",
-        generatingFor: id,
-        generatingTemplateId: t.id,
-        artifactStreamText: "",
-        error: null,
-      });
+      if (!id) return;
       try {
-        const note = await api.generateArtifact(id, "template", t.prompt);
-        // The backend titles unknown kinds "Report" — rename to the template's name.
-        await api.updateNote(note.id, t.name, note.content);
-        const titled = { ...note, title: t.name };
+        const note = await api.enqueueGeneration(
+          id,
+          `template:${t.id}` as NoteKind,
+          "",
+          selectedIdsForIpc(),
+        );
         if (get().currentId === id) {
           set({
-            notes: [titled, ...get().notes.filter((n) => n.id !== note.id)],
-            justCreatedNoteId: note.id,
+            notes: [note, ...get().notes.filter((n) => n.id !== note.id)],
           });
-          get().pushToast("success", `${t.name} ready`);
-        } else {
-          get().pushToast(
-            "success",
-            `${t.name} ready — click to open`,
-            () =>
-              void get()
-                .selectNotebook(id)
-                .then(() => set({ justCreatedNoteId: note.id })),
-          );
         }
-        void get().refreshModelStats();
-        playDone();
-        void notify("Document ready", `“${t.name}” finished generating.`);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        if (msg.includes("Generation stopped"))
-          get().pushToast("info", "Generation stopped");
-        else set({ error: msg });
-      } finally {
-        set({
-          generatingKind: null,
-          generatingFor: null,
-          generatingTemplateId: null,
-          artifactStreamText: "",
-          audioProgress: null,
-        });
+        set({ error: e instanceof Error ? e.message : String(e) });
       }
     },
 
