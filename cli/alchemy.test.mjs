@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   CliError,
   McpClient,
+  discoverMcpConnection,
   discoverMcpUrl,
   parseArgs,
   resolveNotebook,
@@ -17,6 +18,7 @@ test("parses the narrow command surface", () => {
   assert.deepEqual(parseArgs(["notebooks", "--json"]), {
     command: "notebooks",
     mcpUrl: undefined,
+    mcpToken: undefined,
     json: true,
   });
   assert.deepEqual(
@@ -24,6 +26,7 @@ test("parses the narrow command surface", () => {
     {
       command: "search",
       mcpUrl: undefined,
+      mcpToken: undefined,
       json: false,
       notebook: "Atlas",
       query: "renewal risk",
@@ -38,10 +41,14 @@ test("parses the narrow command surface", () => {
 test("discovers the running app and honors explicit overrides", async () => {
   const dir = await mkdtemp(join(tmpdir(), "alchemy-cli-"));
   const discovery = join(dir, "mcp.json");
-  await writeFile(discovery, JSON.stringify({ port: 43123 }));
+  await writeFile(discovery, JSON.stringify({ port: 43123, token: "secret" }));
   assert.equal(
     await discoverMcpUrl(undefined, { ALCHEMY_MCP_DISCOVERY: discovery }),
     "http://127.0.0.1:43123/mcp",
+  );
+  assert.deepEqual(
+    await discoverMcpConnection(undefined, undefined, { ALCHEMY_MCP_DISCOVERY: discovery }),
+    { url: "http://127.0.0.1:43123/mcp", token: "secret" },
   );
   assert.equal(
     await discoverMcpUrl("http://localhost:9999/mcp", {}),
@@ -76,7 +83,7 @@ test("resolves notebooks only by exact id or exact case-insensitive title", asyn
   await assert.rejects(() => resolveNotebook(client, "Atlas"), /no notebook/);
 });
 
-test("MCP client initializes a session and parses a JSON tool result", async () => {
+test("MCP client authenticates, initializes a session, and parses a JSON tool result", async () => {
   const requests = [];
   const fetchImpl = async (_url, init) => {
     const request = JSON.parse(init.body);
@@ -97,8 +104,9 @@ test("MCP client initializes a session and parses a JSON tool result", async () 
       { headers: { "content-type": "application/json" } },
     );
   };
-  const client = new McpClient("http://127.0.0.1:41414/mcp", fetchImpl);
+  const client = new McpClient("http://127.0.0.1:41414/mcp", "local-secret", fetchImpl);
   assert.deepEqual(await client.call("list_notebooks"), [{ id: "nb-1", title: "Atlas" }]);
+  assert.equal(requests[0].headers.authorization, "Bearer local-secret");
   assert.equal(requests[2].headers["mcp-session-id"], "session-1");
 });
 

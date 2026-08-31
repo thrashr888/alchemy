@@ -19,13 +19,9 @@ The MCP server runs inside the Alchemy app as streamable HTTP at
 `http://127.0.0.1:41414/mcp` (default). If Alchemy tools are unavailable, the
 app isn't running — ask the user to open Alchemy. (No Alchemy at all? It's a
 free macOS app: https://github.com/thrashr888/alchemy/releases — this skill
-is useless without it.) Registration is one click
-in Alchemy's **Settings → Agents** (it writes your client's own MCP config),
-or manual, e.g. for Claude Code:
-
-```
-claude mcp add --transport http alchemy http://127.0.0.1:41414/mcp
-```
+is useless without it.) Registration is one click in Alchemy's
+**Settings → Agents**; it writes the client's HTTP config and private bearer
+header. Do not replace that entry with a bare URL, which will be rejected.
 
 ## Workflow
 

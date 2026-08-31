@@ -32,7 +32,8 @@ Commands:
 
 Connection:
   The Alchemy app must be running with MCP enabled. The CLI discovers the
-  app through its mcp.json file. Override with --mcp-url or ALCHEMY_MCP_URL.
+  app and its private local token through mcp.json. Override with --mcp-url
+  and --mcp-token, or ALCHEMY_MCP_URL and ALCHEMY_MCP_TOKEN.
 
 Install from this checkout:
   pnpm add --global ./cli
@@ -75,11 +76,12 @@ export function parseArgs(argv) {
 
   const command = args.shift();
   const mcpUrl = takeOption(args, "--mcp-url");
+  const mcpToken = takeOption(args, "--mcp-token");
   const json = takeFlag(args, "--json");
 
   if (command === "notebooks") {
     if (args.length) throw new CliError(`unexpected argument: ${args[0]}`);
-    return { command, mcpUrl, json };
+    return { command, mcpUrl, mcpToken, json };
   }
 
   if (command === "add") {
@@ -95,7 +97,7 @@ export function parseArgs(argv) {
     if (title && (args.length > 1 || (args.length === 1 && args[0] !== "-"))) {
       throw new CliError("--title can only be used when adding one stdin source");
     }
-    return { command, mcpUrl, json, notebook, title, inputs: args };
+    return { command, mcpUrl, mcpToken, json, notebook, title, inputs: args };
   }
 
   if (command === "search") {
@@ -113,7 +115,7 @@ export function parseArgs(argv) {
         throw new CliError("--limit must be an integer from 1 to 20");
       }
     }
-    return { command, mcpUrl, json, notebook, query, limit };
+    return { command, mcpUrl, mcpToken, json, notebook, query, limit };
   }
 
   throw new CliError(`unknown command: ${command}`);
@@ -133,24 +135,42 @@ export function discoveryPaths(env = process.env, home = homedir(), platform = p
 }
 
 export async function discoverMcpUrl(explicit, env = process.env) {
-  if (explicit) return validateMcpUrl(explicit, "--mcp-url");
-  if (env.ALCHEMY_MCP_URL) return validateMcpUrl(env.ALCHEMY_MCP_URL, "ALCHEMY_MCP_URL");
+  return (await discoverMcpConnection(explicit, undefined, env)).url;
+}
+
+export async function discoverMcpConnection(explicitUrl, explicitToken, env = process.env) {
+  const overrideUrl = explicitUrl || env.ALCHEMY_MCP_URL;
+  const overrideToken = explicitToken || env.ALCHEMY_MCP_TOKEN || "";
+  if (overrideUrl) {
+    return {
+      url: validateMcpUrl(overrideUrl, explicitUrl ? "--mcp-url" : "ALCHEMY_MCP_URL"),
+      token: overrideToken,
+    };
+  }
 
   for (const path of discoveryPaths(env)) {
     try {
       const info = JSON.parse(await readFile(path, "utf8"));
-      if (typeof info.url === "string") return validateMcpUrl(info.url, path);
-      if (Number.isInteger(info.port)) {
-        return `http://127.0.0.1:${info.port}/mcp`;
+      const url =
+        typeof info.url === "string"
+          ? validateMcpUrl(info.url, path)
+          : Number.isInteger(info.port)
+            ? `http://127.0.0.1:${info.port}/mcp`
+            : null;
+      if (!url) throw new CliError(`Alchemy discovery file has no url or port: ${path}`);
+      if (typeof info.token !== "string" || !info.token) {
+        throw new CliError(
+          `Alchemy discovery file has no authentication token: ${path}; restart the app to refresh it`,
+        );
       }
-      throw new CliError(`Alchemy discovery file has no url or port: ${path}`);
+      return { url, token: overrideToken || info.token };
     } catch (error) {
       if (error?.code === "ENOENT") continue;
       if (error instanceof CliError) throw error;
       throw new CliError(`could not read Alchemy discovery file ${path}: ${error.message}`);
     }
   }
-  return DEFAULT_MCP_URL;
+  return { url: DEFAULT_MCP_URL, token: overrideToken };
 }
 
 function validateMcpUrl(value, source) {
@@ -199,9 +219,12 @@ async function parseRpcResponse(response, id) {
 }
 
 export class McpClient {
-  constructor(url, fetchImpl = globalThis.fetch) {
+  constructor(url, tokenOrFetch = "", fetchImpl = globalThis.fetch) {
     this.url = url;
-    this.fetch = fetchImpl;
+    // Preserve the pre-token constructor shape for downstream imports while
+    // making authenticated use the normal path for the bundled CLI.
+    this.token = typeof tokenOrFetch === "string" ? tokenOrFetch : "";
+    this.fetch = typeof tokenOrFetch === "function" ? tokenOrFetch : fetchImpl;
     this.sessionId = null;
     this.nextId = 1;
   }
@@ -211,6 +234,7 @@ export class McpClient {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
     };
+    if (this.token) headers.authorization = `Bearer ${this.token}`;
     if (sessionId) headers["mcp-session-id"] = sessionId;
     try {
       return await this.fetch(this.url, {
@@ -241,7 +265,13 @@ export class McpClient {
       },
       null,
     );
-    if (!response.ok) throw new CliError(`Alchemy MCP initialize failed (HTTP ${response.status})`);
+    if (!response.ok) {
+      const hint =
+        response.status === 401
+          ? "; authentication failed — restart Alchemy or remove connection overrides to rediscover it"
+          : "";
+      throw new CliError(`Alchemy MCP initialize failed (HTTP ${response.status}${hint})`);
+    }
     const message = await parseRpcResponse(response, id);
     if (message.error) throw new CliError(message.error.message || "Alchemy MCP initialize failed");
     this.sessionId = response.headers.get("mcp-session-id");
@@ -370,7 +400,8 @@ export async function run(argv = process.argv.slice(2)) {
     return;
   }
 
-  const client = new McpClient(await discoverMcpUrl(options.mcpUrl));
+  const connection = await discoverMcpConnection(options.mcpUrl, options.mcpToken);
+  const client = new McpClient(connection.url, connection.token);
   if (options.command === "notebooks") {
     const notebooks = await client.call("list_notebooks");
     options.json ? console.log(JSON.stringify(notebooks, null, 2)) : printNotebooks(notebooks);

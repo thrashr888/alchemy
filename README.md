@@ -225,7 +225,8 @@ two-host podcast voiced on-device.*
 
   An omitted `--notebook` searches across all notebooks. `--json` keeps every
   command scriptable. The app must be running with MCP enabled; discovery uses
-  its app-data `mcp.json`, with `--mcp-url` / `ALCHEMY_MCP_URL` as overrides.
+  its owner-only app-data `mcp.json` for the URL and local bearer token, with
+  matching `--mcp-url` / `--mcp-token` environment overrides when needed.
 - **Periodic reports** — schedule a notebook to refresh its URL sources and generate a
   timestamped report note on an interval; each run sees the previous report and
   calls out what changed since.

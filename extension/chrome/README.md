@@ -61,7 +61,10 @@ extension card.
 The same folder loads in Firefox as-is: the manifest carries
 `browser_specific_settings.gecko.id` (`clipper@alchemy.thrasher.dev`,
 min 121.0) and `background.scripts` alongside `service_worker`, so each
-browser picks its supported key. Test via `about:debugging` → This
+browser picks its supported key. Firefox assigns an unpredictable
+`moz-extension://` origin, so Alchemy deliberately rejects its rendered-DOM
+POST and the extension falls back to URL-only clipping; this avoids trusting
+every installed Firefox extension. Test via `about:debugging` → This
 Firefox → Load Temporary Add-on → pick `manifest.json`. Publish the
 identical zip at https://addons.mozilla.org/developers/ (free account,
 no fee; copy lives in STORE.md).

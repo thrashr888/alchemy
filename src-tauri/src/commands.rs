@@ -3155,6 +3155,7 @@ fn sniff_image_mime(bytes: &[u8]) -> &'static str {
         b if b.starts_with(b"\x89PNG") => "image/png",
         b if b.starts_with(b"\xff\xd8") => "image/jpeg",
         b if b.starts_with(b"GIF8") => "image/gif",
+        b if b.starts_with(b"BM") => "image/bmp",
         b if b.len() > 11 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" => "image/webp",
         _ => "image/png",
     }
@@ -3311,6 +3312,42 @@ pub async fn source_thumbnail(
         }
         _ => Ok(String::new()),
     }
+}
+
+/// Original bytes for the full image reader, addressed by source id rather
+/// than by an arbitrary renderer-supplied path. This lets the asset protocol
+/// stay scoped to app-owned media instead of granting the webview all of HOME.
+#[tauri::command]
+pub async fn source_image(state: State<'_, AppState>, source_id: String) -> Result<String, String> {
+    use base64::Engine;
+    const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
+
+    let Some(source) = e(state.db.get_source(&source_id).await)? else {
+        return Err("Source not found".into());
+    };
+    if source.source_type != "image" || source.url.is_empty() {
+        return Err("Source is not a local image".into());
+    }
+    let path = std::path::PathBuf::from(source.url);
+    let size = std::fs::metadata(&path)
+        .map_err(|_| "The original image has moved".to_string())?
+        .len();
+    if size > MAX_IMAGE_BYTES {
+        return Err("Image is too large to open safely (64 MB maximum)".into());
+    }
+
+    let bytes = tokio::task::spawn_blocking(move || image_bytes_for_ocr(&path.to_string_lossy()))
+        .await
+        .map_err(|_| "Image reader stopped unexpectedly".to_string())?
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_IMAGE_BYTES {
+        return Err("Converted image is too large to open safely (64 MB maximum)".into());
+    }
+    Ok(format!(
+        "data:{};base64,{}",
+        sniff_image_mime(&bytes),
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
 }
 
 /// Opening lines of a source's text for a gallery card: provenance
@@ -11605,17 +11642,81 @@ fn note_kind_from_label(label: &str) -> String {
     "note".into()
 }
 
-/// Safely extract an .okf.zip into a scratch dir and return it.
-fn extract_okf_zip(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+#[derive(Clone, Copy)]
+struct OkfZipLimits {
+    max_entries: usize,
+    max_entry_bytes: u64,
+    max_total_bytes: u64,
+    max_compression_ratio: u64,
+}
+
+const OKF_ZIP_LIMITS: OkfZipLimits = OkfZipLimits {
+    max_entries: 10_000,
+    max_entry_bytes: 64 * 1024 * 1024,
+    max_total_bytes: 512 * 1024 * 1024,
+    max_compression_ratio: 1_000,
+};
+
+/// Safely extract an .okf.zip into an RAII scratch directory. Declared sizes
+/// are screened before extraction, then actual streamed bytes are bounded too
+/// so forged metadata cannot bypass the disk budget.
+fn extract_okf_zip(path: &std::path::Path) -> Result<tempfile::TempDir, String> {
+    extract_okf_zip_in(path, OKF_ZIP_LIMITS, &std::env::temp_dir())
+}
+
+fn extract_okf_zip_in(
+    path: &std::path::Path,
+    limits: OkfZipLimits,
+    scratch_parent: &std::path::Path,
+) -> Result<tempfile::TempDir, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("Failed to open zip: {e}"))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Not a readable zip: {e}"))?;
-    let dest = std::env::temp_dir().join(format!("alchemy-okf-import-{}", new_id()));
-    std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+
+    if archive.len() > limits.max_entries {
+        return Err(format!(
+            "OKF archive has too many entries ({}; maximum {})",
+            archive.len(),
+            limits.max_entries
+        ));
+    }
+    let mut declared_total = 0_u64;
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        let size = entry.size();
+        if size > limits.max_entry_bytes {
+            return Err(format!(
+                "OKF archive entry is too large ({} bytes; maximum {})",
+                size, limits.max_entry_bytes
+            ));
+        }
+        declared_total = declared_total
+            .checked_add(size)
+            .ok_or_else(|| "OKF archive size overflow".to_string())?;
+        if declared_total > limits.max_total_bytes {
+            return Err(format!(
+                "OKF archive expands beyond the {} byte limit",
+                limits.max_total_bytes
+            ));
+        }
+        let compressed = entry.compressed_size();
+        if size >= 1024 * 1024
+            && (compressed == 0 || size / compressed.max(1) > limits.max_compression_ratio)
+        {
+            return Err("OKF archive has an unsafe compression ratio".into());
+        }
+    }
+
+    let scratch = tempfile::Builder::new()
+        .prefix("alchemy-okf-import-")
+        .tempdir_in(scratch_parent)
+        .map_err(|e| format!("Failed to create import scratch directory: {e}"))?;
+    let dest = scratch.path();
+    let mut actual_total = 0_u64;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
         // enclosed_name refuses absolute paths and `..` traversal.
         let Some(rel) = entry.enclosed_name() else {
-            continue;
+            return Err("OKF archive contains an unsafe path".into());
         };
         let out = dest.join(rel);
         if entry.is_dir() {
@@ -11625,10 +11726,22 @@ fn extract_okf_zip(path: &std::path::Path) -> Result<std::path::PathBuf, String>
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
             let mut f = std::fs::File::create(&out).map_err(|e| e.to_string())?;
-            std::io::copy(&mut entry, &mut f).map_err(|e| e.to_string())?;
+            let remaining_total = limits.max_total_bytes.saturating_sub(actual_total);
+            let allowed = limits.max_entry_bytes.min(remaining_total);
+            let copied = std::io::copy(
+                &mut std::io::Read::take(&mut entry, allowed.saturating_add(1)),
+                &mut f,
+            )
+            .map_err(|e| e.to_string())?;
+            if copied > allowed {
+                return Err("OKF archive exceeded its extraction byte limit".into());
+            }
+            actual_total = actual_total
+                .checked_add(copied)
+                .ok_or_else(|| "OKF archive size overflow".to_string())?;
         }
     }
-    Ok(dest)
+    Ok(scratch)
 }
 
 /// An OKF bundle root holds index.md (and sources/ / notes/); a zip usually
@@ -11716,13 +11829,12 @@ pub async fn import_notebook_okf(
     let (scratch, root) = if src.is_dir() {
         (None, src)
     } else {
-        let dest = extract_okf_zip(&src)?;
-        (Some(dest.clone()), dest)
+        let scratch = extract_okf_zip(&src)?;
+        let root = scratch.path().to_path_buf();
+        (Some(scratch), root)
     };
     let result = import_bundle(&app, &state, root, notebook_id).await;
-    if let Some(dir) = scratch {
-        let _ = std::fs::remove_dir_all(dir);
-    }
+    drop(scratch);
     result
 }
 
@@ -11995,11 +12107,7 @@ fn meta_step(app: Option<&AppHandle>, label: impl Into<String>, transient: bool)
 /// Window-targeted variant for corpus chat. Alchemy can have more than one
 /// window open, so one window's Home Chat must not receive another window's
 /// progress trail.
-fn meta_step_to(
-    target: Option<(&AppHandle, &str)>,
-    label: impl Into<String>,
-    transient: bool,
-) {
+fn meta_step_to(target: Option<(&AppHandle, &str)>, label: impl Into<String>, transient: bool) {
     if let Some((app, window_label)) = target {
         let _ = app.emit_to(
             window_label,
@@ -13408,7 +13516,8 @@ pub(crate) async fn apply_ai_config(
     // Keep the provider list and flat legacy fields coherent on every save.
     config.normalize();
     let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
-    std::fs::write(&state.config_path, json).map_err(|e| e.to_string())?;
+    crate::secure_fs::write_private_file(&state.config_path, json.as_bytes())
+        .map_err(|e| e.to_string())?;
     let (mcp_enabled, mcp_port) = (config.mcp_enabled, config.mcp_port);
     let (clip_enabled, clip_port) = (config.clip_enabled, config.clip_port);
     crate::integrations::set_tray_visible(app, config.tray_enabled);
@@ -13462,6 +13571,85 @@ pub async fn check_ollama(state: State<'_, AppState>) -> Result<bool, String> {
 #[cfg(test)]
 mod tool_tests {
     use super::*;
+
+    fn write_okf_test_zip(path: &std::path::Path, entries: &[(&str, &[u8])]) {
+        use std::io::Write as _;
+
+        let file = std::fs::File::create(path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        let options: zip::write::SimpleFileOptions = Default::default();
+        for (name, bytes) in entries {
+            archive.start_file(*name, options).unwrap();
+            archive.write_all(bytes).unwrap();
+        }
+        archive.finish().unwrap();
+    }
+
+    #[test]
+    fn okf_zip_extraction_is_bounded_and_raii_cleaned() {
+        let parent = tempfile::tempdir().unwrap();
+        let archive_path = parent.path().join("bundle.okf.zip");
+        write_okf_test_zip(&archive_path, &[("bundle/index.md", b"# Safe\n")]);
+        let limits = OkfZipLimits {
+            max_entries: 2,
+            max_entry_bytes: 32,
+            max_total_bytes: 32,
+            max_compression_ratio: 100,
+        };
+
+        let scratch = extract_okf_zip_in(&archive_path, limits, parent.path()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(scratch.path().join("bundle/index.md")).unwrap(),
+            "# Safe\n"
+        );
+        let scratch_path = scratch.path().to_path_buf();
+        drop(scratch);
+        assert!(!scratch_path.exists(), "TempDir removes successful imports");
+
+        let too_small = OkfZipLimits {
+            max_entry_bytes: 4,
+            ..limits
+        };
+        let error = extract_okf_zip_in(&archive_path, too_small, parent.path()).unwrap_err();
+        assert!(error.contains("too large"), "{error}");
+    }
+
+    #[test]
+    fn okf_zip_rejects_traversal_and_cleans_partial_output() {
+        let parent = tempfile::tempdir().unwrap();
+        let archive_path = parent.path().join("unsafe.okf.zip");
+        write_okf_test_zip(
+            &archive_path,
+            &[
+                ("bundle/index.md", b"# Partial\n"),
+                ("../escaped.md", b"no"),
+            ],
+        );
+        let error = extract_okf_zip_in(&archive_path, OKF_ZIP_LIMITS, parent.path()).unwrap_err();
+        assert!(error.contains("unsafe path"), "{error}");
+        assert!(!parent.path().join("escaped.md").exists());
+        let leftovers: Vec<_> = std::fs::read_dir(parent.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .collect();
+        assert_eq!(leftovers, vec![std::ffi::OsString::from("unsafe.okf.zip")]);
+    }
+
+    #[test]
+    fn okf_zip_rejects_excess_entry_count_before_extracting() {
+        let parent = tempfile::tempdir().unwrap();
+        let archive_path = parent.path().join("many.okf.zip");
+        write_okf_test_zip(&archive_path, &[("one.md", b"1"), ("two.md", b"2")]);
+        let limits = OkfZipLimits {
+            max_entries: 1,
+            max_entry_bytes: 32,
+            max_total_bytes: 32,
+            max_compression_ratio: 100,
+        };
+        let error = extract_okf_zip_in(&archive_path, limits, parent.path()).unwrap_err();
+        assert!(error.contains("too many entries"), "{error}");
+    }
 
     #[test]
     fn chat_presets_compose_style_and_length_guidance() {

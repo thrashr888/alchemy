@@ -51,8 +51,8 @@ jobs:
       # The Foundation Models helper is deterministic for a given Swift
       # manifest. Cache its build products so pnpm's postinstall hook can
       # reuse them, while still rebuilding whenever its source is newer.
-      # Keep PDFium out of this cache: fetch-pdfium.sh deliberately tracks the
-      # publisher's latest binary on every clean runner.
+      # Keep PDFium out of this cache: fetch-pdfium.sh downloads and verifies
+      # the version and architecture hashes pinned in the script.
       - name: Cache Foundation Models sidecar
         uses: actions/cache@v4
         with:
@@ -61,6 +61,16 @@ jobs:
             src-tauri/binaries/alchemy-fm
             src-tauri/binaries/alchemy-fm.sha256
           key: fm-sidecar-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('sidecar/alchemy-fm/Package.swift', 'scripts/build-fm-sidecar.sh') }}
+
+      - name: PDFium checksum rejects tampered archives
+        run: |
+          fixture="$(mktemp)"
+          trap 'rm -f "$fixture"' EXIT
+          printf 'not pdfium\n' > "$fixture"
+          if PDFIUM_SOURCE_ARCHIVE="$fixture" scripts/fetch-pdfium.sh "$(uname -m)"; then
+            echo "fetch-pdfium accepted a tampered archive" >&2
+            exit 1
+          fi
 
       - name: Install frontend dependencies
         # Postinstall fetches PDFium and builds the Swift FM sidecar. Both are
