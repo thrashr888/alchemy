@@ -108,8 +108,10 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
         <div className="mx-1 h-4 w-px bg-border" />
         {/* `group`: the name cluster is a right-clickable object — the ⋯
             RowMenu inside binds contextmenu to this div, carrying the same
-            verbs as a notebook row on Home (color lives in Rename's dialog). */}
-        <div className="group relative flex items-center gap-1.5 min-w-0">
+            verbs as a notebook row on Home (color lives in Rename's dialog).
+            The ⋯ stays visible (hover-reveal reflowed the tabs beside it)
+            and the name is chrome, not copy — no text selection. */}
+        <div className="group relative flex select-none items-center gap-1.5 min-w-0">
           {(() => {
             const Icon = notebookIcon(notebook?.icon);
             return <Icon className="h-3.5 w-3.5 shrink-0 text-primary" />;
@@ -128,6 +130,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
           </span>
           {notebook && (
             <RowMenu
+              alwaysVisible
               label={`Options for ${notebook.title}`}
               items={[
                 {

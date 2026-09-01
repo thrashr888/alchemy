@@ -64,6 +64,26 @@ export function NotebookEditModal({
           value={title}
           onChange={(e) => setTitle(e.target.value)}
         />
+        {/* Color first: it reads as part of the name row above (the dot the
+            title bar and cards wear), where the icon grid is a bigger,
+            slower choice below it. */}
+        <div className="flex items-center justify-between py-1">
+          {NOTEBOOK_PALETTE.map((c) => (
+            <button
+              key={c}
+              type="button"
+              aria-pressed={color === c}
+              aria-label={`Color ${c}`}
+              onClick={() => setColor(c)}
+              className={cn(
+                "h-6 w-6 rounded-full border border-border transition-shadow",
+                color === c &&
+                  "ring-2 ring-foreground ring-offset-1 ring-offset-surface",
+              )}
+              style={{ backgroundColor: c }}
+            />
+          ))}
+        </div>
         {/* Icon picker: the auto-picked icon can always be overridden
             here; the plain book is a first-class choice, not an absence. */}
         <div className="grid grid-cols-8 gap-1">
@@ -93,23 +113,6 @@ export function NotebookEditModal({
               );
             },
           )}
-        </div>
-        <div className="flex items-center gap-1.5">
-          {NOTEBOOK_PALETTE.map((c) => (
-            <button
-              key={c}
-              type="button"
-              aria-pressed={color === c}
-              aria-label={`Color ${c}`}
-              onClick={() => setColor(c)}
-              className={cn(
-                "h-6 w-6 rounded-full border border-border transition-shadow",
-                color === c &&
-                  "ring-2 ring-foreground ring-offset-1 ring-offset-surface",
-              )}
-              style={{ backgroundColor: c }}
-            />
-          ))}
         </div>
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose}>

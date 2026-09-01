@@ -74,8 +74,9 @@ pub const GIST_CHUNK_PREFIX: &str = "gist:";
 /// gists these rows are user ground truth, so they stay IN the per-notebook
 /// search path (no exclusion filter) and need no confabulation gate.
 pub const SNOTE_CHUNK_PREFIX: &str = "snote:";
-pub const NOTEBOOK_PALETTE: [&str; 8] = [
-    "#eb5757", "#e8a33d", "#4cb782", "#5e9bd2", "#9b87f5", "#e274b6", "#4fc1c9", "#98a562",
+pub const NOTEBOOK_PALETTE: [&str; 11] = [
+    "#eb5757", "#e8a33d", "#d9b13b", "#4cb782", "#4fc1c9", "#5e9bd2", "#9b87f5", "#e274b6",
+    "#c1765a", "#98a562", "#8a93a6",
 ];
 
 /// One hybrid search with the working shown: what each stage saw and any
