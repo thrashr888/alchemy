@@ -104,6 +104,22 @@ const EXTRA_CORPUS: &[(&str, &str)] = &[
 struct Dataset {
     name: String,
     queries: Vec<EvalQuery>,
+    /// Which corpus the queries run over: "" (default) is the golden corpus
+    /// plus EXTRA_CORPUS; "outline" is the long structured documents from
+    /// `outline_corpus`, seeded into their own notebook so they never crowd
+    /// the other datasets' top-k.
+    #[serde(default)]
+    corpus: String,
+    /// Whether the shipping floors apply. A gate dataset — one that exists
+    /// to measure a failure mode retrieval does NOT yet handle — sets this
+    /// false: its numbers are reported and diffed, not asserted, and only
+    /// its control kinds are held to recall 1.0.
+    #[serde(default = "default_true")]
+    floors: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -150,6 +166,273 @@ struct DatasetReport {
     k: usize,
     queries: usize,
     variants: BTreeMap<String, VariantReport>,
+}
+
+/// Long structured documents for the outline gate (Reminders: "Outline
+/// eval cases before outline work"). The failure mode is a 300-page manual
+/// where every chapter repeats the same subsections — inspection interval,
+/// torque values, replacement parts — with the same vocabulary and different
+/// numbers. The word that tells the chunks apart (the chapter name) lives
+/// only in the chapter heading, which `chunk_text` drops the moment a
+/// subsection heading replaces it; the outline index exists to carry it.
+/// Generated from tables rather than hand-written so the look-alike shape
+/// is exact and the numbers are unique (no torque is a suffix of another
+/// once matched as "to N N", so `must_contain` can't hit a neighbor).
+fn outline_corpus() -> Vec<(String, String)> {
+    /// One chapter of the manual: the system it covers and the numbers its
+    /// look-alike subsections carry.
+    struct Chapter {
+        system: &'static str,
+        intro: &'static str,
+        bolts: &'static str,
+        nuts: &'static str,
+        torque_bolts: u32,
+        torque_nuts: u32,
+        hours: u32,
+        months: u32,
+        part: &'static str,
+        seal: &'static str,
+    }
+    const CHAPTERS: &[Chapter] = &[
+        Chapter {
+            system: "Hydraulics",
+            intro: "pressurizes the flight-control actuators and the gear retraction circuit",
+            bolts: "mounting bolts",
+            nuts: "union nuts",
+            torque_bolts: 23,
+            torque_nuts: 12,
+            hours: 100,
+            months: 3,
+            part: "FM-1102",
+            seal: "SK-1102",
+        },
+        Chapter {
+            system: "Landing Gear",
+            intro: "carries the aircraft on the ground and absorbs the landing loads",
+            bolts: "hinge bolts",
+            nuts: "retaining nuts",
+            torque_bolts: 31,
+            torque_nuts: 19,
+            hours: 150,
+            months: 4,
+            part: "FM-1210",
+            seal: "SK-1210",
+        },
+        Chapter {
+            system: "Avionics",
+            intro: "integrates navigation, communication, and flight-management computers",
+            bolts: "clamp bolts",
+            nuts: "lock nuts",
+            torque_bolts: 47,
+            torque_nuts: 28,
+            hours: 200,
+            months: 5,
+            part: "FM-1305",
+            seal: "SK-1305",
+        },
+        Chapter {
+            system: "Fuel System",
+            intro: "stores and meters fuel from the wing tanks to the engines",
+            bolts: "mounting bolts",
+            nuts: "union nuts",
+            torque_bolts: 52,
+            torque_nuts: 36,
+            hours: 250,
+            months: 6,
+            part: "FM-1420",
+            seal: "SK-1420",
+        },
+        Chapter {
+            system: "Cabin Pressurization",
+            intro: "regulates cabin altitude through the outflow valves",
+            bolts: "clamp bolts",
+            nuts: "retaining nuts",
+            torque_bolts: 68,
+            torque_nuts: 44,
+            hours: 300,
+            months: 7,
+            part: "FM-1511",
+            seal: "SK-1511",
+        },
+        Chapter {
+            system: "Flight Controls",
+            intro: "links the cockpit inceptors to the control surfaces",
+            bolts: "hinge bolts",
+            nuts: "lock nuts",
+            torque_bolts: 74,
+            torque_nuts: 57,
+            hours: 350,
+            months: 8,
+            part: "FM-1618",
+            seal: "SK-1618",
+        },
+        Chapter {
+            system: "Electrical",
+            intro: "distributes generator and battery power across the buses",
+            bolts: "mounting bolts",
+            nuts: "lock nuts",
+            torque_bolts: 86,
+            torque_nuts: 63,
+            hours: 400,
+            months: 9,
+            part: "FM-1707",
+            seal: "SK-1707",
+        },
+        Chapter {
+            system: "Auxiliary Power Unit",
+            intro: "supplies ground power and bleed air with the engines shut down",
+            bolts: "clamp bolts",
+            nuts: "union nuts",
+            torque_bolts: 91,
+            torque_nuts: 79,
+            hours: 450,
+            months: 10,
+            part: "FM-1823",
+            seal: "SK-1823",
+        },
+        Chapter {
+            system: "Environmental Control",
+            intro: "conditions and circulates cabin air",
+            bolts: "hinge bolts",
+            nuts: "retaining nuts",
+            torque_bolts: 105,
+            torque_nuts: 82,
+            hours: 500,
+            months: 11,
+            part: "FM-1904",
+            seal: "SK-1904",
+        },
+        Chapter {
+            system: "Oxygen System",
+            intro: "provides emergency oxygen to the flight deck and cabin",
+            bolts: "mounting bolts",
+            nuts: "retaining nuts",
+            torque_bolts: 118,
+            torque_nuts: 97,
+            hours: 550,
+            months: 12,
+            part: "FM-2041",
+            seal: "SK-2041",
+        },
+        Chapter {
+            system: "Brakes",
+            intro: "stops the aircraft on landing and holds it during engine run-up",
+            bolts: "clamp bolts",
+            nuts: "lock nuts",
+            torque_bolts: 126,
+            torque_nuts: 112,
+            hours: 600,
+            months: 13,
+            part: "FM-2116",
+            seal: "SK-2116",
+        },
+        Chapter {
+            system: "Nose Wheel Steering",
+            intro: "steers the nose gear from the tiller and the rudder pedals",
+            bolts: "hinge bolts",
+            nuts: "union nuts",
+            torque_bolts: 137,
+            torque_nuts: 124,
+            hours: 650,
+            months: 14,
+            part: "FM-2209",
+            seal: "SK-2209",
+        },
+        Chapter {
+            system: "Engine Cowling",
+            intro: "encloses the engine and directs cooling air",
+            bolts: "mounting bolts",
+            nuts: "lock nuts",
+            torque_bolts: 143,
+            torque_nuts: 131,
+            hours: 700,
+            months: 15,
+            part: "FM-2330",
+            seal: "SK-2330",
+        },
+        Chapter {
+            system: "Wing Anti-Ice",
+            intro: "heats the wing leading edges with engine bleed air",
+            bolts: "clamp bolts",
+            nuts: "union nuts",
+            torque_bolts: 159,
+            torque_nuts: 148,
+            hours: 750,
+            months: 16,
+            part: "FM-2412",
+            seal: "SK-2412",
+        },
+    ];
+    let mut manual = String::from(
+        "Maintenance manual for the fleet. Each chapter covers one aircraft system \
+         and follows the same layout: an inspection interval, the torque values for \
+         its fasteners, and the replacement part numbers.",
+    );
+    for (i, c) in CHAPTERS.iter().enumerate() {
+        manual.push_str(&format!(
+            "\n\n# Chapter {n}: {system}\n\nThe {lower} system {intro}. This chapter \
+             applies to every airframe in the fleet unless a service bulletin says \
+             otherwise.\n\n\
+             ## Inspection Interval\n\nInspect the assembly every {hours} flight hours \
+             or {months} months, whichever comes first. Record the inspection in the \
+             aircraft log and note any deferred defects.\n\n\
+             ## Torque Values\n\nTorque the {bolts} to {tb} N\u{b7}m and the {nuts} to \
+             {tn} N\u{b7}m. Use a calibrated wrench and apply thread lubricant only \
+             where the illustrated parts catalog calls for it.\n\n\
+             ## Replacement Parts\n\nOrder part number {part} for the complete assembly. \
+             The seal kit is {seal}. Discard fasteners removed during disassembly.",
+            n = i + 1,
+            system = c.system,
+            lower = c.system.to_lowercase(),
+            intro = c.intro,
+            hours = c.hours,
+            months = c.months,
+            bolts = c.bolts,
+            tb = c.torque_bolts,
+            nuts = c.nuts,
+            tn = c.torque_nuts,
+            part = c.part,
+            seal = c.seal,
+        ));
+    }
+
+    // (office, holidays, per-night cap, notice weeks)
+    const OFFICES: &[(&str, u32, u32, u32)] = &[
+        ("Lisbon", 13, 110, 2),
+        ("Austin", 9, 125, 3),
+        ("Toronto", 11, 140, 4),
+        ("Singapore", 12, 155, 5),
+        ("Dublin", 10, 170, 6),
+        ("Melbourne", 14, 185, 7),
+        ("Berlin", 15, 200, 8),
+        ("Sao Paulo", 16, 215, 9),
+        ("Tokyo", 17, 230, 10),
+        ("Bangalore", 18, 245, 11),
+        ("Mexico City", 19, 260, 12),
+        ("Warsaw", 20, 275, 13),
+    ];
+    let mut policy = String::from(
+        "Employee policy manual, by office. Each office section carries the same \
+         three subsections: public holidays, expense limits, and notice period. \
+         Where local law is more generous, local law applies.",
+    );
+    for (office, holidays, cap, weeks) in OFFICES {
+        policy.push_str(&format!(
+            "\n\n# {office} Office\n\nThe {office} office follows the regional \
+             agreement in this section. Questions go to the local people partner.\n\n\
+             ## Public Holidays\n\nEmployees observe {holidays} paid public holidays per \
+             year. Holidays that fall on a weekend are taken on the next working day.\n\n\
+             ## Expense Limits\n\nHotel stays are reimbursed up to ${cap} per night. \
+             Meals are reimbursed at actual cost with itemized receipts.\n\n\
+             ## Notice Period\n\nThe notice period is {weeks} weeks for employees past \
+             probation. Probationary employees give one week.",
+        ));
+    }
+
+    vec![
+        ("Fleet Maintenance Manual".to_string(), manual),
+        ("Regional Employee Policy Manual".to_string(), policy),
+    ]
 }
 
 fn load_datasets() -> Vec<Dataset> {
@@ -272,14 +555,25 @@ async fn eval_retrieval_datasets() {
     let nb = "eval-nb";
     seed_corpus(&ai, &db, nb).await;
     seed_docs(&ai, &db, nb, EXTRA_CORPUS, "x-").await;
-    let titles: HashMap<String, String> = db
-        .list_sources(nb)
-        .await
-        .expect("list sources")
-        .into_iter()
-        .map(|s| (s.id, s.title))
-        .collect();
-    let title_set: std::collections::HashSet<&str> = titles.values().map(String::as_str).collect();
+    // The outline gate's long documents live in their own notebook: seeded
+    // only when a dataset asks for them, and never as distractors for the
+    // golden queries.
+    let outline_nb = "eval-outline";
+    if datasets.iter().any(|d| d.corpus == "outline") {
+        let docs = outline_corpus();
+        let refs: Vec<(&str, &str)> = docs.iter().map(|(t, b)| (t.as_str(), b.as_str())).collect();
+        seed_docs(&ai, &db, outline_nb, &refs, "o-").await;
+    }
+    async fn titles_of(db: &Db, nb: &str) -> HashMap<String, String> {
+        db.list_sources(nb)
+            .await
+            .expect("list sources")
+            .into_iter()
+            .map(|s| (s.id, s.title))
+            .collect()
+    }
+    let golden_titles = titles_of(&db, nb).await;
+    let outline_titles = titles_of(&db, outline_nb).await;
 
     // "meta" is the corpus-wide path (search_chunks_all_opts with the
     // production meta-chat caps) — the surface gists and cross-notebook
@@ -294,7 +588,15 @@ async fn eval_retrieval_datasets() {
         max_gists: 2,
     };
     let mut reports = Vec::new();
+    let mut floored: Vec<bool> = Vec::new();
     for ds in &datasets {
+        let (nb, titles) = match ds.corpus.as_str() {
+            "" => (nb, &golden_titles),
+            "outline" => (outline_nb, &outline_titles),
+            other => panic!("dataset {}: unknown corpus {other:?}", ds.name),
+        };
+        let title_set: std::collections::HashSet<&str> =
+            titles.values().map(String::as_str).collect();
         // Fail loudly on dataset authoring errors: an empty query list or a
         // spec naming a source that was never seeded would otherwise score
         // zero forever while the failure message blames retrieval.
@@ -345,7 +647,7 @@ async fn eval_retrieval_datasets() {
                 .map(|(_, c)| c)
                 .collect();
             for (vi, hits) in [vector, fts, hybrid, meta].into_iter().enumerate() {
-                let (ranks, unmatched) = matched_ranks(&hits, &titles, &q.relevant);
+                let (ranks, unmatched) = matched_ranks(&hits, titles, &q.relevant);
                 for si in unmatched {
                     let s = &q.relevant[si];
                     misses.push(format!(
@@ -425,6 +727,7 @@ async fn eval_retrieval_datasets() {
             queries: ds.queries.len(),
             variants,
         });
+        floored.push(ds.floors);
     }
 
     let report_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -446,9 +749,26 @@ async fn eval_retrieval_datasets() {
     // The built-in embedder and BM25 are deterministic for fixed inputs, and
     // RRF fusion tie-breaks on chunk id, so a failure is a retrieval
     // regression, not flakiness.
-    for r in &reports {
+    for (r, floors) in reports.iter().zip(&floored) {
         let hybrid = &r.variants["hybrid"];
         let vector = &r.variants["vector"];
+        if !floors {
+            // A gate dataset: the measured kind ("outline") is reported, not
+            // asserted — improving it is the outline work's merge criterion.
+            // Its control kinds must be perfect, or the corpus didn't seed
+            // the way the dataset assumes and the gate measures nothing.
+            for (kind, m) in &hybrid.by_kind {
+                if kind != "outline" {
+                    assert!(
+                        (m.recall_at_10 - 1.0).abs() < f64::EPSILON,
+                        "{}: control kind {kind} recall@10 {:.2} — the gate corpus is not seeded as assumed",
+                        r.dataset,
+                        m.recall_at_10
+                    );
+                }
+            }
+            continue;
+        }
         assert!(
             hybrid.overall.recall_at_10 >= vector.overall.recall_at_10,
             "{}: hybrid recall@10 ({:.2}) fell below vector-only ({:.2})",
