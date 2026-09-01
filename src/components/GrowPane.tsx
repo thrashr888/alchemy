@@ -4,9 +4,7 @@ import { api } from "@/lib/api";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import {
   HYGIENE_LABEL,
-  loadGrowthDismissed,
   loadHygieneKept,
-  saveGrowthDismissed,
   saveHygieneKept,
   takeLegacyWebFlag,
 } from "@/lib/growth";
@@ -135,7 +133,10 @@ export function GrowPane() {
   // Tag-merge proposals (phase 5): near-duplicate tags, deterministic.
   const [merges, setMerges] = useState<TagMergeProposal[]>([]);
   const [indexBusy, setIndexBusy] = useState(false);
-  const [dismissed, setDismissed] = useState<Record<string, number>>({});
+  // Dismissals live in the store (loaded per notebook there) so the
+  // sidebar's "Grow this notebook" door empties as this pane is cleared.
+  const dismissed = useStore((s) => s.growthDismissed);
+  const dismiss = useStore((s) => s.dismissGrowth);
   // The open-web tier: per-notebook opt-in; results and meter arrive
   // together. null = not run this visit.
   const [webOn, setWebOn] = useState(false);
@@ -151,7 +152,6 @@ export function GrowPane() {
     setQueries([]);
     setProposals(null);
     setWeb(null);
-    setDismissed(loadGrowthDismissed(currentId));
     setWebOn(false);
     if (!currentId) return;
     // Backend-owned opt-in (the sweep acts on it); the old localStorage
@@ -228,12 +228,6 @@ export function GrowPane() {
   );
   const visible = (list: GrowthProposal[]) =>
     list.filter((p) => !dismissed[p.url] && !existingUrls.has(p.url));
-  const dismiss = (url: string) =>
-    setDismissed((m) => {
-      const next = { ...m, [url]: Date.now() };
-      saveGrowthDismissed(currentId, next);
-      return next;
-    });
   const add = (p: GrowthProposal) => {
     dismiss(p.url);
     if (p.kind === "local") void addSourceFiles([p.url]);

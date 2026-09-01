@@ -12,6 +12,7 @@ import { applyTheme, SYSTEM_THEME, themeIsDark } from "./themes";
 import { refreshEpigraph } from "./epigraph";
 import { describe } from "./errors";
 import { notify } from "./notify";
+import { loadGrowthDismissed, saveGrowthDismissed } from "./growth";
 import { dropEntry, makeEntry, pushEntry } from "./history";
 import { historyOf, mergeLoadedTurns } from "./homeChatRun";
 import { claimTextUndo } from "./textUndo";
@@ -418,6 +419,7 @@ export const useStore = create<AppState>((set, get) => {
     selectedSourceIds: null,
     picked: null,
     hygiene: [],
+    growthDismissed: {},
     messages: [],
     messagesHasMore: false,
     messagesLoadingOlder: false,
@@ -1306,6 +1308,7 @@ export const useStore = create<AppState>((set, get) => {
         selectedSourceIds: loadSourceSel(id),
         picked: null,
         hygiene: [],
+        growthDismissed: loadGrowthDismissed(id),
         messages: [],
         messagesHasMore: false,
         messagesLoadingOlder: false,
@@ -1364,6 +1367,7 @@ export const useStore = create<AppState>((set, get) => {
         currentId: null,
         sources: [],
         selectedSourceIds: null,
+        growthDismissed: {},
         messages: [],
         messagesHasMore: false,
         messagesLoadingOlder: false,
@@ -2324,6 +2328,12 @@ export const useStore = create<AppState>((set, get) => {
       } catch {
         // Classification is best-effort chrome — never surface a failure.
       }
+    },
+
+    dismissGrowth: (key) => {
+      const next = { ...get().growthDismissed, [key]: Date.now() };
+      saveGrowthDismissed(get().currentId, next);
+      set({ growthDismissed: next });
     },
 
     hygieneKeep: async (sourceId) => {

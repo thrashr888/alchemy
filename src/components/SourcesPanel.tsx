@@ -29,11 +29,7 @@ import {
   visibleTitle,
 } from "@/lib/utils";
 import { sourceIcon } from "@/lib/sourceIcon";
-import {
-  HYGIENE_LABEL,
-  loadGrowthDismissed,
-  loadHygieneKept,
-} from "@/lib/growth";
+import { HYGIENE_LABEL, loadHygieneKept } from "@/lib/growth";
 import { AttachToCardModal } from "./RegistrySection";
 import {
   SourceMetaModals,
@@ -361,12 +357,11 @@ export function SourcesPanel() {
   // the notebook's own sources, loaded once per notebook. Nothing fetches
   // until the user accepts a proposal.
   const [growth, setGrowth] = useState<GrowthProposal[]>([]);
-  const [growthDismissed, setGrowthDismissed] = useState<
-    Record<string, number>
-  >({});
+  // Dismissals come from the store (per-notebook, persisted there) so the
+  // Grow pane clearing its last proposal also drops this door live.
+  const growthDismissed = useStore((s) => s.growthDismissed);
   useEffect(() => {
     setGrowth([]);
-    setGrowthDismissed(loadGrowthDismissed(currentId));
     if (!currentId) return;
     let stale = false;
     api

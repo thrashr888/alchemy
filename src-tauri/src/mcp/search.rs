@@ -48,7 +48,7 @@ impl AlchemyMcp {
     // -- Search --
 
     #[tool(
-        description = "Hybrid search (vector similarity + BM25 keyword, rank-fused) over a notebook's source chunks AND notes. Runs on the local embedder — cheap, call freely. Returns passages with sourceId/sourceTitle/snippet/distance; a passage with a non-empty noteId came from a note (a prior conclusion — yours or the user's), not a source document: weigh it as secondhand and use get_note for its full text. Use get_source for a source passage's full document. Synthesize answers yourself from the passages."
+        description = "Hybrid search (vector similarity + BM25 keyword, rank-fused) over a notebook's source chunks AND notes. Runs on the local embedder — cheap, call freely. Returns passages with sourceId/sourceTitle/snippet/distance; a passage with a non-empty noteId came from a note (a prior conclusion — yours or the user's), not a source document: weigh it as secondhand and use get_note for its full text. Use get_source for a source passage's full document. Synthesize answers yourself from the passages. Example: {\"notebook_id\":\"<id from list_notebooks>\",\"query\":\"what tradeoffs did we weigh for retry backoff?\",\"max_results\":8}"
     )]
     async fn search(
         &self,
@@ -88,7 +88,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Exact-match search (ripgrep's engine, in-process) over the notebook's repo- and folder-backed files — the full working trees, not just embedded passages. Use for identifiers, error strings, or regex; use `search` for concepts and prose. Returns ranked file windows with sourceId/sourceTitle/path/line/window; get_source fetches a hit's stored text."
+        description = "Exact-match search (ripgrep's engine, in-process) over the notebook's repo- and folder-backed files — the full working trees, not just embedded passages. Use for identifiers, error strings, or regex; use `search` for concepts and prose. Returns ranked file windows with sourceId/sourceTitle/path/line/window; get_source fetches a hit's stored text. Example: {\"notebook_id\":\"<id>\",\"pattern\":\"fn ingest_url\\\\(\",\"max_results\":10}"
     )]
     async fn grep_sources(
         &self,
@@ -228,7 +228,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Retrieve passages for a question across ALL notebooks at once (hybrid vector + keyword, rank-fused, plus matching notes). Each passage names its notebook — use this to answer 'which notebook has…' questions or to ground corpus-wide answers. Synthesize the answer yourself from the passages."
+        description = "Retrieve passages for a question across ALL notebooks at once (hybrid vector + keyword, rank-fused, plus matching notes). Each passage names its notebook — use this to answer 'which notebook has…' questions or to ground corpus-wide answers. Synthesize the answer yourself from the passages. Example: {\"question\":\"where did we settle the heat-pump sizing rule?\"}"
     )]
     async fn ask_everything(
         &self,
