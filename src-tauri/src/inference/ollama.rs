@@ -204,18 +204,32 @@ impl Ollama {
         Ok(parsed.embeddings.first().map(|v| v.len()).unwrap_or(0))
     }
 
+    /// The configured residency window and output cap, as body fragments.
+    /// Both absent unless set — the server defaults are what every other
+    /// request expects.
+    fn apply_keep_alive(&self, body: &mut serde_json::Value) {
+        if let Some(ka) = &self.config.keep_alive {
+            body["keep_alive"] = json!(ka);
+        }
+        if let Some(n) = self.config.num_predict {
+            body["options"] = json!({ "num_predict": n });
+        }
+    }
+
     /// Non-streaming chat completion; used for one-shot artifact generation.
     pub async fn chat(&self, messages: &[ChatTurn]) -> Result<ChatOutcome> {
+        let mut body = json!({
+            "model": self.config.chat_model,
+            "messages": messages,
+            "stream": false,
+        });
+        self.apply_keep_alive(&mut body);
         let mut attempt = 0;
         let resp = loop {
             let resp = self
                 .http
                 .post(self.url("/api/chat"))
-                .json(&json!({
-                    "model": self.config.chat_model,
-                    "messages": messages,
-                    "stream": false,
-                }))
+                .json(&body)
                 .send()
                 .await
                 .context("ollama chat request failed")?;
@@ -267,6 +281,7 @@ impl Ollama {
             if !self.config.effort.trim().is_empty() {
                 body["think"] = json!(self.config.effort.trim());
             }
+            self.apply_keep_alive(&mut body);
             body
         };
         // Retries happen strictly before any body is consumed, so a retried
