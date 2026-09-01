@@ -69,6 +69,16 @@ fn effective_port(configured: u16) -> u16 {
 /// save). Stops first when the port changed or it was disabled.
 pub async fn apply_config(app: &AppHandle, enabled: bool, port: u16) {
     let port = effective_port(port);
+    let token = match auth_token(app) {
+        Ok(token) => token,
+        Err(err) => {
+            crate::diagnostics::error(
+                "mcp",
+                format!("could not initialize local authentication: {err:#}"),
+            );
+            return;
+        }
+    };
     let mcp = app.state::<McpState>();
     {
         let mut running = mcp.running.lock().unwrap();
@@ -85,10 +95,15 @@ pub async fn apply_config(app: &AppHandle, enabled: bool, port: u16) {
             return;
         }
     }
-    match start_server(app.clone(), port).await {
+    match start_server(app.clone(), port, token.clone()).await {
         Ok(shutdown) => {
             *mcp.running.lock().unwrap() = Some(Running { port, shutdown });
-            write_port_file(app, port);
+            if let Err(err) = write_port_file(app, port, &token) {
+                crate::diagnostics::error(
+                    "mcp",
+                    format!("could not write private discovery file: {err:#}"),
+                );
+            }
         }
         Err(err) => crate::diagnostics::error(
             "mcp",
@@ -108,15 +123,74 @@ pub fn status(app: &AppHandle) -> McpStatus {
     }
 }
 
-/// Reject anything that looks like it came from a browser page. Browsers
-/// always attach `Origin` to cross-origin requests, so this closes the
-/// malicious-webpage → localhost hole; real MCP clients never send one.
-async fn reject_browser_origins(
+const TOKEN_FILE: &str = "mcp-token";
+static TOKEN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Read the stable per-installation bearer token, creating it with 256 bits of
+/// randomness when this installation has not served MCP before. Keeping it in
+/// a separate private file lets discovery JSON be replaced atomically without
+/// rotating every configured agent connector.
+pub(crate) fn auth_token(app: &AppHandle) -> anyhow::Result<String> {
+    let _guard = TOKEN_LOCK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("authentication token lock was poisoned"))?;
+    let dir = app.path().app_data_dir()?;
+    crate::secure_fs::ensure_private_dir(&dir)?;
+    let path = dir.join(TOKEN_FILE);
+    crate::secure_fs::ensure_private_file(&path)?;
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let token = existing.trim();
+        if token.len() == 64 && token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Ok(token.to_string());
+        }
+    }
+
+    let token = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    crate::secure_fs::write_private_file(&path, token.as_bytes())?;
+    Ok(token)
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut difference = 0_u8;
+    for (&a, &b) in left.iter().zip(right) {
+        difference |= a ^ b;
+    }
+    difference == 0
+}
+
+fn bearer_authorized(headers: &axum::http::HeaderMap, expected: &str) -> bool {
+    let Some(value) = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    let Some(token) = value.strip_prefix("Bearer ") else {
+        return false;
+    };
+    constant_time_eq(token.as_bytes(), expected.as_bytes())
+}
+
+/// Authenticate every request before rmcp allocates a session. The Origin
+/// rejection remains useful defense in depth against a token ever being
+/// exposed to renderer content.
+async fn authorize_request(
+    axum::extract::State(expected): axum::extract::State<String>,
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, axum::http::StatusCode> {
     if req.headers().contains_key(axum::http::header::ORIGIN) {
         return Err(axum::http::StatusCode::FORBIDDEN);
+    }
+    if !bearer_authorized(req.headers(), &expected) {
+        return Err(axum::http::StatusCode::UNAUTHORIZED);
     }
     Ok(next.run(req).await)
 }
@@ -124,6 +198,7 @@ async fn reject_browser_origins(
 async fn start_server(
     app: AppHandle,
     port: u16,
+    token: String,
 ) -> anyhow::Result<tokio_util::sync::CancellationToken> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     let shutdown = tokio_util::sync::CancellationToken::new();
@@ -146,9 +221,9 @@ async fn start_server(
         sessions.into(),
         StreamableHttpServerConfig::default(),
     );
-    let router = axum::Router::new()
-        .nest_service("/mcp", service)
-        .layer(axum::middleware::from_fn(reject_browser_origins));
+    let router = axum::Router::new().nest_service("/mcp", service).layer(
+        axum::middleware::from_fn_with_state(token, authorize_request),
+    );
 
     let ct = shutdown.clone();
     tauri::async_runtime::spawn(async move {
@@ -160,15 +235,19 @@ async fn start_server(
 }
 
 /// Discovery file so tooling can find the server without hardcoding the port.
-fn write_port_file(app: &AppHandle, port: u16) {
-    if let Ok(dir) = app.path().app_data_dir() {
-        let info = serde_json::json!({
-            "port": port,
-            "url": format!("http://127.0.0.1:{port}/mcp"),
-            "pid": std::process::id(),
-        });
-        let _ = std::fs::write(dir.join("mcp.json"), info.to_string());
-    }
+fn write_port_file(app: &AppHandle, port: u16, token: &str) -> anyhow::Result<()> {
+    let dir = app.path().app_data_dir()?;
+    let info = serde_json::json!({
+        "port": port,
+        "url": format!("http://127.0.0.1:{port}/mcp"),
+        "pid": std::process::id(),
+        "token": token,
+    });
+    crate::secure_fs::write_private_file(
+        &dir.join("mcp.json"),
+        serde_json::to_string(&info)?.as_bytes(),
+    )?;
+    Ok(())
 }
 
 fn remove_port_file(app: &AppHandle) {
@@ -272,5 +351,90 @@ impl ServerHandler for AlchemyMcp {
                  relevant passages → write findings with create_note. Everything runs on the \
                  user's machine; search is cheap, call it freely.",
             )
+    }
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::*;
+
+    #[test]
+    fn bearer_auth_requires_exact_scheme_and_token() {
+        let expected = "0123456789abcdef";
+        let mut headers = axum::http::HeaderMap::new();
+        assert!(!bearer_authorized(&headers, expected));
+
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Basic 0123456789abcdef".parse().unwrap(),
+        );
+        assert!(!bearer_authorized(&headers, expected));
+
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer 0123456789abcdee".parse().unwrap(),
+        );
+        assert!(!bearer_authorized(&headers, expected));
+
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer 0123456789abcdef".parse().unwrap(),
+        );
+        assert!(bearer_authorized(&headers, expected));
+    }
+
+    #[tokio::test]
+    async fn auth_middleware_rejects_missing_invalid_and_browser_requests() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let router = axum::Router::new()
+            .route("/", axum::routing::get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn_with_state(
+                "secret".to_string(),
+                authorize_request,
+            ));
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        let url = format!("http://{address}/");
+        let client = reqwest::Client::new();
+
+        assert_eq!(
+            client.get(&url).send().await.unwrap().status(),
+            reqwest::StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            client
+                .get(&url)
+                .bearer_auth("wrong")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            client
+                .get(&url)
+                .bearer_auth("secret")
+                .header("Origin", "https://example.com")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            client
+                .get(&url)
+                .bearer_auth("secret")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::OK
+        );
     }
 }

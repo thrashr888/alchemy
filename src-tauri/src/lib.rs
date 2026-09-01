@@ -38,6 +38,7 @@ mod pptx;
 mod rag;
 mod router;
 mod scheduler;
+mod secure_fs;
 mod selfheal;
 #[cfg(target_os = "macos")]
 mod services;
@@ -164,8 +165,8 @@ pub fn run() {
                 Ok(dir) => dir,
                 Err(err) => diagnostics::fatal_startup("could not resolve the app data dir", &err),
             };
-            if let Err(err) = std::fs::create_dir_all(&data_dir) {
-                diagnostics::fatal_startup("could not create the app data dir", &err);
+            if let Err(err) = secure_fs::ensure_private_dir(&data_dir) {
+                diagnostics::fatal_startup("could not secure the app data dir", &err);
             }
             // Boot-phase stamps -> traces/startup.jsonl (docs/RFC-professional-grade.md
             // Pillar 2). See trace::Startup for exactly what the clock covers.
@@ -180,6 +181,10 @@ pub fn run() {
 
             // First run (no config on disk) sizes the default chat model to
             // this Mac's unified memory; a config that exists keeps its own.
+            if let Err(err) = secure_fs::ensure_private_file(&config_path) {
+                diagnostics::fatal_startup("could not secure the AI config", &err);
+            }
+
             let mut config = std::fs::read_to_string(&config_path)
                 .ok()
                 .and_then(|s| serde_json::from_str::<ai::AiConfig>(&s).ok())
@@ -328,6 +333,7 @@ pub fn run() {
             // file comparisons that must not sit on the setup thread.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn_blocking(move || {
+                connectors::refresh_installed_connectors(&handle, mcp_port);
                 connectors::refresh_installed_skills(&handle);
             });
 
@@ -474,6 +480,7 @@ pub fn run() {
             commands::activity_stats,
             commands::home_activity,
             commands::source_thumbnail,
+            commands::source_image,
             commands::source_snippets,
             commands::backfill_source_images,
             commands::export_notebook_okf,

@@ -161,6 +161,9 @@ export const api = {
   /** Base64 PNG for gallery cards (PDF first page / image file); "" = none. */
   sourceThumbnail: (sourceId: string) =>
     run(query<string>("source_thumbnail", { sourceId })),
+  /** Original local image, resolved by stored source id rather than raw path. */
+  sourceImage: (sourceId: string) =>
+    run(query<string>("source_image", { sourceId })),
   /** Batched opening-lines snippets for gallery cards. */
   sourceSnippets: (sourceIds: string[], maxChars?: number) =>
     run(

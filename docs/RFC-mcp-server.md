@@ -37,14 +37,12 @@ axum router, bound to `127.0.0.1:41414` (configurable). Started in `setup()`
 alongside the existing state; a handle in `AppState` lets Settings stop/start
 it.
 
-Client registration is one line, shown copyable in Settings:
+Client registration is one click in Settings → Agents, which writes the
+client's HTTP entry and private bearer header.
 
-```
-claude mcp add --transport http alchemy http://127.0.0.1:41414/mcp
-```
-
-Discovery file `<app-data>/mcp.json` (`{ "port": 41414, "pid": … }`) for
-tooling that wants to find the server without hardcoding the port.
+Owner-only discovery file `<app-data>/mcp.json`
+(`{ "port": 41414, "pid": …, "token": … }`) for tooling that wants to find
+and authenticate to the server without hardcoding credentials.
 
 **The app must be running for agents to reach it.** That's the same contract
 OpenKnowledge has (most of its tools require the Hocuspocus server) and the
@@ -92,9 +90,9 @@ Claude works is the demo.
   send `Origin` on cross-origin requests, so this kills the
   malicious-webpage → localhost CSRF/DNS-rebinding vector; real MCP clients
   don't send one.
-- No auth token in v1: a local process that could call the server could read
-  the LanceDB files directly — same trust boundary. A bearer token is a
-  straightforward follow-up if that changes.
+- **Require a 256-bit per-installation bearer token** before creating an MCP
+  session. The token and discovery file are owner-only; connector config
+  files are tightened to owner-only when Alchemy writes them.
 
 ### 5. Config & settings
 
@@ -163,9 +161,8 @@ Prime Agent (verified live 2026-08-09) is the odd one out on the skill side:
 its MCP integrations are kernel-imported Python modules, not client-side tool
 lists, so Connect installs a Python skill package (`SKILL.md` +
 `pyproject.toml` + `src/alchemy/__init__.py` subclassing `McpIntegration`,
-from `skills/alchemy-prime/`). The subclass overrides `_resolve_token` with a
-placeholder because our server is loopback-only and unauthenticated, while
-prime-agent's base class refuses tokenless connections. The host-resolved
+from `skills/alchemy-prime/`). The subclass overrides `_resolve_token` to read
+the app's owner-only discovery file at connection time. The host-resolved
 `mcpServers` URL wins over the module's hardcoded fallback, so non-default
 ports keep working.
 
@@ -224,8 +221,9 @@ per skill best practice):
 
 - **New dependency surface:** `rmcp` + `axum` (tower/hyper tree). Moderate
   compile-time cost; both are the standard, well-maintained choices.
-- **Open localhost port by default.** Mitigated by origin rejection and
-  loopback bind; documented in README. Toggle exists for the cautious.
+- **Open localhost port by default.** Mitigated by loopback binding, browser
+  origin rejection, and per-installation bearer authentication. Toggle exists
+  for users who do not need agent access.
 - **Agent-driven writes race user edits** (e.g. both editing a note). V1
   policy: last-write-wins, same as two app windows today. Notes are small;
   acceptable.

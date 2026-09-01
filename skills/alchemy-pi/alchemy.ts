@@ -6,12 +6,13 @@
  * Alchemy app's embedded server and registers its core tools natively.
  * The full tool catalog stays reachable via alchemy_list_tools +
  * alchemy_call. The `__ALCHEMY_MCP_URL__` placeholder is substituted with
- * the configured server URL at install time.
+ * the configured server URL and private bearer token at install time.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 const MCP_URL = "__ALCHEMY_MCP_URL__";
+const MCP_TOKEN = "__ALCHEMY_MCP_TOKEN__";
 
 let sessionId: string | null = null;
 let nextId = 1;
@@ -20,6 +21,7 @@ async function post(body: unknown, session: string | null): Promise<Response> {
   const headers: Record<string, string> = {
     "content-type": "application/json",
     accept: "application/json, text/event-stream",
+    authorization: `Bearer ${MCP_TOKEN}`,
   };
   if (session) headers["mcp-session-id"] = session;
   return fetch(MCP_URL, {

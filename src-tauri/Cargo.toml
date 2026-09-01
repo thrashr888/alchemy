@@ -34,6 +34,7 @@ chrono = { version = "0.4.45", features = ["serde"] }
 arrow-array = "58"
 arrow-schema = "58"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+tempfile = "3"
 base64 = "0.22"
 # Single-pass multi-needle scan for the notebook link graph (graph.rs).
 aho-corasick = "1"

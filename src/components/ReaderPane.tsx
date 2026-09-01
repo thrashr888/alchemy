@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
@@ -1260,41 +1259,34 @@ function DocRails({
   );
 }
 
-/** The original image behind an image source. WKWebView won't decode
- *  asset:// URLs in <img> elements (fetch of the same URL works fine), so
- *  the bytes come in via fetch and render from a blob URL. */
-function ImageView({ url, title }: { url: string; title: string }) {
-  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+/** The original image behind an image source. The backend resolves the stored
+ * source id so the renderer never needs broad asset-protocol filesystem scope. */
+function ImageView({ sourceId, title }: { sourceId: string; title: string }) {
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
-    let revoked: string | null = null;
     let stale = false;
-    setBlobUrl(null);
+    setImageUrl(null);
     setFailed(false);
-    fetch(convertFileSrc(url))
-      .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`${r.status}`))))
-      .then((blob) => {
-        if (stale) return;
-        revoked = URL.createObjectURL(blob);
-        setBlobUrl(revoked);
-      })
+    api
+      .sourceImage(sourceId)
+      .then((url) => !stale && setImageUrl(url))
       .catch(() => {
         if (!stale) setFailed(true);
       });
     return () => {
       stale = true;
-      if (revoked) URL.revokeObjectURL(revoked);
     };
-  }, [url]);
+  }, [sourceId]);
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-6">
       {failed ? (
         <span className="text-body text-muted-foreground">
           The original file could not be read — it may have moved.
         </span>
-      ) : blobUrl ? (
+      ) : imageUrl ? (
         <img
-          src={blobUrl}
+          src={imageUrl}
           alt={title}
           className="max-h-full max-w-full rounded-md border border-border object-contain shadow-sm"
         />
@@ -2384,7 +2376,7 @@ function SourceReader({
   }
 
   if (source.sourceType === "image" && source.url && imageView) {
-    return <ImageView url={source.url} title={source.title} />;
+    return <ImageView sourceId={source.id} title={source.title} />;
   }
 
   if (isPdfFile(source) && pageView) {

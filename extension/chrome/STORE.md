@@ -70,5 +70,7 @@ Productivity · English
 Same copy applies. The manifest carries
 `browser_specific_settings.gecko.id = clipper@alchemy.thrasher.dev`
 (strict_min_version 121.0), and `background.scripts` alongside
-`service_worker` so the same folder loads in both browsers. Submit the
-identical zip at https://addons.mozilla.org/developers/.
+`service_worker` so the same folder loads in both browsers. Firefox clips
+URLs, links, and selections; rendered-DOM handoff is Chrome-only because
+Firefox does not expose a stable extension origin the app can allowlist.
+Submit the identical zip at https://addons.mozilla.org/developers/.

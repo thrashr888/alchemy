@@ -203,16 +203,14 @@ plain text usually won't fit. The payload must travel out of band.
 The app already owns the right pattern: the MCP server (`mcp.rs`) binds a
 localhost HTTP port, writes a discovery file, and toggles from config. The
 clip receiver is the same shape — a separate module (`clip.rs`) because its
-**auth is the inverse of MCP's**. MCP *rejects* any request carrying an
-`Origin` header (real MCP clients never send one; a browser always does). A
-browser extension's `fetch` always sends `Origin: chrome-extension://<id>`
-(or `moz-extension://…`), and a malicious web page **cannot forge that** —
-the browser sets it. So the clip endpoint's rule is: allow when `Origin` is
-absent (native/CLI) or an extension scheme; reject everything else with 403.
-That single check closes the malicious-web-page and DNS-rebind holes (their
-`Origin` stays their real site), while `host_permissions` for
-`http://127.0.0.1/*` let the extension's cross-origin POST bypass CORS
-preflight entirely.
+**auth is based on the browser-assigned extension identity**. MCP requires a
+private bearer token and rejects browser origins. The Chrome clipper's
+`fetch` sends its fixed Web Store origin, which the app allowlists exactly;
+requests without an origin and requests from every other extension are
+rejected. Firefox's generated `moz-extension://` UUID is not a stable
+identity, so that build falls back to URL-only clipping rather than trusting
+all Firefox extensions. The exact allowlist closes malicious-page,
+DNS-rebind, arbitrary-extension, and unauthenticated-native request paths.
 
 ### 8.2 Flow — held clip, unchanged deep link
 

@@ -31,9 +31,10 @@ hits = await alchemy.search(notebookId="…", query="…")
 Every tool is `async` — always `await`. Results arrive as parsed Python
 (dicts/lists), no `json.loads` needed.
 
-A connection error means the Alchemy app isn't running — its MCP server lives
-inside the app at `http://127.0.0.1:41414/mcp` (no login; the server is
-loopback-only). Ask the user to open Alchemy. (No Alchemy at all? It's a free
+A connection error means the Alchemy app isn't running or its private local
+credential needs refreshing — its MCP server lives inside the app at
+`http://127.0.0.1:41414/mcp`. Ask the user to open Alchemy and use
+Settings → Agents → Connect if needed. (No Alchemy at all? It's a free
 macOS app: https://github.com/thrashr888/alchemy/releases — this skill is
 useless without it.)
 

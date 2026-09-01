@@ -174,15 +174,16 @@ pub async fn apply_config(app: &AppHandle, enabled: bool, port: u16) {
     }
 }
 
-/// Allow only requests a browser extension (or a native/CLI caller) could
-/// have sent: an extension-scheme `Origin`, or none at all. A web page always
-/// carries its real `Origin`, which it cannot forge, so this rejects
-/// malicious pages and DNS-rebind attempts with 403.
+/// Published Chrome Web Store identity for the Alchemy clipper. An extension
+/// scheme by itself is not an identity: any installed extension can send one.
+const CHROME_CLIPPER_ORIGIN: &str = "chrome-extension://bdiidbpifneigmcknjbgolbclbbgjheh";
+
+/// Only the signed, published clipper may stage rendered DOM. Firefox assigns
+/// an installation-specific moz-extension UUID, so its build safely falls
+/// back to URL-only clipping instead of reopening this endpoint to every
+/// Firefox extension. Requests without Origin are deliberately rejected too.
 fn origin_allowed(origin: Option<&str>) -> bool {
-    match origin {
-        None => true,
-        Some(o) => o.starts_with("chrome-extension://") || o.starts_with("moz-extension://"),
-    }
+    origin == Some(CHROME_CLIPPER_ORIGIN)
 }
 
 async fn guard_origin(
@@ -215,7 +216,7 @@ async fn handle_clip(body: axum::body::Bytes) -> axum::http::StatusCode {
 }
 
 /// Probe endpoint so the extension can discover which candidate port is the
-/// app (only extension-origin callers reach it, per the guard). Plain text —
+/// app (only the published Chrome clipper reaches it, per the guard). Plain text —
 /// axum is built without the `json` feature; the extension string-matches.
 async fn handle_health() -> &'static str {
     r#"{"ok":true,"app":"alchemy"}"#
@@ -285,10 +286,11 @@ mod tests {
     }
 
     #[test]
-    fn origin_gate_admits_extensions_and_native_only() {
-        assert!(origin_allowed(None)); // curl / native
-        assert!(origin_allowed(Some("chrome-extension://abcdef")));
-        assert!(origin_allowed(Some("moz-extension://uuid")));
+    fn origin_gate_admits_only_published_chrome_clipper() {
+        assert!(!origin_allowed(None));
+        assert!(origin_allowed(Some(CHROME_CLIPPER_ORIGIN)));
+        assert!(!origin_allowed(Some("chrome-extension://abcdef")));
+        assert!(!origin_allowed(Some("moz-extension://uuid")));
         assert!(!origin_allowed(Some("https://evil.com"))); // web page
         assert!(!origin_allowed(Some("http://127.0.0.1:41500"))); // rebind
         assert!(!origin_allowed(Some("null")));
@@ -365,7 +367,7 @@ mod tests {
         // An extension Origin is accepted and the clip becomes takeable.
         let ok = http
             .post(&base)
-            .header("Origin", "chrome-extension://abcdefghijklmnop")
+            .header("Origin", CHROME_CLIPPER_ORIGIN)
             .body(body)
             .send()
             .await
@@ -378,10 +380,10 @@ mod tests {
             .text
             .contains("article prose"));
 
-        // The health probe answers for extension callers.
+        // The health probe answers for the published extension only.
         let health = http
             .get(&base)
-            .header("Origin", "moz-extension://uuid")
+            .header("Origin", CHROME_CLIPPER_ORIGIN)
             .send()
             .await
             .unwrap();

@@ -30,6 +30,7 @@ src/target
 
 # Fetched on first build by scripts/fetch-pdfium.sh (see build.rs)
 src-tauri/libs/*.dylib
+src-tauri/libs/.pdfium-version
 sidecar/alchemy-fm/.build/
 # Staged by scripts/build-fm-sidecar.sh for bundling
 src-tauri/binaries/

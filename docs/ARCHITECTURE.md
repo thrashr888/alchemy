@@ -173,6 +173,12 @@ refresh live. Requests carrying a browser `Origin` header are rejected (CSRF
 guard); enable/port live in `AiConfig` (Settings → Agents), and a discovery
 file is written to `<app-data>/mcp.json`. See `docs/RFC-mcp-server.md`.
 
+`cli/alchemy.mjs` is a zero-dependency command-line client for that same
+server. It discovers the live URL from `mcp.json` and exposes a deliberately
+small shell surface (list notebooks, add file/URL/stdin sources, and search).
+It never opens the database or starts a second backend process; a running app
+remains the sole owner of ingestion, indexing, and retrieval.
+
 ### `connectors.rs` — agent client registry
 One-click registration of the MCP server (plus the bundled `skills/alchemy`
 SKILL.md) with installed agent clients — Claude Code, Codex, OpenCode, Gemini
