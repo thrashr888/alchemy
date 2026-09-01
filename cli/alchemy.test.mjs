@@ -12,7 +12,24 @@ import {
   parseArgs,
   resolveNotebook,
   sourceArguments,
+  visibleNotebooks,
 } from "./alchemy.mjs";
+
+test("archived notebooks are hidden unless --all", () => {
+  const list = [
+    { id: "nb-1", title: "Active" },
+    { id: "nb-2", title: "Old", status: "archived" },
+    { id: "nb-3", title: "Briefs", status: "system" },
+  ];
+  assert.deepEqual(
+    visibleNotebooks(list, false).map((n) => n.id),
+    ["nb-1", "nb-3"],
+  );
+  assert.deepEqual(
+    visibleNotebooks(list, true).map((n) => n.id),
+    ["nb-1", "nb-2", "nb-3"],
+  );
+});
 
 test("parses the narrow command surface", () => {
   assert.deepEqual(parseArgs(["notebooks", "--json"]), {
@@ -20,7 +37,12 @@ test("parses the narrow command surface", () => {
     mcpUrl: undefined,
     mcpToken: undefined,
     json: true,
+    all: false,
   });
+  assert.equal(parseArgs(["notebooks", "--all"]).all, true);
+  assert.equal(parseArgs(["-h"]).command, "help");
+  assert.equal(parseArgs(["-v"]).command, "version");
+  assert.equal(parseArgs(["--version"]).command, "version");
   assert.deepEqual(
     parseArgs(["search", "renewal", "risk", "--notebook", "Atlas", "--limit", "4"]),
     {

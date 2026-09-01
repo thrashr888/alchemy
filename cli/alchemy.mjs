@@ -20,13 +20,13 @@ const DEFAULT_MCP_URL = "http://127.0.0.1:41414/mcp";
 const HELP = `Alchemy CLI — add to and search the running Alchemy app
 
 Usage:
-  alchemy notebooks [--json]
+  alchemy notebooks [--all] [--json]
   alchemy add <file-or-url>... --notebook <id-or-title> [--title <title>] [--json]
   alchemy add - --notebook <id-or-title> [--title <title>] [--json]
   alchemy search <query...> [--notebook <id-or-title>] [--limit <1-20>] [--json]
 
 Commands:
-  notebooks  List notebooks and their ids.
+  notebooks  List notebooks and their ids (--all includes archived).
   add        Add local files, web URLs, or stdin (use - or pipe with no input).
   search     Search one notebook, or all notebooks when --notebook is omitted.
 
@@ -66,10 +66,17 @@ function takeFlag(args, longName) {
 
 export function parseArgs(argv) {
   const args = [...argv];
-  if (args.length === 0 || args[0] === "help" || takeFlag(args, "--help")) {
+  if (
+    args.length === 0 ||
+    args[0] === "help" ||
+    takeFlag(args, "--help") ||
+    takeFlag(args, "-h")
+  ) {
     return { command: "help" };
   }
-  if (takeFlag(args, "--version")) return { command: "version" };
+  if (takeFlag(args, "--version") || takeFlag(args, "-v")) {
+    return { command: "version" };
+  }
 
   const command = args.shift();
   const mcpUrl = takeOption(args, "--mcp-url");
@@ -77,8 +84,9 @@ export function parseArgs(argv) {
   const json = takeFlag(args, "--json");
 
   if (command === "notebooks") {
+    const all = takeFlag(args, "--all");
     if (args.length) throw new CliError(`unexpected argument: ${args[0]}`);
-    return { command, mcpUrl, mcpToken, json };
+    return { command, mcpUrl, mcpToken, json, all };
   }
 
   if (command === "add") {
@@ -346,6 +354,11 @@ export async function sourceArguments(input, title, stdinText) {
   return { file_path: path };
 }
 
+/** Archived notebooks are shelved work — surfaced only on request. */
+export function visibleNotebooks(notebooks, all) {
+  return all ? notebooks : notebooks.filter((notebook) => notebook.status !== "archived");
+}
+
 function printNotebooks(notebooks) {
   if (!notebooks.length) {
     console.log("No notebooks.");
@@ -399,7 +412,7 @@ export async function run(argv = process.argv.slice(2)) {
   const connection = await discoverMcpConnection(options.mcpUrl, options.mcpToken);
   const client = new McpClient(connection.url, connection.token);
   if (options.command === "notebooks") {
-    const notebooks = await client.call("list_notebooks");
+    const notebooks = visibleNotebooks(await client.call("list_notebooks"), options.all);
     options.json ? console.log(JSON.stringify(notebooks, null, 2)) : printNotebooks(notebooks);
     return;
   }
