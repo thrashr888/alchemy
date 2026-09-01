@@ -786,7 +786,12 @@ function estimateCardHeight(
     : 0;
   const title = lines(s.title, hasVisual ? 2 : 3, 6.6) * 19;
   // The snippet only renders when there is no visual to carry the card.
-  const body = !hasVisual && snippet ? 6 + lines(snippet, 4, 6) * 18 : 0;
+  // Table corners render one row per line (SnippetTable); prose wraps.
+  const body = !hasVisual && snippet
+    ? tableRows(snippet)
+      ? 6 + (snippet.split("\n").length + 1) * 20
+      : 6 + lines(snippet, 4, 6) * 18
+    : 0;
   const error = s.status === "error" ? 22 : 0;
   return visual + PADDING + title + body + CAPTION + error;
 }
@@ -872,6 +877,52 @@ function FolderCard({
           {relativeTime(s.createdAt)}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** The backend previews a spreadsheet as the table's corner: a few
+ *  `a | b | c` lines, header first (commands.rs `table_corner`). Anything
+ *  else — prose, a heading line — is not a table. The heading a sheet
+ *  export carries ("Sheet: Q3") may precede the rows; it stays a caption. */
+function tableRows(snippet: string): { caption: string; rows: string[][] } | null {
+  const lines = snippet.split("\n");
+  const first = lines.findIndex((l) => l.includes(" | "));
+  if (first < 0 || first > 1) return null;
+  const rows = lines.slice(first).map((l) => l.split(" | "));
+  if (rows.length < 2 || rows.some((r) => r.length !== rows[0].length)) {
+    return null;
+  }
+  return { caption: first === 1 ? lines[0] : "", rows };
+}
+
+function SnippetTable({
+  rows: { caption, rows },
+}: {
+  rows: { caption: string; rows: string[][] };
+}) {
+  return (
+    <div className="mt-1.5 text-caption text-muted-foreground">
+      {caption && <div className="truncate">{caption}</div>}
+      <table className="mt-1 w-full table-fixed border-collapse">
+        <tbody>
+          {rows.map((cells, i) => (
+            <tr
+              key={i}
+              className={cn(
+                "border-b border-border last:border-b-0",
+                i === 0 && "font-medium text-foreground",
+              )}
+            >
+              {cells.map((cell, j) => (
+                <td key={j} className="truncate py-0.5 pr-2 align-top">
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -997,11 +1048,13 @@ function GalleryCard({
         >
           {s.title}
         </div>
-        {!visual && snippet && (
+        {!visual && snippet && (tableRows(snippet) ? (
+          <SnippetTable rows={tableRows(snippet)!} />
+        ) : (
           <div className="mt-1.5 line-clamp-4 whitespace-pre-line text-caption leading-relaxed text-muted-foreground">
             {snippet}
           </div>
-        )}
+        ))}
         <div className="mt-1.5 flex items-center gap-1.5 text-caption text-subtle-foreground">
           {web ? <Favicon url={s.url} /> : sourceIcon(s.sourceType, s.url)}
           <span className="truncate">{caption}</span>

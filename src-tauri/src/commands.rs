@@ -3415,10 +3415,33 @@ pub async fn source_image(state: State<'_, AppState>, source_id: String) -> Resu
 /// blockquotes, images, and blank lines dropped, capped by chars.
 fn snippet_of(content: &str, max_chars: usize) -> String {
     let mut out = String::new();
-    for line in content.lines() {
+    let mut lines = content.lines().peekable();
+    while let Some(line) = lines.next() {
         let t = line.trim();
         if t.is_empty() || t.starts_with("> ") || t.starts_with("![") {
             continue;
+        }
+        // A markdown table (spreadsheets, CSVs, "# Sheet:" exports): the raw
+        // rows are pipe soup at card width, so the preview is the table's
+        // corner — header plus the first rows, first few columns, one row
+        // per line. The card renders these lines as a mini grid. The table
+        // ends the snippet: after a corner, more prose would just be noise.
+        if t.starts_with('|') && t.ends_with('|') {
+            let mut rows: Vec<&str> = vec![t];
+            while let Some(next) = lines.peek() {
+                let n = next.trim();
+                if n.starts_with('|') && n.ends_with('|') {
+                    rows.push(n);
+                    lines.next();
+                } else {
+                    break;
+                }
+            }
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&table_corner(&rows));
+            break;
         }
         // Headings read fine as plain lines; just drop the marker.
         let t = t.trim_start_matches('#').trim_start();
@@ -3440,6 +3463,49 @@ fn snippet_of(content: &str, max_chars: usize) -> String {
         out.push('…');
     }
     out
+}
+
+/// Preview rows for a markdown table's top-left corner. Column and row
+/// caps are the gallery card's budget, not the table's.
+const TABLE_CORNER_COLS: usize = 3;
+const TABLE_CORNER_ROWS: usize = 3;
+
+/// Reduce GFM table rows (`| a | b | c |`) to at most a few rows of the
+/// first few columns, one `a | b | c` line each. The `| --- |` separator
+/// row is dropped, empty cells stay as blanks, and a trailing ellipsis cell
+/// marks that columns were cut.
+fn table_corner(rows: &[&str]) -> String {
+    let cells = |row: &str| -> Vec<String> {
+        row.trim()
+            .trim_start_matches('|')
+            .trim_end_matches('|')
+            .split('|')
+            .map(|c| c.trim().to_string())
+            .collect()
+    };
+    let is_separator = |cells: &[String]| {
+        !cells.is_empty()
+            && cells
+                .iter()
+                .all(|c| !c.is_empty() && c.chars().all(|ch| matches!(ch, '-' | ':')))
+    };
+    let mut out: Vec<String> = Vec::new();
+    for row in rows {
+        let cs = cells(row);
+        if is_separator(&cs) {
+            continue;
+        }
+        let wide = cs.len() > TABLE_CORNER_COLS;
+        let mut kept: Vec<String> = cs.into_iter().take(TABLE_CORNER_COLS).collect();
+        if wide {
+            kept.push("…".into());
+        }
+        out.push(kept.join(" | "));
+        if out.len() >= TABLE_CORNER_ROWS {
+            break;
+        }
+    }
+    out.join("\n")
 }
 
 /// Batched card snippets for the gallery: one IPC per level instead of one
@@ -13683,6 +13749,38 @@ pub async fn check_ollama(state: State<'_, AppState>) -> Result<bool, String> {
 #[cfg(test)]
 mod tool_tests {
     use super::*;
+
+    /// Gallery snippets of spreadsheet-shaped sources are the table's
+    /// corner, not pipe soup: header plus the first rows, first three
+    /// columns, separator dropped, an ellipsis cell where columns were cut.
+    #[test]
+    fn snippet_previews_a_table_corner() {
+        let sheet = "# Sheet: Q3\n\
+             | invoice | customer | amount | status | owner |\n\
+             | --- | --- | --- | --- | --- |\n\
+             | INV-1 | Acme | $12 | paid | kim |\n\
+             | INV-2 | Globex | $8 | overdue | lee |\n\
+             | INV-3 | Initech | $3 | disputed | ana |\n\
+             | INV-4 | Hooli | $9 | paid | raj |\n\n\
+             Notes after the table are not part of the preview.";
+        assert_eq!(
+            snippet_of(sheet, 280),
+            "Sheet: Q3\ninvoice | customer | amount | …\nINV-1 | Acme | $12 | …\nINV-2 | Globex | $8 | …"
+        );
+        // Narrow tables keep every column and carry no ellipsis.
+        assert_eq!(
+            snippet_of(
+                "| vessel | berth |\n| --- | --- |\n| Sea Otter | 12 |\n",
+                280
+            ),
+            "vessel | berth\nSea Otter | 12"
+        );
+        // Prose is untouched by the table path.
+        assert_eq!(
+            snippet_of("# Title\n\nFirst line.\nSecond.", 280),
+            "Title\nFirst line.\nSecond."
+        );
+    }
 
     fn write_okf_test_zip(path: &std::path::Path, entries: &[(&str, &[u8])]) {
         use std::io::Write as _;
