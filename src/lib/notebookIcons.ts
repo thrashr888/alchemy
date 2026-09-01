@@ -95,14 +95,17 @@ export function notebookIcon(name: string | undefined): LucideIcon {
 }
 
 // Keep this list in sync with Rust in `src-tauri/src/db.rs` (`NOTEBOOK_PALETTE`)
-// and the `set_notebook_color` validator in `src-tauri/src/commands.rs`.
+// — that copy seeds new-notebook colors. The validator only checks hex form.
 export const NOTEBOOK_PALETTE = [
   "#eb5757",
   "#e8a33d",
+  "#d9b13b",
   "#4cb782",
+  "#4fc1c9",
   "#5e9bd2",
   "#9b87f5",
   "#e274b6",
-  "#4fc1c9",
+  "#c1765a",
   "#98a562",
+  "#8a93a6",
 ];
