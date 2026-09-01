@@ -142,6 +142,14 @@ pub fn persona_block(profile: &UserProfile) -> String {
             profile.instructions.trim()
         ));
     }
+    if !profile.assistant_name.trim().is_empty() {
+        parts.push(format!(
+            "They call you {0}. You are {0}: answer as yourself, in the first person, and use \
+             the name when it fits (a greeting, a sign-off, when they address you). The name \
+             changes nothing about grounding or citations.",
+            profile.assistant_name.trim()
+        ));
+    }
     if parts.is_empty() {
         String::new()
     } else {
@@ -1127,6 +1135,19 @@ pub fn build_artifact_messages(instruction: &str, corpus: &str, persona: &str) -
 
 #[cfg(test)]
 mod tests {
+    /// A named assistant answers as itself; an unnamed one gets no persona
+    /// line at all, so the block stays empty for a blank profile.
+    #[test]
+    fn persona_block_names_the_assistant() {
+        let mut profile = crate::ai::UserProfile::default();
+        assert_eq!(super::persona_block(&profile), "");
+        profile.assistant_name = " Pip ".into();
+        let block = super::persona_block(&profile);
+        assert!(block.contains("They call you Pip."), "{block}");
+        assert!(block.contains("You are Pip"), "{block}");
+        assert!(block.contains("changes nothing about grounding"), "{block}");
+    }
+
     use super::*;
     use std::collections::HashMap;
 

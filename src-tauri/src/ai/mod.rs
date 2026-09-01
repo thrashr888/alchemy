@@ -192,6 +192,9 @@ pub struct UserProfile {
     pub profession: String,
     /// Standing instructions, kept in mind across chats and generations.
     pub instructions: String,
+    /// What the user calls the assistant. People name their agents and talk
+    /// to them like a friend; a named assistant answers as itself.
+    pub assistant_name: String,
 }
 
 fn default_provider() -> String {

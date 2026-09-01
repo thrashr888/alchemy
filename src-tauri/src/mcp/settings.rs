@@ -16,7 +16,7 @@ struct SettingsReq {
     /// For set: chatProvider, studioProvider, chatModel, effort, baseUrl
     /// (bare fields target the active chat provider), smallModel, embedder,
     /// provider.<id>.chatModel / .effort / .baseUrl, or profile.name /
-    /// profile.profession / profile.instructions.
+    /// profile.profession / profile.instructions / profile.assistantName.
     #[serde(default)]
     field: String,
     /// For set: the new value. Provider fields accept an id or a label.
@@ -34,7 +34,7 @@ struct SettingsReq {
     /// notebook).
     #[serde(default)]
     notebook_id: String,
-    /// For style: a style id or name (friendly, buddy, professional, scientific,
+    /// For style: a style id or name (friendly, buddy, kids, professional, scientific,
     /// adhd, ste100, govuk, plain, gdev, learning, custom, default). Empty
     /// keeps the current style.
     #[serde(default)]
@@ -56,7 +56,7 @@ struct SettingsReq {
 #[tool_router(router = settings_router, vis = "pub(super)")]
 impl AlchemyMcp {
     #[tool(
-        description = "Read, change, or probe Alchemy's settings. op:\"get\" returns a redacted snapshot (API keys are never readable). op:\"set\" changes ONE field: chatProvider, studioProvider, chatModel, effort, baseUrl (these three target the active chat provider), smallModel, embedder (ollama|builtin), provider.<id>.chatModel / .effort / .baseUrl, or profile.name / profile.profession / profile.instructions (the user's persona — free text, never secrets); provider values accept an id or a label; API keys and tokens can never be read or set. op:\"models\" lists installed Ollama models plus every provider's active model and live readiness. op:\"test\" live-probes one provider or model (pass `target`; empty = active chat provider) with exactly one tiny chat call and, for Ollama targets, one embed call — no config change. op:\"pull\" validates an Ollama model name (pass `model`) and returns the `ollama pull` command string for the USER to run in Terminal — Alchemy never executes it. op:\"style\" sets a notebook's answer voice/length (pass `notebook_id` plus `style` and/or `length`). op:\"theme\" switches the app theme (pass `theme`; empty lists them). op:\"connect\" lists agent clients (empty `target`) or registers Alchemy with one — requires `confirm: true` because it writes that client's config file. op:\"setup\" reports the next unmet setup step. Applied changes take effect immediately and open windows refresh live."
+        description = "Read, change, or probe Alchemy's settings. op:\"get\" returns a redacted snapshot (API keys are never readable). op:\"set\" changes ONE field: chatProvider, studioProvider, chatModel, effort, baseUrl (these three target the active chat provider), smallModel, embedder (ollama|builtin), provider.<id>.chatModel / .effort / .baseUrl, or profile.name / profile.profession / profile.instructions / profile.assistantName (the user's persona — free text, never secrets); provider values accept an id or a label; API keys and tokens can never be read or set. op:\"models\" lists installed Ollama models plus every provider's active model and live readiness. op:\"test\" live-probes one provider or model (pass `target`; empty = active chat provider) with exactly one tiny chat call and, for Ollama targets, one embed call — no config change. op:\"pull\" validates an Ollama model name (pass `model`) and returns the `ollama pull` command string for the USER to run in Terminal — Alchemy never executes it. op:\"style\" sets a notebook's answer voice/length (pass `notebook_id` plus `style` and/or `length`). op:\"theme\" switches the app theme (pass `theme`; empty lists them). op:\"connect\" lists agent clients (empty `target`) or registers Alchemy with one — requires `confirm: true` because it writes that client's config file. op:\"setup\" reports the next unmet setup step. Applied changes take effect immediately and open windows refresh live."
     )]
     async fn settings(
         &self,

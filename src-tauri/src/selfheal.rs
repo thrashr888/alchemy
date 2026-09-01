@@ -217,10 +217,11 @@ pub(crate) fn settings_get(config: &AiConfig) -> String {
         }
     };
     out.push_str(&format!(
-        "\nProfile:\n- Name: {}\n- Profession: {}\n- Standing instructions: {}\n",
+        "\nProfile:\n- Name: {}\n- Profession: {}\n- Standing instructions: {}\n- Assistant's name: {}\n",
         unset(&config.profile.name),
         unset(&config.profile.profession),
-        unset(&config.profile.instructions)
+        unset(&config.profile.instructions),
+        unset(&config.profile.assistant_name)
     ));
     out.push_str(
         "\nAPI keys are never shown here — manage them in Settings → Models. \
@@ -232,7 +233,7 @@ pub(crate) fn settings_get(config: &AiConfig) -> String {
 const SETTABLE_FIELDS: &str = "chatProvider, studioProvider, chatModel, effort, baseUrl, \
      smallModel, embedder (the \"search model\" in user terms), provider.<id>.chatModel, \
      provider.<id>.effort, provider.<id>.baseUrl, \
-     profile.name, profile.profession, profile.instructions";
+     profile.name, profile.profession, profile.instructions, profile.assistantName";
 
 const EFFORTS: [&str; 5] = ["", "minimal", "low", "medium", "high"];
 
@@ -317,7 +318,12 @@ pub(crate) fn settings_set(
         // Personalization (RFC-conversational-setup §2): free text, but the
         // key-shape refusal above still applies — "remember this token for
         // me" can never smuggle a secret into the prompt-borne profile.
-        "profile.name" | "profile.profession" | "profile.instructions" if target_id.is_none() => {
+        "profile.name"
+        | "profile.profession"
+        | "profile.instructions"
+        | "profile.assistantName"
+            if target_id.is_none() =>
+        {
             let cap = if sub == "profile.instructions" {
                 500
             } else {
@@ -343,6 +349,14 @@ pub(crate) fn settings_set(
                         "Cleared your profession from the profile.".to_string()
                     } else {
                         format!("Noted your profession: {value}.")
+                    })
+                }
+                "profile.assistantName" => {
+                    config.profile.assistant_name = value.to_string();
+                    Ok(if value.is_empty() {
+                        "Cleared the assistant's name.".to_string()
+                    } else {
+                        format!("{value} it is — that's me from now on.")
                     })
                 }
                 _ => {
@@ -1677,6 +1691,9 @@ mod tests {
         assert_eq!(c.profile.name, "Paul");
         assert!(echo.contains("call you Paul"), "{echo}");
         settings_set(&mut c, "profile.profession", "software engineer").unwrap();
+        let echo = settings_set(&mut c, "profile.assistantName", "Pip").unwrap();
+        assert_eq!(c.profile.assistant_name, "Pip");
+        assert!(echo.contains("Pip"), "{echo}");
         assert_eq!(c.profile.profession, "software engineer");
         let echo = settings_set(&mut c, "profile.instructions", "keep answers short").unwrap();
         assert!(echo.contains("keep answers short"), "{echo}");

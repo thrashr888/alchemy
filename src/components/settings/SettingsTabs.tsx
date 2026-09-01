@@ -147,21 +147,32 @@ export function ChatTab() {
 export function PersonalizationTab() {
   const aiConfig = useStore((state) => state.aiConfig);
   const save = useStore((state) => state.saveAiConfig);
-  const [draft, setDraft] = useState({ name: "", profession: "", instructions: "" });
+  const [draft, setDraft] = useState({
+    name: "",
+    profession: "",
+    instructions: "",
+    assistantName: "",
+  });
 
   useEffect(() => {
-    if (aiConfig?.profile) setDraft(aiConfig.profile);
+    if (aiConfig?.profile) setDraft({ ...aiConfig.profile, assistantName: aiConfig.profile.assistantName ?? "" });
     // Load once so a blur-save round trip cannot clobber in-progress typing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const saveOnBlur = () => {
     if (!aiConfig) return;
-    const profile = aiConfig.profile ?? { name: "", profession: "", instructions: "" };
+    const profile = aiConfig.profile ?? {
+      name: "",
+      profession: "",
+      instructions: "",
+      assistantName: "",
+    };
     if (
       draft.name !== profile.name ||
       draft.profession !== profile.profession ||
-      draft.instructions !== profile.instructions
+      draft.instructions !== profile.instructions ||
+      draft.assistantName !== (profile.assistantName ?? "")
     ) {
       void save({ ...aiConfig, profile: { ...draft } });
     }
@@ -180,6 +191,16 @@ export function PersonalizationTab() {
           placeholder="Paul…"
           value={draft.name}
           onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+          onBlur={saveOnBlur}
+        />
+      </Field>
+      <Field label="What do you call the assistant?">
+        <Input
+          name="profile-assistant-name"
+          aria-label="What do you call the assistant?"
+          placeholder="Pip…"
+          value={draft.assistantName}
+          onChange={(event) => setDraft({ ...draft, assistantName: event.target.value })}
           onBlur={saveOnBlur}
         />
       </Field>
