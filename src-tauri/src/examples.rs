@@ -22,10 +22,18 @@ use crate::models::{Notebook, RegistryCard, Source};
 pub(crate) const INTRO_TITLE: &str = "Introduction to Alchemy";
 pub(crate) const EARNINGS_TITLE: &str = "Earnings Reports for Top 50 Corporations";
 pub(crate) const AI_RESEARCH_TITLE: &str = "AI Research: Landmark Papers";
+pub(crate) const CURATED_TITLE: &str = "Curated Supply: Well-Designed Objects";
 
 /// (title, url, body) — url is "" for the intro's pasted-text tour and the
 /// company's top-level investor-relations page for earnings sources.
 type ExampleSource = (&'static str, &'static str, &'static str);
+
+/// (title, url, image, body) — a web source with its lead image pinned:
+/// `url` is the product page on curated.supply and `image` the product
+/// photo from its CDN, so the Gallery shows the object instead of the
+/// site's shared og:image (which Framer stamps identically on every page).
+/// Bodies are our own short write-ups; the page itself is one refresh away.
+type CuratedSource = (&'static str, &'static str, &'static str, &'static str);
 
 /// (kind, name) — example registry cards (docs/RFC-registry.md), so a fresh
 /// install's Registry shows a real cast instead of a blank page.
@@ -480,14 +488,333 @@ const AI_RESEARCH_SOURCES: &[ExampleSource] = &[
     ),
 ];
 
+/// Objects from curated.supply — a design-goods catalog — as URL sources:
+/// the demo corpus for the Gallery (photos, not first lines) and for
+/// shopping-style questions ("what's the cheapest espresso machine?").
+const CURATED_SOURCES: &[CuratedSource] = &[
+    (
+        "Apple iPhone 17 Pro",
+        "https://www.curated.supply/products/iphone-pro-17",
+        "https://assets.curated.supply/Apple_iPhone%20Pro%2017.webp",
+        include_str!("../examples/curated/iphone-pro-17.md"),
+    ),
+    (
+        "Apple iMac",
+        "https://www.curated.supply/products/imac",
+        "https://assets.curated.supply/apple_imacm4.webp",
+        include_str!("../examples/curated/imac.md"),
+    ),
+    (
+        "Apple Studio Display",
+        "https://www.curated.supply/products/studio-display",
+        "https://assets.curated.supply/studio%20display.webp",
+        include_str!("../examples/curated/studio-display.md"),
+    ),
+    (
+        "Apple HomePod Mini",
+        "https://www.curated.supply/products/homepod-mini",
+        "https://assets.curated.supply/apple_homepodmini.webp",
+        include_str!("../examples/curated/homepod-mini.md"),
+    ),
+    (
+        "Nothing Ear (3)",
+        "https://www.curated.supply/products/ear-%283%29",
+        "https://assets.curated.supply/nothing_ear3.webp",
+        include_str!("../examples/curated/ear-3.md"),
+    ),
+    (
+        "Nothing Phone (4a) Pro",
+        "https://www.curated.supply/products/phone-4-a-pro",
+        "https://assets.curated.supply/nothing_phone(4a)pro.webp",
+        include_str!("../examples/curated/phone-4-a-pro.md"),
+    ),
+    (
+        "Google Pixel Buds Pro 2",
+        "https://www.curated.supply/products/pixelbudspro-2",
+        "https://assets.curated.supply/google_pixelbudspro2.webp",
+        include_str!("../examples/curated/pixelbudspro-2.md"),
+    ),
+    (
+        "HOVERAir X1 Pro Max",
+        "https://www.curated.supply/products/x1-pro-max",
+        "https://assets.curated.supply/hoverair_x1promax8kfoldabledrone.webp",
+        include_str!("../examples/curated/x1-pro-max.md"),
+    ),
+    (
+        "Kismas Doric Lamp 01",
+        "https://www.curated.supply/products/doric-lamp-01",
+        "https://assets.curated.supply/Kismas_Doric%20Lamp%2001.webp",
+        include_str!("../examples/curated/doric-lamp-01.md"),
+    ),
+    (
+        "Herman Miller Noguchi Coffee Table",
+        "https://www.curated.supply/products/noguchi-coffee-table",
+        "https://assets.curated.supply/noguchi_table.webp",
+        include_str!("../examples/curated/noguchi-coffee-table.md"),
+    ),
+    (
+        "Ligne Roset Togo ® Loveseat",
+        "https://www.curated.supply/products/togo-loveseat",
+        "https://assets.curated.supply/ligneroset_TogoLoveseat.webp",
+        include_str!("../examples/curated/togo-loveseat.md"),
+    ),
+    (
+        "Dyson Solarcycle Morph Floor",
+        "https://www.curated.supply/products/solarcycle-morph-floor",
+        "https://assets.curated.supply/Dyson_Solarcycle%20Morph%20Floor.webp",
+        include_str!("../examples/curated/solarcycle-morph-floor.md"),
+    ),
+    (
+        "Crust P–1 Pepper Mill",
+        "https://www.curated.supply/products/p-1-pepper-mill",
+        "https://assets.curated.supply/Crust_P%E2%80%931%20Pepper%20Mill.webp",
+        include_str!("../examples/curated/p-1-pepper-mill.md"),
+    ),
+    (
+        "Lego Icons 10295 Porsche 911",
+        "https://www.curated.supply/products/icons-10295-porsche-911",
+        "https://assets.curated.supply/Lego%20_%20Icons%2010295%20Porsche%20911.webp",
+        include_str!("../examples/curated/icons-10295-porsche-911.md"),
+    ),
+    (
+        "Herman Miller Aeron",
+        "https://www.curated.supply/products/herman-miller-aeron",
+        "https://assets.curated.supply/aeron.webp",
+        include_str!("../examples/curated/herman-miller-aeron.md"),
+    ),
+    (
+        "Electronic Materials Office Altar II",
+        "https://www.curated.supply/products/altar-ii-mechanical-keyboard",
+        "https://assets.curated.supply/electronicmaterialsoffice_altarii.webp",
+        include_str!("../examples/curated/altar-ii-mechanical-keyboard.md"),
+    ),
+    (
+        "Lofree Flow 2",
+        "https://www.curated.supply/products/flow-2",
+        "https://assets.curated.supply/Lofree_%20Flow%202.webp",
+        include_str!("../examples/curated/flow-2.md"),
+    ),
+    (
+        "Work Louder k•no•b•1",
+        "https://www.curated.supply/products/k-no-b-1",
+        "https://assets.curated.supply/Work Louder_k%E2%80%A2no%E2%80%A2b%E2%80%A21.webp",
+        include_str!("../examples/curated/k-no-b-1.md"),
+    ),
+    (
+        "Humans Since 1982 ClockClock 24",
+        "https://www.curated.supply/products/clockclock-24",
+        "https://assets.curated.supply/HS82_ClockClock%2024.webp",
+        include_str!("../examples/curated/clockclock-24.md"),
+    ),
+    (
+        "Anglepoise Original 1227 Desk Lamp",
+        "https://www.curated.supply/products/original-1227-desk-lamp",
+        "https://assets.curated.supply/anglepoise_original1227.webp",
+        include_str!("../examples/curated/original-1227-desk-lamp.md"),
+    ),
+    (
+        "Branch Duo Standing Desk",
+        "https://www.curated.supply/products/duo-standing-desk",
+        "https://assets.curated.supply/branch_duostandingdesk.webp",
+        include_str!("../examples/curated/duo-standing-desk.md"),
+    ),
+    (
+        "Craighill Kepler Pen",
+        "https://www.curated.supply/products/kepler-pen",
+        "https://assets.curated.supply/craighill_keplerpen.webp",
+        include_str!("../examples/curated/kepler-pen.md"),
+    ),
+    (
+        "Orbitkey Ring V2 Quick Release Keyring",
+        "https://www.curated.supply/products/ringv-2-quickreleasekeyring",
+        "https://assets.curated.supply/orbitkey_ringv2quickreleasekeyring.webp",
+        include_str!("../examples/curated/ringv-2-quickreleasekeyring.md"),
+    ),
+    (
+        "Goyard Saint-Florentin Wallet",
+        "https://www.curated.supply/products/saint-florentin-wallet",
+        "https://assets.curated.supply/goyard_saintflorentinwallet.webp",
+        include_str!("../examples/curated/saint-florentin-wallet.md"),
+    ),
+    (
+        "CIVIVI Elementum II Button Lock Folding Knife",
+        "https://www.curated.supply/products/elementum-ii",
+        "https://assets.curated.supply/civivi_elementumii.webp",
+        include_str!("../examples/curated/elementum-ii.md"),
+    ),
+    (
+        "Memobottle A3 Daily Tote",
+        "https://www.curated.supply/products/a-3-dailybag",
+        "https://assets.curated.supply/memobottle_a3dailybag.webp",
+        include_str!("../examples/curated/a-3-dailybag.md"),
+    ),
+    (
+        "Omega Speedmaster",
+        "https://www.curated.supply/products/speedmaster",
+        "https://assets.curated.supply/Omega_Speedmaster.webp",
+        include_str!("../examples/curated/speedmaster.md"),
+    ),
+    (
+        "Rolex Datejust",
+        "https://www.curated.supply/products/datejust",
+        "https://assets.curated.supply/Rolex_Datejust.webp",
+        include_str!("../examples/curated/datejust.md"),
+    ),
+    (
+        "Serica Ref. 1174-1 Parade",
+        "https://www.curated.supply/products/ref-1174-1-parade",
+        "https://assets.curated.supply/Serica_Re%CC%81f.%201174-1%20Parade.webp",
+        include_str!("../examples/curated/ref-1174-1-parade.md"),
+    ),
+    (
+        "Timex Easy Reader Watch",
+        "https://www.curated.supply/products/easyreader",
+        "https://assets.curated.supply/timex_easyreader.webp",
+        include_str!("../examples/curated/easyreader.md"),
+    ),
+    (
+        "Breda Pulse (Tandem)",
+        "https://www.curated.supply/products/pulse-%28tandem%29",
+        "https://assets.curated.supply/Breda_Pulse%20(Tandem).webp",
+        include_str!("../examples/curated/pulse-tandem.md"),
+    ),
+    (
+        "Tom Ford Oud Wood Eau De Parfum",
+        "https://www.curated.supply/products/oudwood",
+        "https://assets.curated.supply/tomford_oudwood.webp",
+        include_str!("../examples/curated/oudwood.md"),
+    ),
+    (
+        "Diptyque Philosykos Eau De Parfum",
+        "https://www.curated.supply/products/philosykos",
+        "https://assets.curated.supply/diptyque_philosykos.webp",
+        include_str!("../examples/curated/philosykos.md"),
+    ),
+    (
+        "Merkur Stahlwaren 23B Long Handle Double Edge Safety Razor",
+        "https://www.curated.supply/products/23-bdoubleedgedsafetyrazor",
+        "https://assets.curated.supply/merkur_23bdoubleedgedsafetyrazor.webp",
+        include_str!("../examples/curated/23-bdoubleedgedsafetyrazor.md"),
+    ),
+    (
+        "Phaidon Dieter Rams: The Complete Works",
+        "https://www.curated.supply/products/dieter-rams-the-complete-works",
+        "https://assets.curated.supply/Phaidon_Dieter%20Rams_%20The%20Complete%20Works.webp",
+        include_str!("../examples/curated/dieter-rams-the-complete-works.md"),
+    ),
+    (
+        "Verlag Niggli AG Grid Systems in Graphic Design",
+        "https://www.curated.supply/products/grid-systems-in-graphic-design",
+        "https://assets.curated.supply/niggli_gridsystems.webp",
+        include_str!("../examples/curated/grid-systems-in-graphic-design.md"),
+    ),
+    (
+        "Stripe Press The Making of Prince of Persia",
+        "https://www.curated.supply/products/the-making-of-prince-of-persia",
+        "https://assets.curated.supply/Stripe Press_The%20Making%20of%20Prince%20of%20Persia.webp",
+        include_str!("../examples/curated/the-making-of-prince-of-persia.md"),
+    ),
+    (
+        "Mitchell Beazley The World Atlas Of Coffee",
+        "https://www.curated.supply/products/the-world-atlas-of-coffee",
+        "https://assets.curated.supply/mitchellbeazley_worldatlasofcoffee.webp",
+        include_str!("../examples/curated/the-world-atlas-of-coffee.md"),
+    ),
+    (
+        "Rimowa Classic Cabin",
+        "https://www.curated.supply/products/classic-cabin",
+        "https://assets.curated.supply/Rimowa_Classic%20Cabin.webp",
+        include_str!("../examples/curated/classic-cabin.md"),
+    ),
+    (
+        "Fellow Carter Carry Travel Mug",
+        "https://www.curated.supply/products/carter-carry-travel-mug",
+        "https://assets.curated.supply/fellow_cartercarrytravelmug.webp",
+        include_str!("../examples/curated/carter-carry-travel-mug.md"),
+    ),
+    (
+        "Nintendo Switch 2",
+        "https://www.curated.supply/products/nintendo-switch2",
+        "https://assets.curated.supply/nintendo_switch2.webp",
+        include_str!("../examples/curated/nintendo-switch2.md"),
+    ),
+    (
+        "Leica Q3",
+        "https://www.curated.supply/products/leica-q3",
+        "https://assets.curated.supply/Leica%20Q3.webp",
+        include_str!("../examples/curated/leica-q3.md"),
+    ),
+    (
+        "Sigma BF",
+        "https://www.curated.supply/products/bf",
+        "https://assets.curated.supply/Sigma_BF.webp",
+        include_str!("../examples/curated/bf.md"),
+    ),
+    (
+        "Fujifilm X Half Premium Compact Camera",
+        "https://www.curated.supply/products/x-half-premium-compact-camera",
+        "https://assets.curated.supply/fujifilm_xhalfpremiumcompactdigitalcamera.webp",
+        include_str!("../examples/curated/x-half-premium-compact-camera.md"),
+    ),
+    (
+        "La Marzocco Linea Micra",
+        "https://www.curated.supply/products/linea-micra",
+        "https://assets.curated.supply/lamarzocco_lineamicra.webp",
+        include_str!("../examples/curated/linea-micra.md"),
+    ),
+    (
+        "La Marzocco Linea Mini",
+        "https://www.curated.supply/products/linea-mini-espresso-machine",
+        "https://assets.curated.supply/lamarzocco_lineamini.webp",
+        include_str!("../examples/curated/linea-mini-espresso-machine.md"),
+    ),
+    (
+        "Fellow Stagg EKG Electric Kettle",
+        "https://www.curated.supply/products/stagg-ekg-electric-kettle",
+        "https://assets.curated.supply/fellow_stagg.webp",
+        include_str!("../examples/curated/stagg-ekg-electric-kettle.md"),
+    ),
+    (
+        "Acaia Lunar",
+        "https://www.curated.supply/products/lunar-espresso-scale",
+        "https://assets.curated.supply/acaia_lunar.webp",
+        include_str!("../examples/curated/lunar-espresso-scale.md"),
+    ),
+    (
+        "Hario V60 Dripper 02",
+        "https://www.curated.supply/products/ceramic-coffee-dripper",
+        "https://assets.curated.supply/hario_v60ceramic02.webp",
+        include_str!("../examples/curated/ceramic-coffee-dripper.md"),
+    ),
+    (
+        "Alessi La Cupola Espresso Coffee Maker",
+        "https://www.curated.supply/products/la-cupola-espresso-coffee-maker",
+        "https://assets.curated.supply/alessi_lacupola.webp",
+        include_str!("../examples/curated/la-cupola-espresso-coffee-maker.md"),
+    ),
+    (
+        "xBloom Studio Coffee Machine",
+        "https://www.curated.supply/products/xbloom-studio-coffee-machine",
+        "https://assets.curated.supply/xbloomstudio.webp",
+        include_str!("../examples/curated/xbloom-studio-coffee-machine.md"),
+    ),
+    (
+        "Porsche 911 Turbo S",
+        "https://www.curated.supply/products/porsche-911-turbo-s",
+        "https://assets.curated.supply/911.webp",
+        include_str!("../examples/curated/porsche-911-turbo-s.md"),
+    ),
+];
+
 /// Seed the example notebooks once, ever. Returns true when anything new
 /// landed (so the caller can nudge open windows to refresh). Failures leave
 /// the marker unwritten and retry on the next launch; a user deleting the
 /// notebooks after the marker exists is final.
 /// Bump when the example content grows, so installs seeded by an older build
 /// get one [`top_up_ai_research`] pass. The marker file's CONTENT carries the
-/// version; the original release wrote "1".
-const EXAMPLES_VERSION: &str = "2";
+/// version; the original release wrote "1", the papers top-up "2", and the
+/// curated-objects notebook "3".
+const EXAMPLES_VERSION: &str = "3";
 
 pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
     let marker = app_data_dir(state).join("examples-seeded");
@@ -500,13 +827,22 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
         // yet) leaves the marker at the old version so the next launch
         // retries, same contract as first seeding.
         let ai = state.ai.read().await.clone();
-        let added = match top_up_ai_research(&state.db, &ai).await {
+        let mut added = match top_up_ai_research(&state.db, &ai).await {
             Ok(n) => n > 0,
             Err(err) => {
                 crate::note!("examples: papers top-up failed ({err:#}); will retry next launch");
                 return false;
             }
         };
+        // A whole notebook this build adds (v3): offered once, like the
+        // originals — skipped by title if it already exists.
+        match seed_curated(&state.db, &ai).await {
+            Ok(created) => added |= created,
+            Err(err) => {
+                crate::note!("examples: seeding \u{201c}{CURATED_TITLE}\u{201d} failed ({err:#}); will retry next launch");
+                return added;
+            }
+        }
         if let Err(err) = std::fs::write(&marker, EXAMPLES_VERSION) {
             crate::note!("examples: couldn't write marker: {err}");
         }
@@ -531,6 +867,13 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
                 crate::note!("examples: seeding \u{201c}{title}\u{201d} failed ({err:#}); will retry next launch");
                 return seeded;
             }
+        }
+    }
+    match seed_curated(&state.db, &ai).await {
+        Ok(created) => seeded |= created,
+        Err(err) => {
+            crate::note!("examples: seeding \u{201c}{CURATED_TITLE}\u{201d} failed ({err:#}); will retry next launch");
+            return seeded;
         }
     }
     if let Err(err) = seed_registry_cards(&state.db).await {
@@ -676,6 +1019,10 @@ struct Prepared {
     text: String,
     chunks: Vec<(String, i32, String)>,
     embeddings: Vec<Vec<f32>>,
+    /// "text" for pasted bodies; "url" for the curated web sources, whose
+    /// Gallery card then leads with `image_url`.
+    source_type: &'static str,
+    image_url: String,
 }
 
 /// Extract, chunk, and embed one example source, ready to insert.
@@ -700,7 +1047,19 @@ async fn prepare_source(
         text: extracted.text,
         chunks: tuples,
         embeddings,
+        source_type: "text",
+        image_url: String::new(),
     })
+}
+
+/// A curated web source: prepared like a pasted body, stored as a URL
+/// source with its product photo pinned as the lead image.
+async fn prepare_curated(ai: &Ai, src: &CuratedSource) -> anyhow::Result<Prepared> {
+    let (title, url, image, body) = src;
+    let mut p = prepare_source(ai, title, url, body).await?;
+    p.source_type = "url";
+    p.image_url = image.to_string();
+    Ok(p)
 }
 
 /// Write one prepared source into a notebook.
@@ -709,7 +1068,7 @@ async fn insert_prepared(db: &Db, notebook_id: &str, ts: i64, p: Prepared) -> an
         id: new_id(),
         notebook_id: notebook_id.to_string(),
         title: p.title,
-        source_type: "text".into(),
+        source_type: p.source_type.into(),
         url: p.url,
         content: p.text.clone(),
         char_count: p.text.chars().count() as i64,
@@ -719,7 +1078,7 @@ async fn insert_prepared(db: &Db, notebook_id: &str, ts: i64, p: Prepared) -> an
         error: String::new(),
         parent_id: String::new(),
         mtime: 0,
-        image_url: String::new(),
+        image_url: p.image_url,
         author: String::new(),
         tags: String::new(),
         note: String::new(),
@@ -744,9 +1103,34 @@ async fn seed_notebook(
     for (src_title, url, body) in sources {
         prepared.push(prepare_source(ai, src_title, url, body).await?);
     }
+    insert_notebook(db, title, notebooks.len(), prepared).await?;
+    Ok(true)
+}
 
+/// The curated-objects notebook, same once-ever contract as the others.
+async fn seed_curated(db: &Db, ai: &Ai) -> anyhow::Result<bool> {
+    let notebooks = db.list_notebooks().await?;
+    if notebooks.iter().any(|n| n.title == CURATED_TITLE) {
+        return Ok(false);
+    }
+    let mut prepared = Vec::with_capacity(CURATED_SOURCES.len());
+    for src in CURATED_SOURCES {
+        prepared.push(prepare_curated(ai, src).await?);
+    }
+    insert_notebook(db, CURATED_TITLE, notebooks.len(), prepared).await?;
+    Ok(true)
+}
+
+/// Create the notebook and write every prepared source into it. `existing`
+/// is how many notebooks there already are — it picks the palette color.
+async fn insert_notebook(
+    db: &Db,
+    title: &str,
+    existing: usize,
+    prepared: Vec<Prepared>,
+) -> anyhow::Result<()> {
     let ts = now();
-    let color = NOTEBOOK_PALETTE[notebooks.len() % NOTEBOOK_PALETTE.len()];
+    let color = NOTEBOOK_PALETTE[existing % NOTEBOOK_PALETTE.len()];
     let nb = Notebook {
         id: new_id(),
         title: title.to_string(),
@@ -764,7 +1148,7 @@ async fn seed_notebook(
     for p in prepared {
         insert_prepared(db, &nb.id, ts, p).await?;
     }
-    Ok(true)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -815,6 +1199,29 @@ mod tests {
             assert!(
                 body.lines().next().unwrap_or("").contains("arXiv:"),
                 "{title} first line missing its arXiv id"
+            );
+        }
+
+        // The curated objects: product-page urls, CDN photos (the whole point
+        // of the notebook is a Gallery of pictures), short bodies in the
+        // house shape with the listing footer.
+        assert_eq!(CURATED_SOURCES.len(), 52);
+        for (title, url, image, body) in CURATED_SOURCES {
+            assert!(titles.insert(*title), "duplicate title {title}");
+            assert!(
+                url.starts_with("https://www.curated.supply/products/"),
+                "{title}: url should be a curated.supply product page, got {url}"
+            );
+            assert!(
+                image.starts_with("https://assets.curated.supply/"),
+                "{title}: image should come from the curated.supply CDN, got {image}"
+            );
+            let n = words(body);
+            assert!((40..=160).contains(&n), "{title}: {n} words");
+            assert!(body.starts_with("# "), "{title} body missing its heading");
+            assert!(
+                body.contains(&format!("Listed on [Curated Supply]({url})")),
+                "{title} body missing its listing footer"
             );
         }
 
