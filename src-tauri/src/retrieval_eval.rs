@@ -680,9 +680,12 @@ async fn eval_deep_rerank() {
 
     const KEEP: usize = 4;
     const POOL: usize = 16;
+    // small_model too: the loop's rerank runs on the Small role, and only
+    // that engine carries the runaway cap + residency window.
     let chat = crate::ai::Ai::new(
         crate::ai::AiConfig {
             chat_model: "digitsflow/bonsai-8b:latest".into(),
+            small_model: "digitsflow/bonsai-8b:latest".into(),
             ..Default::default()
         },
         crate::ai::AiRuntime::default(),
@@ -734,6 +737,9 @@ async fn eval_deep_rerank() {
                 rerank_sum += recall_at(&reranked, KEEP);
             }
         }
+    }
+    if ollama_up {
+        crate::evals::release_models(&["digitsflow/bonsai-8b:latest"]).await;
     }
     let fusion = fusion_sum / n as f64;
     let ceiling = ceiling_sum / n as f64;
@@ -2274,6 +2280,7 @@ async fn eval_agent_planner_roles() {
         "  (Small is the shipping default — agent::loop_role; \
          ALCHEMY_PLANNER_ROLE=chat restores the old behaviour.)"
     );
+    crate::evals::release_models(&[&chat_model, &small_model]).await;
 }
 
 /// Distillation probes: a question, the fixture document it should be read
@@ -2347,6 +2354,7 @@ async fn eval_agent_distill_roles() {
             total_ms / n as u128
         );
     }
+    crate::evals::release_models(&[&chat_model, &small_model]).await;
 }
 
 /// Per-phase cost of one deep-research step, so the next optimization aims
@@ -2449,10 +2457,21 @@ async fn eval_agent_phase_costs() {
                 .await
         });
     }
+
+    // Gap retrieval — the direct chat path's small-model call, timed here
+    // because the per-stage chat trace convicted it of a 591s runaway
+    // before its output was capped. Runs on the same pool the search made.
+    let gap = timed!("gap retrieve", {
+        let mut pool = picked.clone();
+        crate::commands::gap_retrieve(&ai, &db, nb, question, &mut pool, 4, 20, None).await
+    });
+    eprintln!("     (gap query: {gap:?})");
+
     eprintln!(
         "  (cold-warm gap is model load. A turn pays planner+action per step, \n\
           up to MAX_STEPS, then streams the answer.)"
     );
+    crate::evals::release_models(&[&chat_model, &small_model]).await;
 }
 
 /// Rerank probes: a question and the fixture document whose passage must
@@ -2544,4 +2563,5 @@ async fn eval_agent_rerank_paths() {
         xe_ms / n as u128,
         xe_n as f64 / n as f64
     );
+    crate::evals::release_models(&[&chat_model, &small_model]).await;
 }

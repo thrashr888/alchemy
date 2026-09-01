@@ -2268,7 +2268,7 @@ pub async fn grep_sources(
 /// win came from). Returns the gap query for the retrieval trace; any
 /// failure leaves the pool untouched.
 #[allow(clippy::too_many_arguments)]
-async fn gap_retrieve(
+pub(crate) async fn gap_retrieve(
     ai: &crate::ai::Ai,
     db: &crate::db::Db,
     notebook_id: &str,
