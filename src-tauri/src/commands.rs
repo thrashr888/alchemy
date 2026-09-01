@@ -12106,15 +12106,33 @@ fn meta_step(app: Option<&AppHandle>, label: impl Into<String>, transient: bool)
 
 /// Window-targeted variant for corpus chat. Alchemy can have more than one
 /// window open, so one window's Home Chat must not receive another window's
-/// progress trail.
+/// progress trail. The payload carries the window label because JS
+/// `Any`-listeners receive events regardless of emit target (see CLAUDE.md's
+/// multi-window gotcha) — the front-end self-filters on it.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct MetaStepEvent {
+    label: String,
+    transient: bool,
+    window: String,
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct MetaTokenEvent {
+    content: String,
+    window: String,
+}
+
 fn meta_step_to(target: Option<(&AppHandle, &str)>, label: impl Into<String>, transient: bool) {
     if let Some((app, window_label)) = target {
         let _ = app.emit_to(
             window_label,
             "meta://step",
-            StepEvent {
+            MetaStepEvent {
                 label: label.into(),
                 transient,
+                window: window_label.to_string(),
             },
         );
     }
@@ -12966,7 +12984,10 @@ pub async fn ask_everything(
                 let _ = app_for_cb.emit_to(
                     &window_label,
                     "meta://token",
-                    TokenEvent { content: tok.to_string() },
+                    MetaTokenEvent {
+                        content: tok.to_string(),
+                        window: window_label.clone(),
+                    },
                 );
             }) => Some(e(out)?),
             _ = cancel.cancelled() => None,

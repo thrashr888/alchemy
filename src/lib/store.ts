@@ -720,16 +720,25 @@ export const useStore = create<AppState>((set, get) => {
       // conversation it was asked in, so leaving that conversation — for
       // another thread, or for a notebook behind a citation — must not tear
       // its listeners down. A queued run hasn't been sent yet; anything
-      // arriving belongs to the run it is waiting on.
-      void listen<{ content: string }>("meta://token", (e) => {
+      // arriving belongs to the run it is waiting on. Events carrying a
+      // window label belong to that window's run only — emit targets don't
+      // filter Any-listeners, so the payload does; label-less events are
+      // legacy broadcasts and keep the old accept-all behavior.
+      const thisWindow = getCurrentWebviewWindow().label;
+      void listen<{ content: string; window?: string }>("meta://token", (e) => {
+        if (e.payload.window && e.payload.window !== thisWindow) return;
         const run = get().homeRun;
         if (run && !run.queued) get().appendHomeToken(e.payload.content);
       });
-      void listen<{ label: string; transient: boolean }>("meta://step", (e) => {
-        const run = get().homeRun;
-        if (run && !run.queued)
-          get().appendHomeStep(e.payload.label, e.payload.transient);
-      });
+      void listen<{ label: string; transient: boolean; window?: string }>(
+        "meta://step",
+        (e) => {
+          if (e.payload.window && e.payload.window !== thisWindow) return;
+          const run = get().homeRun;
+          if (run && !run.queued)
+            get().appendHomeStep(e.payload.label, e.payload.transient);
+        },
+      );
       // Verify-and-repair swaps a revised answer under the same message id
       // (backend spawn_answer_verify) — apply only when the message is in
       // this window's transcript.
