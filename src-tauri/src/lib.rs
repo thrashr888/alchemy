@@ -444,6 +444,8 @@ pub fn run() {
             commands::update_source_text,
             commands::set_source_tags,
             commands::set_source_note,
+            commands::set_source_image,
+            commands::source_image_candidates,
             commands::refresh_source_url,
             commands::refresh_sources,
             commands::get_source_content,

@@ -26,6 +26,7 @@ import { RichEditor } from "./RichEditor";
 import { StreamingBody } from "./StudioNoteViewer";
 import { KIND_LABEL } from "./studioArtifacts";
 import { Favicon } from "./SourcesPanel";
+import { SourceImagePicker } from "./SourceImagePicker";
 import { sourceIcon } from "@/lib/sourceIcon";
 import { Button, Input, RowMenu, Spinner, Textarea, useDelayedFlag } from "./ui";
 import {
@@ -50,6 +51,7 @@ import {
   ExternalLink,
   FileInput,
   FolderOpen,
+  Image as ImageIcon,
   LayoutGrid,
   MessageSquare,
   MessageSquarePlus,
@@ -560,6 +562,7 @@ export function ReaderPane() {
   const compact = paneWidth > 0 && paneWidth < 560;
   const [findOpen, setFindOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [imagePickerOpen, setImagePickerOpen] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
   const [editing, setEditing] = useState(false);
   const [liveMode, setLiveMode] = useState(false);
@@ -707,6 +710,16 @@ export function ReaderPane() {
           },
         }
       : null;
+  // Hand-pick the gallery card's image (url sources only — that's the type
+  // whose card leads with one): rare enough to live in the overflow menu.
+  const cardImageAction =
+    source && source.sourceType === "url"
+      ? {
+          label: "Choose card image…",
+          icon: <ImageIcon className="h-3.5 w-3.5" />,
+          onClick: () => setImagePickerOpen(true),
+        }
+      : null;
   // Roomy: source actions all inline (no menu at all); notes keep only the
   // rare actions behind the menu. Compact: secondaries fold into the menu.
   const inlineActions = compact
@@ -716,6 +729,7 @@ export function ReaderPane() {
       );
   const overflowItems = [
     ...(copyLinkAction ? [copyLinkAction] : []),
+    ...(cardImageAction ? [cardImageAction] : []),
     ...(compact
       ? [askAction, originAction, refreshAction].filter(
           (a): a is NonNullable<typeof a> => a !== null,
@@ -997,6 +1011,13 @@ export function ReaderPane() {
         <div className="flex flex-1 items-center justify-center text-body text-muted-foreground">
           This document no longer exists — it may have been deleted.
         </div>
+      )}
+      {source && source.sourceType === "url" && (
+        <SourceImagePicker
+          source={source}
+          open={imagePickerOpen}
+          onClose={() => setImagePickerOpen(false)}
+        />
       )}
     </div>
   );

@@ -1894,6 +1894,90 @@ pub async fn fetch_lead_image(url: &str) -> Option<String> {
     og_image(&body, url)
 }
 
+/// Every plausible lead-image candidate on a page, for the reader's manual
+/// picker (the auto `og_image` pick misses some pages): meta og/twitter
+/// images first, then body `<img>` sources (data-src lazy-load variants
+/// included via the attribute scan), resolved against the page URL, with
+/// obvious chrome (SVGs, sprites, favicons, pixels) dropped. Deduped,
+/// capped, never fetches anything.
+pub fn page_images(html: &str, base_url: &str) -> Vec<String> {
+    const MAX_CANDIDATES: usize = 24;
+    let cap = html
+        .char_indices()
+        .nth(1_000_000)
+        .map(|(i, _)| i)
+        .unwrap_or(html.len());
+    let hay = &html[..cap];
+    let lower = hay.to_lowercase();
+    let mut out: Vec<String> = Vec::new();
+    if lower.len() != hay.len() {
+        // See og_image: shared byte indices below need same-length lowering.
+        out.extend(og_image(html, base_url));
+        return out;
+    }
+    let base = reqwest::Url::parse(base_url).ok();
+    let mut seen = std::collections::HashSet::new();
+    let mut push = |raw: &str, out: &mut Vec<String>| {
+        let candidate = decode_entities(raw.trim());
+        if candidate.is_empty() || candidate.starts_with("data:") {
+            return;
+        }
+        let resolved = base
+            .as_ref()
+            .and_then(|b| b.join(&candidate).ok())
+            .map(|u| u.to_string())
+            .unwrap_or(candidate);
+        if !resolved.starts_with("http://") && !resolved.starts_with("https://") {
+            return;
+        }
+        let l = resolved.to_lowercase();
+        if l.ends_with(".svg")
+            || ["sprite", "favicon", "pixel.", "1x1", "spacer"]
+                .iter()
+                .any(|w| l.contains(w))
+        {
+            return;
+        }
+        if seen.insert(l) {
+            out.push(resolved);
+        }
+    };
+    // Meta tags first — they're the page's own pick of a representative image.
+    for key in ["<meta", "<img"] {
+        let mut pos = 0;
+        while out.len() < MAX_CANDIDATES {
+            let Some(off) = lower[pos..].find(key) else {
+                break;
+            };
+            let start = pos + off;
+            let Some(end) = lower[start..].find('>').map(|e| start + e + 1) else {
+                break;
+            };
+            pos = end;
+            let tag = &hay[start..end];
+            if key == "<meta" {
+                const KEYS: &[&str] = &[
+                    "og:image",
+                    "og:image:url",
+                    "og:image:secure_url",
+                    "twitter:image",
+                    "twitter:image:src",
+                ];
+                let name = meta_attr(tag, "property").or_else(|| meta_attr(tag, "name"));
+                if !name.is_some_and(|k| KEYS.contains(&k.to_lowercase().as_str())) {
+                    continue;
+                }
+                if let Some(content) = meta_attr(tag, "content") {
+                    push(content, &mut out);
+                }
+            } else if let Some(src) = meta_attr(tag, "src") {
+                push(src, &mut out);
+            }
+        }
+    }
+    out
+}
+
 /// The page's lead image from raw HTML meta tags — `og:image` (and its
 /// `:url`/`:secure_url` variants) or `twitter:image`, first hit wins —
 /// resolved against the page URL. Head-only scan; never fetches anything.
@@ -2001,6 +2085,28 @@ mod tests {
         assert_eq!(
             og_image(twitter, "https://ex.com/"),
             Some("https://ex.com/t.png".to_string())
+        );
+    }
+
+    #[test]
+    fn page_images_collects_meta_then_body_and_filters_chrome() {
+        let html = r#"<html><head>
+            <meta property="og:image" content="https://ex.com/hero.jpg">
+        </head><body>
+            <img src="/photos/a.png" alt="">
+            <img src="https://ex.com/sprite-sheet.png">
+            <img src="https://ex.com/logo.svg">
+            <img src="data:image/gif;base64,R0lGOD">
+            <img data-src="../b.webp" src="https://ex.com/1x1.gif">
+            <img src="/photos/a.png">
+        </body></html>"#;
+        assert_eq!(
+            page_images(html, "https://ex.com/articles/page"),
+            vec![
+                "https://ex.com/hero.jpg".to_string(),
+                "https://ex.com/photos/a.png".to_string(),
+                "https://ex.com/b.webp".to_string(),
+            ]
         );
     }
 

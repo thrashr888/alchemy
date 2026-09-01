@@ -23,6 +23,7 @@ import {
   useSourceMetaModals,
 } from "./SourceMetaModals";
 import { sourceIcon } from "@/lib/sourceIcon";
+import { thumbMemory } from "@/lib/thumbCache";
 import { GraphView } from "./GraphView";
 import {
   ArrowLeft,
@@ -48,10 +49,8 @@ const sweptNotebooks = new Set<string>();
 /* Scroll positions per notebook+level ride the persistent scrollMemory in
  * lib/utils — Reader round-trips AND relaunches come back to the same place. */
 
-/** Resolved card visuals (data URIs) per source id, so reopening the
- *  gallery paints instantly instead of re-running IPC + image fetches.
- *  "" = checked, none. The backend also disk-caches og downloads. */
-const thumbMemory = new Map<string, string>();
+/* Resolved card visuals ride lib/thumbCache's thumbMemory — shared so the
+ * reader's image picker can invalidate a card after a hand-pick. */
 
 /** At most this many thumbnail IPC calls in flight. Every mounted card used
  *  to fire its own immediately — a large gallery meant hundreds of parallel
