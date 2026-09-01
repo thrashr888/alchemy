@@ -35,8 +35,9 @@ Connection:
   app and its private local token through mcp.json. Override with --mcp-url
   and --mcp-token, or ALCHEMY_MCP_URL and ALCHEMY_MCP_TOKEN.
 
-Install from this checkout:
-  pnpm add --global ./cli
+Install:
+  brew install thrashr888/tap/alchemy-cli     (or, from a source checkout,
+  pnpm add --global ./cli)
 
 Examples:
   alchemy notebooks

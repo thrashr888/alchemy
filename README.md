@@ -209,11 +209,15 @@ two-host podcast voiced on-device.*
   ```bash
   npx skills add thrashr888/alchemy@alchemy
   ```
-- **Command line** — a thin, zero-dependency `alchemy` client talks to the
-  embedded MCP server in the running app; it does not open a second database
-  or start a headless Alchemy process. From a source checkout, install the
-  command once with `pnpm add --global ./cli`, then add files, URLs, or piped text
-  and search from any directory:
+- **Command line** — a thin `alchemy` client talks to the embedded MCP
+  server in the running app; it does not open a second database or start a
+  headless Alchemy process. Install it with [Homebrew](https://brew.sh):
+
+  ```bash
+  brew install thrashr888/tap/alchemy-cli
+  ```
+
+  Then add files, URLs, or piped text and search from any directory:
 
   ```bash
   alchemy notebooks
