@@ -146,6 +146,10 @@ export function ChatTab() {
   );
 }
 
+/** Mirrors ai::DEFAULT_ASSISTANT_NAME — the name a fresh install answers
+ *  to. An empty field turns the persona off. */
+const DEFAULT_ASSISTANT_NAME = "Alphonse";
+
 export function PersonalizationTab() {
   const aiConfig = useStore((state) => state.aiConfig);
   const save = useStore((state) => state.saveAiConfig);
@@ -153,11 +157,15 @@ export function PersonalizationTab() {
     name: "",
     profession: "",
     instructions: "",
-    assistantName: "",
+    assistantName: DEFAULT_ASSISTANT_NAME,
   });
 
   useEffect(() => {
-    if (aiConfig?.profile) setDraft({ ...aiConfig.profile, assistantName: aiConfig.profile.assistantName ?? "" });
+    if (aiConfig?.profile)
+      setDraft({
+        ...aiConfig.profile,
+        assistantName: aiConfig.profile.assistantName ?? DEFAULT_ASSISTANT_NAME,
+      });
     // Load once so a blur-save round trip cannot clobber in-progress typing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -168,13 +176,13 @@ export function PersonalizationTab() {
       name: "",
       profession: "",
       instructions: "",
-      assistantName: "",
+      assistantName: DEFAULT_ASSISTANT_NAME,
     };
     if (
       draft.name !== profile.name ||
       draft.profession !== profile.profession ||
       draft.instructions !== profile.instructions ||
-      draft.assistantName !== (profile.assistantName ?? "")
+      draft.assistantName !== (profile.assistantName ?? DEFAULT_ASSISTANT_NAME)
     ) {
       void save({ ...aiConfig, profile: { ...draft } });
     }
@@ -200,7 +208,7 @@ export function PersonalizationTab() {
         <Input
           name="profile-assistant-name"
           aria-label="What do you call the assistant?"
-          placeholder="Pip…"
+          placeholder="Alphonse…"
           value={draft.assistantName}
           onChange={(event) => setDraft({ ...draft, assistantName: event.target.value })}
           onBlur={saveOnBlur}

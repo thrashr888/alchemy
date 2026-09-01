@@ -185,7 +185,7 @@ fn default_hygiene_days() -> u32 {
     30
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct UserProfile {
     pub name: String,
@@ -193,8 +193,25 @@ pub struct UserProfile {
     /// Standing instructions, kept in mind across chats and generations.
     pub instructions: String,
     /// What the user calls the assistant. People name their agents and talk
-    /// to them like a friend; a named assistant answers as itself.
+    /// to them like a friend; a named assistant answers as itself. Empty
+    /// means no persona at all.
     pub assistant_name: String,
+}
+
+/// The assistant's name out of the box: Alphonse, the Elric brother who is
+/// all heart (Fullmetal Alchemist). Clearing the field turns the persona
+/// off.
+pub const DEFAULT_ASSISTANT_NAME: &str = "Alphonse";
+
+impl Default for UserProfile {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            profession: String::new(),
+            instructions: String::new(),
+            assistant_name: DEFAULT_ASSISTANT_NAME.to_string(),
+        }
+    }
 }
 
 fn default_provider() -> String {

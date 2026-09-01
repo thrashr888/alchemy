@@ -1147,11 +1147,16 @@ pub fn build_artifact_messages(instruction: &str, corpus: &str, persona: &str) -
 
 #[cfg(test)]
 mod tests {
-    /// A named assistant answers as itself; an unnamed one gets no persona
-    /// line at all, so the block stays empty for a blank profile.
+    /// A named assistant answers as itself — Alphonse out of the box — and
+    /// clearing the name turns the persona line off entirely.
     #[test]
     fn persona_block_names_the_assistant() {
         let mut profile = crate::ai::UserProfile::default();
+        assert!(
+            super::persona_block(&profile).contains("They call you Alphonse."),
+            "default profile names Alphonse"
+        );
+        profile.assistant_name = String::new();
         assert_eq!(super::persona_block(&profile), "");
         profile.assistant_name = " Pip ".into();
         let block = super::persona_block(&profile);
