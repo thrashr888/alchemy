@@ -996,23 +996,48 @@ and distilled in parallel, so one read of four sources is far faster than four r
 Guidance: break multi-part questions into several searches across turns. Prefer distinct queries that cover \
 different facets. Choose \"answer\" once the gathered excerpts can support a complete, grounded response.";
 
+/// Loop-position numbers for the planner's status line — the loop has
+/// always tracked these; the model just never saw them. `step` is 1-based;
+/// the read fields are chars.
+pub struct AgentStatus {
+    pub step: usize,
+    pub max_steps: usize,
+    pub read_used: usize,
+    pub read_budget: usize,
+}
+
 /// Build the planner prompt for one step of the agentic retrieval loop.
+///
+/// The status line (agent-status-bar pattern) tells the model where it is
+/// in the loop, so it can pace its remaining steps and knows the loop
+/// hard-stops rather than planning as if steps were unlimited.
 pub fn build_agent_decision(
     question: &str,
     source_list: &str,
     transcript: &str,
     gathered_count: usize,
+    status: &AgentStatus,
 ) -> Vec<ChatTurn> {
     let gathered = if transcript.trim().is_empty() {
         "(nothing yet)".to_string()
     } else {
         transcript.to_string()
     };
+    let AgentStatus {
+        step,
+        max_steps,
+        read_used,
+        read_budget,
+    } = status;
     vec![
         ChatTurn::system(AGENT_SYSTEM),
         ChatTurn::user(format!(
             "Question: {question}\n\nAvailable sources:\n{source_list}\n\n\
              Evidence gathered so far ({gathered_count} excerpts):\n{gathered}\n\n\
+             Status: step {step} of {max_steps}; read budget {read_used} of \
+             {read_budget} chars used. After step {max_steps} the loop stops and \
+             the answer is written from the evidence above — choose \
+             {{\"action\":\"answer\"}} sooner the moment it suffices.\n\n\
              Next action (one JSON object):"
         )),
     ]
@@ -1087,6 +1112,23 @@ mod tests {
             snippet: snippet.into(),
             distance: 0.0,
         }
+    }
+
+    /// The planner sees its own status: step position, read budget, and the
+    /// hard-stop warning, so it can pace the remaining steps.
+    #[test]
+    fn agent_decision_carries_status_line() {
+        let status = AgentStatus {
+            step: 3,
+            max_steps: 5,
+            read_used: 800,
+            read_budget: 12_000,
+        };
+        let messages = build_agent_decision("q?", "- Doc (id: s1, 3 chunks)", "", 0, &status);
+        let user = &messages[1].content;
+        assert!(user.contains("step 3 of 5"), "{user}");
+        assert!(user.contains("read budget 800 of 12000 chars"), "{user}");
+        assert!(user.contains("After step 5 the loop stops"), "{user}");
     }
 
     /// Lost-in-the-Middle ordering: strongest hits land first and last,

@@ -14,7 +14,7 @@ use crate::db::Db;
 use crate::models::Citation;
 use crate::rag;
 
-const MAX_STEPS: usize = 5;
+pub(crate) const MAX_STEPS: usize = 5;
 
 /// Which model role runs the loop's internal calls — planning, reranking,
 /// and per-source distillation.
@@ -149,13 +149,65 @@ pub async fn run(
     let mut seen: HashSet<String> = HashSet::new();
     let mut transcript = String::new();
 
-    for _ in 0..MAX_STEPS {
-        let messages =
-            rag::build_agent_decision(question, &source_list, &transcript, gathered.len());
+    // Run trace (docs/RFC-retrieval-maturity.md): every plan/search/read step
+    // lands in agent.jsonl under one run id, so a bad run can be replayed,
+    // its first wrong step named, and its shape turned into an eval fixture.
+    // chat://step events are ephemeral; this is the durable record.
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let t_run = std::time::Instant::now();
+    let trace = |record: serde_json::Value| {
+        if let Some(dir) = crate::trace::dir() {
+            let mut record = record;
+            if let Some(obj) = record.as_object_mut() {
+                obj.insert("ts".into(), chrono::Utc::now().timestamp_millis().into());
+                obj.insert("run".into(), run_id.clone().into());
+            }
+            crate::trace::log_file(dir, "agent.jsonl", record);
+        }
+    };
+    let read_budget_total = read_remaining;
+    trace(serde_json::json!({
+        "event": "start",
+        "notebookId": notebook_id,
+        "question": question,
+        "sources": sources.len(),
+        "scoped": source_ids.is_some(),
+        "readBudget": read_budget_total,
+    }));
+
+    for step0 in 0..MAX_STEPS {
+        let step = step0 + 1;
+        let messages = rag::build_agent_decision(
+            question,
+            &source_list,
+            &transcript,
+            gathered.len(),
+            &rag::AgentStatus {
+                step,
+                max_steps: MAX_STEPS,
+                read_used: read_budget_total - read_remaining,
+                read_budget: read_budget_total,
+            },
+        );
         let planned = std::time::Instant::now();
         let raw = ollama.chat_role(loop_role(), &messages).await?.text;
-        phases.planner(planned.elapsed().as_millis() as u64);
-        match parse_action(&raw) {
+        let planner_ms = planned.elapsed().as_millis() as u64;
+        phases.planner(planner_ms);
+        let action = parse_action(&raw);
+        trace(serde_json::json!({
+            "event": "plan",
+            "step": step,
+            "ms": planner_ms,
+            "action": match &action {
+                Some(Action::Search(q)) => serde_json::json!({ "search": q }),
+                Some(Action::Read(ids)) => serde_json::json!({ "read": ids }),
+                Some(Action::Stop) => serde_json::json!("answer"),
+                // The raw output only when it didn't parse — that's the case
+                // replay and repair work need to see.
+                None => serde_json::json!({ "unparseable": truncate(&raw, 400) }),
+            },
+        }));
+        match action {
             Some(Action::Search(query)) => {
                 let searched = std::time::Instant::now();
                 emit_step(app, format!("Searching: {query}"));
@@ -166,6 +218,7 @@ pub async fn run(
                 // Retrieve wide, then let the model pick the few passages that
                 // actually answer — recall from hybrid search, precision from
                 // the rerank.
+                let pool = hits.len();
                 if hits.len() > SEARCH_K {
                     emit_step(app, "Ranking results".into());
                     // The local cross-encoder when there is one: measured
@@ -182,6 +235,7 @@ pub async fn run(
                     hits = rerank_for_search(ollama, &query, hits).await;
                 }
                 transcript.push_str(&format!("SEARCH \"{query}\":\n"));
+                let before = gathered.len();
                 for h in &hits {
                     if seen.insert(h.chunk_id.clone()) {
                         gathered.push(h.clone());
@@ -193,7 +247,17 @@ pub async fn run(
                     ));
                 }
                 transcript.push('\n');
-                phases.search(searched.elapsed().as_millis() as u64);
+                let search_ms = searched.elapsed().as_millis() as u64;
+                trace(serde_json::json!({
+                    "event": "search",
+                    "step": step,
+                    "query": query,
+                    "pool": pool,
+                    "kept": hits.len(),
+                    "new": gathered.len() - before,
+                    "ms": search_ms,
+                }));
+                phases.search(search_ms);
             }
             Some(Action::Read(source_ids)) => {
                 let readed = std::time::Instant::now();
@@ -238,8 +302,14 @@ pub async fn run(
                     .buffered(DISTILL_CONCURRENCY)
                     .collect()
                     .await;
+                let mut read_log: Vec<serde_json::Value> = Vec::new();
                 for (source_id, title, evidence) in distilled {
                     transcript.push_str(&format!("READ \"{title}\":\n{evidence}\n\n"));
+                    read_log.push(serde_json::json!({
+                        "sourceId": source_id,
+                        "title": title,
+                        "evidenceChars": evidence.chars().count(),
+                    }));
                     let read_id = format!("read:{source_id}");
                     if seen.insert(read_id.clone()) {
                         gathered.push(Citation {
@@ -256,7 +326,15 @@ pub async fn run(
                         });
                     }
                 }
-                phases.read(readed.elapsed().as_millis() as u64);
+                let read_ms = readed.elapsed().as_millis() as u64;
+                trace(serde_json::json!({
+                    "event": "read",
+                    "step": step,
+                    "sources": read_log,
+                    "readBudgetLeft": read_remaining,
+                    "ms": read_ms,
+                }));
+                phases.read(read_ms);
             }
             Some(Action::Stop) | None => break,
         }
@@ -270,7 +348,16 @@ pub async fn run(
         gathered = db
             .search_chunks(notebook_id, qvec, question, 8, source_ids)
             .await?;
+        trace(serde_json::json!({
+            "event": "fallback_search",
+            "kept": gathered.len(),
+        }));
     }
+    trace(serde_json::json!({
+        "event": "answer",
+        "citations": crate::trace::cite_summaries(&gathered),
+        "msToAnswer": t_run.elapsed().as_millis() as u64,
+    }));
 
     emit_step(app, "Writing answer".into());
     let source_manifest: Vec<(String, String, String)> = sources
