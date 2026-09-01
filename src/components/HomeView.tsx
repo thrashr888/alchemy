@@ -61,26 +61,14 @@ import {
   HomeThreadsSidebar,
   useHomeChat,
 } from "./HomeChat";
-import { NOTEBOOK_ICONS, notebookIcon } from "@/lib/notebookIcons";
+import { NOTEBOOK_PALETTE, notebookIcon } from "@/lib/notebookIcons";
+import { NotebookEditModal } from "./NotebookEditModal";
 import { RegistrySection } from "./RegistrySection";
 import {
   HomeTable,
   HomeViewControls,
   matchesHomeQuery,
 } from "./HomeViewControls";
-
-// Keep this list in sync with Rust in `src-tauri/src/db.rs` (`NOTEBOOK_PALETTE`)
-// and the `set_notebook_color` validator in `src-tauri/src/commands.rs`.
-const NOTEBOOK_PALETTE = [
-  "#eb5757",
-  "#e8a33d",
-  "#4cb782",
-  "#5e9bd2",
-  "#9b87f5",
-  "#e274b6",
-  "#4fc1c9",
-  "#98a562",
-];
 
 const clampSplit = (pct: number) => Math.min(75, Math.max(15, pct));
 
@@ -157,7 +145,6 @@ function NotebookTable({
   pickedIds,
   onRowClick,
   onRowOpen,
-  colorPop,
 }: {
   notebooks: Notebook[];
   onNew: () => void;
@@ -170,9 +157,6 @@ function NotebookTable({
   /** Keyboard path: Tab reaches each row, Enter opens it (bypassing the
    *  pointer-only selection logic in onRowClick). */
   onRowOpen: (nb: Notebook) => void;
-  /** The color palette pop-over ("Change color…" in the row menu) — rendered
-   *  by the host so the table shares the grid's dismissal wiring. */
-  colorPop: (nb: Notebook) => React.ReactNode;
 }) {
   return (
     <>
@@ -204,7 +188,6 @@ function NotebookTable({
             )}
           >
             <td className="relative px-3 py-2">
-              {colorPop(nb)}
               <span className="flex items-center gap-2">
                 {(() => {
                   const Icon = notebookIcon(nb.icon);
@@ -316,8 +299,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const notebooksFailed = useStore((s) => s.notebooksFailed);
   const open = useStore((s) => s.selectNotebook);
   const create = useStore((s) => s.createNotebook);
-  const rename = useStore((s) => s.renameNotebook);
-  const setColor = useStore((s) => s.setNotebookColor);
   const remove = useStore((s) => s.deleteNotebook);
   const setStatus = useStore((s) => s.setNotebookStatus);
   const theme = useStore((s) => s.theme);
@@ -332,12 +313,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const shownIdsRef = useRef<string[]>([]);
   const [creating, setCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
-  const [renaming, setRenaming] = useState<{
-    id: string;
-    title: string;
-    icon: string;
-  } | null>(null);
-  const [colorPickerFor, setColorPickerFor] = useState<string | null>(null);
+  const [editing, setEditing] = useState<Notebook | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);
   // "system" notebooks (Briefs) are working infrastructure, not shelf items.
   const activeNotebooks = notebooks.filter((n) => !n.status);
@@ -538,26 +514,11 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const notebookRowItems = (nb: Notebook): RowMenuItem[] => [
 
     {
+      // Name, icon, AND color — the edit dialog owns the notebook's look,
+      // so color no longer needs its own pop-over or menu entry.
       label: "Rename",
       icon: <Pencil className="h-3.5 w-3.5" />,
-      onClick: () =>
-        setRenaming({
-          id: nb.id,
-          title: nb.title,
-          icon: nb.icon,
-        }),
-    },
-    // Right-click parity: color was hover-swatch-only (cards) and export was
-    // palette-only — both belong on the object's one menu.
-    {
-      label: "Change color…",
-      icon: (
-        <span
-          className="block h-3.5 w-3.5 rounded-full border border-border"
-          style={{ backgroundColor: nb.color || NOTEBOOK_PALETTE[0] }}
-        />
-      ),
-      onClick: () => setColorPickerFor(nb.id),
+      onClick: () => setEditing(nb),
     },
     {
       label: "Export notebook…",
@@ -704,69 +665,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     }
   }
   const totalUnread = [...unreadByNb.values()].reduce((a, b) => a + b, 0);
-
-  // Palette popup stays local to one card and closes on outside interaction or Escape.
-  useEffect(() => {
-    if (!colorPickerFor) return;
-    const onPointerDown = (e: PointerEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (
-        t &&
-        (t.closest("[data-notebook-color-trigger]") ||
-          t.closest("[data-notebook-color-palette]"))
-      ) {
-        return;
-      }
-      setColorPickerFor(null);
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setColorPickerFor(null);
-    };
-    window.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [colorPickerFor]);
-
-  const onPickColor = (notebookId: string, color: string) => {
-    setColorPickerFor(null);
-    setColor(notebookId, color);
-  };
-
-  /** The color palette pop-over, positioned by the host (card corner or
-   *  table row). One markup: the outside-click/Escape dismissal keys off
-   *  its data attribute, so it works wherever it renders. */
-  const colorPalettePop = (nb: Notebook, className: string) =>
-    colorPickerFor === nb.id ? (
-      <div
-        onClick={(e) => e.stopPropagation()}
-        onPointerDown={(e) => e.stopPropagation()}
-        data-notebook-color-palette
-        className={cn(
-          "menu-glass absolute z-30 flex rounded-md border border-border px-2 py-1.5 shadow-sm",
-          className,
-        )}
-      >
-        {NOTEBOOK_PALETTE.map((c) => (
-          <button
-            key={c}
-            type="button"
-            onClick={() => onPickColor(nb.id, c)}
-            onPointerDown={(e) => e.stopPropagation()}
-            aria-label={`Set ${nb.title} color to ${c}`}
-            className={cn(
-              "m-0.5 h-5 w-5 rounded-full border border-border",
-              c === (nb.color || NOTEBOOK_PALETTE[0])
-                ? "ring-2 ring-foreground ring-offset-1 ring-offset-surface"
-                : "",
-            )}
-            style={{ backgroundColor: c }}
-          />
-        ))}
-      </div>
-    ) : null;
 
   function openNote(note: Note) {
     // StudioPanel auto-opens this id once the notebook's notes load.
@@ -1265,7 +1163,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                     if (!pick.handleClick(e, nb.id)) open(nb.id);
                   }}
                   onRowOpen={(nb) => open(nb.id)}
-                  colorPop={(nb) => colorPalettePop(nb, "left-8 top-8")}
                   rowMenu={(nb) => (
                     <RowMenu
                       label={`Options for ${nb.title}`}
@@ -1336,26 +1233,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                     </div>
 
                     <div className="absolute right-2 top-2 z-20 flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
-                      <button
-                        type="button"
-                        className="rounded p-1 text-muted-foreground transition hover:bg-elevated"
-                        style={{
-                          backgroundColor: nb.color || NOTEBOOK_PALETTE[0],
-                        }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setColorPickerFor((cur) =>
-                            cur === nb.id ? null : nb.id,
-                          );
-                        }}
-                        onPointerDown={(e) => e.stopPropagation()}
-                        data-notebook-color-trigger
-                        aria-expanded={colorPickerFor === nb.id}
-                        aria-label={`Change color for ${nb.title}`}
-                        title="Change notebook color"
-                      >
-                        <span className="relative block h-3 w-3 rounded-full border border-background" />
-                      </button>
                       <RowMenu
                         label={`Options for ${nb.title}`}
                         contextItems={() =>
@@ -1364,7 +1241,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                         items={notebookRowItems(nb)}
                       />
                     </div>
-                    {colorPalettePop(nb, "right-2 top-10")}
                   </div>
                 ))}
               </div>
@@ -1655,85 +1531,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       {marquee}
       {confirmDialog}
 
-      <Modal
-        open={!!renaming}
-        onClose={() => setRenaming(null)}
-        title="Edit notebook"
-      >
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (renaming) {
-              const r = renaming;
-              const before = notebooks.find((n) => n.id === r.id);
-              // Icon first, sequenced: rename() ends with a full refresh,
-              // and firing both unordered let that refresh read the DB
-              // before the icon write landed — reverting the optimistic
-              // icon until some later refresh ("shows up two edits later").
-              void (async () => {
-                if (before && before.icon !== r.icon)
-                  await useStore.getState().setNotebookIcon(r.id, r.icon);
-                if (before && before.title !== r.title)
-                  await rename(r.id, r.title);
-              })();
-            }
-            setRenaming(null);
-          }}
-          className={cn("flex flex-col gap-3")}
-        >
-          <Input
-            autoFocus
-            name="notebook-title"
-            aria-label="Notebook title"
-            value={renaming?.title ?? ""}
-            onChange={(e) =>
-              setRenaming((r) => (r ? { ...r, title: e.target.value } : r))
-            }
-          />
-          {/* Icon picker: the auto-picked icon can always be overridden
-              here; the plain book is a first-class choice, not an absence. */}
-          <div className="grid grid-cols-8 gap-1">
-            {["", ...Object.keys(NOTEBOOK_ICONS).filter((k) => k !== "book-open")].map(
-              (name) => {
-                const Icon = notebookIcon(name);
-                const active = (renaming?.icon ?? "") === name;
-                return (
-                  <button
-                    key={name || "default"}
-                    type="button"
-                    aria-pressed={active}
-                    aria-label={name ? `Icon: ${name.replace(/-/g, " ")}` : "Default icon"}
-                    title={name ? name.replace(/-/g, " ") : "Default"}
-                    onClick={() =>
-                      setRenaming((r) => (r ? { ...r, icon: name } : r))
-                    }
-                    className={cn(
-                      "flex h-8 items-center justify-center rounded-md border transition-colors",
-                      active
-                        ? "border-primary/60 bg-primary/10 text-foreground"
-                        : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    <Icon className="h-4 w-4" />
-                  </button>
-                );
-              },
-            )}
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => setRenaming(null)}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" variant="primary">
-              Save
-            </Button>
-          </div>
-        </form>
-      </Modal>
+      <NotebookEditModal notebook={editing} onClose={() => setEditing(null)} />
     </div>
   );
 }

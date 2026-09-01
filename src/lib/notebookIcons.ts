@@ -93,3 +93,16 @@ export const NOTEBOOK_ICONS: Record<string, LucideIcon> = {
 export function notebookIcon(name: string | undefined): LucideIcon {
   return (name && NOTEBOOK_ICONS[name]) || BookOpen;
 }
+
+// Keep this list in sync with Rust in `src-tauri/src/db.rs` (`NOTEBOOK_PALETTE`)
+// and the `set_notebook_color` validator in `src-tauri/src/commands.rs`.
+export const NOTEBOOK_PALETTE = [
+  "#eb5757",
+  "#e8a33d",
+  "#4cb782",
+  "#5e9bd2",
+  "#9b87f5",
+  "#e274b6",
+  "#4fc1c9",
+  "#98a562",
+];
