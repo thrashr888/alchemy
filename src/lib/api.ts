@@ -223,6 +223,14 @@ export const api = {
    *  annotation for retrieval, hence the ai budget. */
   setSourceNote: (sourceId: string, note: string) =>
     run(ai<Source>("set_source_note", { sourceId, note })),
+  /** Candidate lead images scraped live from a URL source's page, for the
+   *  reader's manual picker. */
+  sourceImageCandidates: (sourceId: string) =>
+    run(slow<string[]>("source_image_candidates", { sourceId })),
+  /** Hand-pick a URL source's gallery card image ("-" = none, "" = let the
+   *  backfill auto-pick again). Returns the updated source, content stripped. */
+  setSourceImage: (sourceId: string, imageUrl: string) =>
+    run(cmd<Source>("set_source_image", { sourceId, imageUrl })),
   refreshSourceUrl: (sourceId: string) =>
     run(ai<Source>("refresh_source_url", { sourceId })),
   /** Batch refresh (RFC-multi-select): returns immediately; the backend

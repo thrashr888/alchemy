@@ -133,6 +133,15 @@ struct SetNoteReq {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+struct SetImageReq {
+    /// Source id (from list_sources); must be a URL source.
+    source_id: String,
+    /// Web URL of the image to show on the source's gallery card, "-" to
+    /// show none, or "" to forget the pick and let the backfill auto-pick.
+    image_url: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 struct ActivityReq {
     /// Look-back window in hours (default 24, capped to the 30-day event
     /// window the table keeps).
@@ -385,6 +394,24 @@ impl AlchemyMcp {
     ) -> Result<CallToolResult, McpError> {
         let state = self.state();
         let source = commands::set_source_note_impl(&state, &source_id, &note)
+            .await
+            .map_err(internal)?;
+        self.changed("sources", Some(&source.notebook_id));
+        json_result(&source)
+    }
+
+    #[tool(
+        description = "Set a URL source's gallery card image by hand — the ingest-time og:image pick misses some pages. image_url is a web image URL, \"-\" for none, or \"\" to forget the pick so the backfill can auto-pick again. Returns the updated source."
+    )]
+    async fn set_source_image(
+        &self,
+        Parameters(SetImageReq {
+            source_id,
+            image_url,
+        }): Parameters<SetImageReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let source = commands::set_source_image_impl(&state, &source_id, &image_url)
             .await
             .map_err(internal)?;
         self.changed("sources", Some(&source.notebook_id));

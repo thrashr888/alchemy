@@ -2735,6 +2735,65 @@ pub(crate) async fn set_source_tags_impl(
     })
 }
 
+/// Candidate lead images for a URL source, for the reader's manual picker
+/// (docs: the ingest-time og:image pick misses some pages): fetch the live
+/// page once and return its meta images plus body `<img>` sources.
+#[tauri::command]
+pub async fn source_image_candidates(
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<Vec<String>, String> {
+    let src =
+        e(state.db.get_source(&source_id).await)?.ok_or_else(|| "Source not found".to_string())?;
+    if !is_web_url(&src.url) {
+        return Err("Only web sources have page images".into());
+    }
+    let bytes = ingest::fetch_bytes(&src.url, 4 * 1024 * 1024)
+        .await
+        .ok_or_else(|| "Couldn't fetch the page".to_string())?;
+    let html = String::from_utf8_lossy(&bytes);
+    Ok(ingest::page_images(&html, &src.url))
+}
+
+/// Hand-pick a URL source's gallery lead image ("-" = show none, "" = back
+/// to unknown so the backfill may auto-pick again). Shared by the Tauri
+/// command and the MCP tool. Clears the cached og bytes so the next
+/// thumbnail render fetches the new pick.
+pub(crate) async fn set_source_image_impl(
+    state: &AppState,
+    source_id: &str,
+    image_url: &str,
+) -> anyhow::Result<Source> {
+    let existing = state
+        .db
+        .get_source(source_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Source not found"))?;
+    if existing.source_type != "url" {
+        anyhow::bail!("Only URL sources carry a gallery image");
+    }
+    let image_url = image_url.trim();
+    if !image_url.is_empty() && image_url != "-" && !is_web_url(image_url) {
+        anyhow::bail!("image_url must be a web URL, \"-\" for none, or empty to re-auto-pick");
+    }
+    state.db.set_source_image(source_id, image_url).await?;
+    let _ = std::fs::remove_file(og_cache_path(state, source_id));
+    Ok(Source {
+        image_url: image_url.to_string(),
+        content: String::new(),
+        ..existing
+    })
+}
+
+#[tauri::command]
+pub async fn set_source_image(
+    state: State<'_, AppState>,
+    source_id: String,
+    image_url: String,
+) -> Result<Source, String> {
+    e(set_source_image_impl(&state, &source_id, &image_url).await)
+}
+
 /// Store the user's annotation on a source and (re)index it under
 /// `snote:<source_id>` so retrieval can surface "why I saved this"
 /// (docs/RFC-source-tags.md). Empty note = clear both row field and index.
