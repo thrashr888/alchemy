@@ -758,6 +758,13 @@ pub fn refresh_installed_connectors(app: &AppHandle, port: u16) {
             if matches!(strategy, Strategy::Manual { .. }) {
                 continue;
             }
+            // Rewrite only when stale: these are live client configs
+            // (Claude Code rewrites ~/.claude.json constantly), and an
+            // unconditional read-modify-write on every boot would race
+            // their own writes for no gain.
+            if strategy_configured(&home, strategy, port, &token) {
+                continue;
+            }
             if let Err(err) = strategy_apply(&home, strategy, port, &token) {
                 crate::diagnostics::error(
                     "connectors",
