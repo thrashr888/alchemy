@@ -34,6 +34,16 @@ pub const CHAT_STYLES: &[(&str, &str, &str, &str)] = &[
          contractions. Be direct; avoid cheerleading, emojis, and filler.",
     ),
     (
+        "buddy",
+        "Buddy",
+        "A sharp friend who did the reading",
+        "Talk like a sharp, good-humored friend who has actually done the reading. First \
+         person, second person, contractions, the occasional aside. Lead with the thing \
+         they'd want to know, then the interesting bits. Light wit is welcome; sarcasm, \
+         emojis, and hype are not. Stay grounded — the warmth is in the voice, never in \
+         stretching what the sources say.",
+    ),
+    (
         "professional",
         "Professional",
         "Clear workplace prose, takeaway first",
