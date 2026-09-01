@@ -982,6 +982,8 @@ export function RowMenu({
   alwaysVisible = false,
   trigger,
   triggerClassName,
+  contextAt,
+  rowContext,
 }: {
   items: RowMenuItem[];
   label?: string;
@@ -1005,6 +1007,13 @@ export function RowMenu({
   trigger?: React.ReactNode;
   /** Classes for the trigger button when `trigger` supplies its own look. */
   triggerClassName?: string;
+  /** Open at these viewport coordinates whenever a new `nonce` arrives —
+   *  for hosts whose rows aren't DOM rows (graph nodes in an SVG) and so
+   *  can't use the `.group` right-click path. */
+  contextAt?: { x: number; y: number; nonce: number } | null;
+  /** Bind right-click on the nearest `.group` row (default). Off for a
+   *  menu that floats over a surface with its own right-click handling. */
+  rowContext?: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef<HTMLDivElement>(null);
@@ -1082,6 +1091,7 @@ export function RowMenu({
   // opens the same menu as the ⋯ trigger, replacing the webview's own
   // context menu on rows.
   React.useEffect(() => {
+    if (rowContext === false) return;
     const row = ref.current?.closest(".group");
     if (!(row instanceof HTMLElement)) return;
     const onContextMenu = (e: MouseEvent) => {
@@ -1094,6 +1104,15 @@ export function RowMenu({
     row.addEventListener("contextmenu", onContextMenu);
     return () => row.removeEventListener("contextmenu", onContextMenu);
   }, []);
+
+  // A host-driven open (graph nodes): a fresh nonce means a fresh
+  // right-click, even at the same spot.
+  React.useEffect(() => {
+    if (!contextAt) return;
+    setSwapItems(null);
+    setCtxPos({ x: contextAt.x, y: contextAt.y });
+    setOpen(true);
+  }, [contextAt]);
 
   // One notification point for every way the menu opens (button, context
   // menu, keyboard).

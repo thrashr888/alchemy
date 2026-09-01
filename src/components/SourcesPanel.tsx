@@ -5,9 +5,6 @@ import { api } from "@/lib/api";
 import {
   Badge,
   Button,
-  Input,
-  Textarea,
-  Modal,
   EmptyState,
   LoadingState,
   ResizeHandle,
@@ -30,12 +27,7 @@ import {
 } from "@/lib/utils";
 import { sourceIcon } from "@/lib/sourceIcon";
 import { HYGIENE_LABEL, loadHygieneKept } from "@/lib/growth";
-import { AttachToCardModal } from "./RegistrySection";
-import {
-  SourceMetaModals,
-  sourceMetaItems,
-  sourceOriginItems,
-} from "./SourceMetaModals";
+import { useSourceActions } from "./SourceMenu";
 import type { GrowthProposal, Source } from "@/lib/types";
 import {
   ChevronRight,
@@ -49,11 +41,8 @@ import {
   Check,
   AlertCircle,
   X,
-  Pencil,
   RefreshCw,
   Cloud,
-  MessageSquare,
-  Package,
   Search,
   Sprout,
   Tag,
@@ -251,17 +240,12 @@ export function SourcesPanel() {
   const clearQueueItem = useStore((s) => s.clearQueueItem);
   const openAddSource = useStore((s) => s.openAddSource);
   const folderScan = useStore((s) => s.folderScan);
-  const editSourceText = useStore((s) => s.editSourceText);
-  const updateMacNote = useStore((s) => s.updateMacNote);
-  const addMacReminder = useStore((s) => s.addMacReminder);
-  const refreshSource = useStore((s) => s.refreshSource);
   const draggingFiles = useStore((s) => s.draggingFiles);
   const toggleSources = useStore((s) => s.toggleSources);
   const openSourceViewer = useStore((s) => s.openSourceViewer);
   const selectedSourceIds = useStore((s) => s.selectedSourceIds);
   const toggleSourceSelected = useStore((s) => s.toggleSourceSelected);
   const setAllSourcesSelected = useStore((s) => s.setAllSourcesSelected);
-  const askAboutSource = useStore((s) => s.askAboutSource);
   const picked = useStore((s) => s.picked);
   const pickOne = useStore((s) => s.pickOne);
   const pickToggle = useStore((s) => s.pickToggle);
@@ -273,49 +257,10 @@ export function SourcesPanel() {
   const refreshHygiene = useStore((s) => s.refreshHygiene);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
-  const [editing, setEditing] = useState<{
-    id: string;
-    title: string;
-    text: string;
-    /** Editing the Apple Note itself — save writes back through cider. */
-    macNote?: boolean;
-  } | null>(null);
-  const [addingReminder, setAddingReminder] = useState<{
-    sourceId: string;
-    list: string;
-  } | null>(null);
-  // Inline metadata editors (RFC-source-tags): tags as one input line,
-  // the annotation as a small textarea — same modal idiom as Edit source.
-  // `ids` carries one id for the row menu, several for the multi-select
-  // batch verb (RFC-multi-select).
-  const [tagEdit, setTagEdit] = useState<{
-    ids: string[];
-    title: string;
-    value: string;
-  } | null>(null);
-  const [noteEdit, setNoteEdit] = useState<{
-    id: string;
-    title: string;
-    value: string;
-  } | null>(null);
-  /** Source being filed under a registry card (RFC-registry §2). */
-  const [attaching, setAttaching] = useState<{
-    id: string;
-    title: string;
-  } | null>(null);
-
-  async function startEdit(s: Source) {
-    // List payloads omit content; fetch the full text to prefill the editor.
-    const content = await api.getSourceContent(s.id);
-    setEditing({ id: s.id, title: s.title, text: content });
-  }
-
-  async function startEditMacNote(s: Source) {
-    // The real note body (first line is the title — Notes derives the visible
-    // title from it), not our rendered markdown copy.
-    const body = await api.macNoteBody(s.id);
-    setEditing({ id: s.id, title: s.title, text: body, macNote: true });
-  }
+  // One source, one menu: the row verbs and every modal they open come
+  // from the shared source actions (SourceMenu.tsx).
+  const actions = useSourceActions();
+  const { setTagEdit } = actions;
 
   const { show: showCard, hide: hideCard, card: hoverCard } = useHoverCard("right");
   const sourceCard = sourceHoverData;
@@ -1065,10 +1010,6 @@ export function SourcesPanel() {
                 }
                 const { s, indent } = row;
                 const isFolder = FOLDER_TYPES.includes(s.sourceType);
-                const isMacNote = s.url.startsWith("cider://notes/note/");
-                const isMacReminders = s.url.startsWith(
-                  "cider://reminders/list/",
-                );
                 // A folder inserted optimistically while its children embed:
                 // shown right away with a loading affordance, not yet openable.
                 const importing = isFolder && importingFolders.includes(s.id);
@@ -1229,100 +1170,7 @@ export function SourcesPanel() {
                               pickOne("sources", s.id);
                               return null;
                             }}
-                            items={[
-                              // Chat scoped to this one source (a folder
-                              // scopes to its files); placeholders have no
-                              // chunks yet, so there's nothing to ask.
-                              ...(s.status === "ready" &&
-                              (!isFolder ||
-                                kids.some((k) => k.status === "ready"))
-                                ? [
-                                    {
-                                      label: "Ask about this source",
-                                      icon: (
-                                        <MessageSquare className="h-3.5 w-3.5" />
-                                      ),
-                                      onClick: () => askAboutSource(s.id),
-                                    },
-                                  ]
-                                : []),
-                              // url holds the origin: a web URL, an on-disk path, or
-                              // a folder — any of them can be refreshed.
-                              ...(s.url
-                                ? [
-                                    {
-                                      label: isFolder
-                                        ? "Rescan folder now"
-                                        : s.sourceType === "mac"
-                                          ? "Sync now"
-                                          : s.status === "placeholder"
-                                            ? "Download & embed"
-                                            : isWebUrl(s.url)
-                                              ? "Refresh from URL"
-                                              : "Refresh from file",
-                                      icon: (
-                                        <RefreshCw className="h-3.5 w-3.5" />
-                                      ),
-                                      onClick: () => void refreshSource(s.id),
-                                    },
-                                  ]
-                                : []),
-                              // Mac sources are mirrors — editing our copy would
-                              // just be overwritten, so writes go to the app
-                              // itself and sync back.
-                              ...(isMacNote
-                                ? [
-                                    {
-                                      label: "Edit note",
-                                      icon: <Pencil className="h-3.5 w-3.5" />,
-                                      onClick: () => void startEditMacNote(s),
-                                    },
-                                  ]
-                                : []),
-                              ...(isMacReminders
-                                ? [
-                                    {
-                                      label: "Add reminder…",
-                                      icon: <Plus className="h-3.5 w-3.5" />,
-                                      onClick: () =>
-                                        setAddingReminder({
-                                          sourceId: s.id,
-                                          list: s.title,
-                                        }),
-                                    },
-                                  ]
-                                : []),
-                              ...(s.sourceType !== "url" &&
-                              s.sourceType !== "mac" &&
-                              !isFolder &&
-                              s.status !== "placeholder"
-                                ? [
-                                    {
-                                      label: "Edit text",
-                                      icon: <Pencil className="h-3.5 w-3.5" />,
-                                      onClick: () => void startEdit(s),
-                                    },
-                                  ]
-                                : []),
-                              // Origin trio + tags/note come from the shared
-                              // builders, so this menu, the gallery's, and
-                              // the reader's stay one list per object.
-                              ...sourceOriginItems(s),
-                              ...sourceMetaItems(s, setTagEdit, setNoteEdit),
-                              {
-                                label: "File under a card…",
-                                icon: <Package className="h-3.5 w-3.5" />,
-                                onClick: () =>
-                                  setAttaching({ id: s.id, title: s.title }),
-                              },
-                              {
-                                label: "Remove",
-                                icon: <Trash2 className="h-3.5 w-3.5" />,
-                                danger: true,
-                                onClick: () =>
-                                  void removeSourcesGuarded([s.id], confirm),
-                              },
-                            ]}
+                            items={actions.items(s)}
                           />
                         )}
                       </div>
@@ -1407,102 +1255,7 @@ export function SourcesPanel() {
         )}
       </div>
 
-      <Modal
-        open={!!editing}
-        onClose={() => setEditing(null)}
-        title={editing?.macNote ? "Edit Apple Note" : "Edit source"}
-        width="max-w-lg"
-      >
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            if (!editing) return;
-            const { id, title, text, macNote } = editing;
-            setEditing(null);
-            if (macNote) await updateMacNote(id, text);
-            else await editSourceText(id, title, text);
-          }}
-          className="flex flex-col gap-3"
-        >
-          {/* The note's title IS its first line — no separate title field. */}
-          {!editing?.macNote && (
-            <Input
-              autoFocus
-              name="source-title"
-              aria-label="Source title"
-              placeholder="Title"
-              value={editing?.title ?? ""}
-              onChange={(e) =>
-                setEditing((s) => (s ? { ...s, title: e.target.value } : s))
-              }
-            />
-          )}
-          <Textarea
-            autoFocus={editing?.macNote}
-            rows={12}
-            name="source-text"
-            aria-label={editing?.macNote ? "Apple Note text" : "Source text"}
-            placeholder="Source text…"
-            value={editing?.text ?? ""}
-            onChange={(e) =>
-              setEditing((s) => (s ? { ...s, text: e.target.value } : s))
-            }
-          />
-          {editing?.macNote && (
-            <p className="text-micro leading-relaxed text-subtle-foreground">
-              Saves straight into Apple Notes — the first line is the note's
-              title.
-            </p>
-          )}
-          <div className="flex justify-end gap-2">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => setEditing(null)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              variant="primary"
-              disabled={!editing?.text.trim()}
-            >
-              {editing?.macNote ? "Save to Apple Notes" : "Save"}
-            </Button>
-          </div>
-        </form>
-      </Modal>
-
-      <Modal
-        open={!!addingReminder}
-        onClose={() => setAddingReminder(null)}
-        title={`Add reminder to "${addingReminder?.list ?? ""}"`}
-        width="max-w-md"
-      >
-        <AddReminderForm
-          key={addingReminder?.sourceId ?? "none"}
-          onSubmit={async (title, notes) => {
-            if (!addingReminder) return;
-            const { sourceId } = addingReminder;
-            setAddingReminder(null);
-            await addMacReminder(sourceId, title, notes);
-          }}
-          onCancel={() => setAddingReminder(null)}
-        />
-      </Modal>
-
-      <AttachToCardModal
-        sourceId={attaching?.id ?? null}
-        sourceTitle={attaching?.title ?? ""}
-        onClose={() => setAttaching(null)}
-      />
-
-      <SourceMetaModals
-        tagEdit={tagEdit}
-        setTagEdit={setTagEdit}
-        noteEdit={noteEdit}
-        setNoteEdit={setNoteEdit}
-      />
+      {actions.modals}
 
       {marquee}
       {confirmDialog}
@@ -1511,48 +1264,3 @@ export function SourcesPanel() {
   );
 }
 
-/** Title + optional notes for a new reminder in a connected list. */
-function AddReminderForm({
-  onSubmit,
-  onCancel,
-}: {
-  onSubmit: (title: string, notes?: string) => void;
-  onCancel: () => void;
-}) {
-  const [title, setTitle] = useState("");
-  const [notes, setNotes] = useState("");
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (title.trim()) onSubmit(title.trim(), notes.trim() || undefined);
-      }}
-      className="flex flex-col gap-3"
-    >
-      <Input
-        autoFocus
-        name="reminder-title"
-        aria-label="Reminder title"
-        placeholder="Remind me to…"
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-      />
-      <Textarea
-        rows={3}
-        name="reminder-notes"
-        aria-label="Reminder notes"
-        placeholder="Notes (optional)"
-        value={notes}
-        onChange={(e) => setNotes(e.target.value)}
-      />
-      <div className="flex justify-end gap-2">
-        <Button type="button" variant="ghost" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button type="submit" variant="primary" disabled={!title.trim()}>
-          Add reminder
-        </Button>
-      </div>
-    </form>
-  );
-}

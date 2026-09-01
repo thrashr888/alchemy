@@ -6,10 +6,12 @@ import {
   Button,
   CardAction,
   LiveRegion,
+  RowMenu,
   StepTrail,
   Textarea,
   useConfirm,
 } from "./ui";
+import { useSourceActions } from "./SourceMenu";
 import { Markdown } from "./Markdown";
 import { cn, chatReadingClass, fmtDateTime, isWebUrl, relativeTime } from "@/lib/utils";
 import { AgentPane } from "./AgentPane";
@@ -1845,6 +1847,9 @@ export function CitationsToggle({
 function Citations({ citations }: { citations: Citation[] }) {
   const [open, setOpen] = useState(false);
   const sources = useStore((s) => s.sources);
+  // The same source menu as everywhere else, on the citation card.
+  const actions = useSourceActions();
+  const srcOf = (id: string) => sources.find((s) => s.id === id);
   // Only web origins get the open-in-browser chip; file paths live in the
   // same field but belong to the source reader's "Show in Finder".
   const urlOf = (sourceId: string) => {
@@ -1864,7 +1869,7 @@ function Citations({ citations }: { citations: Citation[] }) {
             <div
               key={c.chunkId}
               title={c.noteId ? "Open the note in Studio" : "Open in the source, highlighted"}
-              className="relative cursor-pointer rounded-md border border-border bg-surface px-3 py-2 text-left transition-colors hover:border-border-strong hover:bg-surface-2"
+              className="group relative cursor-pointer rounded-md border border-border bg-surface px-3 py-2 text-left transition-colors hover:border-border-strong hover:bg-surface-2"
             >
               <CardAction
                 label={`${c.noteId ? "Open note" : "Open source"} ${c.sourceTitle}`}
@@ -1897,6 +1902,16 @@ function Citations({ citations }: { citations: Citation[] }) {
                     <ExternalLink className="h-3.5 w-3.5" />
                   </button>
                 )}
+                {!c.noteId && srcOf(c.sourceId) && (
+                  <RowMenu
+                    className={cn(
+                      "pointer-events-auto relative z-20 shrink-0",
+                      !urlOf(c.sourceId) && "ml-auto",
+                    )}
+                    label={`Options for ${c.sourceTitle}`}
+                    items={actions.items(srcOf(c.sourceId)!)}
+                  />
+                )}
               </div>
               <p
                 // Stays hit-testable so the text can be selected; plain
@@ -1913,6 +1928,7 @@ function Citations({ citations }: { citations: Citation[] }) {
           ))}
         </div>
       )}
+      {actions.modals}
     </div>
   );
 }

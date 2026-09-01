@@ -12,7 +12,8 @@ import {
 } from "@/lib/sourceGroups";
 import { FilterBar, rankByCount } from "./FilterBar";
 import type { NotebookGraph } from "@/lib/types";
-import { EmptyState, useHoverCard } from "./ui";
+import { EmptyState, RowMenu, useHoverCard } from "./ui";
+import { useSourceActions } from "./SourceMenu";
 import { sourceHoverData } from "./SourcesPanel";
 import { cn, relativeTime } from "@/lib/utils";
 import { Crosshair, Minus, Plus, Share2, X } from "lucide-react";
@@ -102,6 +103,18 @@ export function GraphView() {
    *  graph does — the full picture is rarely the question you arrived with. */
   const readerDoc = useStore((s) => s.reader.history[s.reader.index]);
   const { show: showCard, hide: hideCard, card: hoverCard } = useHoverCard("right");
+  // Right-click on a source node opens the same menu as a sidebar row or a
+  // gallery card. Nodes are SVG, not rows, so the menu is host-driven.
+  const actions = useSourceActions();
+  const [nodeMenu, setNodeMenu] = useState<{
+    x: number;
+    y: number;
+    nonce: number;
+    id: string;
+  } | null>(null);
+  const nodeMenuSource = nodeMenu
+    ? sources.find((s) => s.id === nodeMenu.id)
+    : undefined;
   const [graph, setGraph] = useState<NotebookGraph | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -663,6 +676,17 @@ export function GraphView() {
                     setHovered(null);
                     hideCard();
                   }}
+                  onContextMenu={(e) => {
+                    if (isNote) return;
+                    e.preventDefault();
+                    hideCard();
+                    setNodeMenu({
+                      x: e.clientX,
+                      y: e.clientY,
+                      nonce: Date.now(),
+                      id: p.id,
+                    });
+                  }}
                   onClick={(e) => {
                     // Plain click opens the document, the same as clicking it
                     // anywhere else in the app; the graph does not get to
@@ -751,6 +775,16 @@ export function GraphView() {
         </div>
       )}
         {hoverCard}
+        <div className="absolute left-0 top-0">
+          <RowMenu
+            label="Node options"
+            items={nodeMenuSource ? actions.items(nodeMenuSource) : []}
+            contextAt={nodeMenu}
+            rowContext={false}
+            triggerClassName="hidden"
+          />
+        </div>
+        {actions.modals}
       </div>
     </div>
   );

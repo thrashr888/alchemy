@@ -25,7 +25,7 @@ import { RichEditor } from "./RichEditor";
 import { StreamingBody } from "./StudioNoteViewer";
 import { KIND_LABEL } from "./studioArtifacts";
 import { Favicon } from "./SourcesPanel";
-import { SourceImagePicker } from "./SourceImagePicker";
+import { useSourceActions } from "./SourceMenu";
 import { sourceIcon } from "@/lib/sourceIcon";
 import { Button, Input, RowMenu, Spinner, Textarea, useDelayedFlag } from "./ui";
 import {
@@ -50,7 +50,6 @@ import {
   ExternalLink,
   FileInput,
   FolderOpen,
-  Image as ImageIcon,
   LayoutGrid,
   MessageSquare,
   MessageSquarePlus,
@@ -561,7 +560,8 @@ export function ReaderPane() {
   const compact = paneWidth > 0 && paneWidth < 560;
   const [findOpen, setFindOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [imagePickerOpen, setImagePickerOpen] = useState(false);
+  // The source verbs and their modals, shared with every other surface.
+  const actions = useSourceActions();
   const [refreshTick, setRefreshTick] = useState(0);
   const [editing, setEditing] = useState(false);
   const [liveMode, setLiveMode] = useState(false);
@@ -704,16 +704,6 @@ export function ReaderPane() {
           },
         }
       : null;
-  // Hand-pick the gallery card's image (url sources only — that's the type
-  // whose card leads with one): rare enough to live in the overflow menu.
-  const cardImageAction =
-    source && source.sourceType === "url"
-      ? {
-          label: "Choose card image…",
-          icon: <ImageIcon className="h-3.5 w-3.5" />,
-          onClick: () => setImagePickerOpen(true),
-        }
-      : null;
   // Roomy: source actions all inline (no menu at all); notes keep only the
   // rare actions behind the menu. Compact: secondaries fold into the menu.
   const inlineActions = compact
@@ -721,14 +711,24 @@ export function ReaderPane() {
     : [askAction, originAction, refreshAction, popOutAction].filter(
         (a): a is NonNullable<typeof a> => a !== null,
       );
+  // The shared source menu, minus whatever the roomy toolbar shows inline.
+  // Refresh is always the reader's own (it re-renders the document after
+  // the sync), slotted right after Ask where the shared list keeps it.
+  const sourceItems = source
+    ? actions.items(source, {
+        omit: compact ? ["refresh"] : ["ask", "origin", "refresh"],
+      })
+    : [];
+  if (compact && refreshAction) {
+    sourceItems.splice(
+      sourceItems[0]?.label === "Ask about this source" ? 1 : 0,
+      0,
+      refreshAction,
+    );
+  }
   const overflowItems = [
     ...(copyLinkAction ? [copyLinkAction] : []),
-    ...(cardImageAction ? [cardImageAction] : []),
-    ...(compact
-      ? [askAction, originAction, refreshAction].filter(
-          (a): a is NonNullable<typeof a> => a !== null,
-        )
-      : []),
+    ...sourceItems,
     ...(note
       ? [
           ...(note.kind !== "note"
@@ -989,13 +989,7 @@ export function ReaderPane() {
           This document no longer exists — it may have been deleted.
         </div>
       )}
-      {source && source.sourceType === "url" && (
-        <SourceImagePicker
-          source={source}
-          open={imagePickerOpen}
-          onClose={() => setImagePickerOpen(false)}
-        />
-      )}
+      {actions.modals}
     </div>
   );
 }

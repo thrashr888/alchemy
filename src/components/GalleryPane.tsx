@@ -15,21 +15,14 @@ import {
 } from "./ui";
 import { cn, isWebUrl, relativeTime, scrollMemory, shortcutBlocked, urlHost } from "@/lib/utils";
 import { FilterBar } from "./FilterBar";
-import { AttachToCardModal } from "./RegistrySection";
+import { useSourceActions } from "./SourceMenu";
 import { Favicon, sourceHoverData } from "./SourcesPanel";
-import {
-  sourceMetaItems,
-  sourceOriginItems,
-  useSourceMetaModals,
-} from "./SourceMetaModals";
 import { sourceIcon } from "@/lib/sourceIcon";
 import { thumbMemory } from "@/lib/thumbCache";
 import { GraphView } from "./GraphView";
 import {
   ArrowLeft,
   LayoutGrid,
-  MessageSquare,
-  Package,
   Pencil,
   RefreshCw,
   Search,
@@ -140,8 +133,9 @@ export function GalleryPane() {
   const sources = useStore((s) => s.sources);
   const { confirm, dialog: confirmDialog } = useConfirm();
   // Shared tag/note editors (SourceMetaModals) for the card menu entries.
-  const meta = useSourceMetaModals();
-  const [attaching, setAttaching] = useState<Source | null>(null);
+  // One source, one menu: cards carry the same verbs as the sidebar rows,
+  // the reader, the graph, and citations (SourceMenu.tsx).
+  const actions = useSourceActions();
   /** Find-in-gallery (Cmd/Ctrl+F). A grid's analogue of find-in-source is
    *  filtering, not stepping through ranges — same bar, same Escape/Done,
    *  but the result is which cards remain. */
@@ -448,7 +442,7 @@ export function GalleryPane() {
         label: `Tag ${count} sources…`,
         icon: <Pencil className="h-3.5 w-3.5" />,
         onClick: () =>
-          meta.setTagEdit({ ids, title: `${count} sources`, value: "" }),
+          actions.setTagEdit({ ids, title: `${count} sources`, value: "" }),
       },
       {
         label: `Remove ${count} sources…`,
@@ -459,61 +453,7 @@ export function GalleryPane() {
     ];
   };
 
-  const cardMenuItems = (s: Source) => {
-    const st = useStore.getState();
-    const editable =
-      !["url", "mac", "folder", "git", "notion", "obsidian"].includes(
-        s.sourceType,
-      ) && s.status !== "placeholder";
-    return [
-      // Chat scoped to this one source (a folder scopes to its files);
-      // placeholders have no chunks yet, so there's nothing to ask.
-      ...(s.status === "ready"
-        ? [
-            {
-              label: "Ask about this source",
-              icon: <MessageSquare className="h-3.5 w-3.5" />,
-              onClick: () => st.askAboutSource(s.id),
-            },
-          ]
-        : []),
-      ...(editable
-        ? [
-            {
-              label: "Edit text",
-              icon: <Pencil className="h-3.5 w-3.5" />,
-              onClick: () => {
-                useStore.setState({ readerEditIntent: s.id });
-                st.openSourceViewer(s.id, s.title);
-              },
-            },
-          ]
-        : []),
-      ...(s.url
-        ? [
-            {
-              label: s.sourceType === "mac" ? "Sync now" : "Refresh",
-              icon: <RefreshCw className="h-3.5 w-3.5" />,
-              onClick: () => void st.refreshSource(s.id),
-            },
-          ]
-        : []),
-      // Shared with the sources panel and reader — one menu per object.
-      ...sourceOriginItems(s),
-      ...sourceMetaItems(s, meta.setTagEdit, meta.setNoteEdit),
-      {
-        label: "File under a card…",
-        icon: <Package className="h-3.5 w-3.5" />,
-        onClick: () => setAttaching(s),
-      },
-      {
-        label: "Remove…",
-        icon: <Trash2 className="h-3.5 w-3.5" />,
-        danger: true,
-        onClick: () => void removeSourcesGuarded([s.id], confirm),
-      },
-    ];
-  };
+  const cardMenuItems = (s: Source) => actions.items(s);
 
   return (
     <div className="flex h-full flex-1 flex-col min-w-0">
@@ -736,14 +676,9 @@ export function GalleryPane() {
           )}
         </div>
       )}
-      <AttachToCardModal
-        sourceId={attaching?.id ?? null}
-        sourceTitle={attaching?.title ?? ""}
-        onClose={() => setAttaching(null)}
-      />
       {marquee}
       {confirmDialog}
-      {meta.modals}
+      {actions.modals}
       {hoverCard}
     </div>
   );
