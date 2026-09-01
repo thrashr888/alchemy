@@ -101,6 +101,33 @@ pub(crate) const CORPUS: &[(&str, &str)] = &[
     ),
 ];
 
+/// Documents that contradict a golden fact, for the grounded-chat conflict
+/// cases in `eval_chat_grounding_across_models` ONLY — never seeded into
+/// the retrieval corpus, where a second answer would muddy every metric.
+/// Excerpt numbering there is CORPUS then these, so the first is [10].
+pub(crate) const CONFLICT_CORPUS: &[(&str, &str)] = &[
+    // Never names the value it contradicts — a model must read BOTH
+    // excerpts to know there is a conflict at all.
+    (
+        "Billing Retry Policy (draft, 2025)",
+        "# Retries\n\nUnder the revised policy, a request that fails with \
+         ERR-503-BACKOFF waits ninety seconds before the next attempt. Shorter \
+         waits produced retry storms during the March incident.",
+    ),
+    (
+        "Benefits Update Memo",
+        "# Paid Time Off\n\nStarting next fiscal year, employees accrue two days \
+         of paid time off per month of service. The prior accrual rate no longer \
+         applies to new hires.",
+    ),
+    // A flat contradiction with no recency cue either way.
+    (
+        "Media Server Notes",
+        "# Ports\n\nPlex answers on port 32469 behind the reverse proxy; the \
+         media server has never used the default port.",
+    ),
+];
+
 /// A golden question: the retrieval is correct if any of the top-k snippets
 /// contains `expect` (case-insensitive). `kind` buckets the metrics.
 struct Golden {
@@ -586,7 +613,30 @@ async fn eval_chat_grounding_across_models() {
         ),
     ];
 
-    let citations: Vec<Citation> = CORPUS
+    // Conflict cases (docs: Reminders "surface contradictions"): two excerpts
+    // disagree on the asked-for fact. Grounded behavior is to surface BOTH
+    // values and cite both excerpts, not to silently pick one. Each entry is
+    // (question, both values that must appear, the two 1-based excerpts).
+    let conflicts: &[(&str, [&str; 2], [usize; 2])] = &[
+        (
+            "what is the wait after an ERR-503-BACKOFF before retrying?",
+            ["sixty", "ninety"],
+            [1, 10],
+        ),
+        (
+            "how much paid time off do employees accrue per month?",
+            ["one and a half", "two days"],
+            [4, 11],
+        ),
+        ("what port does Plex use?", ["32400", "32469"], [2, 12]),
+    ];
+
+    let corpus: Vec<(&str, &str)> = CORPUS
+        .iter()
+        .copied()
+        .chain(CONFLICT_CORPUS.iter().copied())
+        .collect();
+    let citations: Vec<Citation> = corpus
         .iter()
         .enumerate()
         .map(|(i, (title, body))| Citation {
@@ -602,7 +652,7 @@ async fn eval_chat_grounding_across_models() {
             distance: 0.1,
         })
         .collect();
-    let sources: Vec<(String, String, String)> = CORPUS
+    let sources: Vec<(String, String, String)> = corpus
         .iter()
         .map(|(title, _)| (title.to_string(), String::new(), String::new()))
         .collect();
@@ -637,13 +687,47 @@ async fn eval_chat_grounding_across_models() {
             marked += !markers.is_empty() as u32;
             cited += markers.contains(excerpt) as u32;
         }
+        // Conflicts: both values named AND both excerpts cited. "One-sided"
+        // counts answers that picked a side silently — the failure mode the
+        // disagreement rule in CHAT_SYSTEM exists to prevent.
+        let (mut both_values, mut both_cited, mut one_sided) = (0, 0, 0);
+        for (question, values, excerpts) in conflicts {
+            let messages = crate::rag::build_chat_messages(
+                &[],
+                question,
+                crate::rag::Excerpts {
+                    citations: &citations,
+                    expanded: &no_expansion,
+                },
+                &sources,
+                "",
+                "",
+                &crate::inference::ContextProfile::default(),
+            );
+            let out = ai.chat(&messages).await.expect("chat");
+            let lower = out.text.to_lowercase();
+            let (_, markers) = crate::verify::strip_markers(&out.text);
+            let values_hit = values.iter().filter(|v| lower.contains(*v)).count();
+            let cited_hit = excerpts.iter().filter(|e| markers.contains(e)).count();
+            both_values += (values_hit == 2) as u32;
+            both_cited += (cited_hit == 2) as u32;
+            one_sided += (values_hit == 1) as u32;
+            let head: String = out.text.chars().take(240).collect();
+            eprintln!(
+                "  conflict {question:?}: values {values_hit}/2, excerpts cited {cited_hit}/2\n    {}",
+                head.replace('\n', " ")
+            );
+        }
         // Release this candidate before the next loads — a sweep used to
         // stack every swept model in unified memory for 5 minutes each.
         ai.unload_chat_model().await;
         let speed = tok_s.iter().sum::<f64>() / tok_s.len().max(1) as f64;
         eprintln!(
-            "{model}: facts {facts}/{n}, cited-at-all {marked}/{n}, cited-right-excerpt {cited}/{n}, {speed:.0} tok/s",
-            n = qa.len()
+            "{model}: facts {facts}/{n}, cited-at-all {marked}/{n}, cited-right-excerpt {cited}/{n}, \
+             conflicts both-values {both_values}/{c}, both-cited {both_cited}/{c}, one-sided {one_sided}/{c}, \
+             {speed:.0} tok/s",
+            n = qa.len(),
+            c = conflicts.len()
         );
         // A default has to ground reliably: near-perfect facts with markers
         // present. Right-excerpt is reported, not gated — several excerpts
