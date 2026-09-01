@@ -87,6 +87,21 @@ Releases go through `scripts/release.sh` (see `RELEASE.md`). pnpm 11 quirks (`al
 
 `DESIGN.md` is the source of truth for all visual/interaction decisions. Key rules: 27 themes (dark + light) driven by semantic CSS tokens in `src/index.css` and `src/lib/themes.ts` — **never hardcode a hex in a component**. Linear-inspired: hairline borders instead of tonal fills, color only when it means something, no colored left-border accents. Shared primitives live in `src/components/ui.tsx`.
 
+**Shaders.** The backdrop (`src/components/DitherBackground.tsx`, one GLSL ES 1.0
+program with 17 theme-driven modes) and the Activity tile washes
+(`src/components/settings/TileShader.tsx`) are WebGL1 on purpose — WKWebView
+everywhere, no WebGPU. Never edit a `FRAG` blind: shader quality is aesthetic,
+not just correct math, and one GLSL error kills the backdrop for every theme.
+Run the harness, look at the pixels next to the reference, iterate:
+
+```bash
+python3 scripts/shader-harness.py --serve   # http://127.0.0.1:8791/ — contact sheet of every mode
+```
+
+Also a `shaders` entry in `.claude/launch.json` for the Browser pane. The page
+sets `<html data-status="ok|fail">` and prints compile logs, so it doubles as
+the compile gate. See `.claude/skills/shaders/SKILL.md` for the workflow.
+
 `WRITING.md` is the source of truth for all user-facing words (website, release notes, in-app copy). Register scales with the surface: Apple-terse headlines, Google-plain body prose, HashiCorp-sober methodology, Vercel-clipped table cells. Translate internal vocabulary before publishing, claim only measured numbers, and run the tell check before shipping copy.
 
 ## Conventions

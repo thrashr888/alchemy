@@ -9,6 +9,16 @@
         "dev"
       ],
       "port": 5173
+    },
+    {
+      "name": "shaders",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "scripts/shader-harness.py",
+        "--serve",
+        "8791"
+      ],
+      "port": 8791
     }
   ]
 }

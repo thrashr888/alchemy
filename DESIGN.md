@@ -39,6 +39,9 @@ transmutation sigil (`AlchemySymbol`) is the one other sanctioned ambient
 element: its slow cross-fade and rotation are deliberately outside the 250ms
 cap (they are its whole character) and go static under
 `prefers-reduced-motion` like everything else.
+Shader work is previewed, never shipped blind: `python3
+scripts/shader-harness.py --serve` renders every backdrop mode and tile field
+in one contact sheet (`.claude/skills/shaders/SKILL.md` has the loop).
 
 The app is themeable (23 schemes, dark and light) — never hardcode a hex in a
 component; always go through the semantic tokens below.
