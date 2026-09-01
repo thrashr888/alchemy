@@ -786,11 +786,58 @@ impl AgentCli {
     /// `chat_stream` plus progress: agent CLIs sit silent for long stretches
     /// while they plan and run tools, so their structured events double as
     /// in-progress status lines (`on_step`) instead of a mute spinner.
+    ///
+    /// Retry parity with the gateway's backoff, scoped to what is safe for
+    /// a subprocess that may run tools: ONE retry, and only when the first
+    /// attempt died quickly without producing any output — a spawn failure
+    /// or an instant crash, the transient class. A run that streamed
+    /// anything is never blindly repeated (duplicate tokens, repeated tool
+    /// side effects), and timeouts are not retried — doubling a 120s
+    /// silence hides a wedged CLI instead of surfacing it.
     pub async fn chat_stream_steps<F, S>(
         &self,
         messages: &[ChatTurn],
-        on_token: F,
-        on_step: S,
+        mut on_token: F,
+        mut on_step: S,
+    ) -> Result<ChatOutcome>
+    where
+        F: FnMut(&str),
+        S: FnMut(super::Step<'_>),
+    {
+        // A missing binary is deterministic — never worth a retry.
+        self.binary.as_ref().ok_or_else(|| {
+            anyhow!(
+                "{} CLI not found. {}",
+                self.kind.binary_name(),
+                self.kind.install_hint()
+            )
+        })?;
+        const QUICK_FAILURE: std::time::Duration = std::time::Duration::from_secs(20);
+        let mut saw_any = false;
+        let started = std::time::Instant::now();
+        match self
+            .chat_stream_once(messages, &mut on_token, &mut on_step, &mut saw_any)
+            .await
+        {
+            Err(err) if !saw_any && started.elapsed() < QUICK_FAILURE => {
+                crate::note!(
+                    "{} failed before any output ({err:#}); retrying once",
+                    self.kind.binary_name()
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                self.chat_stream_once(messages, &mut on_token, &mut on_step, &mut saw_any)
+                    .await
+            }
+            outcome => outcome,
+        }
+    }
+
+    async fn chat_stream_once<F, S>(
+        &self,
+        messages: &[ChatTurn],
+        on_token: &mut F,
+        on_step: &mut S,
+        saw_any: &mut bool,
     ) -> Result<ChatOutcome>
     where
         F: FnMut(&str),
@@ -1080,8 +1127,8 @@ impl AgentCli {
         let kind = self.kind;
         let run = async move {
             let mut lines = BufReader::new(stdout).lines();
-            let mut on_token = on_token;
-            let mut on_step = on_step;
+            let on_token = on_token;
+            let on_step = on_step;
             // Consecutive-duplicate guard: event streams repeat themselves
             // (several deltas per tool call), and the step trail shouldn't.
             // Transient lines skip the guard — their whole job is to change.
@@ -1149,6 +1196,7 @@ impl AgentCli {
                 }
             } {
                 saw_output = true;
+                *saw_any = true;
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
                     // Plain-text CLIs (gemini, bob) and stream-json builds
                     // that print bare text: pass the line through verbatim.

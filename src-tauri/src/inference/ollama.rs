@@ -75,6 +75,21 @@ impl Ollama {
         format!("{}{}", self.config.base_url.trim_end_matches('/'), path)
     }
 
+    /// Gateway-parity backoff for Ollama's idempotent perception calls
+    /// (chat, embed, OCR — generations mutate nothing): two short waits on
+    /// 429/5xx before giving up, so a model mid-load or a restarting server
+    /// doesn't kill a whole agentic run. Transport errors and timeouts are
+    /// deliberately NOT retried — the client timeout is long, and doubling
+    /// it would hide a wedged server instead of surfacing it.
+    async fn backoff_if_retryable(resp: &reqwest::Response, attempt: u32) -> bool {
+        let code = resp.status().as_u16();
+        if attempt >= 2 || !(code == 429 || (500..=503).contains(&code)) {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2 + 4 * attempt as u64)).await;
+        true
+    }
+
     /// Embed a batch of texts. Returns one vector per input, in order.
     ///
     /// Texts are sent in bounded sub-batches with a per-request timeout so a
@@ -100,20 +115,27 @@ impl Ollama {
         inputs: &[String],
         timeout: std::time::Duration,
     ) -> Result<EmbedResponse> {
-        let resp = self
-            .http
-            .post(self.url("/api/embed"))
-            .timeout(timeout)
-            .json(&json!({ "model": self.config.embed_model, "input": inputs }))
-            .send()
-            .await
-            .with_context(|| {
-                format!(
-                    "embedding request to Ollama failed or timed out — is `ollama serve` running \
-                     and is the model `{}` available? (a large chat model loading can also stall this)",
-                    self.config.embed_model
-                )
-            })?;
+        let mut attempt = 0;
+        let resp = loop {
+            let resp = self
+                .http
+                .post(self.url("/api/embed"))
+                .timeout(timeout)
+                .json(&json!({ "model": self.config.embed_model, "input": inputs }))
+                .send()
+                .await
+                .with_context(|| {
+                    format!(
+                        "embedding request to Ollama failed or timed out — is `ollama serve` running \
+                         and is the model `{}` available? (a large chat model loading can also stall this)",
+                        self.config.embed_model
+                    )
+                })?;
+            if resp.status().is_success() || !Self::backoff_if_retryable(&resp, attempt).await {
+                break resp;
+            }
+            attempt += 1;
+        };
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -133,24 +155,33 @@ impl Ollama {
                 "no vision model configured for OCR — set one in Settings"
             ));
         }
-        let resp = self
-            .http
-            .post(self.url("/api/chat"))
-            .timeout(std::time::Duration::from_secs(180))
-            .json(&json!({
-                "model": model,
-                "messages": [{
-                    "role": "user",
-                    "content": ocr_prompt(model),
-                    "images": [image_base64],
-                }],
-                "stream": false,
-            }))
-            .send()
-            .await
-            .with_context(|| {
-                format!("OCR request to Ollama failed — is the vision model `{model}` installed?")
-            })?;
+        let mut attempt = 0;
+        let resp = loop {
+            let resp = self
+                .http
+                .post(self.url("/api/chat"))
+                .timeout(std::time::Duration::from_secs(180))
+                .json(&json!({
+                    "model": model,
+                    "messages": [{
+                        "role": "user",
+                        "content": ocr_prompt(model),
+                        "images": [image_base64],
+                    }],
+                    "stream": false,
+                }))
+                .send()
+                .await
+                .with_context(|| {
+                    format!(
+                        "OCR request to Ollama failed — is the vision model `{model}` installed?"
+                    )
+                })?;
+            if resp.status().is_success() || !Self::backoff_if_retryable(&resp, attempt).await {
+                break resp;
+            }
+            attempt += 1;
+        };
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -175,17 +206,24 @@ impl Ollama {
 
     /// Non-streaming chat completion; used for one-shot artifact generation.
     pub async fn chat(&self, messages: &[ChatTurn]) -> Result<ChatOutcome> {
-        let resp = self
-            .http
-            .post(self.url("/api/chat"))
-            .json(&json!({
-                "model": self.config.chat_model,
-                "messages": messages,
-                "stream": false,
-            }))
-            .send()
-            .await
-            .context("ollama chat request failed")?;
+        let mut attempt = 0;
+        let resp = loop {
+            let resp = self
+                .http
+                .post(self.url("/api/chat"))
+                .json(&json!({
+                    "model": self.config.chat_model,
+                    "messages": messages,
+                    "stream": false,
+                }))
+                .send()
+                .await
+                .context("ollama chat request failed")?;
+            if resp.status().is_success() || !Self::backoff_if_retryable(&resp, attempt).await {
+                break resp;
+            }
+            attempt += 1;
+        };
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -218,25 +256,35 @@ impl Ollama {
     where
         F: FnMut(&str),
     {
-        let resp = self
-            .http
-            .post(self.url("/api/chat"))
-            .json(&{
-                let mut body = json!({
-                    "model": self.config.chat_model,
-                    "messages": messages,
-                    "stream": true,
-                });
-                // Only when the user asked for one: the parameter is absent by
-                // default, which is what every model expects.
-                if !self.config.effort.trim().is_empty() {
-                    body["think"] = json!(self.config.effort.trim());
-                }
-                body
-            })
-            .send()
-            .await
-            .context("ollama chat request failed")?;
+        let body = {
+            let mut body = json!({
+                "model": self.config.chat_model,
+                "messages": messages,
+                "stream": true,
+            });
+            // Only when the user asked for one: the parameter is absent by
+            // default, which is what every model expects.
+            if !self.config.effort.trim().is_empty() {
+                body["think"] = json!(self.config.effort.trim());
+            }
+            body
+        };
+        // Retries happen strictly before any body is consumed, so a retried
+        // stream can never emit duplicate tokens.
+        let mut attempt = 0;
+        let resp = loop {
+            let resp = self
+                .http
+                .post(self.url("/api/chat"))
+                .json(&body)
+                .send()
+                .await
+                .context("ollama chat request failed")?;
+            if resp.status().is_success() || !Self::backoff_if_retryable(&resp, attempt).await {
+                break resp;
+            }
+            attempt += 1;
+        };
 
         if !resp.status().is_success() {
             let status = resp.status();
