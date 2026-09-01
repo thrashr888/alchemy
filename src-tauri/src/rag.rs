@@ -34,9 +34,9 @@ pub const CHAT_STYLES: &[(&str, &str, &str, &str)] = &[
          contractions. Be direct; avoid cheerleading, emojis, and filler.",
     ),
     (
-        "buddy",
-        "Buddy",
-        "A sharp friend who did the reading",
+        "bffs",
+        "BFFs",
+        "Your best friend who did the reading",
         "Talk like a sharp, good-humored friend who has actually done the reading. First \
          person, second person, contractions, the occasional aside. Lead with the thing \
          they'd want to know, then the interesting bits. Match their register: if they \

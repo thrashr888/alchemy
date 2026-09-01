@@ -38,7 +38,7 @@ import {
 export const CHAT_STYLES = [
   { id: "default", label: "Default", icon: Sparkles, hint: "Balanced answers, cited to your sources." },
   { id: "friendly", label: "Friendly", icon: MessageCircle, hint: "Warm and direct. No cheerleading, no filler." },
-  { id: "buddy", label: "Buddy", icon: Smile, hint: "A sharp friend who did the reading. Matches your register, still cited." },
+  { id: "bffs", label: "BFFs", icon: Smile, hint: "Your best friend who did the reading. Matches your register, still cited." },
   { id: "kids", label: "Kid-friendly", icon: Blocks, hint: "Simple words, patient, one idea at a time. Nothing scary." },
   { id: "professional", label: "Professional", icon: Briefcase, hint: "The takeaway first; evidence and caveats after, in workplace prose." },
   { id: "learning", label: "Learning Guide", icon: GraduationCap, hint: "Step-by-step explanations that define terms and build intuition." },

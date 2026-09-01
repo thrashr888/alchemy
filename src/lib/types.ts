@@ -814,7 +814,7 @@ export interface ChatConfig {
     | "default"
     | "learning"
     | "friendly"
-    | "buddy"
+    | "bffs"
     | "kids"
     | "professional"
     | "scientific"
