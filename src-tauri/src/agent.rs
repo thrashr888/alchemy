@@ -175,6 +175,7 @@ pub async fn run(
         "readBudget": read_budget_total,
     }));
 
+    let mut repaired = false;
     for step0 in 0..MAX_STEPS {
         let step = step0 + 1;
         let messages = rag::build_agent_decision(
@@ -193,20 +194,44 @@ pub async fn run(
         let raw = ollama.chat_role(loop_role(), &messages).await?.text;
         let planner_ms = planned.elapsed().as_millis() as u64;
         phases.planner(planner_ms);
-        let action = parse_action(&raw);
+        let mut action = parse_action(&raw);
         trace(serde_json::json!({
             "event": "plan",
             "step": step,
             "ms": planner_ms,
-            "action": match &action {
-                Some(Action::Search(q)) => serde_json::json!({ "search": q }),
-                Some(Action::Read(ids)) => serde_json::json!({ "read": ids }),
-                Some(Action::Stop) => serde_json::json!("answer"),
-                // The raw output only when it didn't parse — that's the case
-                // replay and repair work need to see.
-                None => serde_json::json!({ "unparseable": truncate(&raw, 400) }),
-            },
+            "action": action_json(&action, &raw),
         }));
+        // Repair turn: unparseable planner output used to end the loop
+        // silently. One corrective turn (the model's own reply plus the
+        // grammar) per run; if that also fails to parse — or the call
+        // errors — the break below falls to the safety-net retrieval.
+        if action.is_none() && !repaired {
+            repaired = true;
+            emit_step(app, "Refining the plan".into());
+            let repair = rag::build_agent_repair(&messages, &raw);
+            let t = std::time::Instant::now();
+            match ollama.chat_role(loop_role(), &repair).await {
+                Ok(out) => {
+                    let ms = t.elapsed().as_millis() as u64;
+                    phases.planner(ms);
+                    action = parse_action(&out.text);
+                    trace(serde_json::json!({
+                        "event": "repair",
+                        "step": step,
+                        "ms": ms,
+                        "action": action_json(&action, &out.text),
+                    }));
+                }
+                Err(err) => {
+                    trace(serde_json::json!({
+                        "event": "repair",
+                        "step": step,
+                        "ms": t.elapsed().as_millis() as u64,
+                        "error": err.to_string(),
+                    }));
+                }
+            }
+        }
         match action {
             Some(Action::Search(query)) => {
                 let searched = std::time::Instant::now();
@@ -496,6 +521,17 @@ pub(crate) async fn distill_with(
 
 fn emit_step(app: &AppHandle, label: String) {
     let _ = app.emit("chat://step", StepEvent { label });
+}
+
+/// Trace encoding of one planner decision — the raw output rides along only
+/// when it didn't parse, which is the case replay and repair need to see.
+fn action_json(action: &Option<Action>, raw: &str) -> serde_json::Value {
+    match action {
+        Some(Action::Search(q)) => serde_json::json!({ "search": q }),
+        Some(Action::Read(ids)) => serde_json::json!({ "read": ids }),
+        Some(Action::Stop) => serde_json::json!("answer"),
+        None => serde_json::json!({ "unparseable": truncate(raw, 400) }),
+    }
 }
 
 /// Parse the planner's JSON action, tolerating surrounding prose/code fences.

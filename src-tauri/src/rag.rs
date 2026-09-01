@@ -1043,6 +1043,23 @@ pub fn build_agent_decision(
     ]
 }
 
+/// One corrective turn after unparseable planner output: the decision
+/// prompt, the model's own reply, and a restatement of the grammar. One
+/// shot — the caller falls back to safety-net retrieval if this also
+/// fails to parse.
+pub fn build_agent_repair(decision: &[ChatTurn], raw: &str) -> Vec<ChatTurn> {
+    let mut messages = decision.to_vec();
+    messages.push(ChatTurn::assistant(raw));
+    messages.push(ChatTurn::user(
+        "That reply was not a single valid JSON action object. Respond again with EXACTLY ONE \
+         JSON object and nothing else — no prose, no code fences. Valid actions:\n\
+         {\"action\":\"search\",\"query\":\"<focused search phrase>\"}\n\
+         {\"action\":\"read\",\"sourceIds\":[\"<id from the source list>\"]}\n\
+         {\"action\":\"answer\"}",
+    ));
+    messages
+}
+
 /// Continuation prompt for an under-length Audio Overview script: more
 /// dialogue picking up mid-episode — never a restart.
 pub fn build_audio_continuation(
@@ -1129,6 +1146,34 @@ mod tests {
         assert!(user.contains("step 3 of 5"), "{user}");
         assert!(user.contains("read budget 800 of 12000 chars"), "{user}");
         assert!(user.contains("After step 5 the loop stops"), "{user}");
+    }
+
+    /// The repair turn replays the decision prompt, quotes the model its own
+    /// bad reply, and restates the grammar — nothing else changes.
+    #[test]
+    fn agent_repair_appends_reply_and_grammar() {
+        let status = AgentStatus {
+            step: 1,
+            max_steps: 5,
+            read_used: 0,
+            read_budget: 12_000,
+        };
+        let decision = build_agent_decision("q?", "- Doc (id: s1, 3 chunks)", "", 0, &status);
+        let messages = build_agent_repair(&decision, "I think I should search for things");
+        assert_eq!(messages.len(), decision.len() + 2);
+        assert_eq!(messages[decision.len()].role, "assistant");
+        assert_eq!(
+            messages[decision.len()].content,
+            "I think I should search for things"
+        );
+        let correction = &messages[decision.len() + 1];
+        assert_eq!(correction.role, "user");
+        assert!(
+            correction.content.contains("EXACTLY ONE"),
+            "{}",
+            correction.content
+        );
+        assert!(correction.content.contains("{\"action\":\"answer\"}"));
     }
 
     /// Lost-in-the-Middle ordering: strongest hits land first and last,
