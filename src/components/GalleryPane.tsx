@@ -15,21 +15,14 @@ import {
 } from "./ui";
 import { cn, isWebUrl, relativeTime, scrollMemory, shortcutBlocked, urlHost } from "@/lib/utils";
 import { FilterBar } from "./FilterBar";
-import { AttachToCardModal } from "./RegistrySection";
+import { useSourceActions } from "./SourceMenu";
 import { Favicon, sourceHoverData } from "./SourcesPanel";
-import {
-  sourceMetaItems,
-  sourceOriginItems,
-  useSourceMetaModals,
-} from "./SourceMetaModals";
 import { sourceIcon } from "@/lib/sourceIcon";
 import { thumbMemory } from "@/lib/thumbCache";
 import { GraphView } from "./GraphView";
 import {
   ArrowLeft,
   LayoutGrid,
-  MessageSquare,
-  Package,
   Pencil,
   RefreshCw,
   Search,
@@ -140,8 +133,9 @@ export function GalleryPane() {
   const sources = useStore((s) => s.sources);
   const { confirm, dialog: confirmDialog } = useConfirm();
   // Shared tag/note editors (SourceMetaModals) for the card menu entries.
-  const meta = useSourceMetaModals();
-  const [attaching, setAttaching] = useState<Source | null>(null);
+  // One source, one menu: cards carry the same verbs as the sidebar rows,
+  // the reader, the graph, and citations (SourceMenu.tsx).
+  const actions = useSourceActions();
   /** Find-in-gallery (Cmd/Ctrl+F). A grid's analogue of find-in-source is
    *  filtering, not stepping through ranges — same bar, same Escape/Done,
    *  but the result is which cards remain. */
@@ -448,7 +442,7 @@ export function GalleryPane() {
         label: `Tag ${count} sources…`,
         icon: <Pencil className="h-3.5 w-3.5" />,
         onClick: () =>
-          meta.setTagEdit({ ids, title: `${count} sources`, value: "" }),
+          actions.setTagEdit({ ids, title: `${count} sources`, value: "" }),
       },
       {
         label: `Remove ${count} sources…`,
@@ -459,61 +453,7 @@ export function GalleryPane() {
     ];
   };
 
-  const cardMenuItems = (s: Source) => {
-    const st = useStore.getState();
-    const editable =
-      !["url", "mac", "folder", "git", "notion", "obsidian"].includes(
-        s.sourceType,
-      ) && s.status !== "placeholder";
-    return [
-      // Chat scoped to this one source (a folder scopes to its files);
-      // placeholders have no chunks yet, so there's nothing to ask.
-      ...(s.status === "ready"
-        ? [
-            {
-              label: "Ask about this source",
-              icon: <MessageSquare className="h-3.5 w-3.5" />,
-              onClick: () => st.askAboutSource(s.id),
-            },
-          ]
-        : []),
-      ...(editable
-        ? [
-            {
-              label: "Edit text",
-              icon: <Pencil className="h-3.5 w-3.5" />,
-              onClick: () => {
-                useStore.setState({ readerEditIntent: s.id });
-                st.openSourceViewer(s.id, s.title);
-              },
-            },
-          ]
-        : []),
-      ...(s.url
-        ? [
-            {
-              label: s.sourceType === "mac" ? "Sync now" : "Refresh",
-              icon: <RefreshCw className="h-3.5 w-3.5" />,
-              onClick: () => void st.refreshSource(s.id),
-            },
-          ]
-        : []),
-      // Shared with the sources panel and reader — one menu per object.
-      ...sourceOriginItems(s),
-      ...sourceMetaItems(s, meta.setTagEdit, meta.setNoteEdit),
-      {
-        label: "File under a card…",
-        icon: <Package className="h-3.5 w-3.5" />,
-        onClick: () => setAttaching(s),
-      },
-      {
-        label: "Remove…",
-        icon: <Trash2 className="h-3.5 w-3.5" />,
-        danger: true,
-        onClick: () => void removeSourcesGuarded([s.id], confirm),
-      },
-    ];
-  };
+  const cardMenuItems = (s: Source) => actions.items(s);
 
   return (
     <div className="flex h-full flex-1 flex-col min-w-0">
@@ -736,14 +676,9 @@ export function GalleryPane() {
           )}
         </div>
       )}
-      <AttachToCardModal
-        sourceId={attaching?.id ?? null}
-        sourceTitle={attaching?.title ?? ""}
-        onClose={() => setAttaching(null)}
-      />
       {marquee}
       {confirmDialog}
-      {meta.modals}
+      {actions.modals}
       {hoverCard}
     </div>
   );
@@ -786,7 +721,12 @@ function estimateCardHeight(
     : 0;
   const title = lines(s.title, hasVisual ? 2 : 3, 6.6) * 19;
   // The snippet only renders when there is no visual to carry the card.
-  const body = !hasVisual && snippet ? 6 + lines(snippet, 4, 6) * 18 : 0;
+  // Table corners render one row per line (SnippetTable); prose wraps.
+  const body = !hasVisual && snippet
+    ? tableRows(snippet)
+      ? 6 + (snippet.split("\n").length + 1) * 20
+      : 6 + lines(snippet, 4, 6) * 18
+    : 0;
   const error = s.status === "error" ? 22 : 0;
   return visual + PADDING + title + body + CAPTION + error;
 }
@@ -872,6 +812,65 @@ function FolderCard({
           {relativeTime(s.createdAt)}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** The backend previews a spreadsheet as the table's corner: a few
+ *  `a | b | c` lines, header first (commands.rs `table_corner`). Anything
+ *  else — prose, a heading line — is not a table. The heading a sheet
+ *  export carries ("Sheet: Q3") may precede the rows; it stays a caption. */
+function tableRows(snippet: string): { caption: string; rows: string[][] } | null {
+  const lines = snippet.split("\n");
+  const first = lines.findIndex((l) => l.includes(" | "));
+  // The corner ends the snippet, so everything before it is caption and
+  // everything from it on must be rows — a lone piped line mid-prose is
+  // not a table.
+  if (first < 0 || first > 2) return null;
+  const rows = lines.slice(first).map((l) => l.split(" | "));
+  if (rows.length < 2 || rows.some((r) => r.length !== rows[0].length)) {
+    return null;
+  }
+  return { caption: lines.slice(0, first).join("\n"), rows };
+}
+
+function SnippetTable({
+  rows: { caption, rows },
+}: {
+  rows: { caption: string; rows: string[][] };
+}) {
+  return (
+    <div className="mt-1.5 text-caption text-muted-foreground">
+      {caption && (
+        <div className="line-clamp-2 whitespace-pre-line">{caption}</div>
+      )}
+      <table className="mt-1 w-full table-fixed border-collapse">
+        <tbody>
+          {rows.map((cells, i) => (
+            <tr
+              key={i}
+              className={cn(
+                "border-b border-border last:border-b-0",
+                i === 0 && "font-medium text-foreground",
+              )}
+            >
+              {cells.map((cell, j) => (
+                <td
+                  key={j}
+                  className={cn(
+                    "truncate py-0.5 pr-2 align-top",
+                    // The cut-columns marker is one glyph wide; with
+                    // table-fixed it would otherwise take a full column.
+                    cell === "…" && "w-4 pr-0",
+                  )}
+                >
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -997,11 +996,13 @@ function GalleryCard({
         >
           {s.title}
         </div>
-        {!visual && snippet && (
+        {!visual && snippet && (tableRows(snippet) ? (
+          <SnippetTable rows={tableRows(snippet)!} />
+        ) : (
           <div className="mt-1.5 line-clamp-4 whitespace-pre-line text-caption leading-relaxed text-muted-foreground">
             {snippet}
           </div>
-        )}
+        ))}
         <div className="mt-1.5 flex items-center gap-1.5 text-caption text-subtle-foreground">
           {web ? <Favicon url={s.url} /> : sourceIcon(s.sourceType, s.url)}
           <span className="truncate">{caption}</span>

@@ -34,6 +34,16 @@ pub const CHAT_STYLES: &[(&str, &str, &str, &str)] = &[
          contractions. Be direct; avoid cheerleading, emojis, and filler.",
     ),
     (
+        "buddy",
+        "Buddy",
+        "A sharp friend who did the reading",
+        "Talk like a sharp, good-humored friend who has actually done the reading. First \
+         person, second person, contractions, the occasional aside. Lead with the thing \
+         they'd want to know, then the interesting bits. Light wit is welcome; sarcasm, \
+         emojis, and hype are not. Stay grounded — the warmth is in the voice, never in \
+         stretching what the sources say.",
+    ),
+    (
         "professional",
         "Professional",
         "Clear workplace prose, takeaway first",
@@ -149,6 +159,10 @@ Rules:\n\
 excerpts each contributed evidence, cite each one — comparisons, multi-part questions, and claims \
 that link two facts usually need citations from two or more different sources.\n\
 - If the excerpts do not contain the answer, say so plainly. Do not fabricate.\n\
+- Several excerpts can speak to the same point. Before answering, compare every excerpt that \
+does. If they give different numbers, dates, names, or opposite claims, the sources disagree: \
+report each version with its own citation and say so plainly, instead of presenting one as the \
+answer. If one excerpt is clearly newer or more specific, say which — but still cite both.\n\
 - Be clear, well-structured, and proportionate to the question. Prefer short paragraphs and bullet \
 lists when useful.\n\
 - Exception: when the user asks you to FIND or ADD sources, you may propose full, concrete URLs — \

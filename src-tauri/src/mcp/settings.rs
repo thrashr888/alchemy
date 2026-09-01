@@ -34,7 +34,7 @@ struct SettingsReq {
     /// notebook).
     #[serde(default)]
     notebook_id: String,
-    /// For style: a style id or name (friendly, professional, scientific,
+    /// For style: a style id or name (friendly, buddy, professional, scientific,
     /// adhd, ste100, govuk, plain, gdev, learning, custom, default). Empty
     /// keeps the current style.
     #[serde(default)]

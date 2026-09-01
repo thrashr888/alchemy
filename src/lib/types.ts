@@ -812,6 +812,7 @@ export interface ChatConfig {
     | "default"
     | "learning"
     | "friendly"
+    | "buddy"
     | "professional"
     | "scientific"
     | "adhd"

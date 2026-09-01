@@ -865,6 +865,39 @@ impl Db {
         Ok(out)
     }
 
+    /// `source_contents` plus each source's title, for surfaces that need to
+    /// tell the body apart from its own heading (gallery snippets).
+    pub async fn source_titled_contents(
+        &self,
+        source_ids: &[String],
+    ) -> Result<HashMap<String, (String, String)>> {
+        if source_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let ids = source_ids
+            .iter()
+            .map(|id| format!("'{}'", esc(id)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let filter = format!("id IN ({ids})");
+        let batches = self
+            .collect_cols(T_SOURCES, Some(&filter), &["id", "title", "content"])
+            .await?;
+        let mut out = HashMap::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let title = str_col(b, "title")?;
+            let content = str_col(b, "content")?;
+            for i in 0..b.num_rows() {
+                out.insert(
+                    id.value(i).to_string(),
+                    (title.value(i).to_string(), content.value(i).to_string()),
+                );
+            }
+        }
+        Ok(out)
+    }
+
     async fn delete_where(&self, table: &str, predicate: &str) -> Result<()> {
         if self.table_exists(table).await? {
             let tbl = self.conn.open_table(table).execute().await?;

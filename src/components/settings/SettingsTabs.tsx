@@ -25,6 +25,7 @@ import {
   Scissors,
   ScrollText,
   Sparkles,
+  Smile,
   Wrench,
   Zap,
   type LucideIcon,
@@ -36,6 +37,7 @@ import {
 export const CHAT_STYLES = [
   { id: "default", label: "Default", icon: Sparkles, hint: "Balanced answers, cited to your sources." },
   { id: "friendly", label: "Friendly", icon: MessageCircle, hint: "Warm and direct. No cheerleading, no filler." },
+  { id: "buddy", label: "Buddy", icon: Smile, hint: "A sharp friend who did the reading. Casual voice, still cited." },
   { id: "professional", label: "Professional", icon: Briefcase, hint: "The takeaway first; evidence and caveats after, in workplace prose." },
   { id: "learning", label: "Learning Guide", icon: GraduationCap, hint: "Step-by-step explanations that define terms and build intuition." },
   { id: "scientific", label: "Scientific", icon: FlaskConical, hint: "Hedged to the evidence. Quantified, summary first." },

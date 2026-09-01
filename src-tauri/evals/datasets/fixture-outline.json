@@ -1,0 +1,278 @@
+{
+  "name": "fixture-outline",
+  "description": "Gate for the outline index (docs: Reminders 'Outline eval cases before outline work'). Two long structured documents from retrieval_eval.rs outline_corpus(): every chapter repeats the same subsections with the same vocabulary and different numbers, so the chapter name \u2014 present only in a heading the chunker has already replaced \u2014 is the only thing that tells look-alike chunks apart. 'outline' queries are the measurement; 'chapter' and 'exact' are seeding controls. floors: false \u2014 the numbers are reported and diffed, not asserted, and the outline work merges only if they improve.",
+  "corpus": "outline",
+  "floors": false,
+  "queries": [
+    {
+      "query": "what torque for the landing gear hinge bolts?",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "to 31 N"
+        }
+      ]
+    },
+    {
+      "query": "how often is the fuel system inspected?",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "every 250 flight hours"
+        }
+      ]
+    },
+    {
+      "query": "seal kit part number for the brakes",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "SK-2116"
+        }
+      ]
+    },
+    {
+      "query": "avionics inspection interval",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "every 200 flight hours"
+        }
+      ]
+    },
+    {
+      "query": "torque for the wing anti-ice union nuts",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "to 148 N"
+        }
+      ]
+    },
+    {
+      "query": "APU replacement part number",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "FM-1823"
+        }
+      ]
+    },
+    {
+      "query": "oxygen system inspection interval in months",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "or 12 months"
+        }
+      ]
+    },
+    {
+      "query": "cabin pressurization clamp bolt torque",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "to 68 N"
+        }
+      ]
+    },
+    {
+      "query": "what seal kit does the electrical system use?",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "SK-1707"
+        }
+      ]
+    },
+    {
+      "query": "how many months between flight controls inspections?",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "or 8 months"
+        }
+      ]
+    },
+    {
+      "query": "hydraulics union nut torque",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "to 12 N"
+        }
+      ]
+    },
+    {
+      "query": "engine cowling part number",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "FM-2330"
+        }
+      ]
+    },
+    {
+      "query": "how many public holidays does the Lisbon office get?",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Regional Employee Policy Manual",
+          "must_contain": "observe 13 paid"
+        }
+      ]
+    },
+    {
+      "query": "hotel expense cap per night in Singapore",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Regional Employee Policy Manual",
+          "must_contain": "$155"
+        }
+      ]
+    },
+    {
+      "query": "what's the notice period in Berlin?",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Regional Employee Policy Manual",
+          "must_contain": "is 8 weeks"
+        }
+      ]
+    },
+    {
+      "query": "paid holidays for the Tokyo office",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Regional Employee Policy Manual",
+          "must_contain": "observe 17 paid"
+        }
+      ]
+    },
+    {
+      "query": "Toronto hotel reimbursement limit",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Regional Employee Policy Manual",
+          "must_contain": "$140"
+        }
+      ]
+    },
+    {
+      "query": "Melbourne notice period",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Regional Employee Policy Manual",
+          "must_contain": "is 7 weeks"
+        }
+      ]
+    },
+    {
+      "query": "Warsaw public holidays per year",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Regional Employee Policy Manual",
+          "must_contain": "observe 20 paid"
+        }
+      ]
+    },
+    {
+      "query": "Dublin per-night expense cap",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Regional Employee Policy Manual",
+          "must_contain": "$170"
+        }
+      ]
+    },
+    {
+      "query": "how many weeks notice in Bangalore?",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Regional Employee Policy Manual",
+          "must_contain": "is 11 weeks"
+        }
+      ]
+    },
+    {
+      "query": "Mexico City public holidays",
+      "kind": "outline",
+      "relevant": [
+        {
+          "source_title": "Regional Employee Policy Manual",
+          "must_contain": "observe 19 paid"
+        }
+      ]
+    },
+    {
+      "query": "what does the hydraulics system do?",
+      "kind": "chapter",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "pressurizes the flight-control actuators"
+        }
+      ]
+    },
+    {
+      "query": "which system heats the wing leading edges?",
+      "kind": "chapter",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "leading edges"
+        }
+      ]
+    },
+    {
+      "query": "who handles questions in the Dublin office?",
+      "kind": "chapter",
+      "relevant": [
+        {
+          "source_title": "Regional Employee Policy Manual",
+          "must_contain": "Dublin office follows"
+        }
+      ]
+    },
+    {
+      "query": "what is part FM-2041?",
+      "kind": "exact",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "FM-2041"
+        }
+      ]
+    },
+    {
+      "query": "which assembly uses seal kit SK-1305?",
+      "kind": "exact",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "SK-1305"
+        }
+      ]
+    }
+  ]
+}

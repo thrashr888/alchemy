@@ -3411,21 +3411,75 @@ pub async fn source_image(state: State<'_, AppState>, source_id: String) -> Resu
     ))
 }
 
-/// Opening lines of a source's text for a gallery card: provenance
-/// blockquotes, images, and blank lines dropped, capped by chars.
-fn snippet_of(content: &str, max_chars: usize) -> String {
+/// Opening lines of a source's text for a gallery card, rendered from
+/// markdown to plain lines and then trimmed: frontmatter, provenance
+/// (blockquotes, the italic origin line Mac sources carry), images, rules,
+/// and fence markers are dropped; inline marks are resolved (bold, links,
+/// code spans, task boxes, bullets); a leading heading or line that only
+/// repeats `title` is skipped, since the card already shows it. A leading
+/// table becomes its corner (see `table_corner`) and ends the snippet.
+fn snippet_of(title: &str, content: &str, max_chars: usize) -> String {
+    let (_, body) = ingest::split_frontmatter(content);
+    // Letters and digits only: "Reminders — Alchemy" is the heading for a
+    // source titled "Reminders: Alchemy".
+    let squash = |s: &str| -> String {
+        s.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    let title = squash(title);
     let mut out = String::new();
-    for line in content.lines() {
-        let t = line.trim();
-        if t.is_empty() || t.starts_with("> ") || t.starts_with("![") {
+    let mut lines = body.lines().map(str::trim).peekable();
+    let mut in_fence = false;
+    while let Some(t) = lines.next() {
+        if t.starts_with("```") || t.starts_with("~~~") {
+            in_fence = !in_fence;
             continue;
         }
-        // Headings read fine as plain lines; just drop the marker.
-        let t = t.trim_start_matches('#').trim_start();
+        if t.is_empty() || t.starts_with("> ") || t.starts_with("![") || is_rule(t) {
+            continue;
+        }
+        if out.is_empty() {
+            // The card's own title, as a heading or a bare first line (Apple
+            // Notes repeat the note title as the body's first line).
+            let bare = squash(t.trim_start_matches('#'));
+            if !title.is_empty() && bare == title {
+                continue;
+            }
+            // "_Apple Notes · Folder · modified 2026-07-13_" — the caption
+            // row carries provenance; the snippet is for content.
+            if is_provenance(t) {
+                continue;
+            }
+        }
+        if is_table_row(t, lines.peek().copied()) {
+            let mut rows: Vec<&str> = vec![t];
+            // Inside a table every piped line is a row, separator or not.
+            while let Some(next) = lines.peek() {
+                if next.starts_with('|') || next.contains(" | ") || is_separator_row(next) {
+                    rows.push(next);
+                    lines.next();
+                } else {
+                    break;
+                }
+            }
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&table_corner(&rows));
+            break;
+        }
+        let rendered = render_inline(t.trim_start_matches('#').trim_start());
+        // A line with no letter or digit left — a lone ".", a link that
+        // resolved to nothing — is not a line worth a card row.
+        if !rendered.chars().any(char::is_alphanumeric) {
+            continue;
+        }
         if !out.is_empty() {
             out.push('\n');
         }
-        out.push_str(t);
+        out.push_str(&rendered);
         if out.chars().count() >= max_chars {
             break;
         }
@@ -3442,6 +3496,190 @@ fn snippet_of(content: &str, max_chars: usize) -> String {
     out
 }
 
+/// `---`, `***`, `___` (three or more): a thematic break, not content.
+fn is_rule(t: &str) -> bool {
+    let compact: String = t.chars().filter(|c| !c.is_whitespace()).collect();
+    compact.len() >= 3 && compact.chars().all(|c| c == '-')
+        || compact.len() >= 3 && compact.chars().all(|c| c == '*')
+        || compact.len() >= 3 && compact.chars().all(|c| c == '_')
+}
+
+/// A whole-line italic with a middle dot: the origin line Mac sources
+/// write under their heading.
+fn is_provenance(t: &str) -> bool {
+    let inner = t
+        .strip_prefix('_')
+        .and_then(|s| s.strip_suffix('_'))
+        .or_else(|| t.strip_prefix('*').and_then(|s| s.strip_suffix('*')));
+    inner.is_some_and(|s| s.contains(" · "))
+}
+
+/// A GFM row (`| a | b |`), or a bare-pipe row (`a | b`) when the row after
+/// it is the separator — extractors emit both shapes.
+fn is_table_row(t: &str, next: Option<&str>) -> bool {
+    if t.starts_with('|') && t.ends_with('|') && t.len() > 1 {
+        return true;
+    }
+    // Older imports normalized the separator away, so two piped lines in a
+    // row are a table too.
+    t.contains(" | ")
+        && (is_separator_row(t) || next.is_some_and(|n| is_separator_row(n) || n.contains(" | ")))
+}
+
+fn is_separator_row(t: &str) -> bool {
+    let cells: Vec<&str> = t
+        .trim()
+        .trim_start_matches('|')
+        .trim_end_matches('|')
+        .split('|')
+        .map(str::trim)
+        .collect();
+    !cells.is_empty()
+        && cells
+            .iter()
+            .all(|c| !c.is_empty() && c.chars().all(|ch| matches!(ch, '-' | ':')))
+}
+
+/// Markdown inline marks → the text a reader would see. Task boxes and
+/// bullets become glyphs; links keep their text; code spans lose their
+/// backticks, except id-shaped ones (the reminder ids Mac sources carry for
+/// agents), which drop out entirely.
+fn render_inline(t: &str) -> String {
+    let mut s = t.to_string();
+    for (from, to) in [
+        ("- [ ] ", "\u{2610} "),
+        ("* [ ] ", "\u{2610} "),
+        ("- [x] ", "\u{2611} "),
+        ("- [X] ", "\u{2611} "),
+        ("* [x] ", "\u{2611} "),
+        ("- ", "\u{2022} "),
+        ("* ", "\u{2022} "),
+        ("+ ", "\u{2022} "),
+    ] {
+        if let Some(rest) = s.strip_prefix(from) {
+            s = format!("{to}{rest}");
+            break;
+        }
+    }
+    s = unlink(&s);
+    s = uncode(&s);
+    s = s.replace("**", "").replace("__", "");
+    // Whole-line single emphasis only; a bare `_` or `*` mid-line is more
+    // often a snake_case name or a footnote than emphasis.
+    for m in ['*', '_'] {
+        if s.len() > 2 && s.starts_with(m) && s.ends_with(m) {
+            s = s[1..s.len() - 1].to_string();
+        }
+    }
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `[text](url)` and `![alt](url)` → `text` / `alt`. Unbalanced brackets
+/// pass through untouched.
+fn unlink(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(open) = rest.find('[') {
+        let Some(close) = rest[open..].find("](") else {
+            break;
+        };
+        let close = open + close;
+        let Some(end) = rest[close..].find(')') else {
+            break;
+        };
+        let end = close + end;
+        let mut head = &rest[..open];
+        if let Some(h) = head.strip_suffix('!') {
+            head = h;
+        }
+        out.push_str(head);
+        out.push_str(&rest[open + 1..close]);
+        rest = &rest[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `` `code` `` → `code`, dropping id-shaped spans entirely. An unclosed
+/// backtick passes through.
+fn uncode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(open) = rest.find('`') {
+        let Some(len) = rest[open + 1..].find('`') else {
+            break;
+        };
+        let inner = &rest[open + 1..open + 1 + len];
+        out.push_str(&rest[..open]);
+        if !is_id_shaped(inner) {
+            out.push_str(inner);
+        }
+        rest = &rest[open + 2 + len..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A UUID or a long hex/base64-ish token: an identifier, not prose.
+fn is_id_shaped(s: &str) -> bool {
+    let s = s.trim();
+    let uuid = s.len() == 36
+        && s.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+        && s.matches('-').count() == 4;
+    let token = s.len() >= 20
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && !s.contains(' ');
+    uuid || token
+}
+
+/// Preview rows for a markdown table's top-left corner. Column and row
+/// caps are the gallery card's budget, not the table's.
+const TABLE_CORNER_COLS: usize = 3;
+const TABLE_CORNER_ROWS: usize = 3;
+
+/// Reduce GFM table rows (`| a | b | c |`) to at most a few rows of the
+/// first few columns, one `a | b | c` line each. The `| --- |` separator
+/// row is dropped, empty cells stay as blanks, and a trailing ellipsis cell
+/// marks that columns were cut.
+fn table_corner(rows: &[&str]) -> String {
+    let cells = |row: &str| -> Vec<String> {
+        row.trim()
+            .trim_start_matches('|')
+            .trim_end_matches('|')
+            .split('|')
+            .map(|c| c.trim().to_string())
+            .collect()
+    };
+    let is_separator = |cells: &[String]| {
+        !cells.is_empty()
+            && cells
+                .iter()
+                .all(|c| !c.is_empty() && c.chars().all(|ch| matches!(ch, '-' | ':')))
+    };
+    let mut out: Vec<String> = Vec::new();
+    for row in rows {
+        let cs = cells(row);
+        if is_separator(&cs) {
+            continue;
+        }
+        let wide = cs.len() > TABLE_CORNER_COLS;
+        let mut kept: Vec<String> = cs
+            .into_iter()
+            .take(TABLE_CORNER_COLS)
+            .map(|c| render_inline(&c))
+            .collect();
+        if wide {
+            kept.push("…".into());
+        }
+        out.push(kept.join(" | "));
+        if out.len() >= TABLE_CORNER_ROWS {
+            break;
+        }
+    }
+    out.join("\n")
+}
+
 /// Batched card snippets for the gallery: one IPC per level instead of one
 /// per card. Unknown or empty sources are simply absent from the map.
 #[tauri::command]
@@ -3454,10 +3692,10 @@ pub async fn source_snippets(
     let ids: Vec<String> = source_ids.into_iter().take(400).collect();
     // One projected scan for the whole level — this was 400 sequential
     // single-id scans of the sources table, the Graph N-scan bug reborn.
-    let contents = e(state.db.source_contents(&ids).await)?;
+    let contents = e(state.db.source_titled_contents(&ids).await)?;
     let mut out = std::collections::HashMap::new();
-    for (id, content) in contents {
-        let snip = snippet_of(&content, cap);
+    for (id, (title, content)) in contents {
+        let snip = snippet_of(&title, &content, cap);
         if !snip.is_empty() {
             out.insert(id, snip);
         }
@@ -6379,7 +6617,7 @@ const SHARED_TOOL_LINES: &str = "\
 - {\"action\":\"settings\",\"op\":\"test\",\"target\":\"<provider or model name, or empty for the active chat provider>\"} — live-probe one provider or model (one tiny chat + embed) and report latency (\"is ollama working\", \"test gemma3\").\n\
 - {\"action\":\"settings\",\"op\":\"pull\",\"model\":\"<ollama model name>\"} — stage `ollama pull <model>` as a one-click Terminal command; it is never executed automatically (\"download gemma3\", \"pull qwen3:8b\").\n\
 - {\"action\":\"settings\",\"op\":\"set\",\"field\":\"profile.name|profile.profession|profile.instructions\",\"value\":\"<free text>\"} — personalize (\"call me Paul\" → profile.name Paul; \"always answer briefly\" as a standing preference → profile.instructions).\n\
-- {\"action\":\"settings\",\"op\":\"style\",\"style\":\"default|learning|friendly|professional|scientific|adhd|ste100|govuk|plain|gdev|custom or empty\",\"length\":\"default|shorter|longer or empty\"} — set <STYLE_SCOPE> Empty keeps that half unchanged.\n\
+- {\"action\":\"settings\",\"op\":\"style\",\"style\":\"default|learning|friendly|buddy|professional|scientific|adhd|ste100|govuk|plain|gdev|custom or empty\",\"length\":\"default|shorter|longer or empty\"} — set <STYLE_SCOPE> Empty keeps that half unchanged.\n\
 - {\"action\":\"settings\",\"op\":\"theme\",\"theme\":\"<theme name, the word random to have one picked, or empty to list them>\"} — switch the app theme (\"use the gruvbox theme\", \"something dark\"; \"pick a random theme\" or \"surprise me with a theme\" → theme random).\n\
 - {\"action\":\"settings\",\"op\":\"connect\",\"target\":\"<agent client name, or empty to list>\"} — connect Alchemy to an installed agent client (Claude Code, Codex, …). Always confirmed with a click before anything is written.\n\
 - {\"action\":\"settings\",\"op\":\"setup\"} — guided setup: reports the next unmet setup step (\"help me get set up\").\n";
@@ -13683,6 +13921,82 @@ pub async fn check_ollama(state: State<'_, AppState>) -> Result<bool, String> {
 #[cfg(test)]
 mod tool_tests {
     use super::*;
+
+    /// Gallery snippets of spreadsheet-shaped sources are the table's
+    /// corner, not pipe soup: header plus the first rows, first three
+    /// columns, separator dropped, an ellipsis cell where columns were cut.
+    #[test]
+    fn snippet_previews_a_table_corner() {
+        let sheet = "# Sheet: Q3\n\
+             | invoice | customer | amount | status | owner |\n\
+             | --- | --- | --- | --- | --- |\n\
+             | INV-1 | Acme | $12 | paid | kim |\n\
+             | INV-2 | Globex | $8 | overdue | lee |\n\
+             | INV-3 | Initech | $3 | disputed | ana |\n\
+             | INV-4 | Hooli | $9 | paid | raj |\n\n\
+             Notes after the table are not part of the preview.";
+        assert_eq!(
+            snippet_of("Invoices", sheet, 280),
+            "Sheet: Q3\ninvoice | customer | amount | …\nINV-1 | Acme | $12 | …\nINV-2 | Globex | $8 | …"
+        );
+        // Narrow tables keep every column and carry no ellipsis; bare-pipe
+        // rows count as a table when the separator row follows.
+        assert_eq!(
+            snippet_of(
+                "",
+                "| vessel | berth |\n| --- | --- |\n| Sea Otter | 12 |\n",
+                280
+            ),
+            "vessel | berth\nSea Otter | 12"
+        );
+        assert_eq!(
+            snippet_of("", "Decision | Choice\n---|---\nShell | Tauri 2\n", 280),
+            "Decision | Choice\nShell | Tauri 2"
+        );
+        // Separator normalized away by an older import; cells carry marks.
+        assert_eq!(
+            snippet_of(
+                "",
+                "Decision | Choice\nShell | **Tauri 2**\nAI | `Ollama`\n",
+                280
+            ),
+            "Decision | Choice\nShell | Tauri 2\nAI | Ollama"
+        );
+        // Prose is untouched by the table path.
+        assert_eq!(
+            snippet_of("", "# Title\n\nFirst line.\nSecond.", 280),
+            "Title\nFirst line.\nSecond."
+        );
+    }
+
+    /// Snippets render markdown before trimming: frontmatter, rules, fence
+    /// markers, and the source's own title line drop; bold, links, code
+    /// spans, task boxes, and bullets become the text a reader would see.
+    #[test]
+    fn snippet_renders_markdown_then_trims() {
+        // A skill file: frontmatter used to BE the snippet.
+        let skill = "---\nname: alchemy\ndescription: Use when…\n---\n\n# Alchemy\n\nSome **bold** and a [link](https://x.y).";
+        assert_eq!(snippet_of("Alchemy", skill, 280), "Some bold and a link.");
+        // An Apple Note: heading, provenance line, then the body, whose
+        // first line repeats the title.
+        let note = "# Alchemy\n\n_Apple Notes · Ideas · modified 2026-07-13_\n\nAlchemy\nRename the app to Alchemy\nAdd ability to `edit` sources\n";
+        assert_eq!(
+            snippet_of("Alchemy", note, 280),
+            "Rename the app to Alchemy\nAdd ability to edit sources"
+        );
+        // A Reminders list: task boxes and agent-facing ids.
+        let list = "# Reminders — Alchemy\n\n- [ ] Queue generations `7b737c15-f2f6-4e35-8ce6-1ebaff926628` — due 2026-09-02\n  - Can we pause on close?\n- [x] Ship it\n";
+        assert_eq!(
+            snippet_of("Reminders: Alchemy", list, 280),
+            "\u{2610} Queue generations — due 2026-09-02\n\u{2022} Can we pause on close?\n\u{2611} Ship it"
+        );
+        // Generated docs: link-chrome header, a rule, a fenced block.
+        let doc = "[**@lancedb/lancedb**](../README.md) • **Docs**\n\n***\n\n.\n\n[](https://x.y)\n\nInterface: AddColumnsResult\n\n```ts\nversion: number;\n```\n";
+        assert_eq!(
+            snippet_of("AddColumnsResult", doc, 280),
+            "@lancedb/lancedb • Docs\nInterface: AddColumnsResult\nversion: number;"
+        );
+    }
 
     fn write_okf_test_zip(path: &std::path::Path, entries: &[(&str, &[u8])]) {
         use std::io::Write as _;
