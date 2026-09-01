@@ -426,9 +426,34 @@ fn looks_auth_error(stderr: &str) -> bool {
         || s.contains("403")
 }
 
+/// Does the hostname itself say "forge"? A label like `github`, `gitlab`,
+/// or `git` anywhere in it (github.ibm.com, gitlab.example.org,
+/// git.sr.ht, code.company.com). Any two-segment path parses as
+/// owner/repo, so without this a benefits page at club.org/page/Join was
+/// getting an eight-second `ls-remote`, and one misread answer poisoned
+/// the host for the TTL and sent the next add off to clone it.
+fn forge_like(host: &str) -> bool {
+    const LABELS: &[&str] = &[
+        "github",
+        "gitlab",
+        "gitea",
+        "gogs",
+        "forgejo",
+        "bitbucket",
+        "codeberg",
+        "git",
+        "code",
+        "scm",
+        "sr",
+    ];
+    host.split('.').any(|label| LABELS.contains(&label))
+}
+
 /// Shape-parse plus host gating: github.com is trusted, clone URLs are
 /// unambiguous, and unknown hosts get one remembered `ls-remote` probe —
 /// zero-config GHE (github.ibm.com works because the user's git does).
+/// A bare owner/repo shape on a host that doesn't look like a forge isn't
+/// probed at all; an explicit /blob/ or /tree/ path still is.
 pub async fn detect_target(data_dir: &Path, url: &str) -> Option<GitTarget> {
     let target = parse_git_url(url)?;
     if matches!(target, GitTarget::CloneAll { .. }) {
@@ -437,6 +462,9 @@ pub async fn detect_target(data_dir: &Path, url: &str) -> Option<GitTarget> {
     let host = host_of(target.remote());
     if host == "github.com" {
         return Some(target);
+    }
+    if matches!(target, GitTarget::RepoHome { .. }) && !forge_like(&host) {
+        return None;
     }
     if let Some(v) = host_verdict(data_dir, &host) {
         return v.then_some(target);
@@ -965,5 +993,35 @@ mod tests {
         ));
         assert!(looks_auth_error("git@host: Permission denied (publickey)."));
         assert!(!looks_auth_error("fatal: repository 'x' not found"));
+    }
+}
+
+#[cfg(test)]
+mod forge_gate_tests {
+    use super::*;
+
+    #[test]
+    fn forge_hosts_by_label() {
+        assert!(forge_like("github.ibm.com"));
+        assert!(forge_like("gitlab.example.org"));
+        assert!(forge_like("git.sr.ht"));
+        assert!(forge_like("code.company.com"));
+        assert!(!forge_like("ferrariclubofamerica.org"));
+        assert!(!forge_like("parks.sonomacounty.ca.gov"));
+        // Substrings don't count — only whole labels.
+        assert!(!forge_like("digital.example.com"));
+    }
+
+    #[tokio::test]
+    async fn bare_owner_repo_on_a_plain_host_is_not_probed() {
+        let dir = tempfile::tempdir().unwrap();
+        // No git_hosts.json is written, which proves no probe ran.
+        let got = detect_target(
+            dir.path(),
+            "https://ferrariclubofamerica.org/page/MembershipMain",
+        )
+        .await;
+        assert!(got.is_none());
+        assert!(!hosts_path(dir.path()).exists());
     }
 }
