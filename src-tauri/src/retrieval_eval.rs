@@ -2227,7 +2227,18 @@ async fn eval_agent_planner_roles() {
     for role in [crate::inference::Role::Small, crate::inference::Role::Chat] {
         let (mut parsed, mut on_target, mut total_ms) = (0usize, 0usize, 0u128);
         for (question, marker) in PLANNER_PROBES {
-            let messages = crate::rag::build_agent_decision(question, &source_list, "", 0);
+            let messages = crate::rag::build_agent_decision(
+                question,
+                &source_list,
+                "",
+                0,
+                &crate::rag::AgentStatus {
+                    step: 1,
+                    max_steps: crate::agent::MAX_STEPS,
+                    read_used: 0,
+                    read_budget: crate::agent::READ_CHARS_LOCAL,
+                },
+            );
             let t = std::time::Instant::now();
             let raw = match ai.chat_role(role, &messages).await {
                 Ok(out) => out.text,
@@ -2392,7 +2403,18 @@ async fn eval_agent_phase_costs() {
     }
 
     // Planner decision (Small role — the shipping default).
-    let messages = crate::rag::build_agent_decision(question, &source_list, "", 0);
+    let messages = crate::rag::build_agent_decision(
+        question,
+        &source_list,
+        "",
+        0,
+        &crate::rag::AgentStatus {
+            step: 1,
+            max_steps: crate::agent::MAX_STEPS,
+            read_used: 0,
+            read_budget: crate::agent::READ_CHARS_LOCAL,
+        },
+    );
     let _ = timed!("planner (small)", {
         ai.chat_role(crate::inference::Role::Small, &messages)
             .await
