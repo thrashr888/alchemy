@@ -1715,7 +1715,20 @@ function DocProperties({
   return (
     // data-doc-meta: excluded from find-in-source and citation anchoring —
     // matching "example.com" against the Site row would be noise.
-    <div data-doc-meta className="mb-6 border-b border-border pb-4">
+    <div data-doc-meta className="mb-6 flex items-start gap-6 border-b border-border pb-4">
+      {/* The cover the gallery shows — a picked image is a decision the
+          reader should honor too, not a gallery-only decoration. "-" means
+          checked and none. */}
+      {source?.imageUrl && source.imageUrl !== "-" && (
+        <img
+          src={source.imageUrl}
+          alt=""
+          className="order-last ml-auto h-20 w-28 shrink-0 rounded-md border border-border object-cover"
+          onError={(e) => {
+            e.currentTarget.hidden = true;
+          }}
+        />
+      )}
       <div className="grid w-fit max-w-full grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-caption">
         {rows.map((r) => (
           <Fragment key={r.label}>

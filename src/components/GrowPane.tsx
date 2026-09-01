@@ -377,6 +377,43 @@ export function GrowPane() {
           {title}
         </span>
         <span className="text-caption text-subtle-foreground">{hint}</span>
+        {/* Whole-section verdicts, same shape as the retirement pass: a
+            long list of citations is usually all-or-nothing. */}
+        {!busy && items.length > 1 && (
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                // Files go as one drop; pages queue one at a time — the
+                // ingest queue keys items by millisecond, and a tight loop
+                // of adds would share one.
+                const files = items
+                  .filter((p) => p.kind === "local")
+                  .map((p) => p.url);
+                const pages = items.filter((p) => p.kind !== "local");
+                for (const p of items) dismiss(p.url);
+                if (files.length > 0) void addSourceFiles(files);
+                void (async () => {
+                  for (const p of pages) await addSourceUrl(p.url);
+                })();
+              }}
+              title={`Add all ${items.length} to this notebook`}
+            >
+              Add all
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                for (const p of items) dismiss(p.url);
+              }}
+              title="Hide every proposal below for 30 days"
+            >
+              Dismiss all
+            </Button>
+          </div>
+        )}
       </div>
       {busy ? (
         <div className="flex items-center gap-2 px-1 py-2 text-caption text-muted-foreground">

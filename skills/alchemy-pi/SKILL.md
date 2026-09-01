@@ -39,6 +39,22 @@ are missing entirely, run `/reload` to pick up the extension.
 4. Write findings with `alchemy_create_note` (markdown). Cite which sources
    informed each claim by title so the user can verify.
 
+## Filling a notebook from a list
+
+When the user hands you a list of things to cover, the work is finding the
+right page for each. Prefer each item's official page and check unsure
+URLs first (a quick search, or a HEAD request) instead of guessing paths.
+Read every result: a `title` like "Page Not Found", "Access Denied", or
+"Attention Required", or a `charCount` of a few hundred, is not content
+even when `status` says ready — delete it and try an alternate page, a
+support-center article, or a `text` source you write and label as your
+own summary. A two-segment path on an unfamiliar host can be mistaken for
+a git repo; if an add comes back with a clone error, re-add the URL with a
+`#fragment`. Add three to five at a time, then finish with an index note
+mapping each item the user named to its sources and gaps. Covers, tags,
+and notes on sources are yours to set (`set_source_image`,
+`set_source_tags`, `set_source_note` via `alchemy_call`).
+
 ## Sharp edges
 
 - **Duplicates are rejected, not silently merged.** Adding the same URL or

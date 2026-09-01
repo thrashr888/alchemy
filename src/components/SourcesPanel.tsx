@@ -360,9 +360,16 @@ export function SourcesPanel() {
   // Dismissals come from the store (per-notebook, persisted there) so the
   // Grow pane clearing its last proposal also drops this door live.
   const growthDismissed = useStore((s) => s.growthDismissed);
+  // The frontier is mined from source text, so it moves whenever a source
+  // finishes importing — re-read on the ready count, not just the notebook,
+  // or the door's number drifts from what the Grow pane shows after a batch
+  // of adds.
+  const readyCount = sources.filter((s) => s.status === "ready").length;
   useEffect(() => {
-    setGrowth([]);
-    if (!currentId) return;
+    if (!currentId) {
+      setGrowth([]);
+      return;
+    }
     let stale = false;
     api
       .growthProposals(currentId)
@@ -373,7 +380,7 @@ export function SourcesPanel() {
     return () => {
       stale = true;
     };
-  }, [currentId]);
+  }, [currentId, readyCount]);
   const existingUrls = useMemo(
     () => new Set(sources.map((s) => s.url).filter(Boolean)),
     [sources],

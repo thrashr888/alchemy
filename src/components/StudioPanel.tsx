@@ -81,11 +81,14 @@ const TINT_DISCLOSURE: Tint = {
   icon: "text-muted-foreground",
 };
 
-/** Wiki entity pages are numerous by design — one per registry entity —
- *  and would drown the handful of notes a person actually wrote. The
- *  "Notebook index" note stays in the main list as the wiki's front door;
- *  its entity pages live behind this fold. */
+/** Wiki pages are numerous by design — one per registry entity plus the
+ *  "Notebook index" that links them — and would drown the handful of
+ *  notes a person actually wrote, so the whole wiki lives behind this
+ *  fold, index first. */
+const WIKI_INDEX_TITLE = "Notebook index";
 const isEntityPage = (n: Note) => n.title.startsWith("Entity: ");
+const isWikiPage = (n: Note) =>
+  isEntityPage(n) || n.title === WIKI_INDEX_TITLE;
 
 function WikiNotes({
   notes,
@@ -111,7 +114,7 @@ function WikiNotes({
       </button>
       {open && (
         <div className="mt-1 flex flex-col gap-1.5">
-          {notes.map((n) => (
+          {[...notes.filter((n) => !isEntityPage(n)), ...notes.filter(isEntityPage)].map((n) => (
             <button
               type="button"
               key={n.id}
@@ -122,7 +125,10 @@ function WikiNotes({
                 {n.title.replace(/^Entity: /, "")}
               </span>
               <span className="text-micro text-subtle-foreground">
-                {relativeTime(n.updatedAt)} · linked from the notebook index
+                {relativeTime(n.updatedAt)}
+                {isEntityPage(n)
+                  ? " · linked from the notebook index"
+                  : " · the wiki's front door"}
               </span>
             </button>
           ))}
@@ -225,7 +231,7 @@ export function StudioPanel() {
     [picked],
   );
   const visibleNoteIds = notes
-    .filter((n) => n.status !== "archived" && !isEntityPage(n))
+    .filter((n) => n.status !== "archived" && !isWikiPage(n))
     .map((n) => n.id);
   const visibleNoteIdsRef = useRef(visibleNoteIds);
   visibleNoteIdsRef.current = visibleNoteIds;
@@ -635,7 +641,7 @@ export function StudioPanel() {
           ) : (
             <div className="flex flex-col gap-1.5">
               {notes
-                .filter((n) => n.status !== "archived" && !isEntityPage(n))
+                .filter((n) => n.status !== "archived" && !isWikiPage(n))
                 .map((n) => (
                 <div
                   key={n.id}
@@ -847,7 +853,7 @@ export function StudioPanel() {
           )}
           <WikiNotes
             notes={notes.filter(
-              (n) => n.status !== "archived" && isEntityPage(n),
+              (n) => n.status !== "archived" && isWikiPage(n),
             )}
             onOpen={openNoteCard}
           />
