@@ -888,12 +888,15 @@ function FolderCard({
 function tableRows(snippet: string): { caption: string; rows: string[][] } | null {
   const lines = snippet.split("\n");
   const first = lines.findIndex((l) => l.includes(" | "));
-  if (first < 0 || first > 1) return null;
+  // The corner ends the snippet, so everything before it is caption and
+  // everything from it on must be rows — a lone piped line mid-prose is
+  // not a table.
+  if (first < 0 || first > 2) return null;
   const rows = lines.slice(first).map((l) => l.split(" | "));
   if (rows.length < 2 || rows.some((r) => r.length !== rows[0].length)) {
     return null;
   }
-  return { caption: first === 1 ? lines[0] : "", rows };
+  return { caption: lines.slice(0, first).join("\n"), rows };
 }
 
 function SnippetTable({
@@ -903,7 +906,9 @@ function SnippetTable({
 }) {
   return (
     <div className="mt-1.5 text-caption text-muted-foreground">
-      {caption && <div className="truncate">{caption}</div>}
+      {caption && (
+        <div className="line-clamp-2 whitespace-pre-line">{caption}</div>
+      )}
       <table className="mt-1 w-full table-fixed border-collapse">
         <tbody>
           {rows.map((cells, i) => (
