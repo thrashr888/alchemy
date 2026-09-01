@@ -347,6 +347,26 @@ impl Ollama {
         })
     }
 
+    /// Ask the server to release this engine's chat model now — a chat
+    /// request with `keep_alive: 0` and no messages is Ollama's documented
+    /// unload. Best-effort: eval sweeps call it between models so a swept
+    /// 10-20 GB model doesn't linger in unified memory while the next
+    /// loads; a failure just means the residency window expires instead.
+    #[cfg_attr(not(test), allow(dead_code))] // eval-harness hygiene, test builds only
+    pub async fn unload_chat_model(&self) {
+        let _ = self
+            .http
+            .post(self.url("/api/chat"))
+            .timeout(std::time::Duration::from_secs(10))
+            .json(&json!({
+                "model": self.config.chat_model,
+                "messages": [],
+                "keep_alive": 0,
+            }))
+            .send()
+            .await;
+    }
+
     /// The chat model this engine answers with — the name a loading status
     /// should show.
     pub fn chat_model_name(&self) -> &str {

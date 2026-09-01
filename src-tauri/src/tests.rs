@@ -27,8 +27,10 @@ async fn rag_round_trip() {
         embed_model: "nomic-embed-text".into(),
         vision_model: String::new(),
         effort: String::new(),
-        keep_alive: None,
-        num_predict: None,
+        // Eval-tier discipline (see evals::eval_ollama): short residency
+        // and a runaway cap, so a rambling reply can't wedge the suite.
+        keep_alive: Some("1m".into()),
+        num_predict: Some(2_048),
     });
     if !crate::evals::ollama_tests_enabled() {
         eprintln!("SKIP: set ALCHEMY_OLLAMA_TESTS=1 to run the Ollama round trip");

@@ -216,6 +216,35 @@ fn flag_set(name: &str) -> bool {
     }
 }
 
+/// A raw Ollama engine for eval use, with the same discipline the app now
+/// ships: `num_predict` bounds a runaway reply (one was traced holding the
+/// server's single slot for 12k+ tokens, wedging everything behind it — an
+/// eval sweep hits the identical failure), and a SHORT residency window so
+/// a swept model expires right after its turn instead of stacking in
+/// unified memory at Ollama's 5m default while the next model loads.
+pub(crate) fn eval_ollama(model: &str) -> crate::ai::Ollama {
+    crate::ai::Ollama::new(crate::ai::OllamaConfig {
+        base_url: "http://localhost:11434".into(),
+        chat_model: model.into(),
+        keep_alive: Some("1m".into()),
+        num_predict: Some(2_048),
+        ..Default::default()
+    })
+}
+
+/// Release swept models at the end of a live eval — best-effort unloads so
+/// the machine comes back to the developer instead of holding 10-20 GB of
+/// eval models until their residency windows lapse. "fm" (the sidecar
+/// spelling in the planner A/B envs) is skipped — it isn't an Ollama tag.
+pub(crate) async fn release_models(models: &[&str]) {
+    for m in models {
+        if m.is_empty() || m.eq_ignore_ascii_case("fm") {
+            continue;
+        }
+        eval_ollama(m).unload_chat_model().await;
+    }
+}
+
 /// The embedder for a corpus eval: `builtin_ai`, behind [`evals_enabled`].
 /// The `#[ignore]`d evals call `builtin_ai` directly — `--ignored` is already
 /// an explicit ask, and gating those twice would make them silently no-op.
@@ -386,9 +415,13 @@ async fn eval_retrieval_recall() {
 #[tokio::test]
 #[ignore = "needs live Ollama; run explicitly — the silent skip made this pass green on CI without measuring anything"]
 async fn eval_distill_quality() {
+    // small_model, not just chat_model: distill runs on the Small role in
+    // the app, and that engine carries the runaway cap + residency window —
+    // the eval must exercise the same engine the loop does.
     let ai = Ai::new(
         AiConfig {
             chat_model: "digitsflow/bonsai-8b:latest".into(),
+            small_model: "digitsflow/bonsai-8b:latest".into(),
             ..Default::default()
         },
         AiRuntime::default(),
@@ -416,6 +449,7 @@ async fn eval_distill_quality() {
     .await;
 
     eprintln!("distill output ({} chars):\n{out}\n", out.chars().count());
+    release_models(&["digitsflow/bonsai-8b:latest"]).await;
     assert!(
         out.to_lowercase().contains("third thursday"),
         "distillate lost the key fact; got: {out}"
@@ -431,9 +465,12 @@ async fn eval_distill_quality() {
 #[tokio::test]
 #[ignore = "needs live Ollama; run explicitly — the silent skip made this pass green on CI without measuring anything"]
 async fn eval_rerank_surfaces_buried_hit() {
+    // small_model too — the loop's rerank call runs on the Small role, and
+    // only that engine carries the runaway cap + residency window.
     let ai = Ai::new(
         AiConfig {
             chat_model: "digitsflow/bonsai-8b:latest".into(),
+            small_model: "digitsflow/bonsai-8b:latest".into(),
             ..Default::default()
         },
         AiRuntime::default(),
@@ -482,6 +519,7 @@ async fn eval_rerank_surfaces_buried_hit() {
     );
 
     let kept = crate::agent::rerank(&ai, "what is the deductible for hail damage?", hits).await;
+    release_models(&["digitsflow/bonsai-8b:latest"]).await;
     eprintln!(
         "rerank kept: {:?}",
         kept.iter().map(|c| c.chunk_id.as_str()).collect::<Vec<_>>()
@@ -572,11 +610,9 @@ async fn eval_chat_grounding_across_models() {
 
     let mut failures: Vec<String> = Vec::new();
     for model in &models {
-        let ai = Ollama::new(OllamaConfig {
-            base_url: "http://localhost:11434".into(),
-            chat_model: model.clone(),
-            ..Default::default()
-        });
+        // The eval-tier engine: capped output (a rambling candidate must
+        // not wedge the whole sweep) and a short residency window.
+        let ai = eval_ollama(model);
         let (mut facts, mut marked, mut cited, mut tok_s) = (0, 0, 0, Vec::new());
         for (question, expects, excerpt) in qa {
             let messages = crate::rag::build_chat_messages(
@@ -601,6 +637,9 @@ async fn eval_chat_grounding_across_models() {
             marked += !markers.is_empty() as u32;
             cited += markers.contains(excerpt) as u32;
         }
+        // Release this candidate before the next loads — a sweep used to
+        // stack every swept model in unified memory for 5 minutes each.
+        ai.unload_chat_model().await;
         let speed = tok_s.iter().sum::<f64>() / tok_s.len().max(1) as f64;
         eprintln!(
             "{model}: facts {facts}/{n}, cited-at-all {marked}/{n}, cited-right-excerpt {cited}/{n}, {speed:.0} tok/s",
