@@ -157,6 +157,13 @@ export interface AppState {
   /** Latest hygiene classification for the current notebook
    *  (RFC-source-hygiene): drives row badges and the review modal. */
   hygiene: HygieneIssue[];
+  /** Dismissed growth proposals for the current notebook (RFC-living-notebook
+   *  Pillar 2), keyed by proposal url (or `retire:`/`merge:` key) → time.
+   *  Lives in the store, not per-component, so clearing the Grow pane also
+   *  clears the sidebar's "Grow this notebook" door. */
+  growthDismissed: Record<string, number>;
+  /** Dismiss one growth proposal: hidden ~30 days, persisted per notebook. */
+  dismissGrowth: (key: string) => void;
   messages: Message[];
   messagesHasMore: boolean;
   messagesLoadingOlder: boolean;

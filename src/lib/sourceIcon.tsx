@@ -5,12 +5,16 @@
 import type { Source } from "@/lib/types";
 import {
   Blocks,
+  BookOpen,
+  Box,
   Calendar,
   CodeXml,
   Command,
   FileCode,
+  FileSpreadsheet,
   FileText,
   FileType,
+  FileType2,
   Folder,
   Gem,
   GitBranch,
@@ -19,8 +23,25 @@ import {
   Image as ImageIcon,
   ListChecks,
   NotebookText,
+  Presentation,
   TrendingUp,
 } from "lucide-react";
+
+// Application families recognized by file extension. Extraction flattens
+// docx/pptx/xlsx and friends into generic text sources, so the origin app
+// survives only in the path — sniff it back for the row icon.
+const WORD_EXTS = new Set(["doc", "docx", "docm", "rtf", "odt", "gdoc"]);
+const SLIDES_EXTS = new Set(["ppt", "pptx", "pptm", "odp", "gslides", "key"]);
+const SHEET_EXTS = new Set([
+  "xls", "xlsx", "xlsm", "xlsb", "ods", "csv", "tsv", "gsheet",
+]);
+
+/** Extension of a local file path; "" for web/cider URLs and bare titles. */
+function fileExt(url?: string): string {
+  if (!url || /^[a-z][a-z0-9+.-]*:\/\//i.test(url)) return "";
+  const m = /\.([a-z0-9]+)$/i.exec(url);
+  return m ? m[1].toLowerCase() : "";
+}
 
 export function sourceIcon(t: Source["sourceType"], url?: string) {
   // Mac sources show the app they mirror (same icons as the add-source
@@ -35,6 +56,19 @@ export function sourceIcon(t: Source["sourceType"], url?: string) {
     if (url.startsWith("cider://stocks/"))
       return <TrendingUp className="h-3.5 w-3.5 text-muted-foreground" />;
   }
+  // File-backed sources show the application family the file came from —
+  // Word, PowerPoint, Excel, Box, EPUB — not just "text".
+  const ext = fileExt(url);
+  if (WORD_EXTS.has(ext))
+    return <FileType2 className="h-3.5 w-3.5 text-muted-foreground" />;
+  if (SLIDES_EXTS.has(ext))
+    return <Presentation className="h-3.5 w-3.5 text-muted-foreground" />;
+  if (SHEET_EXTS.has(ext))
+    return <FileSpreadsheet className="h-3.5 w-3.5 text-muted-foreground" />;
+  if (ext === "epub")
+    return <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />;
+  if (ext === "boxnote")
+    return <Box className="h-3.5 w-3.5 text-muted-foreground" />;
   switch (t) {
     case "git":
       return <GitBranch className="h-3.5 w-3.5 text-muted-foreground" />;

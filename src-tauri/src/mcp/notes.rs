@@ -98,7 +98,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Create a markdown note in a notebook and return it. When recording WHY you reached a conclusion — a claim, decision, or recommendation grounded in the sources — set kind:\"evidence\" and structure the body as: the claim, supporting passages (verbatim, each naming its source), search queries used, confidence (high/medium/low with why), counter-evidence or \"none found\", and open questions. Evidence notes make your reasoning auditable and let a later session pick up the thread."
+        description = "Create a markdown note in a notebook and return it. When recording WHY you reached a conclusion — a claim, decision, or recommendation grounded in the sources — set kind:\"evidence\" and structure the body as: the claim, supporting passages (verbatim, each naming its source), search queries used, confidence (high/medium/low with why), counter-evidence or \"none found\", and open questions. Evidence notes make your reasoning auditable and let a later session pick up the thread. Example: {\"notebook_id\":\"<id>\",\"title\":\"Why we chose LanceDB\",\"content\":\"## Claim\\n…\",\"kind\":\"evidence\"}"
     )]
     async fn create_note(
         &self,
