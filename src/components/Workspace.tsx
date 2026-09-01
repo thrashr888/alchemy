@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useStore } from "@/lib/store";
 import { SourcesPanel } from "./SourcesPanel";
 import { ChatPanel } from "./ChatPanel";
@@ -10,10 +10,20 @@ import { StudioPanel } from "./StudioPanel";
 import { AddSourceModal } from "./AddSourceModal";
 import { SourcesRail, StudioRail } from "./SidebarRails";
 import { HealthBanner } from "./HealthBanner";
-import { Button } from "./ui";
+import { Button, RowMenu, useConfirm } from "./ui";
 import { NavButtons } from "./NavButtons";
+import { NotebookEditModal } from "./NotebookEditModal";
 import { shortcutBlocked } from "@/lib/utils";
-import { Library, Search, Settings } from "lucide-react";
+import type { Notebook } from "@/lib/types";
+import {
+  Archive,
+  FileDown,
+  Library,
+  Pencil,
+  Search,
+  Settings,
+  Trash2,
+} from "lucide-react";
 import { notebookIcon } from "@/lib/notebookIcons";
 import { DevBadge } from "./DevBadge";
 import { UpdateBadge } from "./UpdateBadge";
@@ -37,6 +47,8 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   const sourceCount = useStore((s) => s.sources.length);
 
   const notebook = notebooks.find((n) => n.id === currentId);
+  const [editing, setEditing] = useState<Notebook | null>(null);
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   // Dev-only automation hook: lets tauri-browser (and console debugging)
   // drive the reader through the store, which invoke-level access can't.
@@ -94,7 +106,10 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
           Notebooks
         </Button>
         <div className="mx-1 h-4 w-px bg-border" />
-        <div className="flex items-center gap-1.5 min-w-0">
+        {/* `group`: the name cluster is a right-clickable object — the ⋯
+            RowMenu inside binds contextmenu to this div, carrying the same
+            verbs as a notebook row on Home (color lives in Rename's dialog). */}
+        <div className="group relative flex items-center gap-1.5 min-w-0">
           {(() => {
             const Icon = notebookIcon(notebook?.icon);
             return <Icon className="h-3.5 w-3.5 shrink-0 text-primary" />;
@@ -111,6 +126,51 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
           >
             {notebook?.title ?? "Notebook"}
           </span>
+          {notebook && (
+            <RowMenu
+              label={`Options for ${notebook.title}`}
+              items={[
+                {
+                  label: "Rename",
+                  icon: <Pencil className="h-3.5 w-3.5" />,
+                  onClick: () => setEditing(notebook),
+                },
+                {
+                  label: "Export notebook…",
+                  icon: <FileDown className="h-3.5 w-3.5" />,
+                  onClick: () =>
+                    void useStore.getState().exportNotebookOkf(notebook.id),
+                },
+                {
+                  // The store leaves the notebook when its current one is
+                  // archived or deleted — no extra navigation here.
+                  label: "Archive",
+                  icon: <Archive className="h-3.5 w-3.5" />,
+                  onClick: () =>
+                    void useStore
+                      .getState()
+                      .setNotebookStatus(notebook.id, "archived"),
+                },
+                {
+                  label: "Delete…",
+                  icon: <Trash2 className="h-3.5 w-3.5" />,
+                  danger: true,
+                  onClick: async () => {
+                    if (
+                      await confirm({
+                        title: `Delete "${notebook.title}"?`,
+                        message:
+                          "This permanently deletes the notebook and all of its sources.",
+                        confirmLabel: "Delete",
+                        danger: true,
+                      })
+                    )
+                      void useStore.getState().deleteNotebook(notebook.id);
+                  },
+                },
+              ]}
+            />
+          )}
         </div>
         <div className="mx-2">
           <CenterModeTabs />
@@ -183,6 +243,8 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
 
       {/* Global: adding sources works even while the panel is collapsed. */}
       <AddSourceModal />
+      {confirmDialog}
+      <NotebookEditModal notebook={editing} onClose={() => setEditing(null)} />
     </div>
   );
 }
