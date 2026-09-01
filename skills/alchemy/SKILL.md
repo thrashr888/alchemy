@@ -53,6 +53,44 @@ header. Do not replace that entry with a bare URL, which will be rejected.
    find them in `list_sources` by a `url` starting with `cider://notes/note/`
    or `cider://reminders/list/`.
 
+## Filling a notebook from a list
+
+When the user hands you a list of things to cover (programs, papers,
+vendors, places), the work is finding the right page for each, not just
+adding what comes to mind. Habits that keep the notebook clean:
+
+- **Prefer the official page for each item** — the program's own benefits or
+  membership page, not a news story about it. When you're unsure of the
+  URL, check it first (`curl -sI`, or a quick web search for the current
+  page) rather than guessing a path; guessed paths 404 or land on a
+  homepage.
+- **Read every result before moving on.** A source whose `title` says "Page
+  Not Found", "Access Denied", "Attention Required", or "Just a moment", or
+  whose `charCount` is a few hundred, is not content even when `status`
+  says ready. Delete it (`delete_source`) and try an alternate: a different
+  page on the same site, a sitemap, a support-center article, a partner's
+  page that mirrors the terms. A site that fetches nothing at all
+  (Cloudflare, Akamai) gets a `text` source you write from what you know,
+  clearly labeled as your summary, with the items the user should confirm.
+- **Two-segment paths on unfamiliar hosts** (`site.org/page/Join`) can be
+  mistaken for a git owner/repo and probed as a repository. If an add
+  comes back with a clone error, re-add with a `#fragment` on the URL —
+  the shape parser skips it and the page fetches normally.
+- **Add in small groups** (three to five at a time) and check the batch
+  before the next; the importer serializes heavy work and a wall of calls
+  just stretches every call's clock.
+- **Finish with an index note**: one table per category mapping each item
+  the user named to its source titles, what each page covers, what it
+  doesn't (login-gated perks, thin marketing pages), and which URLs would
+  not import and why. That note is how the user judges coverage.
+- **Covers are yours to set**: `set_source_image` puts a picked image on
+  the source's gallery card and reader header; `set_source_tags` and
+  `set_source_note` carry the user's own labels into retrieval.
+- **Keep the user's own lists in step.** If they track the same things in
+  an Apple Reminders list, update it as well — through `add_reminder` when
+  the list is a connected source, or the `cider` CLI otherwise — and say
+  which items you added.
+
 ## Sharing notebooks
 
 Notebooks travel as OKF bundles: the app exports a single `.okf.zip`

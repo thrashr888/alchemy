@@ -1186,6 +1186,7 @@ pub fn blocked_marker(text: &str) -> Option<String> {
         "are you a robot",
         "checking your browser",
         "just a moment",
+        "attention required",
         "access denied",
         "captcha",
         "sign in to continue",
