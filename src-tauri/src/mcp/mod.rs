@@ -234,6 +234,18 @@ async fn start_server(
     Ok(shutdown)
 }
 
+/// Dev builds advertise themselves in their own file. They share the app
+/// data dir with the installed app, and clobbering mcp.json pointed the CLI
+/// and every discovering agent at a dead port once the dev instance quit —
+/// the +1 port offset kept the servers apart but not their discovery.
+const fn discovery_file_name() -> &'static str {
+    if cfg!(debug_assertions) {
+        "mcp.dev.json"
+    } else {
+        "mcp.json"
+    }
+}
+
 /// Discovery file so tooling can find the server without hardcoding the port.
 fn write_port_file(app: &AppHandle, port: u16, token: &str) -> anyhow::Result<()> {
     let dir = app.path().app_data_dir()?;
@@ -244,7 +256,7 @@ fn write_port_file(app: &AppHandle, port: u16, token: &str) -> anyhow::Result<()
         "token": token,
     });
     crate::secure_fs::write_private_file(
-        &dir.join("mcp.json"),
+        &dir.join(discovery_file_name()),
         serde_json::to_string(&info)?.as_bytes(),
     )?;
     Ok(())
@@ -252,7 +264,7 @@ fn write_port_file(app: &AppHandle, port: u16, token: &str) -> anyhow::Result<()
 
 fn remove_port_file(app: &AppHandle) {
     if let Ok(dir) = app.path().app_data_dir() {
-        let _ = std::fs::remove_file(dir.join("mcp.json"));
+        let _ = std::fs::remove_file(dir.join(discovery_file_name()));
     }
 }
 
