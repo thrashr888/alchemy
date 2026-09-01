@@ -915,7 +915,15 @@ function SnippetTable({
               )}
             >
               {cells.map((cell, j) => (
-                <td key={j} className="truncate py-0.5 pr-2 align-top">
+                <td
+                  key={j}
+                  className={cn(
+                    "truncate py-0.5 pr-2 align-top",
+                    // The cut-columns marker is one glyph wide; with
+                    // table-fixed it would otherwise take a full column.
+                    cell === "…" && "w-4 pr-0",
+                  )}
+                >
                   {cell}
                 </td>
               ))}
