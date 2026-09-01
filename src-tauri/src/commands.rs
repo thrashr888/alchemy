@@ -3471,7 +3471,9 @@ fn snippet_of(title: &str, content: &str, max_chars: usize) -> String {
             break;
         }
         let rendered = render_inline(t.trim_start_matches('#').trim_start());
-        if rendered.is_empty() {
+        // A line with no letter or digit left — a lone ".", a link that
+        // resolved to nothing — is not a line worth a card row.
+        if !rendered.chars().any(char::is_alphanumeric) {
             continue;
         }
         if !out.is_empty() {
@@ -13989,7 +13991,7 @@ mod tool_tests {
             "\u{2610} Queue generations — due 2026-09-02\n\u{2022} Can we pause on close?\n\u{2611} Ship it"
         );
         // Generated docs: link-chrome header, a rule, a fenced block.
-        let doc = "[**@lancedb/lancedb**](../README.md) • **Docs**\n\n***\n\nInterface: AddColumnsResult\n\n```ts\nversion: number;\n```\n";
+        let doc = "[**@lancedb/lancedb**](../README.md) • **Docs**\n\n***\n\n.\n\n[](https://x.y)\n\nInterface: AddColumnsResult\n\n```ts\nversion: number;\n```\n";
         assert_eq!(
             snippet_of("AddColumnsResult", doc, 280),
             "@lancedb/lancedb • Docs\nInterface: AddColumnsResult\nversion: number;"
