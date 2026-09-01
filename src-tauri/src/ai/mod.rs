@@ -584,6 +584,8 @@ pub(crate) fn ollama_config(config: &AiConfig) -> OllamaConfig {
         vision_model: config.vision_model.clone(),
         // Effort is a per-provider choice; the shared slice carries none.
         effort: String::new(),
+        keep_alive: None,
+        num_predict: None,
     }
 }
 
@@ -681,6 +683,20 @@ impl Ai {
         let small = if !config.small_model.trim().is_empty() {
             let mut oc = ollama_config(&config);
             oc.chat_model = config.small_model.trim().to_string();
+            // Hold the small model resident well past Ollama's 5m default:
+            // its cold load is the measured tail of deep research and gap
+            // retrieval (595s once, under load; 21s typical), and an 8B
+            // model kept warm after real use is cheap — unlike predictive
+            // preloading, which this deliberately is not.
+            oc.keep_alive = Some("30m".into());
+            // And cap its output: every small-role call is short by
+            // contract (a JSON action, a query line, a distillate whose
+            // consumer truncates at 4,000 chars). One runaway response was
+            // traced holding Ollama's single slot for 12k+ tokens (~600s)
+            // with the whole app queued behind it; 2,048 tokens is roomy
+            // for the longest legitimate reply and bounds that tail at
+            // ~20s on an 8B model.
+            oc.num_predict = Some(2_048);
             Some(ChatEngine::Ollama(Ollama::new(oc)))
         } else {
             runtime
@@ -947,6 +963,32 @@ impl Ai {
     #[cfg(test)]
     pub fn has_small_role(&self) -> bool {
         self.router.has_small()
+    }
+
+    /// The Ollama model `chat_role(role)` would run that is NOT currently
+    /// resident in the server — so a caller about to pay the cold load can
+    /// say "Starting {model}…" instead of letting it read as a hang. None
+    /// when the resolved engine isn't Ollama, the model is already loaded,
+    /// or the probe fails (status must never block a run).
+    pub async fn cold_ollama_model(&self, role: Role) -> Option<String> {
+        // Mirror chat_role's resolution: Small falls through to the chat
+        // engine when no small engine is configured.
+        let engine = match role {
+            Role::Small if !self.router.has_small() => self.router.chat_engine(Role::Chat),
+            r => self.router.chat_engine(r),
+        };
+        let ChatEngine::Ollama(o) = engine else {
+            return None;
+        };
+        let model = o.chat_model_name().to_string();
+        let loaded = self.ollama.ps().await.ok()?;
+        // `ps` reports fully tagged names; configs may omit `:latest`.
+        let norm = |s: &str| s.trim_end_matches(":latest").to_string();
+        if loaded.iter().any(|m| norm(m) == norm(&model)) {
+            None
+        } else {
+            Some(model)
+        }
     }
 
     pub async fn chat_role(&self, role: Role, messages: &[ChatTurn]) -> Result<ChatOutcome> {

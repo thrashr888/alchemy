@@ -428,6 +428,8 @@ async fn readiness_for_entry(
                 embed_model: config.embed_model.clone(),
                 vision_model: config.vision_model.clone(),
                 effort: String::new(),
+                keep_alive: None,
+                num_predict: None,
             };
             if !entry.base_url.trim().is_empty() {
                 cfg.base_url = entry.base_url.clone();
@@ -8308,6 +8310,10 @@ pub async fn send_message(
     // recall from hybrid search, precision from the cross-encoder
     // (BEIR-measured in beir_eval.rs; tier choice in Router::xenc_model).
     let fetch_k = if ai.has_xenc() { k * 3 } else { k };
+    // Per-stage clocks: retrievalMs alone showed 1.6-9.2s per turn with no
+    // way to say which stage — hybrid search, the grep leg, the gap
+    // retrieval's model call, or the rerank — was eating it.
+    let t_stage = std::time::Instant::now();
     let search = e(state
         .db
         .search_chunks_trace(
@@ -8318,16 +8324,20 @@ pub async fn send_message(
             source_ids.as_deref(),
         )
         .await)?;
+    let search_ms = t_stage.elapsed().as_millis() as u64;
     // The ripgrep leg (RFC-git-sources §6): code-shaped queries also
     // exact-match over the notebook's repo-backed files, and the windows
     // join the fusion as ordinary citations.
+    let t_stage = std::time::Instant::now();
     let grep_hits = grep_leg(&state, &notebook_id, &content, source_ids.as_deref()).await;
+    let grep_ms = t_stage.elapsed().as_millis() as u64;
     // Iterative retrieval (RFC-judged-evals §4.3, measured before shipped):
     // the small tier names the evidence still missing, one more search
     // fetches it, and the merged pool reranks. Self-gating — the model
     // answers NONE when the first pass suffices — and it lifted multi-hop
     // gold-evidence citation 48%→60% with zero single-hop regression.
     let mut pool = search.final_hits;
+    let t_stage = std::time::Instant::now();
     let gap_query = gap_retrieve(
         &ai,
         &state.db,
@@ -8339,6 +8349,7 @@ pub async fn send_message(
         source_ids.as_deref(),
     )
     .await;
+    let gap_ms = t_stage.elapsed().as_millis() as u64;
     crate::trace::log(
         &state.trace_dir,
         serde_json::json!({
@@ -8357,7 +8368,9 @@ pub async fn send_message(
     );
     let pool_cap = pool.len() + grep_hits.len();
     let citations = fuse_grep_hits(pool, grep_hits, pool_cap);
+    let t_stage = std::time::Instant::now();
     let citations = ai.rerank_hits(&content, citations, k).await;
+    let rerank_ms = t_stage.elapsed().as_millis() as u64;
     let retrieval_ms = (t0.elapsed().as_millis() as u64).saturating_sub(embed_ms);
     bump_note_usage(&state.db, &citations, "retrieval_hits").await;
 
@@ -8469,6 +8482,21 @@ pub async fn send_message(
         // the same step trail the deep-research loop uses — a long silent
         // spinner otherwise reads as a hang.
         let app_for_steps = app.clone();
+        // Cold-model honesty (UX for the measured cold-load tail): if the
+        // chat model has to load first, say whose startup the wait is.
+        // Ollama default engine only — overrides carry their own engines,
+        // and non-Ollama engines return None before any probe.
+        if override_engine.is_none() {
+            if let Some(m) = ai.cold_ollama_model(crate::inference::Role::Chat).await {
+                let _ = app.emit(
+                    "chat://step",
+                    StepEvent {
+                        label: format!("Starting {m}…"),
+                        transient: false,
+                    },
+                );
+            }
+        }
         let streamed = tokio::select! {
             out = engine.chat_stream_steps(&messages, |tok| {
                 ttft_cb.mark();
@@ -8519,6 +8547,10 @@ pub async fn send_message(
             Some(serde_json::json!({
                 "embedMs": embed_ms,
                 "retrievalMs": retrieval_ms,
+                "searchMs": search_ms,
+                "grepMs": grep_ms,
+                "gapMs": gap_ms,
+                "rerankMs": rerank_ms,
             })),
         );
     }

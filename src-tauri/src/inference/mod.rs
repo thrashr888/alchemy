@@ -202,6 +202,19 @@ pub struct OllamaConfig {
     /// with no thinking mode ignores it rather than erroring (verified live
     /// against laguna-s-2.1, which simply answers without a thinking block).
     pub effort: String,
+    /// Residency window sent as Ollama's `keep_alive` on chat requests; None
+    /// keeps the server default (5m). The Small engine sets this: its cold
+    /// load is the measured tail of every deep-research run and gap
+    /// retrieval, and an 8B model held warm is cheap where predictively
+    /// preloading one would not be.
+    pub keep_alive: Option<String>,
+    /// Output-token ceiling sent as Ollama's `num_predict`; None = server
+    /// default (unbounded). The Small engine sets this: its calls are short
+    /// by contract (a JSON action, a query line, a ~500-word distillate),
+    /// and one runaway response was measured holding Ollama's single slot
+    /// for 12,000+ tokens — ~600s — with every other request queued behind
+    /// it. A cap turns that failure mode into a ~20s worst case.
+    pub num_predict: Option<u32>,
 }
 
 /// Reasoning-effort levels for the two engines that take it as a request

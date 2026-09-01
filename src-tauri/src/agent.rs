@@ -175,6 +175,14 @@ pub async fn run(
         "readBudget": read_budget_total,
     }));
 
+    // A cold planner model is the measured tail of a run (595s once, under
+    // load) — name it while it loads instead of letting it read as a hang.
+    // The keep_alive on the small engine makes this rare, not impossible.
+    if let Some(model) = ollama.cold_ollama_model(loop_role()).await {
+        emit_step(app, format!("Starting {model}…"));
+        trace(serde_json::json!({ "event": "cold_model", "model": model, "role": "small" }));
+    }
+
     let mut repaired = false;
     for step0 in 0..MAX_STEPS {
         let step = step0 + 1;
@@ -384,6 +392,12 @@ pub async fn run(
         "msToAnswer": t_run.elapsed().as_millis() as u64,
     }));
 
+    // Same honesty for the answer model — the loop may have run entirely on
+    // the small tier while the chat model sat unloaded.
+    if let Some(model) = ollama.cold_ollama_model(crate::inference::Role::Chat).await {
+        emit_step(app, format!("Starting {model}…"));
+        trace(serde_json::json!({ "event": "cold_model", "model": model, "role": "chat" }));
+    }
     emit_step(app, "Writing answer".into());
     let source_manifest: Vec<(String, String, String)> = sources
         .iter()
