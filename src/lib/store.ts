@@ -2599,13 +2599,6 @@ export const useStore = create<AppState>((set, get) => {
     closeReader: () =>
       set((state) => ({ reader: { ...state.reader, open: false } })),
 
-    readerNavigate: (delta) => {
-      const { history, index } = get().reader;
-      const next = index + delta;
-      if (next < 0 || next >= history.length) return;
-      set({ reader: { open: true, history, index: next } });
-    },
-
     readerStep: (dir) => {
       const { reader, sources, notes } = get();
       const current = reader.history[reader.index];
@@ -3226,6 +3219,8 @@ async function applyNav(delta: 1 | -1): Promise<void> {
       const section = target.section ?? "notebooks";
       if (section === "chat")
         await useStore.getState().openHomeThread(target.thread ?? null);
+      else if (section === "registry")
+        useStore.setState({ homeSection: section, openCardId: target.card ?? null });
       else useStore.setState({ homeSection: section });
     }
   } finally {
@@ -3305,7 +3300,8 @@ useStore.subscribe((s, prev) => {
     s.growOpen === prev.growOpen &&
     s.reader === prev.reader &&
     s.homeSection === prev.homeSection &&
-    s.homeChat.threadId === prev.homeChat.threadId
+    s.homeChat.threadId === prev.homeChat.threadId &&
+    s.openCardId === prev.openCardId
   )
     return;
   recordNav(s);
@@ -3330,6 +3326,7 @@ function recordNav(s: ReturnType<typeof useStore.getState>) {
   // open notebook must not stack entries for a screen nobody is looking at.
   const section = s.currentId ? undefined : s.homeSection;
   const thread = section === "chat" ? (s.homeChat.threadId ?? null) : undefined;
+  const card = section === "registry" ? (s.openCardId ?? null) : undefined;
   const { stack, index } = s.nav;
   const cur = stack[index];
   if (
@@ -3339,13 +3336,14 @@ function recordNav(s: ReturnType<typeof useStore.getState>) {
     cur.doc?.type === doc?.type &&
     cur.doc?.id === doc?.id &&
     cur.section === section &&
-    cur.thread === thread
+    cur.thread === thread &&
+    cur.card === card
   )
     return;
   // A fresh navigation discards forward entries, browser-style.
   const next: NavEntry[] = [
     ...stack.slice(0, index + 1),
-    { nb: s.currentId, mode, doc, section, thread },
+    { nb: s.currentId, mode, doc, section, thread, card },
   ];
   if (next.length > 100) next.splice(0, next.length - 100);
   useStore.setState({ nav: { stack: next, index: next.length - 1 } });

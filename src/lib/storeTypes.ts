@@ -53,6 +53,9 @@ export interface NavEntry {
   section?: HomeSection;
   /** The Home conversation that was open, for `section: "chat"`. */
   thread?: string | null;
+  /** The Registry card that was open, for `section: "registry"` — a card
+   *  is a page of its own, and back from one returns to the cast. */
+  card?: string | null;
 }
 
 /** Home's center column: the notebook grid, the Registry's cast, or the
@@ -474,8 +477,6 @@ export interface AppState {
   openInReader: (doc: ReaderDoc) => void;
   /** Leave the reader (back to chat); history survives for the Reader tab. */
   closeReader: () => void;
-  /** Browser-style back/forward through reader history. */
-  readerNavigate: (delta: 1 | -1) => void;
   /** Step to the previous/next document in rail order (sources then notes). */
   readerStep: (dir: 1 | -1) => void;
   appendToken: (token: string) => void;

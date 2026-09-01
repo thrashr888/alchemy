@@ -71,8 +71,8 @@ import {
 /**
  * The center-column reader — documents open here, in place, instead of in
  * modals. The sources/notes rails act as the navigator: clicking a row swaps
- * the document; history is browser-grade (back/forward, ⌘[ / ⌘]); j/k steps
- * through the rail order. Every note kind renders with its native renderer,
+ * the document; back/forward is the app-level history (NavButtons, ⌘[ / ⌘]),
+ * which every opened document joins; j/k steps through the rail order. Every note kind renders with its native renderer,
  * and markdown-shaped sources render as markdown instead of a text dump
  * (see docs/RFC-document-surface.md).
  */
@@ -598,18 +598,14 @@ export function ReaderPane() {
       ? (templates.find((t) => t.id === current.id) ?? null)
       : null;
 
-  // Keyboard: Esc back to chat, ⌘[ / ⌘] history, j/k rail order.
+  // Keyboard: Esc back to chat, j/k rail order. ⌘[ / ⌘] are the app-level
+  // history's (App.tsx) — the reader's documents are entries in it.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const s = useStore.getState();
       if (e.key === "Escape" && !shortcutBlocked(e)) {
         e.preventDefault();
         s.closeReader();
-        return;
-      }
-      if ((e.metaKey || e.ctrlKey) && (e.key === "[" || e.key === "]")) {
-        e.preventDefault();
-        s.readerNavigate(e.key === "]" ? 1 : -1);
         return;
       }
       if (!shortcutBlocked(e) && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -621,7 +617,6 @@ export function ReaderPane() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const s = useStore.getState();
   // Mirrors the Sources panel "Edit text" gate: extracted text the user may
   // rewrite. URL/mac mirrors and folder-like parents stay read-only.
   const sourceEditable =
@@ -780,26 +775,9 @@ export function ReaderPane() {
       {/* `group`: the toolbar RowMenu binds right-click to its nearest .group
           ancestor — without one, right-clicking the title bar did nothing. */}
       <div className="group relative z-10 flex h-12 shrink-0 items-center gap-0.5 border-b border-border px-3">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => s.readerNavigate(-1)}
-          disabled={reader.index <= 0}
-          title="Back (⌘[)"
-          aria-label="Back"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => s.readerNavigate(1)}
-          disabled={reader.index >= reader.history.length - 1}
-          title="Forward (⌘])"
-          aria-label="Forward"
-        >
-          <ArrowRight className="h-3.5 w-3.5" />
-        </Button>
+        {/* No back/forward here: every document opened lands in the
+            app-level history, so the window's NavButtons (and ⌘[ / ⌘])
+            already cover it. */}
         <div className="mx-1.5 flex min-w-0 flex-1 items-center gap-1.5">
           {source &&
             (isWebUrl(source.url) ? (
