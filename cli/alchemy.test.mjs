@@ -56,6 +56,16 @@ test("discovers the running app and honors explicit overrides", async () => {
   );
 });
 
+test("a tokenless discovery file (older app) still connects", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "alchemy-cli-old-"));
+  const discovery = join(dir, "mcp.json");
+  await writeFile(discovery, JSON.stringify({ port: 41414 }));
+  assert.deepEqual(
+    await discoverMcpConnection(undefined, undefined, { ALCHEMY_MCP_DISCOVERY: discovery }),
+    { url: "http://127.0.0.1:41414/mcp", token: "" },
+  );
+});
+
 test("classifies URLs, files, and stdin for add_source", async () => {
   const dir = await mkdtemp(join(tmpdir(), "alchemy-cli-source-"));
   const file = join(dir, "notes.md");

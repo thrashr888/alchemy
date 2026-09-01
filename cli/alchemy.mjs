@@ -35,10 +35,6 @@ Connection:
   app and its private local token through mcp.json. Override with --mcp-url
   and --mcp-token, or ALCHEMY_MCP_URL and ALCHEMY_MCP_TOKEN.
 
-Install:
-  brew install thrashr888/tap/alchemy-cli     (or, from a source checkout,
-  pnpm add --global ./cli)
-
 Examples:
   alchemy notebooks
   alchemy add report.pdf https://example.com --notebook "Project Atlas"
@@ -159,12 +155,11 @@ export async function discoverMcpConnection(explicitUrl, explicitToken, env = pr
             ? `http://127.0.0.1:${info.port}/mcp`
             : null;
       if (!url) throw new CliError(`Alchemy discovery file has no url or port: ${path}`);
-      if (typeof info.token !== "string" || !info.token) {
-        throw new CliError(
-          `Alchemy discovery file has no authentication token: ${path}; restart the app to refresh it`,
-        );
-      }
-      return { url, token: overrideToken || info.token };
+      // An app from before local authentication writes no token, and its
+      // server accepts tokenless requests — proceed. Against a newer app
+      // the 401 hint explains the mismatch.
+      const token = typeof info.token === "string" ? info.token : "";
+      return { url, token: overrideToken || token };
     } catch (error) {
       if (error?.code === "ENOENT") continue;
       if (error instanceof CliError) throw error;
