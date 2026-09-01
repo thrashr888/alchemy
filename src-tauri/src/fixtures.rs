@@ -86,9 +86,25 @@ pub(crate) async fn library(sources: usize) -> Option<Library> {
         .join(format!("store-g{GENERATION}-{sources}"));
     // The marker guards against a half-seeded cache left by an aborted run.
     let marker = dir.join("seeded.ok");
-    let cached = marker.exists();
+    let mut cached = marker.exists();
 
-    let db = Db::open(&dir).await.expect("open fixture db");
+    // CI's cargo cache can restore this directory gutted — the marker
+    // survives while Lance's own files were pruned, and the store fails to
+    // load ("Table 'notebooks' exists but could not be loaded", seen live
+    // on GitHub runners). A cache that won't open is a miss, not a failure:
+    // wipe and reseed.
+    let db = match Db::open(&dir).await {
+        Ok(db) => db,
+        Err(err) => {
+            eprintln!(
+                "fixture cache at {} unusable ({err:#}); reseeding",
+                dir.display()
+            );
+            std::fs::remove_dir_all(&dir).ok();
+            cached = false;
+            Db::open(&dir).await.expect("open fixture db after reset")
+        }
+    };
     db.set_fusion(ai.fusion_params());
 
     let notebook_id = "fixture-nb".to_string();
