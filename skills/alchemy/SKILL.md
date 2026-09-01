@@ -29,7 +29,14 @@ header. Do not replace that entry with a bare URL, which will be rejected.
    deserves its own. Prefer reusing an existing notebook over creating
    near-duplicates.
 2. `add_source` for each URL, file path, or block of text worth keeping.
-   Ingestion extracts, titles, chunks, and embeds automatically.
+   Ingestion extracts, titles, chunks, and embeds automatically. A list of
+   URLs goes in one call as `urls` — you get one `{url, ok, source, error}`
+   per entry, and one bad page never fails the rest. Check `status` (or
+   `ok`) before trusting a result: a 404 page or a bot wall lands as
+   `status: "error"` with the reason, not as content.
+   `grow` tells you what a notebook is missing — questions it answered
+   thinly, links its own sources keep pointing at, matching files on this
+   Mac — each proposal ready to hand back to `add_source`.
 3. `search` to ground claims before writing — hybrid vector + keyword
    retrieval over the notebook's chunks. It runs on a local embedder and is
    effectively free; make several small queries rather than one broad one.

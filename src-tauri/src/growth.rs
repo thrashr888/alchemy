@@ -95,10 +95,16 @@ fn extract_links(text: &str) -> Vec<(String, String)> {
             .unwrap_or(rest.len());
         let raw = rest[..end].trim_end_matches(['.', ',', ';', ']', '}']);
         // Markdown anchor: the "](url" shape puts "[anchor]" just before.
+        // Emphasis wraps the anchor, not the words ("**The Mart**" is a bold
+        // link to The Mart) — strip it so the proposal reads as a title.
         let anchor = if start >= 2 && &bytes[start - 2..start] == b"](" {
             text[..start - 2]
                 .rfind('[')
-                .map(|open| text[open + 1..start - 2].to_string())
+                .map(|open| {
+                    text[open + 1..start - 2]
+                        .trim_matches(['*', '_', '`', ' '])
+                        .to_string()
+                })
                 .unwrap_or_default()
         } else {
             String::new()

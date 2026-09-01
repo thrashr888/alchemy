@@ -49,6 +49,63 @@ impl Drop for Heartbeat {
     }
 }
 
+/// One web or Mac-item import — the `url` arm of add_source, shared with
+/// the `urls` batch.
+async fn import_url(
+    state: &AppState,
+    notebook_id: &str,
+    url: &str,
+    title: Option<&str>,
+) -> anyhow::Result<Source> {
+    if crate::mac::is_mac_uri(url) {
+        // Mac items connect as living, auto-syncing sources — never through
+        // the web fetcher, which can't reach cider:// origins.
+        commands::ingest_mac(state, notebook_id, url, title.unwrap_or("")).await
+    } else {
+        commands::ingest_url(state, notebook_id, url, None).await
+    }
+}
+
+/// One entry of a batch add. `ok` is false both when the import errored out
+/// (a duplicate, an unreachable host) and when it landed as an error-status
+/// source (a 404 page, a bot wall): either way `error` says why and there is
+/// no searchable content behind it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchItem {
+    url: String,
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<Source>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl BatchItem {
+    fn new(url: String, outcome: anyhow::Result<Source>) -> Self {
+        match outcome {
+            Ok(source) if source.status == "error" => Self {
+                url,
+                ok: false,
+                error: Some(source.error.clone()),
+                source: Some(source),
+            },
+            Ok(source) => Self {
+                url,
+                ok: true,
+                source: Some(source),
+                error: None,
+            },
+            Err(err) => Self {
+                url,
+                ok: false,
+                source: None,
+                error: Some(format!("{err:#}")),
+            },
+        }
+    }
+}
+
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 struct AddSourceReq {
     /// Notebook to add the source to.
@@ -58,6 +115,12 @@ struct AddSourceReq {
     /// (exactly one of url / text / file_path).
     #[serde(default)]
     url: Option<String>,
+    /// Several web URLs (or cider:// origins) to import in one call. Each
+    /// takes the same path as `url`; the result is one entry per URL —
+    /// {url, ok, source, error} — so a 404, a bot wall, or a duplicate
+    /// fails only its own entry. Not combinable with url, text, or file_path.
+    #[serde(default)]
+    urls: Option<Vec<String>>,
     /// Raw text/markdown content to store as a source.
     #[serde(default)]
     text: Option<String>,
@@ -222,13 +285,14 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Add a source to a notebook. Provide exactly one of: url (fetched + article-extracted), text (pasted content; give a title), or file_path (local pdf/md/txt/csv, the whole Office family incl. legacy doc/ppt/xls, OpenDocument, rtf, epub, or an image — images and scanned PDFs are OCR'd when a vision model is configured; office formats extract as markdown). url also accepts a cider:// origin to connect a Mac item as a living, auto-syncing source: cider://reminders/list/<list name>, cider://calendar/upcoming/<days>, cider://notes/note/<note id>, or cider://stocks/watchlist/<name>. Content is chunked and embedded automatically. Duplicate content or an already-added URL is rejected with an error naming the existing source — treat that as already done. Examples: {\"notebook_id\":\"<id>\",\"url\":\"https://example.com/paper\"} · {\"notebook_id\":\"<id>\",\"text\":\"pasted content…\",\"title\":\"Meeting notes\"} · {\"notebook_id\":\"<id>\",\"file_path\":\"/Users/me/Reports/q3.docx\"}"
+        description = "Add a source to a notebook. Provide exactly one of: url (fetched + article-extracted), urls (a batch of such URLs — one result per entry, see below), text (pasted content; give a title), or file_path (local pdf/md/txt/csv, the whole Office family incl. legacy doc/ppt/xls, OpenDocument, rtf, epub, or an image — images and scanned PDFs are OCR'd when a vision model is configured; office formats extract as markdown). url also accepts a cider:// origin to connect a Mac item as a living, auto-syncing source: cider://reminders/list/<list name>, cider://calendar/upcoming/<days>, cider://notes/note/<note id>, or cider://stocks/watchlist/<name>. Content is chunked and embedded automatically. Duplicate content or an already-added URL is rejected with an error naming the existing source — treat that as already done. A page that fetches but is a 404/error page or a bot wall lands with status \"error\" and a reason — check status before trusting a result. With urls, the response is a list of {url, ok, source, error}: ok is false for anything that isn't searchable content, and one bad URL never fails the rest. Examples: {\"notebook_id\":\"<id>\",\"url\":\"https://example.com/paper\"} · {\"notebook_id\":\"<id>\",\"urls\":[\"https://a.com/x\",\"https://b.org/y\"]} · {\"notebook_id\":\"<id>\",\"text\":\"pasted content…\",\"title\":\"Meeting notes\"} · {\"notebook_id\":\"<id>\",\"file_path\":\"/Users/me/Reports/q3.docx\"}"
     )]
     async fn add_source(
         &self,
         Parameters(AddSourceReq {
             notebook_id,
             url,
+            urls,
             text,
             file_path,
             title,
@@ -236,12 +300,40 @@ impl AlchemyMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let state = self.state();
+        if let Some(urls) = urls {
+            if url.is_some() || text.is_some() || file_path.is_some() {
+                return Err(invalid(
+                    "urls is a batch on its own — don't combine it with url, text, or file_path",
+                ));
+            }
+            if urls.is_empty() {
+                return Err(invalid("urls is empty"));
+            }
+            let total = urls.len();
+            let mut results = Vec::with_capacity(total);
+            for (i, url) in urls.into_iter().enumerate() {
+                let _heartbeat =
+                    Heartbeat::start(&ctx, format!("importing {}/{total}: {url}", i + 1));
+                // One permit per item, not per batch, so another client's
+                // small add slips in between two of a long batch's fetches.
+                let _permit = IMPORT_GATE
+                    .acquire()
+                    .await
+                    .expect("import gate never closes");
+                let outcome = import_url(&state, &notebook_id, &url, title.as_deref()).await;
+                results.push(BatchItem::new(url, outcome));
+            }
+            self.changed("sources", Some(&notebook_id));
+            return json_result(&results);
+        }
         let provided = [url.is_some(), text.is_some(), file_path.is_some()]
             .iter()
             .filter(|b| **b)
             .count();
         if provided != 1 {
-            return Err(invalid("provide exactly one of url, text, or file_path"));
+            return Err(invalid(
+                "provide exactly one of url, urls, text, or file_path",
+            ));
         }
         let what = url
             .clone()
@@ -254,17 +346,9 @@ impl AlchemyMcp {
             .await
             .expect("import gate never closes");
         let source = if let Some(url) = url {
-            if crate::mac::is_mac_uri(&url) {
-                // Mac items connect as living, auto-syncing sources — never
-                // through the web fetcher, which can't reach cider:// origins.
-                commands::ingest_mac(&state, &notebook_id, &url, title.as_deref().unwrap_or(""))
-                    .await
-                    .map_err(internal)?
-            } else {
-                commands::ingest_url(&state, &notebook_id, &url, None)
-                    .await
-                    .map_err(internal)?
-            }
+            import_url(&state, &notebook_id, &url, title.as_deref())
+                .await
+                .map_err(internal)?
         } else if let Some(text) = text {
             let title = title.unwrap_or_else(|| "Untitled source".into());
             let extracted = crate::ingest::extract_pasted(&title, &text).map_err(internal)?;

@@ -371,6 +371,14 @@ pub async fn extract_url_rescued(url: &str) -> Result<Extracted> {
         }
     }
     let fast = ingest::extract_url(url).await;
+    if let Err(err) = &fast {
+        if err.downcast_ref::<ingest::HttpErrorPage>().is_some() {
+            // The server said the page is gone and the body agreed. Rendering
+            // the same 404 layout can only make it longer, never real, and
+            // "longer" is exactly what the acceptance rule below rewards.
+            return fast;
+        }
+    }
     let fast_chars = fast.as_ref().map(|ex| ex.text.chars().count()).unwrap_or(0);
     let trigger = match &fast {
         Ok(ex) => match ingest::looks_blocked(&ex.text) {

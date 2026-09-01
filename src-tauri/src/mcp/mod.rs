@@ -21,6 +21,7 @@ use crate::db::NOTEBOOK_PALETTE;
 use crate::models::{Note, Notebook, Source};
 
 mod diagnostics;
+mod growth;
 mod homechat;
 mod ledger;
 mod mac;
@@ -349,6 +350,7 @@ impl AlchemyMcp {
     + Self::registry_router()
     + Self::settings_router()
     + Self::homechat_router()
+    + Self::growth_router()
     + Self::diagnostics_router()))]
 impl ServerHandler for AlchemyMcp {
     fn get_info(&self) -> ServerInfo {
@@ -359,9 +361,10 @@ impl ServerHandler for AlchemyMcp {
             .with_instructions(
                 "Alchemy is the user's local-first research notebook: notebooks hold sources \
                  (documents, web pages, pasted text) and notes. Typical flow: list_notebooks \
-                 (or create_notebook) → add_source for each URL/file/text → search to find \
-                 relevant passages → write findings with create_note. Everything runs on the \
-                 user's machine; search is cheap, call it freely.",
+                 (or create_notebook) → add_source for each URL/file/text (a list of URLs \
+                 goes in one call as urls) → search to find relevant passages → write \
+                 findings with create_note. grow says what a notebook is missing. Everything \
+                 runs on the user's machine; search is cheap, call it freely.",
             )
     }
 }

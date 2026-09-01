@@ -18,6 +18,7 @@ fn chunk_words() -> usize {
         .unwrap_or(280)
 }
 
+#[derive(Debug)]
 pub struct Extracted {
     pub title: String,
     pub source_type: String,
@@ -707,9 +708,10 @@ pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
         .with_context(|| format!("could not reach {url}"))?;
 
     // The status is advisory, not gating: some sites serve the complete
-    // article with a 500 (broken SSR that still renders — cerebras.ai) or a
-    // 404 (soft-deleted pages with full layouts). Fetch the body regardless
-    // and let readability decide; only give up when there's nothing to read.
+    // article with a 500 (broken SSR that still renders — cerebras.ai).
+    // Fetch the body regardless and let readability decide; give up when
+    // there's nothing to read, or when a failing status comes with a body
+    // that reads as the error page itself (`looks_like_error_page`).
     let status = resp.status();
 
     // Not every URL serves HTML. A link straight to a PDF (arxiv.org/pdf/...
@@ -778,6 +780,56 @@ fn url_file_title(url: &str) -> String {
         .unwrap_or_else(|| url.to_string())
 }
 
+/// A 4xx/5xx response whose body reads as the server's error page. Its own
+/// type so the rendered-capture rescue (capture.rs) can recognize it and
+/// stop: rendering a 404 layout yields the same 404 layout, only longer,
+/// and the rescue's "strictly better than the fast path" rule would take it.
+#[derive(Debug)]
+pub struct HttpErrorPage {
+    pub status: u16,
+    pub url: String,
+}
+
+impl std::fmt::Display for HttpErrorPage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} returned HTTP {} and the page is an error page, not the content",
+            self.url, self.status
+        )
+    }
+}
+
+impl std::error::Error for HttpErrorPage {}
+
+/// Does a failing response's extracted page read as the error page rather
+/// than content that merely shipped with a broken status? The title is the
+/// tell: a soft-deleted page keeps its whole layout — nav, footer, sidebars,
+/// thousands of chars — around a "Page Not Found" heading, so length alone
+/// can't catch it. A short body under a failing status is an error page too.
+/// Only consulted once the status already says failure, so a real article
+/// titled "404" served with a 200 is never touched.
+pub fn looks_like_error_page(title: &str, text: &str) -> bool {
+    const THIN: usize = 2_000;
+    if text.trim().chars().count() < THIN {
+        return true;
+    }
+    let lower = title.trim().to_lowercase();
+    const MARKERS: &[&str] = &[
+        "not found",
+        "404",
+        "410",
+        "doesn't exist",
+        "does not exist",
+        "can't be found",
+        "cannot be found",
+        "no longer available",
+        "something went wrong",
+        "server error",
+    ];
+    lower.starts_with("error") || MARKERS.iter().any(|m| lower.contains(m))
+}
+
 /// The HTML arm of `extract_url`: readability over a fetched page body.
 fn readable_page(body: String, status: reqwest::StatusCode, url: String) -> Result<Extracted> {
     let (article_title, text) = readable_text(&body, &url);
@@ -792,6 +844,13 @@ fn readable_page(body: String, status: reqwest::StatusCode, url: String) -> Resu
     let title = article_title
         .or_else(|| extract_title(&body))
         .unwrap_or_else(|| url.clone());
+    if !status.is_success() && looks_like_error_page(&title, &text) {
+        return Err(HttpErrorPage {
+            status: status.as_u16(),
+            url,
+        }
+        .into());
+    }
     let image_url = og_image(&body, &url).unwrap_or_default();
     Ok(Extracted {
         author: String::new(),
@@ -3008,5 +3067,75 @@ mod tests {
         std::fs::write(&other, b"https://paper.dropbox.com/doc/x").unwrap();
         assert_eq!(dropbox_paper_url(&other.to_string_lossy()), None);
         let _ = std::fs::remove_file(&other);
+    }
+}
+
+#[cfg(test)]
+mod error_page_tests {
+    use super::*;
+
+    fn page(title: &str, paragraphs: usize) -> String {
+        let para = "<p>The membership includes a parking pass and discounts at partner businesses across the county.</p>".repeat(paragraphs);
+        format!("<html><head><title>{title}</title></head><body><main><article><h1>{title}</h1>{para}</article></main></body></html>")
+    }
+
+    #[test]
+    fn failing_status_with_error_title_is_an_error_page() {
+        // A soft-404 keeps its whole layout, so the body is long — the title
+        // is what gives it away.
+        let err = readable_page(
+            page("Page Not Found - Error 404 | Regional Parks", 200),
+            reqwest::StatusCode::NOT_FOUND,
+            "https://example.org/gone".into(),
+        )
+        .unwrap_err();
+        let page = err.downcast_ref::<HttpErrorPage>().expect("typed error");
+        assert_eq!(page.status, 404);
+        assert!(err.to_string().contains("HTTP 404"), "{err}");
+    }
+
+    #[test]
+    fn failing_status_with_a_real_article_still_imports() {
+        // Broken SSR that still renders (cerebras.ai): the status lies, the
+        // body doesn't.
+        let ok = readable_page(
+            page("Inference at the speed of thought", 200),
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            "https://example.org/post".into(),
+        )
+        .unwrap();
+        assert!(ok.title.contains("Inference"), "{}", ok.title);
+    }
+
+    #[test]
+    fn success_status_never_consults_the_title() {
+        let ok = readable_page(
+            page("404: why the page-not-found problem persists", 200),
+            reqwest::StatusCode::OK,
+            "https://example.org/essay".into(),
+        )
+        .unwrap();
+        assert!(ok.text.chars().count() > 1_000);
+    }
+
+    #[test]
+    fn error_page_rule_covers_thin_bodies_and_error_titles() {
+        assert!(looks_like_error_page("Error", "Something short."));
+        assert!(looks_like_error_page(
+            "Ducati Page Not Found",
+            &"word ".repeat(1_000)
+        ));
+        assert!(looks_like_error_page(
+            "Error | Costco",
+            &"word ".repeat(1_000)
+        ));
+        assert!(!looks_like_error_page(
+            "A fine title",
+            &"word ".repeat(1_000)
+        ));
+        assert!(!looks_like_error_page(
+            "Terror at the summit",
+            &"word ".repeat(1_000)
+        ));
     }
 }
