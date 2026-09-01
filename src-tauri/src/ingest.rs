@@ -1410,7 +1410,7 @@ pub fn chunk_source(extracted: &Extracted, code_ctx: Option<&str>) -> Vec<Chunk>
 /// `tags:` key, body after the closing `---`). Not a YAML parser — it reads
 /// the two shapes Obsidian writes (inline `[a, b]` and block `- a` lists)
 /// and ignores everything else. Unclosed fences are treated as content.
-fn split_frontmatter(text: &str) -> (Vec<String>, &str) {
+pub(crate) fn split_frontmatter(text: &str) -> (Vec<String>, &str) {
     let Some(rest) = text.strip_prefix("---\n") else {
         return (vec![], text);
     };
