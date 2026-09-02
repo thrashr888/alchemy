@@ -2196,6 +2196,7 @@ async fn run_scale(ai: &crate::ai::Ai, target_chars: usize) -> (f64, f64, usize)
                 crate::ingest::Chunk {
                     text: c.text.clone(),
                     embed_text: c.embed_text.clone(),
+                    section: String::new(),
                 },
             ));
         }
