@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
-import type { Note } from "@/lib/types";
+import type { Note, SourceEvent } from "@/lib/types";
 import { cn, noteUnread, relativeTime } from "@/lib/utils";
+import { tallyEvents, unseenEvents } from "@/lib/arrivals";
 import { Button } from "./ui";
 import {
   ChevronDown,
@@ -16,10 +17,14 @@ export function AwayDigest({
   prevVisit,
   notebooks,
   reports,
+  events = [],
 }: {
   prevVisit: number;
   notebooks: { updatedAt: number }[];
   reports: Note[];
+  /** Source-change events across notebooks; the arrivals since the last
+   *  visit join the line (RFC-events §6). */
+  events?: SourceEvent[];
 }) {
   if (!prevVisit) return null;
   const newReports = reports.filter((report) => report.updatedAt > prevVisit).length;
@@ -30,6 +35,7 @@ export function AwayDigest({
     newReports > 0 && `${newReports} new ${newReports === 1 ? "report" : "reports"}`,
     updatedNotebooks > 0 &&
       `${updatedNotebooks} ${updatedNotebooks === 1 ? "notebook" : "notebooks"} updated`,
+    ...tallyEvents(unseenEvents(events, prevVisit)),
   ].filter(Boolean);
   if (parts.length === 0) return null;
   return (

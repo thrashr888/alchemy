@@ -13,6 +13,7 @@ import {
 } from "./ui";
 import { useSourceActions } from "./SourceMenu";
 import { Markdown } from "./Markdown";
+import { LiveCards } from "./LiveCards";
 import { cn, chatReadingClass, fmtDateTime, isWebUrl, relativeTime } from "@/lib/utils";
 import { AgentPane } from "./AgentPane";
 import { AlchemySymbol } from "./AlchemyHero";
@@ -1472,6 +1473,10 @@ const ChatMessage = memo(function ChatMessage({
       >
         {message.content}
       </Markdown>
+      {/* Live answer cards (RFC-events §7): a cited Mac list or feed renders
+          its current data beneath the prose — derived from the citations at
+          render time, so nothing here is persisted or re-asked. */}
+      {message.citations.length > 0 && <LiveCards citations={message.citations} />}
       {message.citations.length > 0 && <Citations citations={message.citations} />}
       <MessageActions
         content={message.content}

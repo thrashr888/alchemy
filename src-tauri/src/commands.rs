@@ -11802,12 +11802,20 @@ pub fn list_shortcuts() -> Vec<crate::menu::ShortcutRow> {
 pub async fn list_source_events(
     state: State<'_, AppState>,
     hours: Option<u32>,
+    notebook_id: Option<String>,
 ) -> Result<Vec<crate::models::SourceEvent>, String> {
     let hours = i64::from(hours.unwrap_or(24));
-    e(state
+    let mut events = e(state
         .db
         .source_events_since(now() - hours * 3_600_000)
-        .await)
+        .await)?;
+    // The Arrivals strip reads one notebook (docs/RFC-events.md §6); Home
+    // and the Staff section read everything. Filtered here, not in Lance —
+    // the window is small and already in hand.
+    if let Some(nb) = notebook_id.filter(|s| !s.is_empty()) {
+        events.retain(|ev| ev.notebook_id == nb);
+    }
+    Ok(events)
 }
 
 /// What the last snapshot did, for the Nightly settings page

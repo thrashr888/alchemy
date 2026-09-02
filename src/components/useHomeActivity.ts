@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import type { HomeActivity, Notebook } from "@/lib/types";
+import type { HomeActivity, Notebook, SourceEvent } from "@/lib/types";
 
 type HomeActivityData = Omit<HomeActivity, "stats"> & {
   stats: HomeActivity["stats"] | null;
+  /** Source-change events across every notebook, newest first — the
+   *  Arrivals tallies in the away digest (RFC-events §6). */
+  events: SourceEvent[];
 };
 
 const EMPTY_ACTIVITY: HomeActivityData = {
@@ -11,7 +14,11 @@ const EMPTY_ACTIVITY: HomeActivityData = {
   recentNotes: [],
   reports: [],
   stats: null,
+  events: [],
 };
+
+/** As far back as "since you were away" reaches; the table keeps 30 days. */
+const EVENTS_WINDOW_HOURS = 24 * 7;
 
 /** Load one backend snapshot so notes feed recent activity, reports, and stats
  * without three overlapping corpus scans. */
@@ -26,9 +33,14 @@ export function useHomeActivity(notebooks: Notebook[]) {
     setLoading(true);
 
     try {
-      const snapshot = await api.homeActivity();
+      // Events are a separate small read; a miss there must not blank the
+      // whole home, so it degrades to "no arrivals".
+      const [snapshot, events] = await Promise.all([
+        api.homeActivity(),
+        api.listSourceEvents(EVENTS_WINDOW_HOURS).catch((): SourceEvent[] => []),
+      ]);
       if (id !== requestId.current) return;
-      setData(snapshot);
+      setData({ ...snapshot, events });
       setError(null);
     } catch {
       if (id !== requestId.current) return;
