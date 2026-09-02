@@ -168,6 +168,11 @@ struct DatasetReport {
     variants: BTreeMap<String, VariantReport>,
 }
 
+/// The kinds a gate dataset reports rather than asserts: `outline` for the
+/// heading chain (RFC-outline-index phases 1–1.5), `topic` for paraphrased
+/// chapters (phases 2–3). Everything else in such a dataset is a control.
+const MEASURED_KINDS: [&str; 2] = ["outline", "topic"];
+
 /// Long structured documents for the outline gate (Reminders: "Outline
 /// eval cases before outline work"). The failure mode is a 300-page manual
 /// where every chapter repeats the same subsections — inspection interval,
@@ -758,7 +763,7 @@ async fn eval_retrieval_datasets() {
             // Its control kinds must be perfect, or the corpus didn't seed
             // the way the dataset assumes and the gate measures nothing.
             for (kind, m) in &hybrid.by_kind {
-                if kind != "outline" {
+                if !MEASURED_KINDS.contains(&kind.as_str()) {
                     assert!(
                         (m.recall_at_10 - 1.0).abs() < f64::EPSILON,
                         "{}: control kind {kind} recall@10 {:.2} — the gate corpus is not seeded as assumed",

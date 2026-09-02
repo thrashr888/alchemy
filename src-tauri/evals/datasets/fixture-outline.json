@@ -1,6 +1,6 @@
 {
   "name": "fixture-outline",
-  "description": "Gate for the outline index (docs: Reminders 'Outline eval cases before outline work'). Two long structured documents from retrieval_eval.rs outline_corpus(): every chapter repeats the same subsections with the same vocabulary and different numbers, so the chapter name \u2014 present only in a heading the chunker has already replaced \u2014 is the only thing that tells look-alike chunks apart. 'outline' queries are the measurement; 'chapter' and 'exact' are seeding controls. floors: false \u2014 the numbers are reported and diffed, not asserted, and the outline work merges only if they improve.",
+  "description": "Gate for the outline index (docs: Reminders 'Outline eval cases before outline work'). Two long structured documents from retrieval_eval.rs outline_corpus(): every chapter repeats the same subsections with the same vocabulary and different numbers, so the chapter name \u2014 present only in a heading the chunker has already replaced \u2014 is the only thing that tells look-alike chunks apart. 'outline' queries are the measurement for the heading chain; 'topic' queries paraphrase the chapter (undercarriage, de-icing, Portugal) and are the measurement for section summaries and outline-guided escalation; 'chapter' and 'exact' are seeding controls. floors: false \u2014 the numbers are reported and diffed, not asserted, and the outline work merges only if they improve.",
   "corpus": "outline",
   "floors": false,
   "queries": [
@@ -271,6 +271,136 @@
         {
           "source_title": "Fleet Maintenance Manual",
           "must_contain": "SK-1305"
+        }
+      ]
+    },
+    {
+      "query": "undercarriage hinge bolt torque",
+      "kind": "topic",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "to 31 N"
+        }
+      ]
+    },
+    {
+      "query": "de-icing union nut torque",
+      "kind": "topic",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "to 148 N"
+        }
+      ]
+    },
+    {
+      "query": "how often to check the cabin air conditioning",
+      "kind": "topic",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "every 500 flight hours"
+        }
+      ]
+    },
+    {
+      "query": "engine cover replacement part",
+      "kind": "topic",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "FM-2330"
+        }
+      ]
+    },
+    {
+      "query": "ground power unit part number",
+      "kind": "topic",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "FM-1823"
+        }
+      ]
+    },
+    {
+      "query": "tiller seal kit",
+      "kind": "topic",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "SK-2209"
+        }
+      ]
+    },
+    {
+      "query": "outflow valve inspection interval",
+      "kind": "topic",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "every 300 flight hours"
+        }
+      ]
+    },
+    {
+      "query": "emergency O2 seal kit",
+      "kind": "topic",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "SK-2041"
+        }
+      ]
+    },
+    {
+      "query": "gear retraction pump mounting bolt torque",
+      "kind": "topic",
+      "relevant": [
+        {
+          "source_title": "Fleet Maintenance Manual",
+          "must_contain": "to 23 N"
+        }
+      ]
+    },
+    {
+      "query": "days off for national holidays at the Portugal office",
+      "kind": "topic",
+      "relevant": [
+        {
+          "source_title": "Regional Employee Policy Manual",
+          "must_contain": "observe 13 paid"
+        }
+      ]
+    },
+    {
+      "query": "how much notice when quitting in Germany",
+      "kind": "topic",
+      "relevant": [
+        {
+          "source_title": "Regional Employee Policy Manual",
+          "must_contain": "is 8 weeks"
+        }
+      ]
+    },
+    {
+      "query": "max nightly hotel spend in Canada",
+      "kind": "topic",
+      "relevant": [
+        {
+          "source_title": "Regional Employee Policy Manual",
+          "must_contain": "$140"
+        }
+      ]
+    },
+    {
+      "query": "resignation notice in Japan",
+      "kind": "topic",
+      "relevant": [
+        {
+          "source_title": "Regional Employee Policy Manual",
+          "must_contain": "is 10 weeks"
         }
       ]
     }
