@@ -115,6 +115,15 @@ unchanged because children are just sources. The parent's `mtime` holds
 `content_stamp(etag ‖ last-modified ‖ latest entry id)` so a 304 or an
 unchanged document is a no-op at the same cost as a Mac resync today.
 
+The parent is not empty. Its text is a **rolling index**: the feed's
+description plus one line per kept entry (date, title, first sentence),
+rewritten and re-embedded whenever an entry lands. \"What's new in the
+Tauri blog\" retrieves the parent; a specific claim retrieves the child.
+This is the same lesson the wiki fold and living reports taught: a
+synthesized index over its own history gives the next judgement enough
+context to be a judgement, and the `updated` event's diff keeps the
+previous version in reach without a snapshot table.
+
 **Entries.** When the feed carries full content (`content:encoded`, Atom
 `content`), that is the child's text — no second fetch. When it carries a
 summary only, the entry link goes through `extract_url` like any pasted
@@ -142,8 +151,10 @@ doubled on each failure, reset on success. Conditional requests
    explicit **Follow updates…** menu item on a source — not from the sweep.
 3. *Host rules.* GitHub repo → `releases.atom` and `commits.atom`;
    Wikipedia article → page-history Atom; YouTube channel → the channel's
-   `videos.xml`; arXiv abs/pdf → the paper's primary category feed offered
-   as "follow *cs.CL*"; Substack → `/feed`; Reddit → `.rss`. Rules are a
+   `videos.xml`; arXiv abs/pdf → an `export.arxiv.org/api/query` feed built
+   from the notebook's standing queries (`growth::standing_queries`),
+   never a category — a category is the whole field, and the point is to
+   narrow the notebook, not widen it; Substack → `/feed`; Reddit → `.rss`. Rules are a
    table, not code paths.
 
 The living-notebook consent rule holds: a feed on an origin already in the
@@ -380,14 +391,19 @@ timeline.
   silently into "no card". Fallback is prose, so nothing is lost, and a
   fixture test per card pins the format.
 
-## Open questions
+## Decisions (2026-09-01)
 
-- Should a feed parent's own text be the feed description plus latest
-  titles (so "what's new in the Tauri blog" retrieves the parent), or
-  should the parent hold nothing and only children embed? Leaning parent
-  holds a rolling index of the last 50 titles — one small chunk.
-- Does the Arrivals seen-watermark belong per notebook or per source?
-  Per notebook is one number; per source is a column. Start per notebook.
-- arXiv: follow the paper's primary category, or offer a search-query feed
-  built from the notebook's standing queries (`growth::standing_queries`)?
-  The second is the more interesting product and costs the same.
+Three questions the draft left open, settled in review:
+
+- **Feed parents hold a rolling index** of their kept entries and re-embed
+  on change (§2). Reports and the wiki fold got measurably better once they
+  could see indexes and prior versions of themselves; feeds start there.
+- **Arrivals watermark is per notebook**, in `localStorage`. Notebooks are
+  the isolation boundary the user reaches for, while the registry, staff
+  history, activity, and global chat all draw their value from everything
+  living in one database — so the watermark is UI state, not a table, and
+  nothing about events becomes notebook-partitioned storage.
+- **arXiv follows a query, never a category.** A category feed is the
+  whole field and would widen a notebook's focus into noise. The host rule
+  builds an `export.arxiv.org/api/query` feed from the notebook's standing
+  queries and offers *that*, as a proposal like every other discovered feed.
