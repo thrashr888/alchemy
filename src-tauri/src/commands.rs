@@ -430,6 +430,7 @@ async fn readiness_for_entry(
                 effort: String::new(),
                 keep_alive: None,
                 num_predict: None,
+                think: None,
             };
             if !entry.base_url.trim().is_empty() {
                 cfg.base_url = entry.base_url.clone();
@@ -1484,8 +1485,15 @@ pub(crate) async fn spawn_embed_stage(
                 .enumerate()
                 .map(|(i, c)| (new_id(), i as i32, c.text.clone()))
                 .collect();
-            db.add_chunks(&source.notebook_id, &source.id, &tuples, &embeddings)
-                .await?;
+            let contexts: Vec<String> = chunks.iter().map(|c| c.context.clone()).collect();
+            db.add_chunks_ctx(
+                &source.notebook_id,
+                &source.id,
+                &tuples,
+                &contexts,
+                &embeddings,
+            )
+            .await?;
             Ok(Some(tuples.len()))
         }
         .await;
@@ -2400,6 +2408,7 @@ async fn grep_leg(
                 // Not a vector hit — match count carried the ranking; the
                 // field only feeds trace summaries.
                 distance: 0.0,
+                section: String::new(),
             }
         })
         .collect()
@@ -2849,12 +2858,14 @@ async fn index_snote(state: &AppState, source: &Source, note: &str) -> anyhow::R
         .enumerate()
         .map(|(j, c)| (new_id(), j as i32, c.text.clone()))
         .collect();
+    let contexts: Vec<String> = chunks.iter().map(|c| c.context.clone()).collect();
     state
         .db
-        .add_chunks(
+        .add_chunks_ctx(
             &source.notebook_id,
             &format!("{}{}", crate::db::SNOTE_CHUNK_PREFIX, source.id),
             &tuples,
+            &contexts,
             &embeddings,
         )
         .await
@@ -5612,9 +5623,10 @@ pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u
             .enumerate()
             .map(|(j, c)| (new_id(), j as i32, c.text.clone()))
             .collect();
+        let contexts: Vec<String> = chunks.iter().map(|c| c.context.clone()).collect();
         e(state
             .db
-            .add_chunks(notebook_id, owner_id, &tuples, &embeddings)
+            .add_chunks_ctx(notebook_id, owner_id, &tuples, &contexts, &embeddings)
             .await)?;
     }
 
@@ -8584,6 +8596,7 @@ pub async fn send_message(
     // way to say which stage — hybrid search, the grep leg, the gap
     // retrieval's model call, or the rerank — was eating it.
     let t_stage = std::time::Instant::now();
+    let query_vec_for_outline = query_vec.clone();
     let search = e(state
         .db
         .search_chunks_trace(
@@ -8620,6 +8633,27 @@ pub async fn send_message(
     )
     .await;
     let gap_ms = t_stage.elapsed().as_millis() as u64;
+    // Outline-guided escalation (RFC-outline-index Phase 3): when the pool
+    // is thin or sits on look-alike sections of a structured source, the
+    // Small role picks sections from the notebook's outline and their best
+    // passages lead the pool. Self-gating and silent; a failure leaves the
+    // pool as it was.
+    let outline_pick = match crate::outline_index::escalate(
+        &state.db,
+        &ai,
+        &notebook_id,
+        &content,
+        &query_vec_for_outline,
+        &mut pool,
+    )
+    .await
+    {
+        Ok(pick) => pick,
+        Err(err) => {
+            crate::note!("outline: escalation failed: {err:#}");
+            None
+        }
+    };
     crate::trace::log(
         &state.trace_dir,
         serde_json::json!({
@@ -8632,6 +8666,7 @@ pub async fn send_message(
             "fusedHits": search.fused_hits.len(),
             "grepHits": grep_hits.len(),
             "gapQuery": gap_query,
+            "outlinePick": outline_pick,
             "warnings": search.warnings,
             "citations": crate::trace::cite_summaries(&pool),
         }),
@@ -9404,12 +9439,14 @@ async fn try_index_note(state: &AppState, note: &Note) -> anyhow::Result<()> {
         .enumerate()
         .map(|(j, c)| (new_id(), j as i32, c.text.clone()))
         .collect();
+    let contexts: Vec<String> = chunks.iter().map(|c| c.context.clone()).collect();
     state
         .db
-        .add_chunks(
+        .add_chunks_ctx(
             &note.notebook_id,
             &format!("{}{}", crate::db::NOTE_CHUNK_PREFIX, note.id),
             &tuples,
+            &contexts,
             &embeddings,
         )
         .await

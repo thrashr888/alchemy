@@ -35,7 +35,7 @@ use std::sync::Mutex;
 use anyhow::Result;
 
 use crate::ai::Ai;
-use crate::db::{Db, GistRow, GIST_CHUNK_PREFIX};
+use crate::db::{Db, GistRow, SectionGist, GIST_CHUNK_PREFIX};
 use crate::inference::{ChatTurn, Role};
 use crate::models::Source;
 
@@ -318,6 +318,222 @@ pub async fn ensure_gists(db: &Db, ai: &Ai) -> Result<(usize, usize)> {
     Ok((written, deleted))
 }
 
+// ---- Section summaries (docs/RFC-outline-index.md Phase 2) ---------------
+
+/// A source needs at least this many top-level sections to earn section
+/// summaries — below it, the source gist already says what each part is.
+const SECTION_MIN_SECTIONS: usize = 3;
+/// And at most this many are summarized: a 300-page manual with 14
+/// chapters is 14 calls; an outline with hundreds of h1s is a table of
+/// contents, and the source gist has to do.
+const SECTION_MAX_SECTIONS: usize = 40;
+/// How much of a section the summarizer reads.
+const SECTION_HEAD_CHARS: usize = 3000;
+/// Summaries written per sweep pass, matching the gist budget's restraint.
+const SECTION_SWEEP_BUDGET: usize = 6;
+const SECTION_MIN_CHARS: usize = 40;
+const SECTION_MAX_CHARS: usize = 700;
+/// Where the per-source stamp lives: source id → hash of its section
+/// spans and headings, so a re-chunk (or a new h1) reopens the source and
+/// an unchanged one costs nothing.
+const SECTION_STATE_FILE: &str = "section-gists.json";
+
+/// One top-level section of a stored source, from its chunk rows: a `# `
+/// heading chunk opens a section that runs to the next one.
+pub struct Section {
+    pub heading: String,
+    pub start: i32,
+    pub end: i32,
+    pub text: String,
+}
+
+/// The top-level sections of a source's stored chunks (ordinal order).
+/// Heading chunks keep their heading line verbatim, so the outline is a
+/// scan, no stored tree needed.
+pub fn sections_of(rows: &[(String, i32, String)]) -> Vec<Section> {
+    let mut rows: Vec<&(String, i32, String)> = rows.iter().collect();
+    rows.sort_by_key(|r| r.1);
+    let mut out: Vec<Section> = Vec::new();
+    for (_, ord, text) in rows {
+        let first = text.lines().next().unwrap_or("");
+        if let Some(h) = first.strip_prefix("# ") {
+            out.push(Section {
+                heading: h.trim().to_string(),
+                start: *ord,
+                end: *ord,
+                text: text.clone(),
+            });
+        } else if let Some(cur) = out.last_mut() {
+            cur.end = *ord;
+            if cur.text.len() < SECTION_HEAD_CHARS {
+                cur.text.push_str("\n\n");
+                cur.text.push_str(text);
+            }
+        }
+    }
+    out
+}
+
+fn section_stamp(sections: &[Section]) -> i32 {
+    let key: String = sections
+        .iter()
+        .map(|s| format!("{}:{}-{}", s.heading, s.start, s.end))
+        .collect::<Vec<_>>()
+        .join("\n");
+    content_hash(&key)
+}
+
+fn build_section_messages(title: &str, heading: &str, text: &str) -> Vec<ChatTurn> {
+    let head: String = text.chars().take(SECTION_HEAD_CHARS).collect();
+    vec![
+        ChatTurn::system(
+            "You write the index entry for one section of a document, for a reader who \
+             will search for it by whatever words they know. Reply with exactly two \
+             lines. Line 1: one or two plain sentences — what thing the section is about, \
+             then what it covers about it (the specific figures, procedures, and parts it \
+             gives). Line 2: \"Also called:\" followed by up to five other names a reader \
+             might type for that thing — everyday words, abbreviations, the common name \
+             for a technical one, the technical name for a common one, and for a city \
+             its country. Use only what the section says or what the name plainly means. \
+             Nothing else.",
+        ),
+        ChatTurn::user(format!(
+            "Document: {title}\nSection: {heading}\n\n---\n{head}"
+        )),
+    ]
+}
+
+/// Accept a section summary: bounded, and not the model narrating itself.
+fn section_gate(candidate: &str) -> Option<String> {
+    let trimmed = candidate.trim().trim_matches('"').trim();
+    let n = trimmed.chars().count();
+    if !(SECTION_MIN_CHARS..=SECTION_MAX_CHARS).contains(&n) {
+        return None;
+    }
+    let lower = trimmed.to_lowercase();
+    if lower.starts_with("i ") || lower.starts_with("as an ai") || lower.contains("cannot") {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn section_state_path(dir: &Path) -> std::path::PathBuf {
+    dir.join(SECTION_STATE_FILE)
+}
+
+fn load_section_state(dir: &Path) -> HashMap<String, i32> {
+    std::fs::read_to_string(section_state_path(dir))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_section_state(dir: &Path, state: &HashMap<String, i32>) {
+    let write = || -> std::io::Result<()> {
+        std::fs::create_dir_all(dir)?;
+        std::fs::write(
+            section_state_path(dir),
+            serde_json::to_vec(state).unwrap_or_default(),
+        )
+    };
+    if let Err(err) = write() {
+        crate::note!("sections: marker write failed: {err}");
+    }
+}
+
+/// Write section summaries for long structured sources that lack them
+/// (docs/RFC-outline-index.md Phase 2). One Small call per top-level
+/// section, `SECTION_SWEEP_BUDGET` sources per pass; a source is stamped
+/// once its rows land and reopened only when its sections change.
+/// Returns how many sources were summarized this pass.
+pub async fn ensure_section_gists(db: &Db, ai: &Ai) -> Result<usize> {
+    let dir = ai.data_dir().to_path_buf();
+    let mut state = load_section_state(&dir);
+    let mut dirty = false;
+    let mut written = 0usize;
+    'outer: for nb in db.list_notebooks().await? {
+        for s in db.list_sources(&nb.id).await? {
+            if written >= SECTION_SWEEP_BUDGET {
+                break 'outer;
+            }
+            if s.source_type == "code" || s.chunk_count < SECTION_MIN_SECTIONS as i64 {
+                continue;
+            }
+            let rows = db.source_chunk_rows(&s.id).await?;
+            let sections = sections_of(&rows);
+            if sections.len() < SECTION_MIN_SECTIONS || sections.len() > SECTION_MAX_SECTIONS {
+                continue;
+            }
+            let stamp = section_stamp(&sections);
+            if state.get(&s.id) == Some(&stamp) {
+                continue;
+            }
+            let mut gists: Vec<SectionGist> = Vec::with_capacity(sections.len());
+            for sec in &sections {
+                let messages = build_section_messages(&s.title, &sec.heading, &sec.text);
+                let reply = match ai.chat_role(Role::Small, &messages).await {
+                    Ok(out) => {
+                        crate::freshness::record_outcome(&out);
+                        out.text
+                    }
+                    Err(err) => {
+                        crate::note!("sections: Small role failed for \"{}\": {err:#}", s.title);
+                        #[cfg(test)]
+                        eprintln!("  sections: Small role failed: {err:#}");
+                        break 'outer;
+                    }
+                };
+                #[cfg(test)]
+                if std::env::var("ALCHEMY_TRACE_SECTIONS").is_ok() {
+                    eprintln!(
+                        "  [{}] gate {}: {}",
+                        sec.heading,
+                        if section_gate(&reply).is_some() {
+                            "ok"
+                        } else {
+                            "REFUSED"
+                        },
+                        reply
+                            .trim()
+                            .replace('\n', " / ")
+                            .chars()
+                            .take(220)
+                            .collect::<String>()
+                    );
+                }
+                if let Some(summary) = section_gate(&reply) {
+                    gists.push(SectionGist {
+                        start: sec.start,
+                        end: sec.end,
+                        chain: format!("{} › {}", s.title, sec.heading),
+                        summary,
+                    });
+                }
+            }
+            // Stamp even when the gate refused everything: the sections were
+            // read, and only a change to them earns another pass.
+            state.insert(s.id.clone(), stamp);
+            dirty = true;
+            if gists.is_empty() {
+                continue;
+            }
+            let inputs: Vec<String> = gists
+                .iter()
+                .map(|g| format!("[{} — section]\n{}", g.chain, g.summary))
+                .collect();
+            let embeddings = ai.embed(&inputs).await?;
+            db.replace_section_rows(&nb.id, &s.id, &gists, &embeddings)
+                .await?;
+            written += 1;
+            crate::note!("sections: {} summaries for \"{}\"", gists.len(), s.title);
+        }
+    }
+    if dirty {
+        save_section_state(&dir, &state);
+    }
+    Ok(written)
+}
+
 // ---- Phase 2: distilled embeddings for low-density page captures ----------
 
 /// Situating-sentence gate bounds (RFC-infinite-context §2). Tighter than the
@@ -525,8 +741,15 @@ async fn enrich_source(
     }
 
     let embeddings = ai.embed(&inputs).await?;
-    db.reembed_source_chunks(&source.notebook_id, &source.id, &rows, &embeddings)
-        .await?;
+    let contexts: Vec<String> = chunks.iter().map(|c| c.context.clone()).collect();
+    db.reembed_source_chunks(
+        &source.notebook_id,
+        &source.id,
+        &rows,
+        &contexts,
+        &embeddings,
+    )
+    .await?;
     Ok(EnrichOutcome::Enriched)
 }
 
@@ -643,34 +866,58 @@ pub fn spawn_sweep(db: std::sync::Arc<Db>, ai: Ai) {
                 // what's left on chunk enrichment. Tags come first: they are
                 // one cheap call per source and they show up in the UI, where
                 // enrichment only ever shows up in retrieval quality.
-                Ok((0, 0)) => match ensure_tags(&db, &ai).await {
+                Ok((0, 0)) => match ensure_section_gists(&db, &ai).await {
+                    // Section summaries ride right behind gists: same
+                    // budget shape, and the outline they index is what
+                    // long documents are retrieved by.
                     Ok(n) if n > 0 => {
                         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                     }
-                    // Tags converged. Offer registry cards once per notebook
-                    // per run (commands::registry::suggest_cards) — it reads
-                    // the gists this sweep just settled, so it comes after
-                    // them and before enrichment, same reasoning as tags:
-                    // one cheap call, and it shows up in the UI.
-                    Ok(_) => match crate::commands::suggest_cards(&db, &ai).await {
+                    Err(err) => {
+                        crate::diagnostics::error(
+                            "sweep",
+                            format!("section sweep failed: {err:#}"),
+                        );
+                        break;
+                    }
+                    Ok(_) => match ensure_tags(&db, &ai).await {
                         Ok(n) if n > 0 => {
                             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                         }
-                        // Chunk enrichment is the one stage that never
-                        // converges quickly — one small-model call per
-                        // chunk across the corpus — so it runs in quiet
-                        // hours only. The day's sweeps stop here, converged
-                        // on everything a person can see.
-                        Ok(_) if !crate::freshness::is_quiet_hours(crate::commands::now()) => break,
-                        Ok(_) => match ensure_enrichment(&db, &ai).await {
-                            Ok(0) => break,
-                            Ok(_) => {
+                        // Tags converged. Offer registry cards once per notebook
+                        // per run (commands::registry::suggest_cards) — it reads
+                        // the gists this sweep just settled, so it comes after
+                        // them and before enrichment, same reasoning as tags:
+                        // one cheap call, and it shows up in the UI.
+                        Ok(_) => match crate::commands::suggest_cards(&db, &ai).await {
+                            Ok(n) if n > 0 => {
                                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                             }
+                            // Chunk enrichment is the one stage that never
+                            // converges quickly — one small-model call per
+                            // chunk across the corpus — so it runs in quiet
+                            // hours only. The day's sweeps stop here, converged
+                            // on everything a person can see.
+                            Ok(_) if !crate::freshness::is_quiet_hours(crate::commands::now()) => {
+                                break
+                            }
+                            Ok(_) => match ensure_enrichment(&db, &ai).await {
+                                Ok(0) => break,
+                                Ok(_) => {
+                                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                                }
+                                Err(err) => {
+                                    crate::diagnostics::error(
+                                        "sweep",
+                                        format!("enrichment sweep failed: {err:#}"),
+                                    );
+                                    break;
+                                }
+                            },
                             Err(err) => {
                                 crate::diagnostics::error(
                                     "sweep",
-                                    format!("enrichment sweep failed: {err:#}"),
+                                    format!("card suggestion failed: {err:#}"),
                                 );
                                 break;
                             }
@@ -678,15 +925,11 @@ pub fn spawn_sweep(db: std::sync::Arc<Db>, ai: Ai) {
                         Err(err) => {
                             crate::diagnostics::error(
                                 "sweep",
-                                format!("card suggestion failed: {err:#}"),
+                                format!("tag sweep failed: {err:#}"),
                             );
                             break;
                         }
                     },
-                    Err(err) => {
-                        crate::diagnostics::error("sweep", format!("tag sweep failed: {err:#}"));
-                        break;
-                    }
                 },
                 Ok(_) => {
                     // Yield between batches so imports and chat stay snappy.
@@ -817,6 +1060,72 @@ fn gate_tags(reply: &str, haystack: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// Sections are the `# ` headings in ordinal order; each runs to the
+    /// next one, and the section text is its chunks joined (capped).
+    #[test]
+    fn sections_follow_top_level_headings() {
+        let rows = vec![
+            (
+                "c0".to_string(),
+                0,
+                "Preamble before any heading.".to_string(),
+            ),
+            (
+                "c1".to_string(),
+                1,
+                "# Chapter 1: Hydraulics\n\nabout".to_string(),
+            ),
+            (
+                "c2".to_string(),
+                2,
+                "## Torque Values\n\ntorque".to_string(),
+            ),
+            (
+                "c3".to_string(),
+                3,
+                "# Chapter 2: Landing Gear\n\nabout".to_string(),
+            ),
+            ("c4".to_string(), 4, "## Parts\n\nFM-1210".to_string()),
+        ];
+        let secs = super::sections_of(&rows);
+        let shape: Vec<(&str, i32, i32)> = secs
+            .iter()
+            .map(|s| (s.heading.as_str(), s.start, s.end))
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                ("Chapter 1: Hydraulics", 1, 2),
+                ("Chapter 2: Landing Gear", 3, 4)
+            ]
+        );
+        assert!(
+            secs[1].text.contains("FM-1210"),
+            "section text joins its chunks"
+        );
+        // Reordered rows land the same outline.
+        let mut shuffled = rows.clone();
+        shuffled.reverse();
+        assert_eq!(super::sections_of(&shuffled).len(), 2);
+        // Stamp follows headings and spans only.
+        assert_eq!(
+            super::section_stamp(&secs),
+            super::section_stamp(&super::sections_of(&shuffled))
+        );
+    }
+
+    /// The gate keeps a bounded plain summary and drops the model talking
+    /// about itself.
+    #[test]
+    fn section_gate_bounds_and_refuses_narration() {
+        let ok = "Landing gear: the undercarriage that carries the aircraft on the ground. Also called: undercarriage, wheels.";
+        assert_eq!(super::section_gate(ok).as_deref(), Some(ok));
+        assert!(super::section_gate("Too short.").is_none());
+        assert!(super::section_gate("I cannot summarize this section for you.").is_none());
+        let long = "x".repeat(super::SECTION_MAX_CHARS + 1);
+        assert!(super::section_gate(&long).is_none());
+    }
+
     use super::*;
 
     /// The gate is the whole safety story: a tag the document cannot vouch

@@ -1018,6 +1018,8 @@ struct Prepared {
     url: String,
     text: String,
     chunks: Vec<(String, i32, String)>,
+    /// "title › chain" per chunk, stored beside it for the context leg.
+    contexts: Vec<String>,
     embeddings: Vec<Vec<f32>>,
     /// "text" for pasted bodies; "url" for the curated web sources, whose
     /// Gallery card then leads with `image_url`.
@@ -1041,11 +1043,13 @@ async fn prepare_source(
         .enumerate()
         .map(|(i, c)| (new_id(), i as i32, c.text.clone()))
         .collect();
+    let contexts: Vec<String> = chunks.iter().map(|c| c.context.clone()).collect();
     Ok(Prepared {
         title: extracted.title,
         url: url.to_string(),
         text: extracted.text,
         chunks: tuples,
+        contexts,
         embeddings,
         source_type: "text",
         image_url: String::new(),
@@ -1085,7 +1089,8 @@ async fn insert_prepared(db: &Db, notebook_id: &str, ts: i64, p: Prepared) -> an
         fetched_at: ts,
         fetch_failures: 0,
     };
-    db.insert_source(&source, &p.chunks, &p.embeddings).await
+    db.insert_source_ctx(&source, &p.chunks, &p.contexts, &p.embeddings)
+        .await
 }
 
 async fn seed_notebook(

@@ -611,6 +611,7 @@ pub(crate) fn ollama_config(config: &AiConfig) -> OllamaConfig {
         effort: String::new(),
         keep_alive: None,
         num_predict: None,
+        think: None,
     }
 }
 
@@ -722,6 +723,9 @@ impl Ai {
             // for the longest legitimate reply and bounds that tail at
             // ~20s on an 8B model.
             oc.num_predict = Some(2_048);
+            // And no hidden thinking: a thinking model spends that cap on
+            // reasoning and hands back nothing (see OllamaConfig::think).
+            oc.think = Some(false);
             Some(ChatEngine::Ollama(Ollama::new(oc)))
         } else {
             runtime

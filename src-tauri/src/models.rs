@@ -428,6 +428,11 @@ pub struct Citation {
     /// the content hash the gist was distilled from, not a position.
     #[serde(default)]
     pub gist: bool,
+    /// Where the passage sits: "title › chapter › section" from the
+    /// chunk's stored context (docs/RFC-outline-index.md). Empty for rows
+    /// indexed before contexts were stored, and for notes.
+    #[serde(default)]
+    pub section: String,
     /// True when this row is the user's own annotation on a source
     /// (docs/RFC-source-tags.md) — stored under `snote:<source_id>`.
     /// `source_id` still names the annotated source. Prompts label these

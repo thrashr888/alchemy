@@ -320,6 +320,7 @@ pub(crate) async fn seed_docs(
             .enumerate()
             .map(|(j, c)| (format!("{id_prefix}c{i}-{j}"), j as i32, c.text.clone()))
             .collect();
+        let contexts: Vec<String> = chunks.iter().map(|c| c.context.clone()).collect();
         let source = crate::models::Source {
             image_url: String::new(),
             author: String::new(),
@@ -341,7 +342,7 @@ pub(crate) async fn seed_docs(
             fetched_at: 0,
             fetch_failures: 0,
         };
-        db.insert_source(&source, &tuples, &embeddings)
+        db.insert_source_ctx(&source, &tuples, &contexts, &embeddings)
             .await
             .expect("store fixture");
     }
@@ -524,6 +525,7 @@ async fn eval_rerank_surfaces_buried_hit() {
                 "Entry {i}: tomatoes prefer full sun and weekly deep watering in raised beds."
             ),
             distance: 0.1 + i as f32 * 0.01,
+            section: String::new(),
         })
         .collect();
     // The only passage that answers the question, buried at rank 10.
@@ -542,6 +544,7 @@ async fn eval_rerank_surfaces_buried_hit() {
                       for wind and hail damage."
                 .into(),
             distance: 0.3,
+            section: String::new(),
         },
     );
 
@@ -650,6 +653,7 @@ async fn eval_chat_grounding_across_models() {
             ordinal: i as i32,
             snippet: body.to_string(),
             distance: 0.1,
+            section: String::new(),
         })
         .collect();
     let sources: Vec<(String, String, String)> = corpus

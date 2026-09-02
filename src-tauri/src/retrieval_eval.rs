@@ -168,6 +168,11 @@ struct DatasetReport {
     variants: BTreeMap<String, VariantReport>,
 }
 
+/// The kinds a gate dataset reports rather than asserts: `outline` for the
+/// heading chain (RFC-outline-index phases 1–1.5), `topic` for paraphrased
+/// chapters (phases 2–3). Everything else in such a dataset is a control.
+const MEASURED_KINDS: [&str; 2] = ["outline", "topic"];
+
 /// Long structured documents for the outline gate (Reminders: "Outline
 /// eval cases before outline work"). The failure mode is a 300-page manual
 /// where every chapter repeats the same subsections — inspection interval,
@@ -435,6 +440,97 @@ fn outline_corpus() -> Vec<(String, String)> {
     ]
 }
 
+/// Handwritten section summaries for the outline corpus (RFC-outline-index
+/// Phase 2) — what the Small role is asked to write per top-level section:
+/// what the section covers in plain words, plus the other names a reader
+/// might use for it. Handwritten so the retrieval mechanics (rows, hits,
+/// expansion) measure deterministically; the model-written variant has its
+/// own Ollama-gated eval. (document title, h1 heading, summary)
+const OUTLINE_SECTION_GISTS: &[(&str, &str, &str)] = &[
+    ("Fleet Maintenance Manual", "Chapter 1: Hydraulics", "Hydraulic system: fluid pressure for the flight-control actuators and the gear retraction circuit — pump and line fasteners, how often to inspect, part numbers. Also called: hydraulic pump, hydraulic lines."),
+    ("Fleet Maintenance Manual", "Chapter 2: Landing Gear", "Landing gear: the undercarriage that carries the aircraft on the ground and absorbs landing loads — door hinge bolts and axle nuts, inspection cadence, part numbers. Also called: undercarriage, gear legs, wheels."),
+    ("Fleet Maintenance Manual", "Chapter 3: Avionics", "Avionics: navigation, communication and flight-management computers — fastener torques, inspection cadence, parts. Also called: instruments, flight computers, radios."),
+    ("Fleet Maintenance Manual", "Chapter 4: Fuel System", "Fuel system: storing and metering fuel from the wing tanks to the engines — fasteners, inspection cadence, parts. Also called: fuel pumps, fuel lines, tanks."),
+    ("Fleet Maintenance Manual", "Chapter 5: Cabin Pressurization", "Cabin pressurization: regulating cabin altitude through the outflow valves — fasteners, inspection cadence, parts. Also called: pressurisation, outflow valve, cabin altitude."),
+    ("Fleet Maintenance Manual", "Chapter 6: Flight Controls", "Flight controls: linking the cockpit inceptors to the control surfaces — fasteners, inspection cadence, parts. Also called: ailerons, elevator, rudder, control surfaces."),
+    ("Fleet Maintenance Manual", "Chapter 7: Electrical", "Electrical system: generator and battery power across the buses — fasteners, inspection cadence, parts. Also called: generators, batteries, wiring, electrical buses."),
+    ("Fleet Maintenance Manual", "Chapter 8: Auxiliary Power Unit", "Auxiliary power unit: ground power and bleed air with the engines shut down — fasteners, inspection cadence, parts. Also called: APU, ground power unit."),
+    ("Fleet Maintenance Manual", "Chapter 9: Environmental Control", "Environmental control: conditioning and circulating cabin air — fasteners, inspection cadence, parts. Also called: air conditioning, cabin air, ventilation, ECS, packs."),
+    ("Fleet Maintenance Manual", "Chapter 10: Oxygen System", "Oxygen system: emergency oxygen for the flight deck and cabin — fasteners, inspection cadence, parts. Also called: O2, oxygen masks, emergency oxygen."),
+    ("Fleet Maintenance Manual", "Chapter 11: Brakes", "Brakes: stopping the aircraft on landing and holding it during engine run-up — fasteners, inspection cadence, parts. Also called: wheel brakes, braking."),
+    ("Fleet Maintenance Manual", "Chapter 12: Nose Wheel Steering", "Nose wheel steering: steering the nose gear from the tiller and the rudder pedals — fasteners, inspection cadence, parts. Also called: tiller, nosewheel, steering system."),
+    ("Fleet Maintenance Manual", "Chapter 13: Engine Cowling", "Engine cowling: the cover that encloses the engine and directs cooling air — fasteners, inspection cadence, parts. Also called: engine cover, cowl, nacelle."),
+    ("Fleet Maintenance Manual", "Chapter 14: Wing Anti-Ice", "Wing anti-ice: heating the wing leading edges with engine bleed air — fasteners, inspection cadence, parts. Also called: de-icing, anti-icing, ice protection, leading-edge heat."),
+    ("Regional Employee Policy Manual", "Lisbon Office", "Lisbon office (Portugal): paid public holidays, the nightly hotel cap for expenses, and how many weeks' notice on leaving."),
+    ("Regional Employee Policy Manual", "Austin Office", "Austin office (Texas, United States): paid public holidays, the nightly hotel cap for expenses, and how many weeks' notice on leaving."),
+    ("Regional Employee Policy Manual", "Toronto Office", "Toronto office (Canada): paid public holidays, the nightly hotel cap for expenses, and how many weeks' notice on leaving."),
+    ("Regional Employee Policy Manual", "Singapore Office", "Singapore office: paid public holidays, the nightly hotel cap for expenses, and how many weeks' notice on leaving."),
+    ("Regional Employee Policy Manual", "Dublin Office", "Dublin office (Ireland): paid public holidays, the nightly hotel cap for expenses, and how many weeks' notice on leaving."),
+    ("Regional Employee Policy Manual", "Melbourne Office", "Melbourne office (Australia): paid public holidays, the nightly hotel cap for expenses, and how many weeks' notice on leaving."),
+    ("Regional Employee Policy Manual", "Berlin Office", "Berlin office (Germany): paid public holidays, the nightly hotel cap for expenses, and how many weeks' notice on leaving."),
+    ("Regional Employee Policy Manual", "Sao Paulo Office", "Sao Paulo office (Brazil): paid public holidays, the nightly hotel cap for expenses, and how many weeks' notice on leaving."),
+    ("Regional Employee Policy Manual", "Tokyo Office", "Tokyo office (Japan): paid public holidays, the nightly hotel cap for expenses, and how many weeks' notice on leaving."),
+    ("Regional Employee Policy Manual", "Bangalore Office", "Bangalore office (India): paid public holidays, the nightly hotel cap for expenses, and how many weeks' notice on leaving."),
+    ("Regional Employee Policy Manual", "Mexico City Office", "Mexico City office (Mexico): paid public holidays, the nightly hotel cap for expenses, and how many weeks' notice on leaving."),
+    ("Regional Employee Policy Manual", "Warsaw Office", "Warsaw office (Poland): paid public holidays, the nightly hotel cap for expenses, and how many weeks' notice on leaving."),
+];
+
+/// Store the handwritten section summaries for the seeded outline corpus:
+/// each `# heading` chunk opens a section that runs to the next `#`.
+/// Returns how many rows landed.
+async fn seed_outline_sections(ai: &crate::ai::Ai, db: &Db, notebook_id: &str) -> usize {
+    let sources = db.list_sources(notebook_id).await.expect("list sources");
+    let mut written = 0usize;
+    for src in sources {
+        let rows = db.source_chunk_rows(&src.id).await.expect("chunk rows");
+        // (ordinal, heading) for every top-level heading chunk.
+        let mut heads: Vec<(i32, String)> = rows
+            .iter()
+            .filter_map(|(_, ord, text)| {
+                let first = text.lines().next().unwrap_or("");
+                first
+                    .strip_prefix("# ")
+                    .map(|h| (*ord, h.trim().to_string()))
+            })
+            .collect();
+        heads.sort_by_key(|(o, _)| *o);
+        let last = rows.iter().map(|r| r.1).max().unwrap_or(0);
+        let mut sections: Vec<crate::db::SectionGist> = Vec::new();
+        for (i, (start, heading)) in heads.iter().enumerate() {
+            let end = heads.get(i + 1).map(|(o, _)| o - 1).unwrap_or(last);
+            let Some((_, _, summary)) = OUTLINE_SECTION_GISTS
+                .iter()
+                .find(|(doc, h, _)| *doc == src.title && h == heading)
+            else {
+                continue;
+            };
+            sections.push(crate::db::SectionGist {
+                start: *start,
+                end,
+                chain: format!("{} › {heading}", src.title),
+                summary: summary.to_string(),
+            });
+        }
+        if sections.is_empty() {
+            continue;
+        }
+        let inputs: Vec<String> = sections
+            .iter()
+            .map(|s| format!("[{} — section]\n{}", s.chain, s.summary))
+            .collect();
+        let embeddings = ai.embed(&inputs).await.expect("embed sections");
+        db.replace_section_rows(notebook_id, &src.id, &sections, &embeddings)
+            .await
+            .expect("store sections");
+        written += sections.len();
+    }
+    // One index over docs and sections both: an incremental optimize after
+    // the append measured flaky (one BM25-dependent query flipping between
+    // runs), a from-scratch build does not.
+    db.rebuild_fts_from_scratch().await.expect("rebuild fts");
+    written
+}
+
 fn load_datasets() -> Vec<Dataset> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("evals")
@@ -563,6 +659,12 @@ async fn eval_retrieval_datasets() {
         let docs = outline_corpus();
         let refs: Vec<(&str, &str)> = docs.iter().map(|(t, b)| (t.as_str(), b.as_str())).collect();
         seed_docs(&ai, &db, outline_nb, &refs, "o-").await;
+        // Phase 2 rows ride the same seeding unless a sweep asks to see
+        // the corpus without them (ALCHEMY_EVAL_NO_SECTIONS=1).
+        if std::env::var("ALCHEMY_EVAL_NO_SECTIONS").is_err() {
+            let n = seed_outline_sections(&ai, &db, outline_nb).await;
+            eprintln!("outline corpus: {n} section summaries seeded");
+        }
     }
     async fn titles_of(db: &Db, nb: &str) -> HashMap<String, String> {
         db.list_sources(nb)
@@ -758,7 +860,7 @@ async fn eval_retrieval_datasets() {
             // Its control kinds must be perfect, or the corpus didn't seed
             // the way the dataset assumes and the gate measures nothing.
             for (kind, m) in &hybrid.by_kind {
-                if kind != "outline" {
+                if !MEASURED_KINDS.contains(&kind.as_str()) {
                     assert!(
                         (m.recall_at_10 - 1.0).abs() < f64::EPSILON,
                         "{}: control kind {kind} recall@10 {:.2} — the gate corpus is not seeded as assumed",
@@ -1612,7 +1714,7 @@ async fn eval_enrichment_reembed() {
         })
         .collect();
     let new_embeddings = ai.embed(&new_inputs).await.expect("re-embed");
-    db.reembed_source_chunks(nb, &src_id, &rows, &new_embeddings)
+    db.reembed_source_chunks(nb, &src_id, &rows, &[], &new_embeddings)
         .await
         .expect("reembed");
 
@@ -2196,6 +2298,8 @@ async fn run_scale(ai: &crate::ai::Ai, target_chars: usize) -> (f64, f64, usize)
                 crate::ingest::Chunk {
                     text: c.text.clone(),
                     embed_text: c.embed_text.clone(),
+                    section: String::new(),
+                    context: String::new(),
                 },
             ));
         }
@@ -2217,6 +2321,7 @@ async fn run_scale(ai: &crate::ai::Ai, target_chars: usize) -> (f64, f64, usize)
             .enumerate()
             .map(|(ci, c)| (format!("d{di}-c{ci}"), ci as i32, c.text.clone()))
             .collect();
+        let contexts: Vec<String> = chunked[di].iter().map(|c| c.context.clone()).collect();
         let vecs = vectors[cursor..cursor + n].to_vec();
         cursor += n;
         let source = crate::models::Source {
@@ -2241,7 +2346,7 @@ async fn run_scale(ai: &crate::ai::Ai, target_chars: usize) -> (f64, f64, usize)
             fetch_failures: 0,
         };
         total_chars += source.char_count;
-        db.insert_source(&source, &tuples, &vecs)
+        db.insert_source_ctx(&source, &tuples, &contexts, &vecs)
             .await
             .expect("insert scale doc");
     }
@@ -2884,4 +2989,320 @@ async fn eval_agent_rerank_paths() {
         xe_n as f64 / n as f64
     );
     crate::evals::release_models(&[&chat_model, &small_model]).await;
+}
+
+/// Probe for Phase 1.5 (RFC-outline-index): with the heading chain in the
+/// BM25 document, the text leg alone should put the right chapter's
+/// section first for a look-alike query over the outline corpus.
+#[tokio::test]
+async fn eval_context_leg_probe() {
+    let Some(ai) = eval_ai().await else { return };
+    let dir = std::env::temp_dir().join(format!("nbl-ctx-probe-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb = "probe";
+    let docs = outline_corpus();
+    let refs: Vec<(&str, &str)> = docs.iter().map(|(t, b)| (t.as_str(), b.as_str())).collect();
+    seed_docs(&ai, &db, nb, &refs, "p-").await;
+    let (rows, filled) = db.context_fill().await.expect("context fill");
+    eprintln!("chunk rows {rows}, with context {filled}");
+    if std::env::var("ALCHEMY_PROBE_SECTIONS").is_ok() {
+        let n = seed_outline_sections(&ai, &db, nb).await;
+        eprintln!("{n} section summaries seeded");
+    }
+    let probe_q = std::env::var("ALCHEMY_PROBE_QUERY").ok();
+    let q = probe_q
+        .as_deref()
+        .unwrap_or("what torque for the landing gear hinge bolts?");
+    let qvec = ai.embed_one(q).await.expect("embed");
+    let trace = db
+        .search_chunks_trace(nb, qvec, q, 10, None)
+        .await
+        .expect("search");
+    assert!(trace.warnings.is_empty(), "{:?}", trace.warnings);
+    let show = |name: &str, hits: &[Citation]| {
+        eprintln!("{name}: {} hits", hits.len());
+        for c in hits.iter().take(if probe_q.is_some() { 10 } else { 4 }) {
+            eprintln!(
+                "  [{}]{} {} | {}",
+                c.ordinal,
+                if c.chunk_id.starts_with("section:") {
+                    " (section row)"
+                } else {
+                    ""
+                },
+                c.section,
+                c.snippet
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(60)
+                    .collect::<String>()
+            );
+        }
+    };
+    show("vector", &trace.vector_hits);
+    show("fts(bm25 = context + text)", &trace.fts_hits);
+    show("fused", &trace.final_hits);
+    if probe_q.is_none() {
+        assert!(
+            trace
+                .fts_hits
+                .first()
+                .is_some_and(|c| c.section.contains("Landing Gear")),
+            "BM25 with the chain should put the landing-gear section first"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Hybrid metrics for one kind of one dataset over an already-seeded
+/// notebook — the datasets eval's inner loop, for evals that re-seed part
+/// of the store between measurements.
+async fn score_kind(db: &Db, ai: &crate::ai::Ai, nb: &str, ds: &Dataset, kind: &str) -> Metrics {
+    score_kind_with(db, ai, None, nb, ds, kind).await
+}
+
+/// `score_kind`, optionally with the outline escalation (RFC-outline-index
+/// Phase 3) run over each flat result by `escalator` before scoring.
+async fn score_kind_with(
+    db: &Db,
+    ai: &crate::ai::Ai,
+    escalator: Option<&crate::ai::Ai>,
+    nb: &str,
+    ds: &Dataset,
+    kind: &str,
+) -> Metrics {
+    let titles: HashMap<String, String> = db
+        .list_sources(nb)
+        .await
+        .expect("list sources")
+        .into_iter()
+        .map(|s| (s.id, s.title))
+        .collect();
+    let qs: Vec<&EvalQuery> = ds.queries.iter().filter(|q| q.kind == kind).collect();
+    let texts: Vec<String> = qs.iter().map(|q| q.query.clone()).collect();
+    let qvecs = ai.embed(&texts).await.expect("embed queries");
+    let mut rows: Vec<(String, Metrics)> = Vec::new();
+    for (q, qvec) in qs.iter().zip(qvecs) {
+        let trace = db
+            .search_chunks_trace(nb, qvec.clone(), &q.query, K, None)
+            .await
+            .expect("search");
+        let mut hits = trace.final_hits;
+        if let Some(model) = escalator {
+            crate::outline_index::escalate(db, model, nb, &q.query, &qvec, &mut hits)
+                .await
+                .expect("escalate");
+        }
+        let (ranks, _) = matched_ranks(&hits, &titles, &q.relevant);
+        rows.push((kind.to_string(), query_metrics(&ranks, q.relevant.len())));
+    }
+    mean(&rows, None)
+}
+
+/// Phase 3's escalation, on versus off, per kind, over the outline corpus
+/// with the handwritten section summaries as the outline (so the
+/// escalation's own contribution is measured, not the generator's). Needs
+/// live Ollama; ALCHEMY_EVAL_SECTION_MODEL picks the Small model.
+///
+///   ALCHEMY_OLLAMA_TESTS=1 cargo test --lib eval_outline_escalation -- --ignored --nocapture
+#[tokio::test]
+#[ignore = "needs live Ollama; run explicitly — it measures an escalation, it does not guard correctness"]
+async fn eval_outline_escalation() {
+    let Some(ai) = builtin_ai().await else {
+        panic!("built-in embedder unavailable");
+    };
+    let model = std::env::var("ALCHEMY_EVAL_SECTION_MODEL")
+        .unwrap_or_else(|_| "digitsflow/bonsai-8b:latest".into());
+    let dir = std::env::temp_dir().join(format!("nbl-outline-esc-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb = "outline";
+    db.create_notebook(&crate::models::Notebook {
+        id: nb.to_string(),
+        title: "Outline corpus".into(),
+        created_at: 0,
+        updated_at: 0,
+        color: String::new(),
+        icon: String::new(),
+        status: String::new(),
+        growth_web: false,
+        source_count: 0,
+        note_count: 0,
+        report_count: 0,
+    })
+    .await
+    .expect("create notebook");
+    let docs = outline_corpus();
+    let refs: Vec<(&str, &str)> = docs.iter().map(|(t, b)| (t.as_str(), b.as_str())).collect();
+    seed_docs(&ai, &db, nb, &refs, "o-").await;
+    seed_outline_sections(&ai, &db, nb).await;
+    let ds = load_datasets()
+        .into_iter()
+        .find(|d| d.name == "fixture-outline")
+        .expect("outline dataset");
+    let model_ai = crate::ai::Ai::new(
+        crate::ai::AiConfig {
+            embedder: "builtin".into(),
+            chat_model: model.clone(),
+            small_model: model.clone(),
+            ..Default::default()
+        },
+        crate::ai::AiRuntime {
+            data_dir: dir.join("ai"),
+            ..Default::default()
+        },
+    );
+    eprintln!("\noutline escalation by ({model}), hybrid @{K}:");
+    let mut topic: Option<(Metrics, Metrics)> = None;
+    for kind in ["topic", "outline", "chapter", "exact"] {
+        let off = score_kind(&db, &ai, nb, &ds, kind).await;
+        let on = score_kind_with(&db, &ai, Some(&model_ai), nb, &ds, kind).await;
+        eprintln!(
+            "  {kind:<8} off  R@5 {:.2}  R@10 {:.2}  MRR {:.2}  nDCG {:.2}",
+            off.recall_at_5, off.recall_at_10, off.mrr_at_10, off.ndcg_at_10
+        );
+        eprintln!(
+            "  {kind:<8} on   R@5 {:.2}  R@10 {:.2}  MRR {:.2}  nDCG {:.2}",
+            on.recall_at_5, on.recall_at_10, on.mrr_at_10, on.ndcg_at_10
+        );
+        if kind == "topic" {
+            topic = Some((off, on));
+        }
+    }
+    crate::evals::release_models(&[&model]).await;
+    let (off, on) = topic.expect("topic scored");
+    assert!(
+        on.mrr_at_10 >= off.mrr_at_10 - 0.02,
+        "escalation regressed topic MRR ({:.2} vs {:.2})",
+        on.mrr_at_10,
+        off.mrr_at_10
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Phase 2's generator against its fixtures (RFC-outline-index): the Small
+/// model writes the section summaries for the outline corpus, and the
+/// `topic` kind is scored three ways on one store — no section rows, the
+/// handwritten fixtures, the model's. Prints the model's summaries so a
+/// weak run can be read, not just counted. Needs live Ollama;
+/// ALCHEMY_EVAL_SECTION_MODEL picks the model (default bonsai-8b).
+///
+///   ALCHEMY_OLLAMA_TESTS=1 cargo test --lib eval_section_gists_model -- --ignored --nocapture
+#[tokio::test]
+#[ignore = "needs live Ollama; run explicitly — it measures a generator, it does not guard correctness"]
+async fn eval_section_gists_model() {
+    let Some(ai) = builtin_ai().await else {
+        panic!("built-in embedder unavailable");
+    };
+    let model = std::env::var("ALCHEMY_EVAL_SECTION_MODEL")
+        .unwrap_or_else(|_| "digitsflow/bonsai-8b:latest".into());
+    let dir = std::env::temp_dir().join(format!("nbl-section-model-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb = "outline";
+    // The sweep walks notebooks, so the seeded sources need one to live in.
+    db.create_notebook(&crate::models::Notebook {
+        id: nb.to_string(),
+        title: "Outline corpus".into(),
+        created_at: 0,
+        updated_at: 0,
+        color: String::new(),
+        icon: String::new(),
+        status: String::new(),
+        growth_web: false,
+        source_count: 0,
+        note_count: 0,
+        report_count: 0,
+    })
+    .await
+    .expect("create notebook");
+    let docs = outline_corpus();
+    let refs: Vec<(&str, &str)> = docs.iter().map(|(t, b)| (t.as_str(), b.as_str())).collect();
+    seed_docs(&ai, &db, nb, &refs, "o-").await;
+    db.rebuild_fts_from_scratch().await.expect("fts");
+    let ds = load_datasets()
+        .into_iter()
+        .find(|d| d.name == "fixture-outline")
+        .expect("outline dataset");
+
+    let none = score_kind(&db, &ai, nb, &ds, "topic").await;
+    let n = seed_outline_sections(&ai, &db, nb).await;
+    assert!(n > 0);
+    let hand = score_kind(&db, &ai, nb, &ds, "topic").await;
+
+    // The model's turn: same embedder (so the store's vectors agree), the
+    // Small role on Ollama, its own data dir for the stamp file.
+    let model_ai = crate::ai::Ai::new(
+        crate::ai::AiConfig {
+            embedder: "builtin".into(),
+            chat_model: model.clone(),
+            small_model: model.clone(),
+            ..Default::default()
+        },
+        crate::ai::AiRuntime {
+            data_dir: dir.join("ai"),
+            ..Default::default()
+        },
+    );
+    for src in db.list_sources(nb).await.expect("sources") {
+        db.delete_section_rows(&src.id).await.expect("clear");
+        let rows = db.source_chunk_rows(&src.id).await.expect("rows");
+        eprintln!(
+            "  {}: {} chunks (chunk_count {}), {} sections",
+            src.title,
+            rows.len(),
+            src.chunk_count,
+            crate::gist::sections_of(&rows).len()
+        );
+    }
+    // A smoke call first, so an unreachable model reads as itself.
+    let smoke = model_ai
+        .chat_role(
+            crate::inference::Role::Small,
+            &[crate::ai::ChatTurn::user(String::from(
+                "Reply with the single word: ready",
+            ))],
+        )
+        .await
+        .expect("small model answers");
+    eprintln!("  smoke: {}", smoke.text.trim());
+    let mut summarized = 0usize;
+    loop {
+        let n = crate::gist::ensure_section_gists(&db, &model_ai)
+            .await
+            .expect("section gists");
+        if n == 0 {
+            break;
+        }
+        summarized += n;
+    }
+    assert!(summarized > 0, "the model wrote no section summaries");
+    for src in db.list_sources(nb).await.expect("sources") {
+        for (chain, summary) in db.section_rows(&src.id).await.expect("rows") {
+            eprintln!("  {chain}\n    {}", summary.replace('\n', " / "));
+        }
+    }
+    db.rebuild_fts_from_scratch().await.expect("fts");
+    let modelled = score_kind(&db, &ai, nb, &ds, "topic").await;
+    crate::evals::release_models(&[&model]).await;
+
+    let line = |label: &str, m: &Metrics| {
+        eprintln!(
+            "  {label:<22} R@5 {:.2}  R@10 {:.2}  MRR {:.2}  nDCG {:.2}",
+            m.recall_at_5, m.recall_at_10, m.mrr_at_10, m.ndcg_at_10
+        );
+    };
+    eprintln!("\ntopic kind, hybrid, section summaries by ({model}):");
+    line("none", &none);
+    line("handwritten", &hand);
+    line("model", &modelled);
+    // The bar: the model's summaries must beat no summaries. Handwritten is
+    // the ceiling to report against, not a floor to fail on.
+    assert!(
+        modelled.mrr_at_10 > none.mrr_at_10,
+        "model summaries did not improve topic MRR ({:.2} vs {:.2})",
+        modelled.mrr_at_10,
+        none.mrr_at_10
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

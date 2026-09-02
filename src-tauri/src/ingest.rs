@@ -1240,6 +1240,16 @@ pub fn extract_pasted(title: &str, text: &str) -> Result<Extracted> {
 pub struct Chunk {
     pub text: String,
     pub embed_text: String,
+    /// The heading chain this chunk sits under, outermost first, joined
+    /// with " › " — empty above the first heading. Phase 2 of the outline
+    /// index (docs/RFC-outline-index.md) reads it to group chunks into
+    /// sections; until then only the tests and the embed prefix do.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub section: String,
+    /// The embed prefix without its brackets — "title › chain" — stored
+    /// beside the chunk so the BM25 leg can see it (docs/RFC-outline-index.md
+    /// Phase 1.5). Display `text` stays verbatim.
+    pub context: String,
 }
 
 fn word_count(s: &str) -> usize {
@@ -1250,15 +1260,29 @@ fn word_count(s: &str) -> usize {
 /// packed up to ~chunk_words(), markdown-style headings start a new chunk and
 /// become section context, and oversized paragraphs fall back to sentence
 /// (then word-window) splitting.
+///
+/// Section context is the heading *chain*, not the last heading seen
+/// (docs/RFC-outline-index.md): a chunk under `## Torque Values` inside
+/// `# Chapter 2: Landing Gear` embeds as `[Manual › Chapter 2: Landing Gear
+/// › Torque Values]`. In a manual whose every chapter repeats the same
+/// subsections, the chapter name is the only token that tells look-alike
+/// chunks apart, and the old one-level context dropped it the moment the
+/// subsection heading arrived. A deeper heading pushes; a shallower or
+/// equal one pops back to its level first.
 pub fn chunk_text(title: &str, text: &str) -> Vec<Chunk> {
-    let make = |heading: &str, body: &str| -> Chunk {
+    let make = |path: &[(usize, String)], body: &str| -> Chunk {
         let mut ctx = title.trim().to_string();
-        if !heading.is_empty() {
+        for (_, heading) in path {
             if !ctx.is_empty() {
                 ctx.push_str(" › ");
             }
             ctx.push_str(heading);
         }
+        let section = path
+            .iter()
+            .map(|(_, h)| h.as_str())
+            .collect::<Vec<_>>()
+            .join(" › ");
         let body = body.trim().to_string();
         // Embed text de-brackets [[wikilinks]] so retrieval reads prose;
         // display text keeps them for the reader to render as links.
@@ -1271,14 +1295,17 @@ pub fn chunk_text(title: &str, text: &str) -> Vec<Chunk> {
         Chunk {
             text: body,
             embed_text,
+            section,
+            context: ctx,
         }
     };
 
     let mut chunks: Vec<Chunk> = Vec::new();
-    let mut heading = String::new(); // current section heading
+    // The open heading chain, outermost first: (level, heading).
+    let mut path: Vec<(usize, String)> = Vec::new();
     let mut cur = String::new(); // paragraphs packed into the pending chunk
     let mut cur_words = 0usize;
-    let mut cur_heading = String::new(); // section the pending chunk started in
+    let mut cur_path: Vec<(usize, String)> = Vec::new(); // chain the pending chunk started in
 
     for para in text.split("\n\n") {
         let p = para.trim();
@@ -1291,11 +1318,17 @@ pub fn chunk_text(title: &str, text: &str) -> Vec<Chunk> {
         // markers our extractors emit): new section, new chunk.
         if p.lines().count() == 1 && p.starts_with('#') {
             if !cur.is_empty() {
-                chunks.push(make(&cur_heading, &cur));
+                chunks.push(make(&cur_path, &cur));
                 cur.clear();
             }
-            heading = p.trim_start_matches('#').trim().to_string();
-            cur_heading = heading.clone();
+            let level = p.chars().take_while(|c| *c == '#').count();
+            let heading = p.trim_start_matches('#').trim().to_string();
+            // A heading closes every open section at its level or deeper.
+            while path.last().is_some_and(|(l, _)| *l >= level) {
+                path.pop();
+            }
+            path.push((level, heading));
+            cur_path = path.clone();
             cur.push_str(p); // the heading line stays in the chunk verbatim
             cur_words = words;
             continue;
@@ -1305,24 +1338,24 @@ pub fn chunk_text(title: &str, text: &str) -> Vec<Chunk> {
         // and split it by sentences (word windows as a last resort).
         if words > chunk_words() {
             if !cur.is_empty() {
-                chunks.push(make(&cur_heading, &cur));
+                chunks.push(make(&cur_path, &cur));
                 cur.clear();
                 cur_words = 0;
             }
             for piece in split_oversized(p) {
-                chunks.push(make(&heading, &piece));
+                chunks.push(make(&path, &piece));
             }
-            cur_heading = heading.clone();
+            cur_path = path.clone();
             continue;
         }
 
         if cur_words + words > chunk_words() && !cur.is_empty() {
-            chunks.push(make(&cur_heading, &cur));
+            chunks.push(make(&cur_path, &cur));
             cur.clear();
             cur_words = 0;
         }
         if cur.is_empty() {
-            cur_heading = heading.clone();
+            cur_path = path.clone();
         } else {
             cur.push_str("\n\n");
         }
@@ -1330,7 +1363,7 @@ pub fn chunk_text(title: &str, text: &str) -> Vec<Chunk> {
         cur_words += words;
     }
     if !cur.trim().is_empty() {
-        chunks.push(make(&cur_heading, &cur));
+        chunks.push(make(&cur_path, &cur));
     }
     chunks
 }
@@ -1556,6 +1589,8 @@ pub fn chunk_code(context: &str, text: &str) -> Vec<Chunk> {
         Chunk {
             text: body,
             embed_text,
+            section: String::new(),
+            context: ctx.to_string(),
         }
     };
 
@@ -2300,6 +2335,8 @@ mod tests {
         Chunk {
             text: body.to_string(),
             embed_text: format!("[{title}]\n{body}"),
+            section: String::new(),
+            context: title.to_string(),
         }
     }
 
@@ -2324,6 +2361,8 @@ mod tests {
         assert!(!is_boilerplate_chunk(&Chunk {
             text: "Overview".into(),
             embed_text: "[Acme Blog › Docs]\nOverview".into(),
+            section: "Docs".into(),
+            context: "Acme Blog › Docs".into(),
         }));
         // Long real passage never trips the gate.
         assert!(!is_boilerplate_chunk(&page_chunk(
@@ -2483,6 +2522,40 @@ mod tests {
         assert_eq!(chunks.len(), 2);
         assert!(chunks[1].text.starts_with("# Setup"));
         assert!(chunks[1].embed_text.starts_with("[Guide › Setup]\n"));
+        assert_eq!(chunks[0].section, "");
+        assert_eq!(chunks[1].section, "Setup");
+
+        // The context is the heading CHAIN: a subsection keeps its chapter,
+        // a sibling chapter pops back, a deeper level pushes.
+        let manual = "# Chapter 1: Hydraulics\n\nabout hydraulics.\n\n\
+             ## Torque Values\n\ntorque the bolts.\n\n\
+             ### Notes\n\nlubricate first.\n\n\
+             ## Parts\n\norder FM-1102.\n\n\
+             # Chapter 2: Landing Gear\n\nabout the gear.\n\n\
+             ## Torque Values\n\ntorque the hinge bolts.";
+        let sections: Vec<&str> = chunk_text("Manual", manual)
+            .iter()
+            .map(|c| c.section.as_str())
+            .map(|s| Box::leak(s.to_string().into_boxed_str()) as &str)
+            .collect();
+        assert_eq!(
+            sections,
+            [
+                "Chapter 1: Hydraulics",
+                "Chapter 1: Hydraulics › Torque Values",
+                "Chapter 1: Hydraulics › Torque Values › Notes",
+                "Chapter 1: Hydraulics › Parts",
+                "Chapter 2: Landing Gear",
+                "Chapter 2: Landing Gear › Torque Values",
+            ]
+        );
+        let last = chunk_text("Manual", manual).pop().unwrap();
+        assert!(
+            last.embed_text
+                .starts_with("[Manual › Chapter 2: Landing Gear › Torque Values]\n"),
+            "{}",
+            last.embed_text
+        );
 
         // An oversized paragraph splits at sentence boundaries.
         let long: String = (0..600).map(|i| format!("word{i}. ")).collect();

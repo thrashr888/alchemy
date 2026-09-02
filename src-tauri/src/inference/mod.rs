@@ -215,6 +215,13 @@ pub struct OllamaConfig {
     /// for 12,000+ tokens — ~600s — with every other request queued behind
     /// it. A cap turns that failure mode into a ~20s worst case.
     pub num_predict: Option<u32>,
+    /// Thinking switch sent as Ollama's `think` when set; it wins over
+    /// `effort`. The Small engine sends `Some(false)`: its calls are short by
+    /// contract, and a thinking model (gemma4) spent the whole `num_predict`
+    /// cap on hidden reasoning and returned empty text — ~35s per section
+    /// summary, nothing to show — where the same prompt with thinking off
+    /// answered in under a second. Models without a thinking mode ignore it.
+    pub think: Option<bool>,
 }
 
 /// Reasoning-effort levels for the two engines that take it as a request

@@ -33,6 +33,7 @@ mod menu;
 mod models;
 mod notion;
 mod outline;
+mod outline_index;
 mod pdf;
 mod pptx;
 mod rag;
