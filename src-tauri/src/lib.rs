@@ -469,6 +469,7 @@ pub fn run() {
             commands::send_message,
             commands::send_message_agentic,
             commands::cancel_generation,
+            commands::warm_chat_models,
             commands::open_in_terminal,
             commands::start_ollama,
             commands::suggest_notebook,

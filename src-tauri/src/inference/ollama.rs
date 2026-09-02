@@ -370,6 +370,41 @@ impl Ollama {
             .await;
     }
 
+    /// Load this engine's chat model without generating — a chat request
+    /// with no messages is Ollama's documented preload; it returns once the
+    /// model is resident. Residency is this engine's `keep_alive` or ten
+    /// minutes: long enough to bridge typing and Send, short enough that a
+    /// draft never sent does not pin a 20 GB model all afternoon. The
+    /// following real request re-sets residency to its own window.
+    pub async fn warm(&self) {
+        let keep = self
+            .config
+            .keep_alive
+            .clone()
+            .unwrap_or_else(|| "10m".into());
+        let started = std::time::Instant::now();
+        let res = self
+            .http
+            .post(self.url("/api/chat"))
+            .timeout(std::time::Duration::from_secs(300))
+            .json(&json!({
+                "model": self.config.chat_model,
+                "messages": [],
+                "keep_alive": keep,
+            }))
+            .send()
+            .await;
+        match res {
+            Ok(r) if r.status().is_success() => crate::note!(
+                "warm: {} resident after {} ms",
+                self.config.chat_model,
+                started.elapsed().as_millis()
+            ),
+            Ok(r) => crate::note!("warm: {} → HTTP {}", self.config.chat_model, r.status()),
+            Err(err) => crate::note!("warm: {} failed: {err:#}", self.config.chat_model),
+        }
+    }
+
     /// The chat model this engine answers with — the name a loading status
     /// should show.
     pub fn chat_model_name(&self) -> &str {

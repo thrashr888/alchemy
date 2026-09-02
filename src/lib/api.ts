@@ -396,6 +396,8 @@ export const api = {
     run(cmd<void>("delete_message", { messageId })),
   cancelGeneration: (scope?: "chat" | "artifact" | "tts" | "meta") =>
     run(cmd<void>("cancel_generation", { scope })),
+  /** Preload the chat models while the user types (fire-and-forget). */
+  warmChatModels: () => run(cmd<void>("warm_chat_models")),
   suggestFollowups: (notebookId: string) =>
     run(query<string[]>("suggest_followups", { notebookId })),
   generateNotebookSummary: (notebookId: string) =>

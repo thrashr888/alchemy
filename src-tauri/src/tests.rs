@@ -1100,3 +1100,48 @@ fn a_commission_is_built_the_same_way_whoever_asks() {
         .expect("a blank name is not a refusal");
     assert_eq!(unnamed.name, "Commissioned run");
 }
+
+/// The gap query's lexical gate (`commands::gap_gate`): an empty pool, a
+/// linking question, and two unmentioned terms open it; a single-subject
+/// question the pool already answers keeps the model call out of the path.
+#[test]
+fn gap_gate_opens_only_for_linked_or_unmentioned_subjects() {
+    let cite = |snippet: &str| crate::models::Citation {
+        chunk_id: "c".into(),
+        source_id: "s".into(),
+        source_title: "Home Network Guide".into(),
+        source_path: String::new(),
+        note_id: String::new(),
+        gist: false,
+        snote: false,
+        ordinal: 0,
+        snippet: snippet.into(),
+        distance: 0.0,
+        section: String::new(),
+    };
+    let pool = vec![cite(
+        "Guests join the wifi through the captive portal; the passphrase rotates monthly.",
+    )];
+    assert_eq!(crate::commands::gap_gate("anything", &[]), Some("empty"));
+    assert_eq!(
+        crate::commands::gap_gate("how do guests get on the wifi?", &pool),
+        None,
+        "one subject the pool covers"
+    );
+    assert_eq!(
+        crate::commands::gap_gate("compare guest wifi at home versus the office", &pool),
+        Some("linked")
+    );
+    assert_eq!(
+        crate::commands::gap_gate("what was the passphrase policy from 2024 to 2025?", &pool),
+        Some("range")
+    );
+    assert_eq!(
+        crate::commands::gap_gate(
+            "what does the sourdough starter schedule say about hydration?",
+            &pool
+        ),
+        Some("uncovered"),
+        "two subjects the pool never mentions"
+    );
+}

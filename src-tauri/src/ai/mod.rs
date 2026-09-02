@@ -578,6 +578,10 @@ pub struct Ai {
     /// that kept running while the local small model was down would spend
     /// it silently, a dozen calls a minute (it did, 2026-09-01).
     strict_small: bool,
+    /// Ceiling on one Small-role call — set by `helpers()` for the calls a
+    /// person is waiting behind (gap query, outline pick). None = the
+    /// engine's own transport timeout.
+    small_timeout: Option<std::time::Duration>,
     /// Ollama retained directly for the capabilities that haven't joined the
     /// router yet (OCR fallback, model listing).
     ollama: Ollama,
@@ -747,6 +751,7 @@ impl Ai {
         );
         Self {
             strict_small: false,
+            small_timeout: None,
             config,
             router,
             ollama,
@@ -1034,10 +1039,20 @@ impl Ai {
                 _ => true,
             };
             if usable {
-                match engine.chat(messages).await {
+                let outcome = match self.small_timeout {
+                    Some(limit) => match tokio::time::timeout(limit, engine.chat(messages)).await {
+                        Ok(res) => res,
+                        Err(_) => Err(anyhow::anyhow!(
+                            "small model answered nothing in {}s",
+                            limit.as_secs()
+                        )),
+                    },
+                    None => engine.chat(messages).await,
+                };
+                match outcome {
                     Ok(out) => return Ok(out),
                     Err(err) if self.strict_small => {
-                        return Err(err.context("small model unavailable; background work holds"));
+                        return Err(err.context("small model unavailable; helper skipped"));
                     }
                     Err(err) => {
                         crate::note!("small-role engine failed, falling through: {err:#}");
@@ -1046,6 +1061,43 @@ impl Ai {
             }
         }
         self.router.chat_engine(Role::Chat).chat(messages).await
+    }
+
+    /// Longest a chat-path helper may hold the answer. Measured: retrieval's
+    /// model stage lands in 2–9 s on local models when Ollama is healthy;
+    /// when it is wedged, its requests die at its own 10-minute mark, and a
+    /// gap query that waited the whole way put the first token 600 s out.
+    pub const HELPER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// This handle for the helpers that run *before* an answer a person is
+    /// waiting on — the gap query, the outline pick. The Small role gets
+    /// `HELPER_TIMEOUT` and never borrows the chat provider: falling through
+    /// costs a whole extra round trip on the provider that is about to
+    /// answer anyway, and a wedged local server cost ten minutes. A helper
+    /// that cannot answer quickly is skipped; the answer proceeds on the
+    /// flat search.
+    pub fn helpers(mut self) -> Self {
+        self.strict_small = true;
+        self.small_timeout = Some(Self::HELPER_TIMEOUT);
+        self
+    }
+
+    /// Ask Ollama to load the chat and Small models now, so the cold load
+    /// (measured: 111 s for lfm2.5, 115 s for a 27B MLX model, against 10 s
+    /// and 26 s warm) overlaps the user's typing instead of following Send.
+    /// Event-driven — the composer calls it on the first keystroke of a
+    /// draft — never from a tick. Providers other than Ollama have nothing
+    /// to warm. Best-effort and sequential: the chat model is the long
+    /// wait, the Small model backs the helpers behind it.
+    pub async fn warm_models(&self) {
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for role in [Role::Chat, Role::Small] {
+            if let ChatEngine::Ollama(o) = self.router.chat_engine(role) {
+                if seen.insert(o.chat_model_name().to_string()) {
+                    o.warm().await;
+                }
+            }
+        }
     }
 
     /// This handle for background work: sweeps, the nightly weave, card

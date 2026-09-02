@@ -945,6 +945,10 @@ export function ChatPanel() {
                   : undefined
               }
               onChange={(e) => {
+                // First keystroke of a draft: start loading the models now,
+                // so a cold local model's load overlaps the typing instead
+                // of following Send. Throttled backend-side (10 min).
+                if (!draft && e.target.value) void api.warmChatModels().catch(() => {});
                 setDraft(e.target.value);
                 // Any edit re-opens the picker (Esc/blur only dismiss the
                 // current text) and resets the highlight to the top match.
