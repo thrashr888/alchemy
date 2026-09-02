@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import { Button, EmptyState, Input, Textarea, Modal, Spinner } from "./ui";
+import { Button, EmptyState, Input, Textarea, Modal, RowMenu, Select, Spinner } from "./ui";
+import { FOLDER_TYPES } from "./SourceMenu";
 import { cn, fmtDay } from "@/lib/utils";
 import {
   Clock,
@@ -76,8 +77,15 @@ export function Reports() {
   const generating = useStore((s) => s.generatingKind === "report");
   const notes = useStore((s) => s.notes);
   // Top-level sources only: a folder or feed parent's id covers what
-  // arrives under it, so children would be noise in the picker.
+  // arrives under it, so children would be noise in the picker. Living
+  // sources (folders, feeds, git, Mac apps, watched pages) lead; the rest
+  // change only when something edits them — an agent or the CLI can, so
+  // they stay pickable, just below a fold.
   const watchable = useStore((s) => s.sources).filter((src) => !src.parentId);
+  const isLiving = (t: string) =>
+    FOLDER_TYPES.includes(t) || t === "mac" || t === "url";
+  const living = watchable.filter((src) => isLiving(src.sourceType));
+  const editOnly = watchable.filter((src) => !isLiving(src.sourceType));
   const markNotesRead = useStore((s) => s.markNotesRead);
 
   // Each schedule keeps one living note (collapse_report_notes) titled after
@@ -135,6 +143,10 @@ export function Reports() {
   const [watchKinds, setWatchKinds] = useState<string[]>([]);
   const toggleIn = (list: string[], v: string) =>
     list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
+  const allWatchIds = watchable.map((src) => src.id);
+  const allChecked =
+    watchable.length > 0 && allWatchIds.every((id) => watchSources.includes(id));
+  const someChecked = watchSources.length > 0 && !allChecked;
 
   function openEditor() {
     setEditTarget(null);
@@ -192,7 +204,7 @@ export function Reports() {
           hint="Reports refresh your URL sources on a schedule, then write a timestamped note."
         />
       ) : (
-        <div className="mt-2 flex flex-col gap-1">
+        <div className="mt-2 flex select-none flex-col gap-1">
           {schedules.map((r) => (
             <div key={r.id} className="group flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-surface-2">
               <button
@@ -219,6 +231,8 @@ export function Reports() {
                   </span>
                 </div>
               </div>
+              {/* Two quick actions on hover; the rest ride the ⋯ menu, which
+                  right-clicking the row opens too (DESIGN.md §4). */}
               <div className="hidden items-center gap-0.5 group-hover:flex group-focus-within:flex">
                 <button
                   type="button"
@@ -240,25 +254,42 @@ export function Reports() {
                 >
                   {generating ? <Spinner className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
                 </button>
-                <button
-                  type="button"
-                  className="rounded p-1 text-muted-foreground hover:text-foreground"
-                  onClick={() => openEdit(r)}
-                  title="Edit"
-                  aria-label={`Edit "${r.name}"`}
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  className="rounded p-1 text-muted-foreground hover:text-destructive"
-                  onClick={() => remove(r.id)}
-                  title="Delete"
-                  aria-label={`Delete "${r.name}"`}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
               </div>
+              <RowMenu
+                label={`Options for "${r.name}"`}
+                items={[
+                  ...(latestNote(r)
+                    ? [
+                        {
+                          label: "Open the latest result",
+                          icon: <FileText className="h-3.5 w-3.5" />,
+                          onClick: () => showLatest(r),
+                        },
+                      ]
+                    : []),
+                  {
+                    label: "Run now",
+                    icon: <Play className="h-3.5 w-3.5" />,
+                    onClick: () => void runNow(r.id),
+                  },
+                  {
+                    label: r.enabled ? "Pause" : "Enable",
+                    icon: <Power className="h-3.5 w-3.5" />,
+                    onClick: () => void update({ ...r, enabled: !r.enabled }),
+                  },
+                  {
+                    label: "Edit…",
+                    icon: <Pencil className="h-3.5 w-3.5" />,
+                    onClick: () => openEdit(r),
+                  },
+                  {
+                    label: "Delete",
+                    icon: <Trash2 className="h-3.5 w-3.5" />,
+                    danger: true,
+                    onClick: () => void remove(r.id),
+                  },
+                ]}
+              />
             </div>
           ))}
         </div>
@@ -269,8 +300,24 @@ export function Reports() {
         onClose={() => setEditing(false)}
         title={editTarget ? "Edit report" : "Schedule a report"}
         width="max-w-md"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              form="report-form"
+              variant="primary"
+              disabled={!name.trim() || (kind === "custom" && !prompt.trim())}
+            >
+              {editTarget ? "Save" : "Schedule"}
+            </Button>
+          </div>
+        }
       >
         <form
+          id="report-form"
           onSubmit={(e) => {
             e.preventDefault();
             setEditing(false);
@@ -358,27 +405,50 @@ export function Reports() {
               <Field label="Which sources" htmlFor="report-watch-sources">
                 <div
                   id="report-watch-sources"
-                  className="max-h-40 overflow-y-auto rounded-md border border-input bg-surface-2"
+                  className="max-h-48 overflow-y-auto rounded-md border border-input bg-surface-2"
                   role="group"
                   aria-label="Sources to watch"
                 >
                   {watchable.length === 0 ? (
                     <p className="px-3 py-2 text-micro text-subtle-foreground">No sources yet.</p>
                   ) : (
-                    watchable.map((src) => (
-                      <label
-                        key={src.id}
-                        className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-caption text-foreground hover:bg-primary/15"
-                      >
+                    <>
+                      <label className="flex cursor-pointer items-center gap-2 border-b border-border px-3 py-1.5 text-caption text-foreground hover:bg-primary/15">
                         <input
                           type="checkbox"
                           className="select-quiet"
-                          checked={watchSources.includes(src.id)}
-                          onChange={() => setWatchSources(toggleIn(watchSources, src.id))}
+                          checked={allChecked}
+                          ref={(el) => {
+                            if (el) el.indeterminate = someChecked;
+                          }}
+                          onChange={() => setWatchSources(allChecked ? [] : allWatchIds)}
                         />
-                        <span className="truncate">{src.title}</span>
+                        <span className="font-medium">All sources</span>
                       </label>
-                    ))
+                      {living.map((src) => (
+                        <SourcePick
+                          key={src.id}
+                          title={src.title}
+                          checked={watchSources.includes(src.id)}
+                          onToggle={() => setWatchSources(toggleIn(watchSources, src.id))}
+                        />
+                      ))}
+                      {editOnly.length > 0 && (
+                        <>
+                          <div className="px-3 pb-0.5 pt-2 text-micro uppercase tracking-wide text-subtle-foreground">
+                            Change only when edited
+                          </div>
+                          {editOnly.map((src) => (
+                            <SourcePick
+                              key={src.id}
+                              title={src.title}
+                              checked={watchSources.includes(src.id)}
+                              onToggle={() => setWatchSources(toggleIn(watchSources, src.id))}
+                            />
+                          ))}
+                        </>
+                      )}
+                    </>
                   )}
                 </div>
                 <p className="text-micro text-subtle-foreground">
@@ -389,18 +459,6 @@ export function Reports() {
               </Field>
             </>
           )}
-          <div className="flex justify-end gap-2 pt-1">
-            <Button type="button" variant="ghost" onClick={() => setEditing(false)}>
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              variant="primary"
-              disabled={!name.trim() || (kind === "custom" && !prompt.trim())}
-            >
-              {editTarget ? "Save" : "Schedule"}
-            </Button>
-          </div>
         </form>
       </Modal>
     </div>
@@ -416,29 +474,19 @@ function Field({ label, htmlFor, children }: { label: string; htmlFor: string; c
   );
 }
 
-function Select({
-  id,
-  value,
-  onChange,
-  options,
+function SourcePick({
+  title,
+  checked,
+  onToggle,
 }: {
-  id: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string }[];
+  title: string;
+  checked: boolean;
+  onToggle: () => void;
 }) {
   return (
-    <select
-      id={id}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="w-full rounded-md border border-input bg-surface-2 py-2.5 pl-3 pr-9 text-body text-foreground outline-none focus:border-primary/60"
-    >
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
+    <label className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-caption text-foreground hover:bg-primary/15">
+      <input type="checkbox" className="select-quiet" checked={checked} onChange={onToggle} />
+      <span className="truncate">{title}</span>
+    </label>
   );
 }

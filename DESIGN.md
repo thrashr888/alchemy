@@ -137,19 +137,30 @@ introduce a webfont; the system stack is deliberate.
   opacity, no pointer events.
 - **Inputs / Textareas**: 32px tall, `surface-2` fill, 1px `--input` border,
   radius 6px; focus swaps border to `ring/70` plus a 1px ring — no glow.
+- **Selects** (`ui.Select`): a native `<select>` with `appearance-none` and
+  a lucide chevron drawn over it, same height and fill as inputs. Never a
+  bare styled `<select>` — WKWebView ignores its padding and height, so the
+  text sits flush against the border.
 - **Cards / list rows**: `surface` fill, 1px `--border`, radius 6–10px; hover
   raises to `surface-2` and `--border-strong`. Clickable cards use
   `ui.CardAction` — an `absolute inset-0` real button rendered as a *sibling*
   of the card content (card is `relative`, secondary controls sit above it
   with `relative z-20`), so nothing interactive ever nests. Row actions
-  hidden until hover **or focus-within**, never hover-only.
+  hidden until hover **or focus-within**, never hover-only. **At most two
+  quick actions show on a row**; everything else — edit, delete, pause —
+  lives in the row's ⋯ menu (`ui.RowMenu`), which right-clicking the row
+  opens too (§9, objects are direct). List containers are `select-none`:
+  row text is chrome, never a text selection.
 - **Menus**: `menu-glass` material (see §2), hairline edge (see §6), radius 6px, 13px items;
   open focuses the first item, arrows cycle, Escape closes and restores focus,
   `role="menu"`/`menuitem`.
 - **Modals**: `elevated`, radius 10px, hairline + soft shadow, 44px header
   with 13px semibold title; scrim `black/40` with 2px backdrop blur. Escape
   closes; focus is trapped and restored. Confirmations use the app modal,
-  never `window.confirm`.
+  never `window.confirm`. **Actions live in the `footer` slot** — a fixed
+  bar under the scrolling body — never inside the form, so a long dialog
+  keeps Cancel and Save in reach (a submit button outside the form points
+  at it with `form="<id>"`).
 - **Toasts**: bottom-center, `elevated/90` with backdrop blur, status-tinted
   border, 12px text.
 - **Icons**: lucide, 16px (`h-4`) in headers/toolbars, 14px (`h-3.5`) in dense
