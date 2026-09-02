@@ -573,6 +573,11 @@ pub struct AiRuntime {
 pub struct Ai {
     config: AiConfig,
     router: Router,
+    /// Background mode: the Small role never falls through to the chat
+    /// engine. A gateway or agent CLI is the user's *chat* spend; a sweep
+    /// that kept running while the local small model was down would spend
+    /// it silently, a dozen calls a minute (it did, 2026-09-01).
+    strict_small: bool,
     /// Ollama retained directly for the capabilities that haven't joined the
     /// router yet (OCR fallback, model listing).
     ollama: Ollama,
@@ -737,6 +742,7 @@ impl Ai {
             crate::inference::rerank::XencModel::Small,
         );
         Self {
+            strict_small: false,
             config,
             router,
             ollama,
@@ -1026,6 +1032,9 @@ impl Ai {
             if usable {
                 match engine.chat(messages).await {
                     Ok(out) => return Ok(out),
+                    Err(err) if self.strict_small => {
+                        return Err(err.context("small model unavailable; background work holds"));
+                    }
                     Err(err) => {
                         crate::note!("small-role engine failed, falling through: {err:#}");
                     }
@@ -1033,6 +1042,15 @@ impl Ai {
             }
         }
         self.router.chat_engine(Role::Chat).chat(messages).await
+    }
+
+    /// This handle for background work: sweeps, the nightly weave, card
+    /// enrichment. The Small role stays on the small engine or fails — it
+    /// never borrows the chat provider. Foreground callers keep the
+    /// fall-through, because a person is waiting on them.
+    pub fn background(mut self) -> Self {
+        self.strict_small = true;
+        self
     }
 
     pub async fn chat_stream<F>(&self, messages: &[ChatTurn], on_token: F) -> Result<ChatOutcome>
