@@ -3060,6 +3060,19 @@ async fn eval_context_leg_probe() {
 /// notebook — the datasets eval's inner loop, for evals that re-seed part
 /// of the store between measurements.
 async fn score_kind(db: &Db, ai: &crate::ai::Ai, nb: &str, ds: &Dataset, kind: &str) -> Metrics {
+    score_kind_with(db, ai, None, nb, ds, kind).await
+}
+
+/// `score_kind`, optionally with the outline escalation (RFC-outline-index
+/// Phase 3) run over each flat result by `escalator` before scoring.
+async fn score_kind_with(
+    db: &Db,
+    ai: &crate::ai::Ai,
+    escalator: Option<&crate::ai::Ai>,
+    nb: &str,
+    ds: &Dataset,
+    kind: &str,
+) -> Metrics {
     let titles: HashMap<String, String> = db
         .list_sources(nb)
         .await
@@ -3073,13 +3086,99 @@ async fn score_kind(db: &Db, ai: &crate::ai::Ai, nb: &str, ds: &Dataset, kind: &
     let mut rows: Vec<(String, Metrics)> = Vec::new();
     for (q, qvec) in qs.iter().zip(qvecs) {
         let trace = db
-            .search_chunks_trace(nb, qvec, &q.query, K, None)
+            .search_chunks_trace(nb, qvec.clone(), &q.query, K, None)
             .await
             .expect("search");
-        let (ranks, _) = matched_ranks(&trace.final_hits, &titles, &q.relevant);
+        let mut hits = trace.final_hits;
+        if let Some(model) = escalator {
+            crate::outline_index::escalate(db, model, nb, &q.query, &qvec, &mut hits)
+                .await
+                .expect("escalate");
+        }
+        let (ranks, _) = matched_ranks(&hits, &titles, &q.relevant);
         rows.push((kind.to_string(), query_metrics(&ranks, q.relevant.len())));
     }
     mean(&rows, None)
+}
+
+/// Phase 3's escalation, on versus off, per kind, over the outline corpus
+/// with the handwritten section summaries as the outline (so the
+/// escalation's own contribution is measured, not the generator's). Needs
+/// live Ollama; ALCHEMY_EVAL_SECTION_MODEL picks the Small model.
+///
+///   ALCHEMY_OLLAMA_TESTS=1 cargo test --lib eval_outline_escalation -- --ignored --nocapture
+#[tokio::test]
+#[ignore = "needs live Ollama; run explicitly — it measures an escalation, it does not guard correctness"]
+async fn eval_outline_escalation() {
+    let Some(ai) = builtin_ai().await else {
+        panic!("built-in embedder unavailable");
+    };
+    let model = std::env::var("ALCHEMY_EVAL_SECTION_MODEL")
+        .unwrap_or_else(|_| "digitsflow/bonsai-8b:latest".into());
+    let dir = std::env::temp_dir().join(format!("nbl-outline-esc-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb = "outline";
+    db.create_notebook(&crate::models::Notebook {
+        id: nb.to_string(),
+        title: "Outline corpus".into(),
+        created_at: 0,
+        updated_at: 0,
+        color: String::new(),
+        icon: String::new(),
+        status: String::new(),
+        growth_web: false,
+        source_count: 0,
+        note_count: 0,
+        report_count: 0,
+    })
+    .await
+    .expect("create notebook");
+    let docs = outline_corpus();
+    let refs: Vec<(&str, &str)> = docs.iter().map(|(t, b)| (t.as_str(), b.as_str())).collect();
+    seed_docs(&ai, &db, nb, &refs, "o-").await;
+    seed_outline_sections(&ai, &db, nb).await;
+    let ds = load_datasets()
+        .into_iter()
+        .find(|d| d.name == "fixture-outline")
+        .expect("outline dataset");
+    let model_ai = crate::ai::Ai::new(
+        crate::ai::AiConfig {
+            embedder: "builtin".into(),
+            chat_model: model.clone(),
+            small_model: model.clone(),
+            ..Default::default()
+        },
+        crate::ai::AiRuntime {
+            data_dir: dir.join("ai"),
+            ..Default::default()
+        },
+    );
+    eprintln!("\noutline escalation by ({model}), hybrid @{K}:");
+    let mut topic: Option<(Metrics, Metrics)> = None;
+    for kind in ["topic", "outline", "chapter", "exact"] {
+        let off = score_kind(&db, &ai, nb, &ds, kind).await;
+        let on = score_kind_with(&db, &ai, Some(&model_ai), nb, &ds, kind).await;
+        eprintln!(
+            "  {kind:<8} off  R@5 {:.2}  R@10 {:.2}  MRR {:.2}  nDCG {:.2}",
+            off.recall_at_5, off.recall_at_10, off.mrr_at_10, off.ndcg_at_10
+        );
+        eprintln!(
+            "  {kind:<8} on   R@5 {:.2}  R@10 {:.2}  MRR {:.2}  nDCG {:.2}",
+            on.recall_at_5, on.recall_at_10, on.mrr_at_10, on.ndcg_at_10
+        );
+        if kind == "topic" {
+            topic = Some((off, on));
+        }
+    }
+    crate::evals::release_models(&[&model]).await;
+    let (off, on) = topic.expect("topic scored");
+    assert!(
+        on.mrr_at_10 >= off.mrr_at_10 - 0.02,
+        "escalation regressed topic MRR ({:.2} vs {:.2})",
+        on.mrr_at_10,
+        off.mrr_at_10
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Phase 2's generator against its fixtures (RFC-outline-index): the Small

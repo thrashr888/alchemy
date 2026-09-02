@@ -87,6 +87,17 @@ pub struct SectionGist {
     pub summary: String,
 }
 
+/// One line of a notebook's outline (see `notebook_outline`).
+#[derive(Clone, Debug)]
+pub struct OutlineEntry {
+    pub source_id: String,
+    /// "title › heading" — the context column of the section row.
+    pub chain: String,
+    pub summary: String,
+    pub start: i32,
+    pub end: i32,
+}
+
 /// The passage span a section row stands for, from its chunk id.
 pub fn section_range(chunk_id: &str) -> Option<(i32, i32)> {
     let rest = chunk_id.strip_prefix(SECTION_CHUNK_PREFIX)?;
@@ -3364,6 +3375,79 @@ impl Db {
         let contexts: Vec<String> = sections.iter().map(|s| s.chain.clone()).collect();
         self.add_chunks_ctx(notebook_id, &owner, &rows, &contexts, embeddings)
             .await
+    }
+
+    /// Every section summary in a notebook — the outline the escalation
+    /// reads (RFC-outline-index Phase 3): (source_id, chain, summary, start,
+    /// end), in source then section order.
+    pub async fn notebook_outline(&self, notebook_id: &str) -> Result<Vec<OutlineEntry>> {
+        if !self.table_exists(T_CHUNKS).await? {
+            return Ok(vec![]);
+        }
+        let filter = format!(
+            "notebook_id = '{}' AND source_id LIKE '{SECTION_CHUNK_PREFIX}%'",
+            esc(notebook_id)
+        );
+        let batches = self
+            .collect_cols(
+                T_CHUNKS,
+                Some(&filter),
+                &["id", "source_id", "ordinal", "text", CHUNK_CONTEXT_COL],
+            )
+            .await?;
+        let mut out: Vec<(String, i32, OutlineEntry)> = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let sid = str_col(b, "source_id")?;
+            let ord = i32_col(b, "ordinal")?;
+            let text = str_col(b, "text")?;
+            let ctx = str_col(b, CHUNK_CONTEXT_COL)?;
+            for i in 0..b.num_rows() {
+                let Some(source_id) = sid.value(i).strip_prefix(SECTION_CHUNK_PREFIX) else {
+                    continue;
+                };
+                let Some((start, end)) = section_range(id.value(i)) else {
+                    continue;
+                };
+                out.push((
+                    source_id.to_string(),
+                    ord.value(i),
+                    OutlineEntry {
+                        source_id: source_id.to_string(),
+                        chain: ctx.value(i).to_string(),
+                        summary: text.value(i).to_string(),
+                        start,
+                        end,
+                    },
+                ));
+            }
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        Ok(out.into_iter().map(|(_, _, e)| e).collect())
+    }
+
+    /// The best passages of one section for a question — the escalation's
+    /// read after the model picks a section (RFC-outline-index Phase 3).
+    pub async fn section_passages(
+        &self,
+        notebook_id: &str,
+        query_vec: &[f32],
+        query_text: &str,
+        span: (&str, i32, i32),
+        n: usize,
+    ) -> Result<Vec<Citation>> {
+        let mut titles: HashMap<String, String> = HashMap::new();
+        let mut paths: HashMap<String, String> = HashMap::new();
+        for s in self.list_sources(notebook_id).await? {
+            if s.url.starts_with('/') {
+                paths.insert(s.id.clone(), s.url.clone());
+            }
+            titles.insert(s.id, s.title);
+        }
+        let ranked = self
+            .rank_within_section(query_vec, query_text, span, (&titles, &paths))
+            .await?;
+        Ok(ranked.into_iter().take(n).collect())
     }
 
     /// Drop one source's section-summary rows (no-op if it has none).

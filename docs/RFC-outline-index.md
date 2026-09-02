@@ -1,6 +1,6 @@
 # RFC: Outline Index — long documents by their own structure
 
-Status: implementing (Phase 1). Companion to `RFC-retrieval-maturity.md`
+Status: implemented through Phase 3, on branch for review. Companion to `RFC-retrieval-maturity.md`
 (how we search) and `RFC-infinite-context.md` (gists, enrichment). Gated
 end to end on `evals/datasets/fixture-outline.json`: each phase merges
 only if the outline numbers move.
@@ -95,20 +95,43 @@ seeding; production takes the incremental path after every import
 
 ### Phase 3 — outline-guided retrieval as silent escalation
 
-Hybrid search stays the fast default. Escalate when the answer would be
-thin (the existing `citations.len() < 3 || snippet_chars < 700` gate
-in `rag::build_chat_messages`) or the top hits are all from one long
-structured source with near-tied scores: hand the Small role the
-notebook's outlines (chains + section summaries, capped), ask it to
-pick sections, pull those sections' chunks by `(source_id, ordinal
-range)`, and merge them into the excerpt pool ahead of the rerank.
-Same escalation shape as `second_look` and the deep rerank: invisible
-to the user, one extra small-model call, traced in
-`traces/retrieval.jsonl` with `stage: "outline"`.
+Hybrid search stays the fast default. `outline_index::escalate` runs in
+the chat retrieval path beside the gap query, after fusion and before
+the rerank, and fires when the pool is thin (the same `< 3 citations ||
+< 700 chars` bar `rag::build_chat_messages` uses to ask a clarifying
+question) or the top five hits are the same subsection of different
+chapters — chains from one source ending alike, the look-alike shape.
+It hands the Small role the notebook's outline (`db::notebook_outline`:
+one line per section row, chain plus the first line of its summary,
+capped at 80), asks for at most two section numbers or NONE, pulls each
+pick's two best passages with the same in-span scored search Phase 2
+expands with (`db::section_passages`), and fuses them into the pool.
+One extra small-model call, silent, traced as `outlinePick` on the
+chat retrieval line; a failure leaves the pool untouched.
+
+Three shapes measured wrong before the numbers below (the on/off eval
+is `eval_outline_escalation`, Ollama-gated, handwritten summaries so
+the escalation is measured and not the generator):
+
+- *Prepending the picks* ahead of the flat pool. Under bonsai's wrong
+  picks the exact kind fell 1.00 → 0.20: a guess displaced a rank-one
+  hit both legs agreed on. Fusion (RRF of the flat pool with the
+  outline's passages) keeps a passage both sides vouch for on top and
+  lands an outline-only passage behind the flat leader: topic 0.88 vs
+  0.82, exact 0.33 vs 0.20 for bonsai; gemma the same either way.
+- *Escalating over a literal match.* "what is part FM-2041?" quotes an
+  identifier the flat leader carries verbatim; no summary can beat that,
+  and bonsai's guess (already deep in the flat pool as a look-alike)
+  still won the fusion. The trigger now stays quiet when a digit-bearing
+  token from the question appears in the leader's snippet — exact back
+  to 1.00.
+- *Trusting a shotgun.* Bonsai answers "1,2,3,…,14" when the summaries
+  cannot say; more than four numbers reads as NONE.
 
 Citations gain `section` (the chain) so a long-document citation reads
 "Fleet Maintenance Manual › Chapter 2: Landing Gear › Torque Values"
-instead of a page of look-alike prose.
+instead of a page of look-alike prose. The page range the Reminders
+item asked for is not here: chunk rows carry ordinals, not pages.
 
 ## How Phases 2 and 3 get measured
 
@@ -156,7 +179,8 @@ Phase 2.
 | 1 — heading chain | 0.91 | 1.00 | 0.62 | 0.71 |
 | 1.5 — chain in the BM25 document | 1.00 | 1.00 | 0.92 | 0.94 |
 | 2 — section summaries (mechanics, handwritten fixtures) | 0.95 | 1.00 | 0.89 | 0.92 |
-| 3 — escalation | | | | |
+| 3 — escalation, bonsai-8b | 1.00 | 1.00 | 0.91 | 0.93 |
+| 3 — escalation, gemma4 12B | 1.00 | 1.00 | 0.93 | 0.95 |
 
 The `topic` kind (chapter paraphrases: undercarriage, de-icing,
 Portugal) is Phase 2's own measurement:
@@ -167,6 +191,8 @@ Portugal) is Phase 2's own measurement:
 | 2 — section rows + scored expansion, handwritten summaries | 0.85 | 1.00 | 0.79 | 0.83 |
 | 2 — the generator, bonsai-8b (Small role) | 0.77 | 0.92 | 0.54–0.61 | 0.63 |
 | 2 — the generator, gemma4 12B, thinking off | 0.85 | 0.92 | 0.60 | 0.68 |
+| 3 — escalation on, bonsai-8b (handwritten summaries) | 1.00 | 1.00 | 0.88 | 0.91 |
+| 3 — escalation on, gemma4 12B (handwritten summaries) | 1.00 | 1.00 | 0.88 | 0.91 |
 
 The generator's eval (`eval_section_gists_model`, Ollama-gated) scores the
 topic kind three ways on one store: no rows, the handwritten fixtures,
@@ -184,7 +210,10 @@ Ollama `think: false` (ignored by models without a thinking mode); the
 same prompt answers in under a second.
 
 Controls (`chapter`, `exact`) must stay at 1.00; the golden datasets'
-floors are unchanged.
+floors are unchanged. Phase 3's rows are on/off on one seeded store
+(`eval_outline_escalation`); the escalation fires on every topic and
+outline query of this corpus (they all land on look-alike chains) and
+on neither control kind.
 
 Phase 1 note: the vector leg alone reaches R@10 1.00 / MRR 0.95 on the
 outline kind once it carries the chain; hybrid lands lower (MRR 0.62)
