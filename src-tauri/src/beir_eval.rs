@@ -499,7 +499,7 @@ pub(crate) async fn seeded_dataset(
         seeded_docs += 1;
         if rows.len() >= SEED_BATCH {
             let embeddings = ai.embed(&inputs).await.expect("embed corpus batch");
-            db.add_chunk_rows(name, &rows, &embeddings)
+            db.add_chunk_rows(name, &rows, &[], &embeddings)
                 .await
                 .expect("seed chunk rows");
             rows.clear();
@@ -509,7 +509,7 @@ pub(crate) async fn seeded_dataset(
     }
     if !rows.is_empty() {
         let embeddings = ai.embed(&inputs).await.expect("embed corpus tail");
-        db.add_chunk_rows(name, &rows, &embeddings)
+        db.add_chunk_rows(name, &rows, &[], &embeddings)
             .await
             .expect("seed chunk tail");
     }

@@ -1484,8 +1484,15 @@ pub(crate) async fn spawn_embed_stage(
                 .enumerate()
                 .map(|(i, c)| (new_id(), i as i32, c.text.clone()))
                 .collect();
-            db.add_chunks(&source.notebook_id, &source.id, &tuples, &embeddings)
-                .await?;
+            let contexts: Vec<String> = chunks.iter().map(|c| c.context.clone()).collect();
+            db.add_chunks_ctx(
+                &source.notebook_id,
+                &source.id,
+                &tuples,
+                &contexts,
+                &embeddings,
+            )
+            .await?;
             Ok(Some(tuples.len()))
         }
         .await;
@@ -2400,6 +2407,7 @@ async fn grep_leg(
                 // Not a vector hit — match count carried the ranking; the
                 // field only feeds trace summaries.
                 distance: 0.0,
+                section: String::new(),
             }
         })
         .collect()
@@ -2849,12 +2857,14 @@ async fn index_snote(state: &AppState, source: &Source, note: &str) -> anyhow::R
         .enumerate()
         .map(|(j, c)| (new_id(), j as i32, c.text.clone()))
         .collect();
+    let contexts: Vec<String> = chunks.iter().map(|c| c.context.clone()).collect();
     state
         .db
-        .add_chunks(
+        .add_chunks_ctx(
             &source.notebook_id,
             &format!("{}{}", crate::db::SNOTE_CHUNK_PREFIX, source.id),
             &tuples,
+            &contexts,
             &embeddings,
         )
         .await
@@ -5612,9 +5622,10 @@ pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u
             .enumerate()
             .map(|(j, c)| (new_id(), j as i32, c.text.clone()))
             .collect();
+        let contexts: Vec<String> = chunks.iter().map(|c| c.context.clone()).collect();
         e(state
             .db
-            .add_chunks(notebook_id, owner_id, &tuples, &embeddings)
+            .add_chunks_ctx(notebook_id, owner_id, &tuples, &contexts, &embeddings)
             .await)?;
     }
 
@@ -9404,12 +9415,14 @@ async fn try_index_note(state: &AppState, note: &Note) -> anyhow::Result<()> {
         .enumerate()
         .map(|(j, c)| (new_id(), j as i32, c.text.clone()))
         .collect();
+    let contexts: Vec<String> = chunks.iter().map(|c| c.context.clone()).collect();
     state
         .db
-        .add_chunks(
+        .add_chunks_ctx(
             &note.notebook_id,
             &format!("{}{}", crate::db::NOTE_CHUNK_PREFIX, note.id),
             &tuples,
+            &contexts,
             &embeddings,
         )
         .await

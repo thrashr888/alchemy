@@ -159,6 +159,7 @@ async fn seed(ai: &Ai, db: &Db, notebook_id: &str, sources: usize) -> usize {
 
     let mut rows: Vec<(String, String, i32, String)> = Vec::new();
     let mut inputs: Vec<String> = Vec::new();
+    let mut ctxs: Vec<String> = Vec::new();
     let mut written = 0usize;
     for i in 0..sources {
         let (title, body) = document(i);
@@ -173,6 +174,7 @@ async fn seed(ai: &Ai, db: &Db, notebook_id: &str, sources: usize) -> usize {
                 c.text.clone(),
             ));
             inputs.push(c.embed_text.clone());
+            ctxs.push(c.context.clone());
         }
         // Source rows go in one at a time: db.rs keeps its bulk `add_batch`
         // private and only chunks have a public bulk path. One commit per
@@ -206,11 +208,11 @@ async fn seed(ai: &Ai, db: &Db, notebook_id: &str, sources: usize) -> usize {
         .expect("store fixture source");
 
         if rows.len() >= SEED_BATCH {
-            written += flush_rows(ai, db, notebook_id, &mut rows, &mut inputs).await;
+            written += flush_rows(ai, db, notebook_id, &mut rows, &mut inputs, &mut ctxs).await;
             eprintln!("fixtures: seeded {}/{sources} sources", i + 1);
         }
     }
-    written += flush_rows(ai, db, notebook_id, &mut rows, &mut inputs).await;
+    written += flush_rows(ai, db, notebook_id, &mut rows, &mut inputs, &mut ctxs).await;
 
     db.defer_fts(false);
     db.flush_fts().await.expect("flush fixture fts");
@@ -227,17 +229,19 @@ async fn flush_rows(
     notebook_id: &str,
     rows: &mut Vec<(String, String, i32, String)>,
     inputs: &mut Vec<String>,
+    ctxs: &mut Vec<String>,
 ) -> usize {
     if rows.is_empty() {
         return 0;
     }
     let embeddings = ai.embed(inputs).await.expect("embed fixture batch");
-    db.add_chunk_rows(notebook_id, rows, &embeddings)
+    db.add_chunk_rows(notebook_id, rows, ctxs, &embeddings)
         .await
         .expect("store fixture chunks");
     let n = rows.len();
     rows.clear();
     inputs.clear();
+    ctxs.clear();
     n
 }
 

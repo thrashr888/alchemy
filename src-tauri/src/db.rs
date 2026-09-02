@@ -211,6 +211,9 @@ pub struct Db {
     /// only marks the index dirty; `flush_fts` rebuilds once at the end.
     fts_deferred: std::sync::atomic::AtomicBool,
     fts_dirty: std::sync::atomic::AtomicBool,
+    /// The chunks table has been seen with its context column (Phase 1.5);
+    /// see `has_chunk_context`.
+    chunk_context_seen: std::sync::atomic::AtomicBool,
     /// Nudged on every non-deferred chunk write; the debounced flusher task
     /// (lib.rs) listens and rebuilds once per burst.
     fts_notify: tokio::sync::Notify,
@@ -288,6 +291,7 @@ impl Db {
             fts_lock: tokio::sync::Mutex::new(()),
             fts_deferred: std::sync::atomic::AtomicBool::new(false),
             fts_dirty: std::sync::atomic::AtomicBool::new(false),
+            chunk_context_seen: std::sync::atomic::AtomicBool::new(false),
             fts_notify: tokio::sync::Notify::new(),
             fusion_vector_weight: std::sync::atomic::AtomicU32::new(1.0f32.to_bits()),
             fusion_rrf_k: std::sync::atomic::AtomicU32::new(60.0f32.to_bits()),
@@ -1460,12 +1464,31 @@ impl Db {
         chunks: &[(String, i32, String)],
         embeddings: &[Vec<f32>],
     ) -> Result<()> {
+        self.insert_source_ctx(source, chunks, &[], embeddings)
+            .await
+    }
+
+    /// `insert_source` with each chunk's context ("title › chain") stored
+    /// beside it; an empty `contexts` stores blanks.
+    pub async fn insert_source_ctx(
+        &self,
+        source: &Source,
+        chunks: &[(String, i32, String)],
+        contexts: &[String],
+        embeddings: &[Vec<f32>],
+    ) -> Result<()> {
         // Source row.
         let schema = sources_schema();
         let batch = source_batch(&schema, std::slice::from_ref(source))?;
         self.add_batch(T_SOURCES, schema, batch).await?;
-        self.add_chunks(&source.notebook_id, &source.id, chunks, embeddings)
-            .await
+        self.add_chunks_ctx(
+            &source.notebook_id,
+            &source.id,
+            chunks,
+            contexts,
+            embeddings,
+        )
+        .await
     }
 
     /// Append chunk rows (with embeddings) for a source. Creates the chunks
@@ -1477,6 +1500,94 @@ impl Db {
         chunks: &[(String, i32, String)],
         embeddings: &[Vec<f32>],
     ) -> Result<()> {
+        self.add_chunks_ctx(notebook_id, source_id, chunks, &[], embeddings)
+            .await
+    }
+
+    /// Does the live chunks table carry the context column? Tables from
+    /// before Phase 1.5 don't until `ensure_chunk_context_column` runs.
+    /// Remembered once seen: a column never goes away, and every search
+    /// asks — a schema read per query would be a needless round trip.
+    async fn has_chunk_context(&self) -> Result<bool> {
+        if self
+            .chunk_context_seen
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Ok(true);
+        }
+        if !self.table_exists(T_CHUNKS).await? {
+            return Ok(false);
+        }
+        let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
+        let has = tbl
+            .schema()
+            .await?
+            .fields()
+            .iter()
+            .any(|f| f.name() == CHUNK_CONTEXT_COL);
+        if has {
+            self.chunk_context_seen
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        Ok(has)
+    }
+
+    /// Probe for tests: (chunk rows, rows whose context is non-empty).
+    #[cfg(test)]
+    pub async fn context_fill(&self) -> Result<(usize, usize)> {
+        if !self.table_exists(T_CHUNKS).await? {
+            return Ok((0, 0));
+        }
+        let batches = self
+            .collect_cols(T_CHUNKS, None, &["id", CHUNK_CONTEXT_COL])
+            .await?;
+        let mut rows = 0usize;
+        let mut filled = 0usize;
+        for b in &batches {
+            rows += b.num_rows();
+            if let Some(col) = b
+                .column_by_name(CHUNK_CONTEXT_COL)
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            {
+                filled += (0..b.num_rows())
+                    .filter(|&i| !col.value(i).is_empty())
+                    .count();
+            }
+        }
+        Ok((rows, filled))
+    }
+
+    /// One-time schema evolution: give an older chunks table the context
+    /// column, blank for every existing row. Older builds sharing the store
+    /// keep working — their appends conform to the live schema with "".
+    async fn ensure_chunk_context_column(&self) -> Result<()> {
+        if self.has_chunk_context().await? {
+            return Ok(());
+        }
+        let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
+        // Existing rows: no chain to give them, but their BM25 document is
+        // still their text — the index must not lose them.
+        tbl.add_columns()
+            .transform(lancedb::table::NewColumnTransform::SqlExpressions(vec![
+                (CHUNK_CONTEXT_COL.to_string(), "''".to_string()),
+                (CHUNK_BM25_COL.to_string(), "text".to_string()),
+            ]))
+            .execute()
+            .await?;
+        crate::note!("chunks: added the context and bm25 columns");
+        Ok(())
+    }
+
+    /// `add_chunks` with contexts. `contexts[i]` belongs to `chunks[i]`;
+    /// a short or empty slice stores "" for the rest.
+    pub async fn add_chunks_ctx(
+        &self,
+        notebook_id: &str,
+        source_id: &str,
+        chunks: &[(String, i32, String)],
+        contexts: &[String],
+        embeddings: &[Vec<f32>],
+    ) -> Result<()> {
         if chunks.is_empty() {
             return Ok(());
         }
@@ -1485,6 +1596,7 @@ impl Db {
             .map(|v| v.len())
             .ok_or_else(|| anyhow!("no embeddings for chunks"))? as i32;
         self.ensure_table(T_CHUNKS, chunks_schema(dim)).await?;
+        self.ensure_chunk_context_column().await?;
 
         let schema = chunks_schema(dim);
         let ids: Vec<String> = chunks.iter().map(|c| c.0.clone()).collect();
@@ -1492,6 +1604,14 @@ impl Db {
         let sids: Vec<String> = chunks.iter().map(|_| source_id.to_string()).collect();
         let ords: Vec<i32> = chunks.iter().map(|c| c.1).collect();
         let texts: Vec<String> = chunks.iter().map(|c| c.2.clone()).collect();
+        let ctxs: Vec<String> = (0..chunks.len())
+            .map(|i| contexts.get(i).cloned().unwrap_or_default())
+            .collect();
+        let docs: Vec<String> = ctxs
+            .iter()
+            .zip(chunks.iter())
+            .map(|(c, ch)| bm25_doc(c, &ch.2))
+            .collect();
         let vectors = FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
             embeddings
                 .iter()
@@ -1507,6 +1627,8 @@ impl Db {
                 Arc::new(Int32Array::from(ords)),
                 Arc::new(StringArray::from(texts)),
                 Arc::new(vectors),
+                Arc::new(StringArray::from(ctxs)),
+                Arc::new(StringArray::from(docs)),
             ],
         )?;
         self.add_batch(T_CHUNKS, schema, batch).await?;
@@ -1544,6 +1666,7 @@ impl Db {
         &self,
         notebook_id: &str,
         rows: &[(String, String, i32, String)],
+        contexts: &[String],
         embeddings: &[Vec<f32>],
     ) -> Result<()> {
         if rows.is_empty() {
@@ -1554,12 +1677,21 @@ impl Db {
             .map(|v| v.len())
             .ok_or_else(|| anyhow!("no embeddings for chunk rows"))? as i32;
         self.ensure_table(T_CHUNKS, chunks_schema(dim)).await?;
+        self.ensure_chunk_context_column().await?;
         let schema = chunks_schema(dim);
         let ids: Vec<String> = rows.iter().map(|r| r.1.clone()).collect();
         let nbs: Vec<String> = rows.iter().map(|_| notebook_id.to_string()).collect();
         let sids: Vec<String> = rows.iter().map(|r| r.0.clone()).collect();
         let ords: Vec<i32> = rows.iter().map(|r| r.2).collect();
         let texts: Vec<String> = rows.iter().map(|r| r.3.clone()).collect();
+        let ctxs: Vec<String> = (0..rows.len())
+            .map(|i| contexts.get(i).cloned().unwrap_or_default())
+            .collect();
+        let docs: Vec<String> = ctxs
+            .iter()
+            .zip(rows.iter())
+            .map(|(c, r)| bm25_doc(c, &r.3))
+            .collect();
         let vectors = FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
             embeddings
                 .iter()
@@ -1575,6 +1707,8 @@ impl Db {
                 Arc::new(Int32Array::from(ords)),
                 Arc::new(StringArray::from(texts)),
                 Arc::new(vectors),
+                Arc::new(StringArray::from(ctxs)),
+                Arc::new(StringArray::from(docs)),
             ],
         )?;
         self.add_batch(T_CHUNKS, schema, batch).await?;
@@ -1681,11 +1815,15 @@ impl Db {
         let mut attempt = 0u32;
         loop {
             let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
-            let has_fts = tbl
-                .list_indices()
-                .await?
-                .iter()
-                .any(|i| i.columns == ["text"]);
+            let indices = tbl.list_indices().await?;
+            // The BM25 document column (context + text) carries the index
+            // once it exists; a table from before it keeps indexing text.
+            let fts_col = if self.has_chunk_context().await? {
+                CHUNK_BM25_COL
+            } else {
+                "text"
+            };
+            let has_fts = indices.iter().any(|i| i.columns == [fts_col]);
             // lance-index 7.0's inverted builder PANICS (not errors) with an
             // index-out-of-bounds (builder.rs:856) when deletes + compaction
             // remap leave the token set inconsistent (TokenSet::next_id >
@@ -1705,7 +1843,7 @@ impl Db {
                     .await
                     .map(|_| ())
                 } else {
-                    t.create_index(&["text"], Index::FTS(FtsIndexBuilder::default()))
+                    t.create_index(&[fts_col], Index::FTS(FtsIndexBuilder::default()))
                         .replace(true)
                         .execute()
                         .await
@@ -1979,10 +2117,20 @@ impl Db {
         let fts_hits = if query_text.trim().is_empty() {
             vec![]
         } else {
+            // The BM25 document is context + text where the column exists
+            // (docs/RFC-outline-index.md Phase 1.5); older tables index text.
+            let fts_col = if self.has_chunk_context().await? {
+                CHUNK_BM25_COL
+            } else {
+                "text"
+            };
+            let text_query = FullTextSearchQuery::new(query_text.to_string())
+                .with_column(fts_col.to_string())
+                .map_err(|e| anyhow!("fts query: {e}"))?;
             match tbl
                 .query()
                 .only_if(filter)
-                .full_text_search(FullTextSearchQuery::new(query_text.to_string()))
+                .full_text_search(text_query)
                 .limit(pool)
                 .execute()
                 .await
@@ -2001,7 +2149,7 @@ impl Db {
             }
         };
 
-        // Reciprocal rank fusion: score = Σ w/(k + rank) over both lists.
+        // Reciprocal rank fusion: score = Σ w/(k + rank) over the lists.
         // Exact score ties are common (e.g. a vector-only and an FTS-only
         // hit at the same rank), and HashMap iteration order is randomized,
         // so break ties by chunk id to keep results stable across runs.
@@ -2672,13 +2820,17 @@ impl Db {
         // RFC-retrieval-maturity Phase 2).
         let (titles, _) = self.corpus_meta().await?;
         let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
-        let batches = match tbl
-            .query()
-            .full_text_search(FullTextSearchQuery::new(query_text.to_string()))
-            .limit(k)
-            .execute()
-            .await
-        {
+        let fts_col = if self.has_chunk_context().await? {
+            CHUNK_BM25_COL
+        } else {
+            "text"
+        };
+        let Ok(query) =
+            FullTextSearchQuery::new(query_text.to_string()).with_column(fts_col.to_string())
+        else {
+            return Ok(vec![]);
+        };
+        let batches = match tbl.query().full_text_search(query).limit(k).execute().await {
             Ok(stream) => stream.try_collect::<Vec<_>>().await.unwrap_or_default(),
             Err(_) => return Ok(vec![]),
         };
@@ -3112,11 +3264,12 @@ impl Db {
         notebook_id: &str,
         source_id: &str,
         chunks: &[(String, i32, String)],
+        contexts: &[String],
         embeddings: &[Vec<f32>],
     ) -> Result<()> {
         self.delete_where(T_CHUNKS, &format!("source_id = '{}'", esc(source_id)))
             .await?;
-        self.add_chunks(notebook_id, source_id, chunks, embeddings)
+        self.add_chunks_ctx(notebook_id, source_id, chunks, contexts, embeddings)
             .await
     }
 
@@ -3927,6 +4080,9 @@ fn citations_from_batches(
         let sid = str_col(b, "source_id")?;
         let ord = i32_col(b, "ordinal")?;
         let text = str_col(b, "text")?;
+        let ctx = b
+            .column_by_name(CHUNK_CONTEXT_COL)
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>());
         let dist = b.column_by_name("_distance").and_then(|c| {
             c.as_any()
                 .downcast_ref::<arrow_array::Float32Array>()
@@ -3948,6 +4104,7 @@ fn citations_from_batches(
                 ordinal: ord.value(i),
                 snippet: text.value(i).to_string(),
                 distance: dist.as_ref().map(|d| d.value(i)).unwrap_or(0.0),
+                section: ctx.map(|c| c.value(i).to_string()).unwrap_or_default(),
             });
         }
     }
@@ -4148,7 +4305,34 @@ fn chunks_schema(dim: i32) -> SchemaRef {
             DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, true)), dim),
             true,
         ),
+        // "title › chapter › section" — the chunk's place in its document
+        // (docs/RFC-outline-index.md Phase 1.5), read back as the citation's
+        // `section`. Nullable and after `vector`, so a table from before it
+        // exists gains it by `add_columns` and older builds' appends
+        // conform ("").
+        Field::new(CHUNK_CONTEXT_COL, DataType::Utf8, true),
+        // What BM25 indexes: the context and the text as ONE document, so a
+        // chunk matching the question in both scores above one matching a
+        // heading word alone. A separate context leg gave a context-only
+        // match a full rank-one vote and cost exact-identifier queries
+        // their top rank (hard-exact MRR 1.00 → 0.78); one document per
+        // chunk is the field-weighting BM25 was built for.
+        Field::new(CHUNK_BM25_COL, DataType::Utf8, true),
     ]))
+}
+
+/// The chunks table's context column (see `chunks_schema`).
+pub const CHUNK_CONTEXT_COL: &str = "context";
+/// The chunks table's BM25 document column: "{context}\n{text}".
+pub const CHUNK_BM25_COL: &str = "bm25";
+
+/// The BM25 document for one chunk.
+fn bm25_doc(context: &str, text: &str) -> String {
+    if context.is_empty() {
+        text.to_string()
+    } else {
+        format!("{context}\n{text}")
+    }
 }
 
 fn routes_schema(dim: i32) -> SchemaRef {
@@ -5099,6 +5283,7 @@ mod tests {
             ordinal: 0,
             snippet: String::new(),
             distance: 0.0,
+            section: String::new(),
         };
         // Gist rows reach the comparator with source_id already resolved,
         // so they inherit the source's timestamp through the same key.
@@ -5157,6 +5342,7 @@ mod tests {
             ordinal,
             snippet: snippet.into(),
             distance: 0.0,
+            section: String::new(),
         };
         // Both middle and last chunks are cited: the middle one may claim
         // only the uncited ordinal 0; the last one has no free neighbors

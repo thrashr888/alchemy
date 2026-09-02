@@ -525,8 +525,15 @@ async fn enrich_source(
     }
 
     let embeddings = ai.embed(&inputs).await?;
-    db.reembed_source_chunks(&source.notebook_id, &source.id, &rows, &embeddings)
-        .await?;
+    let contexts: Vec<String> = chunks.iter().map(|c| c.context.clone()).collect();
+    db.reembed_source_chunks(
+        &source.notebook_id,
+        &source.id,
+        &rows,
+        &contexts,
+        &embeddings,
+    )
+    .await?;
     Ok(EnrichOutcome::Enriched)
 }
 

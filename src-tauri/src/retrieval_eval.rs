@@ -1612,7 +1612,7 @@ async fn eval_enrichment_reembed() {
         })
         .collect();
     let new_embeddings = ai.embed(&new_inputs).await.expect("re-embed");
-    db.reembed_source_chunks(nb, &src_id, &rows, &new_embeddings)
+    db.reembed_source_chunks(nb, &src_id, &rows, &[], &new_embeddings)
         .await
         .expect("reembed");
 
@@ -2197,6 +2197,7 @@ async fn run_scale(ai: &crate::ai::Ai, target_chars: usize) -> (f64, f64, usize)
                     text: c.text.clone(),
                     embed_text: c.embed_text.clone(),
                     section: String::new(),
+                    context: String::new(),
                 },
             ));
         }
@@ -2218,6 +2219,7 @@ async fn run_scale(ai: &crate::ai::Ai, target_chars: usize) -> (f64, f64, usize)
             .enumerate()
             .map(|(ci, c)| (format!("d{di}-c{ci}"), ci as i32, c.text.clone()))
             .collect();
+        let contexts: Vec<String> = chunked[di].iter().map(|c| c.context.clone()).collect();
         let vecs = vectors[cursor..cursor + n].to_vec();
         cursor += n;
         let source = crate::models::Source {
@@ -2242,7 +2244,7 @@ async fn run_scale(ai: &crate::ai::Ai, target_chars: usize) -> (f64, f64, usize)
             fetch_failures: 0,
         };
         total_chars += source.char_count;
-        db.insert_source(&source, &tuples, &vecs)
+        db.insert_source_ctx(&source, &tuples, &contexts, &vecs)
             .await
             .expect("insert scale doc");
     }
@@ -2885,4 +2887,55 @@ async fn eval_agent_rerank_paths() {
         xe_n as f64 / n as f64
     );
     crate::evals::release_models(&[&chat_model, &small_model]).await;
+}
+
+/// Probe for Phase 1.5 (RFC-outline-index): with the heading chain in the
+/// BM25 document, the text leg alone should put the right chapter's
+/// section first for a look-alike query over the outline corpus.
+#[tokio::test]
+async fn eval_context_leg_probe() {
+    let Some(ai) = eval_ai().await else { return };
+    let dir = std::env::temp_dir().join(format!("nbl-ctx-probe-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb = "probe";
+    let docs = outline_corpus();
+    let refs: Vec<(&str, &str)> = docs.iter().map(|(t, b)| (t.as_str(), b.as_str())).collect();
+    seed_docs(&ai, &db, nb, &refs, "p-").await;
+    let (rows, filled) = db.context_fill().await.expect("context fill");
+    eprintln!("chunk rows {rows}, with context {filled}");
+    let q = "what torque for the landing gear hinge bolts?";
+    let qvec = ai.embed_one(q).await.expect("embed");
+    let trace = db
+        .search_chunks_trace(nb, qvec, q, 10, None)
+        .await
+        .expect("search");
+    assert!(trace.warnings.is_empty(), "{:?}", trace.warnings);
+    let show = |name: &str, hits: &[Citation]| {
+        eprintln!("{name}: {} hits", hits.len());
+        for c in hits.iter().take(4) {
+            eprintln!(
+                "  [{}] {} | {}",
+                c.ordinal,
+                c.section,
+                c.snippet
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(60)
+                    .collect::<String>()
+            );
+        }
+    };
+    show("vector", &trace.vector_hits);
+    show("fts(bm25 = context + text)", &trace.fts_hits);
+    show("fused", &trace.final_hits);
+    assert!(
+        trace
+            .fts_hits
+            .first()
+            .is_some_and(|c| c.section.contains("Landing Gear")),
+        "BM25 with the chain should put the landing-gear section first"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

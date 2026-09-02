@@ -812,6 +812,7 @@ async fn ingest_into(ai: &Ai, db: &Db, notebook_id: &str, path: &Path) -> Source
         .enumerate()
         .map(|(i, c)| (format!("{notebook_id}-c{i}"), i as i32, c.text.clone()))
         .collect();
+    let contexts: Vec<String> = chunks.iter().map(|c| c.context.clone()).collect();
     let source = Source {
         id: format!("{notebook_id}-src"),
         notebook_id: notebook_id.to_string(),
@@ -833,7 +834,7 @@ async fn ingest_into(ai: &Ai, db: &Db, notebook_id: &str, path: &Path) -> Source
         fetched_at: 0,
         fetch_failures: 0,
     };
-    db.insert_source(&source, &tuples, &embeddings)
+    db.insert_source_ctx(&source, &tuples, &contexts, &embeddings)
         .await
         .expect("store fixture");
     source

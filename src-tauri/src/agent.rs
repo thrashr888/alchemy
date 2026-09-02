@@ -356,6 +356,7 @@ pub async fn run(
                             ordinal: 0,
                             snippet: evidence,
                             distance: 0.0,
+                            section: String::new(),
                         });
                     }
                 }

@@ -129,6 +129,7 @@ Phase 2.
 | --- | --- | --- | --- | --- |
 | baseline (v0.53.0) | 0.55 | 0.68 | 0.23 | 0.34 |
 | 1 — heading chain | 0.91 | 1.00 | 0.62 | 0.71 |
+| 1.5 — chain in the BM25 document | 1.00 | 1.00 | 0.92 | 0.94 |
 | 2 — section summaries | | | | |
 | 3 — escalation | | | | |
 
@@ -139,5 +140,21 @@ Phase 1 note: the vector leg alone reaches R@10 1.00 / MRR 0.95 on the
 outline kind once it carries the chain; hybrid lands lower (MRR 0.62)
 because the BM25 leg, which indexes chunk `text` without the chain, is
 still confused by look-alike subsections and fusion averages that in.
-Giving BM25 the chain (a `context` column, or the chain in the FTS
-document) is the obvious Phase 1.5 and is measurable the same way.
+Phase 1.5 did that, and the *shape* mattered more than the weight. Two
+nullable columns join `chunks` — `context` ("title › chain", read back
+onto `Citation.section`) and `bm25` (`"{context}\n{text}"`, the one
+document the FTS index covers); older tables gain both through
+`add_columns`, with `bm25` seeded from `text` so no existing row drops
+out of BM25, and older builds' appends conform with "". Two shapes were
+measured:
+
+- *Separate context leg* (a second FTS index, a third RRF list): outline
+  MRR 0.72 / 0.79 / 0.87 / 0.86 at weights 0.25 / 0.5 / 1.0 / 2.0 — but
+  hard-exact MRR fell 1.00 → 0.78, because a context-only match ("Port
+  Forwarding" for "which port does the badge console use") gets a full
+  rank-one vote of its own.
+- *One BM25 document per chunk* (chain prepended to the text, single
+  index, two legs as before): outline MRR 0.92, R@5 and R@10 1.00, and
+  the golden datasets return exactly to their Phase 1 numbers. Text and
+  chain terms combine in one score, which is the field weighting BM25
+  was built for. This shipped.

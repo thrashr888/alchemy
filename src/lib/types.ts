@@ -175,6 +175,8 @@ export interface Citation {
    * context §1). Optional: citations persisted before gists existed lack it.
    */
   gist?: boolean;
+  /** "title › chapter › section" for the passage; absent on older rows. */
+  section?: string;
   /**
    * True for the user's own per-source annotation (RFC-source-tags);
    * sourceId names the annotated source. Optional: older citations lack it.

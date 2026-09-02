@@ -1246,6 +1246,10 @@ pub struct Chunk {
     /// sections; until then only the tests and the embed prefix do.
     #[cfg_attr(not(test), allow(dead_code))]
     pub section: String,
+    /// The embed prefix without its brackets — "title › chain" — stored
+    /// beside the chunk so the BM25 leg can see it (docs/RFC-outline-index.md
+    /// Phase 1.5). Display `text` stays verbatim.
+    pub context: String,
 }
 
 fn word_count(s: &str) -> usize {
@@ -1292,6 +1296,7 @@ pub fn chunk_text(title: &str, text: &str) -> Vec<Chunk> {
             text: body,
             embed_text,
             section,
+            context: ctx,
         }
     };
 
@@ -1585,6 +1590,7 @@ pub fn chunk_code(context: &str, text: &str) -> Vec<Chunk> {
             text: body,
             embed_text,
             section: String::new(),
+            context: ctx.to_string(),
         }
     };
 
@@ -2330,6 +2336,7 @@ mod tests {
             text: body.to_string(),
             embed_text: format!("[{title}]\n{body}"),
             section: String::new(),
+            context: title.to_string(),
         }
     }
 
@@ -2355,6 +2362,7 @@ mod tests {
             text: "Overview".into(),
             embed_text: "[Acme Blog › Docs]\nOverview".into(),
             section: "Docs".into(),
+            context: "Acme Blog › Docs".into(),
         }));
         // Long real passage never trips the gate.
         assert!(!is_boilerplate_chunk(&page_chunk(

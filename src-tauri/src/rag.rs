@@ -1181,6 +1181,7 @@ mod tests {
             ordinal: 0,
             snippet: snippet.into(),
             distance: 0.0,
+            section: String::new(),
         }
     }
 
