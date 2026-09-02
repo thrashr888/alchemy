@@ -367,9 +367,48 @@ const ENRICH_DOCS_PER_CARD: usize = 2;
 /// resumes where the budget stopped.
 const MAX_ENRICH_CALLS_PER_PASS: usize = 12;
 
-/// Cards enriched this app run — the pass converges (the SUGGESTED idiom).
-static ENRICHED: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
-    std::sync::Mutex::new(None);
+/// Where a card's enrichment marker lives: `<app-data>/registry-enrichment.json`,
+/// card id → stamp of the confirmed attachments it was enriched from. On
+/// disk, not per app run: 168 owned cards re-asked one call per document
+/// on every launch was ten to thirty minutes of small-model churn each
+/// time either app started (2026-09-01). A card is asked again only when
+/// its confirmed attachments change.
+const ENRICH_STATE_FILE: &str = "registry-enrichment.json";
+
+fn load_enrich_state(dir: &std::path::Path) -> std::collections::HashMap<String, i32> {
+    std::fs::read_to_string(dir.join(ENRICH_STATE_FILE))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_enrich_state(dir: &std::path::Path, state: &std::collections::HashMap<String, i32>) {
+    let write = || -> std::io::Result<()> {
+        std::fs::create_dir_all(dir)?;
+        std::fs::write(
+            dir.join(ENRICH_STATE_FILE),
+            serde_json::to_vec(state).unwrap_or_default(),
+        )
+    };
+    if let Err(err) = write() {
+        crate::note!("registry: enrichment marker write failed: {err}");
+    }
+}
+
+/// The stamp a card's enrichment carries: its confirmed attachments, order
+/// independent. Pending or removed attachments don't count — they're not
+/// read — so ruling on a suggestion re-opens the card exactly when it adds
+/// a document.
+fn enrich_stamp(card: &RegistryCard) -> i32 {
+    let mut ids: Vec<&str> = card
+        .attachments
+        .iter()
+        .filter(|a| a.status == "confirmed")
+        .map(|a| a.source_id.as_str())
+        .collect();
+    ids.sort_unstable();
+    crate::gist::content_hash(&ids.join("\n"))
+}
 
 /// Add candidate facts to a card: missing labels only, existing values
 /// never overwritten, duplicate values (under any label) skipped, capped.
@@ -422,6 +461,9 @@ pub(crate) async fn enrich_card_facts(
     use crate::inference::Role;
     const ENRICH_HEAD_CHARS: usize = 10_000;
     let cards = db.list_registry().await?;
+    let dir = ai.data_dir().to_path_buf();
+    let mut state = load_enrich_state(&dir);
+    let mut state_dirty = false;
     let mut calls = 0usize;
     let mut added_total = 0usize;
     for mut card in cards {
@@ -429,6 +471,10 @@ pub(crate) async fn enrich_card_facts(
             break;
         }
         if !card.origin.is_empty() || card.facts.len() >= MAX_CARD_FACTS {
+            continue;
+        }
+        let stamp = enrich_stamp(&card);
+        if state.get(&card.id) == Some(&stamp) {
             continue;
         }
         let docs: Vec<(String, i64)> = card
@@ -441,15 +487,11 @@ pub(crate) async fn enrich_card_facts(
         if docs.is_empty() {
             continue;
         }
-        // Marked only once actually processed — a budget-skipped card gets
-        // its turn on the next pass this run.
-        {
-            let mut guard = ENRICHED.lock().unwrap();
-            let seen = guard.get_or_insert_with(Default::default);
-            if !seen.insert(card.id.clone()) {
-                continue;
-            }
-        }
+        // Stamped only once actually processed — a budget-skipped card gets
+        // its turn on the next pass. A NONE from the model stamps too: the
+        // documents were read and held nothing; only new documents reopen it.
+        state.insert(card.id.clone(), stamp);
+        state_dirty = true;
         let mut candidates: Vec<CardFact> = Vec::new();
         for (source_id, _) in docs {
             if calls >= MAX_ENRICH_CALLS_PER_PASS {
@@ -485,6 +527,9 @@ pub(crate) async fn enrich_card_facts(
             db.update_registry_card(&card).await?;
             added_total += added;
         }
+    }
+    if state_dirty {
+        save_enrich_state(&dir, &state);
     }
     if added_total > 0 {
         super::notify_changed("registry", None);
@@ -1115,6 +1160,7 @@ pub(crate) async fn suggest_now(
     // strip re-sorts itself on the registry bump.
     let db = db.clone();
     tauri::async_runtime::spawn(async move {
+        let ai = ai.background();
         if let Err(err) = triage_suggested_cards(&db, &ai).await {
             crate::note!("registry triage failed: {err:#}");
         }
@@ -1731,6 +1777,33 @@ pub async fn rematch_registry(
 
 #[cfg(test)]
 mod tests {
+    /// The enrichment stamp follows the confirmed attachments only, in any
+    /// order: confirming a suggestion reopens a card, reordering or a
+    /// pending one does not, so a restart re-asks nothing already read.
+    #[test]
+    fn enrich_stamp_tracks_confirmed_attachments() {
+        let att = |id: &str, status: &str| CardAttachment {
+            source_id: id.into(),
+            notebook_id: "nb".into(),
+            status: status.into(),
+            matched: String::new(),
+            at: 0,
+        };
+        let mut card = card("Sea Otter", "");
+        card.attachments = vec![att("a", "confirmed"), att("b", "confirmed")];
+        let base = enrich_stamp(&card);
+        card.attachments.reverse();
+        assert_eq!(enrich_stamp(&card), base, "order independent");
+        card.attachments.push(att("c", "suggested"));
+        assert_eq!(enrich_stamp(&card), base, "pending attachments don't count");
+        card.attachments.push(att("c", "confirmed"));
+        assert_ne!(
+            enrich_stamp(&card),
+            base,
+            "a new confirmed document reopens the card"
+        );
+    }
+
     use super::*;
 
     fn card(name: &str, identifiers: &str) -> RegistryCard {

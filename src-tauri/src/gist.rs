@@ -611,6 +611,7 @@ pub fn spawn_sweep(db: std::sync::Arc<Db>, ai: Ai) {
     if !ai.config().source_gists {
         return;
     }
+    let ai = ai.background();
     if SWEEPING
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
