@@ -236,8 +236,7 @@ One strip, two places, reading `source_events_since` and nothing else:
   "3 new from *Tauri blog* · 1 page changed · 2 reminders done". Expands to
   the events, each linking to the entry, the diff, or the item. Source rows
   carry a new-dot until the strip is dismissed. The seen watermark is a
-  per-notebook `seen_events_at` in `localStorage` (mind the StrictMode
-  restore gotcha), not a table — it is a UI convenience.
+  per-notebook row in the `app_state` table (see Decisions).
 - **On Home**, `AwayDigest` gains the same tallies beside reports, in the
   steward sidebar RFC-v12-steward §2 reserved.
 
@@ -407,11 +406,15 @@ Three questions the draft left open, settled in review:
 - **Feed parents hold a rolling index** of their kept entries and re-embed
   on change (§2). Reports and the wiki fold got measurably better once they
   could see indexes and prior versions of themselves; feeds start there.
-- **Arrivals watermark is per notebook**, in `localStorage`. Notebooks are
+- **Arrivals watermark is per notebook, in the database.** Notebooks are
   the isolation boundary the user reaches for, while the registry, staff
   history, activity, and global chat all draw their value from everything
-  living in one database — so the watermark is UI state, not a table, and
-  nothing about events becomes notebook-partitioned storage.
+  living in one database — so nothing about events becomes
+  notebook-partitioned storage. (Revised 2026-09-02: the draft said
+  `localStorage`; the app is single-tenant by design and already has a
+  database, so small state — this watermark, feed poll state, discovered
+  feeds, robots caches — lives in one `app_state` key-value table, never
+  in sidecar files or the webview.)
 - **arXiv follows a query, never a category.** A category feed is the
   whole field and would widen a notebook's focus into noise. The host rule
   builds an `export.arxiv.org/api/query` feed from the notebook's standing

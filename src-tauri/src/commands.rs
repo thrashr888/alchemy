@@ -1399,7 +1399,7 @@ pub(crate) async fn store_extracted(
     let feeds = extracted.feeds.clone();
     let src = store_new_source(state, notebook_id, extracted, "", mtime, None, true).await?;
     if !feeds.is_empty() {
-        crate::feeds::remember_discovered(state, notebook_id, &src, &feeds);
+        crate::feeds::remember_discovered(state, notebook_id, &src, &feeds).await;
     }
     Ok(src)
 }
@@ -11104,11 +11104,7 @@ pub async fn growth_proposals(
     let mut proposals = crate::growth::proposals(&sources, &queries);
     // Feeds the notebook's pages advertised (docs/RFC-events.md §2, tier 1):
     // remembered at import, proposed here, followed only on a click.
-    proposals.extend(crate::feeds::discovered_proposals(
-        &state,
-        &notebook_id,
-        &sources,
-    ));
+    proposals.extend(crate::feeds::discovered_proposals(&state, &notebook_id, &sources).await);
     Ok(GrowthOverview { queries, proposals })
 }
 
@@ -11116,6 +11112,35 @@ pub async fn growth_proposals(
 /// advertised, what its host's shape implies, and — only when those come
 /// up empty — what sits at the conventional paths on its origin (the one
 /// tier that fetches; docs/RFC-events.md §2). Nothing is followed here.
+/// The Arrivals watermark (docs/RFC-events.md §6): when this notebook's
+/// arrivals were last dismissed. One `app_state` row per notebook — the
+/// database is single-tenant by design, so UI state lives there too, not
+/// in a webview's localStorage that a second window or a reinstall forgets.
+#[tauri::command]
+pub async fn arrivals_seen_at(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<i64, String> {
+    Ok(e(state
+        .db
+        .kv_get(&format!("arrivals.seen.{notebook_id}"))
+        .await)?
+    .and_then(|raw| raw.parse::<i64>().ok())
+    .unwrap_or(0))
+}
+
+#[tauri::command]
+pub async fn mark_arrivals_seen(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    at: i64,
+) -> Result<(), String> {
+    e(state
+        .db
+        .kv_set(&format!("arrivals.seen.{notebook_id}"), &at.to_string())
+        .await)
+}
+
 #[tauri::command]
 pub async fn discover_feeds(
     state: State<'_, AppState>,

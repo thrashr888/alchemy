@@ -41,6 +41,7 @@ mod outline_index;
 mod pdf;
 mod pptx;
 mod rag;
+mod robots;
 mod router;
 mod scheduler;
 mod secure_fs;
@@ -542,6 +543,8 @@ pub fn run() {
             commands::seed_scale_fixture,
             commands::growth_proposals,
             commands::discover_feeds,
+            commands::arrivals_seen_at,
+            commands::mark_arrivals_seen,
             commands::growth_web_search,
             commands::growth_local,
             commands::growth_retire,

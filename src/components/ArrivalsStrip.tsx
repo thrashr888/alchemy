@@ -18,7 +18,7 @@ import { CardAction } from "./ui";
  * Arrivals (docs/RFC-events.md §6): one strip above the sources list when
  * the watchers saw something since the reader last dismissed it. Reads
  * `source_events` and nothing else; never calls a model. The watermark is
- * per notebook in localStorage — a UI convenience, not a table.
+ * per notebook in the database (`app_state`), read on open.
  */
 
 /** The events table keeps 30 days; a week is as far back as "since you
@@ -31,12 +31,20 @@ const DIFF_LINES = 6;
 
 export function useArrivals(notebookId: string | null) {
   const [events, setEvents] = useState<SourceEvent[]>([]);
-  // Lazy initializer, and the effect below re-reads on notebook change:
-  // both are reads only, so StrictMode's double invocation cannot restore
-  // twice (the localStorage gotcha this repo already hit).
-  const [seenAt, setSeenAt] = useState(() => (notebookId ? loadSeenAt(notebookId) : 0));
+  // Read from the database on open and on notebook change; until it
+  // answers, nothing counts as unseen (a flash of "25 new" would be wrong
+  // more often than right).
+  const [seenAt, setSeenAt] = useState(Number.MAX_SAFE_INTEGER);
   useEffect(() => {
-    setSeenAt(notebookId ? loadSeenAt(notebookId) : 0);
+    let live = true;
+    setSeenAt(Number.MAX_SAFE_INTEGER);
+    if (!notebookId) return;
+    void loadSeenAt(notebookId).then((at) => {
+      if (live) setSeenAt(at);
+    });
+    return () => {
+      live = false;
+    };
   }, [notebookId]);
 
   const requestId = useRef(0);

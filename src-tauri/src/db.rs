@@ -33,6 +33,12 @@ const T_REPORTS: &str = "report_schedules";
 const T_ROUTES: &str = "routes";
 const T_SOURCE_EVENTS: &str = "source_events";
 const T_RECEIPTS: &str = "run_receipts";
+/// Small app state that used to live in JSON sidecars and localStorage:
+/// feed poll state, discovered feeds, robots.txt caches, the Arrivals
+/// watermark. One row per key, JSON or a scalar in `value`. The database
+/// is single-tenant by design; a second store beside it is a second
+/// source of truth.
+const T_KV: &str = "app_state";
 const T_LEDGER: &str = "ledger";
 /// The Registry's cast (docs/RFC-registry.md). Corpus-scoped: no
 /// notebook_id column, unlike every other entity table here.
@@ -3965,6 +3971,45 @@ impl Db {
         Ok(out)
     }
 
+    // ---- App state (key → value) -------------------------------------------
+
+    /// One value by key; `None` when unset (or before the table exists).
+    pub async fn kv_get(&self, key: &str) -> Result<Option<String>> {
+        if !self.table_exists(T_KV).await? {
+            return Ok(None);
+        }
+        let batches = self
+            .collect(T_KV, Some(&format!("key = '{}'", esc(key))))
+            .await?;
+        for b in &batches {
+            if b.num_rows() > 0 {
+                let value = str_col(b, "value")?;
+                return Ok(Some(value.value(0).to_string()));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Set (replace) one value. Delete-then-append: the table is tiny and
+    /// a key is written far less often than it is read.
+    pub async fn kv_set(&self, key: &str, value: &str) -> Result<()> {
+        // Created on first write: unlike the entity tables, nothing needs
+        // this one at startup.
+        self.ensure_table(T_KV, kv_schema()).await?;
+        self.delete_where(T_KV, &format!("key = '{}'", esc(key)))
+            .await?;
+        let schema = kv_schema();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec![key.to_string()])),
+                Arc::new(StringArray::from(vec![value.to_string()])),
+                Arc::new(Int64Array::from(vec![crate::commands::now()])),
+            ],
+        )?;
+        self.add_batch(T_KV, schema, batch).await
+    }
+
     /// Record one run. Best-effort by contract: a receipt that fails to
     /// write must never fail the run it describes, so callers log and move on.
     pub async fn add_receipt(&self, receipt: &RunReceipt) -> Result<()> {
@@ -4884,6 +4929,14 @@ fn notes_schema() -> SchemaRef {
         Field::new("prompt", DataType::Utf8, false),
         Field::new("origin", DataType::Utf8, false),
         Field::new("status", DataType::Utf8, false),
+    ]))
+}
+
+fn kv_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Utf8, false),
+        Field::new("value", DataType::Utf8, false),
+        Field::new("updated_at", DataType::Int64, false),
     ]))
 }
 

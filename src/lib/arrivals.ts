@@ -1,3 +1,4 @@
+import { api } from "./api";
 import type { SourceEvent } from "./types";
 
 /**
@@ -6,30 +7,24 @@ import type { SourceEvent } from "./types";
  * sources panel and the Home digest both tally with these, and neither
  * calls a model.
  *
- * The seen watermark is UI state, per notebook, in localStorage (the RFC's
- * decision: notebooks are the isolation boundary the user reaches for, and
- * nothing about events becomes notebook-partitioned storage).
+ * The seen watermark is per notebook, in the database (`app_state`): the
+ * app is single-tenant by design, so UI state belongs there too, not in a
+ * webview's localStorage that another window or a reinstall forgets.
  */
 
-const SEEN_KEY = "arrivalsSeenAt:";
-
 /** Epoch ms the notebook's arrivals were last dismissed; 0 = never. */
-export function loadSeenAt(notebookId: string): number {
+export async function loadSeenAt(notebookId: string): Promise<number> {
   try {
-    const raw = localStorage.getItem(SEEN_KEY + notebookId);
-    const n = raw ? Number(raw) : 0;
-    return Number.isFinite(n) ? n : 0;
+    return await api.arrivalsSeenAt(notebookId);
   } catch {
     return 0;
   }
 }
 
 export function saveSeenAt(notebookId: string, at: number) {
-  try {
-    localStorage.setItem(SEEN_KEY + notebookId, String(at));
-  } catch {
-    /* storage full or unavailable — the strip just shows again next time */
-  }
+  void api.markArrivalsSeen(notebookId, at).catch(() => {
+    /* best-effort — the strip just shows again next time */
+  });
 }
 
 /** How many items an event stands for. Folder scans coalesce a pass into

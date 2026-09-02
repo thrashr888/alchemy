@@ -547,6 +547,10 @@ export const api = {
   /** Source ids ever cited in retrieval traces — the "uncited" facet. */
   citedSourceIds: () => run(query<string[]>("cited_source_ids", {})),
   /** The Grow surface: standing queries + the free tiers' proposals. */
+  arrivalsSeenAt: (notebookId: string) =>
+    run(query<number>("arrivals_seen_at", { notebookId })),
+  markArrivalsSeen: (notebookId: string, at: number) =>
+    run(cmd<void>("mark_arrivals_seen", { notebookId, at })),
   discoverFeeds: (sourceId: string) =>
     run(query<FeedCandidate[]>("discover_feeds", { sourceId })),
   growthProposals: (notebookId: string) =>

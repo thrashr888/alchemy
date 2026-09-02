@@ -19,15 +19,14 @@
 //! event per feed. Nothing here calls a model.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::commands::{self, AppState};
+use crate::db::Db;
 use crate::models::{Source, SourceEvent};
 
 /// New entries ingested per feed per pass; the rest wait for the next one.
@@ -601,7 +600,7 @@ pub fn cadence_ms(published: &[i64]) -> i64 {
     median.clamp(MIN_CADENCE_MS, MAX_CADENCE_MS)
 }
 
-// ---- Persistent poll state (one JSON sidecar, like git_hosts.json) ---------
+// ---- Persistent poll state (app_state rows, never a sidecar) ---------------
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct FeedState {
@@ -628,85 +627,88 @@ struct Discovered {
     seen_at: i64,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct Store {
-    /// Poll state by feed parent source id.
-    #[serde(default)]
-    state: HashMap<String, FeedState>,
-    /// Tier-1 discoveries by notebook id, then feed url.
-    #[serde(default)]
-    discovered: HashMap<String, HashMap<String, Discovered>>,
+fn state_key(source_id: &str) -> String {
+    format!("feed.state.{source_id}")
 }
 
-static STORE: Mutex<Option<Store>> = Mutex::new(None);
-
-fn store_path(data_dir: &Path) -> PathBuf {
-    data_dir.join("feeds.json")
+fn discovered_key(notebook_id: &str) -> String {
+    format!("feed.discovered.{notebook_id}")
 }
 
-fn with_store<T>(data_dir: &Path, f: impl FnOnce(&mut Store) -> T, save: bool) -> T {
-    let mut guard = STORE.lock().unwrap_or_else(|p| p.into_inner());
-    let store = guard.get_or_insert_with(|| {
-        std::fs::read_to_string(store_path(data_dir))
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
-    });
-    let out = f(store);
-    if save {
-        if let Ok(json) = serde_json::to_string_pretty(&*store) {
-            let _ = std::fs::write(store_path(data_dir), json);
+async fn load_state(db: &Db, source_id: &str) -> FeedState {
+    db.kv_get(&state_key(source_id))
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+async fn save_state(db: &Db, source_id: &str, st: &FeedState) {
+    if let Ok(json) = serde_json::to_string(st) {
+        if let Err(err) = db.kv_set(&state_key(source_id), &json).await {
+            crate::note!("feeds: state for {source_id} not saved: {err:#}");
         }
     }
-    out
+}
+
+async fn load_discovered(db: &Db, notebook_id: &str) -> HashMap<String, Discovered> {
+    db.kv_get(&discovered_key(notebook_id))
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+async fn save_discovered(db: &Db, notebook_id: &str, map: &HashMap<String, Discovered>) {
+    if let Ok(json) = serde_json::to_string(map) {
+        if let Err(err) = db.kv_set(&discovered_key(notebook_id), &json).await {
+            crate::note!("feeds: discovered feeds for {notebook_id} not saved: {err:#}");
+        }
+    }
 }
 
 /// Remember feeds a just-imported page advertised (tier 1), so the Grow
 /// pane can propose them without a second fetch.
-pub fn remember_discovered(state: &AppState, notebook_id: &str, source: &Source, feeds: &[String]) {
+pub async fn remember_discovered(
+    state: &AppState,
+    notebook_id: &str,
+    source: &Source,
+    feeds: &[String],
+) {
     if feeds.is_empty() {
         return;
     }
-    let dir = commands::app_data_dir(state);
     let now = commands::now();
-    with_store(
-        &dir,
-        |s| {
-            let nb = s.discovered.entry(notebook_id.to_string()).or_default();
-            for url in feeds {
-                nb.insert(
-                    url.clone(),
-                    Discovered {
-                        source_id: source.id.clone(),
-                        source_title: source.title.clone(),
-                        seen_at: now,
-                    },
-                );
-            }
-        },
-        true,
-    );
+    let mut map = load_discovered(&state.db, notebook_id).await;
+    for url in feeds {
+        map.insert(
+            url.clone(),
+            Discovered {
+                source_id: source.id.clone(),
+                source_title: source.title.clone(),
+                seen_at: now,
+            },
+        );
+    }
+    save_discovered(&state.db, notebook_id, &map).await;
 }
 
 /// Discovered feeds as growth proposals of kind `feed`, minus the ones the
 /// notebook already follows and the ones whose page is gone.
-pub fn discovered_proposals(
+pub async fn discovered_proposals(
     state: &AppState,
     notebook_id: &str,
     sources: &[Source],
 ) -> Vec<crate::growth::GrowthProposal> {
-    let dir = commands::app_data_dir(state);
     let followed: std::collections::HashSet<&str> = sources
         .iter()
         .filter(|s| s.source_type == "feed")
         .map(|s| s.url.trim_end_matches('/'))
         .collect();
     let live: std::collections::HashSet<&str> = sources.iter().map(|s| s.id.as_str()).collect();
-    let found = with_store(
-        &dir,
-        |s| s.discovered.get(notebook_id).cloned().unwrap_or_default(),
-        false,
-    );
+    let found = load_discovered(&state.db, notebook_id).await;
     let mut out: Vec<crate::growth::GrowthProposal> = found
         .into_iter()
         .filter(|(url, d)| {
@@ -731,23 +733,13 @@ pub fn discovered_proposals(
 /// conventional paths (the one tier that fetches, so it runs last and only
 /// here). Deduped, page tier first.
 pub async fn discover_for_source(state: &AppState, source: &Source) -> Vec<FeedCandidate> {
-    let dir = commands::app_data_dir(state);
     let mut out: Vec<FeedCandidate> = Vec::new();
-    let advertised: Vec<String> = with_store(
-        &dir,
-        |s| {
-            s.discovered
-                .get(&source.notebook_id)
-                .map(|m| {
-                    m.iter()
-                        .filter(|(_, d)| d.source_id == source.id)
-                        .map(|(u, _)| u.clone())
-                        .collect()
-                })
-                .unwrap_or_default()
-        },
-        false,
-    );
+    let advertised: Vec<String> = load_discovered(&state.db, &source.notebook_id)
+        .await
+        .iter()
+        .filter(|(_, d)| d.source_id == source.id)
+        .map(|(u, _)| u.clone())
+        .collect();
     for url in advertised {
         out.push(candidate(url, "Feed", "page"));
     }
@@ -880,8 +872,10 @@ async fn ingest_entries(
     parent: &Source,
     entries: &[Entry],
     page_budget: &mut usize,
+    delay: Option<std::time::Duration>,
 ) -> Vec<(String, String)> {
     let mut landed = Vec::new();
+    let mut fetched_any = false;
     for e in entries {
         let mut text = entry_text(e);
         let mut title = e.title.clone();
@@ -895,6 +889,11 @@ async fn ingest_entries(
         let mut fetched = false;
         if !e.full && *page_budget > 0 {
             *page_budget -= 1;
+            // The site's Crawl-delay, between our fetches only.
+            if let (Some(d), true) = (delay, fetched_any) {
+                tokio::time::sleep(d).await;
+            }
+            fetched_any = true;
             // The same path Add Source takes: the fast fetch, then the
             // rendered capture when a page comes back as a JS shell.
             if let Ok(page) = crate::capture::extract_url_rescued(&e.link).await {
@@ -952,6 +951,13 @@ pub async fn connect(state: &AppState, notebook_id: &str, url: &str, body: &str)
     if parsed.entries.is_empty() {
         anyhow::bail!("{url} is a feed with no entries");
     }
+    // A sitemap watch is a crawler, and a site's robots.txt is the rule it
+    // sets for crawlers. A disallowed sitemap is not watched at all.
+    if parsed.sitemap && !crate::robots::allowed(&state.db, url).await {
+        anyhow::bail!(
+            "{url} is off limits to crawlers under the site's robots.txt, so Alchemy won't watch it"
+        );
+    }
     let title = if parsed.title.trim().is_empty() {
         url.to_string()
     } else {
@@ -995,28 +1001,23 @@ pub async fn connect(state: &AppState, notebook_id: &str, url: &str, body: &str)
             .take(MAX_NEW_PER_FEED * 2)
             .cloned()
             .collect();
-        ingest_entries(state, &parent, &first, &mut page_budget).await;
+        ingest_entries(state, &parent, &first, &mut page_budget, None).await;
         Vec::new()
     };
     let parent = rewrite_index(state, &parent, &title, &parsed.description).await?;
-    let dir = commands::app_data_dir(state);
-    with_store(
-        &dir,
-        |s| {
-            s.state.insert(
-                parent.id.clone(),
-                FeedState {
-                    etag: String::new(),
-                    last_modified: String::new(),
-                    next_poll_at: commands::now() + cadence,
-                    failures: 0,
-                    cadence_ms: cadence,
-                    seen,
-                },
-            );
+    save_state(
+        &state.db,
+        &parent.id,
+        &FeedState {
+            etag: String::new(),
+            last_modified: String::new(),
+            next_poll_at: commands::now() + cadence,
+            failures: 0,
+            cadence_ms: cadence,
+            seen,
         },
-        true,
-    );
+    )
+    .await;
     Ok(Source {
         content: String::new(),
         ..parent
@@ -1032,13 +1033,8 @@ pub async fn poll_one(
     force: bool,
     page_budget: &mut usize,
 ) -> Result<usize> {
-    let dir = commands::app_data_dir(state);
     let now = commands::now();
-    let st = with_store(
-        &dir,
-        |s| s.state.get(&parent.id).cloned().unwrap_or_default(),
-        false,
-    );
+    let st = load_state(&state.db, &parent.id).await;
     if !force && now < st.next_poll_at {
         return Ok(0);
     }
@@ -1087,16 +1083,33 @@ pub async fn poll_one(
         } else {
             MAX_NEW_PER_FEED
         };
+        // Sitemap arrivals are crawled, so they obey robots.txt: disallowed
+        // pages are marked seen without a fetch (they are not "new" to us
+        // in any sense the site permits), and Crawl-delay spaces the rest.
+        let robots = if parsed.sitemap {
+            Some(crate::robots::rules_for(&state.db, &parent.url).await)
+        } else {
+            None
+        };
+        let mut disallowed: Vec<u64> = Vec::new();
         let fresh: Vec<Entry> = parsed
             .entries
             .iter()
             .filter(|e| {
                 !known.contains(e.link.trim_end_matches('/')) && !seen.contains(&url_hash(&e.link))
             })
+            .filter(|e| match &robots {
+                Some(r) if !r.allows(&crate::robots::path_of(&e.link)) => {
+                    disallowed.push(url_hash(&e.link));
+                    false
+                }
+                _ => true,
+            })
             .take(cap)
             .cloned()
             .collect();
-        let landed = ingest_entries(state, parent, &fresh, page_budget).await;
+        let delay = robots.as_ref().and_then(|r| r.delay());
+        let landed = ingest_entries(state, parent, &fresh, page_budget, delay).await;
         let title = if parsed.title.trim().is_empty() {
             parent.title.clone()
         } else {
@@ -1142,8 +1155,11 @@ pub async fn poll_one(
         // pass stays unseen and comes round again.
         let mut seen_next = st.seen.clone();
         if parsed.sitemap {
-            for (_, link) in &landed {
-                let h = url_hash(link);
+            for h in landed
+                .iter()
+                .map(|(_, link)| url_hash(link))
+                .chain(disallowed)
+            {
                 if !seen_next.contains(&h) {
                     seen_next.push(h);
                 }
@@ -1164,26 +1180,22 @@ pub async fn poll_one(
     .await;
     match outcome {
         Ok((n, next)) => {
-            with_store(&dir, |s| s.state.insert(parent.id.clone(), next), true);
+            save_state(&state.db, &parent.id, &next).await;
             Ok(n)
         }
         Err(err) => {
             let failures = st.failures + 1;
             let backoff = (cadence << failures.min(5)).min(MAX_CADENCE_MS);
-            with_store(
-                &dir,
-                |s| {
-                    s.state.insert(
-                        parent.id.clone(),
-                        FeedState {
-                            next_poll_at: now + backoff,
-                            failures,
-                            ..st.clone()
-                        },
-                    )
+            save_state(
+                &state.db,
+                &parent.id,
+                &FeedState {
+                    next_poll_at: now + backoff,
+                    failures,
+                    ..st.clone()
                 },
-                true,
-            );
+            )
+            .await;
             if failures == UNREACHABLE_AFTER {
                 let _ = state
                     .db
