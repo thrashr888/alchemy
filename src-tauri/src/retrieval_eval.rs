@@ -3101,6 +3101,59 @@ async fn score_kind_with(
     mean(&rows, None)
 }
 
+/// The gap query's lexical gate (`commands::gap_gate`) over the fixture
+/// datasets on the flat search: how often each kind would still pay for
+/// the Small-role call, and that every multi-hop query does. Deterministic.
+#[tokio::test]
+async fn eval_gap_gate() {
+    let Some(ai) = eval_ai().await else { return };
+    let dir = std::env::temp_dir().join(format!("nbl-eval-gate-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb = "eval-nb";
+    seed_corpus(&ai, &db, nb).await;
+    seed_docs(&ai, &db, nb, EXTRA_CORPUS, "x-").await;
+    let mut asked: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
+    let mut multihop_skipped: Vec<String> = Vec::new();
+    for ds in load_datasets()
+        .into_iter()
+        .filter(|d| d.corpus != "outline")
+    {
+        let texts: Vec<String> = ds.queries.iter().map(|q| q.query.clone()).collect();
+        let qvecs = ai.embed(&texts).await.expect("embed");
+        for (q, qvec) in ds.queries.iter().zip(qvecs) {
+            let trace = db
+                .search_chunks_trace(nb, qvec, &q.query, K, None)
+                .await
+                .expect("search");
+            let gate = crate::commands::gap_gate(&q.query, &trace.final_hits);
+            let e = asked.entry(q.kind.clone()).or_default();
+            e.1 += 1;
+            if gate.is_some() {
+                e.0 += 1;
+            } else if q.kind == "multihop" {
+                multihop_skipped.push(q.query.clone());
+            }
+            if std::env::var("ALCHEMY_TRACE_GATE").is_ok() {
+                eprintln!(
+                    "  {:<10} {:<10} {}",
+                    q.kind,
+                    gate.unwrap_or("skip"),
+                    q.query
+                );
+            }
+        }
+    }
+    eprintln!("\ngap gate asks (kind: asked/total):");
+    for (kind, (a, n)) in &asked {
+        eprintln!("  {kind:<10} {a}/{n}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        multihop_skipped.is_empty(),
+        "multi-hop queries the gate would skip: {multihop_skipped:?}"
+    );
+}
+
 /// Phase 3's escalation, on versus off, per kind, over the outline corpus
 /// with the handwritten section summaries as the outline (so the
 /// escalation's own contribution is measured, not the generator's). Needs

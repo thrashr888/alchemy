@@ -878,6 +878,30 @@ pub(crate) fn classify_model_error(raw: &str) -> Option<String> {
         );
     }
 
+    // Ollama accepted the request and then went quiet past the deadline a
+    // healthy server meets (`Ollama::run_stream`): the runner is stuck.
+    // `ollama stop <model>` drops that runner; the next request reloads it.
+    if lower.starts_with("ollama: ")
+        && (lower.contains(" sent nothing for ") || lower.contains(" stalled mid-answer "))
+    {
+        let model = raw["ollama: ".len()..]
+            .split(' ')
+            .next()
+            .filter(|m| is_safe_model_name(m))
+            .map(str::to_string);
+        return Some(match model {
+            Some(m) => format!(
+                "Ollama took the question but never answered — “{m}” looks stuck. \
+                 Fix: open Terminal, run `ollama stop {m}`, then retry here. Or pick \
+                 another model in Settings → Models."
+            ),
+            None => "Ollama took the question but never answered — the model looks \
+                     stuck. Restart Ollama and retry, or pick another model in \
+                     Settings → Models."
+                .into(),
+        });
+    }
+
     // A model-shaped timeout: still loading into memory, or holding the GPU
     // for another job. Scoped to provider-ish errors so a slow source fetch
     // during import never gets model advice.
@@ -954,6 +978,7 @@ pub(crate) fn terminal_command_allowed(command: &str) -> bool {
     // AppleScript string or the shell.
     command
         .strip_prefix("ollama pull ")
+        .or_else(|| command.strip_prefix("ollama stop "))
         .is_some_and(is_safe_model_name)
 }
 
@@ -2264,6 +2289,82 @@ pub async fn grep_sources(
             }
         })
         .collect())
+}
+
+/// Should the gap query run at all? The model call it gates is a full
+/// Small-role round trip on every question — 2–9 s of the retrieval stage
+/// on local models — while most questions have one subject the flat search
+/// already answered. Two cheap signals say a second search could matter:
+/// the question links things (compare, versus, change from … to …), or it
+/// names terms the pool never mentions. Measured on the fixture datasets
+/// (`eval_gap_gate`): every multi-hop query asks; the single-subject kinds
+/// mostly skip. Returns why the gate opened, or None to skip.
+pub(crate) fn gap_gate(question: &str, pool: &[Citation]) -> Option<&'static str> {
+    if pool.is_empty() {
+        return Some("empty");
+    }
+    let q = format!(" {} ", question.to_lowercase());
+    const LINKED: &[&str] = &[
+        " compare",
+        " comparison",
+        " versus ",
+        " vs ",
+        " vs. ",
+        " differ",
+        " both ",
+        " either ",
+        " between ",
+        " than ",
+        " evolve",
+        " change",
+        " over time",
+        " through ",
+        " respectively",
+        " relate",
+        " relationship",
+        " depend",
+        " as well as ",
+        " and also ",
+        " each ",
+    ];
+    if LINKED.iter().any(|w| q.contains(w)) {
+        return Some("linked");
+    }
+    if q.contains(" from ") && q.contains(" to ") {
+        return Some("range");
+    }
+    // Terms the pool never mentions. Five-character stems forgive
+    // inflection (employees / employee, patched / patching); one stray
+    // synonym is normal, two say the search missed a subject.
+    const STOP: &[&str] = &[
+        "what", "which", "when", "where", "does", "did", "the", "this", "that", "these", "those",
+        "there", "their", "they", "them", "with", "from", "into", "about", "have", "has", "had",
+        "should", "would", "could", "will", "your", "you", "our", "get", "got", "need", "needs",
+        "use", "used", "uses", "much", "many", "long", "often", "more", "less", "some", "any",
+        "all", "how", "who", "why", "was", "were", "are", "is", "be", "been", "for", "and", "but",
+        "not", "can", "may", "might", "must", "over", "under", "after", "before", "still", "also",
+        "just", "only", "like", "want", "wants", "tell", "know", "find", "give", "make", "explain",
+        "explains", "written", "write", "wrote", "down", "document", "covers", "cover", "mention",
+        "mentions", "says", "say", "said",
+    ];
+    let hay = pool
+        .iter()
+        .map(|c| format!("{} {} {}", c.source_title, c.section, c.snippet))
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    let uncovered = q
+        .split(|c: char| !c.is_alphanumeric() && c != '-')
+        .filter(|w| w.len() >= 4 && !STOP.contains(w))
+        .filter(|w| {
+            let stem: String = w.chars().take(5).collect();
+            !hay.contains(&stem)
+        })
+        .count();
+    if uncovered >= 2 {
+        return Some("uncovered");
+    }
+    None
 }
 
 /// Iterative retrieval's gap loop (RFC-judged-evals §4.3): show the small
@@ -8621,17 +8722,25 @@ pub async fn send_message(
     // gold-evidence citation 48%→60% with zero single-hop regression.
     let mut pool = search.final_hits;
     let t_stage = std::time::Instant::now();
-    let gap_query = gap_retrieve(
-        &ai,
-        &state.db,
-        &notebook_id,
-        &content,
-        &mut pool,
-        k,
-        fetch_k,
-        source_ids.as_deref(),
-    )
-    .await;
+    // The helpers ahead of the answer run on the Small role with a short
+    // ceiling and never borrow the chat provider (`Ai::helpers`).
+    let helpers = ai.clone().helpers();
+    let gap_gate = gap_gate(&content, &pool);
+    let gap_query = if gap_gate.is_some() {
+        gap_retrieve(
+            &helpers,
+            &state.db,
+            &notebook_id,
+            &content,
+            &mut pool,
+            k,
+            fetch_k,
+            source_ids.as_deref(),
+        )
+        .await
+    } else {
+        None
+    };
     let gap_ms = t_stage.elapsed().as_millis() as u64;
     // Outline-guided escalation (RFC-outline-index Phase 3): when the pool
     // is thin or sits on look-alike sections of a structured source, the
@@ -8640,7 +8749,7 @@ pub async fn send_message(
     // pool as it was.
     let outline_pick = match crate::outline_index::escalate(
         &state.db,
-        &ai,
+        &helpers,
         &notebook_id,
         &content,
         &query_vec_for_outline,
@@ -8665,6 +8774,7 @@ pub async fn send_message(
             "ftsHits": search.fts_hits.len(),
             "fusedHits": search.fused_hits.len(),
             "grepHits": grep_hits.len(),
+            "gapGate": gap_gate,
             "gapQuery": gap_query,
             "outlinePick": outline_pick,
             "warnings": search.warnings,
@@ -8727,6 +8837,9 @@ pub async fn send_message(
         &persona,
         &profile,
     );
+    // Prompt size rides the timing line: prefill is the part of first-token
+    // time retrieval numbers cannot explain.
+    let prompt_chars: usize = messages.iter().map(|m| m.content.chars().count()).sum();
     // One-shot provider override (RFC-self-resolve phase 4): the error row's
     // "Answer with Ollama / Apple Intelligence" rerun answers THIS question
     // on the named engine — config untouched, one send only.
@@ -8856,6 +8969,7 @@ pub async fn send_message(
                 "grepMs": grep_ms,
                 "gapMs": gap_ms,
                 "rerankMs": rerank_ms,
+                "promptChars": prompt_chars,
             })),
         );
     }
@@ -10205,6 +10319,27 @@ pub async fn enqueue_generation(
         "",
     )
     .await)
+}
+
+/// Preload the chat and Small models while the user is still typing
+/// (`Ai::warm_models`). Fire-and-forget; at most once per ten minutes so a
+/// composer that re-renders cannot turn into a poll.
+#[tauri::command]
+pub async fn warm_chat_models(state: State<'_, AppState>) -> Result<(), String> {
+    static LAST_WARM: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+    {
+        let mut last = LAST_WARM.lock().unwrap();
+        if last
+            .map(|t| t.elapsed() < std::time::Duration::from_secs(600))
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        *last = Some(std::time::Instant::now());
+    }
+    let ai = state.ai.read().await.clone();
+    tokio::spawn(async move { ai.warm_models().await });
+    Ok(())
 }
 
 #[tauri::command]

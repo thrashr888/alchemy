@@ -63,13 +63,27 @@ struct ChatMessageDelta {
 
 impl Ollama {
     pub fn new(config: OllamaConfig) -> Self {
+        // No blanket request timeout: chat is bounded by what a healthy
+        // server does (`run_stream`), everything else sets its own. The old
+        // ten-minute ceiling let a wedged server hold an answer for exactly
+        // that long before anyone heard about it.
         let http = reqwest::Client::builder()
-            // Local models can take a while on the first token; be patient.
-            .timeout(std::time::Duration::from_secs(600))
+            .connect_timeout(std::time::Duration::from_secs(5))
             .build()
             .expect("failed to build reqwest client");
         Self { http, config }
     }
+
+    /// Longest a *loaded* model may take to its first token — prefill of a
+    /// long prompt on a 27B model measures in the tens of seconds; past
+    /// this the server is stuck, not slow.
+    const FIRST_TOKEN_LOADED: std::time::Duration = std::time::Duration::from_secs(90);
+    /// The same for a model that still has to page in (measured: 115 s for
+    /// a 27B MLX model cold). The composer's warm-up makes this the rare
+    /// case.
+    const FIRST_TOKEN_COLD: std::time::Duration = std::time::Duration::from_secs(180);
+    /// Longest silence between tokens once an answer is under way.
+    const STALL: std::time::Duration = std::time::Duration::from_secs(30);
 
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.config.base_url.trim_end_matches('/'), path)
@@ -220,84 +234,80 @@ impl Ollama {
     }
 
     /// Non-streaming chat completion; used for one-shot artifact generation.
+    /// Rides the streaming request underneath so it shares the same
+    /// first-token and stall deadlines — a wedged server is a wedged server
+    /// whichever way the answer is read.
     pub async fn chat(&self, messages: &[ChatTurn]) -> Result<ChatOutcome> {
         let mut body = json!({
             "model": self.config.chat_model,
             "messages": messages,
-            "stream": false,
+            "stream": true,
         });
         self.apply_keep_alive(&mut body);
-        let mut attempt = 0;
-        let resp = loop {
-            let resp = self
-                .http
-                .post(self.url("/api/chat"))
-                .json(&body)
-                .send()
-                .await
-                .context("ollama chat request failed")?;
-            if resp.status().is_success() || !Self::backoff_if_retryable(&resp, attempt).await {
-                break resp;
-            }
-            attempt += 1;
-        };
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("ollama chat {}: {}", status, body));
-        }
-        let value: serde_json::Value = resp.json().await?;
-        let text = value["message"]["content"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
-        let stats = GenStats::from_parts(
-            value.get("eval_count").and_then(|v| v.as_u64()),
-            value.get("eval_duration").and_then(|v| v.as_u64()),
-        );
-        Ok(ChatOutcome {
-            text,
-            stats,
-            cost_usd: None,
-        })
+        self.run_stream(body, |_| {}).await
     }
 
     /// Streaming chat. `on_token` is called for each content delta as it arrives.
     /// Returns the full concatenated assistant message.
-    pub async fn chat_stream<F>(
-        &self,
-        messages: &[ChatTurn],
-        mut on_token: F,
-    ) -> Result<ChatOutcome>
+    pub async fn chat_stream<F>(&self, messages: &[ChatTurn], on_token: F) -> Result<ChatOutcome>
     where
         F: FnMut(&str),
     {
-        let body = {
-            let mut body = json!({
-                "model": self.config.chat_model,
-                "messages": messages,
-                "stream": true,
-            });
-            // Only when the user asked for one: the parameter is absent by
-            // default, which is what every model expects.
-            if !self.config.effort.trim().is_empty() {
-                body["think"] = json!(self.config.effort.trim());
-            }
-            self.apply_keep_alive(&mut body);
-            body
+        let mut body = json!({
+            "model": self.config.chat_model,
+            "messages": messages,
+            "stream": true,
+        });
+        // Only when the user asked for one: the parameter is absent by
+        // default, which is what every model expects.
+        if !self.config.effort.trim().is_empty() {
+            body["think"] = json!(self.config.effort.trim());
+        }
+        self.apply_keep_alive(&mut body);
+        self.run_stream(body, on_token).await
+    }
+
+    /// One streamed `/api/chat` request under the deadlines a healthy
+    /// server meets: the first token within `FIRST_TOKEN_LOADED` (or
+    /// `FIRST_TOKEN_COLD` when `/api/ps` says the model is not resident),
+    /// then no silence longer than `STALL`. Either miss is an error naming
+    /// the model — the chat error row turns it into a Retry and an
+    /// `ollama stop <model>` fix — instead of the ten-minute wait it was.
+    async fn run_stream<F>(&self, body: serde_json::Value, mut on_token: F) -> Result<ChatOutcome>
+    where
+        F: FnMut(&str),
+    {
+        let model = self.config.chat_model.clone();
+        let norm = |s: &str| s.trim_end_matches(":latest").to_string();
+        let loaded = match self.ps().await {
+            Ok(names) => names.iter().any(|n| norm(n) == norm(&model)),
+            Err(_) => false,
         };
+        let first = if loaded {
+            Self::FIRST_TOKEN_LOADED
+        } else {
+            Self::FIRST_TOKEN_COLD
+        };
+        let stuck = |waited: std::time::Duration| {
+            anyhow!(
+                "ollama: {model} sent nothing for {}s (model {} loaded) — it looks stuck",
+                waited.as_secs(),
+                if loaded { "was" } else { "was not" }
+            )
+        };
+        let started = std::time::Instant::now();
         // Retries happen strictly before any body is consumed, so a retried
         // stream can never emit duplicate tokens.
         let mut attempt = 0;
         let resp = loop {
-            let resp = self
-                .http
-                .post(self.url("/api/chat"))
-                .json(&body)
-                .send()
-                .await
-                .context("ollama chat request failed")?;
+            let remaining = first.saturating_sub(started.elapsed());
+            let sent = tokio::time::timeout(
+                remaining,
+                self.http.post(self.url("/api/chat")).json(&body).send(),
+            )
+            .await
+            .map_err(|_| stuck(started.elapsed()))?;
+            let resp = sent.context("ollama chat request failed")?;
             if resp.status().is_success() || !Self::backoff_if_retryable(&resp, attempt).await {
                 break resp;
             }
@@ -313,8 +323,27 @@ impl Ollama {
         let mut full = String::new();
         let mut buf: Vec<u8> = Vec::new();
         let mut stream = resp.bytes_stream();
+        let mut any_token = false;
 
-        while let Some(chunk) = stream.next().await {
+        loop {
+            let limit = if any_token {
+                Self::STALL
+            } else {
+                first.saturating_sub(started.elapsed())
+            };
+            let next = tokio::time::timeout(limit, stream.next())
+                .await
+                .map_err(|_| {
+                    if any_token {
+                        anyhow!(
+                            "ollama: {model} stalled mid-answer for {}s — it looks stuck",
+                            Self::STALL.as_secs()
+                        )
+                    } else {
+                        stuck(started.elapsed())
+                    }
+                })?;
+            let Some(chunk) = next else { break };
             let bytes = chunk.context("error reading chat stream")?;
             buf.extend_from_slice(&bytes);
 
@@ -326,6 +355,7 @@ impl Ollama {
                     continue;
                 }
                 if let Ok(parsed) = serde_json::from_slice::<ChatChunk>(line) {
+                    any_token = true;
                     if let Some(delta) = parsed.message {
                         if !delta.content.is_empty() {
                             on_token(&delta.content);
@@ -370,6 +400,41 @@ impl Ollama {
             .await;
     }
 
+    /// Load this engine's chat model without generating — a chat request
+    /// with no messages is Ollama's documented preload; it returns once the
+    /// model is resident. Residency is this engine's `keep_alive` or ten
+    /// minutes: long enough to bridge typing and Send, short enough that a
+    /// draft never sent does not pin a 20 GB model all afternoon. The
+    /// following real request re-sets residency to its own window.
+    pub async fn warm(&self) {
+        let keep = self
+            .config
+            .keep_alive
+            .clone()
+            .unwrap_or_else(|| "10m".into());
+        let started = std::time::Instant::now();
+        let res = self
+            .http
+            .post(self.url("/api/chat"))
+            .timeout(std::time::Duration::from_secs(300))
+            .json(&json!({
+                "model": self.config.chat_model,
+                "messages": [],
+                "keep_alive": keep,
+            }))
+            .send()
+            .await;
+        match res {
+            Ok(r) if r.status().is_success() => crate::note!(
+                "warm: {} resident after {} ms",
+                self.config.chat_model,
+                started.elapsed().as_millis()
+            ),
+            Ok(r) => crate::note!("warm: {} → HTTP {}", self.config.chat_model, r.status()),
+            Err(err) => crate::note!("warm: {} failed: {err:#}", self.config.chat_model),
+        }
+    }
+
     /// The chat model this engine answers with — the name a loading status
     /// should show.
     pub fn chat_model_name(&self) -> &str {
@@ -381,6 +446,7 @@ impl Ollama {
         let resp = self
             .http
             .get(self.url("/api/tags"))
+            .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
             .context("ollama tags request failed")?;

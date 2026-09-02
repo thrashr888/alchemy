@@ -80,7 +80,6 @@ const MAX_NIGHTLY_SOURCES: usize = 8;
 /// Budget-checked per source rather than once up front, because the cost is
 /// per judgment and a night can run out halfway through the list.
 pub(crate) fn spawn_nightly(db: Arc<Db>, ai: Ai, since: i64, budget: String) {
-    let ai = ai.background();
     // One nightly pass at a time, and never blocked by arrival judgments:
     // the pass is serial internally, so it is not the pile-up the arrival
     // cap guards against.

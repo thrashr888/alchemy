@@ -84,9 +84,12 @@ wants the model the user picked to *write* for them. On the chat model,
 routing inherits that model's worst case: an agent-CLI provider took
 more than 30s to classify "open the ferrari notebook", so an imperative
 message cost more than the answer it was standing in for, and a wedged
-provider made the router itself the hang. `chat_role` already falls
-through to the chat engine when Small is absent or errors, so the move
-is strictly faster and never less capable.
+provider made the router itself the hang. `chat_role` routes Small to
+the chat engine when no Small engine is configured, so the move is
+strictly faster and never less capable. (It no longer falls through on
+*error*: a failing Small engine used to hand its work to whatever
+answers chat — a paid agent CLI, silently, after the small engine's full
+timeout — so since PR #45 the call fails and the caller decides.)
 
 ## 3. The boundary
 
@@ -250,9 +253,13 @@ OpenAI-shaped lives here. No per-vendor SDKs.
   reordered by the user's preference list, overridable per role in
   advanced settings. Zero-config result on a bare Mac: builtin embedder +
   builtin MLX chat — everything works, nothing was configured.
-- **Failure fallthrough**: a provider error at call time drops to the
-  next rung with one toast ("Ollama unreachable — answered with Claude
-  Code"). No modal, no dead chat.
+- **Failure is visible, not routed around**: a provider error at call
+  time lands in the chat error row with the fix as a button — Retry,
+  `ollama serve` / `ollama stop <model>` in Terminal, Settings → Models,
+  or a one-click rerun on another live engine (RFC-self-resolve). The
+  earlier plan, a silent drop to the next rung with a toast, measured
+  badly: a wedged Ollama held a helper call for its full ten-minute
+  timeout and then quietly billed the question to Codex.
 - **Telemetry**: per-provider tok/s already exists (`ModelStat`); the
   router records it per rung so "why is this slow" has an answer and the
   ladder can be tuned with evidence.
