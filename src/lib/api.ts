@@ -440,6 +440,10 @@ export const api = {
    *  Home-only and notebook-only toggles enable and disable with it. */
   setMenuContext: (inNotebook: boolean) =>
     run(cmd<void>("set_menu_context", { inNotebook })),
+  /** Tell the backend which notebook this window has open (null = Home), so
+   *  FSEvents watches its folders and closed notebooks fall to the slow sweep. */
+  setOpenNotebook: (notebookId: string | null) =>
+    run(cmd<void>("set_open_notebook", { notebookId })),
   /** Settings → Shortcuts rows from the menu's command registry. */
   listShortcuts: () =>
     run(

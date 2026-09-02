@@ -76,6 +76,16 @@ function App() {
   // notebook must not grey out the menu over the Home window in front.
   // (A note pop-out has neither set of sidebars and stays out of it.)
   const inNotebook = !!currentId;
+  // Detection cost (docs/RFC-events.md §4): the backend watches the folders
+  // of notebooks some window has open and sweeps the rest slowly, so each
+  // window reports its notebook as it changes — null on the way to Home.
+  // Note pop-outs have no notebook of their own and stay out of it.
+  useEffect(() => {
+    if (!isTauri() || window.__ALCHEMY_NOTE__) return;
+    void api.setOpenNotebook(currentId).catch(() => {
+      /* older backend without the command — the minute sweep still runs */
+    });
+  }, [currentId]);
   const reportedContext = useRef<boolean | null>(null);
   useEffect(() => {
     if (!isTauri() || window.__ALCHEMY_NOTE__) return;
