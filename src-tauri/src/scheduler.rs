@@ -29,6 +29,11 @@ static PAUSED_UNTIL: AtomicI64 = AtomicI64::new(0);
 static LAST_MAINTAIN: AtomicI64 = AtomicI64::new(0);
 const MAINTAIN_EVERY_MS: i64 = 6 * 60 * 60 * 1000;
 
+/// Epoch ms of the last tick that walked closed notebooks' local folders.
+/// Between those, only open notebooks' folders walk each minute — FSEvents
+/// covers them anyway (fswatch.rs); this is the belt to its braces.
+static LAST_CLOSED_SWEEP: AtomicI64 = AtomicI64::new(0);
+
 /// Epoch ms of the last snapshot attempt. Checked hourly; the job itself is
 /// idempotent within a calendar day, so a machine that wakes at odd hours
 /// still gets exactly one snapshot per day.
@@ -483,8 +488,26 @@ async fn run_pass(app: &AppHandle) {
     };
 
     // 1. Freshness. Resync is cheap table/mtime work and always runs: a
-    //    foregrounded window going stale is worse than a few tokens.
-    let _ = commands::resync_sources_inner(app, &state, None).await;
+    //    foregrounded window going stale is worse than a few tokens. Local
+    //    folders of notebooks nobody has open walk once per CLOSED_SWEEP_MS
+    //    (docs/RFC-events.md §4); the stamp moves only when the walk ran,
+    //    so a tick that lost the scan lock does not cost the closed set
+    //    its turn.
+    let open = state.open_notebook_ids();
+    let closed_due =
+        now_ms() - LAST_CLOSED_SWEEP.load(Ordering::Relaxed) >= crate::fswatch::CLOSED_SWEEP_MS;
+    let sweep = crate::fswatch::Sweep::Tick {
+        open: &open,
+        closed_due,
+    };
+    if let Ok(Some(_)) = commands::resync_sources_filtered(app, &state, None, sweep).await {
+        if closed_due {
+            LAST_CLOSED_SWEEP.store(now_ms(), Ordering::Relaxed);
+        }
+    }
+    // Folder sources added or removed since the last tick change what the
+    // watcher should cover; the recompute is one folder-table read.
+    crate::fswatch::rearm(app).await;
 
     if crate::freshness::has_budget(&budget) {
         // Distillation, tags, and card suggestions converge even when no

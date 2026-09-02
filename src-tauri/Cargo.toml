@@ -59,6 +59,8 @@ percent-encoding = "2"
 # Folder scanning for all folder sources (docs/RFC-git-sources.md): ripgrep's
 # own walker — .gitignore/.ignore-aware, symlink-safe, prunes dot-dirs.
 ignore = "0.4"
+# FSEvents for open notebooks' folder sources (fswatch.rs, RFC-events §4).
+notify = "6"
 # Query-time exact-match retrieval leg over repo-backed sources — ripgrep's
 # engine, in-process (RFC-git-sources §6).
 grep-regex = "0.1"

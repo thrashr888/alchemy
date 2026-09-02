@@ -18,6 +18,7 @@ mod export;
 mod filesearch;
 mod foreground;
 mod freshness;
+mod fswatch;
 mod genqueue;
 mod gist;
 mod git;
@@ -146,6 +147,14 @@ pub fn run() {
             tauri::WindowEvent::Destroyed => {
                 if let Some(state) = window.app_handle().try_state::<commands::AppState>() {
                     state.glass_applied.lock().unwrap().remove(window.label());
+                    // Whatever notebook this window had open is no longer
+                    // open here; the next rearm drops its folders from the
+                    // FSEvents set (fswatch.rs).
+                    state
+                        .open_notebooks
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .remove(window.label());
                 }
             }
             // Refocusing Alchemy is the moment the accessibility text size can
@@ -293,8 +302,12 @@ pub fn run() {
                 cancel: std::sync::Mutex::new(std::collections::HashMap::new()),
                 folder_scan_lock: tokio::sync::Mutex::new(()),
                 glass_applied: std::sync::Mutex::new(std::collections::HashMap::new()),
+                open_notebooks: std::sync::Mutex::new(std::collections::HashMap::new()),
                 gen_queue: genqueue::GenQueue::load(&data_dir),
             });
+            // FSEvents for open notebooks' folders (docs/RFC-events.md §4);
+            // the watcher itself arms once a window reports a notebook.
+            fswatch::start(app.handle().clone());
             // The queue worker drains generations the webview only watches;
             // jobs interrupted by the last shutdown are already re-queued.
             genqueue::spawn_worker(app.handle().clone());
@@ -447,6 +460,7 @@ pub fn run() {
             commands::provider_readiness,
             commands::provider_readiness_one,
             commands::resync_sources,
+            commands::set_open_notebook,
             commands::add_source_url,
             commands::add_source_text,
             commands::update_source_text,

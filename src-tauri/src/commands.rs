@@ -155,6 +155,10 @@ pub struct AppState {
     /// Last successfully applied glass state per window label
     /// (enabled, dark, pinned) — evicted on window destroy in lib.rs.
     pub glass_applied: Mutex<HashMap<String, (bool, bool, bool)>>,
+    /// Window label → the notebook that window has open (`set_open_notebook`).
+    /// Drives FSEvents scoping and the closed-notebook sweep (fswatch.rs);
+    /// evicted on window destroy in lib.rs and pruned on each rearm.
+    pub open_notebooks: Mutex<HashMap<String, String>>,
     /// The generation queue (genqueue.rs): pending-note jobs the backend
     /// worker drains independently of any window.
     pub gen_queue: crate::genqueue::GenQueue,
@@ -190,6 +194,16 @@ pub(crate) fn notify_changed(scope: &str, notebook_id: Option<&str>) {
 }
 
 impl AppState {
+    /// The set of notebook ids some window currently has open.
+    pub fn open_notebook_ids(&self) -> HashSet<String> {
+        self.open_notebooks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+            .cloned()
+            .collect()
+    }
+
     /// Start a fresh cancellation scope for a new generation, returning its
     /// token. Supersedes any previous token in the same scope.
     pub fn begin_generation(&self, scope: &str) -> tokio_util::sync::CancellationToken {
@@ -4041,7 +4055,7 @@ const SNIFF_BYTES: usize = 8 * 1024;
 
 /// Vendored/generated directories pruned even when a repo forgot to
 /// gitignore them.
-const SKIP_DIRS: &[&str] = &[
+pub(crate) const SKIP_DIRS: &[&str] = &[
     "node_modules",
     "vendor",
     "third_party",
@@ -5448,6 +5462,52 @@ pub(crate) async fn resync_sources_inner(
     state: &AppState,
     only_notebook: Option<&str>,
 ) -> Result<FolderScan, String> {
+    Ok(
+        resync_sources_filtered(app, state, only_notebook, crate::fswatch::Sweep::All)
+            .await?
+            .unwrap_or_default(),
+    )
+}
+
+/// A window reports the notebook it has open (`None` = Home). Recomputes the
+/// FSEvents watch set right away so a file saved into the newly opened
+/// notebook's folder lands within seconds (docs/RFC-events.md §4).
+#[tauri::command]
+pub async fn set_open_notebook(
+    window: tauri::Window,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    notebook_id: Option<String>,
+) -> Result<(), String> {
+    {
+        let mut open = state
+            .open_notebooks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        match notebook_id {
+            Some(id) => {
+                open.insert(window.label().to_string(), id);
+            }
+            None => {
+                open.remove(window.label());
+            }
+        }
+    }
+    crate::fswatch::rearm(&app).await;
+    Ok(())
+}
+
+/// The sweep proper. `sweep` decides which folder parents walk this pass
+/// (fswatch.rs: the scheduler tick skips closed notebooks' local folders
+/// between ten-minute windows; everyone else walks all). Returns `Ok(None)`
+/// when another scan holds the lock — distinct from "nothing changed", so
+/// the FSEvents loop can retry instead of dropping a real change.
+pub(crate) async fn resync_sources_filtered(
+    app: &AppHandle,
+    state: &AppState,
+    only_notebook: Option<&str>,
+    sweep: crate::fswatch::Sweep<'_>,
+) -> Result<Option<FolderScan>, String> {
     let app = app.clone();
     // The Spotlight index rides the same tick (internally ~10-min throttled).
     #[cfg(target_os = "macos")]
@@ -5463,7 +5523,7 @@ pub(crate) async fn resync_sources_inner(
     // A manual folder add/refresh is already scanning — skip this tick rather
     // than queue behind it and ingest the same files twice.
     let Ok(_guard) = state.folder_scan_lock.try_lock() else {
-        return Ok(FolderScan::default());
+        return Ok(None);
     };
     let mut total = FolderScan::default();
     let mut per_notebook: HashMap<String, FolderScan> = HashMap::new();
@@ -5478,6 +5538,11 @@ pub(crate) async fn resync_sources_inner(
             continue;
         }
         if only_notebook.is_some_and(|nb| nb != folder.notebook_id) {
+            continue;
+        }
+        // Closed notebooks' local folders walk on the ten-minute cadence;
+        // FSEvents covers the open ones between minute ticks (fswatch.rs).
+        if !crate::fswatch::in_sweep(&folder.source_type, &folder.notebook_id, sweep) {
             continue;
         }
         // Remote repos: one cheap ls-remote per cadence tick; a moved branch
@@ -5676,7 +5741,7 @@ pub(crate) async fn resync_sources_inner(
             let _ = app.emit("sources://changed", SourcesChanged { notebook_id, scan });
         }
     }
-    Ok(total)
+    Ok(Some(total))
 }
 
 #[derive(serde::Serialize, Clone)]
