@@ -148,9 +148,13 @@ doubled on each failure, reset on success. Conditional requests
    nothing extra. Found feeds land as a growth proposal of kind `feed`
    ("*Tauri blog* has a feed — follow it?"), never auto-subscribed.
 2. *Well-known paths.* `/feed`, `/rss`, `/rss.xml`, `/atom.xml`,
-   `/feed.xml`, `/index.xml`, `/feed.json`. One probe per domain, cached
-   in a `feed_hosts.json` beside `git_hosts.json`, run only from the
-   explicit **Follow updates…** menu item on a source — not from the sweep.
+   `/feed.xml`, `/index.xml`, `/feed.json`, and last `/sitemap.xml`. One
+   probe per domain, run only from the explicit **Follow updates…** menu
+   item on a source — not from the sweep. **A sitemap is a watch, not a
+   feed**: connecting one marks every page it lists as seen and ingests
+   nothing; only pages that appear later arrive, each fetched through the
+   normal page path under the same caps. Watching a site is not copying
+   it, and no starter notebook ships one — a user who wants it follows it.
 3. *Host rules.* GitHub repo → `releases.atom` and `commits.atom`;
    Wikipedia article → page-history Atom; YouTube channel → the channel's
    `videos.xml`; arXiv abs/pdf → an `export.arxiv.org/api/query` feed built

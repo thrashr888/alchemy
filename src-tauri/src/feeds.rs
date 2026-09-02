@@ -8,6 +8,11 @@
 //! `mtime` = the entry's published time. Retrieval, gallery, tags, and
 //! hygiene work unchanged because children are just sources.
 //!
+//! A **sitemap watch** is the same parent with different arrival rules: a
+//! pasted `sitemap.xml` snapshots every URL it lists as already seen and
+//! ingests nothing — only pages that appear later arrive, each fetched
+//! through the normal page path. Watching a site is not copying it.
+//!
 //! Cost rules (RFC "Cost rules"): a poll is one conditional GET; a 304 costs
 //! nothing downstream. New entries ingest through the normal chunk/embed
 //! path, capped per feed and per pass. A poll writes at most one `added`
@@ -45,7 +50,7 @@ const PROBE_BYTES: usize = 4 * 1024;
 /// Entry text handed to the child source, capped.
 const ENTRY_TEXT_CAP: usize = 40_000;
 
-const WELL_KNOWN: [&str; 7] = [
+const WELL_KNOWN: [&str; 8] = [
     "/feed",
     "/rss",
     "/rss.xml",
@@ -53,6 +58,8 @@ const WELL_KNOWN: [&str; 7] = [
     "/feed.xml",
     "/index.xml",
     "/feed.json",
+    // Last, and only a watch: a site with no feed still lists its pages.
+    "/sitemap.xml",
 ];
 
 // ---- Sniffing and discovery (pure) ---------------------------------------
@@ -69,11 +76,25 @@ pub fn looks_like_feed(content_type: &str, body: &str) -> bool {
     if lower.starts_with('{') {
         return lower.contains("\"version\"") && lower.contains("jsonfeed.org");
     }
-    let xml_ish =
-        lower.starts_with("<?xml") || lower.starts_with("<rss") || lower.starts_with("<feed");
+    let xml_ish = lower.starts_with("<?xml")
+        || lower.starts_with("<rss")
+        || lower.starts_with("<feed")
+        || lower.starts_with("<urlset")
+        || lower.starts_with("<sitemapindex");
     xml_ish
-        && (lower.contains("<rss") || lower.contains("<feed") || lower.contains("<rdf:rdf"))
+        && (lower.contains("<rss")
+            || lower.contains("<feed")
+            || lower.contains("<rdf:rdf")
+            || lower.contains("<urlset")
+            || lower.contains("<sitemapindex"))
         && !lower.contains("<html")
+}
+
+/// Is this feed document a sitemap (RFC §2, the watch shape)?
+fn is_sitemap(body: &str) -> bool {
+    let head: String = body.trim_start().chars().take(2_000).collect();
+    let lower = head.to_ascii_lowercase();
+    lower.contains("<urlset") || lower.contains("<sitemapindex")
 }
 
 /// Tier 1: `<link rel="alternate" type="application/rss+xml|atom+xml|
@@ -344,11 +365,105 @@ pub struct Parsed {
     pub description: String,
     /// Newest first.
     pub entries: Vec<Entry>,
+    /// A sitemap watch: entries are bare links, and nothing ingests at
+    /// connect (see the module doc).
+    pub sitemap: bool,
 }
 
-/// Parse RSS / Atom / JSON Feed. Entries without a link are dropped — a
-/// child source needs an origin to refresh from and to dedupe on.
+/// A sitemap's `<url><loc>…</loc><lastmod>…</lastmod></url>` blocks as
+/// link-only entries, newest `lastmod` first (undated ones keep file order
+/// after the dated ones). A sitemap *index* is refused with the list it
+/// points at: the user picks one, the app never crawls a tree.
+fn parse_sitemap(body: &str, base: &str) -> Result<Parsed> {
+    let lower = body.to_ascii_lowercase();
+    if lower.contains("<sitemapindex") {
+        let children: Vec<String> = between_all(body, "<loc>", "</loc>")
+            .into_iter()
+            .take(6)
+            .collect();
+        anyhow::bail!(
+            "{base} is a sitemap index — paste one of the sitemaps it lists instead: {}",
+            children.join(", ")
+        );
+    }
+    let host = base
+        .split("://")
+        .nth(1)
+        .and_then(|r| r.split('/').next())
+        .unwrap_or(base)
+        .trim_start_matches("www.");
+    let mut entries: Vec<Entry> = Vec::new();
+    for block in body.split("<url>").skip(1) {
+        let block = block.split("</url>").next().unwrap_or("");
+        let Some(loc) = between(block, "<loc>", "</loc>") else {
+            continue;
+        };
+        let Some(link) = resolve(base, loc.trim()) else {
+            continue;
+        };
+        let published_ms = between(block, "<lastmod>", "</lastmod>")
+            .and_then(|d| parse_lastmod(d.trim()))
+            .unwrap_or(0);
+        entries.push(Entry {
+            id: link.clone(),
+            title: link.clone(),
+            link,
+            published_ms,
+            text: String::new(),
+            full: false,
+        });
+    }
+    let n = entries.len();
+    // Stable: dated pages newest first, undated ones after in file order.
+    entries.sort_by_key(|e| std::cmp::Reverse(e.published_ms));
+    Ok(Parsed {
+        title: format!("{host} \u{2014} new pages"),
+        description: format!(
+            "Watching the {n} pages listed at {base}. Pages added to the site arrive here as sources; nothing already listed is copied."
+        ),
+        entries,
+        sitemap: true,
+    })
+}
+
+fn between<'a>(s: &'a str, open: &str, close: &str) -> Option<&'a str> {
+    let i = s.find(open)? + open.len();
+    let j = s[i..].find(close)? + i;
+    Some(&s[i..j])
+}
+
+fn between_all(s: &str, open: &str, close: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = s;
+    while let Some(found) = between(rest, open, close) {
+        out.push(found.trim().to_string());
+        let skip = rest.find(open).unwrap_or(0) + open.len() + found.len() + close.len();
+        rest = &rest[skip.min(rest.len())..];
+    }
+    out
+}
+
+/// `2026-09-01`, `2026-09-01T10:00:00Z`, or with an offset → epoch ms.
+fn parse_lastmod(s: &str) -> Option<i64> {
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.timestamp_millis());
+    }
+    let date = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()?;
+    Some(date.and_hms_opt(0, 0, 0)?.and_utc().timestamp_millis())
+}
+
+/// A URL as the compact token the seen-set keeps (docs/RFC-events.md §2):
+/// trailing-slash-insensitive, so `/a` and `/a/` are one page.
+pub fn url_hash(url: &str) -> u64 {
+    crate::mac::content_stamp(url.trim_end_matches('/')) as u64
+}
+
+/// Parse RSS / Atom / JSON Feed — or a sitemap. Entries without a link are
+/// dropped — a child source needs an origin to refresh from and to dedupe on.
 pub fn parse(body: &str, base: &str) -> Result<Parsed> {
+    if is_sitemap(body) {
+        return parse_sitemap(body, base);
+    }
     let feed = feed_rs::parser::parse(body.as_bytes()).context("could not parse feed")?;
     let text_of = |t: &Option<feed_rs::model::Text>| -> String {
         t.as_ref().map(|t| plain(&t.content)).unwrap_or_default()
@@ -404,6 +519,7 @@ pub fn parse(body: &str, base: &str) -> Result<Parsed> {
         title: text_of(&feed.title),
         description: text_of(&feed.description),
         entries,
+        sitemap: false,
     })
 }
 
@@ -499,6 +615,10 @@ struct FeedState {
     failures: i64,
     #[serde(default)]
     cadence_ms: i64,
+    /// Sitemap watches only: `url_hash` of every page already seen, so a
+    /// connect ingests nothing and a poll ingests only what appeared.
+    #[serde(default)]
+    seen: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -641,7 +761,12 @@ pub async fn discover_for_source(state: &AppState, source: &Source) -> Vec<FeedC
     if out.is_empty() {
         for url in probe_well_known(&source.url).await {
             if !out.iter().any(|o| o.url == url) {
-                out.push(candidate(url, "Feed", "well-known"));
+                let label = if url.ends_with("/sitemap.xml") {
+                    "New pages (sitemap watch)"
+                } else {
+                    "Feed"
+                };
+                out.push(candidate(url, label, "well-known"));
             }
         }
     }
@@ -755,18 +880,33 @@ async fn ingest_entries(
     parent: &Source,
     entries: &[Entry],
     page_budget: &mut usize,
-) -> Vec<String> {
+) -> Vec<(String, String)> {
     let mut landed = Vec::new();
     for e in entries {
         let mut text = entry_text(e);
+        let mut title = e.title.clone();
+        // A sitemap entry is a bare link: without the page there is nothing
+        // to store, so it waits for a pass with budget (or a page that
+        // answers) rather than landing empty.
+        let link_only = !e.full && e.text.trim().is_empty();
+        if link_only && *page_budget == 0 {
+            continue;
+        }
+        let mut fetched = false;
         if !e.full && *page_budget > 0 {
             *page_budget -= 1;
-            if let Ok(page) = crate::ingest::extract_url(&e.link).await {
+            // The same path Add Source takes: the fast fetch, then the
+            // rendered capture when a page comes back as a JS shell.
+            if let Ok(page) = crate::capture::extract_url_rescued(&e.link).await {
                 if page.source_type != "feed" && page.text.chars().count() > e.text.chars().count()
                 {
+                    fetched = true;
+                    if link_only && !page.title.trim().is_empty() {
+                        title = page.title.trim().to_string();
+                    }
                     text = format!(
                         "# {}\nPublished: {}\nLink: {}\n\n{}",
-                        e.title.trim(),
+                        title.trim(),
                         day(e.published_ms),
                         e.link,
                         page.text.trim()
@@ -774,8 +914,11 @@ async fn ingest_entries(
                 }
             }
         }
+        if link_only && !fetched {
+            continue;
+        }
         let extracted = crate::ingest::Extracted {
-            title: e.title.clone(),
+            title: title.clone(),
             source_type: "url".to_string(),
             url: e.link.clone(),
             text,
@@ -794,7 +937,7 @@ async fn ingest_entries(
         )
         .await
         {
-            Ok(_) => landed.push(e.title.clone()),
+            Ok(_) => landed.push((title, e.link.clone())),
             Err(err) => crate::note!("feed {}: entry {} failed: {err:#}", parent.title, e.link),
         }
     }
@@ -839,14 +982,22 @@ pub async fn connect(state: &AppState, notebook_id: &str, url: &str, body: &str)
     };
     let parent =
         commands::store_new_source(state, notebook_id, extracted, "", stamp, None, false).await?;
-    let mut page_budget = MAX_PAGE_FETCHES_PER_PASS;
-    let first: Vec<Entry> = parsed
-        .entries
-        .iter()
-        .take(MAX_NEW_PER_FEED * 2)
-        .cloned()
-        .collect();
-    ingest_entries(state, &parent, &first, &mut page_budget).await;
+    // A feed connects with its newest entries; a sitemap watch connects
+    // with none — every page it lists today is marked seen, and only pages
+    // that appear from here on arrive.
+    let seen: Vec<u64> = if parsed.sitemap {
+        parsed.entries.iter().map(|e| url_hash(&e.link)).collect()
+    } else {
+        let mut page_budget = MAX_PAGE_FETCHES_PER_PASS;
+        let first: Vec<Entry> = parsed
+            .entries
+            .iter()
+            .take(MAX_NEW_PER_FEED * 2)
+            .cloned()
+            .collect();
+        ingest_entries(state, &parent, &first, &mut page_budget).await;
+        Vec::new()
+    };
     let parent = rewrite_index(state, &parent, &title, &parsed.description).await?;
     let dir = commands::app_data_dir(state);
     with_store(
@@ -860,6 +1011,7 @@ pub async fn connect(state: &AppState, notebook_id: &str, url: &str, body: &str)
                     next_poll_at: commands::now() + cadence,
                     failures: 0,
                     cadence_ms: cadence,
+                    seen,
                 },
             );
         },
@@ -920,17 +1072,28 @@ pub async fn poll_one(
             ));
         };
         let parsed = parse(&body, &parent.url)?;
+        // Anything the notebook already holds — under this feed or added
+        // by hand — is not new; a sitemap watch also remembers what it
+        // saw at connect, since those pages were never ingested.
         let all = state.db.list_sources(&parent.notebook_id).await?;
         let known: std::collections::HashSet<&str> = all
             .iter()
-            .filter(|s| s.parent_id == parent.id)
+            .filter(|s| !s.url.is_empty())
             .map(|s| s.url.trim_end_matches('/'))
             .collect();
+        let seen: std::collections::HashSet<u64> = st.seen.iter().copied().collect();
+        let cap = if parsed.sitemap {
+            MAX_NEW_PER_FEED.min(*page_budget)
+        } else {
+            MAX_NEW_PER_FEED
+        };
         let fresh: Vec<Entry> = parsed
             .entries
             .iter()
-            .filter(|e| !known.contains(e.link.trim_end_matches('/')))
-            .take(MAX_NEW_PER_FEED)
+            .filter(|e| {
+                !known.contains(e.link.trim_end_matches('/')) && !seen.contains(&url_hash(&e.link))
+            })
+            .take(cap)
             .cloned()
             .collect();
         let landed = ingest_entries(state, parent, &fresh, page_budget).await;
@@ -947,7 +1110,7 @@ pub async fn poll_one(
         }
         if !landed.is_empty() {
             let detail = match landed.len() {
-                1 => format!("new entry \u{00b7} {}", landed[0]),
+                1 => format!("new entry \u{00b7} {}", landed[0].0),
                 n => format!("{n} new entries"),
             };
             let _ = state
@@ -961,7 +1124,7 @@ pub async fn poll_one(
                     detail,
                     diff: landed
                         .iter()
-                        .map(|t| format!("+ {t}"))
+                        .map(|(t, _)| format!("+ {t}"))
                         .collect::<Vec<_>>()
                         .join("\n"),
                     at: commands::now(),
@@ -975,6 +1138,17 @@ pub async fn poll_one(
                 .map(|e| e.published_ms)
                 .collect::<Vec<_>>(),
         );
+        // The watch remembers what landed; what it could not fetch this
+        // pass stays unseen and comes round again.
+        let mut seen_next = st.seen.clone();
+        if parsed.sitemap {
+            for (_, link) in &landed {
+                let h = url_hash(link);
+                if !seen_next.contains(&h) {
+                    seen_next.push(h);
+                }
+            }
+        }
         Ok((
             landed.len(),
             FeedState {
@@ -983,6 +1157,7 @@ pub async fn poll_one(
                 next_poll_at: now + cadence,
                 failures: 0,
                 cadence_ms: cadence,
+                seen: seen_next,
             },
         ))
     }
@@ -1240,6 +1415,58 @@ mod tests {
         assert!(
             idx.contains("- 2026-09-01 \u{2014} [Tauri 2.5](https://v2.tauri.app/blog/tauri-25/)")
         );
+    }
+
+    const SITEMAP: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<url><loc>https://www.curated.supply/</loc></url>
+<url><loc>https://www.curated.supply/products/imac</loc><lastmod>2026-08-30</lastmod></url>
+<url><loc>https://www.curated.supply/products/iphone-pro-17</loc><lastmod>2026-09-01T10:00:00Z</lastmod></url>
+<url><loc>/products/relative</loc></url>
+</urlset>"#;
+
+    #[test]
+    fn sitemaps_are_feeds_of_bare_links_newest_first() {
+        assert!(looks_like_feed("text/xml", SITEMAP));
+        assert!(is_sitemap(SITEMAP));
+        assert!(!is_sitemap(RSS));
+        let p = parse(SITEMAP, "https://www.curated.supply/sitemap.xml").expect("parses");
+        assert!(p.sitemap);
+        assert_eq!(p.title, "curated.supply \u{2014} new pages");
+        assert!(p.description.contains("Watching the 4 pages"));
+        let links: Vec<&str> = p.entries.iter().map(|e| e.link.as_str()).collect();
+        assert_eq!(
+            links,
+            vec![
+                "https://www.curated.supply/products/iphone-pro-17",
+                "https://www.curated.supply/products/imac",
+                "https://www.curated.supply/",
+                "https://www.curated.supply/products/relative",
+            ],
+            "dated newest first, undated after in file order, relative resolved"
+        );
+        assert!(
+            p.entries.iter().all(|e| !e.full && e.text.is_empty()),
+            "bare links"
+        );
+        assert_eq!(
+            p.entries[0].title, p.entries[0].link,
+            "titled by the page once fetched"
+        );
+        assert_eq!(url_hash("https://a.b/x/"), url_hash("https://a.b/x"));
+        assert_ne!(url_hash("https://a.b/x"), url_hash("https://a.b/y"));
+    }
+
+    #[test]
+    fn sitemap_indexes_are_refused_with_their_children() {
+        let index = r#"<?xml version="1.0"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<sitemap><loc>https://x.y/sitemap-products.xml</loc></sitemap>
+<sitemap><loc>https://x.y/sitemap-pages.xml</loc></sitemap></sitemapindex>"#;
+        let err = parse(index, "https://x.y/sitemap.xml")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("sitemap index"), "{err}");
+        assert!(err.contains("sitemap-products.xml") && err.contains("sitemap-pages.xml"));
     }
 
     #[test]
