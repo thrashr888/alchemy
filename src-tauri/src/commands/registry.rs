@@ -493,7 +493,8 @@ fn build_enrich_messages(card: &RegistryCard, head: &str) -> Vec<crate::ai::Chat
 }
 
 /// Enrich owned cards with facts from their attached documents. Background
-/// only; returns how many facts landed.
+/// only; returns how many cards were read this pass (facts or not), so a
+/// caller can tell "still working through the Registry" from "converged".
 pub(crate) async fn enrich_card_facts(
     db: &crate::db::Db,
     ai: &crate::ai::Ai,
@@ -506,6 +507,7 @@ pub(crate) async fn enrich_card_facts(
     let mut state_dirty = false;
     let mut calls = 0usize;
     let mut added_total = 0usize;
+    let mut read = 0usize;
     for mut card in cards {
         if calls >= MAX_ENRICH_CALLS_PER_PASS {
             break;
@@ -532,6 +534,7 @@ pub(crate) async fn enrich_card_facts(
         // documents were read and held nothing; only new documents reopen it.
         state.insert(card.id.clone(), stamp);
         state_dirty = true;
+        read += 1;
         let mut candidates: Vec<CardFact> = Vec::new();
         for (source_id, _) in docs {
             if calls >= MAX_ENRICH_CALLS_PER_PASS {
@@ -574,7 +577,7 @@ pub(crate) async fn enrich_card_facts(
     if added_total > 0 {
         super::notify_changed("registry", None);
     }
-    Ok(added_total)
+    Ok(read)
 }
 
 // ---- The suggester -------------------------------------------------------
@@ -708,12 +711,17 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
     if let Err(err) = sweep_orphan_cards(db).await {
         crate::note!("registry orphan sweep failed: {err:#}");
     }
-    if let Err(err) = enrich_card_facts(db, ai).await {
-        crate::note!("registry fact enrichment failed: {err:#}");
+    // In quiet hours the sweep keeps looping while this reads cards, so the
+    // Registry converges overnight; by day one batch per hourly sweep.
+    let mut cards_read = 0usize;
+    match enrich_card_facts(db, ai).await {
+        Ok(n) if crate::freshness::is_quiet_hours(now()) => cards_read = n,
+        Ok(_) => {}
+        Err(err) => crate::note!("registry fact enrichment failed: {err:#}"),
     }
     let gists = db.list_gists().await?;
     if gists.is_empty() {
-        return Ok(0);
+        return Ok(cards_read);
     }
     let mut proposed = 0usize;
     // Once per notebook per run, AND only when the notebook's gists have
@@ -767,6 +775,9 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
     if let Err(err) = triage_suggested_cards(db, ai).await {
         crate::note!("registry triage failed: {err:#}");
     }
+    // What the sweep loop keys on: "did this pass do model work that could
+    // continue?" — proposals by day, proposals plus cards read by night.
+    proposed += cards_read;
     Ok(proposed)
 }
 
