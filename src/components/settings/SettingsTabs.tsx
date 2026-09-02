@@ -93,6 +93,8 @@ export function styleHint(styleId: string, assistantName: string | undefined): s
 
 export function ChatTab() {
   const assistantName = useStore((state) => state.aiConfig?.profile?.assistantName);
+  const reading = useStore((state) => state.reading);
+  const setReading = useStore((state) => state.setReading);
   const chatConfig = useStore((state) => state.chatConfig);
   const setChatConfig = useStore((state) => state.setChatConfig);
   const currentId = useStore((state) => state.currentId);
@@ -158,6 +160,39 @@ export function ChatTab() {
           ))}
         </div>
         {lengthHint && <span className="text-micro text-subtle-foreground">{lengthHint}</span>}
+      </Field>
+      <div className="h-px bg-border" />
+      {/* How answers look, as distinct from how they read. Every notebook
+          shares these — they're display, and the model never sees them. */}
+      <div className="mt-1 px-1 text-micro font-semibold uppercase tracking-wide text-subtle-foreground">
+        Appearance · every notebook
+      </div>
+      <Field label="Chat font" hint="Display only; this does not change the model.">
+        <div className="flex flex-wrap gap-1.5">
+          {CHAT_FONTS.map((font) => (
+            <Pill key={font.id} active={reading.font === font.id} onClick={() => setReading({ font: font.id })}>
+              <span className={font.className}>{font.label}</span>
+            </Pill>
+          ))}
+        </div>
+      </Field>
+      <Field label="Text size">
+        <div className="flex flex-wrap gap-1.5">
+          {CHAT_SIZES.map((size) => (
+            <Pill key={size.id} active={reading.fontSize === size.id} onClick={() => setReading({ fontSize: size.id })}>
+              {size.label}
+            </Pill>
+          ))}
+        </div>
+      </Field>
+      <Field label="Alignment">
+        <div className="flex flex-wrap gap-1.5">
+          {CHAT_ALIGNS.map((alignment) => (
+            <Pill key={alignment.id} active={reading.textAlign === alignment.id} onClick={() => setReading({ textAlign: alignment.id })}>
+              {alignment.label}
+            </Pill>
+          ))}
+        </div>
       </Field>
     </div>
   );
@@ -260,34 +295,6 @@ export function AppearanceTab() {
     <div className="flex flex-col gap-4">
       <Field label="Theme">
         <ThemePicker />
-      </Field>
-      <div className="h-px bg-border" />
-      <Field label="Chat font" hint="Display only; this does not change the model.">
-        <div className="flex flex-wrap gap-1.5">
-          {CHAT_FONTS.map((font) => (
-            <Pill key={font.id} active={reading.font === font.id} onClick={() => setReading({ font: font.id })}>
-              <span className={font.className}>{font.label}</span>
-            </Pill>
-          ))}
-        </div>
-      </Field>
-      <Field label="Text size">
-        <div className="flex flex-wrap gap-1.5">
-          {CHAT_SIZES.map((size) => (
-            <Pill key={size.id} active={reading.fontSize === size.id} onClick={() => setReading({ fontSize: size.id })}>
-              {size.label}
-            </Pill>
-          ))}
-        </div>
-      </Field>
-      <Field label="Alignment">
-        <div className="flex flex-wrap gap-1.5">
-          {CHAT_ALIGNS.map((alignment) => (
-            <Pill key={alignment.id} active={reading.textAlign === alignment.id} onClick={() => setReading({ textAlign: alignment.id })}>
-              {alignment.label}
-            </Pill>
-          ))}
-        </div>
       </Field>
       <div className="h-px bg-border" />
       <Field
