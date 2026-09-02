@@ -6364,7 +6364,7 @@ async fn finish_tool_reply(
 /// user delegates the choice instead of naming it ("pick a random theme",
 /// "surprise me with a theme"), which read as instructions even though
 /// "random" is not a verb.
-const TOOL_VERBS: [&str; 45] = [
+const TOOL_VERBS: [&str; 48] = [
     "add",
     "import",
     "ingest",
@@ -6405,6 +6405,9 @@ const TOOL_VERBS: [&str; 45] = [
     "list",
     "connect",
     "call me",
+    "your name",
+    "call you",
+    "call yourself",
     "help",
     "pick",
     "choose",
@@ -6616,8 +6619,8 @@ const SHARED_TOOL_LINES: &str = "\
 - {\"action\":\"settings\",\"op\":\"models\"} — list installed Ollama models plus every provider's active model and readiness (\"what models do I have\").\n\
 - {\"action\":\"settings\",\"op\":\"test\",\"target\":\"<provider or model name, or empty for the active chat provider>\"} — live-probe one provider or model (one tiny chat + embed) and report latency (\"is ollama working\", \"test gemma3\").\n\
 - {\"action\":\"settings\",\"op\":\"pull\",\"model\":\"<ollama model name>\"} — stage `ollama pull <model>` as a one-click Terminal command; it is never executed automatically (\"download gemma3\", \"pull qwen3:8b\").\n\
-- {\"action\":\"settings\",\"op\":\"set\",\"field\":\"profile.name|profile.profession|profile.instructions\",\"value\":\"<free text>\"} — personalize (\"call me Paul\" → profile.name Paul; \"always answer briefly\" as a standing preference → profile.instructions).\n\
-- {\"action\":\"settings\",\"op\":\"style\",\"style\":\"default|learning|friendly|buddy|professional|scientific|adhd|ste100|govuk|plain|gdev|custom or empty\",\"length\":\"default|shorter|longer or empty\"} — set <STYLE_SCOPE> Empty keeps that half unchanged.\n\
+- {\"action\":\"settings\",\"op\":\"set\",\"field\":\"profile.name|profile.profession|profile.instructions|profile.assistantName\",\"value\":\"<free text>\"} — personalize (\"call me Paul\" → profile.name Paul; \"your name is Pip\" / \"I'll call you Al\" → profile.assistantName; \"always answer briefly\" as a standing preference → profile.instructions).\n\
+- {\"action\":\"settings\",\"op\":\"style\",\"style\":\"default|learning|friendly|bffs|kids|professional|scientific|adhd|ste100|govuk|plain|gdev|custom or empty\",\"length\":\"default|shorter|longer or empty\"} — set <STYLE_SCOPE> Empty keeps that half unchanged.\n\
 - {\"action\":\"settings\",\"op\":\"theme\",\"theme\":\"<theme name, the word random to have one picked, or empty to list them>\"} — switch the app theme (\"use the gruvbox theme\", \"something dark\"; \"pick a random theme\" or \"surprise me with a theme\" → theme random).\n\
 - {\"action\":\"settings\",\"op\":\"connect\",\"target\":\"<agent client name, or empty to list>\"} — connect Alchemy to an installed agent client (Claude Code, Codex, …). Always confirmed with a click before anything is written.\n\
 - {\"action\":\"settings\",\"op\":\"setup\"} — guided setup: reports the next unmet setup step (\"help me get set up\").\n";
@@ -7098,25 +7101,54 @@ pub(crate) fn settings_gate(content: &str) -> Option<(String, String, String)> {
         }
     }
 
-    // "call me <name>" — the day-one profile one-liner. Case is recovered
-    // from the original text (the gate lowercases only for matching).
-    if l.starts_with("call me ") {
+    // "call me <name>" — the day-one profile one-liner — and its mirror,
+    // naming the assistant ("your name is Pip", "I'll call you Al"). Case is
+    // recovered from the original text (the gate lowercases only for
+    // matching). A name is short, few words, and plain characters; anything
+    // else falls through to the model ("call me when the report is done").
+    let name_after = |prefix: &str| -> Option<String> {
+        if !l.starts_with(prefix) {
+            return None;
+        }
         let orig: String = trimmed
             .trim_end_matches(['?', '!', '.', ' '])
             .chars()
-            .skip("call me ".chars().count())
+            .skip(prefix.chars().count())
             .collect();
         let name = orig.trim();
-        if !name.is_empty()
+        let plain = !name.is_empty()
             && name.chars().count() <= 30
             && name.split_whitespace().count() <= 3
             && name
                 .chars()
-                .all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '\'' | '.'))
-        {
-            return hit("set", "profile.name", name);
+                .all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '\'' | '.'));
+        plain.then(|| name.to_string())
+    };
+    if l.starts_with("call me ") {
+        return name_after("call me ").and_then(|n| hit("set", "profile.name", &n));
+    }
+    // Longest prefix first: "your name is now Pip" must not read as "now Pip".
+    for prefix in [
+        "your name is now ",
+        "your name is ",
+        "change your name to ",
+        "rename yourself to ",
+        "rename yourself ",
+        "call yourself ",
+        "i'll call you ",
+        "i will call you ",
+        "i'm going to call you ",
+        "i am going to call you ",
+        "from now on you're ",
+        "from now on you are ",
+        "from now on, you're ",
+        "you are now ",
+        "you're now ",
+        "go by ",
+    ] {
+        if l.starts_with(prefix) {
+            return name_after(prefix).and_then(|n| hit("set", "profile.assistantName", &n));
         }
-        return None;
     }
 
     // switch chat|studio [provider] to <provider> — resolved (and refused,
@@ -14908,6 +14940,25 @@ mod tool_tests {
             ("set".into(), "profile.name".into(), "Paul".into())
         );
         assert_eq!(gate("Call me Dr. Thrash.").2, "Dr. Thrash");
+        // Naming the assistant, in the ways people actually say it.
+        for phrase in [
+            "your name is Pip",
+            "Your name is now Pip!",
+            "change your name to Pip",
+            "call yourself Pip",
+            "I'll call you Pip",
+            "from now on you're Pip",
+            "rename yourself to Pip",
+        ] {
+            assert_eq!(
+                gate(phrase),
+                ("set".into(), "profile.assistantName".into(), "Pip".into()),
+                "{phrase}"
+            );
+        }
+        assert_eq!(gate("your name is Alphonse Elric").2, "Alphonse Elric");
+        // A sentence about a name is not a rename.
+        assert!(settings_gate("your name is on the invoice, isn't it?").is_none());
         // Not-routed: clause-shaped or question-shaped stays research.
         assert!(settings_gate("call me when the report is done").is_none());
         assert!(settings_gate("how do I set up a home lab?").is_none());

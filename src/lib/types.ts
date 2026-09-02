@@ -804,6 +804,8 @@ export interface UserProfile {
   profession: string;
   /** Standing instructions, kept in mind across chats and generations. */
   instructions: string;
+  /** What the user calls the assistant; empty for no persona. */
+  assistantName: string;
 }
 
 export interface ChatConfig {
@@ -812,7 +814,8 @@ export interface ChatConfig {
     | "default"
     | "learning"
     | "friendly"
-    | "buddy"
+    | "bffs"
+    | "kids"
     | "professional"
     | "scientific"
     | "adhd"

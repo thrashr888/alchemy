@@ -25,6 +25,7 @@ import {
   Scissors,
   ScrollText,
   Sparkles,
+  Blocks,
   Smile,
   Wrench,
   Zap,
@@ -37,7 +38,8 @@ import {
 export const CHAT_STYLES = [
   { id: "default", label: "Default", icon: Sparkles, hint: "Balanced answers, cited to your sources." },
   { id: "friendly", label: "Friendly", icon: MessageCircle, hint: "Warm and direct. No cheerleading, no filler." },
-  { id: "buddy", label: "Buddy", icon: Smile, hint: "A sharp friend who did the reading. Casual voice, still cited." },
+  { id: "bffs", label: "BFFs", icon: Smile, hint: "{assistant}, your best friend who did the reading. Matches your register, still cited." },
+  { id: "kids", label: "Kid-friendly", icon: Blocks, hint: "Simple words, patient, one idea at a time. Nothing scary." },
   { id: "professional", label: "Professional", icon: Briefcase, hint: "The takeaway first; evidence and caveats after, in workplace prose." },
   { id: "learning", label: "Learning Guide", icon: GraduationCap, hint: "Step-by-step explanations that define terms and build intuition." },
   { id: "scientific", label: "Scientific", icon: FlaskConical, hint: "Hedged to the evidence. Quantified, summary first." },
@@ -73,7 +75,24 @@ const CHAT_ALIGNS = [
   { id: "justified", label: "Justified" },
 ] as const;
 
+/** Mirrors ai::DEFAULT_ASSISTANT_NAME — the name a fresh install answers
+ *  to. An empty field turns the persona off. */
+const DEFAULT_ASSISTANT_NAME = "Alphonse";
+
+/** A style's hint with the assistant's name filled in — BFFs is a friend,
+ *  and a friend has a name. With the persona off, the hint reads without
+ *  one. */
+export function styleHint(styleId: string, assistantName: string | undefined): string | undefined {
+  const raw = CHAT_STYLES.find((style) => style.id === styleId)?.hint;
+  if (!raw) return raw;
+  const name = (assistantName ?? DEFAULT_ASSISTANT_NAME).trim();
+  return name
+    ? raw.replace("{assistant}", name)
+    : raw.replace("{assistant}, your", "Your");
+}
+
 export function ChatTab() {
+  const assistantName = useStore((state) => state.aiConfig?.profile?.assistantName);
   const chatConfig = useStore((state) => state.chatConfig);
   const setChatConfig = useStore((state) => state.setChatConfig);
   const currentId = useStore((state) => state.currentId);
@@ -82,7 +101,7 @@ export function ChatTab() {
   );
   const apply = (patch: Partial<ChatConfig>) =>
     setChatConfig({ ...chatConfig, ...patch });
-  const styleHint = CHAT_STYLES.find((style) => style.id === chatConfig.style)?.hint;
+  const hint = styleHint(chatConfig.style, assistantName);
   const lengthHint = CHAT_LENGTHS.find((length) => length.id === chatConfig.length)?.hint;
 
   return (
@@ -113,7 +132,7 @@ export function ChatTab() {
             />
           ))}
         </div>
-        {styleHint && <span className="text-micro text-subtle-foreground">{styleHint}</span>}
+        {hint && <span className="text-micro text-subtle-foreground">{hint}</span>}
         {chatConfig.style === "custom" && (
           <Textarea
             rows={4}
@@ -147,21 +166,36 @@ export function ChatTab() {
 export function PersonalizationTab() {
   const aiConfig = useStore((state) => state.aiConfig);
   const save = useStore((state) => state.saveAiConfig);
-  const [draft, setDraft] = useState({ name: "", profession: "", instructions: "" });
+  const [draft, setDraft] = useState({
+    name: "",
+    profession: "",
+    instructions: "",
+    assistantName: DEFAULT_ASSISTANT_NAME,
+  });
 
   useEffect(() => {
-    if (aiConfig?.profile) setDraft(aiConfig.profile);
+    if (aiConfig?.profile)
+      setDraft({
+        ...aiConfig.profile,
+        assistantName: aiConfig.profile.assistantName ?? DEFAULT_ASSISTANT_NAME,
+      });
     // Load once so a blur-save round trip cannot clobber in-progress typing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const saveOnBlur = () => {
     if (!aiConfig) return;
-    const profile = aiConfig.profile ?? { name: "", profession: "", instructions: "" };
+    const profile = aiConfig.profile ?? {
+      name: "",
+      profession: "",
+      instructions: "",
+      assistantName: DEFAULT_ASSISTANT_NAME,
+    };
     if (
       draft.name !== profile.name ||
       draft.profession !== profile.profession ||
-      draft.instructions !== profile.instructions
+      draft.instructions !== profile.instructions ||
+      draft.assistantName !== (profile.assistantName ?? DEFAULT_ASSISTANT_NAME)
     ) {
       void save({ ...aiConfig, profile: { ...draft } });
     }
@@ -180,6 +214,16 @@ export function PersonalizationTab() {
           placeholder="Paul…"
           value={draft.name}
           onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+          onBlur={saveOnBlur}
+        />
+      </Field>
+      <Field label="What do you call the assistant?">
+        <Input
+          name="profile-assistant-name"
+          aria-label="What do you call the assistant?"
+          placeholder="Alphonse…"
+          value={draft.assistantName}
+          onChange={(event) => setDraft({ ...draft, assistantName: event.target.value })}
           onBlur={saveOnBlur}
         />
       </Field>
