@@ -896,7 +896,14 @@ pub async fn poll_one(
         MAX_CADENCE_MS
     };
     let outcome = async {
-        let fetched = fetch(&parent.url, &st).await?;
+        // A forced poll wants the document, not a 304: send no validators,
+        // so the index rewrite below always has a body to work from.
+        let conditional = if force {
+            FeedState::default()
+        } else {
+            st.clone()
+        };
+        let fetched = fetch(&parent.url, &conditional).await?;
         let Fetched::Body {
             body,
             etag,
@@ -932,8 +939,13 @@ pub async fn poll_one(
         } else {
             parsed.title.clone()
         };
-        if !landed.is_empty() {
+        // A forced poll (manual Refresh) always rewrites the index, so a
+        // renamed feed or a changed index format reaches parents that
+        // predate it; the sweep rewrites only when something landed.
+        if !landed.is_empty() || force {
             rewrite_index(state, parent, &title, &parsed.description).await?;
+        }
+        if !landed.is_empty() {
             let detail = match landed.len() {
                 1 => format!("new entry \u{00b7} {}", landed[0]),
                 n => format!("{n} new entries"),

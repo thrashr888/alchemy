@@ -3618,7 +3618,12 @@ fn snippet_of(title: &str, content: &str, max_chars: usize) -> String {
             in_fence = !in_fence;
             continue;
         }
-        if t.is_empty() || t.starts_with("> ") || t.starts_with("![") || is_rule(t) {
+        if t.is_empty()
+            || t.starts_with("> ")
+            || t.starts_with("![")
+            || is_badge_row(t)
+            || is_rule(t)
+        {
             continue;
         }
         if out.is_empty() {
@@ -3675,6 +3680,44 @@ fn snippet_of(title: &str, content: &str, max_chars: usize) -> String {
         out.push('…');
     }
     out
+}
+
+/// A line that is nothing but images or linked images — `![a](u)` and the
+/// `[![a](u)](l)` shape README badge rows take. Alt text ("Discord",
+/// "Twitter") is not prose, so the whole row skips.
+fn is_badge_row(t: &str) -> bool {
+    let mut rest = t.trim();
+    if rest.is_empty() {
+        return false;
+    }
+    while !rest.is_empty() {
+        let linked = rest.starts_with("[![");
+        let start = if linked {
+            1
+        } else if rest.starts_with("![") {
+            0
+        } else {
+            return false;
+        };
+        let Some(close_alt) = rest[start..].find("](") else {
+            return false;
+        };
+        let Some(close_url) = rest[start + close_alt..].find(')') else {
+            return false;
+        };
+        rest = &rest[start + close_alt + close_url + 1..];
+        if linked {
+            let Some(r) = rest.strip_prefix("](") else {
+                return false;
+            };
+            let Some(end) = r.find(')') else {
+                return false;
+            };
+            rest = &r[end + 1..];
+        }
+        rest = rest.trim_start();
+    }
+    true
 }
 
 /// `---`, `***`, `___` (three or more): a thematic break, not content.
@@ -3742,7 +3785,9 @@ fn render_inline(t: &str) -> String {
             break;
         }
     }
-    s = unlink(&s);
+    s = untag(&s);
+    // Twice: a linked image `[![alt](img)](url)` unlinks inside-out.
+    s = unlink(&unlink(&s));
     s = uncode(&s);
     s = s.replace("**", "").replace("__", "");
     // Whole-line single emphasis only; a bare `_` or `*` mid-line is more
@@ -3753,6 +3798,37 @@ fn render_inline(t: &str) -> String {
         }
     }
     s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Inline HTML → its text. GitHub READMEs open with `<a href><img src>`
+/// badge rows and `<p align="center">` wrappers that GFM renders but a
+/// card must not show raw; a line that is only tags strips to nothing and
+/// the caller skips it. A bare `<` with no closing `>` on the line (a
+/// comparison, "a <b") passes through.
+fn untag(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(open) = rest.find('<') {
+        let Some(len) = rest[open..].find('>') else {
+            break;
+        };
+        // Only tag-shaped runs: `<name`, `</name`, `<!--`. "a < b > c" stays.
+        let inner = &rest[open + 1..open + len];
+        let tagish = inner
+            .trim_start_matches('/')
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '!');
+        if !tagish {
+            out.push_str(&rest[..open + 1]);
+            rest = &rest[open + 1..];
+            continue;
+        }
+        out.push_str(&rest[..open]);
+        rest = &rest[open + len + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// `[text](url)` and `![alt](url)` → `text` / `alt`. Unbalanced brackets
@@ -14353,6 +14429,24 @@ mod tool_tests {
     /// Gallery snippets of spreadsheet-shaped sources are the table's
     /// corner, not pipe soup: header plus the first rows, first three
     /// columns, separator dropped, an ellipsis cell where columns were cut.
+    /// A README that opens with badge markup shows its first sentence, not
+    /// the anchor and image tags GFM would have rendered.
+    #[test]
+    fn snippet_strips_inline_html() {
+        let readme = "# lancedb\n\n\
+             <a href=\"https://cloud.lancedb.com\" target=\"_blank\">\n\
+             <img src=\"https://github.com/user-attachments/assets/92dad0a2.png\" alt=\"LanceDB Cloud\">\n\
+             </a>\n\
+             [![Blog](https://img.shields.io/badge/blog.svg)](https://blog.lancedb.com/) [![Discord](https://img.shields.io/discord.svg)](https://discord.gg/x)\n\
+             ![Stars](https://img.shields.io/stars.svg)\n\
+             <p align=\"center\"><b>Developer-friendly</b>, serverless vector database.</p>\n\
+             Only a < b here is math, not a tag.";
+        assert_eq!(
+            snippet_of("lancedb", readme, 280),
+            "Developer-friendly, serverless vector database.\nOnly a < b here is math, not a tag."
+        );
+    }
+
     #[test]
     fn snippet_previews_a_table_corner() {
         let sheet = "# Sheet: Q3\n\

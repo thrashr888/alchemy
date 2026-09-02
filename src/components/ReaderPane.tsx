@@ -2145,6 +2145,9 @@ function SourceReader({
   );
   const markdownShaped =
     source.sourceType === "markdown" ||
+    // A feed parent's text is its rolling index, written as markdown by
+    // construction (feeds.rs::index_text).
+    source.sourceType === "feed" ||
     ((source.sourceType === "text" ||
       source.sourceType === "url" ||
       // Apple integrations (Notes, Calendar, Reminders, Stocks) come out of
