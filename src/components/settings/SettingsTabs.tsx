@@ -38,7 +38,7 @@ import {
 export const CHAT_STYLES = [
   { id: "default", label: "Default", icon: Sparkles, hint: "Balanced answers, cited to your sources." },
   { id: "friendly", label: "Friendly", icon: MessageCircle, hint: "Warm and direct. No cheerleading, no filler." },
-  { id: "bffs", label: "BFFs", icon: Smile, hint: "Your best friend who did the reading. Matches your register, still cited." },
+  { id: "bffs", label: "BFFs", icon: Smile, hint: "{assistant}, your best friend who did the reading. Matches your register, still cited." },
   { id: "kids", label: "Kid-friendly", icon: Blocks, hint: "Simple words, patient, one idea at a time. Nothing scary." },
   { id: "professional", label: "Professional", icon: Briefcase, hint: "The takeaway first; evidence and caveats after, in workplace prose." },
   { id: "learning", label: "Learning Guide", icon: GraduationCap, hint: "Step-by-step explanations that define terms and build intuition." },
@@ -75,7 +75,24 @@ const CHAT_ALIGNS = [
   { id: "justified", label: "Justified" },
 ] as const;
 
+/** Mirrors ai::DEFAULT_ASSISTANT_NAME — the name a fresh install answers
+ *  to. An empty field turns the persona off. */
+const DEFAULT_ASSISTANT_NAME = "Alphonse";
+
+/** A style's hint with the assistant's name filled in — BFFs is a friend,
+ *  and a friend has a name. With the persona off, the hint reads without
+ *  one. */
+export function styleHint(styleId: string, assistantName: string | undefined): string | undefined {
+  const raw = CHAT_STYLES.find((style) => style.id === styleId)?.hint;
+  if (!raw) return raw;
+  const name = (assistantName ?? DEFAULT_ASSISTANT_NAME).trim();
+  return name
+    ? raw.replace("{assistant}", name)
+    : raw.replace("{assistant}, your", "Your");
+}
+
 export function ChatTab() {
+  const assistantName = useStore((state) => state.aiConfig?.profile?.assistantName);
   const chatConfig = useStore((state) => state.chatConfig);
   const setChatConfig = useStore((state) => state.setChatConfig);
   const currentId = useStore((state) => state.currentId);
@@ -84,7 +101,7 @@ export function ChatTab() {
   );
   const apply = (patch: Partial<ChatConfig>) =>
     setChatConfig({ ...chatConfig, ...patch });
-  const styleHint = CHAT_STYLES.find((style) => style.id === chatConfig.style)?.hint;
+  const hint = styleHint(chatConfig.style, assistantName);
   const lengthHint = CHAT_LENGTHS.find((length) => length.id === chatConfig.length)?.hint;
 
   return (
@@ -115,7 +132,7 @@ export function ChatTab() {
             />
           ))}
         </div>
-        {styleHint && <span className="text-micro text-subtle-foreground">{styleHint}</span>}
+        {hint && <span className="text-micro text-subtle-foreground">{hint}</span>}
         {chatConfig.style === "custom" && (
           <Textarea
             rows={4}
@@ -145,10 +162,6 @@ export function ChatTab() {
     </div>
   );
 }
-
-/** Mirrors ai::DEFAULT_ASSISTANT_NAME — the name a fresh install answers
- *  to. An empty field turns the persona off. */
-const DEFAULT_ASSISTANT_NAME = "Alphonse";
 
 export function PersonalizationTab() {
   const aiConfig = useStore((state) => state.aiConfig);

@@ -41,8 +41,9 @@ pub const CHAT_STYLES: &[(&str, &str, &str, &str)] = &[
          person, second person, contractions, the occasional aside. Lead with the thing \
          they'd want to know, then the interesting bits. Match their register: if they \
          write casually, with nicknames or emojis, you can too; if they're brisk, be brisk. \
-         Light wit is welcome; sarcasm and hype are not. Stay grounded — the warmth is in \
-         the voice, never in stretching what the sources say.",
+         Light wit is welcome; sarcasm and hype are not. If they've given you a name, be \
+         that friend by name — a greeting, a sign-off, never every line. Stay grounded — the \
+         warmth is in the voice, never in stretching what the sources say.",
     ),
     (
         "kids",
