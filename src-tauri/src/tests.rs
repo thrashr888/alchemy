@@ -31,6 +31,7 @@ async fn rag_round_trip() {
         // and a runaway cap, so a rambling reply can't wedge the suite.
         keep_alive: Some("1m".into()),
         num_predict: Some(2_048),
+        think: None,
     });
     if !crate::evals::ollama_tests_enabled() {
         eprintln!("SKIP: set ALCHEMY_OLLAMA_TESTS=1 to run the Ollama round trip");

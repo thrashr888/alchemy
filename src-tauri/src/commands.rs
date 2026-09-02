@@ -430,6 +430,7 @@ async fn readiness_for_entry(
                 effort: String::new(),
                 keep_alive: None,
                 num_predict: None,
+                think: None,
             };
             if !entry.base_url.trim().is_empty() {
                 cfg.base_url = entry.base_url.clone();

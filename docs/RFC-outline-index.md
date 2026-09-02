@@ -54,19 +54,44 @@ it with a heading path would show up in the reader.
 
 ### Phase 2 — per-section summaries (hierarchical gists)
 
-`gist.rs` distills one gist per source. For a long structured source
-(outline depth ≥ 2 and ≥ N sections), distill one short summary per
-top-level section with the Small role, stored as chunk rows with owner
-`section:<source_id>` and `ordinal` = section index, text
-`"<chain>: <summary>"`. Embedded like gists, so a section summary is
-itself searchable; retrieval treats them like gist rows (capped,
-flagged) and a hit on one expands to the section's chunks the way
-neighbor expansion widens a hit today.
+`gist.rs` distills one gist per source. For a long structured source,
+distill one short summary per top-level section with the Small role —
+what the section covers in plain words *plus the other names a reader
+might use for it* — stored as chunk rows with owner `section:<source_id>`,
+chunk id `section:<source_id>:<start>-<end>` (the passage span), the
+chain as context, the summary as text. Embedded and BM25-indexed like a
+gist, so a section summary is itself a hit.
+
+**Expansion is scored, not positional.** A section hit is swapped, in
+place, for the top two passages of a mini hybrid search (both legs,
+filtered to the span, RRF) — "the answer is in this section" becomes
+"this passage". Two things measured wrong first: dumping the section in
+document order (topic MRR 0.50 → 0.44), and leaving a vouched-for
+passage "at its own rank" when the flat search had it deep in the pool
+(the promotion is the point). Every section hit expands; gating on the
+row's rank measured no better. The rows themselves never leave
+`search_chunks_trace`: the per-notebook chat path stays verbatim-only.
+
+Mechanics landed with handwritten fixture summaries so the measurement
+is deterministic; the model-written variant is the generator's own
+Ollama-gated eval. The generator (`gist::ensure_section_gists`) runs in
+the gist sweep right after gists converge: sources with 3–40 top-level
+sections, six sources per pass, stamped on disk by heading-and-span hash
+(`section-gists.json`) so an unchanged source costs nothing and a
+re-chunk reopens it. Section rows go with the chunks on refresh and with
+the source on delete.
 
 Budget: sections, not chunks — a 300-page manual with 14 chapters is
 14 calls, once, refreshed on content hash like gists. Runs in the same
 sweep slot as gists (event on import; hourly catch-up; never per
 minute — `RFC-night-shift-area.md`, background-settle rules).
+
+Found on the way: appending rows after an FTS index exists and taking
+the incremental `optimize` path ranked one BM25-dependent query
+differently run to run, and differently from a from-scratch index over
+the same rows. The eval builds its index once, from scratch, after
+seeding; production takes the incremental path after every import
+(issue filed).
 
 ### Phase 3 — outline-guided retrieval as silent escalation
 
@@ -130,8 +155,33 @@ Phase 2.
 | baseline (v0.53.0) | 0.55 | 0.68 | 0.23 | 0.34 |
 | 1 — heading chain | 0.91 | 1.00 | 0.62 | 0.71 |
 | 1.5 — chain in the BM25 document | 1.00 | 1.00 | 0.92 | 0.94 |
-| 2 — section summaries | | | | |
+| 2 — section summaries (mechanics, handwritten fixtures) | 0.95 | 1.00 | 0.89 | 0.92 |
 | 3 — escalation | | | | |
+
+The `topic` kind (chapter paraphrases: undercarriage, de-icing,
+Portugal) is Phase 2's own measurement:
+
+| phase | topic R@5 | R@10 | MRR | nDCG |
+| --- | --- | --- | --- | --- |
+| after 1.5 (no section rows) | 0.69 | 0.85 | 0.50 | 0.59 |
+| 2 — section rows + scored expansion, handwritten summaries | 0.85 | 1.00 | 0.79 | 0.83 |
+| 2 — the generator, bonsai-8b (Small role) | 0.77 | 0.92 | 0.54–0.61 | 0.63 |
+| 2 — the generator, gemma4 12B, thinking off | 0.85 | 0.92 | 0.60 | 0.68 |
+
+The generator's eval (`eval_section_gists_model`, Ollama-gated) scores the
+topic kind three ways on one store: no rows, the handwritten fixtures,
+the model's. Handwritten is the ceiling to report against, not a floor
+to fail on; the bar is "beats no rows", and both models clear it. Bonsai
+never reaches "undercarriage" or "Portugal" and its runs spread 0.54–0.61
+at Ollama's default temperature; gemma writes exactly the names the
+queries use and lands 0.60 — the rest of the gap to 0.79 is the
+summaries' length and phrasing against BM25, not their content.
+
+Found on the way, and fixed: a thinking model as the Small role (gemma4)
+spent the whole `num_predict` cap on hidden reasoning and returned empty
+text — 35 s per section, nothing to show. The Small engine now sends
+Ollama `think: false` (ignored by models without a thinking mode); the
+same prompt answers in under a second.
 
 Controls (`chapter`, `exact`) must stay at 1.00; the golden datasets'
 floors are unchanged.

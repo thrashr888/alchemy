@@ -208,6 +208,9 @@ impl Ollama {
     /// Both absent unless set — the server defaults are what every other
     /// request expects.
     fn apply_keep_alive(&self, body: &mut serde_json::Value) {
+        if let Some(t) = self.config.think {
+            body["think"] = json!(t);
+        }
         if let Some(ka) = &self.config.keep_alive {
             body["keep_alive"] = json!(ka);
         }
@@ -408,5 +411,29 @@ impl Ollama {
             .context("ollama ps request failed")?;
         let parsed: PsResponse = resp.json().await.context("invalid ps response")?;
         Ok(parsed.models.into_iter().map(|m| m.name).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Small engine's `think: false` reaches the request body and wins
+    /// over a reasoning effort; an engine with no opinion sends nothing.
+    #[test]
+    fn think_switch_reaches_the_body() {
+        let small = Ollama::new(OllamaConfig {
+            think: Some(false),
+            effort: "low".into(),
+            ..Default::default()
+        });
+        let mut body = json!({});
+        small.apply_keep_alive(&mut body);
+        assert_eq!(body["think"], json!(false));
+
+        let plain = Ollama::new(OllamaConfig::default());
+        let mut body = json!({});
+        plain.apply_keep_alive(&mut body);
+        assert!(body.get("think").is_none());
     }
 }
