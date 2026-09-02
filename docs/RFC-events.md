@@ -117,8 +117,8 @@ unchanged document is a no-op at the same cost as a Mac resync today.
 
 The parent is not empty. Its text is a **rolling index**: the feed's
 description plus one line per kept entry (date, title, first sentence),
-rewritten and re-embedded whenever an entry lands. \"What's new in the
-Tauri blog\" retrieves the parent; a specific claim retrieves the child.
+rewritten and re-embedded whenever an entry lands. "What's new in the
+Tauri blog" retrieves the parent; a specific claim retrieves the child.
 This is the same lesson the wiki fold and living reports taught: a
 synthesized index over its own history gives the next judgement enough
 context to be a judgement, and the `updated` event's diff keeps the
@@ -330,7 +330,8 @@ Each phase is its own change with its own gate, in dependency order:
 
 1. **Vocabulary + producers** — `added`/`removed`/`unreachable` from the
    existing reconcilers, trigger filters, `list_source_events` filters.
-   *Gate:* a folder add of 3 files writes 3 `added` rows and one
+   *Gate:* a folder add of 3 files writes **one** `added` event naming the
+   three files (never one row per file — cost rule 3) and one
    `sources://changed`; a filtered standing question ignores events outside
    its filter (unit tests beside `is_due`).
 2. **Feeds** — parent/child shape, poller, sniffing, tier-1 discovery into

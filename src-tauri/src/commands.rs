@@ -13,7 +13,7 @@ mod brief;
 mod diagnostics;
 mod ledger;
 mod registry;
-mod reports;
+pub(crate) mod reports;
 mod second_look;
 pub(crate) mod weave;
 pub(crate) use brief::ensure_default_brief;
@@ -2771,19 +2771,29 @@ pub(crate) async fn reingest(
             updated.content.clone(),
         );
     }
-    let _ = state
-        .db
-        .add_source_event(&crate::models::SourceEvent {
-            id: new_id(),
-            notebook_id: existing.notebook_id.clone(),
-            source_id: existing.id.clone(),
-            source_title: updated.title.clone(),
-            kind: "updated".into(),
-            detail,
-            diff,
-            at: now(),
-        })
-        .await;
+    // A folder-like parent's content is its map, which the scan rewrites
+    // whenever files come or go — and the scan already writes the `added` /
+    // `removed` events for exactly that (note_scan_events), so a parent
+    // `updated` here would be the same arrival twice.
+    let is_parent = matches!(
+        existing.source_type.as_str(),
+        "folder" | "obsidian" | "git" | "notion"
+    );
+    if !is_parent {
+        let _ = state
+            .db
+            .add_source_event(&crate::models::SourceEvent {
+                id: new_id(),
+                notebook_id: existing.notebook_id.clone(),
+                source_id: existing.id.clone(),
+                source_title: updated.title.clone(),
+                kind: "updated".into(),
+                detail,
+                diff,
+                at: now(),
+            })
+            .await;
+    }
     // Refreshed content means a changed hash — let the sweep re-gist it.
     crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
     Ok(Source {
@@ -4677,6 +4687,9 @@ async fn rescan_one_folder_inner(
     };
     let work: Vec<&ScanEntry> = on_disk.iter().filter(|e| needs_action(e)).collect();
     let total = work.len() as u32;
+    // Titles for this pass's `added` / `removed` events (note_scan_events).
+    let mut added_titles: Vec<String> = Vec::new();
+    let mut removed_titles: Vec<String> = Vec::new();
 
     for (done, entry) in work.iter().enumerate() {
         let path = entry.path.as_str();
@@ -4695,6 +4708,7 @@ async fn rescan_one_folder_inner(
             // New but not downloaded — list it, label it, embed nothing.
             None if entry.placeholder => {
                 store_placeholder_child(state, folder, path, mtime).await?;
+                added_titles.push(ingest::file_title(path));
                 scan.added += 1;
             }
             // New file — full ingest as a child of this folder.
@@ -4715,6 +4729,7 @@ async fn rescan_one_folder_inner(
                     if !settled {
                         spawn_retitle(state, &src).await;
                     }
+                    added_titles.push(src.title.clone());
                     scan.added += 1;
                 }
                 Err(err) => {
@@ -4793,9 +4808,11 @@ async fn rescan_one_folder_inner(
     for child in &children {
         if !disk_paths.contains(child.url.as_str()) {
             state.db.delete_source(&child.id).await?;
+            removed_titles.push(child.title.clone());
             scan.removed += 1;
         }
     }
+    note_scan_events(state, folder, &added_titles, &removed_titles).await;
 
     // The parent's content is a folder/repo map: git provenance (when the
     // root sits in a working tree), the file tree, and the skip list — so
@@ -4881,6 +4898,49 @@ async fn rescan_one_folder_inner(
         state.db.touch_notebook(&folder.notebook_id, now()).await?;
     }
     Ok(scan)
+}
+
+/// The scan's arrivals and departures as `source_events` rows
+/// (docs/RFC-events.md §1): one `added` and one `removed` per pass, never
+/// one per file — a sync tool dropping 400 files must read as "400 new
+/// files", not 400 rows. The folder parent is the event's source, so a
+/// standing question watches the folder; titles ride in `diff` as `+`/`−`
+/// lines, capped like a content diff. Best-effort: an event miss must never
+/// fail the scan that produced it.
+async fn note_scan_events(state: &AppState, folder: &Source, added: &[String], removed: &[String]) {
+    const SHOWN: usize = 20;
+    for (kind, sign, titles) in [("added", '+', added), ("removed", '\u{2212}', removed)] {
+        if titles.is_empty() {
+            continue;
+        }
+        let detail = match (kind, titles.len()) {
+            ("added", 1) => format!("new file \u{00b7} {}", titles[0]),
+            ("added", n) => format!("{n} new files"),
+            (_, 1) => format!("file gone \u{00b7} {}", titles[0]),
+            (_, n) => format!("{n} files gone"),
+        };
+        let mut lines: Vec<String> = titles
+            .iter()
+            .take(SHOWN)
+            .map(|t| format!("{sign} {t}"))
+            .collect();
+        if titles.len() > SHOWN {
+            lines.push(format!("\u{2026} and {} more", titles.len() - SHOWN));
+        }
+        let _ = state
+            .db
+            .add_source_event(&crate::models::SourceEvent {
+                id: new_id(),
+                notebook_id: folder.notebook_id.clone(),
+                source_id: folder.id.clone(),
+                source_title: folder.title.clone(),
+                kind: kind.into(),
+                detail,
+                diff: lines.join("\n"),
+                at: now(),
+            })
+            .await;
+    }
 }
 
 /// A cloud-storage sync root the user can pick a subfolder from. `provider` is
@@ -7402,6 +7462,8 @@ pub(crate) fn build_commission(
         named => named.to_string(),
     };
     Ok(ReportSchedule {
+        watch_sources: String::new(),
+        watch_kinds: String::new(),
         id: new_id(),
         notebook_id: notebook_id.to_string(),
         name,
@@ -7541,6 +7603,8 @@ async fn create_schedule_reply(
         }
     };
     let schedule = ReportSchedule {
+        watch_sources: String::new(),
+        watch_kinds: String::new(),
         id: new_id(),
         notebook_id: notebook_id.to_string(),
         name: name.trim().to_string(),
@@ -8125,6 +8189,8 @@ async fn try_tool_route(
                     &schedule.trigger,
                     schedule.interval_secs,
                     schedule.enabled,
+                    &schedule.watch_sources,
+                    &schedule.watch_kinds,
                 )
                 .await
             {

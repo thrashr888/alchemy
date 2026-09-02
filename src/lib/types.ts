@@ -456,6 +456,10 @@ export interface ReportSchedule {
   notBefore: number;
   intervalSecs: number;
   enabled: boolean;
+  /** Change-trigger filters (docs/RFC-events.md §5): space-separated source
+   *  ids and event kinds; empty = any. Ignored unless trigger is "change". */
+  watchSources: string;
+  watchKinds: string;
   lastRunAt: number;
   createdAt: number;
 }
@@ -549,12 +553,23 @@ export interface RegistryCard {
 
 /** One observed source change (watchers, RFC-night-shift): written by the
  *  refresh paths, read by the Brief, the Staff section, and agents. */
+/** Every SourceEvent.kind a producer writes (docs/RFC-events.md §1). */
+export const EVENT_KINDS = [
+  "added",
+  "updated",
+  "removed",
+  "unreachable",
+  "completed",
+  "moved",
+] as const;
+export type EventKind = (typeof EVENT_KINDS)[number];
+
 export interface SourceEvent {
   id: string;
   notebookId: string;
   sourceId: string;
   sourceTitle: string;
-  kind: string;
+  kind: EventKind | string;
   detail: string;
   /** Capped ±-prefixed line excerpt; empty when nothing textual changed. */
   diff: string;

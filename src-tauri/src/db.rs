@@ -453,7 +453,12 @@ impl Db {
         // Commissions (docs/RFC-night-shift-area.md §1). Zero means "the next
         // pass", which is the right reading for every schedule that predates
         // the column.
-        self.add_i64_column(T_REPORTS, "not_before", "0").await
+        self.add_i64_column(T_REPORTS, "not_before", "0").await?;
+        // Standing-question filters (docs/RFC-events.md §5). Empty means
+        // "any", which is exactly what every pre-filter schedule meant.
+        self.add_string_column(T_REPORTS, "watch_sources", "")
+            .await?;
+        self.add_string_column(T_REPORTS, "watch_kinds", "").await
     }
 
     /// Lateness came after receipts did; 0 reads as "not recorded", which is
@@ -3854,8 +3859,15 @@ impl Db {
             let enabled = i64_col(b, "enabled")?;
             let last = i64_col(b, "last_run_at")?;
             let created = i64_col(b, "created_at")?;
+            let watch_sources = opt_str_col(b, "watch_sources");
+            let watch_kinds = opt_str_col(b, "watch_kinds");
+            let opt = |col: Option<&StringArray>, i: usize| {
+                col.map(|c| c.value(i).to_string()).unwrap_or_default()
+            };
             for i in 0..b.num_rows() {
                 out.push(ReportSchedule {
+                    watch_sources: opt(watch_sources, i),
+                    watch_kinds: opt(watch_kinds, i),
                     id: id.value(i).to_string(),
                     notebook_id: nb.value(i).to_string(),
                     name: name.value(i).to_string(),
@@ -4281,6 +4293,8 @@ impl Db {
         trigger: &str,
         interval_secs: i64,
         enabled: bool,
+        watch_sources: &str,
+        watch_kinds: &str,
     ) -> Result<()> {
         let tbl = self.conn.open_table(T_REPORTS).execute().await?;
         tbl.update()
@@ -4291,6 +4305,8 @@ impl Db {
             .column("trigger", format!("'{}'", esc(trigger)))
             .column("interval_secs", interval_secs.to_string())
             .column("enabled", i64::from(enabled).to_string())
+            .column("watch_sources", format!("'{}'", esc(watch_sources)))
+            .column("watch_kinds", format!("'{}'", esc(watch_kinds)))
             .execute()
             .await?;
         Ok(())
@@ -5023,6 +5039,8 @@ fn reports_schema() -> SchemaRef {
         Field::new("enabled", DataType::Int64, false),
         Field::new("last_run_at", DataType::Int64, false),
         Field::new("created_at", DataType::Int64, false),
+        Field::new("watch_sources", DataType::Utf8, false),
+        Field::new("watch_kinds", DataType::Utf8, false),
     ]))
 }
 
@@ -5041,6 +5059,8 @@ fn report_batch(schema: &SchemaRef, r: &ReportSchedule) -> Result<RecordBatch> {
             Arc::new(Int64Array::from(vec![i64::from(r.enabled)])),
             Arc::new(Int64Array::from(vec![r.last_run_at])),
             Arc::new(Int64Array::from(vec![r.created_at])),
+            Arc::new(StringArray::from(vec![r.watch_sources.clone()])),
+            Arc::new(StringArray::from(vec![r.watch_kinds.clone()])),
         ],
     )?)
 }

@@ -720,6 +720,8 @@ export const api = {
     prompt: string,
     trigger: string,
     intervalSecs: number,
+    watchSources = "",
+    watchKinds = "",
   ) =>
     run(
       cmd<ReportSchedule>("create_report_schedule", {
@@ -729,6 +731,8 @@ export const api = {
         prompt,
         trigger,
         intervalSecs,
+        watchSources,
+        watchKinds,
       }),
     ),
   updateReportSchedule: (
@@ -739,6 +743,8 @@ export const api = {
     trigger: string,
     intervalSecs: number,
     enabled: boolean,
+    watchSources = "",
+    watchKinds = "",
   ) =>
     run(
       cmd<void>("update_report_schedule", {
@@ -749,6 +755,8 @@ export const api = {
         trigger,
         intervalSecs,
         enabled,
+        watchSources,
+        watchKinds,
       }),
     ),
   deleteReportSchedule: (id: string) =>

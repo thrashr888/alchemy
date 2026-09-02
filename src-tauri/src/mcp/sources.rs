@@ -207,9 +207,24 @@ struct SetImageReq {
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 struct ActivityReq {
     /// Look-back window in hours (default 24, capped to the 30-day event
-    /// window the table keeps).
+    /// window the table keeps). Ignored when `since` is given.
     #[serde(default)]
     hours: Option<u32>,
+    /// Exact cursor: only events with a millisecond timestamp after this.
+    /// Pass the newest `at` you have seen to read just the delta.
+    #[serde(default)]
+    since: Option<i64>,
+    /// Only events in this notebook.
+    #[serde(default)]
+    notebook_id: Option<String>,
+    /// Only these event kinds ("added", "updated", "removed", "unreachable",
+    /// "completed", "moved").
+    #[serde(default)]
+    kinds: Option<Vec<String>>,
+    /// Only events on these source ids (a folder or feed parent's id covers
+    /// what arrived under it).
+    #[serde(default)]
+    source_ids: Option<Vec<String>>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -228,20 +243,37 @@ impl AlchemyMcp {
     // -- Sources --
 
     #[tool(
-        description = "Recent source-change events across ALL notebooks (what the resident scheduler's resyncs observed): each event has notebook_id, source_id, source_title, kind, a short detail, and a millisecond timestamp, newest first. The same signal the Morning Brief's \"what changed\" reads. Default window 24 hours."
+        description = "Recent source-change events across ALL notebooks (what the resident scheduler's resyncs and sweeps observed): each event has notebook_id, source_id, source_title, kind (added, updated, removed, unreachable, completed, moved), a short detail, a capped diff or title list, and a millisecond timestamp `at`, newest first. The same signal the Morning Brief's \"what changed\" and change-triggered reports read. Default window 24 hours; to poll for deltas pass `since` = the newest `at` you have seen, and narrow with notebook_id, kinds, or source_ids."
     )]
     async fn list_source_events(
         &self,
-        Parameters(ActivityReq { hours }): Parameters<ActivityReq>,
+        Parameters(ActivityReq {
+            hours,
+            since,
+            notebook_id,
+            kinds,
+            source_ids,
+        }): Parameters<ActivityReq>,
     ) -> Result<CallToolResult, McpError> {
-        let hours = i64::from(hours.unwrap_or(24));
-        let since = commands::now() - hours * 60 * 60 * 1000;
-        let events = self
+        let since = since.unwrap_or_else(|| {
+            let hours = i64::from(hours.unwrap_or(24));
+            commands::now() - hours * 60 * 60 * 1000
+        });
+        let mut events = self
             .state()
             .db
             .source_events_since(since)
             .await
             .map_err(|e| invalid(format!("{e:#}")))?;
+        if let Some(nb) = notebook_id.filter(|s| !s.is_empty()) {
+            events.retain(|e| e.notebook_id == nb);
+        }
+        if let Some(kinds) = kinds.filter(|k| !k.is_empty()) {
+            events.retain(|e| kinds.contains(&e.kind));
+        }
+        if let Some(ids) = source_ids.filter(|s| !s.is_empty()) {
+            events.retain(|e| ids.contains(&e.source_id));
+        }
         json_result(&events)
     }
 
