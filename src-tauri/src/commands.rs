@@ -878,6 +878,30 @@ pub(crate) fn classify_model_error(raw: &str) -> Option<String> {
         );
     }
 
+    // Ollama accepted the request and then went quiet past the deadline a
+    // healthy server meets (`Ollama::run_stream`): the runner is stuck.
+    // `ollama stop <model>` drops that runner; the next request reloads it.
+    if lower.starts_with("ollama: ")
+        && (lower.contains(" sent nothing for ") || lower.contains(" stalled mid-answer "))
+    {
+        let model = raw["ollama: ".len()..]
+            .split(' ')
+            .next()
+            .filter(|m| is_safe_model_name(m))
+            .map(str::to_string);
+        return Some(match model {
+            Some(m) => format!(
+                "Ollama took the question but never answered — “{m}” looks stuck. \
+                 Fix: open Terminal, run `ollama stop {m}`, then retry here. Or pick \
+                 another model in Settings → Models."
+            ),
+            None => "Ollama took the question but never answered — the model looks \
+                     stuck. Restart Ollama and retry, or pick another model in \
+                     Settings → Models."
+                .into(),
+        });
+    }
+
     // A model-shaped timeout: still loading into memory, or holding the GPU
     // for another job. Scoped to provider-ish errors so a slow source fetch
     // during import never gets model advice.
@@ -954,6 +978,7 @@ pub(crate) fn terminal_command_allowed(command: &str) -> bool {
     // AppleScript string or the shell.
     command
         .strip_prefix("ollama pull ")
+        .or_else(|| command.strip_prefix("ollama stop "))
         .is_some_and(is_safe_model_name)
 }
 

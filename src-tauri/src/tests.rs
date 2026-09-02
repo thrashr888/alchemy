@@ -1145,3 +1145,30 @@ fn gap_gate_opens_only_for_linked_or_unmentioned_subjects() {
         "two subjects the pool never mentions"
     );
 }
+
+/// A stuck Ollama runner (`Ollama::run_stream`'s deadlines) reads as a
+/// Terminal fix the error row can offer — `ollama stop <model>` — and that
+/// command passes the Terminal allowlist while an unsafe name does not.
+#[test]
+fn stuck_ollama_reads_as_a_stop_fix() {
+    let advice = crate::commands::classify_model_error(
+        "ollama: gemma4:12b-mlx sent nothing for 90s (model was loaded) — it looks stuck",
+    )
+    .expect("classified");
+    assert!(
+        advice.contains("run `ollama stop gemma4:12b-mlx`"),
+        "{advice}"
+    );
+    assert!(advice.contains("Settings → Models"), "{advice}");
+    let stalled = crate::commands::classify_model_error(
+        "ollama: bonsai stalled mid-answer for 30s — it looks stuck",
+    )
+    .expect("classified");
+    assert!(stalled.contains("`ollama stop bonsai`"), "{stalled}");
+    assert!(crate::commands::terminal_command_allowed(
+        "ollama stop gemma4:12b-mlx"
+    ));
+    assert!(!crate::commands::terminal_command_allowed(
+        "ollama stop x; rm -rf ~"
+    ));
+}

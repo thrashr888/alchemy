@@ -1235,7 +1235,6 @@ pub(crate) async fn suggest_now(
     // strip re-sorts itself on the registry bump.
     let db = db.clone();
     tauri::async_runtime::spawn(async move {
-        let ai = ai.background();
         if let Err(err) = triage_suggested_cards(&db, &ai).await {
             crate::note!("registry triage failed: {err:#}");
         }
