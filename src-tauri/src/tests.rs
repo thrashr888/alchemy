@@ -1172,3 +1172,34 @@ fn stuck_ollama_reads_as_a_stop_fix() {
         "ollama stop x; rm -rf ~"
     ));
 }
+
+/// `gap_query_from_reply`: NONE anywhere, a parroted instruction, and a
+/// restated question all read as "no gap"; a targeted query passes.
+#[test]
+fn gap_reply_guards_reject_none_parrots_and_restatements() {
+    let q = "compare how guests get wifi at home versus in the office";
+    let gap = crate::commands::gap_query_from_reply;
+    assert_eq!(gap(q, "NONE"), None);
+    assert_eq!(
+        gap(q, "Everything needed is here, so reply NONE instead."),
+        None
+    );
+    assert_eq!(
+        gap(
+            q,
+            "ONLY the search query text for the missing evidence — a search that merely \
+             restates the question is useless; reply NONE instead"
+        ),
+        None,
+        "the prompt's own instruction is not a query"
+    );
+    assert_eq!(
+        gap(q, "how do guests get wifi at home versus in the office?"),
+        None,
+        "restatement"
+    );
+    assert_eq!(
+        gap(q, "\"office guest network passphrase\".").as_deref(),
+        Some("office guest network passphrase")
+    );
+}

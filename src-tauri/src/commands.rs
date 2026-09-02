@@ -2367,6 +2367,58 @@ pub(crate) fn gap_gate(question: &str, pool: &[Citation]) -> Option<&'static str
     None
 }
 
+/// The gap query a Small-role reply carries, or None when the reply says
+/// NONE, restates the question, or parrots the prompt. Three guards, each
+/// found live: small models restate the question instead of answering
+/// NONE (Jaccard ≈0.7 catches that while a targeted query, which reuses
+/// only part of the question's words, passes at ≈0.4); they answer
+/// "…reply NONE instead" with NONE buried mid-sentence; and bonsai once
+/// echoed the instruction itself — "ONLY the search query text for the
+/// missing evidence…" — which then ran as a search.
+pub(crate) fn gap_query_from_reply(question: &str, reply: &str) -> Option<String> {
+    let gq = reply
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .trim_matches(|c: char| c == '"' || c == '.' || c.is_whitespace())
+        .to_string();
+    if gq.is_empty() || gq.len() > 200 {
+        return None;
+    }
+    let lower = gq.to_ascii_lowercase();
+    if lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| w == "none")
+    {
+        return None;
+    }
+    const PARROT: &[&str] = &[
+        "search query",
+        "missing evidence",
+        "restates the question",
+        "excerpts",
+        "second entity",
+    ];
+    if PARROT.iter().any(|p| lower.contains(p)) {
+        return None;
+    }
+    let words = |s: &str| -> std::collections::HashSet<String> {
+        s.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.len() > 2)
+            .map(str::to_string)
+            .collect()
+    };
+    let (qw, gw) = (words(question), words(&gq));
+    let overlap = qw.intersection(&gw).count();
+    let union = qw.union(&gw).count();
+    if union > 0 && overlap * 10 >= union * 6 {
+        return None;
+    }
+    Some(gq)
+}
+
 /// Iterative retrieval's gap loop (RFC-judged-evals §4.3): show the small
 /// tier the first-pass excerpts, ask what ONE search would find the
 /// missing evidence, run it, and merge. Self-gating — NONE means the
@@ -2413,37 +2465,7 @@ pub(crate) async fn gap_retrieve(
         )
         .await
         .ok()?;
-    let gq = reply
-        .text
-        .lines()
-        .next()
-        .unwrap_or("")
-        .trim()
-        .trim_matches('"')
-        .trim_end_matches('.')
-        .to_string();
-    if gq.is_empty() || gq.len() > 200 || gq.to_ascii_lowercase().starts_with("none") {
-        return None;
-    }
-    // Rephrase guard (found live, not in the harness): small models
-    // sometimes restate the question instead of answering NONE — a second
-    // search for the same thing buys nothing. Jaccard word similarity
-    // catches the restatement (≈0.7) while sparing a targeted gap query,
-    // which reuses only PART of the question's words (≈0.4 on the live
-    // comparison case) — plain question-overlap would kill both.
-    let words = |s: &str| -> std::collections::HashSet<String> {
-        s.to_lowercase()
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|w| w.len() > 2)
-            .map(str::to_string)
-            .collect()
-    };
-    let (qw, gw) = (words(question), words(&gq));
-    let overlap = qw.intersection(&gw).count();
-    let union = qw.union(&gw).count();
-    if union > 0 && overlap * 10 >= union * 6 {
-        return None;
-    }
+    let gq = gap_query_from_reply(question, &reply.text)?;
     let qvec = ai.embed_one(&gq).await.ok()?;
     let extra = db
         .search_chunks_trace(notebook_id, qvec, &gq, fetch_k, source_ids)
@@ -8644,6 +8666,9 @@ pub async fn send_message(
     source_ids: Option<Vec<String>>,
     provider_override: Option<String>,
 ) -> Result<Message, String> {
+    // A person is waiting: background Small-role calls stand aside
+    // until this returns (`crate::foreground`).
+    let _foreground = crate::foreground::begin();
     let content = content.trim().to_string();
     if content.is_empty() {
         return Err("Message is empty".into());
@@ -9021,6 +9046,9 @@ pub async fn send_message_agentic(
     config: Option<ChatConfig>,
     source_ids: Option<Vec<String>>,
 ) -> Result<Message, String> {
+    // A person is waiting: background Small-role calls stand aside
+    // until this returns (`crate::foreground`).
+    let _foreground = crate::foreground::begin();
     let content = content.trim().to_string();
     if content.is_empty() {
         return Err("Message is empty".into());
@@ -10380,6 +10408,9 @@ pub async fn generate_artifact(
     prompt: Option<String>,
     source_ids: Option<Vec<String>>,
 ) -> Result<Note, String> {
+    // A person is waiting: background Small-role calls stand aside
+    // until this returns (`crate::foreground`).
+    let _foreground = crate::foreground::begin();
     let prompt = prompt.unwrap_or_default();
     let cancel = state.begin_generation(&format!("artifact:{}", window.label()));
     let produced = tokio::select! {
@@ -13320,6 +13351,9 @@ pub async fn ask_everything(
     // thread back); absent means those simply have nothing to act on.
     thread_id: Option<String>,
 ) -> Result<MetaAnswer, String> {
+    // A person is waiting: background Small-role calls stand aside
+    // until this returns (`crate::foreground`).
+    let _foreground = crate::foreground::begin();
     touch_activity();
     let question = question.trim().to_string();
     if question.is_empty() {

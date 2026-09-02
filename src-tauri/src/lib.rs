@@ -16,6 +16,7 @@ mod dragout;
 mod examples;
 mod export;
 mod filesearch;
+mod foreground;
 mod freshness;
 mod genqueue;
 mod gist;
