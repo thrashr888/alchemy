@@ -3921,7 +3921,11 @@ impl Db {
     pub async fn add_source_event(&self, event: &SourceEvent) -> Result<()> {
         let schema = source_events_schema();
         let batch = source_event_batch(&schema, event)?;
-        self.add_batch(T_SOURCE_EVENTS, schema, batch).await
+        self.add_batch(T_SOURCE_EVENTS, schema, batch).await?;
+        // The one write point doubles as the live stream's fan-out
+        // (docs/RFC-events.md §8): agents tailing /events see it now.
+        crate::events::publish(event);
+        Ok(())
     }
 
     /// Events newer than `since`, newest first. Prunes the rolling window on

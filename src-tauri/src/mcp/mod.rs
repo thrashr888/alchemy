@@ -217,14 +217,22 @@ async fn start_server(
     // plus margin.
     let mut sessions = LocalSessionManager::default();
     sessions.session_config.keep_alive = Some(std::time::Duration::from_secs(30 * 60));
+    let handle = app.clone();
     let service = StreamableHttpService::new(
         move || Ok(AlchemyMcp::new(app.clone())),
         sessions.into(),
         StreamableHttpServerConfig::default(),
     );
-    let router = axum::Router::new().nest_service("/mcp", service).layer(
-        axum::middleware::from_fn_with_state(token, authorize_request),
-    );
+    // /events (docs/RFC-events.md §8) sits beside /mcp under the same
+    // bearer + no-Origin gate: a browser page can never open the stream.
+    let router = axum::Router::new()
+        .route("/events", axum::routing::get(crate::events::sse))
+        .with_state(handle)
+        .nest_service("/mcp", service)
+        .layer(axum::middleware::from_fn_with_state(
+            token,
+            authorize_request,
+        ));
 
     let ct = shutdown.clone();
     tauri::async_runtime::spawn(async move {
@@ -253,6 +261,7 @@ fn write_port_file(app: &AppHandle, port: u16, token: &str) -> anyhow::Result<()
     let info = serde_json::json!({
         "port": port,
         "url": format!("http://127.0.0.1:{port}/mcp"),
+        "events_url": format!("http://127.0.0.1:{port}/events"),
         "pid": std::process::id(),
         "token": token,
     });

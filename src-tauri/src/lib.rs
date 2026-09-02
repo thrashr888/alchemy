@@ -13,6 +13,7 @@ mod diagnostics;
 mod dockmenu;
 #[cfg(target_os = "macos")]
 mod dragout;
+mod events;
 mod examples;
 mod export;
 mod feeds;

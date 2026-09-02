@@ -1,6 +1,8 @@
 # RFC: Events — feeds, watchers, arrivals, and live cards
 
-Status: draft, for review (2026-09-01). Tracking: `bd show alchemy-release-jcd`.
+Status: implementing on `cld/events` (2026-09-02) — phases 1–4 and 6 landed
+and live-verified; phase 5 (cider deltas) waits on the cider 0.5 release.
+Tracking: `bd show alchemy-release-jcd`.
 Origin: "explore bringing in realtime or event-based data." Companion to
 [RFC-night-shift.md](RFC-night-shift.md) (the scheduler and `source_events`),
 [RFC-living-notebook.md](RFC-living-notebook.md) (growth, consent tiers), and
@@ -354,7 +356,9 @@ Each phase is its own change with its own gate, in dependency order:
    `updated` diff of the list.
 6. **Agent stream** — `/events` SSE, CLI `events --follow`, ACP config.
    *Gate:* `curl -N` tails a live `added` event within a second of the
-   poller writing it.
+   poller writing it. (Landed: `events.rs`, `alchemy events [--follow]`,
+   `events_url` in the discovery file. The ACP `session/new` hand-off is
+   still open.)
 
 Phases 1–3 are the product; 4–6 are cost and reach. Nothing here is a
 timeline.
