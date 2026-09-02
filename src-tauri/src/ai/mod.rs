@@ -577,6 +577,9 @@ pub struct Ai {
     /// engine. A gateway or agent CLI is the user's *chat* spend; a sweep
     /// that kept running while the local small model was down would spend
     /// it silently, a dozen calls a minute (it did, 2026-09-01).
+    /// A background handle: every Small-role call first waits for the
+    /// foreground queue to clear (`crate::foreground`).
+    yields: bool,
     /// Ceiling on one Small-role call — set by `helpers()` for the calls a
     /// person is waiting behind (gap query, outline pick). None = the
     /// engine's own transport timeout.
@@ -749,6 +752,7 @@ impl Ai {
             crate::inference::rerank::XencModel::Small,
         );
         Self {
+            yields: false,
             small_timeout: None,
             config,
             router,
@@ -1035,6 +1039,9 @@ impl Ai {
                 _ => true,
             };
             if usable {
+                if self.yields {
+                    crate::foreground::wait_idle().await;
+                }
                 let outcome = match self.small_timeout {
                     Some(limit) => match tokio::time::timeout(limit, engine.chat(messages)).await {
                         Ok(res) => res,
@@ -1061,6 +1068,17 @@ impl Ai {
     /// when it is wedged, its requests die at its own 10-minute mark, and a
     /// gap query that waited the whole way put the first token 600 s out.
     pub const HELPER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// This handle for background work — sweeps, the nightly weave, card
+    /// triage and enrichment. Its Small-role calls go last: each one waits
+    /// for every foreground request (`crate::foreground::Guard`) to finish
+    /// before it takes the local model's single slot. Measured need: a
+    /// sweep's back-to-back 3–4 s calls pushed a chat helper past its
+    /// ten-second ceiling on a healthy server.
+    pub fn background(mut self) -> Self {
+        self.yields = true;
+        self
+    }
 
     /// This handle for the helpers that run *before* an answer a person is
     /// waiting on — the gap query, the outline pick. The Small role gets
