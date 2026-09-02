@@ -1,7 +1,8 @@
 # RFC: Events — feeds, watchers, arrivals, and live cards
 
 Status: implementing on `cld/events` (2026-09-02) — phases 1–4 and 6 landed
-and live-verified; phase 5 (cider deltas) waits on the cider 0.5 release.
+and live-verified; phase 5 (Mac item events) landed against cider 0.6 and
+awaits its live check.
 Tracking: `bd show alchemy-release-jcd`.
 Origin: "explore bringing in realtime or event-based data." Companion to
 [RFC-night-shift.md](RFC-night-shift.md) (the scheduler and `source_events`),
@@ -202,15 +203,26 @@ Debounce matters more than latency: a folder sync tool writing 400 files
 must land as one rescan and one coalesced batch of events, or it recreates
 the Lance scan storms.
 
-**Mac events via cider.** cider reads the Reminders and Calendar SQLite
-stores directly and already returns stable IDs and `modified_at`. Upstream
-(`cider_lib`, fix-there-then-bump per house rule), each list call gains
-`since: Option<DateTime>`; Alchemy keeps the last high-water mark per Mac
-source and asks for the delta, producing `added`/`completed`/`moved`/
-`updated` per item instead of one whole-list diff. A later `cider watch`
-that FSEvents the store files and yields a change stream slots in behind
-the same call, so Alchemy's side does not change twice. Mail stays out as
-a source, as RFC-cider-tools decided; nothing here reopens that.
+**Mac events via cider.** cider 0.6 (linked from its git tag until it
+publishes) gives two things: `since: Option<DateTime>` on the Reminders,
+Calendar, and Notes list calls, and `watch` — FSEvents over the directories
+those apps write to, folded into one event per store. Alchemy takes the
+watch (`macwatch.rs`): one resident task over Reminders, Calendar, and
+Notes, debounced two seconds per provider, and on an event every Mac source
+of that provider re-fetches through the ordinary path — one cider read and
+a hash compare each, a reingest only where the rendering moved. The
+fifteen-minute sweep cadence stays underneath it. Item-level events do not
+use `since`: the stored rendering already carries the ids, due dates, days,
+and times a delta needs, so `mac::item_events` diffs the old and new
+renderings and writes `completed` / `moved` / `added` / `removed` per item
+— the same answer whether the change arrived through the watch, the sweep,
+or one of Alchemy's own write-backs, and no high-water mark to keep per
+source. A calendar window slides every fetch, so days that fell off the
+front and days that rolled in at the back are not events. When the items
+have nothing to say (a note, a stocks table, an edited reminder note) the
+generic `updated` diff is written as before; more than 20 item events in
+one resync collapse into one `updated` carrying the count. Mail stays out
+as a source, as RFC-cider-tools decided; nothing here reopens that.
 
 ### 5. Triggers: filters on change-triggered reports
 
@@ -356,7 +368,12 @@ Each phase is its own change with its own gate, in dependency order:
    notebook's folder is a source within 5 seconds.
 5. **cider deltas** — `since` upstream, release, bump; item-level Mac
    events. *Gate:* completing a reminder writes one `completed` row, not an
-   `updated` diff of the list.
+   `updated` diff of the list. (Landed: cider 0.6 from its git tag,
+   `macwatch.rs` over the Reminders/Calendar/Notes stores,
+   `mac::item_events` diffing the stored and fresh renderings,
+   `reingest_with(quiet)` so an item-named resync writes no generic
+   `updated`. The upstream `since` filters are available and unused — the
+   rendering diff needs no high-water mark.)
 6. **Agent stream** — `/events` SSE, CLI `events --follow`, ACP config.
    *Gate:* `curl -N` tails a live `added` event within a second of the
    poller writing it. (Landed: `events.rs`, `alchemy events [--follow]`,
@@ -398,6 +415,13 @@ timeline.
 - **Card parse drift.** cider output changing shape breaks the stocks card
   silently into "no card". Fallback is prose, so nothing is lost, and a
   fixture test per card pins the format.
+- **cider prints to stderr from library paths.** `watch` announces itself
+  and notes a missing store with `eprintln!`, and `watch_via`'s CLI branch
+  does the same; `eprintln!` panics on a closed stderr and has aborted this
+  app from an FFI callback before (diagnostics.rs). `macwatch.rs` therefore
+  calls `watch` only, filters the stores for presence before calling it, and
+  skips the watch when stderr is already closed. The fix belongs upstream —
+  a quiet library path, or a logging hook — and is a cider follow-up.
 
 ## Decisions (2026-09-01)
 

@@ -2672,6 +2672,24 @@ pub(crate) async fn reingest(
     code_ctx: Option<&str>,
     embed: bool,
 ) -> anyhow::Result<Source> {
+    reingest_with(state, existing, extracted, code_ctx, embed, false).await
+}
+
+/// [`reingest`] with the event write under the caller's control. `quiet`
+/// means the caller has already named what changed item by item — the Mac
+/// resync's `completed` / `moved` / `added` rows (docs/RFC-events.md §1,
+/// phase 5) — and the generic `updated` diff would be the same arrival
+/// twice: the parent rule below, made explicit for the one caller that
+/// knows more than the diff does. Everything else about the refresh (the
+/// row, the chunks, the weave, the registry match) is unchanged.
+pub(crate) async fn reingest_with(
+    state: &AppState,
+    existing: &Source,
+    extracted: ingest::Extracted,
+    code_ctx: Option<&str>,
+    embed: bool,
+    quiet: bool,
+) -> anyhow::Result<Source> {
     // Classify against the stored URL: text edits arrive via extract_pasted
     // with an empty extracted.url, which would drop the Google-doc exemption.
     let (status, error) = classify(&existing.source_type, &existing.url, &extracted.text);
@@ -2811,7 +2829,7 @@ pub(crate) async fn reingest(
         existing.source_type.as_str(),
         "folder" | "obsidian" | "git" | "notion" | "feed"
     );
-    if !is_parent {
+    if !is_parent && !quiet {
         let _ = state
             .db
             .add_source_event(&crate::models::SourceEvent {
@@ -4118,9 +4136,40 @@ pub async fn complete_mac_reminder(
 /// Post-write resync: fetch the item's current state and re-embed it.
 pub(crate) async fn resync_mac_source(
     state: &AppState,
-    mut existing: Source,
+    existing: Source,
 ) -> Result<Source, String> {
     let (_, text) = e(crate::mac::fetch(&existing.url).await)?;
+    resync_mac_text(state, existing, text).await
+}
+
+/// Item events per resync before they collapse into one `updated` with a
+/// count — a list rebuilt wholesale is one arrival, not forty.
+const MAC_ITEM_EVENTS_MAX: usize = 20;
+
+/// The Mac resync's shared tail: `text` is the fresh rendering of
+/// `existing`, already fetched. Reads the stored rendering back, names what
+/// changed item by item (`mac::item_events`), re-embeds, and writes one
+/// event per item — or, when the items had nothing to say (a note, a stocks
+/// table, an edited reminder note), lets `reingest` write its generic
+/// `updated` diff as before. Every path that refreshes a Mac source ends
+/// here — the store watch (macwatch.rs), the minute sweep, and our own
+/// write-backs — so an event reads the same whichever one saw the change.
+pub(crate) async fn resync_mac_text(
+    state: &AppState,
+    mut existing: Source,
+    text: String,
+) -> Result<Source, String> {
+    // The sweep hands over a metadata-only row, the write-backs a full one;
+    // either way the stored text is what the items (and the generic diff)
+    // are measured against.
+    if existing.content.is_empty() {
+        existing.content = state
+            .db
+            .source_content(&existing.id)
+            .await
+            .unwrap_or_default();
+    }
+    let events = crate::mac::item_events(&existing.url, &existing.content, &text);
     existing.mtime = crate::mac::content_stamp(&text);
     let extracted = ingest::Extracted {
         feeds: Vec::new(),
@@ -4131,7 +4180,108 @@ pub(crate) async fn resync_mac_source(
         url: existing.url.clone(),
         text,
     };
-    e(reingest(state, &existing, extracted, None, true).await)
+    let quiet = !events.is_empty();
+    let updated = e(reingest_with(state, &existing, extracted, None, true, quiet).await)?;
+    note_mac_item_events(state, &existing, &updated.title, events).await;
+    Ok(updated)
+}
+
+/// One `source_events` row per item event, capped at [`MAC_ITEM_EVENTS_MAX`];
+/// past the cap, one `updated` row carries the count and the first lines.
+/// Best-effort, like every event write: a miss never fails the resync.
+async fn note_mac_item_events(
+    state: &AppState,
+    source: &Source,
+    title: &str,
+    events: Vec<(&'static str, String)>,
+) {
+    let row = |kind: &str, detail: String, diff: String| crate::models::SourceEvent {
+        id: new_id(),
+        notebook_id: source.notebook_id.clone(),
+        source_id: source.id.clone(),
+        source_title: title.to_string(),
+        kind: kind.into(),
+        detail,
+        diff,
+        at: now(),
+    };
+    if events.len() > MAC_ITEM_EVENTS_MAX {
+        let n = events.len();
+        let lines: Vec<String> = events
+            .into_iter()
+            .take(MAC_ITEM_EVENTS_MAX)
+            .map(|(kind, detail)| format!("{kind} \u{00b7} {detail}"))
+            .collect();
+        let _ = state
+            .db
+            .add_source_event(&row(
+                "updated",
+                format!("Mac item synced \u{00b7} {n} items changed"),
+                lines.join("\n"),
+            ))
+            .await;
+        return;
+    }
+    for (kind, detail) in events {
+        let _ = state
+            .db
+            .add_source_event(&row(kind, detail, String::new()))
+            .await;
+    }
+}
+
+/// Every Mac source of one provider, re-fetched now: the store watch
+/// (macwatch.rs) saw Reminders, Calendar, or Notes write, so the sweep's
+/// fifteen-minute cadence does not apply. Archived notebooks sit out, as in
+/// the sweep. One cider read and a hash compare per source; only a changed
+/// rendering reingests (and names its items). Emits `sources://changed` per
+/// notebook that changed, the way the sweep does. Waits for the scan lock —
+/// a manual import ahead of it is a reason to queue, not to drop a change.
+pub(crate) async fn resync_mac_provider(
+    app: &AppHandle,
+    state: &AppState,
+    provider: &str,
+) -> Result<FolderScan, String> {
+    let _guard = state.folder_scan_lock.lock().await;
+    let prefix = format!("cider://{provider}/");
+    let archived = state.db.archived_notebook_ids().await.unwrap_or_default();
+    let mut total = FolderScan::default();
+    let mut per_notebook: HashMap<String, FolderScan> = HashMap::new();
+    for src in e(state.db.all_mac_sources().await)? {
+        if !src.url.starts_with(&prefix) || archived.contains(&src.notebook_id) {
+            continue;
+        }
+        let text = match crate::mac::fetch(&src.url).await {
+            Ok((_, text)) => text,
+            Err(err) => {
+                // Transient (a permission prompt, an app mid-write): the
+                // sweep retries on its own cadence.
+                crate::note!("macwatch: failed to fetch {}: {err:#}", src.url);
+                continue;
+            }
+        };
+        if crate::mac::content_stamp(&text) == src.mtime {
+            continue;
+        }
+        let scan = per_notebook.entry(src.notebook_id.clone()).or_default();
+        match resync_mac_text(state, src.clone(), text).await {
+            Ok(_) => {
+                scan.updated += 1;
+                total.updated += 1;
+            }
+            Err(err) => {
+                crate::note!("macwatch: failed to re-embed {}: {err:#}", src.url);
+                scan.failed += 1;
+                total.failed += 1;
+            }
+        }
+    }
+    for (notebook_id, scan) in per_notebook {
+        if scan.changed() {
+            let _ = app.emit("sources://changed", SourcesChanged { notebook_id, scan });
+        }
+    }
+    Ok(total)
 }
 
 // ---- Folder sources --------------------------------------------------------
@@ -5820,19 +5970,8 @@ pub(crate) async fn resync_sources_filtered(
                     if stamp == src.mtime {
                         continue;
                     }
-                    let mut existing = src.clone();
-                    existing.mtime = stamp;
-                    let extracted = ingest::Extracted {
-                        feeds: Vec::new(),
-                        image_url: String::new(),
-                        author: String::new(),
-                        title: existing.title.clone(),
-                        source_type: "mac".to_string(),
-                        url: existing.url.clone(),
-                        text,
-                    };
                     let scan = per_notebook.entry(src.notebook_id.clone()).or_default();
-                    match reingest(state, &existing, extracted, None, true).await {
+                    match resync_mac_text(state, src.clone(), text).await {
                         Ok(_) => {
                             scan.updated += 1;
                             total.updated += 1;
