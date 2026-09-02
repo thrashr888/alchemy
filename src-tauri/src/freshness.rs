@@ -52,6 +52,18 @@ fn night_of(now: i64) -> i64 {
         .unwrap_or(now)
 }
 
+/// Quiet hours: 10 PM to 6 AM local. The heavy background stage (chunk
+/// enrichment over the whole corpus) runs only here. A laptop that is
+/// warm all afternoon because a sweep is polishing embeddings is a laptop
+/// whose owner turns the feature off; the polish can wait for the night.
+pub fn is_quiet_hours(now: i64) -> bool {
+    let dt = chrono::DateTime::from_timestamp_millis(now)
+        .map(|d| d.with_timezone(&chrono::Local))
+        .unwrap_or_else(chrono::Local::now);
+    let hour = chrono::Timelike::hour(&dt);
+    !(6..22).contains(&hour)
+}
+
 fn roll_if_new_night(now: i64) {
     let night = night_of(now);
     if NIGHT_STAMP.swap(night, Ordering::Relaxed) != night {
@@ -243,6 +255,28 @@ fn join_prose(parts: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// Quiet hours are a local-clock window: evenings and small hours in,
+    /// the working day out.
+    #[test]
+    fn quiet_hours_is_the_night_window() {
+        let at = |h: u32| {
+            chrono::Local::now()
+                .date_naive()
+                .and_hms_opt(h, 30, 0)
+                .expect("valid time")
+                .and_local_timezone(chrono::Local)
+                .earliest()
+                .expect("local time")
+                .timestamp_millis()
+        };
+        for h in [22, 23, 0, 3, 5] {
+            assert!(super::is_quiet_hours(at(h)), "{h}:30 is quiet");
+        }
+        for h in [6, 9, 12, 17, 21] {
+            assert!(!super::is_quiet_hours(at(h)), "{h}:30 is not quiet");
+        }
+    }
+
     use super::*;
 
     #[test]

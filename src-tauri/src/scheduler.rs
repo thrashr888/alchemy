@@ -41,6 +41,17 @@ const SNAPSHOT_EVERY_MS: i64 = 60 * 60 * 1000;
 static LAST_WEAVE: AtomicI64 = AtomicI64::new(0);
 const WEAVE_EVERY_MS: i64 = 60 * 60 * 1000;
 
+/// Epoch ms of the last tick-driven catch-up sweep (gists, tags, cards,
+/// hygiene). Imports and edits kick the same sweep the moment they land —
+/// that is the event path, and it is where almost all the work happens.
+/// The tick's copy exists for what those miss (a restart mid-sweep, a
+/// change made by another process), and once an hour is plenty for that.
+/// Every minute was a fan-spinning idle: a sweep that has converged still
+/// scans the corpus and asks the small model about anything new it finds,
+/// and the model it wakes stays resident for half an hour after.
+static LAST_SWEEP: AtomicI64 = AtomicI64::new(0);
+const SWEEP_EVERY_MS: i64 = 60 * 60 * 1000;
+
 /// Quit for real: mark the exit as intentional, then exit.
 pub fn request_quit(app: &AppHandle) {
     QUIT_REQUESTED.store(true, Ordering::Relaxed);
@@ -478,13 +489,19 @@ async fn run_pass(app: &AppHandle) {
     if crate::freshness::has_budget(&budget) {
         // Distillation, tags, and card suggestions converge even when no
         // fresh import kicks them — a restart mid-sweep used to strand
-        // untagged sources until the next import happened to arrive.
-        // Self-gating (SWEEPING), so a converged corpus is a cheap no-op.
-        crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
+        // untagged sources until the next import happened to arrive. Hourly
+        // from here (imports kick it immediately; see LAST_SWEEP), and the
+        // first tick after launch counts, so a restart still catches up.
+        if now_ms() - LAST_SWEEP.load(Ordering::Relaxed) >= SWEEP_EVERY_MS {
+            LAST_SWEEP.store(now_ms(), Ordering::Relaxed);
+            crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
 
-        // Source hygiene (docs/RFC-source-hygiene.md): re-fetch aging urls,
-        // count strikes on unreachable ones. Its own config gate lives inside.
-        crate::hygiene::spawn_sweep(app);
+            // Source hygiene (docs/RFC-source-hygiene.md): re-fetch aging
+            // urls, count strikes on unreachable ones. Its own config gate
+            // lives inside; the cadence it works to is days, so hourly is
+            // already generous.
+            crate::hygiene::spawn_sweep(app);
+        }
         // 2. Verification. The Weave already judges a source the moment it
         //    arrives; this catches the case that matters more — a watched
         //    page changed at 3 AM, and the conclusion it undermines was

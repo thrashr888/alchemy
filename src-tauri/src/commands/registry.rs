@@ -395,6 +395,46 @@ fn save_enrich_state(dir: &std::path::Path, state: &std::collections::HashMap<St
     }
 }
 
+/// Card suggestions, same idea: `<app-data>/registry-suggested.json`,
+/// notebook id → stamp of the gists it was last asked about.
+const SUGGEST_STATE_FILE: &str = "registry-suggested.json";
+
+fn load_suggest_state(dir: &std::path::Path) -> std::collections::HashMap<String, i32> {
+    std::fs::read_to_string(dir.join(SUGGEST_STATE_FILE))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_suggest_state(dir: &std::path::Path, state: &std::collections::HashMap<String, i32>) {
+    let write = || -> std::io::Result<()> {
+        std::fs::create_dir_all(dir)?;
+        std::fs::write(
+            dir.join(SUGGEST_STATE_FILE),
+            serde_json::to_vec(state).unwrap_or_default(),
+        )
+    };
+    if let Err(err) = write() {
+        crate::note!("registry: suggestion marker write failed: {err}");
+    }
+}
+
+/// What a notebook's suggestion pass saw: its sources' gists, by source
+/// and content hash, order independent. A new or re-distilled source
+/// changes it; so does removing one.
+fn suggest_stamp(
+    source_ids: &std::collections::HashSet<String>,
+    gists: &[crate::db::GistRow],
+) -> i32 {
+    let mut rows: Vec<String> = gists
+        .iter()
+        .filter(|g| source_ids.contains(&g.source_id))
+        .map(|g| format!("{}:{}", g.source_id, g.hash))
+        .collect();
+    rows.sort_unstable();
+    crate::gist::content_hash(&rows.join("\n"))
+}
+
 /// The stamp a card's enrichment carries: its confirmed attachments, order
 /// independent. Pending or removed attachments don't count — they're not
 /// read — so ruling on a suggestion re-opens the card exactly when it adds
@@ -676,6 +716,14 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
         return Ok(0);
     }
     let mut proposed = 0usize;
+    // Once per notebook per run, AND only when the notebook's gists have
+    // changed since it was last asked: the cast a notebook implies follows
+    // from its gists, so the same gists would draw the same proposals (and
+    // the same refusals). On disk, so a launch on an unchanged library
+    // asks nothing.
+    let dir = ai.data_dir().to_path_buf();
+    let mut asked = load_suggest_state(&dir);
+    let mut asked_dirty = false;
 
     for nb in db.list_notebooks().await? {
         {
@@ -685,6 +733,19 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
                 continue;
             }
         }
+        let source_ids: std::collections::HashSet<String> = db
+            .list_sources(&nb.id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        let stamp = suggest_stamp(&source_ids, &gists);
+        if asked.get(&nb.id) == Some(&stamp) {
+            continue;
+        }
+        asked.insert(nb.id.clone(), stamp);
+        asked_dirty = true;
         // Fetched per notebook, not once for the sweep: a card proposed for
         // the previous notebook must block the same name here, or every
         // notebook that shares a dependency mints its own copy of it.
@@ -693,6 +754,9 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
             .await
             .unwrap_or_default()
             .len();
+    }
+    if asked_dirty {
+        save_suggest_state(&dir, &asked);
     }
     if proposed > 0 {
         super::notify_changed("registry", None);
