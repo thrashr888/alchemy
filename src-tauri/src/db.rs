@@ -1364,6 +1364,12 @@ impl Db {
         self.query_sources(Some("source_type = 'url'"), false).await
     }
 
+    /// Feed parents (docs/RFC-events.md §2) — the poller's work list.
+    pub async fn all_feed_sources(&self) -> Result<Vec<Source>> {
+        self.query_sources(Some("source_type = 'feed'"), false)
+            .await
+    }
+
     /// Update a source's recorded file mtime without touching its chunks.
     pub async fn set_source_mtime(&self, source_id: &str, mtime: i64) -> Result<()> {
         let tbl = self.conn.open_table(T_SOURCES).execute().await?;

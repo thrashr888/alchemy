@@ -1431,6 +1431,7 @@ export const SOURCE_TYPE_LABEL: Record<Source["sourceType"], string> = {
   git: "Git repository",
   notion: "Notion pages",
   obsidian: "Obsidian vault",
+  feed: "Feed",
 };
 
 /** Git provenance parsed from the content header line the ingesters write

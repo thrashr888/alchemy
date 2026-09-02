@@ -688,6 +688,7 @@ async fn enrich_source(
     // used (chunk_source, boilerplate filter and all) so re-chunking lines up
     // 1:1 with the rows — ordinal i of the fresh chunks is row i.
     let extracted = crate::ingest::Extracted {
+        feeds: Vec::new(),
         image_url: String::new(),
         author: String::new(),
         title: source.title.clone(),

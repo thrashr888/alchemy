@@ -1380,7 +1380,14 @@ pub(crate) async fn store_extracted(
     } else {
         0
     };
-    store_new_source(state, notebook_id, extracted, "", mtime, None, true).await
+    // Tier-1 feed discovery rode in on the page (docs/RFC-events.md §2):
+    // remember it for the Grow pane's proposals — never auto-follow.
+    let feeds = extracted.feeds.clone();
+    let src = store_new_source(state, notebook_id, extracted, "", mtime, None, true).await?;
+    if !feeds.is_empty() {
+        crate::feeds::remember_discovered(state, notebook_id, &src, &feeds);
+    }
+    Ok(src)
 }
 
 /// Classify and persist a new source row IMMEDIATELY, then hand chunking and
@@ -1389,7 +1396,7 @@ pub(crate) async fn store_extracted(
 /// `parent_id` is set for folder children (which dedup by path, not
 /// content); `mtime` for any file-backed source; `code_ctx` is the
 /// "repo › path" retrieval context for code chunks when the caller knows it.
-async fn store_new_source(
+pub(crate) async fn store_new_source(
     state: &AppState,
     notebook_id: &str,
     extracted: ingest::Extracted,
@@ -1594,6 +1601,7 @@ pub(crate) fn resume_stranded_imports(app: &AppHandle) {
         if let Ok(processing) = state.db.processing_sources().await {
             for s in processing {
                 let extracted = ingest::Extracted {
+                    feeds: Vec::new(),
                     image_url: s.image_url.clone(),
                     author: s.author.clone(),
                     title: s.title.clone(),
@@ -1707,6 +1715,7 @@ async fn extract_image(state: &AppState, path: &str) -> anyhow::Result<ingest::E
         anyhow::bail!("no text found in image {path}");
     }
     Ok(ingest::Extracted {
+        feeds: Vec::new(),
         image_url: String::new(),
         author: String::new(),
         title: ingest::file_title(path),
@@ -1740,6 +1749,7 @@ async fn extract_pdf_ocr(state: &AppState, path: &str) -> anyhow::Result<ingest:
         anyhow::bail!("OCR produced no text from {path}");
     }
     Ok(ingest::Extracted {
+        feeds: Vec::new(),
         image_url: String::new(),
         author: String::new(),
         title: ingest::file_title(path),
@@ -2017,6 +2027,14 @@ pub(crate) async fn ingest_url(
         }
     }
     match crate::capture::extract_url_rescued(url).await {
+        // The fetch came back as a feed document (docs/RFC-events.md §2):
+        // connect it as a living source — parent index plus newest entries.
+        Ok(extracted) if extracted.source_type == "feed" => {
+            match crate::feeds::connect(state, notebook_id, &extracted.url, &extracted.text).await {
+                Ok(src) => Ok(src),
+                Err(err) => store_failed_url(state, notebook_id, url.trim(), err.to_string()).await,
+            }
+        }
         Ok(extracted) => store_extracted(state, notebook_id, extracted).await,
         Err(err) => store_failed_url(state, notebook_id, url.trim(), err.to_string()).await,
     }
@@ -2224,7 +2242,7 @@ pub(crate) async fn repo_backed_files(
         .filter(|s| {
             matches!(
                 s.source_type.as_str(),
-                "folder" | "obsidian" | "git" | "notion"
+                "folder" | "obsidian" | "git" | "notion" | "feed"
             ) && s.parent_id.is_empty()
         })
         .map(|s| s.id.as_str())
@@ -2777,7 +2795,7 @@ pub(crate) async fn reingest(
     // `updated` here would be the same arrival twice.
     let is_parent = matches!(
         existing.source_type.as_str(),
-        "folder" | "obsidian" | "git" | "notion"
+        "folder" | "obsidian" | "git" | "notion" | "feed"
     );
     if !is_parent {
         let _ = state
@@ -3075,6 +3093,10 @@ pub(crate) async fn refresh_source_impl(
     if existing.url.is_empty() {
         anyhow::bail!("This source has no URL or file path to refresh from");
     }
+    // A feed parent polls now, cadence ignored (docs/RFC-events.md §2).
+    if existing.source_type == "feed" {
+        return crate::feeds::refresh(state, &existing).await;
+    }
     if matches!(
         existing.source_type.as_str(),
         "folder" | "obsidian" | "git" | "notion"
@@ -3132,6 +3154,7 @@ pub(crate) async fn refresh_source_impl(
         let mut existing = existing;
         existing.mtime = crate::mac::content_stamp(&text);
         let extracted = ingest::Extracted {
+            feeds: Vec::new(),
             image_url: String::new(),
             author: String::new(),
             title: existing.title.clone(),
@@ -3936,6 +3959,7 @@ pub(crate) async fn ingest_mac(
     // store_extracted stamps 0 for a nonexistent path, so set it after.
     let stamp = crate::mac::content_stamp(&text);
     let extracted = ingest::Extracted {
+        feeds: Vec::new(),
         image_url: String::new(),
         author: String::new(),
         title,
@@ -4009,6 +4033,7 @@ pub(crate) async fn resync_mac_source(
     let (_, text) = e(crate::mac::fetch(&existing.url).await)?;
     existing.mtime = crate::mac::content_stamp(&text);
     let extracted = ingest::Extracted {
+        feeds: Vec::new(),
         image_url: String::new(),
         author: String::new(),
         title: existing.title.clone(),
@@ -4878,6 +4903,7 @@ async fn rescan_one_folder_inner(
             .unwrap_or_default();
         if map != current {
             let extracted = ingest::Extracted {
+                feeds: Vec::new(),
                 image_url: String::new(),
                 author: String::new(),
                 title: folder.title.clone(),
@@ -5656,6 +5682,7 @@ pub(crate) async fn resync_sources_inner(
                     let mut existing = src.clone();
                     existing.mtime = stamp;
                     let extracted = ingest::Extracted {
+                        feeds: Vec::new(),
                         image_url: String::new(),
                         author: String::new(),
                         title: existing.title.clone(),
@@ -5762,6 +5789,7 @@ pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u
                 s.notebook_id.clone(),
                 s.id.clone(),
                 ingest::Extracted {
+                    feeds: Vec::new(),
                     image_url: String::new(),
                     author: String::new(),
                     title: s.title.clone(),
@@ -9979,6 +10007,7 @@ pub async fn convert_note_to_source(
 ) -> Result<Source, String> {
     let note = e(state.db.get_note(&note_id).await)?.ok_or_else(|| "Note not found".to_string())?;
     let extracted = ingest::Extracted {
+        feeds: Vec::new(),
         image_url: String::new(),
         author: String::new(),
         title: note.title.clone(),
@@ -10931,8 +10960,29 @@ pub async fn growth_proposals(
     // returns as fast as a text scan.
     let sources = e(state.db.sources_with_content(&notebook_id).await)?;
     let queries = crate::growth::standing_queries(&state.trace_dir, &notebook_id, now());
-    let proposals = crate::growth::proposals(&sources, &queries);
+    let mut proposals = crate::growth::proposals(&sources, &queries);
+    // Feeds the notebook's pages advertised (docs/RFC-events.md §2, tier 1):
+    // remembered at import, proposed here, followed only on a click.
+    proposals.extend(crate::feeds::discovered_proposals(
+        &state,
+        &notebook_id,
+        &sources,
+    ));
     Ok(GrowthOverview { queries, proposals })
+}
+
+/// Every feed the app can offer to follow for one source: what its page
+/// advertised, what its host's shape implies, and — only when those come
+/// up empty — what sits at the conventional paths on its origin (the one
+/// tier that fetches; docs/RFC-events.md §2). Nothing is followed here.
+#[tauri::command]
+pub async fn discover_feeds(
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<Vec<crate::feeds::FeedCandidate>, String> {
+    let source =
+        e(state.db.get_source(&source_id).await)?.ok_or_else(|| "Source not found".to_string())?;
+    Ok(crate::feeds::discover_for_source(&state, &source).await)
 }
 
 /// The Spotlight tier alone — mdfind subprocesses make it the slow section,
@@ -12560,6 +12610,7 @@ async fn import_bundle(
             None => String::new(),
         };
         let extracted = ingest::Extracted {
+            feeds: Vec::new(),
             image_url: String::new(),
             author: String::new(),
             title,

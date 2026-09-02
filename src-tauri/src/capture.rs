@@ -371,6 +371,11 @@ pub async fn extract_url_rescued(url: &str) -> Result<Extracted> {
         }
     }
     let fast = ingest::extract_url(url).await;
+    // A feed document is final: nothing about a render pass would improve
+    // raw XML, and its entry text could trip the blocked-page markers.
+    if fast.as_ref().is_ok_and(|ex| ex.source_type == "feed") {
+        return fast;
+    }
     if let Err(err) = &fast {
         if err.downcast_ref::<ingest::HttpErrorPage>().is_some() {
             // The server said the page is gone and the body agreed. Rendering

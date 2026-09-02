@@ -492,6 +492,9 @@ async fn run_pass(app: &AppHandle) {
     // 1. Freshness. Resync is cheap table/mtime work and always runs: a
     //    foregrounded window going stale is worse than a few tokens.
     let _ = commands::resync_sources_inner(app, &state, None).await;
+    // Feeds poll on their own cadences (docs/RFC-events.md §2): a
+    // conditional GET each, no model, so outside the nightly budget.
+    crate::feeds::spawn_poll(app);
 
     if crate::freshness::has_budget(&budget) {
         // Distillation, tags, and card suggestions converge even when no

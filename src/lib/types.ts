@@ -71,7 +71,8 @@ export interface Source {
     | "code"
     | "git"
     | "notion"
-    | "obsidian";
+    | "obsidian"
+    | "feed";
   url: string;
   content: string;
   /** "placeholder" = cloud-sync file not downloaded yet; listed, not embedded.
@@ -279,8 +280,9 @@ export interface GrowthWebSearch {
 
 export interface GrowthProposal {
   /** "web" (link mined from sources) | "local" (on-disk path) |
-   *  "search" (found on the open web via Firecrawl). */
-  kind: "web" | "local" | "search";
+   *  "search" (found on the open web via Firecrawl) | "feed" (a feed one
+   *  of the notebook's pages advertised — docs/RFC-events.md §2). */
+  kind: "web" | "local" | "search" | "feed";
   url: string;
   /** Best anchor text seen for the link, or the file's name. */
   anchor: string;
@@ -553,6 +555,16 @@ export interface RegistryCard {
 
 /** One observed source change (watchers, RFC-night-shift): written by the
  *  refresh paths, read by the Brief, the Staff section, and agents. */
+/** A feed the app can offer to follow for a source (docs/RFC-events.md §2). */
+export interface FeedCandidate {
+  url: string;
+  /** "Releases", "Page history", "Feed", … */
+  label: string;
+  /** "page" (advertised by the page) | "host" (the host's shape) |
+   *  "well-known" (found at a conventional path). */
+  tier: "page" | "host" | "well-known";
+}
+
 /** Every SourceEvent.kind a producer writes (docs/RFC-events.md §1). */
 export const EVENT_KINDS = [
   "added",

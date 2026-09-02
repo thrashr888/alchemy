@@ -44,6 +44,8 @@ tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 futures-util = "0.3.32"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+# RSS / Atom / JSON Feed parsing for feed sources (docs/RFC-events.md §2).
+feed-rs = "2"
 tauri-plugin-debug-bridge = { version = "0.6", optional = true }
 model2vec-rs = "0.2.1"
 tokio-util = { version = "0.7.18", default-features = false }

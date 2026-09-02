@@ -228,6 +228,12 @@ struct ActivityReq {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+struct DiscoverFeedsReq {
+    /// The source (a web page) to find feeds for — from list_sources.
+    source_id: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 struct ReceiptsReq {
     /// Look-back window in hours (default 168, one week; capped to the
     /// 30-day window the table keeps).
@@ -278,6 +284,24 @@ impl AlchemyMcp {
     }
 
     #[tool(
+        description = "Feeds the app can follow for a web source: what its page advertised (<link rel=alternate>), what its host's shape implies (GitHub releases/commits, Wikipedia page history, YouTube channel, Substack, Reddit, Medium; arXiv offers a query feed built from the notebook's open questions, never a whole category), and — only when those are empty — the conventional /feed, /rss.xml, /atom.xml paths on its origin. Each candidate has url, label, and tier (page | host | well-known). Nothing is followed: pass a candidate's url to add_source to follow it as a living feed source (entries arrive as children, and change-triggered reports can watch the parent's id with watch_kinds [\"added\"])."
+    )]
+    async fn discover_feeds(
+        &self,
+        Parameters(DiscoverFeedsReq { source_id }): Parameters<DiscoverFeedsReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let source = state
+            .db
+            .get_source(&source_id)
+            .await
+            .map_err(|e| invalid(format!("{e:#}")))?
+            .ok_or_else(|| invalid("Source not found"))?;
+        let found = crate::feeds::discover_for_source(&state, &source).await;
+        json_result(&found)
+    }
+
+    #[tool(
         description = "What the Night Shift actually did: one receipt per run (scheduled reports, standing questions, and housekeeping chores), newest first. Each has name, kind, trigger, status (\"ok\" or \"failed\"), the note it wrote, the provider and model that answered, cost in millionths of a dollar (0 when nothing was metered — local runs are free), and start/end timestamps. Pass schedule_id for one standing order's history. Receipts are a rolling 30-day record; the durable artifacts are the notes themselves."
     )]
     async fn list_receipts(
@@ -317,7 +341,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Add a source to a notebook. Provide exactly one of: url (fetched + article-extracted), urls (a batch of such URLs — one result per entry, see below), text (pasted content; give a title), or file_path (local pdf/md/txt/csv, the whole Office family incl. legacy doc/ppt/xls, OpenDocument, rtf, epub, or an image — images and scanned PDFs are OCR'd when a vision model is configured; office formats extract as markdown). url also accepts a cider:// origin to connect a Mac item as a living, auto-syncing source: cider://reminders/list/<list name>, cider://calendar/upcoming/<days>, cider://notes/note/<note id>, or cider://stocks/watchlist/<name>. Content is chunked and embedded automatically. Duplicate content or an already-added URL is rejected with an error naming the existing source — treat that as already done. A page that fetches but is a 404/error page or a bot wall lands with status \"error\" and a reason — check status before trusting a result. With urls, the response is a list of {url, ok, source, error}: ok is false for anything that isn't searchable content, and one bad URL never fails the rest. Examples: {\"notebook_id\":\"<id>\",\"url\":\"https://example.com/paper\"} · {\"notebook_id\":\"<id>\",\"urls\":[\"https://a.com/x\",\"https://b.org/y\"]} · {\"notebook_id\":\"<id>\",\"text\":\"pasted content…\",\"title\":\"Meeting notes\"} · {\"notebook_id\":\"<id>\",\"file_path\":\"/Users/me/Reports/q3.docx\"}"
+        description = "Add a source to a notebook. A feed URL (RSS, Atom, JSON Feed — e.g. a GitHub releases.atom or a blog's /feed) becomes a living feed source: a parent that polls on the feed's own cadence, with each entry a child source. Provide exactly one of: url (fetched + article-extracted), urls (a batch of such URLs — one result per entry, see below), text (pasted content; give a title), or file_path (local pdf/md/txt/csv, the whole Office family incl. legacy doc/ppt/xls, OpenDocument, rtf, epub, or an image — images and scanned PDFs are OCR'd when a vision model is configured; office formats extract as markdown). url also accepts a cider:// origin to connect a Mac item as a living, auto-syncing source: cider://reminders/list/<list name>, cider://calendar/upcoming/<days>, cider://notes/note/<note id>, or cider://stocks/watchlist/<name>. Content is chunked and embedded automatically. Duplicate content or an already-added URL is rejected with an error naming the existing source — treat that as already done. A page that fetches but is a 404/error page or a bot wall lands with status \"error\" and a reason — check status before trusting a result. With urls, the response is a list of {url, ok, source, error}: ok is false for anything that isn't searchable content, and one bad URL never fails the rest. Examples: {\"notebook_id\":\"<id>\",\"url\":\"https://example.com/paper\"} · {\"notebook_id\":\"<id>\",\"urls\":[\"https://a.com/x\",\"https://b.org/y\"]} · {\"notebook_id\":\"<id>\",\"text\":\"pasted content…\",\"title\":\"Meeting notes\"} · {\"notebook_id\":\"<id>\",\"file_path\":\"/Users/me/Reports/q3.docx\"}"
     )]
     async fn add_source(
         &self,

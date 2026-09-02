@@ -116,7 +116,7 @@ unchanged because children are just sources. The parent's `mtime` holds
 unchanged document is a no-op at the same cost as a Mac resync today.
 
 The parent is not empty. Its text is a **rolling index**: the feed's
-description plus one line per kept entry (date, title, first sentence),
+description plus one line per kept entry (`- YYYY-MM-DD — [Title](link)`),
 rewritten and re-embedded whenever an entry lands. "What's new in the
 Tauri blog" retrieves the parent; a specific claim retrieves the child.
 This is the same lesson the wiki fold and living reports taught: a

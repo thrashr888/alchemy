@@ -10,6 +10,7 @@ import type {
   AiConfig,
   BuildInfo,
   GrowthOverview,
+  FeedCandidate,
   GrowthProposal,
   GrowthWebSearch,
   RetireProposal,
@@ -542,6 +543,8 @@ export const api = {
   /** Source ids ever cited in retrieval traces — the "uncited" facet. */
   citedSourceIds: () => run(query<string[]>("cited_source_ids", {})),
   /** The Grow surface: standing queries + the free tiers' proposals. */
+  discoverFeeds: (sourceId: string) =>
+    run(query<FeedCandidate[]>("discover_feeds", { sourceId })),
   growthProposals: (notebookId: string) =>
     run(query<GrowthOverview>("growth_proposals", { notebookId })),
   /** The Spotlight tier — mdfind is the slow part, loaded separately. */

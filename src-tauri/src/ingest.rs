@@ -31,6 +31,11 @@ pub struct Extracted {
     /// Lead image (og:image / twitter:image) for `url` sources; "" when the
     /// page has none. Powers the source gallery.
     pub image_url: String,
+    /// Feeds the page advertised (`<link rel="alternate" type="application/
+    /// rss+xml|atom+xml|feed+json">`), absolute — tier-1 discovery
+    /// (docs/RFC-events.md §2), free because the HTML was already in hand.
+    /// Empty for everything that is not a fetched or captured page.
+    pub feeds: Vec<String>,
 }
 
 /// Is this path an image we should OCR rather than read as text?
@@ -167,6 +172,7 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
             return Err(anyhow!("No readable text in {}", err_name(path)));
         }
         return Ok(Extracted {
+            feeds: Vec::new(),
             image_url: String::new(),
             author: String::new(),
             title: p
@@ -193,6 +199,7 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
             return Err(anyhow!("No readable text in {}", err_name(path)));
         }
         Ok(Extracted {
+            feeds: Vec::new(),
             image_url: String::new(),
             author: file_author(path),
             title: title.clone(),
@@ -284,6 +291,7 @@ fn extract_file_inner(path: &str) -> Result<Extracted> {
         return Err(anyhow!("No readable text in {}", err_name(path)));
     }
     Ok(Extracted {
+        feeds: Vec::new(),
         image_url: String::new(),
         // Stamped here — the one chokepoint every local-file ingest passes
         // through — so refresh and folder resync re-capture it for free.
@@ -738,6 +746,7 @@ pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
                 ));
             }
             return Ok(Extracted {
+                feeds: Vec::new(),
                 author: String::new(),
                 // Anything beats the URL's last path segment, which on arXiv
                 // is a bare id ("2307.03172"): the /Title tag first, then the
@@ -758,6 +767,20 @@ pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
     }
 
     let body = resp.text().await.unwrap_or_default();
+    // A feed is not a page: readability would shred it into a wall of
+    // titles. Hand the raw document up as a `feed` so the caller connects
+    // it as a living source (docs/RFC-events.md §2) — one GET, not two.
+    if crate::feeds::looks_like_feed(&content_type, &body) {
+        return Ok(Extracted {
+            feeds: Vec::new(),
+            author: String::new(),
+            title: String::new(),
+            source_type: "feed".to_string(),
+            url,
+            text: body,
+            image_url: String::new(),
+        });
+    }
     readable_page(body, status, url)
 }
 
@@ -853,6 +876,7 @@ fn readable_page(body: String, status: reqwest::StatusCode, url: String) -> Resu
     }
     let image_url = og_image(&body, &url).unwrap_or_default();
     Ok(Extracted {
+        feeds: crate::feeds::discover_in_html(&body, &url),
         author: String::new(),
         title,
         source_type: "url".to_string(),
@@ -1024,6 +1048,7 @@ async fn extract_google(
         return Err(anyhow!("this {} exported no text", kind.product()));
     }
     Ok(Extracted {
+        feeds: Vec::new(),
         image_url: String::new(),
         author: String::new(),
         title,
@@ -1107,6 +1132,28 @@ pub struct PageMeta {
     pub og_image: String,
 }
 
+/// An HTML fragment (a feed entry's body or summary) as markdown-ish plain
+/// text, through the same converter whole pages use. Falls back to a tag
+/// strip when the converter refuses the fragment.
+pub fn html_fragment_to_text(html: &str) -> String {
+    match htmd::convert(html) {
+        Ok(md) => normalize(&md),
+        Err(_) => {
+            let mut out = String::with_capacity(html.len());
+            let mut in_tag = false;
+            for c in html.chars() {
+                match c {
+                    '<' => in_tag = true,
+                    '>' => in_tag = false,
+                    _ if !in_tag => out.push(c),
+                    _ => {}
+                }
+            }
+            normalize(&out)
+        }
+    }
+}
+
 /// Build an `Extracted` from already-rendered HTML — the webview capture
 /// path (capture.rs). Same readability pipeline as fetched URLs and saved
 /// pages; the live DOM's `document.title` and OpenGraph title fill in when
@@ -1129,6 +1176,7 @@ pub fn extracted_from_html(html: &str, url: &str, dom_title: &str, meta: &PageMe
         .or_else(|| og_image(html, url))
         .unwrap_or_default();
     Extracted {
+        feeds: crate::feeds::discover_in_html(html, url),
         author: String::new(),
         title,
         source_type: "url".to_string(),
@@ -1223,6 +1271,7 @@ pub fn extract_pasted(title: &str, text: &str) -> Result<Extracted> {
         title.trim().to_string()
     };
     Ok(Extracted {
+        feeds: Vec::new(),
         image_url: String::new(),
         author: String::new(),
         title,
@@ -2305,6 +2354,7 @@ mod tests {
     #[test]
     fn chunk_source_dispatches_on_source_type() {
         let code = Extracted {
+            feeds: Vec::new(),
             image_url: String::new(),
             author: String::new(),
             title: "main.rs".into(),
@@ -2317,6 +2367,7 @@ mod tests {
         assert!(got[0].embed_text.starts_with("[main.rs]\n"));
 
         let prose = Extracted {
+            feeds: Vec::new(),
             image_url: String::new(),
             author: String::new(),
             title: "Notes".into(),
@@ -2485,6 +2536,7 @@ mod tests {
     #[test]
     fn markdown_chunking_strips_frontmatter_and_carries_tags() {
         let ex = Extracted {
+            feeds: Vec::new(),
             image_url: String::new(),
             author: String::new(),
             title: "Dialing In".into(),

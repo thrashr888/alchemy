@@ -134,7 +134,7 @@ export function Favicon({ url }: { url: string }) {
   );
 }
 
-const FOLDER_TYPES = ["folder", "git", "notion", "obsidian"];
+const FOLDER_TYPES = ["folder", "git", "notion", "obsidian", "feed"];
 
 /** Facet kinds: coarse buckets a narrow panel can offer as chips. */
 type SourceKind = "web" | "files" | "images" | "apple" | "folders";

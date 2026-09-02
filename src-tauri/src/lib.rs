@@ -15,6 +15,7 @@ mod dockmenu;
 mod dragout;
 mod examples;
 mod export;
+mod feeds;
 mod filesearch;
 mod foreground;
 mod freshness;
@@ -525,6 +526,7 @@ pub fn run() {
             commands::cited_source_ids,
             commands::seed_scale_fixture,
             commands::growth_proposals,
+            commands::discover_feeds,
             commands::growth_web_search,
             commands::growth_local,
             commands::growth_retire,

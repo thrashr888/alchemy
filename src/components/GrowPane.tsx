@@ -29,6 +29,7 @@ import {
   Tags,
   FileText,
   Globe,
+  Rss,
   Search,
   Sprout,
 } from "lucide-react";
@@ -304,6 +305,9 @@ export function GrowPane() {
       .finally(() => setIndexBusy(false));
   };
   const mined = visible(proposals ?? []).filter((p) => p.kind === "web");
+  // Feeds the notebook's own pages advertised (docs/RFC-events.md §2):
+  // remembered at import, followed only from here.
+  const feeds = visible(proposals ?? []).filter((p) => p.kind === "feed");
   const found = visible(web?.proposals ?? []);
 
   const row = (p: GrowthProposal) => (
@@ -348,10 +352,12 @@ export function GrowPane() {
         title={
           p.kind === "local"
             ? "Add this file as a source"
-            : "Fetch this page and add it as a source"
+            : p.kind === "feed"
+              ? "Follow this feed — new entries arrive as sources"
+              : "Fetch this page and add it as a source"
         }
       >
-        Add
+        {p.kind === "feed" ? "Follow" : "Add"}
       </Button>
       <Button
         variant="ghost"
@@ -475,6 +481,7 @@ export function GrowPane() {
                   down to one line when neither found anything. */}
               {locals.length === 0 &&
               mined.length === 0 &&
+              feeds.length === 0 &&
               localTier !== null ? (
                 <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption text-subtle-foreground">
                   Nothing new on this Mac or in your sources right now.
@@ -496,6 +503,13 @@ export function GrowPane() {
                       "From your sources",
                       "pages your sources keep citing",
                       mined,
+                    )}
+                  {feeds.length > 0 &&
+                    section(
+                      <Rss className="h-3.5 w-3.5 text-muted-foreground" />,
+                      "Feeds",
+                      "your pages advertise these — follow one to keep up",
+                      feeds,
                     )}
                 </>
               )}
