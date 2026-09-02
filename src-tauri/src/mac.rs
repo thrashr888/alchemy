@@ -214,67 +214,14 @@ pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
             None,
         ))
         .await?;
-        let mut out = format!("# Calendar — next {days} days\n\n");
-        let mut last_day = String::new();
-        for e in data.as_array().unwrap_or(&vec![]) {
-            let start = e["start_date"].as_str().unwrap_or("");
-            let day = start.chars().take(10).collect::<String>();
-            if day != last_day && !day.is_empty() {
-                out.push_str(&format!("## {day}\n"));
-                last_day = day;
-            }
-            let time = if e["is_all_day"].as_bool() == Some(true) {
-                "all day".to_string()
-            } else {
-                start.chars().skip(11).take(5).collect()
-            };
-            out.push_str(&format!(
-                "- {} — {} ({})",
-                time,
-                e["title"].as_str().unwrap_or("Untitled"),
-                e["calendar"].as_str().unwrap_or("Calendar"),
-            ));
-            if let Some(loc) = e["location"].as_str() {
-                out.push_str(&format!(" at {loc}"));
-            }
-            out.push('\n');
-            if let Some(notes) = e["notes"].as_str() {
-                if !notes.trim().is_empty() {
-                    out.push_str(&format!("  - {}\n", notes.trim().replace('\n', " ")));
-                }
-            }
-        }
-        return Ok((format!("Calendar: next {days} days"), out));
+        return Ok((
+            format!("Calendar: next {days} days"),
+            render_calendar(days, &data),
+        ));
     }
     if let Some(list) = uri.strip_prefix("cider://reminders/list/") {
         let data = cider(cider_lib::reminders::list(Some(list))).await?;
-        let mut out = format!("# Reminders — {list}\n\n");
-        for r in data.as_array().unwrap_or(&vec![]) {
-            out.push_str(&format!(
-                "- [ ] {}",
-                r["title"].as_str().unwrap_or("Untitled")
-            ));
-            // Carry the id into the text: titles repeat (two identical bug
-            // reports is the case that prompted this), so it is the only way
-            // for a reader — or an agent — to name one reminder exactly when
-            // asking to complete it.
-            if let Some(id) = r["id"].as_str() {
-                out.push_str(&format!(" `{id}`"));
-            }
-            if let Some(due) = r["due_date"].as_str() {
-                out.push_str(&format!(
-                    " — due {}",
-                    due.chars().take(10).collect::<String>()
-                ));
-            }
-            out.push('\n');
-            if let Some(notes) = r["notes"].as_str() {
-                if !notes.trim().is_empty() {
-                    out.push_str(&format!("  - {}\n", notes.trim().replace('\n', " ")));
-                }
-            }
-        }
-        return Ok((format!("Reminders: {list}"), out));
+        return Ok((format!("Reminders: {list}"), render_reminders(list, &data)));
     }
     if let Some(id) = uri.strip_prefix("cider://notes/note/") {
         let n = cider(cider_lib::notes::get(id)).await?;
@@ -314,45 +261,10 @@ pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
             anyhow::bail!("Watchlist \"{list}\" not found in Apple Stocks (was it renamed?)");
         }
         let quotes = cider(cider_lib::stocks::fetch()).await?;
-        let mut out = format!("# Stocks — {list}\n\n");
-        let mut as_of = "";
-        let empty = vec![];
-        let rows = quotes.as_array().unwrap_or(&empty);
-        out.push_str("| Symbol | Name | Price | Change | Status |\n");
-        out.push_str("|---|---|---|---|---|\n");
-        for sym in &symbols {
-            let q = rows.iter().find(|q| q["symbol"].as_str() == Some(sym));
-            let (name, price, pct, status) = match q {
-                Some(q) => {
-                    if let Some(t) = q["as_of"].as_str() {
-                        if t > as_of {
-                            as_of = t;
-                        }
-                    }
-                    (
-                        q["name"].as_str().unwrap_or("").to_string(),
-                        q["price"]
-                            .as_f64()
-                            .map(|p| format!("{p:.2} {}", q["currency"].as_str().unwrap_or("")))
-                            .unwrap_or_default(),
-                        q["change_percent"]
-                            .as_f64()
-                            .map(|c| format!("{c:+.2}%"))
-                            .unwrap_or_default(),
-                        q["exchange_status"].as_str().unwrap_or("").to_string(),
-                    )
-                }
-                None => (String::new(), String::new(), String::new(), String::new()),
-            };
-            out.push_str(&format!(
-                "| {sym} | {name} | {price} | {pct} | {status} |\n"
-            ));
-        }
-        let as_of = as_of.to_string();
-        if !as_of.is_empty() {
-            out.push_str(&format!("\n_Prices as of {as_of} (Apple Stocks cache)._\n"));
-        }
-        return Ok((format!("Stocks: {list}"), out));
+        return Ok((
+            format!("Stocks: {list}"),
+            render_stocks(list, &symbols, &quotes),
+        ));
     }
     // Legacy folder-as-source origins keep syncing.
     if let Some(folder) = uri.strip_prefix("cider://notes/folder/") {
@@ -377,6 +289,129 @@ pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
         return Ok((format!("Notes: {folder}"), out));
     }
     anyhow::bail!("Unrecognized Mac source origin: {uri}")
+}
+
+// ---- Renderers -------------------------------------------------------------
+//
+// Pure functions from cider's JSON to the markdown a source stores. The shapes
+// are a contract, not a style: the chat's live answer cards
+// (src/lib/liveCards.ts, docs/RFC-events.md §7) parse this text back into
+// native tables, so every line is fixed-order and one item per line. The
+// tests below pin each shape; change one only together with its parser.
+
+/// `# Calendar — next N days`, a `## YYYY-MM-DD` heading per day, then one
+/// `- HH:MM — Title (Calendar)[ at Location]` per event (`all day` in the
+/// time slot for all-day events); notes ride as an indented `  - ` line.
+fn render_calendar(days: &str, data: &serde_json::Value) -> String {
+    let mut out = format!("# Calendar — next {days} days\n\n");
+    let mut last_day = String::new();
+    for e in data.as_array().unwrap_or(&vec![]) {
+        let start = e["start_date"].as_str().unwrap_or("");
+        let day = start.chars().take(10).collect::<String>();
+        if day != last_day && !day.is_empty() {
+            out.push_str(&format!("## {day}\n"));
+            last_day = day;
+        }
+        let time = if e["is_all_day"].as_bool() == Some(true) {
+            "all day".to_string()
+        } else {
+            start.chars().skip(11).take(5).collect()
+        };
+        out.push_str(&format!(
+            "- {} — {} ({})",
+            time,
+            e["title"].as_str().unwrap_or("Untitled"),
+            e["calendar"].as_str().unwrap_or("Calendar"),
+        ));
+        if let Some(loc) = e["location"].as_str() {
+            out.push_str(&format!(" at {loc}"));
+        }
+        out.push('\n');
+        if let Some(notes) = e["notes"].as_str() {
+            if !notes.trim().is_empty() {
+                out.push_str(&format!("  - {}\n", notes.trim().replace('\n', " ")));
+            }
+        }
+    }
+    out
+}
+
+/// `# Reminders — List`, then one `- [ ] Title \`id\`[ — due YYYY-MM-DD]`
+/// per open reminder; notes ride as an indented `  - ` line.
+fn render_reminders(list: &str, data: &serde_json::Value) -> String {
+    let mut out = format!("# Reminders — {list}\n\n");
+    for r in data.as_array().unwrap_or(&vec![]) {
+        out.push_str(&format!(
+            "- [ ] {}",
+            r["title"].as_str().unwrap_or("Untitled")
+        ));
+        // Carry the id into the text: titles repeat (two identical bug
+        // reports is the case that prompted this), so it is the only way
+        // for a reader — or an agent — to name one reminder exactly when
+        // asking to complete it.
+        if let Some(id) = r["id"].as_str() {
+            out.push_str(&format!(" `{id}`"));
+        }
+        if let Some(due) = r["due_date"].as_str() {
+            out.push_str(&format!(
+                " — due {}",
+                due.chars().take(10).collect::<String>()
+            ));
+        }
+        out.push('\n');
+        if let Some(notes) = r["notes"].as_str() {
+            if !notes.trim().is_empty() {
+                out.push_str(&format!("  - {}\n", notes.trim().replace('\n', " ")));
+            }
+        }
+    }
+    out
+}
+
+/// `# Stocks — List`, a five-column table `| Symbol | Name | Price | Change |
+/// Status |` in watchlist order (price as `123.45 USD`, change as `+1.23%`,
+/// blanks for symbols the quote cache lacks), then
+/// `_Prices as of <RFC 3339> (Apple Stocks cache)._` when any quote carried a
+/// time. Quotes are as fresh as the Stocks app/widget keeps them.
+fn render_stocks(list: &str, symbols: &[String], quotes: &serde_json::Value) -> String {
+    let mut out = format!("# Stocks — {list}\n\n");
+    let mut as_of = "";
+    let empty = vec![];
+    let rows = quotes.as_array().unwrap_or(&empty);
+    out.push_str("| Symbol | Name | Price | Change | Status |\n");
+    out.push_str("|---|---|---|---|---|\n");
+    for sym in symbols {
+        let q = rows.iter().find(|q| q["symbol"].as_str() == Some(sym));
+        let (name, price, pct, status) = match q {
+            Some(q) => {
+                if let Some(t) = q["as_of"].as_str() {
+                    if t > as_of {
+                        as_of = t;
+                    }
+                }
+                (
+                    q["name"].as_str().unwrap_or("").to_string(),
+                    q["price"]
+                        .as_f64()
+                        .map(|p| format!("{p:.2} {}", q["currency"].as_str().unwrap_or("")))
+                        .unwrap_or_default(),
+                    q["change_percent"]
+                        .as_f64()
+                        .map(|c| format!("{c:+.2}%"))
+                        .unwrap_or_default(),
+                    q["exchange_status"].as_str().unwrap_or("").to_string(),
+                )
+            }
+            None => (String::new(), String::new(), String::new(), String::new()),
+        };
+        out.push_str(&format!(
+            "| {sym} | {name} | {price} | {pct} | {status} |\n"
+        ));
+    }
+    if !as_of.is_empty() {
+        out.push_str(&format!("\n_Prices as of {as_of} (Apple Stocks cache)._\n"));
+    }
+    out
 }
 
 /// Is this origin a Mac item?
@@ -531,5 +566,64 @@ mod tests {
     async fn fetch_rejects_unrecognized_origin() {
         let err = fetch("cider://bogus/thing").await.unwrap_err();
         assert!(err.to_string().contains("Unrecognized Mac source origin"));
+    }
+
+    // The live-card contract (src/lib/liveCards.ts parses these): one item
+    // per line, fixed field order. A drift here is a card silently gone.
+    #[test]
+    fn calendar_renders_one_fixed_line_per_event() {
+        let data = serde_json::json!([
+            {"title": "Inspection", "calendar": "Home", "location": "12 Elm St",
+             "start_date": "2026-09-03T14:00:00", "is_all_day": false,
+             "notes": "bring the\nreport"},
+            {"title": "Labor Day", "calendar": "US Holidays",
+             "start_date": "2026-09-07T00:00:00", "is_all_day": true},
+        ]);
+        assert_eq!(
+            render_calendar("7", &data),
+            "# Calendar — next 7 days\n\n\
+             ## 2026-09-03\n\
+             - 14:00 — Inspection (Home) at 12 Elm St\n\
+             \x20 - bring the report\n\
+             ## 2026-09-07\n\
+             - all day — Labor Day (US Holidays)\n"
+        );
+    }
+
+    #[test]
+    fn reminders_render_title_id_and_due() {
+        let data = serde_json::json!([
+            {"id": "x-apple-reminder://A1", "title": "Call the insurer",
+             "list": "Home", "priority": 0, "due_date": "2026-09-04T16:00:00Z",
+             "notes": "policy 4471"},
+            {"id": "x-apple-reminder://B2", "title": "Buy stamps", "list": "Home",
+             "priority": 0},
+        ]);
+        assert_eq!(
+            render_reminders("Home", &data),
+            "# Reminders — Home\n\n\
+             - [ ] Call the insurer `x-apple-reminder://A1` — due 2026-09-04\n\
+             \x20 - policy 4471\n\
+             - [ ] Buy stamps `x-apple-reminder://B2`\n"
+        );
+    }
+
+    #[test]
+    fn stocks_render_a_five_column_table_and_as_of() {
+        let symbols = vec!["AAPL".to_string(), "ZZZZ".to_string()];
+        let quotes = serde_json::json!([
+            {"symbol": "AAPL", "name": "Apple Inc.", "price": 231.456,
+             "change_percent": -1.2345, "currency": "USD",
+             "exchange_status": "closed", "as_of": "2026-09-02T20:00:00Z"},
+        ]);
+        assert_eq!(
+            render_stocks("My Symbols", &symbols, &quotes),
+            "# Stocks — My Symbols\n\n\
+             | Symbol | Name | Price | Change | Status |\n\
+             |---|---|---|---|---|\n\
+             | AAPL | Apple Inc. | 231.46 USD | -1.23% | closed |\n\
+             | ZZZZ |  |  |  |  |\n\n\
+             _Prices as of 2026-09-02T20:00:00Z (Apple Stocks cache)._\n"
+        );
     }
 }

@@ -644,6 +644,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     recentNotes,
     stats,
     reports,
+    events: sourceEvents,
     loading: activityLoading,
     error: activityError,
     refresh: refreshActivity,
@@ -1067,6 +1068,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                       prevVisit={prevVisit}
                       notebooks={notebooks}
                       reports={reports}
+                      events={sourceEvents}
                     />
                   )}
                 </div>

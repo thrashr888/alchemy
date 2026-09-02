@@ -702,8 +702,10 @@ export const api = {
     run(cmd<number>("rematch_registry", { notebookId })),
 
   // Night Shift (the Home Staff section)
-  listSourceEvents: (hours = 24) =>
-    run(query<SourceEvent[]>("list_source_events", { hours })),
+  /** Source-change events, newest first. `notebookId` narrows to one
+   *  notebook (the Arrivals strip); omit it for Home and Staff. */
+  listSourceEvents: (hours = 24, notebookId?: string) =>
+    run(query<SourceEvent[]>("list_source_events", { hours, notebookId })),
   nightShiftStatus: () => run(query<NightShiftStatus>("night_shift_status")),
   snapshotStatus: () => run(query<SnapshotStatus>("snapshot_status")),
   snapshotNow: () => run(cmd<SnapshotStatus>("snapshot_now")),
