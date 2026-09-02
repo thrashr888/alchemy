@@ -1324,6 +1324,13 @@ impl Db {
         Ok(out)
     }
 
+    /// Living Mac sources — `cider://` origins (mac.rs) of every status: the
+    /// store watch re-fetches these by provider, and an errored one (a
+    /// permission denied at add time) deserves the retry a change brings.
+    pub async fn all_mac_sources(&self) -> Result<Vec<Source>> {
+        self.query_sources(Some("source_type = 'mac'"), false).await
+    }
+
     /// Top-level ready sources that aren't folder-like parents (folders and
     /// git repos sweep via rescan) — the resync sweep filters these down to
     /// file- or git-backed ones and re-embeds any whose backing changed.

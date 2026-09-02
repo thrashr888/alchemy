@@ -32,6 +32,7 @@ mod inference;
 mod ingest;
 mod integrations;
 mod mac;
+mod macwatch;
 mod mcp;
 mod menu;
 mod models;
@@ -310,6 +311,10 @@ pub fn run() {
             // FSEvents for open notebooks' folders (docs/RFC-events.md §4);
             // the watcher itself arms once a window reports a notebook.
             fswatch::start(app.handle().clone());
+            // FSEvents over the Reminders, Calendar, and Notes stores through
+            // cider's watch (docs/RFC-events.md §4, phase 5); the minute
+            // sweep's Mac cadence stays underneath it.
+            macwatch::start(app.handle().clone());
             // The queue worker drains generations the webview only watches;
             // jobs interrupted by the last shutdown are already re-queued.
             genqueue::spawn_worker(app.handle().clone());
