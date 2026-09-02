@@ -85,6 +85,34 @@ Citations gain `section` (the chain) so a long-document citation reads
 "Fleet Maintenance Manual › Chapter 2: Landing Gear › Torque Values"
 instead of a page of look-alike prose.
 
+## How Phases 2 and 3 get measured
+
+Phase 1 leaves the gate's recall saturated (R@10 1.00) and its ranking
+limited by the BM25 leg. Two consequences:
+
+1. **Section summaries cannot move `fixture-outline` by themselves.**
+   Its `must_contain` strings are numbers inside chunks; a summary row
+   never contains them, and `db.search_chunks` does no expansion. Phase 2
+   needs its own cases: *section-topic* queries whose answer is "which
+   section covers X" — `kind: "topic"`, relevant = the section summary
+   row (or the section's heading chunk). The dataset grows those cases
+   before Phase 2 lands, the same way the outline kind preceded Phase 1.
+2. **Escalation is a model-in-the-loop change** and measures like
+   `eval_deep_rerank`: an `ALCHEMY_OLLAMA_TESTS=1` half that runs the
+   real Small role over the outline, plus a deterministic half that
+   checks the trigger fires on the thin/near-tied cases and stays quiet
+   on the golden ones. The number to report is MRR on the outline kind
+   with escalation on versus off, on the same seeded store.
+
+The cheaper lever for ranking is **Phase 1.5**: give the BM25 leg the
+chain. The FTS index is on `text`; the chain would need a `context`
+column on `chunks` (a schema addition on a store shared by prod and dev
+builds — `add_batch` conforms batches to the table it finds, but the
+index and the query must tolerate its absence on old tables) or a
+second FTS leg over a chain-only column fused at RRF. Measurable on the
+existing gate with no new cases; it is the first thing to try before
+Phase 2.
+
 ## Non-goals
 
 - Not vectorless. The tree is a second signal, not a replacement.
