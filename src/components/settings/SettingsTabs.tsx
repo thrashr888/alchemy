@@ -298,25 +298,6 @@ export function AppearanceTab() {
       </Field>
       <div className="h-px bg-border" />
       <Field
-        label="Reader"
-        hint="What the document reader shows around the text."
-      >
-        <div className="flex flex-wrap gap-1.5">
-          <Pill
-            active={reading.showToc}
-            onClick={() => setReading({ showToc: !reading.showToc })}
-          >
-            Table of contents
-          </Pill>
-          <Pill
-            active={reading.showRelated}
-            onClick={() => setReading({ showRelated: !reading.showRelated })}
-          >
-            Related passages
-          </Pill>
-        </div>
-      </Field>
-      <Field
         label="Glass chrome"
         hint="Experimental: the desktop blurs through the chrome like native macOS apps. Tinted keeps more body; Clear lets more through."
       >
