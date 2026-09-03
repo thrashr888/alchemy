@@ -4126,15 +4126,22 @@ pub async fn complete_mac_reminder(
 }
 
 /// Post-write resync: fetch the item's current state and re-embed it.
-/// Under the scan lock: the store change this write caused wakes the Mac
-/// watch too, and two resyncs diffing the same pre-write text both wrote
-/// the item event. Serialized, the second sees the first's text and is a
-/// no-op (`resync_mac_text`).
+/// Under the scan lock, and measured against the row as stored now, not
+/// the caller's copy: that copy predates the write, and the store change
+/// the write caused wakes the Mac watch too — a Reminders write takes
+/// seconds while FSEvents fires in two, so the watch's resync often lands
+/// first. Two resyncs diffing the same pre-write text both wrote the item
+/// event; against the stored text the second is a no-op
+/// (`resync_mac_text`).
 pub(crate) async fn resync_mac_source(
     state: &AppState,
     existing: Source,
 ) -> Result<Source, String> {
     let _guard = state.folder_scan_lock.lock().await;
+    let existing = match state.db.get_source(&existing.id).await {
+        Ok(Some(current)) => current,
+        _ => existing,
+    };
     let (_, text) = e(crate::mac::fetch(&existing.url).await)?;
     resync_mac_text(state, existing, text).await
 }
