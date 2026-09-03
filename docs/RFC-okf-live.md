@@ -79,7 +79,7 @@ a v0.1 bundle that still imports.
 
 ## 4. Bundle as a source (shape B)
 
-The easy half, and it ships first. Detection follows the Obsidian rule:
+The easy half, and the first thing after phase 0. Detection follows the Obsidian rule:
 a picked or dropped folder is an OKF bundle when `probe_okf` says so
 (an `index.md` at the root, or `sources/` / `notes/` beneath it). The
 folder-source pipeline runs as today with a new `source_type` of `okf`
@@ -96,7 +96,7 @@ behaviors:
 - **Lifecycle shows.** `status: deprecated` children start hidden
   (the per-file show/hide that folder sources already have), and a
   concept past its `stale_after` wears a stale badge in the panel and
-  the reader. Trust tier (§5.3) rides the same header row: unverified,
+  the reader. Trust tier (spec §5.3) rides the same header row: unverified,
   machine-confirmed, human-reviewed.
 - **Links resolve within the bundle.** Bundle-relative and root-relative
   markdown links (`/tables/orders.md`) rewrite to the target child's
@@ -116,7 +116,7 @@ who want a copy rather than a link, and gains the binding checkbox in §5.5.
 
 ## 5. A bound notebook (shape A)
 
-### 4.1 The binding
+### 5.1 The binding
 
 A notebook is bound to at most one bundle root. The binding lives in a
 machine-local sidecar, `<app-data>/okf-bindings.json`, keyed by notebook
@@ -132,7 +132,7 @@ carry back out. Dot-directories are not concept documents (spec §3.1
 reserves only `index.md` and `log.md`, and every consumer skips hidden
 dirs), so the manifest is invisible to other tools and harmless in git.
 
-### 4.2 Write-through
+### 5.2 Write-through
 
 Every mutation that touches a bound notebook's sources or notes — add,
 delete, rename, refresh, retag; note create, update, delete, curator
@@ -157,7 +157,7 @@ Keys the manifest carried in from an outside edit (`verified`, custom
 tags, anything) are re-emitted verbatim. The existing `export_notebook_okf`
 becomes the seed pass of this writer, not a separate code path.
 
-### 4.3 Read-back
+### 5.3 Read-back
 
 `fswatch` adds the bundle roots of bound notebooks to what it already
 watches for open notebooks, and the closed sweep walks them on the same
@@ -179,7 +179,7 @@ note's origin to that actor rather than clearing it, so a curator-managed
 note edited by an agent stays attributed. A deliberate in-app edit still
 clears origin, as today.
 
-### 4.4 Conflicts
+### 5.4 Conflicts
 
 Both sides changed since the last sync means the file's mtime is newer
 than the entity's `updated_at`, or older. The newer one wins; the older
@@ -187,7 +187,7 @@ text goes into `log.md` under the entry that recorded the overwrite, so
 nothing is lost silently. That is the whole policy. Merge tooling is a
 non-goal until someone actually hits this.
 
-### 4.5 Surfaces
+### 5.5 Surfaces
 
 - **Notebook ⋯ menu:** "Keep on disk as OKF…" picks a folder. An empty
   folder gets the seed pass; a folder that already is a bundle gets an
