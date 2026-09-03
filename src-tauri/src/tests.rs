@@ -2012,6 +2012,7 @@ fn okf_heals_the_duplicates_it_finds() {
         path: path.into(),
         id: format!("binding-{path}"),
         last_write_at: 0,
+        lost: false,
     };
 
     // Two notebooks over one folder: the older keeps it, the newer is
@@ -2202,6 +2203,7 @@ fn okf_a_write_never_resurrects_a_binding() {
             path: "/tmp/alchemy-unbind/nb".into(),
             id: "binding-1".into(),
             last_write_at: 0,
+            lost: false,
         }),
     );
     // A write that started before the unbind, finishing after it.
@@ -2220,6 +2222,7 @@ fn okf_a_write_never_resurrects_a_binding() {
             path: "/tmp/alchemy-unbind/elsewhere".into(),
             id: "binding-2".into(),
             last_write_at: 0,
+            lost: false,
         }),
     );
     touch_last_write(&data, "nb-open", "binding-1", 1_788_457_384_142);
@@ -2548,6 +2551,7 @@ fn okf_bindings_round_trip() {
             path: "/tmp/one".into(),
             id: "bind-one".into(),
             last_write_at: 42,
+            lost: false,
         }),
     );
     set_binding(
@@ -2557,6 +2561,7 @@ fn okf_bindings_round_trip() {
             path: "/tmp/two".into(),
             id: "bind-two".into(),
             last_write_at: 0,
+            lost: false,
         }),
     );
     assert_eq!(binding_for(&dir, "nb1").expect("nb1").path, "/tmp/one");
@@ -3840,6 +3845,7 @@ fn okf_icloud_move_offer_only_for_stage_one_bundles() {
                 path: dir.join("ferrari").to_string_lossy().to_string(),
                 id: "b1".into(),
                 last_write_at: 1,
+                lost: false,
             },
         );
         map.insert(
@@ -3848,6 +3854,7 @@ fn okf_icloud_move_offer_only_for_stage_one_bundles() {
                 path: dir.join("thesis").to_string_lossy().to_string(),
                 id: "b2".into(),
                 last_write_at: 1,
+                lost: false,
             },
         );
         map
@@ -3897,6 +3904,7 @@ fn okf_icloud_move_rewrites_binding_paths() {
                 path: from.join(slug).to_string_lossy().to_string(),
                 id: format!("b-{nb}"),
                 last_write_at: 7,
+                lost: false,
             },
         );
     }
@@ -3907,19 +3915,26 @@ fn okf_icloud_move_rewrites_binding_paths() {
             path: "/Users/tester/Dropbox/other".into(),
             id: "b-nb3".into(),
             last_write_at: 7,
+            lost: false,
         },
     );
 
     let taken: std::collections::HashSet<String> = ["ferrari".to_string()].into_iter().collect();
-    let moves = plan_icloud_moves(&from, &to, &bindings, &taken);
-    assert_eq!(moves.len(), 2, "only the two under the Notebooks folder");
-    assert_eq!(moves[0].0, "nb1");
-    assert_eq!(
-        moves[0].2,
-        to.join("ferrari-2"),
-        "a name already in the container gets the exporter's -2, never a clobber"
+    let moves = plan_icloud_moves(
+        &from,
+        &to,
+        &bindings,
+        &taken,
+        &std::collections::HashMap::new(),
     );
-    assert_eq!(moves[1].2, to.join("thesis"));
+    assert_eq!(moves.len(), 2, "only the two under the Notebooks folder");
+    assert_eq!(moves[0].notebook(), "nb1");
+    assert_eq!(
+        moves[0].dest(),
+        to.join("ferrari-2"),
+        "a name already in the container that belongs to a different notebook gets the exporter's -2, never a clobber"
+    );
+    assert_eq!(moves[1].dest(), to.join("thesis"));
 
     rebind_moved(&mut bindings, &moves);
     assert_eq!(bindings["nb1"].path, to.join("ferrari-2").to_string_lossy());
@@ -4000,6 +4015,165 @@ fn okf_delete_needs_two_sightings_and_stands_down_in_an_outage() {
     assert_eq!(v.outage, Some((2, 5)));
     assert!(v.delete.is_empty(), "a sync outage deletes nothing");
     assert!(v.mark.is_empty());
+}
+
+/// A bundle the container already holds is that notebook's bundle, whatever
+/// its folder is called: the move adopts it rather than writing a `-2` copy
+/// of a notebook that is already there.
+#[test]
+fn okf_icloud_move_adopts_a_bundle_already_in_the_container() {
+    use crate::okf::{plan_icloud_moves, rebind_moved, IcloudPlacement, OkfBinding};
+    let from = std::path::PathBuf::from("/Users/tester/iCloudDrive/Alchemy");
+    let to = std::path::PathBuf::from("/Users/tester/Container/Documents");
+    let mut bindings = std::collections::HashMap::new();
+    for (nb, slug) in [("nb1", "ferrari"), ("nb2", "thesis")] {
+        bindings.insert(
+            nb.to_string(),
+            OkfBinding {
+                path: from.join(slug).to_string_lossy().to_string(),
+                id: format!("b-{nb}"),
+                last_write_at: 7,
+                lost: false,
+            },
+        );
+    }
+    // The other Mac already moved nb1's bundle into the container, so its
+    // folder name is taken there — by nb1 itself.
+    let taken: std::collections::HashSet<String> = ["ferrari".to_string()].into_iter().collect();
+    let already: std::collections::HashMap<String, std::path::PathBuf> =
+        [("nb1".to_string(), to.join("ferrari"))]
+            .into_iter()
+            .collect();
+
+    let moves = plan_icloud_moves(&from, &to, &bindings, &taken, &already);
+    assert_eq!(
+        moves[0],
+        IcloudPlacement::Adopt {
+            notebook: "nb1".into(),
+            at: to.join("ferrari")
+        },
+        "identity before name: no ferrari-2"
+    );
+    assert_eq!(moves[1].dest(), to.join("thesis"));
+
+    rebind_moved(&mut bindings, &moves);
+    assert_eq!(bindings["nb1"].path, to.join("ferrari").to_string_lossy());
+    assert_eq!(
+        bindings["nb1"].id, "b-nb1",
+        "the manifest survives an adopt"
+    );
+}
+
+/// One `alchemy.id` in several folders keeps one of them, and both Macs have
+/// to keep the same one — so the keeper comes from the folder names, never
+/// from which binding happens to be local.
+#[test]
+fn okf_consolidation_keeps_the_same_folder_on_either_mac() {
+    use crate::okf::consolidate_plan;
+    let root = std::path::PathBuf::from("/Users/tester/Container/Documents");
+    let bundles = vec![
+        (root.join("ferrari-2"), Some("nb1".to_string())),
+        (root.join("ferrari"), Some("nb1".to_string())),
+        (root.join("ferrari-2-2"), Some("nb1".to_string())),
+        (root.join("thesis"), Some("nb2".to_string())),
+        (root.join("stray"), None),
+    ];
+    let aside = root.join("Duplicates");
+
+    let plan = consolidate_plan(&root, &bundles);
+    assert_eq!(
+        plan,
+        vec![
+            (root.join("ferrari-2"), aside.join("ferrari-2")),
+            (root.join("ferrari-2-2"), aside.join("ferrari-2-2")),
+        ],
+        "the unsuffixed folder keeps the notebook; the copies are set aside"
+    );
+
+    // The same listing in another order — which is all "the other Mac" means
+    // here — plans the same moves.
+    let mut shuffled = bundles.clone();
+    shuffled.reverse();
+    assert_eq!(consolidate_plan(&root, &shuffled), plan);
+
+    // A notebook with one folder is not a duplicate, and a folder claiming no
+    // id is somebody else's.
+    assert!(consolidate_plan(
+        &root,
+        &[
+            (root.join("thesis"), Some("nb2".to_string())),
+            (root.join("stray"), None),
+        ]
+    )
+    .is_empty());
+}
+
+/// A write pass that finds its bundle root gone never makes one: it follows
+/// the folder if the id turns up elsewhere, and otherwise waits and writes
+/// nothing. Re-seeding is the last answer, not the first.
+#[test]
+fn okf_a_vanished_root_is_never_recreated() {
+    use crate::okf::{lost_folder_plan, LostFolder};
+    let moved = std::path::PathBuf::from("/Users/tester/Container/Documents/ferrari");
+
+    assert_eq!(
+        lost_folder_plan(true, Some(moved.clone()), false),
+        LostFolder::Follow(moved.clone()),
+        "the id found it; the binding follows"
+    );
+    assert_eq!(
+        lost_folder_plan(true, None, false),
+        LostFolder::Wait,
+        "gone and unclaimed is a wait, never a folder written back"
+    );
+    assert_eq!(
+        lost_folder_plan(true, None, true),
+        LostFolder::Reseed,
+        "a second pass with nothing claiming it starts the notebook again"
+    );
+    assert_eq!(
+        lost_folder_plan(false, None, true),
+        LostFolder::Wait,
+        "an unreachable Notebooks folder is an outage, not a fresh start"
+    );
+    // Even lost, a bundle that turns up is followed rather than re-seeded.
+    assert_eq!(
+        lost_folder_plan(true, Some(moved.clone()), true),
+        LostFolder::Follow(moved)
+    );
+}
+
+/// The bundle a stale binding is looking for is the one carrying its
+/// notebook's id, wherever the sync client put it (§5.7, stage two).
+#[test]
+fn okf_finds_a_moved_bundle_by_its_id() {
+    use crate::okf::{declared_id, find_bundle_with_id};
+    let root = okf_scratch("moved-root");
+    let _ = std::fs::remove_dir_all(&root);
+    let write = |folder: &std::path::Path, id: &str| {
+        std::fs::create_dir_all(folder.join("sources")).expect("mkdir");
+        std::fs::write(
+            folder.join("index.md"),
+            format!("---\ntitle: Ferrari\nalchemy:\n  id: {id}\n---\n\n# Ferrari\n"),
+        )
+        .expect("write");
+    };
+    write(&root.join("ferrari-moved"), "nb1");
+    write(&root.join("thesis"), "nb2");
+    // Set aside is out of the running, however plainly it claims the id.
+    write(&root.join("Duplicates/ferrari"), "nb1");
+
+    assert_eq!(
+        declared_id(&root.join("ferrari-moved")).as_deref(),
+        Some("nb1")
+    );
+    assert_eq!(
+        find_bundle_with_id(&root, "nb1"),
+        Some(root.join("ferrari-moved")),
+        "the folder name changed; the id did not"
+    );
+    assert_eq!(find_bundle_with_id(&root, "nobody"), None);
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// A notebook gets its own folder under the root, deduped the way the

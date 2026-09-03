@@ -1683,6 +1683,7 @@ pub(crate) async fn bind_new_notebook(state: &AppState, notebook: &Notebook) {
             path: folder.to_string_lossy().to_string(),
             id: new_id(),
             last_write_at: 0,
+            lost: false,
         }),
     );
     if let Err(err) = write_bound(state, &notebook.id).await {
@@ -1902,9 +1903,85 @@ pub(crate) fn heal_plan(
     steps
 }
 
+/// Put the duplicate bundles that already exist out of the way.
+///
+/// One `alchemy.id` under the Notebooks folder in several folders is one
+/// notebook in several folders — nineteen of them, on the run that prompted
+/// this. The keeper is chosen from the folder names alone so both Macs choose
+/// the same one (`duplicate_rank`), everything else is *renamed* into
+/// `Duplicates/`, and a local binding pointing at a folder that moved is
+/// repointed at the keeper. Nothing is deleted, and both paths go in the log.
+async fn consolidate_duplicate_bundles(state: &AppState, data_dir: &Path) {
+    let (root, _) = notebooks_home(state).await;
+    if root.as_os_str().is_empty() || !root.is_dir() {
+        return;
+    }
+    let bundles = bundles_under(&root);
+    let plan = consolidate_plan(&root, &bundles);
+    if plan.is_empty() {
+        return;
+    }
+    if let Err(err) = std::fs::create_dir_all(root.join(DUPLICATES_DIR)) {
+        crate::diagnostics::error(
+            "okf",
+            format!("could not make the Duplicates folder: {err}"),
+        );
+        return;
+    }
+    // Notebook id -> the folder that keeps it, so a binding aimed at a copy
+    // can be repointed rather than left aimed at `Duplicates/`.
+    let mut moved: HashMap<String, PathBuf> = HashMap::new();
+    for (from, to) in plan {
+        if let Err(err) = std::fs::rename(&from, &to) {
+            crate::diagnostics::error(
+                "okf",
+                format!("could not set {from:?} aside as {to:?}: {err}"),
+            );
+            continue;
+        }
+        okf_notice(format!(
+            "{} is a second folder for a notebook that already has one, so it moved to {}. Nothing was deleted.",
+            from.display(),
+            to.display()
+        ));
+        if let Some(id) = declared_id(&to) {
+            moved.insert(id, from);
+        }
+    }
+    for (notebook, was) in moved {
+        let Some(binding) = binding_for(data_dir, &notebook) else {
+            continue;
+        };
+        if Path::new(&binding.path) != was {
+            continue;
+        }
+        let Some(keeper) = find_bundle_with_id(&root, &notebook) else {
+            continue;
+        };
+        restat_manifest(&manifest_path(data_dir, &binding.id), &keeper);
+        set_binding(
+            data_dir,
+            &notebook,
+            Some(OkfBinding {
+                path: keeper.to_string_lossy().to_string(),
+                lost: false,
+                ..binding
+            }),
+        );
+        okf_notice(format!(
+            "the binding for that notebook now points at {}.",
+            keeper.display()
+        ));
+    }
+}
+
 /// What this pass understands how to repair. A machine stamped with the
 /// current number has been through it and is not put through it again.
-const HEAL_VERSION: &str = "1";
+///
+/// 2 adds the duplicate consolidation: 0.56.0's move planner matched folder
+/// names rather than ids, so a second Mac wrote a `-2` copy of every notebook
+/// the container already held.
+const HEAL_VERSION: &str = "2";
 
 /// Run the plan once, ever — not once per launch.
 ///
@@ -1981,6 +2058,7 @@ pub(crate) async fn heal_bindings(state: &AppState) {
             }
         }
     }
+    consolidate_duplicate_bundles(state, &data_dir).await;
     if let Err(err) = std::fs::write(&stamp, HEAL_VERSION) {
         crate::note!("okf: couldn't stamp the heal: {err}");
     }
@@ -2039,6 +2117,127 @@ pub(crate) enum FoundBundle {
     Import,
 }
 
+/// Where a bundle that lost its place is put: beside the notebooks, named
+/// plainly, so a person opening the Notebooks folder can see what happened
+/// and move anything back by hand.
+pub(crate) const DUPLICATES_DIR: &str = "Duplicates";
+
+/// Who a bundle folder says it belongs to — the `alchemy.id` in its root
+/// `index.md`, which travels with the folder wherever a sync client puts it.
+pub(crate) fn declared_id(folder: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(folder.join("index.md")).ok()?;
+    parse_okf_doc(&text).nested("alchemy", "id")
+}
+
+/// A folder name that looks like a copy: `ferrari-2`, `ferrari-2-2`.
+fn is_copy_name(name: &str) -> bool {
+    name.rsplit_once('-').is_some_and(|(stem, n)| {
+        !stem.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
+/// The order two Macs have to agree on when one `alchemy.id` turns up in
+/// several folders: the unsuffixed name first, then lexically.
+///
+/// Deliberately not "whichever one this Mac happens to be bound to". Both
+/// machines run the consolidation over the same synced folder, and a keeper
+/// chosen from local state makes each of them put the other's keeper aside —
+/// which is a loop, not a repair. Local state decides only where the local
+/// binding is repointed afterwards.
+pub(crate) fn duplicate_rank(folder: &Path) -> (bool, String) {
+    let name = folder
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    (is_copy_name(&name), name)
+}
+
+/// Direct children of `root` that probe as OKF bundles, with the id each one
+/// claims. Sorted, and never `Duplicates/` — what was put aside is out of the
+/// way, not back in the running.
+pub(crate) fn bundles_under(root: &Path) -> Vec<(PathBuf, Option<String>)> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(PathBuf, Option<String>)> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            p.is_dir()
+                && !name.starts_with('.')
+                && name != DUPLICATES_DIR
+                && crate::commands::find_bundle_root(p.clone()).as_deref() == Ok(p.as_path())
+        })
+        .map(|p| {
+            let id = declared_id(&p);
+            (p, id)
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// The bundle under `root` that belongs to `notebook_id`, if one is there.
+///
+/// This is what makes a stale binding recoverable rather than a reason to
+/// write the old folder back: the id is in the bundle, so a folder the other
+/// Mac moved is still findable at its new address.
+pub(crate) fn find_bundle_with_id(root: &Path, notebook_id: &str) -> Option<PathBuf> {
+    let mut hits: Vec<PathBuf> = bundles_under(root)
+        .into_iter()
+        .filter(|(_, id)| id.as_deref() == Some(notebook_id))
+        .map(|(p, _)| p)
+        .collect();
+    hits.sort_by_key(|p| duplicate_rank(p));
+    hits.into_iter().next()
+}
+
+/// One `alchemy.id` in several folders is one notebook in several folders.
+///
+/// The keeper stays where it is and every other copy is *moved* into
+/// `Duplicates/` — a rename, never a delete, so a wrong guess costs a drag in
+/// Finder rather than somebody's notes. Pure over the listing, so the two
+/// Macs can be shown to agree.
+pub(crate) fn consolidate_plan(
+    root: &Path,
+    bundles: &[(PathBuf, Option<String>)],
+) -> Vec<(PathBuf, PathBuf)> {
+    let mut by_id: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    for (path, id) in bundles {
+        let Some(id) = id else { continue };
+        by_id.entry(id.clone()).or_default().push(path.clone());
+    }
+    let mut ids: Vec<&String> = by_id.keys().collect();
+    ids.sort();
+    let aside = root.join(DUPLICATES_DIR);
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for id in ids {
+        let folders = &by_id[id];
+        if folders.len() < 2 {
+            continue;
+        }
+        let mut ranked = folders.clone();
+        ranked.sort_by_key(|p| duplicate_rank(p));
+        for folder in ranked.into_iter().skip(1) {
+            let base = folder
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let mut name = base.clone();
+            let mut n = 2;
+            while taken.contains(&name) || aside.join(&name).exists() {
+                name = format!("{base}-{n}");
+                n += 1;
+            }
+            taken.insert(name.clone());
+            out.push((folder, aside.join(name)));
+        }
+    }
+    out
+}
+
 /// The rule, as a decision, so the cases that went wrong on 0.55.0 are tested
 /// rather than reasoned about.
 ///
@@ -2095,7 +2294,7 @@ pub(crate) fn unopened_bundles(
                 && !p
                     .file_name()
                     .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with('.'))
+                    .is_some_and(|n| n.starts_with('.') || n == DUPLICATES_DIR)
                 && !bound.contains(&p.to_string_lossy().to_string())
                 // A folder that is not a bundle is somebody else's; leave it.
                 && crate::commands::find_bundle_root(p.clone()).as_deref() == Ok(p.as_path())
@@ -2172,6 +2371,7 @@ async fn open_found_bundles_inner(app: &AppHandle, state: &AppState, root: &Path
                         path: path.clone(),
                         id: new_id(),
                         last_write_at: 0,
+                        lost: false,
                     }),
                 );
                 write_bound(state, &id).await.map(|_| id)
@@ -2190,6 +2390,7 @@ async fn open_found_bundles_inner(app: &AppHandle, state: &AppState, root: &Path
                                 path: path.clone(),
                                 id: new_id(),
                                 last_write_at: 0,
+                                lost: false,
                             }),
                         );
                         write_bound(state, &nb.id).await.map(|_| nb.id)
@@ -2545,6 +2746,17 @@ pub struct OkfBinding {
     /// Epoch ms of the last successful write; 0 until the seed pass lands.
     #[serde(default)]
     pub last_write_at: i64,
+    /// The folder this binding names is not there any more.
+    ///
+    /// Set by the writer when it finds the root gone, and the reason it does
+    /// not simply make one: on 0.56.0 the other Mac moved its bundles into
+    /// the app container, iCloud carried the move here, and this Mac's next
+    /// write-through `create_dir_all`'d all eighteen old paths back into
+    /// existence — so the folder everybody had just left came back on both
+    /// machines. A binding that has lost its folder is a question for the
+    /// rebind, not a directory to create.
+    #[serde(default)]
+    pub lost: bool,
 }
 
 fn bindings_path(data_dir: &Path) -> PathBuf {
@@ -2828,13 +3040,181 @@ pub(crate) fn cancel_pending_write(notebook_id: &str) {
     }
 }
 
+/// What a binding whose folder has gone should do next.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum LostFolder {
+    /// The bundle is under the Notebooks folder at another name: follow it,
+    /// and keep the manifest — it is the same bundle at a new address.
+    Follow(PathBuf),
+    /// Write nothing this pass. Either the Notebooks folder itself is
+    /// unreachable, or the bundle simply is not here yet: a folder in the
+    /// middle of a sync comes back on its own, and one write pass is not
+    /// enough evidence to act on.
+    Wait,
+    /// A pass has already waited and nothing anywhere claims this notebook,
+    /// so it gets a fresh folder under the Notebooks root.
+    Reseed,
+}
+
+/// The rule, apart from the filesystem, so the case that mattered — the
+/// folder is gone and nothing claims it *yet* — is a test rather than an
+/// argument. The one thing this never says is "make the folder you were
+/// looking for": recreating a path the other Mac has just moved away from is
+/// what put eighteen dead folders back into iCloud Drive on 0.56.0.
+pub(crate) fn lost_folder_plan(
+    root_reachable: bool,
+    found: Option<PathBuf>,
+    already_lost: bool,
+) -> LostFolder {
+    match found {
+        Some(at) => LostFolder::Follow(at),
+        // An unreachable Notebooks folder is an outage, not an invitation to
+        // start a new one somewhere.
+        None if !root_reachable => LostFolder::Wait,
+        None if already_lost => LostFolder::Reseed,
+        None => LostFolder::Wait,
+    }
+}
+
+/// A binding whose folder is gone, put right without inventing anything.
+///
+/// Three answers, in order. The bundle is somewhere else under the Notebooks
+/// folder — the other Mac moved it and iCloud carried the move here — so the
+/// binding follows it and keeps its manifest, which is every hash the
+/// reconciler has. Or the folder is not there at all yet, in which case the
+/// binding is marked `lost` and the pass writes nothing: a folder that is
+/// mid-sync comes back on its own, and one write pass is not enough evidence
+/// to act on. Or it was already lost on an earlier pass and no bundle
+/// anywhere claims this notebook, and only then does the notebook get a fresh
+/// folder — under the Notebooks folder, at its plain slug, never back at the
+/// path it lost.
+async fn recover_binding(
+    state: &AppState,
+    notebook_id: &str,
+    binding: &OkfBinding,
+) -> Option<OkfBinding> {
+    let data_dir = app_data_dir(state);
+    let (root, _) = notebooks_home(state).await;
+    let reachable = !root.as_os_str().is_empty() && root.is_dir();
+    let plan = lost_folder_plan(
+        reachable,
+        reachable
+            .then(|| find_bundle_with_id(&root, notebook_id))
+            .flatten(),
+        binding.lost,
+    );
+    if let LostFolder::Follow(found) = plan {
+        let moved = OkfBinding {
+            path: found.to_string_lossy().to_string(),
+            lost: false,
+            ..binding.clone()
+        };
+        restat_manifest(&manifest_path(&data_dir, &binding.id), &found);
+        set_binding(&data_dir, notebook_id, Some(moved.clone()));
+        okf_notice(format!(
+            "{} moved to {}; the binding followed it.",
+            binding.path,
+            found.display()
+        ));
+        return Some(moved);
+    }
+    if plan == LostFolder::Wait {
+        if !binding.lost {
+            set_binding(
+                &data_dir,
+                notebook_id,
+                Some(OkfBinding {
+                    lost: true,
+                    ..binding.clone()
+                }),
+            );
+            okf_notice(format!(
+                "{} is not there any more and no bundle under the Notebooks folder claims this notebook. Nothing written; waiting a pass in case it is still arriving.",
+                binding.path
+            ));
+        }
+        return None;
+    }
+    // Still lost, still unclaimed: give the notebook a folder of its own.
+    let title = state
+        .db
+        .list_notebooks()
+        .await
+        .ok()?
+        .into_iter()
+        .find(|n| n.id == notebook_id)
+        .map(|n| n.title)?;
+    let taken: std::collections::HashSet<String> = load_bindings(&data_dir)
+        .values()
+        .filter_map(|b| Path::new(&b.path).file_name())
+        .map(|n| n.to_string_lossy().to_string())
+        .collect();
+    let folder = claim_notebook_folder(&root, &title, &taken);
+    if let Err(err) = std::fs::create_dir_all(&folder) {
+        crate::diagnostics::error("okf", format!("could not make {folder:?}: {err}"));
+        return None;
+    }
+    // A different folder is a different bundle: a fresh binding id, and so a
+    // fresh manifest, because inheriting the old one's paths and hashes would
+    // make the first write into the new folder a no-op for every file.
+    let fresh = OkfBinding {
+        path: folder.to_string_lossy().to_string(),
+        id: new_id(),
+        last_write_at: 0,
+        lost: false,
+    };
+    set_binding(&data_dir, notebook_id, Some(fresh.clone()));
+    okf_notice(format!(
+        "\u{201c}{title}\u{201d} lost its folder and nothing claimed it, so it starts again at {}.",
+        folder.display()
+    ));
+    Some(fresh)
+}
+
+/// Make the manifest's clocks describe the files that are actually there.
+///
+/// A binding that followed its bundle to a new path keeps every hash it had,
+/// which is the point — but the mtime/len skip rule is a claim about a file,
+/// and after a move (or a cross-volume copy, which restamps everything) that
+/// claim may be about a file that no longer exists. So every entry is
+/// re-stat'd and any whose clock does not match what was recorded is zeroed,
+/// which reads as changed: one full read pass, and an honest skip after it.
+fn restat_manifest(manifest_at: &Path, bundle: &Path) {
+    let mut manifest = load_manifest(manifest_at);
+    if manifest.concepts.is_empty() {
+        return;
+    }
+    for entry in manifest.concepts.values_mut() {
+        let (mtime, len) = file_clock(&bundle.join(&entry.path));
+        if mtime != entry.file_mtime || len != entry.file_len {
+            entry.file_mtime = 0;
+            entry.file_len = 0;
+        }
+        // Wherever the file was while the folder was in transit, it is not
+        // missing now that the binding has caught up with it.
+        entry.missing_since = 0;
+    }
+    save_manifest(manifest_at, &manifest);
+}
+
 /// Bring a bound notebook's bundle up to date. The seed pass and every write
 /// after it are the same pass — a bundle nobody has written yet simply has an
 /// empty manifest, so every concept counts as changed.
 pub async fn write_bound(state: &AppState, notebook_id: &str) -> Result<OkfWrite, String> {
     let data_dir = app_data_dir(state);
-    let binding = binding_for(&data_dir, notebook_id)
+    let mut binding = binding_for(&data_dir, notebook_id)
         .ok_or_else(|| "This notebook isn't kept on disk".to_string())?;
+    // The writer does not build a bundle root it did not find. Making one is
+    // bind's job and seed's job; here a missing root means the folder went
+    // somewhere, and `create_dir_all` would put the old one back — which on
+    // 0.56.0 resurrected eighteen folders the other Mac had just moved out of
+    // iCloud Drive, on both machines at once.
+    if !PathBuf::from(&binding.path).is_dir() {
+        match recover_binding(state, notebook_id, &binding).await {
+            Some(found) => binding = found,
+            None => return Ok(OkfWrite::default()),
+        }
+    }
     let bundle = PathBuf::from(&binding.path);
     let manifest = manifest_path(&data_dir, &binding.id);
     let (notebook, sources, notes) = gather_bundle_for(state, notebook_id, &bundle).await?;
@@ -2908,6 +3288,7 @@ pub(crate) async fn bind_impl(
             path: path.to_string(),
             id,
             last_write_at: 0,
+            lost: false,
         }),
     );
     write_bound(state, notebook_id).await?;
@@ -3905,23 +4286,72 @@ pub(crate) fn icloud_move_plan(
     offer
 }
 
+/// What the move does with one bound bundle.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum IcloudPlacement {
+    /// Rename the folder into the container.
+    Move {
+        notebook: String,
+        from: PathBuf,
+        to: PathBuf,
+    },
+    /// The container already holds this notebook's bundle — the other Mac
+    /// moved it and iCloud carried it here. Point the binding at that folder
+    /// and leave the copy under the old root alone.
+    Adopt { notebook: String, at: PathBuf },
+}
+
+impl IcloudPlacement {
+    pub(crate) fn notebook(&self) -> &str {
+        match self {
+            IcloudPlacement::Move { notebook, .. } | IcloudPlacement::Adopt { notebook, .. } => {
+                notebook
+            }
+        }
+    }
+
+    /// Where the binding points once this placement is carried out.
+    pub(crate) fn dest(&self) -> &Path {
+        match self {
+            IcloudPlacement::Move { to, .. } => to,
+            IcloudPlacement::Adopt { at, .. } => at,
+        }
+    }
+}
+
 /// Where each bound bundle under `from` lands in the container.
 ///
-/// `taken` carries the names already in the destination, so a collision gets
-/// the exporter's `-2` treatment instead of landing on somebody's folder —
-/// and so the planner stays a pure function of what it is told.
+/// **Identity before name.** `already` maps the `alchemy.id` of every bundle
+/// the destination holds to its folder, and a notebook whose bundle is
+/// already there is adopted rather than moved: on the two-Mac run the second
+/// Mac matched on folder names alone, found all nineteen taken, and wrote
+/// nineteen `<slug>-2` copies of notebooks that were already in the container.
+/// `-2` is for a genuinely different notebook that shares a title.
+///
+/// `taken` carries the names already in the destination, so that remaining
+/// collision gets the exporter's `-2` treatment instead of landing on
+/// somebody's folder — and so the planner stays a pure function of what it is
+/// told.
 pub(crate) fn plan_icloud_moves(
     from: &Path,
     to: &Path,
     bindings: &HashMap<String, OkfBinding>,
     taken: &std::collections::HashSet<String>,
-) -> Vec<(String, PathBuf, PathBuf)> {
+    already: &HashMap<String, PathBuf>,
+) -> Vec<IcloudPlacement> {
     let mut taken = taken.clone();
     let mut out = Vec::new();
     for id in bound_under(from, bindings) {
         let Some(binding) = bindings.get(&id) else {
             continue;
         };
+        if let Some(at) = already.get(&id) {
+            out.push(IcloudPlacement::Adopt {
+                notebook: id,
+                at: at.clone(),
+            });
+            continue;
+        }
         let old = PathBuf::from(&binding.path);
         let Some(name) = old.file_name().and_then(|n| n.to_str()) else {
             continue;
@@ -3933,7 +4363,11 @@ pub(crate) fn plan_icloud_moves(
             n += 1;
         }
         taken.insert(slug.clone());
-        out.push((id, old, to.join(slug)));
+        out.push(IcloudPlacement::Move {
+            notebook: id,
+            from: old,
+            to: to.join(slug),
+        });
     }
     out
 }
@@ -3941,13 +4375,11 @@ pub(crate) fn plan_icloud_moves(
 /// Point the bindings sidecar at the folders' new homes. The binding id and
 /// its manifest are untouched: this is the same bundle at a new path, not a
 /// rebind, and a rebind would throw away every hash the reconciler has.
-pub(crate) fn rebind_moved(
-    bindings: &mut HashMap<String, OkfBinding>,
-    moves: &[(String, PathBuf, PathBuf)],
-) {
-    for (id, _, new) in moves {
-        if let Some(binding) = bindings.get_mut(id) {
-            binding.path = new.to_string_lossy().to_string();
+pub(crate) fn rebind_moved(bindings: &mut HashMap<String, OkfBinding>, moves: &[IcloudPlacement]) {
+    for placement in moves {
+        if let Some(binding) = bindings.get_mut(placement.notebook()) {
+            binding.path = placement.dest().to_string_lossy().to_string();
+            binding.lost = false;
         }
     }
 }
@@ -4063,18 +4495,65 @@ pub async fn move_notebooks_to_icloud_container(
         .flatten()
         .map(|entry| entry.file_name().to_string_lossy().to_string())
         .collect();
-    let moves = plan_icloud_moves(&from, &to, &bindings, &taken);
+    // What the container already holds, by the id each bundle claims: a
+    // notebook whose folder the other Mac already moved here is adopted, not
+    // copied in beside itself.
+    let already: HashMap<String, PathBuf> = bundles_under(&to)
+        .into_iter()
+        .filter_map(|(path, id)| id.map(|id| (id, path)))
+        .collect();
+    let moves = plan_icloud_moves(&from, &to, &bindings, &taken, &already);
 
-    let mut done: Vec<(String, PathBuf, PathBuf)> = Vec::new();
-    for (id, old, new) in moves {
+    let mut done: Vec<IcloudPlacement> = Vec::new();
+    for placement in moves {
+        let (old, new) = match &placement {
+            IcloudPlacement::Adopt { at, .. } => {
+                okf_notice(format!(
+                    "{} is already in the Alchemy iCloud folder; the binding points there and the old copy is left where it is.",
+                    at.display()
+                ));
+                done.push(placement);
+                continue;
+            }
+            IcloudPlacement::Move { from, to, .. } => (from.clone(), to.clone()),
+        };
+        // The folder went before the move did — the other Mac moved it and
+        // iCloud carried that here. There is nothing to rename; the writer's
+        // recovery finds the bundle by id on its next pass, and marking the
+        // binding lost is what puts it on that path.
+        if !old.is_dir() {
+            match find_bundle_with_id(&to, placement.notebook()) {
+                Some(at) => {
+                    okf_notice(format!(
+                        "{} had already moved to {}; the binding followed it.",
+                        old.display(),
+                        at.display()
+                    ));
+                    done.push(IcloudPlacement::Adopt {
+                        notebook: placement.notebook().to_string(),
+                        at,
+                    });
+                }
+                None => {
+                    if let Some(binding) = bindings.get_mut(placement.notebook()) {
+                        binding.lost = true;
+                    }
+                    okf_notice(format!(
+                        "{} is not there to move and no bundle in the Alchemy iCloud folder claims it yet.",
+                        old.display()
+                    ));
+                }
+            }
+            continue;
+        }
         if std::fs::rename(&old, &new).is_ok() {
-            done.push((id, old, new));
+            done.push(placement);
             continue;
         }
         match copy_tree(&old, &new) {
             Ok(()) => {
                 crate::note!("okf: copied {old:?} to {new:?}; the original is still there");
-                done.push((id, old, new));
+                done.push(placement);
             }
             Err(err) => {
                 crate::diagnostics::error("okf", format!("could not move {old:?}: {err}"));

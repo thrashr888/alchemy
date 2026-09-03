@@ -843,6 +843,48 @@ they exist without being asked for.
   `path` and leaves the binding id alone, so the manifest — every hash the
   reconciler has — survives. Minting a new binding would have made the whole
   bundle read as changed on the far side of a folder move.
+- **A folder is found by its id, never rebuilt from its path.** The move is a
+  folder move on one Mac and an arrival on the other, and 0.56.0 had no
+  account of the second half. Mac A moved its bundles into the container;
+  iCloud carried the move to Mac B, whose bindings still named
+  `iCloud Drive/Alchemy/<slug>`; and Mac B's next write-through `create_dir_all`'d
+  all eighteen of those paths back into existence, so the folder both machines
+  had just left came back on both of them. Then Mac B's own move matched
+  destination *names*, found every one taken, and wrote nineteen `<slug>-2`
+  copies of notebooks that were already in the container.
+
+  Four rules, all of them the same rule — **`alchemy.id` is the identity, the
+  folder name is only a name**:
+
+  - **The writer never creates a bundle root.** Making one is bind's and
+    seed's job. A write pass that finds the root gone marks the binding `lost`
+    and writes nothing; subdirectories inside a root that *is* there are still
+    created, as they always were.
+  - **A lost binding follows its bundle.** The recovery looks under
+    `notebooks_dir` for a bundle whose `index.md` claims this notebook's id
+    and repoints the binding at it, keeping the binding id and so the manifest
+    — every hash the reconciler has. The manifest's clocks are re-stat'd
+    against the new location and any that no longer match are zeroed: after a
+    move the recorded mtime is a claim about a file that may not be the one
+    there now, and a claim like that is better paid for with one full read
+    pass than trusted. Only when no bundle anywhere under `notebooks_dir`
+    claims the notebook, *and* a previous pass already marked it lost, does
+    the notebook get a fresh folder — under `notebooks_dir`, at its plain
+    slug, never back at the path it lost. An unreachable Notebooks folder is
+    an outage and buys nothing but a wait.
+  - **The move checks identity before name.** A notebook whose bundle the
+    container already holds is adopted — the binding points there and the old
+    copy is left where it is — rather than copied in beside itself as `-2`.
+    `-2` is for a genuinely different notebook that shares a title.
+  - **The duplicates that already exist are put aside, not deleted.** One
+    `alchemy.id` in several folders under `notebooks_dir` keeps one folder and
+    the rest are *renamed* into `Duplicates/`, which the root watcher ignores.
+    The keeper is chosen from the folder names alone — unsuffixed first, then
+    lexically — because both Macs run this over the same synced folder, and a
+    keeper picked from local state would have each of them setting the other's
+    keeper aside forever. Local state decides only where the local binding is
+    repointed afterwards. This rides the once-ever heal stamp at version 2.
+
 - **Nothing moves under a write in flight, and nothing is deleted.** The move
   waits on §5.2's pending/flushing sets and refuses rather than renaming a
   bundle out from under its own writer. A rename that cannot be done in place
