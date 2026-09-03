@@ -1238,6 +1238,16 @@ pub(crate) async fn bind_impl(
     if !bundle.is_dir() {
         return Err(format!("Not a folder: {path}"));
     }
+    // The other half of the loop guard in `add_source_folder`: a folder this
+    // notebook already reads as a source cannot also be where it writes.
+    if e(state.db.list_sources(notebook_id).await)?
+        .iter()
+        .any(|s| s.url == path)
+    {
+        return Err(
+            "This notebook already reads that folder as a source — pick a different one".into(),
+        );
+    }
     // A bundle already living here has content the notebook does not; take it
     // in before the writer starts treating this folder as its own.
     if crate::commands::find_bundle_root(bundle.clone()).is_ok() {

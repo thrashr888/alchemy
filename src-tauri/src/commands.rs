@@ -5332,6 +5332,18 @@ pub async fn add_source_folder(
     if !root.is_dir() {
         return Err(format!("Not a folder: {path}"));
     }
+    // A notebook's own bundle is not a source of itself. Adding it would
+    // close a loop: the writer lays down concept files, the folder source
+    // ingests them, the new sources are written as more concepts, and so on
+    // (docs/RFC-okf-live.md §5).
+    if let Some(binding) = crate::okf::binding_for(&app_data_dir(&state), &notebook_id) {
+        if binding.path == path {
+            return Err(
+                "This notebook already keeps itself in that folder — it can't also read it as a source"
+                    .into(),
+            );
+        }
+    }
     let _guard = state.folder_scan_lock.lock().await;
     for s in e(state.db.list_sources(&notebook_id).await)? {
         if matches!(s.source_type.as_str(), "folder" | "obsidian" | "okf") && s.url == path {
