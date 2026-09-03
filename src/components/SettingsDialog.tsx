@@ -160,7 +160,7 @@ export function SettingsDialog({
       open={open}
       onClose={onClose}
       title="Settings"
-      width="max-w-2xl"
+      width={tab === "shortcuts" ? "max-w-4xl" : "max-w-2xl"}
       tall
       bodyScroll={false}
       hideHeader

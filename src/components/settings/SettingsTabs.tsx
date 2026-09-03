@@ -10,7 +10,7 @@ import type { BuildInfo, ChatConfig, ReleaseNote } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { AlchemySymbol } from "../AlchemyHero";
 import { Markdown } from "../Markdown";
-import { Input, Textarea } from "../ui";
+import { Button, EmptyState, Input, Spinner, Textarea } from "../ui";
 import {
   AlignLeft,
   Braces,
@@ -330,49 +330,252 @@ export function ShortcutsTab() {
   // The rows come from the menu's command registry (menu.rs::CMD) — one
   // source of truth for the native menu and this tab, so a shortcut can no
   // longer be registered in one and missing from the other.
-  const [shortcuts, setShortcuts] = useState<
-    { keys: string; label: string; context: string }[]
-  >([]);
+  const [shortcuts, setShortcuts] = useState<ShortcutRow[] | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+
   useEffect(() => {
+    setShortcuts(null);
+    setLoadFailed(false);
     api
       .listShortcuts()
       .then(setShortcuts)
-      .catch(() => setShortcuts([]));
-  }, []);
-  return (
-    <div className="flex flex-col gap-1">
-      {shortcuts.map((shortcut) => (
-        <div key={`${shortcut.label}-${shortcut.context || "global"}`} className="flex items-center gap-3 rounded-md px-1 py-1.5">
-          <div className="flex w-20 shrink-0 items-center gap-1">
-            {shortcut.keys.split(" ").map((key) => <Kbd key={key}>{key}</Kbd>)}
-          </div>
-          <span className="text-body text-foreground/90">{shortcut.label}</span>
-          {shortcut.context && <span className="ml-auto text-micro text-subtle-foreground">{shortcut.context}</span>}
-        </div>
-      ))}
-      <p className="mt-2 text-micro leading-relaxed text-subtle-foreground">
-        On Windows and Linux, use Ctrl in place of ⌘. In a chat, just start
-        typing: the composer takes the keys.
-      </p>
+      .catch(() => {
+        setShortcuts([]);
+        setLoadFailed(true);
+      });
+  }, [loadAttempt]);
 
-      <div className="mt-5 mb-1 px-1 text-micro font-semibold uppercase tracking-wide text-subtle-foreground">
-        Slash commands
-      </div>
-      <p className="mb-1.5 px-1 text-caption leading-relaxed text-muted-foreground">
-        Type <code className="text-citation">/</code> at the start of the chat
-        composer to open the command picker. Tab completes, Enter runs.
-      </p>
-      {SLASH_COMMANDS.map((c) => (
-        <div key={c.name} className="flex items-center gap-3 rounded-md px-1 py-1.5">
-          <code className="w-36 shrink-0 truncate text-caption text-citation">
-            /{c.name}
-            {c.argHint ? ` ${c.argHint}` : ""}
-          </code>
-          <span className="min-w-0 flex-1 text-body text-foreground/90">{c.description}</span>
-          <span className="ml-auto shrink-0 text-micro text-subtle-foreground">{c.family}</span>
+  if (shortcuts === null) {
+    return (
+      <div className="flex min-h-48 items-center justify-center rounded-lg border border-border">
+        <div className="flex items-center gap-2 text-caption text-muted-foreground">
+          <Spinner className="size-4" />
+          Loading shortcuts…
         </div>
-      ))}
+      </div>
+    );
+  }
+
+  if (loadFailed) {
+    return (
+      <div className="rounded-lg border border-border">
+        <EmptyState
+          compact
+          title="Couldn't load shortcuts"
+          hint="Alchemy couldn't read the command registry."
+        >
+          <Button
+            className="mt-2"
+            size="sm"
+            variant="secondary"
+            onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+          >
+            Try again
+          </Button>
+        </EmptyState>
+      </div>
+    );
+  }
+
+  const byContext = new Map<string, ShortcutRow[]>();
+  for (const shortcut of shortcuts) {
+    const context = shortcut.context || "App-wide";
+    byContext.set(context, [...(byContext.get(context) ?? []), shortcut]);
+  }
+
+  const shortcutColumns = [
+    ["Home", "Notebook"],
+    ["App-wide", "Reader"],
+  ].map((contexts) =>
+    contexts
+      .map((context) => ({ context, rows: byContext.get(context) ?? [] }))
+      .filter((section) => section.rows.length > 0),
+  );
+  const knownContexts = new Set(
+    shortcutColumns.flatMap((column) =>
+      column.map((section) => section.context),
+    ),
+  );
+  const extraShortcutSections = [...byContext.entries()]
+    .filter(([context]) => !knownContexts.has(context))
+    .map(([context, rows]) => ({ context, rows }));
+  shortcutColumns[1].push(...extraShortcutSections);
+
+  const slashColumns = [
+    ["Generate", "Documents"],
+    ["Actions", "Learning"],
+  ].map((families) =>
+    families.map((family) => ({
+      family,
+      commands: SLASH_COMMANDS.filter((command) => command.family === family),
+    })),
+  );
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-3">
+        <p className="text-pretty text-caption leading-relaxed text-muted-foreground">
+          Work quickly without leaving the keyboard. Shortcuts follow the
+          part of Alchemy you are using.
+        </p>
+
+        <div className="grid grid-cols-2 items-start gap-2">
+          {shortcutColumns.map((column, columnIndex) => (
+            <div key={columnIndex} className="flex min-w-0 flex-col gap-2">
+              {column.map((section) => (
+                <ShortcutSection
+                  key={section.context}
+                  title={section.context}
+                  rows={section.rows}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+
+        <p className="text-pretty px-1 text-micro leading-relaxed text-subtle-foreground">
+          On Windows and Linux, use Ctrl in place of ⌘. In a chat, just start
+          typing and the composer takes focus.
+        </p>
+      </div>
+
+      <section
+        aria-labelledby="slash-commands-heading"
+        className="flex flex-col gap-3"
+      >
+        <div className="px-1">
+          <h3
+            id="slash-commands-heading"
+            className="text-balance text-body font-semibold text-foreground"
+          >
+            Slash commands
+          </h3>
+          <p className="mt-1 text-pretty text-caption leading-relaxed text-muted-foreground">
+            Type <code className="text-citation">/</code> at the start of the
+            chat composer to open the command picker. Tab completes; Enter runs.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 items-start gap-2">
+          {slashColumns.map((column, columnIndex) => (
+            <div key={columnIndex} className="flex min-w-0 flex-col gap-2">
+              {column.map((section) => (
+                <SlashCommandSection
+                  key={section.family}
+                  title={section.family}
+                  commands={section.commands}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+      </section>
     </div>
+  );
+}
+
+interface ShortcutRow {
+  keys: string;
+  label: string;
+  context: string;
+}
+
+function ShortcutSection({
+  title,
+  rows,
+}: {
+  title: string;
+  rows: ShortcutRow[];
+}) {
+  const headingId = `shortcut-section-${title.toLowerCase().replace(/\s+/g, "-")}`;
+  return (
+    <section
+      aria-labelledby={headingId}
+      className="overflow-hidden rounded-lg border border-border"
+    >
+      <h3
+        id={headingId}
+        className="text-balance border-b border-border px-3 py-2 text-body font-semibold text-foreground"
+      >
+        {title}
+      </h3>
+      <div className="divide-y divide-border">
+        {rows.map((shortcut) => (
+          <div
+            key={`${shortcut.label}-${shortcut.keys}`}
+            className="flex min-h-9 items-center gap-3 px-3 py-2"
+          >
+            <span className="min-w-0 flex-1 text-caption leading-snug text-foreground/90">
+              {shortcut.label}
+            </span>
+            <ShortcutKeys keys={shortcut.keys} />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ShortcutKeys({ keys }: { keys: string }) {
+  return (
+    <span
+      className="flex shrink-0 items-center justify-end gap-1"
+      aria-label={keys}
+    >
+      {keys.split(" ").map((key, index) => (
+        <Kbd key={`${key}-${index}`}>{displayKey(key)}</Kbd>
+      ))}
+    </span>
+  );
+}
+
+function displayKey(key: string) {
+  if (key === "esc") return "Esc";
+  if (key === "space") return "Space";
+  if (key === "click") return "Click";
+  return key;
+}
+
+function SlashCommandSection({
+  title,
+  commands,
+}: {
+  title: string;
+  commands: typeof SLASH_COMMANDS;
+}) {
+  const headingId = `slash-section-${title.toLowerCase()}`;
+  return (
+    <section
+      aria-labelledby={headingId}
+      className="overflow-hidden rounded-lg border border-border"
+    >
+      <h4
+        id={headingId}
+        className="text-balance border-b border-border px-3 py-2 text-body font-semibold text-foreground"
+      >
+        {title}
+      </h4>
+      <div className="divide-y divide-border">
+        {commands.map((command) => (
+          <div
+            key={command.name}
+            className="flex min-h-10 items-start gap-3 px-3 py-2"
+          >
+            <span className="min-w-0 flex-1 text-caption leading-snug text-foreground/90">
+              {command.description}
+            </span>
+            <code
+              className="max-w-36 shrink-0 truncate text-right text-micro leading-snug text-citation"
+              title={`/${command.name}${command.argHint ? ` ${command.argHint}` : ""}`}
+            >
+              /{command.name}
+              {command.argHint ? ` ${command.argHint}` : ""}
+            </code>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -517,7 +720,11 @@ function ThemeButton({ label, selected, colors, onClick }: { label: string; sele
 }
 
 function Kbd({ children }: { children: ReactNode }) {
-  return <kbd className="inline-flex h-[22px] min-w-[22px] items-center justify-center rounded-md border border-border-strong bg-surface-2 px-1.5 font-sans text-caption text-foreground/85 shadow-[0_1px_0_var(--border)]">{children}</kbd>;
+  return (
+    <kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded-md border border-border-strong bg-surface-2 px-1.5 font-sans text-micro text-foreground/85 shadow-sm">
+      {children}
+    </kbd>
+  );
 }
 
 /** macOS System Settings-style option: an icon tile above its label, the
