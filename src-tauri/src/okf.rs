@@ -628,6 +628,9 @@ pub fn write_bundle(
                     path: rel,
                     adopted,
                     hash,
+                    // What the file's clock says now that we are done with
+                    // it, so the next read-back pass can skip it on a stat.
+                    file_mtime: file_mtime_ms(&at),
                     wrote_at: concept.generated_at,
                     extra: std::mem::take(&mut concept.extra),
                 },
@@ -1571,6 +1574,9 @@ pub(crate) async fn bind_new_notebook(state: &AppState, notebook: &Notebook) {
     if let Err(err) = write_bound(state, &notebook.id).await {
         crate::diagnostics::error("okf", format!("seed pass failed: {err}"));
     }
+    if let Some(app) = crate::commands::app_handle() {
+        crate::fswatch::rearm(&app).await;
+    }
 }
 
 /// Keep every active notebook on disk — the upgrade offer's Keep button
@@ -2465,6 +2471,14 @@ pub struct OkfManifestEntry {
     /// Hash of the whole file as written. Both the "did this change" test and
     /// the echo test the reconciler needs (§5.3).
     pub hash: String,
+    /// The file's own mtime when this entry was last correct. The reconciler
+    /// reads and hashes only files whose mtime has moved since — hashing all
+    /// 742 concepts of a large bundle to discover nothing changed took 228
+    /// seconds on OneDrive and never finished on Drive. Zero means "never
+    /// recorded", which reads as changed, so an older manifest costs one
+    /// full pass and no correctness.
+    #[serde(default)]
+    pub file_mtime: i64,
     /// Epoch ms of the entity when we wrote it — the conflict clock (§5.4).
     #[serde(default)]
     pub wrote_at: i64,
@@ -2720,6 +2734,10 @@ pub(crate) async fn bind_impl(
         }),
     );
     write_bound(state, notebook_id).await?;
+    // Watch it now, not on the next minute tick: a folder somebody just
+    // asked the app to keep in step should be in step from the next save
+    // (docs/RFC-okf-live.md §5.3).
+    crate::fswatch::rearm(app).await;
     Ok(path.to_string())
 }
 
@@ -2797,6 +2815,21 @@ pub fn classify(rel: &str, hash: &str, manifest: &OkfManifest) -> OkfAction {
         Some((id, _)) => OkfAction::Update(id.clone()),
         None => OkfAction::Create,
     }
+}
+
+/// Has this file gone untouched since the manifest last looked at it?
+///
+/// The read-back sweep's first question, and the cheap one: a file whose own
+/// mtime has not moved is the file we already know, so there is nothing to
+/// read and nothing to hash. `file_mtime: 0` is a manifest written before
+/// this was recorded, and reads as changed — one full pass, then never
+/// again.
+pub fn is_untouched(rel: &str, mtime: i64, manifest: &OkfManifest) -> bool {
+    mtime != 0
+        && manifest
+            .concepts
+            .values()
+            .any(|entry| entry.path == rel && entry.file_mtime == mtime)
 }
 
 /// Last writer wins by clock (§5.4). A tie goes to disk: the file is what a
@@ -2944,8 +2977,8 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
     let mut out = OkfReconcile::default();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut losers: Vec<String> = Vec::new();
-    // Did this pass take a file in, and so change the manifest?
-    let mut adopted = false;
+    // Did this pass change the manifest — a file taken in, or a clock moved?
+    let mut dirty = false;
 
     // Ask for anything the cloud has evicted before reading what is here, so
     // the next pass finds it (§5.6). Bounded by the same cap folder scans use.
@@ -2986,6 +3019,16 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
                 }
                 continue;
             }
+            // One stat, and most of the time that is the whole cost. Reading
+            // and hashing every concept of every bundle on one serial tick is
+            // what made a closed notebook's read-back take minutes.
+            let mtime = file_mtime_ms(&path);
+            if is_untouched(&rel, mtime, &manifest) {
+                if let Some(id) = by_path.get(&rel) {
+                    seen.insert(id.clone());
+                }
+                continue;
+            }
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
@@ -2996,10 +3039,16 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
                     seen.insert(id.clone());
                     Some(id.clone())
                 }
-                // Our own write, echoing back through the watcher.
+                // Our own write, echoing back through the watcher. Note the
+                // clock while we are here: a file whose mtime moved but whose
+                // bytes did not should cost a stat next time, not a read.
                 OkfAction::Echo => {
                     if let Some(id) = by_path.get(&rel) {
                         seen.insert(id.clone());
+                        if let Some(entry) = manifest.concepts.get_mut(id) {
+                            entry.file_mtime = mtime;
+                            dirty = true;
+                        }
                     }
                     continue;
                 }
@@ -3010,8 +3059,8 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
             match (dir, known) {
                 ("notes", None) => {
                     if let Some(id) = take_in_note(state, notebook_id, &doc, &path).await? {
-                        adopt(&mut manifest, &id, &rel, &hash, &doc);
-                        adopted = true;
+                        adopt(&mut manifest, &id, &rel, &hash, mtime, &doc);
+                        dirty = true;
                         out.created += 1;
                     }
                 }
@@ -3019,8 +3068,8 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
                     if let Some(id) =
                         take_in_source(state, notebook_id, &doc, &path, &bundle).await?
                     {
-                        adopt(&mut manifest, &id, &rel, &hash, &doc);
-                        adopted = true;
+                        adopt(&mut manifest, &id, &rel, &hash, mtime, &doc);
+                        dirty = true;
                         out.created += 1;
                     }
                 }
@@ -3068,7 +3117,7 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
             crate::note!("okf: {rel} was deleted on disk; removed it here too");
         }
     }
-    if out.deleted > 0 || adopted {
+    if out.deleted > 0 || dirty {
         save_manifest(&manifest_at, &manifest);
     }
 
@@ -3102,13 +3151,21 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
 /// as it stands, so the very next pass reads it as an echo rather than an
 /// edit, and the frontmatter keys we do not write ride along the way an
 /// outside edit's always have.
-pub(crate) fn adopt(manifest: &mut OkfManifest, id: &str, rel: &str, hash: &str, doc: &OkfDoc) {
+pub(crate) fn adopt(
+    manifest: &mut OkfManifest,
+    id: &str,
+    rel: &str,
+    hash: &str,
+    mtime: i64,
+    doc: &OkfDoc,
+) {
     manifest.concepts.insert(
         id.to_string(),
         OkfManifestEntry {
             path: rel.to_string(),
             adopted: true,
             hash: hash.to_string(),
+            file_mtime: mtime,
             wrote_at: 0,
             extra: doc.extra(),
         },

@@ -410,6 +410,28 @@ up. Four things the RFC did not settle, decided in the writing:
   side to err on: renaming a file somebody else made is a surprise, and a
   stale slug is not.
 
+- **The clock is read before the bytes.** §5.3's table is written per file,
+  which read as "hash every file every pass" — and on 26 bindings, one of them
+  holding 742 sources, a serial sweep of that took 228 s to notice an outside
+  edit on OneDrive and never finished on Google Drive inside ten minutes. The
+  manifest now records each file's own mtime alongside its hash, and a file
+  whose clock has not moved is skipped without being opened. An unchanged
+  bundle costs one stat per file; a changed one costs reads of the changed
+  files. `file_mtime: 0` — every manifest written before this — reads as
+  changed, so the upgrade costs one full pass and nothing after it.
+
+  Not the directory's mtime, which is what a first draft of this reached for.
+  APFS does not bump a directory when a file inside it is written in place, so
+  a whole-bundle skip on `sources/` and `notes/` mtimes would silently stop
+  reading back `printf >> note.md` on a closed notebook — the exact class of
+  bug this is fixing. The saving it would buy over the per-file stats is
+  microseconds against the minutes that were the actual problem.
+
+  The watcher's half is timing, not cost: `rearm` now runs on every bind as
+  well as on every open-set change, and the bound roots no longer sit behind
+  the folder-source table read, so a folder somebody just asked the app to
+  keep in step is watched from that moment rather than up to a minute later.
+
 - **Reconcile stands down while a write is in flight.** Reading a bundle
   mid-write would see half of Alchemy's own pass and call it an outside
   edit, so the reconciler returns early when the notebook has a pending or

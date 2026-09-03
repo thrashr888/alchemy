@@ -315,24 +315,25 @@ pub async fn rearm(app: &AppHandle) {
                     }
                 }
             }
-            Err(err) => {
-                crate::note!("fswatch: folder list failed: {err:#}");
-                return;
-            }
+            // The folder table is not the bound roots' business: a read
+            // that failed must not cost them their watch.
+            Err(err) => crate::note!("fswatch: folder list failed: {err:#}"),
         }
-        // A bound notebook's bundle is watched for the same reason its folder
-        // sources are: it is the notebook's shared surface, and an edit made
-        // in a text editor should land here in seconds, not on the next sweep
-        // (docs/RFC-okf-live.md §5.3).
-        if let Ok(data_dir) = app.path().app_data_dir() {
-            for (notebook_id, binding) in crate::okf::load_bindings(&data_dir) {
-                if !open.contains(&notebook_id) {
-                    continue;
-                }
-                let root = PathBuf::from(&binding.path);
-                if root.is_dir() {
-                    desired.insert(root, notebook_id);
-                }
+    }
+    // A bound notebook's bundle is watched for the same reason its folder
+    // sources are: it is the notebook's shared surface, and an edit made in a
+    // text editor should land here in seconds, not on the next sweep
+    // (docs/RFC-okf-live.md §5.3). Rearm runs on every open-set change and on
+    // every bind, so the watch is live from the moment there is something to
+    // watch rather than up to a minute later.
+    if let Ok(data_dir) = app.path().app_data_dir() {
+        for (notebook_id, binding) in crate::okf::load_bindings(&data_dir) {
+            if !open.contains(&notebook_id) {
+                continue;
+            }
+            let root = PathBuf::from(&binding.path);
+            if root.is_dir() {
+                desired.insert(root, notebook_id);
             }
         }
     }
