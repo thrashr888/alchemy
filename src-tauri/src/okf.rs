@@ -470,10 +470,16 @@ pub fn write_bundle(
             // bundle does not own — and `alchemy.origin` keeps the machine
             // path either way, so a bind-back can re-link.
             match concept.reference.clone() {
-                Some(ReferencePlan::Copy { name, from }) => {
-                    match place_reference(bundle, &name, &from) {
+                Some(ReferencePlan::Copy { name, hash, from }) => {
+                    match place_reference(bundle, &mut manifest, &name, &hash, &from) {
                         Ok(rel) => {
-                            references.insert(name);
+                            references.insert(
+                                rel.strip_prefix("references/").unwrap_or(&rel).to_string(),
+                            );
+                            // The hash is how the bundle dedupes originals, so
+                            // it says so out loud rather than hiding in the
+                            // filename where only we could read it.
+                            concept.alchemy.push(("sha256".into(), hash));
                             concept.resource = rel;
                         }
                         Err(err) => {
@@ -619,7 +625,7 @@ pub fn write_bundle(
     write(&bundle.join("index.md"), &index)?;
 
     // An original nothing claims any more goes with the source that owned it.
-    let dropped = prune_references(bundle, &references);
+    let dropped = prune_references(bundle, &mut manifest, &references);
     out.removed += dropped;
     out.referenced = references.len();
     out.sources = listings.get("sources").map(Vec::len).unwrap_or(0);
@@ -1571,19 +1577,97 @@ const REFERENCE_EXTENSIONS: &[&str] = &[
 ];
 
 /// The first 16 hex characters of the file's SHA-256 — 64 bits, which for a
-/// notebook's worth of documents is a collision nobody will see, and short
-/// enough that the filename stays readable.
+/// notebook's worth of documents is a collision nobody will see.
+///
+/// It is an original's identity, not its name. The manifest maps it to the
+/// file the bundle carries and `alchemy.sha256` repeats it in the concept, so
+/// other tools can dedupe the same way; the filename stays the one the person
+/// who made the file chose.
 pub fn reference_hash(bytes: &[u8]) -> String {
     use sha2::Digest;
     let digest = sha2::Sha256::digest(bytes);
     digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
+/// How long a reference name may get, in bytes. macOS allows 255; a shorter
+/// cap leaves room for a `-2` and keeps a log line readable.
+const REFERENCE_NAME_MAX: usize = 120;
+
+/// Split a filename into stem and suffix. A name with no dot, and a name that
+/// is only a suffix, are all stem.
+fn split_reference_name(name: &str) -> (&str, &str) {
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => (stem, ext),
+        _ => (name, ""),
+    }
+}
+
+/// `paper.pdf` at 2 is `paper-2.pdf`.
+fn numbered_reference_name(name: &str, n: u32) -> String {
+    let (stem, ext) = split_reference_name(name);
+    if ext.is_empty() {
+        format!("{stem}-{n}")
+    } else {
+        format!("{stem}-{n}.{ext}")
+    }
+}
+
+/// A name from the hash-named layout this branch shipped first: sixteen hex
+/// characters and a suffix.
+fn is_hash_name(name: &str) -> bool {
+    let (stem, _) = split_reference_name(name);
+    stem.len() == 16 && stem.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// The name an original travels under: its own.
+///
+/// A bundle is meant to be read by a person as well as by a program, and
+/// `2018 488 Spider brochure.pdf` says what `14030e98bcc8daf5.pdf` cannot. So
+/// the filename is kept as it was — spaces, case and unicode included — and
+/// only what a filesystem or a path parser would choke on comes out:
+/// separators, control characters, a leading dot that would hide the file,
+/// and any length past the cap. A source whose origin has no filename of its
+/// own — a clipboard image, a captured page — falls back to its slug.
+fn reference_name(path: &Path, fallback_stem: &str, ext: &str) -> String {
+    let raw: String = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| !c.is_control() && !matches!(c, '/' | '\\' | ':'))
+        .collect();
+    let raw = raw.trim().trim_start_matches('.').trim();
+    let (stem, suffix) = split_reference_name(raw);
+    let suffix = if suffix.is_empty() { ext } else { suffix };
+    let mut stem = stem.trim().to_string();
+    if stem.is_empty() {
+        stem = fallback_stem.trim().to_string();
+    }
+    while !stem.is_empty() && stem.len() + suffix.len() + 1 > REFERENCE_NAME_MAX {
+        stem.pop();
+    }
+    let stem = stem.trim_end().to_string();
+    let stem = if stem.is_empty() {
+        "untitled".to_string()
+    } else {
+        stem
+    };
+    if suffix.is_empty() {
+        stem
+    } else {
+        format!("{stem}.{suffix}")
+    }
+}
+
 /// Why a source's original is, or is not, in the bundle (§6's table).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReferencePlan {
-    /// Copy the bytes in under this name.
-    Copy { name: String, from: PathBuf },
+    /// Copy the bytes in under this name, deduplicated by this hash.
+    Copy {
+        name: String,
+        hash: String,
+        from: PathBuf,
+    },
     /// Already inside the bundle: cite it where it lies.
     Inside { rel: String },
     /// Leave the bytes where they are; `resource:` stays provenance.
@@ -1641,20 +1725,106 @@ pub fn plan_reference(source: &Source, bundle: &Path, cap_bytes: u64) -> Referen
         };
     };
     ReferencePlan::Copy {
-        name: format!("{}.{ext}", reference_hash(&bytes)),
+        name: reference_name(path, &okf_slug(&source.title), &ext),
+        hash: reference_hash(&bytes),
         from: path.to_path_buf(),
     }
 }
 
-/// Copy an original into `references/`, unless it is already there.
+/// The name a reference the bundle already holds should be cited under, or
+/// `None` when the bundle does not hold it any more and the bytes have to be
+/// copied again.
 ///
-/// Named by content, so two sources over the same file share one copy, a
-/// rename moves nothing, and every write after the first is a `exists()`
-/// check rather than a copy. Returns the bundle-relative path.
-fn place_reference(bundle: &Path, name: &str, from: &Path) -> Result<String, String> {
+/// A `held` that is only a hash takes `want` — the original's own name — in
+/// one `rename(2)`, which is the migration off the hash-named layout and
+/// which git reads as a move rather than a delete and an add.
+fn settle_reference(dir: &Path, held: &str, want: &str, hash: &str) -> Option<String> {
+    let at = dir.join(held);
+    if is_evicted_stub(&at) {
+        // Not downloaded, so not renameable — and not missing either. Ask for
+        // it and keep the name; the write after it lands migrates it.
+        hydrate_if_evicted(&at);
+        return Some(held.to_string());
+    }
+    if !at.exists() {
+        return None;
+    }
+    if held == want || !is_hash_name(held) {
+        return Some(held.to_string());
+    }
+    let dest = free_reference_name(dir, want, hash);
+    match std::fs::rename(&at, dir.join(&dest)) {
+        Ok(()) => Some(dest),
+        Err(err) => {
+            crate::note!("okf: {at:?} would not take its original name ({err})");
+            Some(held.to_string())
+        }
+    }
+}
+
+/// The first of `paper.pdf`, `paper-2.pdf`, … that is free — or that already
+/// holds exactly these bytes, since one file per original is the point.
+fn free_reference_name(dir: &Path, name: &str, hash: &str) -> String {
+    let mut candidate = name.to_string();
+    for n in 2..100u32 {
+        let at = dir.join(&candidate);
+        // A stub is the other Mac's copy of the same name, not a rival file.
+        if is_evicted_stub(&at) || !at.exists() {
+            return candidate;
+        }
+        if std::fs::read(&at)
+            .map(|bytes| reference_hash(&bytes) == hash)
+            .unwrap_or(false)
+        {
+            return candidate;
+        }
+        candidate = numbered_reference_name(name, n);
+    }
+    candidate
+}
+
+/// Copy an original into `references/` under its own name, unless the bundle
+/// already carries those bytes.
+///
+/// Identity is the content hash and the manifest maps it to the file that
+/// holds it: two sources over the same file share one copy, and every write
+/// after the first is a lookup rather than a copy. The name is the original
+/// file's, so a different file that happens to be called the same thing lands
+/// as `<stem>-2.<ext>` instead of overwriting it. Returns the bundle-relative
+/// path.
+fn place_reference(
+    bundle: &Path,
+    manifest: &mut OkfManifest,
+    name: &str,
+    hash: &str,
+    from: &Path,
+) -> Result<String, String> {
     let dir = bundle.join("references");
     std::fs::create_dir_all(&dir).map_err(|err| format!("Failed to create {dir:?}: {err}"))?;
-    let dest = dir.join(name);
+    // Already carried: cite it where it lies.
+    if let Some(prior) = manifest.references.get(hash).cloned() {
+        if let Some(rel) = settle_reference(&dir, &prior, name, hash) {
+            manifest.references.insert(hash.to_string(), rel.clone());
+            return Ok(format!("references/{rel}"));
+        }
+    }
+    // A bundle this branch's earlier builds wrote has the bytes under the
+    // hash, and no manifest entry for them. Rename rather than copy a second
+    // time, so one write-through migrates the folder and leaves no duplicate.
+    let ext = split_reference_name(name).1;
+    let legacy = if ext.is_empty() {
+        hash.to_string()
+    } else {
+        format!("{hash}.{ext}")
+    };
+    if legacy != name {
+        if let Some(rel) = settle_reference(&dir, &legacy, name, hash) {
+            manifest.references.insert(hash.to_string(), rel.clone());
+            return Ok(format!("references/{rel}"));
+        }
+    }
+    let dest_name = free_reference_name(&dir, name, hash);
+    let dest = dir.join(&dest_name);
     if is_evicted_stub(&dest) {
         // The bytes are here, just not downloaded. Ask for them rather than
         // writing a second copy over the placeholder.
@@ -1663,15 +1833,26 @@ fn place_reference(bundle: &Path, name: &str, from: &Path) -> Result<String, Str
         std::fs::copy(from, &dest)
             .map_err(|err| format!("Failed to copy {from:?} into the bundle: {err}"))?;
     }
-    Ok(format!("references/{name}"))
+    manifest
+        .references
+        .insert(hash.to_string(), dest_name.clone());
+    Ok(format!("references/{dest_name}"))
 }
 
 /// Drop references nothing points at any more.
 ///
-/// "Points at" means a concept the manifest claims, so deleting a source
-/// takes its original with it and nothing else does — a file a person put in
-/// `references/` by hand is not ours to remove.
-fn prune_references(bundle: &Path, claimed: &std::collections::HashSet<String>) -> usize {
+/// "Points at" means a concept this pass wrote, and "ours" means a name the
+/// manifest recorded the writer choosing — which is where the claim has to
+/// live now that files are named after their originals rather than their
+/// bytes. A `handout.pdf` someone put in `references/` by hand is still not
+/// ours to remove.
+fn prune_references(
+    bundle: &Path,
+    manifest: &mut OkfManifest,
+    claimed: &std::collections::HashSet<String>,
+) -> usize {
+    let ours: std::collections::HashSet<String> = manifest.references.values().cloned().collect();
+    manifest.references.retain(|_, name| claimed.contains(name));
     let dir = bundle.join("references");
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return 0;
@@ -1682,12 +1863,7 @@ fn prune_references(bundle: &Path, claimed: &std::collections::HashSet<String>) 
         if name.starts_with('.') || claimed.contains(&name) {
             continue;
         }
-        // Only the content-addressed names are the writer's to remove.
-        let stem = name.split('.').next().unwrap_or_default();
-        if stem.len() == 16
-            && stem.chars().all(|c| c.is_ascii_hexdigit())
-            && std::fs::remove_file(entry.path()).is_ok()
-        {
+        if ours.contains(&name) && std::fs::remove_file(entry.path()).is_ok() {
             removed += 1;
         }
     }
@@ -1776,6 +1952,12 @@ pub struct OkfManifest {
     /// Entity id → the file written for it.
     #[serde(default)]
     pub concepts: HashMap<String, OkfManifestEntry>,
+    /// Content hash → the file in `references/` that holds those bytes (§6).
+    /// Originals are named after the originals, so the hash that dedupes them
+    /// lives here rather than in the filename — and this map is also what
+    /// says which names in `references/` the writer chose and may remove.
+    #[serde(default)]
+    pub references: HashMap<String, String>,
 }
 
 /// Where a binding's manifest lives: `<app-data>/okf/<binding-id>.json`,

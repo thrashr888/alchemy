@@ -2519,9 +2519,10 @@ fn okf_reference_plan_follows_the_table() {
     let pdf = dir.join("paper.pdf");
     std::fs::write(&pdf, b"%PDF-1.4 pretend").expect("write");
     match plan_reference(&okf_src("s1", &pdf.to_string_lossy()), &bundle, cap) {
-        ReferencePlan::Copy { name, .. } => {
-            assert!(name.ends_with(".pdf"));
-            assert_eq!(name.len(), 16 + 4, "sixteen hex characters plus the suffix");
+        ReferencePlan::Copy { name, hash, .. } => {
+            assert_eq!(name, "paper.pdf", "the original travels under its own name");
+            assert_eq!(hash.len(), 16, "the hash dedupes, in the manifest");
+            assert!(hash.chars().all(|c| c.is_ascii_hexdigit()), "got {hash}");
         }
         other => panic!("a dragged PDF copies, got {other:?}"),
     }
@@ -2579,10 +2580,11 @@ fn okf_reference_plan_follows_the_table() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// One original per distinct file, written once, and removed only when the
-/// last concept pointing at it goes (§6, §8's "Originals" bullet).
+/// One original per distinct file, under the name its maker gave it, written
+/// once, and removed only when the last concept pointing at it goes (§6, §8's
+/// "Originals" bullet).
 #[test]
-fn okf_originals_are_written_once_and_shared_by_hash() {
+fn okf_originals_keep_their_name_and_dedupe_by_hash() {
     use crate::okf::{parse_okf_doc, plan_reference, write_bundle, OkfConcept};
     let dir = okf_scratch("refs");
     let bundle = dir.join("nb");
@@ -2623,17 +2625,22 @@ fn okf_originals_are_written_once_and_shared_by_hash() {
         .flatten()
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
-    assert_eq!(refs.len(), 1, "one file on disk: {refs:?}");
+    assert_eq!(refs, vec!["paper.pdf".to_string()], "one file, named");
 
-    // `resource:` says the bytes are here; `alchemy.origin` keeps the path.
+    // `resource:` says the bytes are here; `alchemy.origin` keeps the path,
+    // and `alchemy.sha256` keeps the identity the filename no longer carries.
     let doc =
         parse_okf_doc(&std::fs::read_to_string(bundle.join("sources/first-read.md")).unwrap());
     let resource = doc.str("resource").expect("resource");
-    assert!(resource.starts_with("references/"), "got {resource}");
+    assert_eq!(resource, "references/paper.pdf");
     assert!(bundle.join(&resource).exists(), "and it resolves");
     assert_eq!(
         doc.nested("alchemy", "origin").as_deref(),
         Some(uri.as_str())
+    );
+    assert_eq!(
+        doc.nested("alchemy", "sha256"),
+        Some(crate::okf::reference_hash(b"%PDF-1.4 the same bytes"))
     );
     assert_eq!(
         parse_okf_doc(&std::fs::read_to_string(bundle.join("sources/second-read.md")).unwrap())
@@ -2693,8 +2700,152 @@ fn okf_originals_are_written_once_and_shared_by_hash() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Two different files called the same thing are two files: the second takes
+/// `<stem>-2.<ext>` rather than overwriting the first (§6).
+#[test]
+fn okf_originals_with_the_same_name_do_not_collide() {
+    use crate::okf::{parse_okf_doc, plan_reference, write_bundle, OkfConcept};
+    let dir = okf_scratch("refname");
+    let bundle = dir.join("nb");
+    let cap = 50 * 1024 * 1024;
+
+    // Same filename, different bytes, different folders — the everyday case
+    // of two brochures both saved as `paper.pdf`.
+    let mut concepts: Vec<OkfConcept> = Vec::new();
+    for (i, bytes) in [b"%PDF one".as_slice(), b"%PDF two".as_slice()]
+        .iter()
+        .enumerate()
+    {
+        let folder = dir.join(format!("d{i}"));
+        std::fs::create_dir_all(&folder).expect("mkdir");
+        let pdf = folder.join("paper.pdf");
+        std::fs::write(&pdf, bytes).expect("write");
+        let id = format!("s{i}");
+        concepts.push(OkfConcept {
+            id: id.clone(),
+            title: format!("Read {i}"),
+            content: "Extracted text.".into(),
+            type_label: "Source".into(),
+            generated_at: 1_756_000_000_000,
+            generated_by: "alchemy/test".into(),
+            reference: Some(plan_reference(
+                &okf_src(&id, &pdf.to_string_lossy()),
+                &bundle,
+                cap,
+            )),
+            ..okf_blank_concept()
+        });
+    }
+
+    let out = write_bundle(
+        &okf_notebook("NB"),
+        &concepts,
+        &[],
+        &bundle,
+        Some(&okf_manifest(&bundle)),
+    )
+    .expect("write");
+    assert_eq!(out.referenced, 2, "two distinct originals");
+    let mut refs: Vec<String> = std::fs::read_dir(bundle.join("references"))
+        .expect("references/")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    refs.sort();
+    assert_eq!(refs, vec!["paper-2.pdf", "paper.pdf"]);
+
+    let resource = |slug: &str| {
+        parse_okf_doc(
+            &std::fs::read_to_string(bundle.join(format!("sources/{slug}.md"))).expect("read"),
+        )
+        .str("resource")
+        .expect("resource")
+    };
+    assert_eq!(resource("read-0"), "references/paper.pdf");
+    assert_eq!(resource("read-1"), "references/paper-2.pdf");
+    assert_eq!(
+        std::fs::read(bundle.join("references/paper-2.pdf")).expect("read"),
+        b"%PDF two",
+        "the second file kept its own bytes"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A bundle written under the hash-named layout comes out named after one
+/// write-through — by `rename(2)`, so git reads a move, and with no duplicate
+/// left behind (§6, "as built").
+#[test]
+fn okf_hash_named_originals_migrate_to_their_own_names() {
+    use crate::okf::{parse_okf_doc, plan_reference, reference_hash, write_bundle, OkfConcept};
+    use std::os::unix::fs::MetadataExt;
+    let dir = okf_scratch("refmigrate");
+    let bundle = dir.join("nb");
+    let bytes = b"%PDF-1.4 a brochure";
+    let pdf = dir.join("2018 488 Spider brochure.pdf");
+    std::fs::write(&pdf, bytes).expect("write");
+
+    // What the first build of this branch left in Paul's iCloud Drive: the
+    // bytes, under their hash, and a manifest that never mentioned them.
+    let legacy = bundle.join(format!("references/{}.pdf", reference_hash(bytes)));
+    std::fs::create_dir_all(legacy.parent().expect("parent")).expect("mkdir");
+    std::fs::write(&legacy, bytes).expect("write");
+    let ino = std::fs::metadata(&legacy).expect("legacy").ino();
+
+    let out = write_bundle(
+        &okf_notebook("NB"),
+        &[OkfConcept {
+            id: "s1".into(),
+            title: "Spider brochure".into(),
+            content: "Extracted text.".into(),
+            type_label: "Source".into(),
+            generated_at: 1_756_000_000_000,
+            generated_by: "alchemy/test".into(),
+            reference: Some(plan_reference(
+                &okf_src("s1", &pdf.to_string_lossy()),
+                &bundle,
+                50 * 1024 * 1024,
+            )),
+            ..okf_blank_concept()
+        }],
+        &[],
+        &bundle,
+        Some(&okf_manifest(&bundle)),
+    )
+    .expect("write");
+
+    let named = bundle.join("references/2018 488 Spider brochure.pdf");
+    assert!(
+        !legacy.exists(),
+        "the hash-named copy moved, it did not stay"
+    );
+    assert_eq!(
+        std::fs::metadata(&named).expect("named").ino(),
+        ino,
+        "renamed rather than recopied, so git sees a move"
+    );
+    let refs: Vec<String> = std::fs::read_dir(bundle.join("references"))
+        .expect("references/")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(refs.len(), 1, "no duplicate left behind: {refs:?}");
+    assert_eq!(out.referenced, 1);
+    assert_eq!(
+        parse_okf_doc(
+            &std::fs::read_to_string(bundle.join("sources/spider-brochure.md")).expect("read")
+        )
+        .str("resource")
+        .as_deref(),
+        Some("references/2018 488 Spider brochure.pdf"),
+        "and the concept points at the new name in the same pass"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A file a person put in `references/` themselves is not the writer's to
-/// remove — only the content-addressed names it wrote are.
+/// remove — only the names its manifest recorded it choosing.
 #[test]
 fn okf_leaves_references_it_did_not_name() {
     use crate::okf::write_bundle;
