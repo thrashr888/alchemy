@@ -40,6 +40,13 @@ static LAST_CLOSED_SWEEP: AtomicI64 = AtomicI64::new(0);
 static LAST_SNAPSHOT: AtomicI64 = AtomicI64::new(0);
 const SNAPSHOT_EVERY_MS: i64 = 60 * 60 * 1000;
 
+/// Epoch ms of the last OKF escape-hatch attempt, and whether one is still
+/// running. Unlike the store clone this reads every source's text and writes
+/// a file per concept, so it runs off the pass thread and never stacks.
+static LAST_OKF: AtomicI64 = AtomicI64::new(0);
+static OKF_RUNNING: AtomicBool = AtomicBool::new(false);
+const OKF_EVERY_MS: i64 = 60 * 60 * 1000;
+
 /// Epoch ms of the last nightly Weave pass, and the window it judges. Hourly
 /// rather than per-tick: judging is the expensive stage, and a source that
 /// changed two minutes ago is no more urgent than one that changed fifty.
@@ -445,6 +452,56 @@ async fn run_snapshot(app: &AppHandle, state: &AppState) {
     write_receipt(state, receipt).await;
 }
 
+/// Write every notebook out as an OKF bundle into `backups/okf/latest/`
+/// (docs/RFC-night-shift-area.md §7, docs/RFC-okf-live.md §3). The store
+/// snapshot beside it is an opaque clone; this copy is markdown a person can
+/// read with nothing but a text editor, which is what makes it the escape
+/// hatch from a Lance-format problem rather than a second copy of one.
+///
+/// Detached, unlike `run_snapshot`: a clone is a metadata operation, but this
+/// reads every source's text out of the store and writes a file per concept.
+async fn run_okf_export(app: &AppHandle, state: &AppState) {
+    let Ok(data_dir) = app.path().app_data_dir() else {
+        return;
+    };
+    // Once per calendar day, stamped on disk so a relaunch does not buy the
+    // day a second full rewrite.
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    if crate::backup::okf_last_run(&data_dir) == today {
+        return;
+    }
+    if OKF_RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let started_at = now_ms();
+    let dest = crate::backup::okf_latest_dir(&data_dir);
+    let receipt = match crate::commands::export_all_notebooks_okf(state, &dest).await {
+        Ok((notebooks, concepts)) => {
+            crate::backup::set_okf_last_run(&data_dir, &today);
+            crate::note!("nightly OKF export: {notebooks} notebooks, {concepts} concepts");
+            chore_receipt(
+                "Nightly OKF export",
+                "okf",
+                started_at,
+                format!("{notebooks} notebooks \u{00b7} {concepts} concepts"),
+                None,
+            )
+        }
+        Err(err) => {
+            crate::diagnostics::error("backup", format!("OKF export failed: {err}"));
+            chore_receipt(
+                "Nightly OKF export",
+                "okf",
+                started_at,
+                String::new(),
+                Some(err),
+            )
+        }
+    };
+    OKF_RUNNING.store(false, Ordering::SeqCst);
+    write_receipt(state, receipt).await;
+}
+
 /// One pass: resync sources, then run due reports sequentially — exactly the
 /// work the two frontend ticks did, minus the window requirement. A pass
 /// longer than the interval delays the next tick rather than stacking.
@@ -482,6 +539,19 @@ async fn run_pass(app: &AppHandle) {
     if !background {
         crate::integrations::set_tray_status(app, "Background work is off");
         return;
+    }
+
+    // The OKF escape hatch beside the snapshot (docs/RFC-night-shift-area.md
+    // §7). It sits behind the background gate rather than ahead of it with
+    // the clone: reading every source's text out of the store and writing a
+    // file per concept is real work, not a metadata operation.
+    if now_ms() - LAST_OKF.load(Ordering::Relaxed) >= OKF_EVERY_MS {
+        LAST_OKF.store(now_ms(), Ordering::Relaxed);
+        let app2 = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let state = app2.state::<AppState>();
+            run_okf_export(&app2, &state).await;
+        });
     }
 
     // The nightly freshness queue (docs/RFC-night-shift-area.md, freshness.rs).

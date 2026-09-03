@@ -24,6 +24,10 @@ tauri = { version = "2", features = ["macos-private-api", "protocol-asset", "tra
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Real YAML for OKF frontmatter round-trips (docs/RFC-okf-live.md §3): nested
+# `generated`, lists of `verified` entries, and unknown keys preserved.
+# Already in the tree transitively; serde_yaml itself is unmaintained.
+serde_yaml_ng = "0.10"
 lancedb = "0.37.1"
 tokio = { version = "1.52.3", features = ["full"] }
 anyhow = "1.0.103"

@@ -1203,3 +1203,270 @@ fn gap_reply_guards_reject_none_parrots_and_restatements() {
         Some("office guest network passphrase")
     );
 }
+/// A notebook's worth of concepts for the bundle-writer tests: two sources
+/// and two notes, one of which names a source in its prose so the link graph
+/// has an edge to turn into `sources:` provenance.
+fn okf_fixture() -> (
+    Vec<crate::commands::OkfConcept>,
+    Vec<crate::commands::OkfConcept>,
+) {
+    use crate::commands::OkfConcept;
+    let sources = vec![
+        OkfConcept {
+            id: "src-orders".into(),
+            title: "Orders table".into(),
+            content: "The orders table holds one row per placed order.".into(),
+            type_label: "Source".into(),
+            resource: "https://example.com/orders".into(),
+            tags: vec!["url".into()],
+            generated_at: 1_756_000_000_000,
+            status: String::new(),
+            derived_from: Vec::new(),
+            extra: serde_yaml_ng::Mapping::new(),
+        },
+        OkfConcept {
+            id: "src-refunds".into(),
+            title: "Refunds policy".into(),
+            content: "Refunds are issued within 30 days.".into(),
+            type_label: "Source".into(),
+            resource: "file:///tmp/refunds.md".into(),
+            tags: vec!["markdown".into()],
+            generated_at: 1_756_000_100_000,
+            status: String::new(),
+            derived_from: Vec::new(),
+            extra: serde_yaml_ng::Mapping::new(),
+        },
+    ];
+    let notes = vec![
+        OkfConcept {
+            id: "note-summary".into(),
+            title: "What the data says".into(),
+            content: "Drawn from the Orders table and the Refunds policy.".into(),
+            type_label: "Summary".into(),
+            resource: String::new(),
+            tags: Vec::new(),
+            generated_at: 1_756_000_200_000,
+            status: "draft".into(),
+            derived_from: vec!["src-orders".into(), "src-refunds".into()],
+            extra: serde_yaml_ng::Mapping::new(),
+        },
+        OkfConcept {
+            id: "note-retired".into(),
+            title: "Old thinking".into(),
+            content: "Superseded.".into(),
+            type_label: "Note".into(),
+            resource: String::new(),
+            tags: Vec::new(),
+            generated_at: 1_756_000_300_000,
+            status: "deprecated".into(),
+            derived_from: Vec::new(),
+            extra: serde_yaml_ng::Mapping::new(),
+        },
+    ];
+    (sources, notes)
+}
+
+fn okf_scratch(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("alchemy-okf-{tag}-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).expect("scratch");
+    dir
+}
+
+/// The golden bundle (docs/RFC-okf-live.md §3): every v0.2 frontmatter family
+/// present, timestamps `Z`-suffixed, and every `sources:` path resolving to a
+/// file that is actually in the bundle.
+#[test]
+fn okf_bundle_is_v02() {
+    use crate::commands::{parse_okf_doc, write_okf_bundle};
+    let dir = okf_scratch("golden");
+    let bundle = dir.join("data-notebook");
+    let (sources, notes) = okf_fixture();
+    let written =
+        write_okf_bundle("Data notebook", &sources, &notes, &bundle).expect("write bundle");
+    assert_eq!((written.sources, written.notes), (2, 2));
+
+    // Sources: resource, tags, and a generated block naming this build.
+    let orders = std::fs::read_to_string(bundle.join("sources/orders-table.md")).expect("orders");
+    let doc = parse_okf_doc(&orders);
+    assert_eq!(doc.str("type").as_deref(), Some("Source"));
+    assert_eq!(doc.str("title").as_deref(), Some("Orders table"));
+    assert_eq!(
+        doc.str("resource").as_deref(),
+        Some("https://example.com/orders")
+    );
+    assert_eq!(doc.tags(), vec!["url".to_string()]);
+    assert_eq!(
+        doc.nested("generated", "by").as_deref(),
+        Some(concat!("alchemy/", env!("CARGO_PKG_VERSION")))
+    );
+    let at = doc.nested("generated", "at").expect("generated.at");
+    assert!(at.ends_with('Z'), "timestamps carry an explicit Z: {at}");
+    let stamp = doc.str("timestamp").expect("timestamp");
+    assert!(
+        stamp.ends_with('Z'),
+        "timestamps carry an explicit Z: {stamp}"
+    );
+    assert!(doc.body.starts_with("The orders table"));
+
+    // Notes: status per origin, and provenance that resolves in the bundle.
+    let summary =
+        std::fs::read_to_string(bundle.join("notes/what-the-data-says.md")).expect("summary");
+    let doc = parse_okf_doc(&summary);
+    assert_eq!(doc.str("type").as_deref(), Some("Summary"));
+    assert_eq!(doc.str("status").as_deref(), Some("draft"));
+    let listed = doc.get("sources").expect("sources block");
+    let entries = listed.as_sequence().expect("sources is a list");
+    assert_eq!(entries.len(), 2);
+    for entry in entries {
+        let path = entry
+            .get("resource")
+            .and_then(|v| v.as_str())
+            .expect("resource path");
+        assert!(
+            bundle.join(path).exists(),
+            "sources: path resolves inside the bundle: {path}"
+        );
+        assert!(entry.get("id").and_then(|v| v.as_str()).is_some());
+        assert!(entry.get("title").and_then(|v| v.as_str()).is_some());
+    }
+
+    let retired = std::fs::read_to_string(bundle.join("notes/old-thinking.md")).expect("retired");
+    assert_eq!(
+        parse_okf_doc(&retired).str("status").as_deref(),
+        Some("deprecated")
+    );
+
+    // Listings and the log.
+    let index = std::fs::read_to_string(bundle.join("index.md")).expect("index");
+    assert!(index.contains("[Orders table](sources/orders-table.md)"));
+    assert!(index.contains("[What the data says](notes/what-the-data-says.md)"));
+    let log = std::fs::read_to_string(bundle.join("log.md")).expect("log");
+    assert!(log.starts_with("# Log\n"));
+    assert!(log.contains("Wrote 2 sources and 2 notes."));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A bundle rewritten every night reads as a history, and stops carrying
+/// concepts the notebook no longer has (§3, §5.2).
+#[test]
+fn okf_rewrite_appends_the_log_and_drops_orphans() {
+    use crate::commands::write_okf_bundle;
+    let dir = okf_scratch("rewrite");
+    let bundle = dir.join("data-notebook");
+    let (sources, notes) = okf_fixture();
+    write_okf_bundle("Data notebook", &sources, &notes, &bundle).expect("first write");
+
+    // The second night: one source is gone.
+    let fewer = vec![sources[0].clone()];
+    write_okf_bundle("Data notebook", &fewer, &notes, &bundle).expect("second write");
+
+    assert!(bundle.join("sources/orders-table.md").exists());
+    assert!(
+        !bundle.join("sources/refunds-policy.md").exists(),
+        "a deleted source leaves no orphan behind"
+    );
+    let log = std::fs::read_to_string(bundle.join("log.md")).expect("log");
+    assert_eq!(
+        log.matches("- ").count(),
+        2,
+        "the log accumulates rather than being rewritten:\n{log}"
+    );
+    assert_eq!(
+        log.matches("## ").count(),
+        1,
+        "two writes on one day share a heading:\n{log}"
+    );
+    // The note that cited the removed source no longer points at a file that
+    // is not there.
+    let summary =
+        std::fs::read_to_string(bundle.join("notes/what-the-data-says.md")).expect("summary");
+    assert!(!summary.contains("sources/refunds-policy.md"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The v0.1 bundles Alchemy already wrote still parse, and a v0.2 file's
+/// nested and unknown keys survive the reader (§3, round-trip).
+#[test]
+fn okf_reads_v01_and_preserves_unknown_keys() {
+    use crate::commands::parse_okf_doc;
+
+    // Exactly what the v0.1 exporter wrote: quoted scalars, an inline tag
+    // list, and a bare unquoted timestamp.
+    let v01 = "---\ntype: Source\ntitle: \"Orders table\"\ndescription: \"One row per order\"\nresource: \"https://example.com/orders\"\ntags: [url]\ntimestamp: 2026-08-24T09:00:00Z\n---\n\nThe orders table.\n";
+    let doc = parse_okf_doc(v01);
+    assert_eq!(doc.str("title").as_deref(), Some("Orders table"));
+    assert_eq!(
+        doc.str("resource").as_deref(),
+        Some("https://example.com/orders")
+    );
+    assert_eq!(doc.tags(), vec!["url".to_string()]);
+    assert_eq!(doc.body.trim(), "The orders table.");
+    assert!(doc.extra().is_empty(), "v0.1 writes nothing we don't own");
+
+    // A v0.2 file from somewhere else: nested maps, a list of verified
+    // entries, and a key Alchemy has never heard of.
+    let v02 = "---\ntype: Source\ntitle: \"Orders table\"\ngenerated:\n  by: \"okf-pipeline/2.1\"\n  at: \"2026-08-24T09:00:00Z\"\nverified:\n  - by: \"reviewer@example.com\"\n    at: \"2026-08-25T10:00:00Z\"\nstale_after: \"2027-01-01T00:00:00Z\"\nconfidence: 0.8\n---\n\nBody.\n";
+    let doc = parse_okf_doc(v02);
+    assert_eq!(
+        doc.nested("generated", "by").as_deref(),
+        Some("okf-pipeline/2.1")
+    );
+    let extra = doc.extra();
+    let keys: Vec<String> = extra
+        .keys()
+        .filter_map(|k| k.as_str().map(str::to_string))
+        .collect();
+    assert!(keys.contains(&"verified".to_string()), "got {keys:?}");
+    assert!(keys.contains(&"stale_after".to_string()), "got {keys:?}");
+    assert!(keys.contains(&"confidence".to_string()), "got {keys:?}");
+    let verified = extra
+        .get(serde_yaml_ng::Value::String("verified".into()))
+        .and_then(|v| v.as_sequence())
+        .expect("verified survives as a list");
+    assert_eq!(verified.len(), 1);
+
+    // Frontmatter that is not valid YAML still gives up its title rather
+    // than taking the document down with it.
+    let broken = "---\ntitle: \"Half quoted\ntype: Note\n---\n\nBody.\n";
+    assert_eq!(
+        parse_okf_doc(broken).str("type").as_deref(),
+        Some("Note"),
+        "the quoted-scalar fallback still reads what it can"
+    );
+}
+
+/// Unknown keys make it back out again: what an outside editor put in the
+/// file is re-emitted verbatim on the next write (§3, §5.2).
+#[test]
+fn okf_writes_unknown_keys_back_out() {
+    use crate::commands::{parse_okf_doc, write_okf_bundle, OkfConcept};
+    let dir = okf_scratch("preserve");
+    let bundle = dir.join("nb");
+    let mut extra = serde_yaml_ng::Mapping::new();
+    extra.insert(
+        serde_yaml_ng::Value::String("stale_after".into()),
+        serde_yaml_ng::Value::String("2027-01-01T00:00:00Z".into()),
+    );
+    let concept = OkfConcept {
+        id: "s1".into(),
+        title: "Kept".into(),
+        content: "Body.".into(),
+        type_label: "Source".into(),
+        resource: String::new(),
+        tags: Vec::new(),
+        generated_at: 1_756_000_000_000,
+        status: String::new(),
+        derived_from: Vec::new(),
+        extra,
+    };
+    write_okf_bundle("NB", &[concept], &[], &bundle).expect("write");
+    let text = std::fs::read_to_string(bundle.join("sources/kept.md")).expect("read");
+    let doc = parse_okf_doc(&text);
+    assert_eq!(
+        doc.str("stale_after").as_deref(),
+        Some("2027-01-01T00:00:00Z")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

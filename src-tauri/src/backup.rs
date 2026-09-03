@@ -40,6 +40,35 @@ fn snapshots_dir(data_dir: &Path) -> PathBuf {
     backups_dir(data_dir).join("store")
 }
 
+/// Where the nightly OKF escape hatch writes (docs/RFC-night-shift-area.md §7,
+/// docs/RFC-okf-live.md §3): one bundle directory per notebook, replaced each
+/// night. Unlike the store snapshots this is not dated and never pruned —
+/// there is one copy, always current, and it costs kilobytes of markdown.
+pub fn okf_latest_dir(data_dir: &Path) -> PathBuf {
+    backups_dir(data_dir).join("okf").join("latest")
+}
+
+/// The day the OKF pass last ran, so an hourly tick writes the bundles once.
+/// A file rather than an in-memory stamp: a relaunch should not cost the day
+/// a second full rewrite of every notebook.
+fn okf_stamp_file(data_dir: &Path) -> PathBuf {
+    backups_dir(data_dir).join("okf").join("last-run")
+}
+
+pub fn okf_last_run(data_dir: &Path) -> String {
+    std::fs::read_to_string(okf_stamp_file(data_dir))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
+pub fn set_okf_last_run(data_dir: &Path, day: &str) {
+    let path = okf_stamp_file(data_dir);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, day);
+}
+
 /// Copy a directory tree, preferring APFS clones. Returns whether the clone
 /// path was taken — worth knowing, because a fallback copy on a big store is
 /// the difference between milliseconds and minutes.

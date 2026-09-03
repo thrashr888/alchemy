@@ -12372,42 +12372,182 @@ fn link_text(s: &str) -> String {
     s.replace(['[', ']'], " ").trim().to_string()
 }
 
-/// Export a notebook as an Open Knowledge Format bundle: a directory of
-/// markdown concept files with YAML frontmatter (sources/ and notes/), plus
-/// index.md listings and a log.md — per the OKF v0.1 spec.
-#[tauri::command]
-pub async fn export_notebook_okf(
-    state: State<'_, AppState>,
-    notebook_id: String,
-    dest_dir: String,
-) -> Result<String, String> {
-    let notebook = e(state.db.list_notebooks().await)?
-        .into_iter()
-        .find(|n| n.id == notebook_id)
-        .ok_or_else(|| "Notebook not found".to_string())?;
-    let sources = e(state.db.list_sources(&notebook_id).await)?;
-    let notes = e(state.db.list_notes(&notebook_id).await)?;
+/// Who wrote a concept file: the `generated.by` actor, and the attribution
+/// on every `log.md` entry (OKF v0.2 §5.2).
+pub(crate) fn okf_writer() -> String {
+    concat!("alchemy/", env!("CARGO_PKG_VERSION")).to_string()
+}
 
-    // A fresh directory per export — never merge into (or clobber) one the
-    // user already has.
-    let base = std::path::Path::new(&dest_dir);
-    let nb_slug = okf_slug(&notebook.title);
-    let mut bundle = base.join(&nb_slug);
-    let mut n = 2;
-    while bundle.exists() {
-        bundle = base.join(format!("{nb_slug}-{n}"));
-        n += 1;
+/// One concept file's worth of what the bundle writer needs. Decoupled from
+/// `Source`/`Note` so the writer runs — and is tested — without a database.
+#[derive(Clone)]
+pub(crate) struct OkfConcept {
+    pub id: String,
+    pub title: String,
+    pub content: String,
+    /// The human `type:` label: "Source", "Note", or an artifact's own title.
+    pub type_label: String,
+    /// `resource:` — where the concept came from. Empty writes no key.
+    pub resource: String,
+    /// `tags:` — a source's type, a note's kind. Empty writes no key.
+    pub tags: Vec<String>,
+    /// `generated.at`: `created_at` for sources, `updated_at` for notes.
+    pub generated_at: i64,
+    /// `status:` — "" | "draft" | "deprecated".
+    pub status: String,
+    /// `sources:` — ids of the concepts this one was derived from. Resolved
+    /// to bundle-relative paths at write time, so an id that did not make it
+    /// into the bundle simply does not appear.
+    pub derived_from: Vec<String>,
+    /// Frontmatter keys Alchemy does not itself write, carried in from an
+    /// outside edit and re-emitted verbatim — the spec's round-trip rule.
+    pub extra: serde_yaml_ng::Mapping,
+}
+
+impl OkfConcept {
+    fn blank() -> Self {
+        Self {
+            id: String::new(),
+            title: String::new(),
+            content: String::new(),
+            type_label: "Note".into(),
+            resource: String::new(),
+            tags: Vec::new(),
+            generated_at: 0,
+            status: String::new(),
+            derived_from: Vec::new(),
+            extra: serde_yaml_ng::Mapping::new(),
+        }
     }
+}
+
+/// What one bundle write did, for the log line and the caller's receipt.
+pub(crate) struct OkfBundleWrite {
+    pub sources: usize,
+    pub notes: usize,
+}
+
+/// A concept's place in the bundle: its slug and the path other concepts
+/// cite it by.
+struct OkfPlacement {
+    slug: String,
+    /// Bundle-relative, e.g. `sources/orders.md`.
+    path: String,
+    title: String,
+}
+
+/// Emit one concept's v0.2 frontmatter. Hand-written rather than serialized:
+/// key order is part of the document's readability, and only the values need
+/// escaping. Unknown keys go through `serde_yaml_ng` so nested maps and
+/// sequences survive verbatim.
+fn okf_frontmatter(
+    concept: &OkfConcept,
+    description: &str,
+    placements: &std::collections::HashMap<String, OkfPlacement>,
+) -> String {
+    let mut fm = String::from("---\n");
+    fm.push_str(&format!("type: {}\n", concept.type_label));
+    fm.push_str(&format!("title: {}\n", yaml_str(&concept.title)));
+    if !description.is_empty() {
+        fm.push_str(&format!("description: {}\n", yaml_str(description)));
+    }
+    if !concept.resource.is_empty() {
+        fm.push_str(&format!("resource: {}\n", yaml_str(&concept.resource)));
+    }
+    if !concept.tags.is_empty() {
+        fm.push_str(&format!("tags: [{}]\n", concept.tags.join(", ")));
+    }
+    if !concept.status.is_empty() {
+        fm.push_str(&format!("status: {}\n", concept.status));
+    }
+    fm.push_str("generated:\n");
+    fm.push_str(&format!("  by: {}\n", yaml_str(&okf_writer())));
+    fm.push_str(&format!(
+        "  at: {}\n",
+        yaml_str(&okf_timestamp(concept.generated_at))
+    ));
+    // Provenance: every concept in this bundle that the body actually refers
+    // to. A reader can follow a summary back to what it summarized.
+    let cited: Vec<&OkfPlacement> = concept
+        .derived_from
+        .iter()
+        .filter_map(|id| placements.get(id))
+        .collect();
+    if !cited.is_empty() {
+        fm.push_str("sources:\n");
+        for place in cited {
+            fm.push_str(&format!("  - id: {}\n", yaml_str(&place.slug)));
+            fm.push_str(&format!("    resource: {}\n", yaml_str(&place.path)));
+            fm.push_str(&format!("    title: {}\n", yaml_str(&place.title)));
+        }
+    }
+    // Keys from an outside edit, re-emitted as they came in.
+    if !concept.extra.is_empty() {
+        if let Ok(text) = serde_yaml_ng::to_string(&concept.extra) {
+            fm.push_str(&text);
+            if !fm.ends_with('\n') {
+                fm.push('\n');
+            }
+        }
+    }
+    fm.push_str(&format!(
+        "timestamp: {}\n---\n\n",
+        yaml_str(&okf_timestamp(concept.generated_at))
+    ));
+    fm
+}
+
+/// Append one dated entry to the bundle's `log.md` (spec §9). A day already
+/// present gains a bullet; a new day gains a heading. The file is a history,
+/// not a stamp — which is what makes a bundle rewritten every night worth
+/// reading.
+pub(crate) fn okf_log_append(bundle: &std::path::Path, entry: &str) -> Result<(), String> {
+    let path = bundle.join("log.md");
+    let now = chrono::Utc::now();
+    let day = now.format("%Y-%m-%d").to_string();
+    let at = now.format("%H:%M:%SZ").to_string();
+
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut out = if existing.trim().is_empty() {
+        String::from("# Log\n")
+    } else {
+        existing
+    };
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    // Entries arrive in order, so the newest day is always the last heading.
+    if !out.contains(&format!("\n## {day}\n")) {
+        out.push_str(&format!("\n## {day}\n\n"));
+    }
+    out.push_str(&format!("- {at} {entry} ({})\n", okf_writer()));
+    std::fs::write(&path, out).map_err(|err| format!("Failed to write {path:?}: {err}"))
+}
+
+/// Write (or refresh) an OKF v0.2 bundle at `bundle`.
+///
+/// The pass is whole: every concept file is written, concept files Alchemy no
+/// longer owns are removed, and the three index listings are regenerated.
+/// `log.md` is the one file that accumulates, so a directory rewritten every
+/// night records its own history. This is the seed pass the bound-notebook
+/// writer (docs/RFC-okf-live.md §5.2) refines into incremental writes.
+pub(crate) fn write_okf_bundle(
+    notebook_title: &str,
+    sources: &[OkfConcept],
+    notes: &[OkfConcept],
+    bundle: &std::path::Path,
+) -> Result<OkfBundleWrite, String> {
+    std::fs::create_dir_all(bundle).map_err(|err| format!("Failed to create {bundle:?}: {err}"))?;
     let write = |path: &std::path::Path, text: &str| -> Result<(), String> {
         std::fs::write(path, text).map_err(|err| format!("Failed to write {path:?}: {err}"))
     };
 
-    // Concept files, with per-directory slug dedup.
+    // Slugs are claimed per directory, so two sources called "Notes" become
+    // notes.md and notes-2.md rather than one clobbering the other.
     let mut used: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     let mut claim = |dir: &str, title: &str| -> String {
         let s = okf_slug(title);
-        let key = format!("{dir}/{s}");
-        let count = used.entry(key).or_insert(0);
+        let count = used.entry(format!("{dir}/{s}")).or_insert(0);
         *count += 1;
         if *count == 1 {
             s
@@ -12416,114 +12556,304 @@ pub async fn export_notebook_okf(
         }
     };
 
-    let mut source_entries = Vec::new(); // (slug, title, description)
-    if !sources.is_empty() {
-        let dir = bundle.join("sources");
-        std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
-        for s in &sources {
-            let content = e(state.db.source_content(&s.id).await)?;
-            let slug = claim("sources", &s.title);
-            let mut fm = String::from("---\ntype: Source\n");
-            fm.push_str(&format!("title: {}\n", yaml_str(&s.title)));
-            let desc = okf_description(&content);
-            if !desc.is_empty() {
-                fm.push_str(&format!("description: {}\n", yaml_str(&desc)));
-            }
-            if !s.url.is_empty() {
-                let resource = if is_web_url(&s.url) {
-                    s.url.clone()
-                } else {
-                    format!("file://{}", s.url)
-                };
-                fm.push_str(&format!("resource: {}\n", yaml_str(&resource)));
-            }
-            fm.push_str(&format!("tags: [{}]\n", s.source_type));
-            fm.push_str(&format!(
-                "timestamp: {}\n---\n\n",
-                okf_timestamp(s.created_at)
-            ));
-            write(&dir.join(format!("{slug}.md")), &format!("{fm}{content}\n"))?;
-            source_entries.push((slug, s.title.clone(), desc));
+    // Place everything first: a note's `sources:` entries cite bundle paths,
+    // which are only known once every slug is claimed.
+    let mut placements: std::collections::HashMap<String, OkfPlacement> =
+        std::collections::HashMap::new();
+    let order: Vec<(&str, Vec<&OkfConcept>)> = vec![
+        ("sources", sources.iter().collect()),
+        ("notes", notes.iter().collect()),
+    ];
+    for (dir, concepts) in &order {
+        for concept in concepts {
+            let slug = claim(dir, &concept.title);
+            placements.insert(
+                concept.id.clone(),
+                OkfPlacement {
+                    path: format!("{dir}/{slug}.md"),
+                    slug,
+                    title: concept.title.clone(),
+                },
+            );
         }
-        let listing = source_entries
-            .iter()
-            .map(|(slug, title, desc)| format!("- [{}]({slug}.md) — {desc}", link_text(title)))
-            .collect::<Vec<_>>()
-            .join("\n");
-        write(&dir.join("index.md"), &format!("# Sources\n\n{listing}\n"))?;
     }
 
-    let mut note_entries = Vec::new();
-    if !notes.is_empty() {
-        let dir = bundle.join("notes");
-        std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
-        for note in &notes {
-            let slug = claim("notes", &note.title);
-            let type_label = match note.kind.as_str() {
-                "note" => "Note",
-                "report" => "Report",
-                kind => rag::artifact_spec(kind).map(|(t, _)| t).unwrap_or("Note"),
-            };
-            let desc = okf_description(&note.content);
-            let mut fm = format!("---\ntype: {type_label}\n");
-            fm.push_str(&format!("title: {}\n", yaml_str(&note.title)));
-            if !desc.is_empty() {
-                fm.push_str(&format!("description: {}\n", yaml_str(&desc)));
-            }
-            fm.push_str(&format!(
-                "timestamp: {}\n---\n\n",
-                okf_timestamp(note.updated_at)
-            ));
-            write(
-                &dir.join(format!("{slug}.md")),
-                &format!("{fm}{}\n", note.content),
-            )?;
-            note_entries.push((slug, note.title.clone(), desc));
+    // Concept files, then the per-directory listing.
+    let mut listings: std::collections::HashMap<&str, Vec<(String, String, String)>> =
+        std::collections::HashMap::new();
+    for (dir, concepts) in &order {
+        if concepts.is_empty() {
+            continue;
         }
-        let listing = note_entries
+        let out_dir = bundle.join(dir);
+        std::fs::create_dir_all(&out_dir).map_err(|err| err.to_string())?;
+        let mut entries = Vec::new();
+        let mut kept: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for concept in concepts {
+            let Some(place) = placements.get(&concept.id) else {
+                continue;
+            };
+            let description = okf_description(&concept.content);
+            let fm = okf_frontmatter(concept, &description, &placements);
+            let file = format!("{}.md", place.slug);
+            write(&out_dir.join(&file), &format!("{fm}{}\n", concept.content))?;
+            kept.insert(file);
+            entries.push((place.slug.clone(), concept.title.clone(), description));
+        }
+        // A source deleted in the app leaves no orphan behind.
+        prune_okf_dir(&out_dir, &kept);
+        let listing = entries
             .iter()
             .map(|(slug, title, desc)| format!("- [{}]({slug}.md) — {desc}", link_text(title)))
             .collect::<Vec<_>>()
             .join("\n");
-        write(&dir.join("index.md"), &format!("# Notes\n\n{listing}\n"))?;
+        let heading = if *dir == "sources" {
+            "Sources"
+        } else {
+            "Notes"
+        };
+        write(
+            &out_dir.join("index.md"),
+            &format!("# {heading}\n\n{listing}\n"),
+        )?;
+        listings.insert(dir, entries);
     }
 
     // Root index.md: progressive-disclosure listing of the whole bundle.
-    let mut index = format!("# {}\n\n", notebook.title);
+    let mut index = format!("# {notebook_title}\n\n");
     index.push_str(
         "A research notebook exported from Alchemy as an Open Knowledge Format bundle.\n",
     );
-    if !source_entries.is_empty() {
-        index.push_str("\n# Sources\n\n");
-        for (slug, title, desc) in &source_entries {
-            index.push_str(&format!(
-                "- [{}](sources/{slug}.md) — {desc}\n",
-                link_text(title)
-            ));
+    for (dir, heading) in [("sources", "Sources"), ("notes", "Notes")] {
+        let Some(entries) = listings.get(dir) else {
+            continue;
+        };
+        if entries.is_empty() {
+            continue;
         }
-    }
-    if !note_entries.is_empty() {
-        index.push_str("\n# Notes\n\n");
-        for (slug, title, desc) in &note_entries {
+        index.push_str(&format!("\n# {heading}\n\n"));
+        for (slug, title, desc) in entries {
             index.push_str(&format!(
-                "- [{}](notes/{slug}.md) — {desc}\n",
+                "- [{}]({dir}/{slug}.md) — {desc}\n",
                 link_text(title)
             ));
         }
     }
     write(&bundle.join("index.md"), &index)?;
 
-    let today = chrono::Utc::now().format("%Y-%m-%d");
-    write(
-        &bundle.join("log.md"),
+    let written = OkfBundleWrite {
+        sources: listings.get("sources").map(Vec::len).unwrap_or(0),
+        notes: listings.get("notes").map(Vec::len).unwrap_or(0),
+    };
+    okf_log_append(
+        bundle,
         &format!(
-            "# {today}\n\nExported from Alchemy: {} sources, {} notes.\n",
-            source_entries.len(),
-            note_entries.len()
+            "Wrote {} sources and {} notes.",
+            written.sources, written.notes
         ),
     )?;
+    Ok(written)
+}
 
+/// Drop concept files in a bundle directory that this pass did not write.
+/// `index.md` is a listing, never a concept, and dot-files (the bound
+/// notebook's `.alchemy/manifest.json`) are nobody's business but ours.
+fn prune_okf_dir(dir: &std::path::Path, kept: &std::collections::HashSet<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || name == "index.md" || !name.ends_with(".md") {
+            continue;
+        }
+        if !kept.contains(&name) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// A note's lifecycle in the bundle (§3): the curator's archive is the
+/// spec's `deprecated`, and anything the app wrote on its own initiative is
+/// a `draft` until a person has touched it.
+fn okf_note_status(note: &Note) -> String {
+    if note.status == "archived" {
+        "deprecated".into()
+    } else if !note.origin.is_empty() {
+        "draft".into()
+    } else {
+        String::new()
+    }
+}
+
+/// Read a notebook out of the store as concept files waiting to be written.
+///
+/// **Provenance:** a `Note` records no source ids — the selection a
+/// generation ran over lives on the in-flight `GenJob` and is discarded when
+/// the job finishes (docs/RFC-okf-live.md §3, "what we know"). What is
+/// recorded, in the note's own text, is which documents it refers to: the
+/// same URLs, filenames, and wikilinks the link graph already reads. So
+/// `sources:` is the graph's outbound source edges for each note — the
+/// citations that are actually there, never a guess at what was in scope.
+pub(crate) async fn gather_okf_bundle(
+    state: &AppState,
+    notebook_id: &str,
+) -> Result<(String, Vec<OkfConcept>, Vec<OkfConcept>), String> {
+    let notebook = e(state.db.list_notebooks().await)?
+        .into_iter()
+        .find(|n| n.id == notebook_id)
+        .ok_or_else(|| "Notebook not found".to_string())?;
+    let sources = e(state.db.list_sources(notebook_id).await)?;
+    let notes = e(state.db.list_notes(notebook_id).await)?;
+
+    let mut source_concepts = Vec::with_capacity(sources.len());
+    for s in &sources {
+        let content = e(state.db.source_content(&s.id).await)?;
+        let resource = if s.url.is_empty() {
+            String::new()
+        } else if is_web_url(&s.url) {
+            s.url.clone()
+        } else {
+            format!("file://{}", s.url)
+        };
+        source_concepts.push(OkfConcept {
+            id: s.id.clone(),
+            title: s.title.clone(),
+            content,
+            type_label: "Source".into(),
+            resource,
+            tags: vec![s.source_type.clone()],
+            generated_at: s.created_at,
+            ..OkfConcept::blank()
+        });
+    }
+
+    // One Aho-Corasick pass over the whole notebook, the same one the graph
+    // view runs — cheap enough to do on every export.
+    let docs: Vec<crate::graph::GraphDoc> = sources
+        .iter()
+        .zip(source_concepts.iter())
+        .map(|(s, c)| crate::graph::GraphDoc {
+            id: s.id.clone(),
+            kind: "source".into(),
+            title: s.title.clone(),
+            source_type: s.source_type.clone(),
+            url: s.url.clone(),
+            content: c.content.clone(),
+        })
+        .chain(notes.iter().map(|n| crate::graph::GraphDoc {
+            id: n.id.clone(),
+            kind: "note".into(),
+            title: n.title.clone(),
+            source_type: String::new(),
+            url: String::new(),
+            content: n.content.clone(),
+        }))
+        .collect();
+    let graph = crate::graph::build(&docs);
+    let source_ids: std::collections::HashSet<&str> =
+        sources.iter().map(|s| s.id.as_str()).collect();
+    let mut cites: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for edge in &graph.edges {
+        if source_ids.contains(edge.to.as_str()) {
+            cites
+                .entry(edge.from.clone())
+                .or_default()
+                .push(edge.to.clone());
+        }
+    }
+
+    let note_concepts = notes
+        .iter()
+        .map(|note| OkfConcept {
+            id: note.id.clone(),
+            title: note.title.clone(),
+            content: note.content.clone(),
+            type_label: match note.kind.as_str() {
+                "note" => "Note",
+                "report" => "Report",
+                kind => rag::artifact_spec(kind).map(|(t, _)| t).unwrap_or("Note"),
+            }
+            .to_string(),
+            generated_at: note.updated_at,
+            status: okf_note_status(note),
+            derived_from: cites.get(&note.id).cloned().unwrap_or_default(),
+            ..OkfConcept::blank()
+        })
+        .collect();
+
+    Ok((notebook.title, source_concepts, note_concepts))
+}
+
+/// Export a notebook as an Open Knowledge Format bundle: a directory of
+/// markdown concept files with YAML frontmatter (sources/ and notes/), plus
+/// index.md listings and a log.md — per the OKF v0.2 spec.
+#[tauri::command]
+pub async fn export_notebook_okf(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    dest_dir: String,
+) -> Result<String, String> {
+    let (title, sources, notes) = gather_okf_bundle(&state, &notebook_id).await?;
+
+    // A fresh directory per export — never merge into (or clobber) one the
+    // user already has.
+    let base = std::path::Path::new(&dest_dir);
+    let nb_slug = okf_slug(&title);
+    let mut bundle = base.join(&nb_slug);
+    let mut n = 2;
+    while bundle.exists() {
+        bundle = base.join(format!("{nb_slug}-{n}"));
+        n += 1;
+    }
+    write_okf_bundle(&title, &sources, &notes, &bundle)?;
     Ok(bundle.display().to_string())
+}
+
+/// The nightly escape hatch (docs/RFC-night-shift-area.md §7): every notebook
+/// written into `backups/okf/latest/<slug>/` as a v0.2 bundle. Markdown
+/// survives a Lance-format problem entirely, which is the whole point. Each
+/// night replaces the previous copy in place — except `log.md`, which
+/// accumulates, so the directory says what changed and when.
+pub(crate) async fn export_all_notebooks_okf(
+    state: &AppState,
+    dest: &std::path::Path,
+) -> Result<(usize, usize), String> {
+    std::fs::create_dir_all(dest).map_err(|err| format!("Failed to create {dest:?}: {err}"))?;
+    let notebooks = e(state.db.list_notebooks().await)?;
+    let mut concepts = 0usize;
+    let mut kept: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut used: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    for nb in &notebooks {
+        // Two notebooks may share a title; the slug must not collide, and it
+        // must be stable across nights, so it is claimed in list order.
+        let base = okf_slug(&nb.title);
+        let count = used.entry(base.clone()).or_insert(0);
+        *count += 1;
+        let slug = if *count == 1 {
+            base
+        } else {
+            format!("{base}-{count}")
+        };
+        let (title, sources, notes) = gather_okf_bundle(state, &nb.id).await?;
+        let written = write_okf_bundle(&title, &sources, &notes, &dest.join(&slug))?;
+        concepts += written.sources + written.notes;
+        kept.insert(slug);
+    }
+    // A notebook deleted since last night takes its copy with it.
+    if let Ok(entries) = std::fs::read_dir(dest) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with('.')
+                && !kept.contains(&name)
+                && entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
+            {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    Ok((notebooks.len(), concepts))
 }
 
 /// Export the bundle and zip it into a single shareable `.okf.zip` file at
@@ -12588,17 +12918,130 @@ fn zip_dir(dir: &std::path::Path, dest: &std::path::Path) -> Result<(), String> 
 
 // ---- OKF import ------------------------------------------------------------
 
-/// Parse the exporter's frontmatter subset (`key: "quoted"` or bare values).
-fn parse_okf_doc(text: &str) -> (std::collections::HashMap<String, String>, String) {
-    let mut fm = std::collections::HashMap::new();
+/// The frontmatter keys Alchemy writes itself (see `okf_frontmatter`).
+/// Everything else in a concept file came from somewhere else and is the
+/// bound notebook's to carry back out untouched — the spec's round-trip rule.
+#[cfg_attr(not(test), allow(dead_code))]
+const OKF_OWN_KEYS: &[&str] = &[
+    "type",
+    "title",
+    "description",
+    "resource",
+    "tags",
+    "status",
+    "generated",
+    "sources",
+    "timestamp",
+];
+
+/// A parsed OKF concept file: its frontmatter as real YAML, and its body.
+pub(crate) struct OkfDoc {
+    front: serde_yaml_ng::Mapping,
+    pub body: String,
+}
+
+impl OkfDoc {
+    /// A frontmatter value, whatever its shape.
+    pub fn get(&self, key: &str) -> Option<&serde_yaml_ng::Value> {
+        self.front.get(serde_yaml_ng::Value::String(key.into()))
+    }
+
+    /// A scalar field as a string. `None` when the key is absent, empty, or
+    /// carries a map or a sequence rather than a scalar.
+    pub fn str(&self, key: &str) -> Option<String> {
+        let text = match self.get(key)? {
+            serde_yaml_ng::Value::String(s) => s.clone(),
+            serde_yaml_ng::Value::Number(n) => n.to_string(),
+            serde_yaml_ng::Value::Bool(b) => b.to_string(),
+            _ => return None,
+        };
+        (!text.is_empty()).then_some(text)
+    }
+
+    /// A nested field, one level down (`generated.by`).
+    pub fn nested(&self, key: &str, inner: &str) -> Option<String> {
+        match self.get(key)?.get(inner)? {
+            serde_yaml_ng::Value::String(s) => Some(s.clone()).filter(|s| !s.is_empty()),
+            _ => None,
+        }
+    }
+
+    /// `tags:` as a list, however it was written — `[a, b]`, a block
+    /// sequence, or one bare scalar.
+    pub fn tags(&self) -> Vec<String> {
+        match self.get("tags") {
+            Some(serde_yaml_ng::Value::Sequence(items)) => items
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect(),
+            Some(serde_yaml_ng::Value::String(s)) => {
+                s.split(',').map(|t| t.trim().to_string()).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// When the bundle says this concept was last written, as epoch ms.
+    /// `generated.at` first, then the older `timestamp:` — so a v0.1 file and
+    /// a v0.2 one both keep their real age across an import instead of being
+    /// stamped with the moment they arrived.
+    pub fn written_at(&self) -> Option<i64> {
+        let raw = self
+            .nested("generated", "at")
+            .or_else(|| self.str("timestamp"))?;
+        chrono::DateTime::parse_from_rfc3339(&raw)
+            .ok()
+            .map(|d| d.timestamp_millis())
+    }
+
+    /// The keys Alchemy did not write. The bound notebook's manifest carries
+    /// these back out on the next write (docs/RFC-okf-live.md §5.1), which is
+    /// the only consumer — phase 0 reads them so the round trip is testable
+    /// before there is anywhere to keep them.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn extra(&self) -> serde_yaml_ng::Mapping {
+        self.front
+            .iter()
+            .filter(|(k, _)| !k.as_str().is_some_and(|k| OKF_OWN_KEYS.contains(&k)))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+}
+
+/// Split a concept file into frontmatter and body, parsing the frontmatter as
+/// real YAML — nested `generated`, lists of `verified` entries, and anything
+/// else a bundle carries. The v0.1 files Alchemy already wrote are a valid
+/// subset, so they parse unchanged; a file whose YAML does not parse falls
+/// back to the quoted-scalar reader rather than losing its title.
+pub(crate) fn parse_okf_doc(text: &str) -> OkfDoc {
     let Some(rest) = text.strip_prefix("---\n") else {
-        return (fm, text.to_string());
+        return OkfDoc {
+            front: serde_yaml_ng::Mapping::new(),
+            body: text.to_string(),
+        };
     };
     let Some(end) = rest.find("\n---") else {
-        return (fm, text.to_string());
+        return OkfDoc {
+            front: serde_yaml_ng::Mapping::new(),
+            body: text.to_string(),
+        };
     };
     let head = &rest[..end];
-    let body = rest[end + 4..].trim_start_matches('\n');
+    let body = rest[end + 4..].trim_start_matches('\n').to_string();
+    let front = match serde_yaml_ng::from_str::<serde_yaml_ng::Value>(head) {
+        Ok(serde_yaml_ng::Value::Mapping(map)) => map,
+        // Hand-edited frontmatter that is not valid YAML still has readable
+        // `key: value` lines; take those rather than dropping the document's
+        // title on the floor.
+        _ => parse_okf_scalars(head),
+    };
+    OkfDoc { front, body }
+}
+
+/// The v0.1 reader, kept as the fallback: `key: "quoted"` or bare values,
+/// one per line, nothing nested.
+fn parse_okf_scalars(head: &str) -> serde_yaml_ng::Mapping {
+    let mut map = serde_yaml_ng::Mapping::new();
     for line in head.lines() {
         if let Some((k, v)) = line.split_once(':') {
             let v = v.trim();
@@ -12609,10 +13052,13 @@ fn parse_okf_doc(text: &str) -> (std::collections::HashMap<String, String>, Stri
             } else {
                 v.to_string()
             };
-            fm.insert(k.trim().to_string(), v);
+            map.insert(
+                serde_yaml_ng::Value::String(k.trim().to_string()),
+                serde_yaml_ng::Value::String(v),
+            );
         }
     }
-    (fm, body.to_string())
+    map
 }
 
 /// Map an exported note's `type:` label back to its kind.
@@ -12905,33 +13351,29 @@ async fn import_bundle(
             skipped += 1;
             continue;
         };
-        let (fm, body) = parse_okf_doc(&text);
+        let parsed = parse_okf_doc(&text);
         // Folder container rows export with empty bodies — their children
         // are full documents of their own. Nothing to embed here.
-        if body.trim().is_empty() {
+        if parsed.body.trim().is_empty() {
             skipped += 1;
             continue;
         }
-        let title = fm
-            .get("title")
-            .cloned()
-            .filter(|t| !t.is_empty())
-            .unwrap_or_else(|| {
-                doc.file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("Untitled source")
-                    .to_string()
-            });
-        let source_type = fm
-            .get("tags")
-            .map(|t| t.trim_matches(['[', ']']).trim().to_string())
-            .filter(|t| SOURCE_TYPES.contains(&t.as_str()))
+        let title = parsed.str("title").unwrap_or_else(|| {
+            doc.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Untitled source")
+                .to_string()
+        });
+        let source_type = parsed
+            .tags()
+            .into_iter()
+            .find(|t| SOURCE_TYPES.contains(&t.as_str()))
             .unwrap_or_else(|| "text".to_string());
         // The resource is where the source CAME from — on this machine it's
         // provenance, not a live path, except web URLs which stay refreshable.
-        let url = match fm.get("resource") {
-            Some(r) if is_web_url(r) => r.clone(),
-            Some(r) => r.strip_prefix("file://").unwrap_or(r).to_string(),
+        let url = match parsed.str("resource") {
+            Some(r) if is_web_url(&r) => r,
+            Some(r) => r.strip_prefix("file://").unwrap_or(&r).to_string(),
             None => String::new(),
         };
         let extracted = ingest::Extracted {
@@ -12941,7 +13383,7 @@ async fn import_bundle(
             title,
             source_type,
             url,
-            text: body,
+            text: parsed.body,
         };
         let _ = app.emit(
             "import://progress",
@@ -12964,33 +13406,45 @@ async fn import_bundle(
         let Ok(text) = std::fs::read_to_string(&doc) else {
             continue;
         };
-        let (fm, body) = parse_okf_doc(&text);
-        if body.trim().is_empty() {
+        let parsed = parse_okf_doc(&text);
+        if parsed.body.trim().is_empty() {
             continue;
         }
-        let title_for_dup = fm.get("title").cloned().unwrap_or_default();
+        let title_for_dup = parsed.str("title").unwrap_or_default();
         if existing_notes
             .iter()
-            .any(|(t, c)| t == &title_for_dup && c.trim() == body.trim())
+            .any(|(t, c)| t == &title_for_dup && c.trim() == parsed.body.trim())
         {
             continue;
         }
+        // Lifecycle round-trips: a concept the bundle marks deprecated comes
+        // back archived, so a note retired on one machine stays retired here
+        // instead of reappearing in retrieval.
+        let status = if parsed.str("status").as_deref() == Some("deprecated") {
+            "archived"
+        } else {
+            ""
+        };
+        let kind = note_kind_from_label(parsed.str("type").as_deref().unwrap_or("Note"));
+        // A note keeps the age the bundle records, not the moment it landed
+        // here — otherwise every import resets the whole notebook's clock.
+        let written = parsed.written_at().unwrap_or_else(now);
         let note = Note {
             id: new_id(),
             notebook_id: notebook.id.clone(),
-            title: fm.get("title").cloned().unwrap_or_else(|| {
+            title: parsed.str("title").unwrap_or_else(|| {
                 doc.file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("Untitled note")
                     .to_string()
             }),
-            content: body,
-            kind: note_kind_from_label(fm.get("type").map(String::as_str).unwrap_or("Note")),
+            content: parsed.body,
+            kind,
             prompt: String::new(),
             origin: String::new(),
-            status: String::new(),
-            created_at: now(),
-            updated_at: now(),
+            status: status.to_string(),
+            created_at: written,
+            updated_at: written,
         };
         e(add_note_indexed(state, &note).await)?;
     }

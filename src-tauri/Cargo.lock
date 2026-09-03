@@ -143,6 +143,7 @@ dependencies = [
  "rust_xlsxwriter",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "tauri",
  "tauri-build",
  "tauri-plugin-debug-bridge",

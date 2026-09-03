@@ -77,6 +77,48 @@ Tests: a golden bundle for one notebook (frontmatter families present,
 timestamps `Z`-suffixed, `sources:` paths resolve inside the bundle), and
 a v0.1 bundle that still imports.
 
+### What `sources:` can honestly say — as built
+
+A note records no source ids. `Note` has ten fields and none of them is
+provenance (`models.rs`, `db.rs::notes_schema`); the selection a
+generation ran over lives on the in-flight `GenJob` and is thrown away
+when the job finishes; report notes carry a prompt and nothing else; and
+the one place source ids do get persisted — `LedgerAnchor` on an
+auto-evidence assertion — joins back to its note by fuzzy title overlap,
+not by id. "Every source the note was generated over" is therefore not
+knowable after the fact, and guessing it (every source in the notebook,
+say) would put a claim in the file that the data does not support.
+
+What *is* recorded, in the note's own text, is which documents it refers
+to. The link graph already reads exactly that, three ways — an absolute
+URL, a bare filename, an Obsidian wikilink naming a title — in one
+Aho-Corasick pass over the notebook (`graph.rs`). So `sources:` is the
+graph's outbound source edges for each note: the citations that are
+actually there. Notes that name nothing get no `sources:` key rather than
+an invented one. If a note ever grows a real provenance column, the
+exporter should prefer it and keep the graph as the fallback.
+
+### Two other decisions phase 0 had to make
+
+- **Where the nightly loop sits relative to the gate.** RFC-night-shift-area
+  §7 says the snapshot is "gated only by `background_enabled`", but the
+  code puts the store clone *ahead* of that gate — a clone is a metadata
+  operation and losing the library is unrecoverable. The OKF loop is not
+  in that class: it reads every source's text out of the store and writes
+  a file per concept. It goes behind the gate, and off the pass thread
+  (`tauri::async_runtime::spawn` with a running flag, the shape the
+  reports batch already uses), so a large corpus cannot stall the minute
+  tick. Once-per-day is stamped on disk (`backups/okf/last-run`) rather
+  than in memory, so a relaunch does not buy the day a second full pass.
+- **The nightly directory is rewritten, but its log is not.** `latest/`
+  replaces each notebook's concept files and drops the ones the notebook
+  no longer has (and drops whole directories for notebooks that are
+  gone), while `log.md` accumulates — which is what makes the copy read
+  as a history. Import also stops stamping notes with the moment they
+  arrived: a note keeps the age `generated.at` (or the older
+  `timestamp:`) records, and a concept marked `status: deprecated` comes
+  back archived, so a note retired on one machine stays retired.
+
 ## 4. Bundle as a source (shape B)
 
 The easy half, and the first thing after phase 0. Detection follows the Obsidian rule:
