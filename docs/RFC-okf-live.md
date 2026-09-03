@@ -392,6 +392,21 @@ up. Four things the RFC did not settle, decided in the writing:
   one dated line naming every path it removed — beside the write lines and the
   conflict-loser lines that were already there.
 
+- **A delete needs two sightings, and stands down in an outage.** §5.3's
+  table reads "file gone → delete the entity", and the pass took one look. On
+  a Mac whose bundles are arriving over iCloud that is wrong twice over: a
+  folder mid-move between two Notebooks roots is absent for as long as the
+  move takes, and a bundle the other Mac is still downloading is absent for
+  longer. So the manifest entry carries `missing_since`, the first pass that
+  misses a claimed file only records when it missed it, and only a pass at
+  least a minute later may act. And a bundle that loses **more than a third**
+  of its claimed files at once is a sync outage, not a person deleting: the
+  whole delete step stands down for that pass, nothing is even marked, and the
+  reason goes to the app log. A file genuinely deleted is still deleted next
+  pass; a file the cloud is carrying is not. The policy is one pure function
+  over the manifest (`vanish_verdict`), so the clock is an argument rather
+  than something a test has to wait on.
+
 - **A tie goes to disk.** §5.4 says the newer side wins but not what happens
   at equal timestamps. The file wins: it is what a person or an agent just
   saved, and it is the artifact they can see. When the app's version wins

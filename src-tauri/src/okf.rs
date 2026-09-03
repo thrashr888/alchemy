@@ -685,6 +685,7 @@ pub fn write_bundle(
                     file_mtime: file_clock(&at).0,
                     file_len: file_clock(&at).1,
                     wrote_at: concept.generated_at,
+                    missing_since: 0,
                     extra: std::mem::take(&mut concept.extra),
                 },
             );
@@ -2648,6 +2649,16 @@ pub struct OkfManifestEntry {
     /// Epoch ms of the entity when we wrote it — the conflict clock (§5.4).
     #[serde(default)]
     pub wrote_at: i64,
+    /// When a pass first found this file absent, or zero when it is there.
+    ///
+    /// A claimed file that is gone used to take its entity with it on the
+    /// strength of one pass, and under iCloud or a FileProvider mount a file
+    /// is routinely absent for a while — a folder mid-move between two
+    /// Notebooks roots, a bundle the other Mac is still downloading. So the
+    /// first sighting is recorded here and the delete waits for a second one
+    /// (§5.3, "A delete needs two sightings").
+    #[serde(default)]
+    pub missing_since: i64,
     /// Frontmatter keys Alchemy does not write, carried in from an outside
     /// edit and re-emitted verbatim on every write since.
     #[serde(default)]
@@ -3156,6 +3167,76 @@ fn outside_actor(doc: &OkfDoc) -> String {
     }
 }
 
+/// How long a claimed file has to stay missing before its entity goes with
+/// it. Two passes at least this far apart, both finding it absent.
+pub(crate) const OKF_MISSING_GRACE_MS: i64 = 60_000;
+
+/// What a pass should do about the concepts whose files it did not find.
+///
+/// Pure over the manifest and a presence test, so the whole delete policy is
+/// testable without a store, a bundle, or a clock that has to be waited on.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct VanishVerdict {
+    /// Entity id and bundle-relative path of everything to delete now: absent
+    /// on this pass and on one at least `OKF_MISSING_GRACE_MS` ago.
+    pub delete: Vec<(String, String)>,
+    /// Absent for the first time — stamp `missing_since` and keep the entity.
+    pub mark: Vec<String>,
+    /// The file is back, so the earlier sighting no longer counts.
+    pub clear: Vec<String>,
+    /// Absent and claimed counts when the pass stood down: too much of the
+    /// bundle went missing at once for this to be somebody deleting.
+    pub outage: Option<(usize, usize)>,
+}
+
+/// Decide what this pass may delete (§5.3).
+///
+/// Two rules, both of them about the difference between a person deleting a
+/// file and a sync client moving one. **A delete needs two sightings**: the
+/// first pass that misses a claimed file only records when it missed it, and
+/// only a later pass, at least a minute on, may act — long enough for a
+/// folder mid-move or a bundle mid-download to come back. And **a bundle
+/// losing more than a third of its files at once is an outage**, not an
+/// intention, so the whole delete step stands down for that pass and nothing
+/// is even marked; a file that is genuinely gone will still be gone next
+/// time, and a file the cloud is carrying will not.
+pub(crate) fn vanish_verdict(
+    manifest: &OkfManifest,
+    seen: &std::collections::HashSet<String>,
+    present: impl Fn(&str) -> bool,
+    now: i64,
+) -> VanishVerdict {
+    let mut out = VanishVerdict::default();
+    let mut absent: Vec<(&String, &OkfManifestEntry)> = Vec::new();
+    for (id, entry) in &manifest.concepts {
+        if seen.contains(id) || present(&entry.path) {
+            if entry.missing_since != 0 {
+                out.clear.push(id.clone());
+            }
+        } else {
+            absent.push((id, entry));
+        }
+    }
+    // A HashMap has no order and a delete log that reads differently twice is
+    // harder to trust than one that does not.
+    absent.sort_by(|a, b| a.0.cmp(b.0));
+    out.clear.sort();
+
+    let claimed = manifest.concepts.len();
+    if claimed > 0 && absent.len() * 3 > claimed {
+        out.outage = Some((absent.len(), claimed));
+        return out;
+    }
+    for (id, entry) in absent {
+        if entry.missing_since == 0 {
+            out.mark.push(id.clone());
+        } else if now - entry.missing_since >= OKF_MISSING_GRACE_MS {
+            out.delete.push((id.clone(), entry.path.clone()));
+        }
+    }
+    out
+}
+
 /// Reconcile a bound notebook against its bundle (§5.3).
 ///
 /// Echo suppression is the hash, not a timer: the writer records what it
@@ -3308,15 +3389,31 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
         }
     }
 
-    // A concept file that is gone takes its entity with it.
-    let vanished: Vec<(String, String)> = manifest
-        .concepts
-        .iter()
-        .filter(|(id, entry)| !seen.contains(*id) && !bundle.join(&entry.path).exists())
-        .map(|(id, entry)| (id.clone(), entry.path.clone()))
-        .collect();
+    // A concept file that is gone takes its entity with it — but only once
+    // two passes a minute apart agree it is gone, and never during what looks
+    // like a sync outage. See `vanish_verdict`.
+    let now = now_ms();
+    let verdict = vanish_verdict(&manifest, &seen, |rel| bundle.join(rel).exists(), now);
+    if let Some((absent, claimed)) = verdict.outage {
+        okf_notice(format!(
+            "{absent} of {claimed} claimed files are missing from {}; that reads as a sync outage, not a delete, so nothing was removed this pass.",
+            binding.path
+        ));
+    }
+    for id in &verdict.mark {
+        if let Some(entry) = manifest.concepts.get_mut(id) {
+            entry.missing_since = now;
+            dirty = true;
+        }
+    }
+    for id in &verdict.clear {
+        if let Some(entry) = manifest.concepts.get_mut(id) {
+            entry.missing_since = 0;
+            dirty = true;
+        }
+    }
     let mut removed: Vec<String> = Vec::new();
-    for (id, rel) in vanished {
+    for (id, rel) in verdict.delete {
         let deleted = if rel.starts_with("notes/") {
             state.db.delete_note(&id).await.is_ok()
         } else {
@@ -3325,7 +3422,10 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
         if deleted {
             manifest.concepts.remove(&id);
             out.deleted += 1;
-            crate::note!("okf: {rel} was deleted on disk; removed it here too");
+            // Through diagnostics as well as stderr: on a shared folder this
+            // line is the only account anybody has of why a concept went away,
+            // and stderr is not where a user can find it.
+            okf_notice(format!("{rel} was deleted on disk; removed it here too"));
             removed.push(rel);
         }
     }
@@ -3394,6 +3494,7 @@ pub(crate) fn adopt(
             file_mtime: mtime,
             file_len: len,
             wrote_at: 0,
+            missing_since: 0,
             extra: doc.extra(),
         },
     );

@@ -3934,6 +3934,74 @@ fn okf_icloud_move_rewrites_binding_paths() {
     assert_eq!(bindings["nb1"].last_write_at, 7);
 }
 
+/// A claimed file that is absent is not yet a delete: it takes two passes a
+/// minute apart, and a bundle that loses a third of its files at once is a
+/// sync outage rather than an intention (§5.3).
+#[test]
+fn okf_delete_needs_two_sightings_and_stands_down_in_an_outage() {
+    use crate::okf::{vanish_verdict, OkfManifest, OkfManifestEntry, VanishVerdict};
+    let manifest = |missing: &[(&str, i64)]| {
+        let mut m = OkfManifest::default();
+        for (id, since) in missing {
+            m.concepts.insert(
+                (*id).to_string(),
+                OkfManifestEntry {
+                    path: format!("notes/{id}.md"),
+                    missing_since: *since,
+                    ..Default::default()
+                },
+            );
+        }
+        m
+    };
+    let none = std::collections::HashSet::new();
+    let all_absent = |_: &str| false;
+    let minute = crate::okf::OKF_MISSING_GRACE_MS;
+
+    // Four files, one of them gone: under the outage share, so the pass acts.
+    let first = manifest(&[("a", 0), ("b", 0), ("c", 0), ("gone", 0)]);
+    let seen: std::collections::HashSet<String> =
+        ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+    let v = vanish_verdict(&first, &seen, all_absent, 1_000);
+    assert_eq!(v.delete, Vec::new(), "absent once is not gone");
+    assert_eq!(v.mark, vec!["gone".to_string()], "the sighting is recorded");
+    assert_eq!(v.outage, None);
+
+    // Absent again, but inside the grace: still not gone.
+    let second = manifest(&[("a", 0), ("b", 0), ("c", 0), ("gone", 1_000)]);
+    let v = vanish_verdict(&second, &seen, all_absent, 1_000 + minute - 1);
+    assert_eq!(v.delete, Vec::new(), "a folder mid-move gets its minute");
+    assert!(v.mark.is_empty(), "the first sighting stands");
+
+    // Absent again, a minute on: now it is a delete.
+    let v = vanish_verdict(&second, &seen, all_absent, 1_000 + minute);
+    assert_eq!(
+        v.delete,
+        vec![("gone".to_string(), "notes/gone.md".to_string())]
+    );
+
+    // The file came back, so the sighting is cleared and nothing goes.
+    let v = vanish_verdict(&second, &none, |_| true, 1_000 + minute);
+    assert_eq!(v.clear, vec!["gone".to_string()]);
+    assert_eq!(
+        v,
+        VanishVerdict {
+            clear: vec!["gone".to_string()],
+            ..Default::default()
+        }
+    );
+
+    // Two of five absent — 40%, over the third — is an outage: nothing is
+    // deleted, nothing is even marked, and the caller gets a record to write.
+    let outage = manifest(&[("a", 0), ("b", 0), ("c", 0), ("d", 1_000), ("e", 1_000)]);
+    let seen: std::collections::HashSet<String> =
+        ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+    let v = vanish_verdict(&outage, &seen, all_absent, 1_000 + minute);
+    assert_eq!(v.outage, Some((2, 5)));
+    assert!(v.delete.is_empty(), "a sync outage deletes nothing");
+    assert!(v.mark.is_empty());
+}
+
 /// A notebook gets its own folder under the root, deduped the way the
 /// exporter's slugs are (§5.7).
 #[test]
