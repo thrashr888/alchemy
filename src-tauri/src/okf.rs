@@ -679,9 +679,11 @@ pub fn write_bundle(
                     path: rel,
                     adopted,
                     hash,
-                    // What the file's clock says now that we are done with
-                    // it, so the next read-back pass can skip it on a stat.
-                    file_mtime: file_mtime_ms(&at),
+                    // What the file's clock and size say now that we are
+                    // done with it, so the next read-back pass can skip it
+                    // on a stat.
+                    file_mtime: file_clock(&at).0,
+                    file_len: file_clock(&at).1,
                     wrote_at: concept.generated_at,
                     extra: std::mem::take(&mut concept.extra),
                 },
@@ -2637,6 +2639,12 @@ pub struct OkfManifestEntry {
     /// full pass and no correctness.
     #[serde(default)]
     pub file_mtime: i64,
+    /// The file's byte length beside its mtime: mtime has millisecond
+    /// resolution, and an edit that lands inside the same millisecond as
+    /// our own write would otherwise read as untouched. Zero on a manifest
+    /// written before this was recorded, which reads as changed.
+    #[serde(default)]
+    pub file_len: u64,
     /// Epoch ms of the entity when we wrote it — the conflict clock (§5.4).
     #[serde(default)]
     pub wrote_at: i64,
@@ -3009,16 +3017,18 @@ pub fn classify(rel: &str, hash: &str, manifest: &OkfManifest) -> OkfAction {
 /// Has this file gone untouched since the manifest last looked at it?
 ///
 /// The read-back sweep's first question, and the cheap one: a file whose own
-/// mtime has not moved is the file we already know, so there is nothing to
-/// read and nothing to hash. `file_mtime: 0` is a manifest written before
-/// this was recorded, and reads as changed — one full pass, then never
-/// again.
-pub fn is_untouched(rel: &str, mtime: i64, manifest: &OkfManifest) -> bool {
+/// mtime and size have not moved is the file we already know, so there is
+/// nothing to read and nothing to hash. Size rides along because mtime is
+/// millisecond-grained and an edit inside our own write's millisecond is
+/// exactly the kind a test makes. `file_mtime: 0` is a manifest written
+/// before this was recorded, and reads as changed — one full pass, then
+/// never again.
+pub fn is_untouched(rel: &str, mtime: i64, len: u64, manifest: &OkfManifest) -> bool {
     mtime != 0
         && manifest
             .concepts
             .values()
-            .any(|entry| entry.path == rel && entry.file_mtime == mtime)
+            .any(|entry| entry.path == rel && entry.file_mtime == mtime && entry.file_len == len)
 }
 
 /// Last writer wins by clock (§5.4). A tie goes to disk: the file is what a
@@ -3112,12 +3122,22 @@ fn evicted_concepts(bundle: &Path, dir: &str) -> Vec<String> {
 }
 
 fn file_mtime_ms(path: &Path) -> i64 {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
+    file_clock(path).0
+}
+
+/// A file's mtime in epoch ms and its byte length — the two numbers one
+/// `stat` gives that together say "this is the file we already read".
+fn file_clock(path: &Path) -> (i64, u64) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return (0, 0);
+    };
+    let mtime = meta
+        .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+        .unwrap_or(0);
+    (mtime, meta.len())
 }
 
 /// Who a concept file says last wrote it, when that is somebody other than
@@ -3211,8 +3231,8 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
             // One stat, and most of the time that is the whole cost. Reading
             // and hashing every concept of every bundle on one serial tick is
             // what made a closed notebook's read-back take minutes.
-            let mtime = file_mtime_ms(&path);
-            if is_untouched(&rel, mtime, &manifest) {
+            let (mtime, len) = file_clock(&path);
+            if is_untouched(&rel, mtime, len, &manifest) {
                 if let Some(id) = by_path.get(&rel) {
                     seen.insert(id.clone());
                 }
@@ -3236,6 +3256,7 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
                         seen.insert(id.clone());
                         if let Some(entry) = manifest.concepts.get_mut(id) {
                             entry.file_mtime = mtime;
+                            entry.file_len = len;
                             dirty = true;
                         }
                     }
@@ -3244,11 +3265,11 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
                 OkfAction::Create => None,
             };
             let doc = parse_okf_doc(&text);
-            let mtime = file_mtime_ms(&path);
+            let (mtime, len) = file_clock(&path);
             match (dir, known) {
                 ("notes", None) => {
                     if let Some(id) = take_in_note(state, notebook_id, &doc, &path).await? {
-                        adopt(&mut manifest, &id, &rel, &hash, mtime, &doc);
+                        adopt(&mut manifest, &id, &rel, &hash, mtime, len, &doc);
                         dirty = true;
                         out.created += 1;
                     }
@@ -3257,7 +3278,7 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
                     if let Some(id) =
                         take_in_source(state, notebook_id, &doc, &path, &bundle).await?
                     {
-                        adopt(&mut manifest, &id, &rel, &hash, mtime, &doc);
+                        adopt(&mut manifest, &id, &rel, &hash, mtime, len, &doc);
                         dirty = true;
                         out.created += 1;
                     }
@@ -3361,6 +3382,7 @@ pub(crate) fn adopt(
     rel: &str,
     hash: &str,
     mtime: i64,
+    len: u64,
     doc: &OkfDoc,
 ) {
     manifest.concepts.insert(
@@ -3370,6 +3392,7 @@ pub(crate) fn adopt(
             adopted: true,
             hash: hash.to_string(),
             file_mtime: mtime,
+            file_len: len,
             wrote_at: 0,
             extra: doc.extra(),
         },

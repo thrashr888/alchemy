@@ -1696,6 +1696,7 @@ fn okf_a_hand_added_file_lands_once() {
         rel,
         &okf_hash(text),
         0,
+        0,
         &parse_okf_doc(text),
     );
     let manifest_at = okf_manifest(&bundle);
@@ -2128,7 +2129,10 @@ fn okf_read_back_hashes_only_what_moved() {
         let at = bundle.join(&entry.path);
         assert!(entry.file_mtime > 0, "{} has no clock", entry.path);
         assert!(
-            is_untouched(&entry.path, okf_file_mtime(&at), &manifest),
+            {
+                let (m, l) = okf_file_clock(&at);
+                is_untouched(&entry.path, m, l, &manifest)
+            },
             "{} was written by this pass and has not moved since",
             entry.path
         );
@@ -2142,7 +2146,10 @@ fn okf_read_back_hashes_only_what_moved() {
     let moved: Vec<&str> = manifest
         .concepts
         .values()
-        .filter(|e| !is_untouched(&e.path, okf_file_mtime(&bundle.join(&e.path)), &manifest))
+        .filter(|e| {
+            let (m, l) = okf_file_clock(&bundle.join(&e.path));
+            !is_untouched(&e.path, m, l, &manifest)
+        })
         .map(|e| e.path.as_str())
         .collect();
     assert_eq!(
@@ -2157,19 +2164,22 @@ fn okf_read_back_hashes_only_what_moved() {
     for entry in old.concepts.values_mut() {
         entry.file_mtime = 0;
     }
-    assert!(!is_untouched(edited, okf_file_mtime(&at), &old));
+    let (m, l) = okf_file_clock(&at);
+    assert!(!is_untouched(edited, m, l, &old));
 
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A file's mtime in epoch ms, the way the reconciler reads it.
-fn okf_file_mtime(path: &std::path::Path) -> i64 {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
+fn okf_file_clock(path: &std::path::Path) -> (i64, u64) {
+    let meta = std::fs::metadata(path).expect("stat");
+    let mtime = meta
+        .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+        .unwrap_or(0);
+    (mtime, meta.len())
 }
 
 /// A write in flight never puts back a binding the user removed
