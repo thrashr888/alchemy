@@ -926,6 +926,28 @@ they exist without being asked for.
     directory a sync client is still filling is empty too, which is why its
     own mtime has to be old before it counts as a leftover.
 
+- **The stage-one folder is emptied on every pass too.** The one-shot offer
+  (`icloud_move_asked`) was the only thing that ever looked at `iCloud
+  Drive/Alchemy`, and on the real two-Mac state that left ten entries there
+  with nothing that would ever look again: unbound starter bundles and their
+  `-2` copies, plus two bundles the other Mac recreated after the move. One
+  migration's worth of attention is not enough for a folder two Macs keep
+  putting things into, and a folder the app no longer writes to is not a
+  place to leave somebody's notebooks.
+
+  The placement rules are the move planner's, with one deliberate difference.
+  `plan_icloud_moves` *leaves* a bundle whose `alchemy.id` the container
+  already holds — right for the duration of one migration, wrong as a
+  standing rule, because leaving it is exactly what stranded those ten
+  entries. So the leftover is renamed to `<container>/Duplicates/<name>`
+  beside the keeper, where the consolidation already puts second folders and
+  where a person can find it. Everything else that probes as a bundle moves
+  in with the `-2` rule; files that are not bundles stay, empty directories
+  over the grace go, and the old folder is removed only once it is genuinely
+  empty. Only when the container is the active `notebooks_dir` — a Notebooks
+  folder the user pointed elsewhere is still theirs — and never while a write
+  for that notebook is in flight, under the same move guard as the migration.
+
 - **Nothing moves under a write in flight, and nothing is deleted.** The move
   waits on §5.2's pending/flushing sets rather than renaming a bundle out from
   under its own writer. A rename that cannot be done in place falls back to a

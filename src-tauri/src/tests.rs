@@ -4283,6 +4283,117 @@ fn okf_empty_folders_go_only_once_they_are_old() {
     );
 }
 
+/// The stage-one folder is emptied on every pass, not once inside a migration
+/// nobody will run again. A leftover whose notebook the container already
+/// keeps goes to `Duplicates/` beside the keeper — never over it — and
+/// everything else moves in with the `-2` rule (§5.7).
+#[test]
+fn okf_the_old_folder_is_tidied_by_identity_not_by_name() {
+    use crate::okf::{plan_old_folder_tidy, OkfBinding, TidyStep};
+    let from = std::path::PathBuf::from("/Users/tester/iCloudDrive/Alchemy");
+    let to = std::path::PathBuf::from("/Users/tester/Container/Documents");
+    let aside = to.join("Duplicates");
+    let mut bindings = std::collections::HashMap::new();
+    bindings.insert(
+        "nb1".to_string(),
+        OkfBinding {
+            path: from.join("thesis").to_string_lossy().to_string(),
+            id: "b-nb1".into(),
+            last_write_at: 7,
+            lost: false,
+        },
+    );
+    // What the two-Mac run actually left there: a starter the container
+    // already holds, its `-2` copy of the same notebook, a bundle nothing
+    // here is bound to, one this Mac is still bound to, and an old empty dir.
+    let bundles = vec![
+        (from.join("thesis"), Some("nb1".to_string())),
+        (from.join("worked-examples"), Some("starter-a".to_string())),
+        (
+            from.join("worked-examples-2"),
+            Some("starter-a".to_string()),
+        ),
+        (from.join("stray"), Some("nb9".to_string())),
+    ];
+    let already: std::collections::HashMap<String, std::path::PathBuf> =
+        [("starter-a".to_string(), to.join("worked-examples"))]
+            .into_iter()
+            .collect();
+    let taken: std::collections::HashSet<String> =
+        ["worked-examples".to_string(), "stray".to_string()]
+            .into_iter()
+            .collect();
+    // Something is already set aside under that name from an earlier pass.
+    let aside_taken: std::collections::HashSet<String> =
+        ["worked-examples".to_string()].into_iter().collect();
+    let empties = vec![from.join("arriving")];
+
+    let plan = plan_old_folder_tidy(
+        &to,
+        &bindings,
+        &taken,
+        &aside_taken,
+        &already,
+        &bundles,
+        &empties,
+    );
+    assert_eq!(
+        plan,
+        vec![
+            TidyStep::Move {
+                notebook: "nb1".into(),
+                from: from.join("thesis"),
+                to: to.join("thesis"),
+            },
+            TidyStep::Aside {
+                notebook: "starter-a".into(),
+                from: from.join("worked-examples"),
+                to: aside.join("worked-examples-2"),
+            },
+            TidyStep::Aside {
+                notebook: "starter-a".into(),
+                from: from.join("worked-examples-2"),
+                to: aside.join("worked-examples-2-2"),
+            },
+            TidyStep::Move {
+                notebook: String::new(),
+                from: from.join("stray"),
+                to: to.join("stray-2"),
+            },
+            TidyStep::RemoveEmpty(from.join("arriving")),
+        ],
+        "same id as something in the container goes aside; a name clash on a different notebook gets -2; a bundle nothing is bound to still travels"
+    );
+
+    // Nothing in the old folder at all is not a plan, it is a folder to drop.
+    assert!(
+        plan_old_folder_tidy(&to, &bindings, &taken, &aside_taken, &already, &[], &[]).is_empty()
+    );
+}
+
+/// And the emptied folder itself goes — but only once it is genuinely empty.
+/// A file somebody put there by hand keeps it alive on purpose (§5.7).
+#[test]
+fn okf_the_emptied_old_folder_is_removed_and_a_kept_one_is_not() {
+    use crate::okf::remove_if_empty;
+    let tmp = tempfile::tempdir().unwrap();
+    let old = tmp.path().join("Alchemy");
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::write(old.join("notes to self.txt"), "mine").unwrap();
+    assert!(
+        !remove_if_empty(&old),
+        "a file that is not a bundle keeps the folder"
+    );
+    assert!(old.is_dir());
+
+    std::fs::remove_file(old.join("notes to self.txt")).unwrap();
+    assert!(remove_if_empty(&old));
+    assert!(
+        !old.exists(),
+        "an empty directory going away is not a delete"
+    );
+}
+
 /// The move holds new writes rather than waiting for the app to go quiet, and
 /// waits per notebook: on a Mac whose watcher is rebinding bundles from the
 /// other one, something is always writing and global quiet never comes.

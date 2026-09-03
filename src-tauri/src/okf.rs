@@ -2084,6 +2084,9 @@ pub(crate) async fn tidy_notebooks_folder(state: &AppState) {
     }
     consolidate_duplicate_bundles(state, &app_data_dir(state)).await;
     sweep_empty_dirs(&root);
+    // And the folder the container replaced, which the one-shot move offer
+    // was the only thing that ever looked at.
+    tidy_old_notebooks_folder(state).await;
 }
 
 /// What this pass understands how to repair. A machine stamped with the
@@ -4625,6 +4628,250 @@ pub(crate) fn plan_icloud_moves(
     out
 }
 
+/// What the standing tidy does with one entry left behind in the stage-one
+/// folder once the container is the Notebooks folder.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum TidyStep {
+    /// A bundle for a notebook the container already holds. The container's
+    /// copy is the keeper — it is the one the app writes and the one the
+    /// other Mac syncs — so this one is renamed under
+    /// `<container>/Duplicates/` rather than written over it.
+    Aside {
+        notebook: String,
+        from: PathBuf,
+        to: PathBuf,
+    },
+    /// A bundle the container has nothing for: move it in, with the
+    /// exporter's `-2` rule for a name already taken there.
+    Move {
+        notebook: String,
+        from: PathBuf,
+        to: PathBuf,
+    },
+    /// An empty directory old enough to be a leftover rather than a folder
+    /// iCloud is still filling.
+    RemoveEmpty(PathBuf),
+}
+
+/// Where everything still sitting in the old stage-one folder belongs.
+///
+/// The move planner's rules, minus the one-shot framing: identity before
+/// name, `-2` for a genuine collision, nothing deleted. It differs in one
+/// place, and deliberately. `plan_icloud_moves` *leaves* a same-id bundle
+/// where it is, which was right while the old folder was still the Notebooks
+/// folder for the duration of one migration; it is wrong as a standing rule,
+/// because leaving it there is what left ten entries in `iCloud
+/// Drive/Alchemy` with nothing that would ever look at them again. So the
+/// leftover goes to `Duplicates/` beside the keeper, where the consolidation
+/// already puts second folders and where a person can find it.
+///
+/// Files that are not bundles are not in the plan at all: they stay, and they
+/// are why the old folder is removed only when it turns out to be empty.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn plan_old_folder_tidy(
+    to: &Path,
+    bindings: &HashMap<String, OkfBinding>,
+    // Names already in the container, and names already in its `Duplicates/`.
+    taken: &std::collections::HashSet<String>,
+    aside_taken: &std::collections::HashSet<String>,
+    // The `alchemy.id` of every bundle the container holds, to its folder.
+    already: &HashMap<String, PathBuf>,
+    // Everything under the old folder that probes as a bundle.
+    bundles: &[(PathBuf, Option<String>)],
+    // Empty directories there that are old enough to collect.
+    empties: &[PathBuf],
+) -> Vec<TidyStep> {
+    let bound_at: HashMap<PathBuf, String> = bindings
+        .iter()
+        .map(|(id, b)| (PathBuf::from(&b.path), id.clone()))
+        .collect();
+    let mut taken = taken.clone();
+    let mut aside_taken = aside_taken.clone();
+    let aside = to.join(DUPLICATES_DIR);
+    let mut out = Vec::new();
+    for (folder, id) in bundles {
+        let Some(name) = folder.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if let Some(id) = id.as_ref().filter(|id| already.contains_key(*id)) {
+            out.push(TidyStep::Aside {
+                notebook: id.clone(),
+                from: folder.clone(),
+                to: aside.join(free_name(name, &mut aside_taken)),
+            });
+            continue;
+        }
+        out.push(TidyStep::Move {
+            notebook: bound_at.get(folder).cloned().unwrap_or_default(),
+            from: folder.clone(),
+            to: to.join(free_name(name, &mut taken)),
+        });
+    }
+    out.extend(empties.iter().cloned().map(TidyStep::RemoveEmpty));
+    out
+}
+
+/// The names directly inside a folder, for the `-2` rule to dodge.
+fn names_in(dir: &Path) -> std::collections::HashSet<String> {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .collect()
+}
+
+/// Rename a folder, falling back to a copy across volumes. Never a delete: a
+/// move that could only be done by copying leaves the original where it was
+/// and says so, because a half-finished move must leave the user with their
+/// files rather than a gap.
+fn move_folder(from: &Path, to: &Path) -> bool {
+    if std::fs::rename(from, to).is_ok() {
+        return true;
+    }
+    match copy_tree(from, to) {
+        Ok(()) => {
+            crate::note!("okf: copied {from:?} to {to:?}; the original is still there");
+            true
+        }
+        Err(err) => {
+            crate::diagnostics::error("okf", format!("could not move {from:?}: {err}"));
+            false
+        }
+    }
+}
+
+/// Empty the stage-one folder into the container, at every launch and on
+/// every root-watcher pass.
+///
+/// The one-shot offer (`icloud_move_asked`) was the only thing that ever
+/// looked at `iCloud Drive/Alchemy`, and on the real two-Mac state that left
+/// ten entries there with nothing that would ever look again: unbound starter
+/// bundles and their `-2` copies, plus two bundles the other Mac recreated
+/// after the move. A folder the app no longer writes to is not a place to
+/// leave somebody's notebooks, and one migration's worth of attention is not
+/// enough for a folder two Macs keep putting things into.
+///
+/// Only when the container is the active Notebooks folder. A Notebooks folder
+/// the user pointed at Dropbox or a second drive is their decision (§5.7);
+/// this is about the folder Alchemy itself chose and then left behind. And
+/// nothing is touched while a write for that notebook is in flight.
+pub(crate) async fn tidy_old_notebooks_folder(state: &AppState) {
+    let home = home_dir();
+    let to = crate::ai::icloud_container_documents(&home);
+    let (dir, _) = notebooks_home(state).await;
+    if dir != to || !to.is_dir() {
+        return;
+    }
+    let from = crate::ai::icloud_drive_alchemy(&home);
+    if from == to || !from.is_dir() {
+        return;
+    }
+    let data_dir = app_data_dir(state);
+    let mut bindings = load_bindings(&data_dir);
+    let bundles = bundles_under(&from);
+    let empties = stale_empty_dirs(&from, now_ms());
+    if bundles.is_empty() && empties.is_empty() {
+        // Nothing to carry across; the folder still goes when it is empty.
+        if remove_if_empty(&from) {
+            okf_notice(format!(
+                "{} was empty, so the folder Alchemy used to keep notebooks in is gone.",
+                from.display()
+            ));
+        }
+        return;
+    }
+    let already: HashMap<String, PathBuf> = bundles_under(&to)
+        .into_iter()
+        .filter_map(|(path, id)| id.map(|id| (id, path)))
+        .collect();
+    let plan = plan_old_folder_tidy(
+        &to,
+        &bindings,
+        &names_in(&to),
+        &names_in(&to.join(DUPLICATES_DIR)),
+        &already,
+        &bundles,
+        &empties,
+    );
+
+    // The writer holds new scheduling while folders are moving, exactly as
+    // the migration does; the guard is RAII so an early return cannot leave
+    // every notebook deferred.
+    let _moving = begin_move();
+    let mut rebound = false;
+    for step in plan {
+        match step {
+            TidyStep::RemoveEmpty(dir) => {
+                if remove_if_empty(&dir) {
+                    crate::note!(
+                        "okf: {} was an empty folder ten minutes old, so it is gone",
+                        dir.display()
+                    );
+                }
+            }
+            TidyStep::Aside {
+                notebook,
+                from: old,
+                to: new,
+            } => {
+                if write_in_flight(&notebook) {
+                    continue;
+                }
+                if let Err(err) = std::fs::create_dir_all(to.join(DUPLICATES_DIR)) {
+                    crate::diagnostics::error(
+                        "okf",
+                        format!("could not make the Duplicates folder: {err}"),
+                    );
+                    continue;
+                }
+                if move_folder(&old, &new) {
+                    okf_notice(format!(
+                        "{} is an older copy of a notebook the Alchemy iCloud folder already keeps at {}, so it moved to {}. Nothing was deleted.",
+                        old.display(),
+                        already
+                            .get(&notebook)
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default(),
+                        new.display()
+                    ));
+                }
+            }
+            TidyStep::Move {
+                notebook,
+                from: old,
+                to: new,
+            } => {
+                if !notebook.is_empty() && write_in_flight(&notebook) {
+                    continue;
+                }
+                if !move_folder(&old, &new) {
+                    continue;
+                }
+                okf_notice(format!(
+                    "{} moved into the Alchemy iCloud folder as {}.",
+                    old.display(),
+                    new.display()
+                ));
+                if let Some(binding) = bindings.get_mut(&notebook) {
+                    binding.path = new.to_string_lossy().to_string();
+                    binding.lost = false;
+                    rebound = true;
+                }
+            }
+        }
+    }
+    if rebound {
+        save_bindings(&data_dir, &bindings);
+    }
+    if remove_if_empty(&from) {
+        okf_notice(format!(
+            "{} is empty now, so the folder Alchemy used to keep notebooks in is gone.",
+            from.display()
+        ));
+    }
+}
+
 /// The first name in the destination this folder can have, claiming it: the
 /// exporter's `-2` rule, so a collision never lands on somebody's folder.
 fn free_name(name: &str, taken: &mut std::collections::HashSet<String>) -> String {
@@ -4753,12 +5000,7 @@ pub async fn move_notebooks_to_icloud_container(
     // Making the directory is what provisions the container: the entitlement
     // says the app may have it, and the first thing to ask for it gets it made.
     std::fs::create_dir_all(&to).map_err(|err| format!("Couldn't make {}: {err}", offer.to))?;
-    let taken: std::collections::HashSet<String> = std::fs::read_dir(&to)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|entry| entry.file_name().to_string_lossy().to_string())
-        .collect();
+    let taken = names_in(&to);
     // What the container already holds, by the id each bundle claims: a
     // notebook whose folder the other Mac already moved here is adopted, not
     // copied in beside itself.
@@ -4829,18 +5071,8 @@ pub async fn move_notebooks_to_icloud_container(
             }
             continue;
         }
-        if std::fs::rename(&old, &new).is_ok() {
+        if move_folder(&old, &new) {
             done.push(placement);
-            continue;
-        }
-        match copy_tree(&old, &new) {
-            Ok(()) => {
-                crate::note!("okf: copied {old:?} to {new:?}; the original is still there");
-                done.push(placement);
-            }
-            Err(err) => {
-                crate::diagnostics::error("okf", format!("could not move {old:?}: {err}"));
-            }
         }
     }
 
@@ -4872,11 +5104,7 @@ pub async fn move_notebooks_to_icloud_container(
     // anything, only the removal of an empty directory. A file somebody put
     // there by hand, or a bundle left behind because the container already
     // holds its notebook, keeps the folder alive on purpose.
-    if std::fs::read_dir(&from)
-        .map(|mut d| d.next().is_none())
-        .unwrap_or(false)
-        && std::fs::remove_dir(&from).is_ok()
-    {
+    if remove_if_empty(&from) {
         crate::note!("okf: the old Notebooks folder was empty, so it is gone");
     }
 
