@@ -368,7 +368,12 @@ export interface AppState {
   /** Set Home chat's style/length; persisted for the surface. */
   setHomeChatConfig: (config: ChatConfig) => void;
   /** Resolves to the new notebook's id. */
-  createNotebook: (title: string) => Promise<string>;
+  /** `look` is the New notebook dialog's choice; absent, the color rotates
+   *  through the palette and the icon comes from the title. */
+  createNotebook: (
+    title: string,
+    look?: { icon?: string; color?: string },
+  ) => Promise<string>;
   renameNotebook: (id: string, title: string) => Promise<void>;
   setNotebookColor: (id: string, color: string) => Promise<void>;
   setNotebookIcon: (id: string, icon: string) => Promise<void>;

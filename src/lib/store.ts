@@ -1805,8 +1805,8 @@ export const useStore = create<AppState>((set, get) => {
       set(panel === "sources" ? { sourcesWidth: w } : { studioWidth: w });
     },
 
-    createNotebook: async (title) => {
-      const nb = await api.createNotebook(title);
+    createNotebook: async (title, look) => {
+      const nb = await api.createNotebook(title, look);
       set({ notebooks: [nb, ...get().notebooks] });
       void api.rebuildAppMenu();
       await get().selectNotebook(nb.id);

@@ -64,56 +64,12 @@ export function NotebookEditModal({
           value={title}
           onChange={(e) => setTitle(e.target.value)}
         />
-        {/* Color first: it reads as part of the name row above (the dot the
-            title bar and cards wear), where the icon grid is a bigger,
-            slower choice below it. */}
-        <div className="flex items-center justify-between py-1">
-          {NOTEBOOK_PALETTE.map((c) => (
-            <button
-              key={c}
-              type="button"
-              aria-pressed={color === c}
-              aria-label={`Color ${c}`}
-              onClick={() => setColor(c)}
-              className={cn(
-                "h-6 w-6 rounded-full border border-border transition-shadow",
-                color === c &&
-                  "ring-2 ring-foreground ring-offset-1 ring-offset-surface",
-              )}
-              style={{ backgroundColor: c }}
-            />
-          ))}
-        </div>
-        {/* Icon picker: the auto-picked icon can always be overridden
-            here; the plain book is a first-class choice, not an absence. */}
-        <div className="grid grid-cols-8 gap-1">
-          {["", ...Object.keys(NOTEBOOK_ICONS).filter((k) => k !== "book-open")].map(
-            (name) => {
-              const Icon = notebookIcon(name);
-              const active = icon === name;
-              return (
-                <button
-                  key={name || "default"}
-                  type="button"
-                  aria-pressed={active}
-                  aria-label={
-                    name ? `Icon: ${name.replace(/-/g, " ")}` : "Default icon"
-                  }
-                  title={name ? name.replace(/-/g, " ") : "Default"}
-                  onClick={() => setIcon(name)}
-                  className={cn(
-                    "flex h-8 items-center justify-center rounded-md border transition-colors",
-                    active
-                      ? "border-primary/60 bg-primary/10 text-foreground"
-                      : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  <Icon className="h-4 w-4" />
-                </button>
-              );
-            },
-          )}
-        </div>
+        <NotebookLookFields
+          icon={icon}
+          color={color}
+          onIcon={setIcon}
+          onColor={setColor}
+        />
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose}>
             Cancel
@@ -124,5 +80,84 @@ export function NotebookEditModal({
         </div>
       </form>
     </Modal>
+  );
+}
+
+/** The look half of the dialog — the color row and the icon grid — shared
+ *  with the New notebook dialog so both offer the same choice up front.
+ *  `autoIcon` relabels the empty choice: on an existing notebook "" is the
+ *  plain book, on a new one it means "pick from the title". */
+export function NotebookLookFields({
+  icon,
+  color,
+  onIcon,
+  onColor,
+  autoIcon = false,
+}: {
+  icon: string;
+  color: string;
+  onIcon: (icon: string) => void;
+  onColor: (color: string) => void;
+  autoIcon?: boolean;
+}) {
+  return (
+    <>
+    {/* Color first: it reads as part of the name row above (the dot the
+        title bar and cards wear), where the icon grid is a bigger,
+        slower choice below it. */}
+    <div className="flex items-center justify-between py-1">
+      {NOTEBOOK_PALETTE.map((c) => (
+        <button
+          key={c}
+          type="button"
+          aria-pressed={color === c}
+          aria-label={`Color ${c}`}
+          onClick={() => onColor(c)}
+          className={cn(
+            "h-6 w-6 rounded-full border border-border transition-shadow",
+            color === c &&
+              "ring-2 ring-foreground ring-offset-1 ring-offset-surface",
+          )}
+          style={{ backgroundColor: c }}
+        />
+      ))}
+    </div>
+    {/* Icon picker: the auto-picked icon can always be overridden
+        here; the plain book is a first-class choice, not an absence. */}
+    <div className="grid grid-cols-8 gap-1">
+      {["", ...Object.keys(NOTEBOOK_ICONS).filter((k) => k !== "book-open")].map(
+        (name) => {
+          const Icon = notebookIcon(name);
+          const active = icon === name;
+          return (
+            <button
+              key={name || "default"}
+              type="button"
+              aria-pressed={active}
+              aria-label={
+                name
+                  ? `Icon: ${name.replace(/-/g, " ")}`
+                  : autoIcon
+                    ? "Icon from the title"
+                    : "Default icon"
+              }
+              title={
+                name ? name.replace(/-/g, " ") : autoIcon ? "Auto" : "Default"
+              }
+              onClick={() => onIcon(name)}
+              className={cn(
+                "flex h-8 items-center justify-center rounded-md border transition-colors",
+                active
+                  ? "border-primary/60 bg-primary/10 text-foreground"
+                  : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Icon className="h-4 w-4" />
+            </button>
+          );
+        },
+      )}
+    </div>
+    </>
   );
 }

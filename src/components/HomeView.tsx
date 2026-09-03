@@ -63,7 +63,7 @@ import {
   useHomeChat,
 } from "./HomeChat";
 import { NOTEBOOK_PALETTE, notebookIcon } from "@/lib/notebookIcons";
-import { NotebookEditModal } from "./NotebookEditModal";
+import { NotebookEditModal, NotebookLookFields } from "./NotebookEditModal";
 import { RegistrySection } from "./RegistrySection";
 import {
   HomeTable,
@@ -314,6 +314,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const shownIdsRef = useRef<string[]>([]);
   const [creating, setCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
+  // The look is offered up front, like Edit: the color defaults to the
+  // palette slot the backend would rotate to, the icon to "from the title".
+  const [newIcon, setNewIcon] = useState("");
+  const [newColor, setNewColor] = useState("");
   const [editing, setEditing] = useState<Notebook | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);
   // "system" notebooks (Briefs) are working infrastructure, not shelf items.
@@ -701,6 +705,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       if ((e.metaKey || e.ctrlKey) && e.key === "n" && !shortcutBlocked(e)) {
         e.preventDefault();
         setNewTitle("");
+        setNewIcon("");
+        setNewColor("");
         setCreating(true);
       }
     };
@@ -915,6 +921,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               variant="primary"
               onClick={() => {
                 setNewTitle("");
+        setNewIcon("");
+        setNewColor("");
                 setCreating(true);
               }}
             >
@@ -1135,6 +1143,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                         variant="primary"
                         onClick={() => {
                           setNewTitle("");
+        setNewIcon("");
+        setNewColor("");
                           setCreating(true);
                         }}
                       >
@@ -1174,6 +1184,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   notebooks={shownNotebooks}
                   onNew={() => {
                     setNewTitle("");
+        setNewIcon("");
+        setNewColor("");
                     setCreating(true);
                   }}
                   unreadByNb={unreadByNb}
@@ -1520,7 +1532,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            create(newTitle);
+            create(newTitle, {
+              icon: newIcon || undefined,
+              color: newColor || undefined,
+            });
             setCreating(false);
           }}
           className="flex flex-col gap-3"
@@ -1532,6 +1547,16 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             placeholder="Notebook title"
             value={newTitle}
             onChange={(e) => setNewTitle(e.target.value)}
+          />
+          <NotebookLookFields
+            autoIcon
+            icon={newIcon}
+            color={
+              newColor ||
+              NOTEBOOK_PALETTE[notebooks.length % NOTEBOOK_PALETTE.length]
+            }
+            onIcon={setNewIcon}
+            onColor={setNewColor}
           />
           <div className="flex justify-end gap-2">
             <Button
