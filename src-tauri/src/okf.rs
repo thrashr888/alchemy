@@ -1531,7 +1531,7 @@ pub(crate) fn is_system_notebook(notebook: &Notebook) -> bool {
 /// Give a notebook its folder and seed it (§5.7). Silent and best-effort:
 /// creating a notebook must not fail because a disk did.
 pub(crate) async fn bind_new_notebook(state: &AppState, notebook: &Notebook) {
-    if is_system_notebook(notebook) {
+    if is_system_notebook(notebook) || crate::examples::is_starter_title(&notebook.title) {
         return;
     }
     let (root, keep) = notebooks_home(state).await;
@@ -1580,7 +1580,14 @@ pub(crate) async fn bind_all_notebooks(app: &AppHandle, state: &AppState) -> Res
     let total = notebooks.len();
     let mut bound = 0usize;
     for (done, nb) in notebooks.iter().enumerate() {
-        if is_system_notebook(nb) || nb.status == "archived" {
+        // A starter is the app's own sample, and every Mac seeds its own
+        // copy under its own id. Binding them means two installs trade
+        // bundles for notebooks neither person asked for (§5.7); the ⋯ verb
+        // still binds one if somebody wants it on disk.
+        if is_system_notebook(nb)
+            || nb.status == "archived"
+            || crate::examples::is_starter_title(&nb.title)
+        {
             continue;
         }
         let _ = app.emit(
@@ -1597,6 +1604,337 @@ pub(crate) async fn bind_all_notebooks(app: &AppHandle, state: &AppState) -> Res
         serde_json::json!({ "done": total, "total": total, "title": "" }),
     );
     Ok(bound)
+}
+
+// ---- The self-heal (§5.7) ---------------------------------------------------
+//
+// Rules are for the state that has not happened yet. The duplication that
+// shipped in 0.55.0 already happened, on at least two Macs, and it leaves
+// behind exactly four shapes: two notebooks writing into one folder, a
+// starter notebook bound at all, a binding whose folder says it belongs to a
+// notebook that is bound elsewhere, and a second copy of a starter imported
+// from the other Mac's bundle. This is the pass that puts those right, once
+// per launch, before anything writes.
+//
+// It never deletes. Every fix is an unbind (which leaves the files where
+// they are, as §5.5 promises) or an archive (which hides a notebook from the
+// grid and keeps every row it has). A wrong guess here costs the user a
+// visit to the archive, not their notes.
+
+/// One thing the heal decided to do, and the sentence that explains it.
+#[derive(Debug, PartialEq)]
+pub(crate) enum HealStep {
+    /// Stop keeping this notebook on disk. The folder is left alone.
+    Unbind { notebook: String, why: String },
+    /// Hide this notebook: it is a duplicate of one that stays.
+    Archive { notebook: String, why: String },
+}
+
+/// A notebook, as the heal needs to see it.
+pub(crate) struct HealNotebook {
+    pub id: String,
+    pub title: String,
+    pub created_at: i64,
+    pub archived: bool,
+}
+
+/// The plan, as a pure function over what is on disk and in the store.
+///
+/// Age decides every tie, and age means the notebook's `created_at`, not the
+/// binding's: a binding carries no clock, and in every duplication seen the
+/// original notebook is the older row and the duplicate was minted by an
+/// import a moment ago. So the older notebook keeps the folder.
+pub(crate) fn heal_plan(
+    bindings: &HashMap<String, OkfBinding>,
+    notebooks: &[HealNotebook],
+    // `declared` maps a binding path to the `alchemy.id` that folder's
+    // `index.md` names — who the folder says it belongs to.
+    declared: &HashMap<String, String>,
+) -> Vec<HealStep> {
+    let by_id: HashMap<&str, &HealNotebook> =
+        notebooks.iter().map(|n| (n.id.as_str(), n)).collect();
+    // Oldest first, then by id, so a plan is the same plan twice.
+    let rank = |id: &str| {
+        by_id
+            .get(id)
+            .map(|n| (n.created_at, n.id.clone()))
+            .unwrap_or((i64::MAX, id.to_string()))
+    };
+    let mut steps: Vec<HealStep> = Vec::new();
+    let mut unbound: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let unbind = |steps: &mut Vec<HealStep>,
+                  unbound: &mut std::collections::HashSet<String>,
+                  id: &str,
+                  why: String| {
+        if unbound.insert(id.to_string()) {
+            steps.push(HealStep::Unbind {
+                notebook: id.to_string(),
+                why,
+            });
+        }
+    };
+
+    // 1. Two notebooks over one folder. Two manifests and two writers over
+    //    one file is the thing §5.6 forbids; the older binding keeps it and
+    //    the newcomer is a copy, so it is unbound and hidden.
+    let mut per_folder: HashMap<PathBuf, Vec<String>> = HashMap::new();
+    for (notebook, binding) in bindings {
+        per_folder
+            .entry(same_folder(&binding.path))
+            .or_default()
+            .push(notebook.clone());
+    }
+    let mut folders: Vec<(&PathBuf, &Vec<String>)> = per_folder.iter().collect();
+    folders.sort_by(|a, b| a.0.cmp(b.0));
+    for (folder, ids) in folders {
+        if ids.len() < 2 {
+            continue;
+        }
+        let mut ids = ids.clone();
+        ids.sort_by_key(|id| rank(id));
+        let keeper = ids[0].clone();
+        for id in &ids[1..] {
+            let why = format!(
+                "{} is notebook {keeper}'s bundle, and two writers must not share one",
+                folder.display()
+            );
+            unbind(&mut steps, &mut unbound, id, why.clone());
+            if by_id.get(id.as_str()).is_some_and(|n| !n.archived) {
+                steps.push(HealStep::Archive {
+                    notebook: id.clone(),
+                    why,
+                });
+            }
+        }
+    }
+
+    // 2. A starter notebook is not kept on disk by default. Every install
+    //    seeds its own, so a bound one is a bundle two Macs will trade.
+    let mut bound: Vec<&String> = bindings.keys().collect();
+    bound.sort();
+    for id in &bound {
+        if by_id
+            .get(id.as_str())
+            .is_some_and(|n| crate::examples::is_starter_title(&n.title))
+        {
+            unbind(
+                &mut steps,
+                &mut unbound,
+                id,
+                "a starter notebook is the app's own sample, not a document to sync".into(),
+            );
+        }
+    }
+
+    // 3. A folder that says it belongs to somebody else, and that somebody
+    //    already keeps itself on disk elsewhere. The folder is a duplicate of
+    //    their bundle; this notebook has no business writing into it.
+    for id in &bound {
+        let Some(binding) = bindings.get(*id) else {
+            continue;
+        };
+        let Some(owner) = declared.get(&binding.path) else {
+            continue;
+        };
+        if owner == *id || !by_id.contains_key(owner.as_str()) {
+            continue;
+        }
+        if bindings.contains_key(owner) {
+            unbind(
+                &mut steps,
+                &mut unbound,
+                id,
+                format!("{} is notebook {owner}'s bundle", binding.path),
+            );
+        }
+    }
+
+    // 4. A second copy of a starter, imported from the other Mac's bundle
+    //    before rule 2 existed. The oldest stays; the rest are hidden, never
+    //    deleted — a person may have added to one.
+    let mut per_title: HashMap<&str, Vec<&HealNotebook>> = HashMap::new();
+    for nb in notebooks.iter().filter(|n| !n.archived) {
+        if crate::examples::is_starter_title(&nb.title) {
+            per_title.entry(nb.title.as_str()).or_default().push(nb);
+        }
+    }
+    let mut titles: Vec<&&str> = per_title.keys().collect();
+    titles.sort();
+    for title in titles {
+        let mut copies = per_title[*title].clone();
+        if copies.len() < 2 {
+            continue;
+        }
+        copies.sort_by_key(|n| (n.created_at, n.id.clone()));
+        for nb in &copies[1..] {
+            let why = format!("a second copy of the starter notebook \u{201c}{title}\u{201d}");
+            if !steps
+                .iter()
+                .any(|s| matches!(s, HealStep::Archive { notebook, .. } if notebook == &nb.id))
+            {
+                steps.push(HealStep::Archive {
+                    notebook: nb.id.clone(),
+                    why,
+                });
+            }
+        }
+    }
+    steps
+}
+
+/// Run the plan, once, at launch. Best-effort: a heal that cannot read the
+/// store leaves everything as it found it.
+pub(crate) async fn heal_bindings(state: &AppState) {
+    let data_dir = app_data_dir(state);
+    let bindings = load_bindings(&data_dir);
+    let Ok(rows) = state.db.list_notebooks().await else {
+        return;
+    };
+    let notebooks: Vec<HealNotebook> = rows
+        .into_iter()
+        .map(|n| HealNotebook {
+            id: n.id,
+            title: n.title,
+            created_at: n.created_at,
+            archived: n.status == "archived",
+        })
+        .collect();
+    // What each bound folder says about itself, read once.
+    let declared: HashMap<String, String> = bindings
+        .values()
+        .filter_map(|b| {
+            let text = std::fs::read_to_string(Path::new(&b.path).join("index.md")).ok()?;
+            let id = parse_okf_doc(&text).nested("alchemy", "id")?;
+            Some((b.path.clone(), id))
+        })
+        .collect();
+    let title_of = |id: &str| {
+        notebooks
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| n.title.clone())
+            .unwrap_or_else(|| id.to_string())
+    };
+    for step in heal_plan(&bindings, &notebooks, &declared) {
+        match step {
+            HealStep::Unbind { notebook, why } => {
+                let path = bindings
+                    .get(&notebook)
+                    .map(|b| b.path.clone())
+                    .unwrap_or_default();
+                cancel_pending_write(&notebook);
+                set_binding(&data_dir, &notebook, None);
+                okf_notice(format!(
+                    "stopped keeping \u{201c}{}\u{201d} at {path} \u{2014} {why}. The folder is untouched.",
+                    title_of(&notebook)
+                ));
+            }
+            HealStep::Archive { notebook, why } => {
+                if state
+                    .db
+                    .set_notebook_status(&notebook, "archived")
+                    .await
+                    .is_ok()
+                {
+                    okf_notice(format!(
+                        "archived \u{201c}{}\u{201d} \u{2014} {why}. Nothing was deleted.",
+                        title_of(&notebook)
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// Say something worth reading later. `crate::note!` alone is stderr, which
+/// is where 0.55.0's duplication went: the app log's last line that day was
+/// the startup entry, and five bundles had been written since.
+fn okf_notice(message: String) {
+    crate::note!("okf: {message}");
+    crate::diagnostics::record(
+        crate::diagnostics::Event::new(crate::diagnostics::Level::Warn, "rust", "okf")
+            .message(message),
+    );
+}
+
+/// What this Mac already knows, as the found-bundle rule needs it. Read fresh
+/// per folder: a bind that landed a moment ago has to count.
+pub(crate) struct KnownNotebooks {
+    /// Notebook id → title, for every notebook here.
+    pub titles: HashMap<String, String>,
+    /// Notebooks that already keep themselves on disk somewhere.
+    pub bound: std::collections::HashSet<String>,
+    /// The bundle folders those bindings point at, normalized.
+    pub folders: std::collections::HashSet<PathBuf>,
+}
+
+fn known_notebooks(data_dir: &Path, notebooks: &[Notebook]) -> KnownNotebooks {
+    let bindings = load_bindings(data_dir);
+    KnownNotebooks {
+        titles: notebooks
+            .iter()
+            .map(|n| (n.id.clone(), n.title.clone()))
+            .collect(),
+        bound: bindings.keys().cloned().collect(),
+        folders: bindings.values().map(|b| same_folder(&b.path)).collect(),
+    }
+}
+
+/// One path spelling per folder, so a symlinked or trailing-slash binding
+/// still reads as the folder it is. Canonicalization is best-effort: a folder
+/// that is gone compares by its literal path, which is the only thing left.
+pub(crate) fn same_folder(path: impl AsRef<Path>) -> PathBuf {
+    let path = path.as_ref();
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// What the Notebooks-root watcher should do with a bundle it found (§5.7).
+#[derive(Debug, PartialEq)]
+pub(crate) enum FoundBundle {
+    /// Leave the folder exactly as it is, and say why.
+    Skip(String),
+    /// The same notebook arriving by another route: bind it here.
+    Rebind(String),
+    /// A notebook this Mac does not have: import it, then bind.
+    Import,
+}
+
+/// The rule, as a decision, so the cases that went wrong on 0.55.0 are tested
+/// rather than reasoned about.
+///
+/// Three things it will not do. It will not open a folder some notebook here
+/// is already bound to — that is two writers over one file, which §5.6
+/// forbids outright. It will not import a bundle whose `alchemy.id` names a
+/// notebook this Mac has: that notebook is either unbound (so this folder is
+/// its bundle, and it rebinds) or bound somewhere else (so this folder is a
+/// duplicate of it, and duplicating the notebook to match would be the wrong
+/// half to fix). And it will not open a starter notebook: every install seeds
+/// its own copies under its own ids, so trading them between two Macs is a
+/// loop that ends with everybody holding everybody's samples.
+pub(crate) fn decide_bundle(
+    folder: &Path,
+    claimed_id: Option<&str>,
+    claimed_title: Option<&str>,
+    known: &KnownNotebooks,
+) -> FoundBundle {
+    if known.folders.contains(&same_folder(folder)) {
+        return FoundBundle::Skip("a notebook here is already bound to it".into());
+    }
+    let starter = claimed_id
+        .and_then(|id| known.titles.get(id))
+        .map(String::as_str)
+        .or(claimed_title)
+        .is_some_and(crate::examples::is_starter_title);
+    if starter {
+        return FoundBundle::Skip("it is one of the app's own starter notebooks".into());
+    }
+    match claimed_id {
+        Some(id) if known.bound.contains(id) => FoundBundle::Skip(format!(
+            "notebook {id} already keeps itself on disk somewhere else"
+        )),
+        Some(id) if known.titles.contains_key(id) => FoundBundle::Rebind(id.to_string()),
+        _ => FoundBundle::Import,
+    }
 }
 
 /// Bundles sitting in the Notebooks folder that no notebook here is bound to
@@ -1638,30 +1976,55 @@ pub(crate) async fn open_found_bundles(app: &AppHandle, state: &AppState) -> usi
     if root.as_os_str().is_empty() || !root.is_dir() {
         return 0;
     }
+    // One pass at a time. The minute tick and the root watcher's debounce
+    // both call this, and two overlapping passes each see the same folder as
+    // unbound — which on the 0.55.0 first launch imported bundles the seed
+    // pass was still writing, as new notebooks.
+    if OPENING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return 0;
+    }
+    let out = open_found_bundles_inner(app, state, &root).await;
+    OPENING.store(false, std::sync::atomic::Ordering::SeqCst);
+    out
+}
+
+static OPENING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+async fn open_found_bundles_inner(app: &AppHandle, state: &AppState, root: &Path) -> usize {
     let data_dir = app_data_dir(state);
-    let bindings = load_bindings(&data_dir);
-    let bound: std::collections::HashSet<String> =
-        bindings.values().map(|b| b.path.clone()).collect();
-    let found = unopened_bundles(&root, &bound);
+    let bound: std::collections::HashSet<String> = load_bindings(&data_dir)
+        .values()
+        .map(|b| b.path.clone())
+        .collect();
+    let found = unopened_bundles(root, &bound);
     if found.is_empty() {
         return 0;
     }
-    let known: std::collections::HashSet<String> = e(state.db.list_notebooks().await)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|n| n.id)
-        .collect();
+    let notebooks = e(state.db.list_notebooks().await).unwrap_or_default();
 
     let mut opened = Vec::new();
     for folder in found {
         let path = folder.to_string_lossy().to_string();
-        // The same notebook by another route rebinds; a new one is imported.
-        let claimed = std::fs::read_to_string(folder.join("index.md"))
-            .ok()
-            .and_then(|text| parse_okf_doc(&text).nested("alchemy", "id"))
-            .filter(|id| known.contains(id) && !bindings.contains_key(id));
-        let outcome = match claimed {
-            Some(id) => {
+        // Re-read the bindings for every folder: a bind may have landed
+        // since the listing was taken, and acting on a stale map is how one
+        // folder ended up with two notebooks writing into it.
+        let known = known_notebooks(&data_dir, &notebooks);
+        let index = std::fs::read_to_string(folder.join("index.md")).unwrap_or_default();
+        let doc = parse_okf_doc(&index);
+        let decision = decide_bundle(
+            &folder,
+            doc.nested("alchemy", "id").as_deref(),
+            doc.str("title").as_deref(),
+            &known,
+        );
+        let outcome = match decision {
+            FoundBundle::Skip(why) => {
+                crate::note!("okf: left {path} alone: {why}");
+                continue;
+            }
+            // The same notebook by another route — the other Mac's copy, a
+            // share, a folder moved — rebinds rather than duplicating.
+            FoundBundle::Rebind(id) => {
                 set_binding(
                     &data_dir,
                     &id,
@@ -1674,23 +2037,26 @@ pub(crate) async fn open_found_bundles(app: &AppHandle, state: &AppState) -> usi
                 write_bound(state, &id).await.map(|_| id)
             }
             // Import creates the notebook — reusing the bundle's own
-            // `alchemy.id` when nothing here claims it — and then it is
-            // bound to the folder it came from.
-            None => match crate::commands::import_bundle(app, state, folder.clone(), None).await {
-                Ok(nb) => {
-                    set_binding(
-                        &data_dir,
-                        &nb.id,
-                        Some(OkfBinding {
-                            path: path.clone(),
-                            id: new_id(),
-                            last_write_at: 0,
-                        }),
-                    );
-                    write_bound(state, &nb.id).await.map(|_| nb.id)
+            // `alchemy.id` when nothing here claims it — and the binding is
+            // recorded before the first write, so the writer's own output
+            // can never read as a second arrival.
+            FoundBundle::Import => {
+                match crate::commands::import_bundle(app, state, folder.clone(), None).await {
+                    Ok(nb) => {
+                        set_binding(
+                            &data_dir,
+                            &nb.id,
+                            Some(OkfBinding {
+                                path: path.clone(),
+                                id: new_id(),
+                                last_write_at: 0,
+                            }),
+                        );
+                        write_bound(state, &nb.id).await.map(|_| nb.id)
+                    }
+                    Err(err) => Err(err),
                 }
-                Err(err) => Err(err),
-            },
+            }
         };
         match outcome {
             Ok(_) => {
@@ -2248,13 +2614,27 @@ pub fn schedule_write(notebook_id: &str) {
             map.remove(&id);
         }
         let state = app.state::<AppState>();
-        if let Err(err) = write_bound(&state, &id).await {
-            crate::diagnostics::error("okf", format!("bundle write failed: {err}"));
+        // Unbound while the debounce ran: nothing to write, and no error to
+        // report — the user asked for exactly this.
+        if binding_for(&data_dir, &id).is_some() {
+            if let Err(err) = write_bound(&state, &id).await {
+                crate::diagnostics::error("okf", format!("bundle write failed: {err}"));
+            }
         }
         if let Ok(mut running) = flushing().lock() {
             running.remove(&id);
         }
     });
+}
+
+/// Drop a notebook's pending write. The flusher checks the binding again
+/// before it writes, so a cancelled notebook costs one map lookup and no
+/// file. Used by the unbind and by the self-heal, which must not leave a
+/// writer aimed at a folder it just released.
+pub(crate) fn cancel_pending_write(notebook_id: &str) {
+    if let Ok(mut map) = pending().lock() {
+        map.remove(notebook_id);
+    }
 }
 
 /// Bring a bound notebook's bundle up to date. The seed pass and every write

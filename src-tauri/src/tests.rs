@@ -1892,6 +1892,210 @@ fn okf_never_removes_a_file_another_concept_claims() {
         .contains_key("note-dead"));
 }
 
+/// What the Notebooks-root watcher does with a folder it finds
+/// (docs/RFC-okf-live.md §5.7).
+///
+/// The 0.55.0 first launch imported bundles its own seed pass had just
+/// written, as new notebooks, and ended with two notebook ids bound to one
+/// folder. Every branch of the rule that stops that is here.
+#[test]
+fn okf_the_root_watcher_never_duplicates_a_notebook() {
+    use crate::okf::{decide_bundle, same_folder, FoundBundle, KnownNotebooks};
+    let dir = okf_scratch("found");
+    let folder = dir.join("ferrari-research");
+    std::fs::create_dir_all(&folder).expect("folder");
+    let mine = dir.join("mine");
+    std::fs::create_dir_all(&mine).expect("folder");
+
+    let known = |bound: &[(&str, &std::path::Path)], titles: &[(&str, &str)]| KnownNotebooks {
+        titles: titles
+            .iter()
+            .map(|(id, t)| (id.to_string(), t.to_string()))
+            .collect(),
+        bound: bound.iter().map(|(id, _)| id.to_string()).collect(),
+        folders: bound.iter().map(|(_, p)| same_folder(p)).collect(),
+    };
+
+    // A folder nothing here is bound to, for a notebook this Mac does not
+    // have: the arrival case, and the only one that imports.
+    assert_eq!(
+        decide_bundle(
+            &folder,
+            Some("nb-elsewhere"),
+            Some("Ferrari research"),
+            &known(&[], &[("nb-mine", "Mine")])
+        ),
+        FoundBundle::Import
+    );
+
+    // The same notebook by another route — the other Mac wrote this folder
+    // for a notebook this Mac already has, unbound. It rebinds.
+    assert_eq!(
+        decide_bundle(
+            &folder,
+            Some("nb-mine"),
+            Some("Ferrari research"),
+            &known(&[], &[("nb-mine", "Ferrari research")])
+        ),
+        FoundBundle::Rebind("nb-mine".into())
+    );
+
+    // Already ours: never opened again, whichever way it is spelled.
+    let bound = known(&[("nb-mine", folder.as_path())], &[("nb-mine", "Ferrari")]);
+    assert!(matches!(
+        decide_bundle(&folder, Some("nb-mine"), None, &bound),
+        FoundBundle::Skip(_)
+    ));
+    assert!(
+        matches!(
+            decide_bundle(
+                &dir.join("ferrari-research").join("."),
+                Some("nb-mine"),
+                None,
+                &bound
+            ),
+            FoundBundle::Skip(_)
+        ),
+        "a folder is a folder however the path is written"
+    );
+
+    // The notebook is bound somewhere else: this folder is a duplicate of
+    // its bundle, so it is left alone rather than imported as a second copy.
+    assert!(matches!(
+        decide_bundle(
+            &folder,
+            Some("nb-mine"),
+            None,
+            &known(&[("nb-mine", mine.as_path())], &[("nb-mine", "Ferrari")])
+        ),
+        FoundBundle::Skip(_)
+    ));
+
+    // A starter notebook never travels: every install seeds its own copies,
+    // so opening the other Mac's is how Home ends up listing 47 notebooks.
+    assert!(matches!(
+        decide_bundle(
+            &folder,
+            Some("nb-theirs"),
+            Some(crate::examples::INTRO_TITLE),
+            &known(&[], &[])
+        ),
+        FoundBundle::Skip(_)
+    ));
+    assert!(matches!(
+        decide_bundle(
+            &folder,
+            Some("nb-mine"),
+            None,
+            &known(&[], &[("nb-mine", crate::examples::CURATED_TITLE)])
+        ),
+        FoundBundle::Skip(_)
+    ));
+}
+
+/// The self-heal for the state 0.55.0 already left on disk
+/// (docs/RFC-okf-live.md §5.7). Unbinds and archives, never a delete.
+#[test]
+fn okf_heals_the_duplicates_it_finds() {
+    use crate::okf::{heal_plan, HealNotebook, HealStep, OkfBinding};
+    use std::collections::HashMap;
+
+    let nb = |id: &str, title: &str, at: i64| HealNotebook {
+        id: id.into(),
+        title: title.into(),
+        created_at: at,
+        archived: false,
+    };
+    let bind = |path: &str| OkfBinding {
+        path: path.into(),
+        id: format!("binding-{path}"),
+        last_write_at: 0,
+    };
+
+    // Two notebooks over one folder: the older keeps it, the newer is
+    // unbound and hidden.
+    let mut bindings: HashMap<String, OkfBinding> = HashMap::new();
+    bindings.insert("nb-old".into(), bind("/tmp/alchemy-heal/spider-2"));
+    bindings.insert("nb-new".into(), bind("/tmp/alchemy-heal/spider-2"));
+    let notebooks = vec![
+        nb("nb-old", "458 Spider Purchase", 100),
+        nb("nb-new", "458 Spider Purchase", 200),
+    ];
+    let steps = heal_plan(&bindings, &notebooks, &HashMap::new());
+    assert!(steps
+        .iter()
+        .any(|s| matches!(s, HealStep::Unbind { notebook, .. } if notebook == "nb-new")));
+    assert!(steps
+        .iter()
+        .any(|s| matches!(s, HealStep::Archive { notebook, .. } if notebook == "nb-new")));
+    assert!(
+        !steps
+            .iter()
+            .any(|s| matches!(s, HealStep::Unbind { notebook, .. } if notebook == "nb-old")),
+        "the older binding is the one that stays"
+    );
+
+    // A bound starter is unbound, and its folder is not touched.
+    let mut bindings: HashMap<String, OkfBinding> = HashMap::new();
+    bindings.insert("nb-intro".into(), bind("/tmp/alchemy-heal/intro"));
+    let notebooks = vec![nb("nb-intro", crate::examples::INTRO_TITLE, 100)];
+    assert_eq!(
+        heal_plan(&bindings, &notebooks, &HashMap::new()),
+        vec![HealStep::Unbind {
+            notebook: "nb-intro".into(),
+            why: "a starter notebook is the app's own sample, not a document to sync".into(),
+        }]
+    );
+
+    // A folder whose index.md names a notebook that is bound elsewhere: the
+    // interloper is unbound, the folder left alone.
+    let mut bindings: HashMap<String, OkfBinding> = HashMap::new();
+    bindings.insert("nb-owner".into(), bind("/tmp/alchemy-heal/real"));
+    bindings.insert("nb-copy".into(), bind("/tmp/alchemy-heal/real-2"));
+    let notebooks = vec![
+        nb("nb-owner", "Ferrari", 100),
+        nb("nb-copy", "Ferrari", 200),
+    ];
+    let declared: HashMap<String, String> = [(
+        "/tmp/alchemy-heal/real-2".to_string(),
+        "nb-owner".to_string(),
+    )]
+    .into_iter()
+    .collect();
+    let steps = heal_plan(&bindings, &notebooks, &declared);
+    assert!(steps
+        .iter()
+        .any(|s| matches!(s, HealStep::Unbind { notebook, .. } if notebook == "nb-copy")));
+    assert!(!steps
+        .iter()
+        .any(|s| matches!(s, HealStep::Unbind { notebook, .. } if notebook == "nb-owner")));
+
+    // A second copy of a starter, imported from the other Mac: archived, and
+    // the original stays exactly as it is.
+    let notebooks = vec![
+        nb("nb-first", crate::examples::AI_RESEARCH_TITLE, 100),
+        nb("nb-second", crate::examples::AI_RESEARCH_TITLE, 200),
+        nb("nb-third", crate::examples::AI_RESEARCH_TITLE, 300),
+    ];
+    let steps = heal_plan(&HashMap::new(), &notebooks, &HashMap::new());
+    assert_eq!(
+        steps.len(),
+        2,
+        "two copies to hide, and nothing to unbind: {steps:?}"
+    );
+    for id in ["nb-second", "nb-third"] {
+        assert!(steps
+            .iter()
+            .any(|s| matches!(s, HealStep::Archive { notebook, .. } if notebook == id)));
+    }
+
+    // Nothing wrong: nothing done.
+    let notebooks = vec![nb("nb-plain", "Ferrari", 100)];
+    let mut bindings: HashMap<String, OkfBinding> = HashMap::new();
+    bindings.insert("nb-plain".into(), bind("/tmp/alchemy-heal/ferrari"));
+    assert!(heal_plan(&bindings, &notebooks, &HashMap::new()).is_empty());
+}
+
 /// A bundle's listings are not its knowledge (docs/RFC-okf-live.md §4):
 /// `index.md` and `log.md` at any level are the table of contents and the
 /// history, and neither ever becomes a source.

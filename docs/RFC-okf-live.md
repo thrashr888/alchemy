@@ -617,6 +617,48 @@ they exist without being asked for.
   reuses a bundle's own `alchemy.id` when nothing here claims it. So the
   rebind rule needed only the *other* case: an id this machine already has
   binds that notebook to the folder rather than importing a second copy.
+- **Starter notebooks never bind by default.** §5.7 said "every active
+  notebook", which on two Macs meant both of them bound their own copies of
+  the four seeded samples — different ids per install, so each Mac's
+  Notebooks-root watcher read the other's bundles as arrivals and imported
+  them. Home ended up listing 47 notebooks, most of them twice, and the `-2`
+  folders were exactly the starters. So the offer, at-creation binding, and
+  the root watcher all skip them. The explicit ⋯ verb still binds one if a
+  person asks: the rule is about what happens without being asked. A starter
+  is recognised by its title, because that is the only thing seeding leaves
+  behind — `seed_notebook` already skips by title, and a Lance column for a
+  fact two callers read is the migration hazard the shared dev/prod store
+  policy exists to avoid.
+
+- **The root watcher opens a folder at most once, and never a notebook
+  twice.** Three rules, one decision function. It skips a folder some
+  notebook here is already bound to (two writers over one file is what §5.6
+  forbids), spelling-normalized so a symlinked or trailing-slash binding
+  still reads as the folder it is. It never *imports* a bundle whose
+  `alchemy.id` names a notebook this Mac has: that notebook is either unbound
+  — the folder is its bundle, and it rebinds — or bound elsewhere, in which
+  case the folder is a duplicate of its bundle and duplicating the notebook
+  to match is the wrong half to fix. And the bindings are re-read per folder,
+  under a one-pass-at-a-time flag: the minute tick and the watcher's debounce
+  both call this, and two overlapping passes each saw the same folder as
+  unbound, which is how a first launch imported bundles its own seed pass was
+  still writing.
+
+- **A self-heal, because the state already exists.** Rules are for what has
+  not happened yet; two Macs are already carrying the duplicates. One pass at
+  launch, before anything writes, puts right four shapes: two notebooks over
+  one folder (the older notebook keeps it — a binding carries no clock, and
+  the duplicate is always the newer row — and the other is unbound and
+  archived), a bound starter (unbound), a binding whose folder's `index.md`
+  names a notebook that is bound elsewhere (unbound), and a second copy of a
+  starter (archived). **It never deletes.** Every fix is an unbind, which
+  leaves the files where they are as §5.5 promises, or an archive, which
+  hides a notebook and keeps every row it has — a wrong guess costs a visit
+  to the archive, not somebody's notes. What it did goes through
+  `diagnostics::record` as well as `note!`: the 0.55.0 duplication left
+  nothing in the app log but the startup line, and five bundles had been
+  written since.
+
 - **The offer banner is a third tone.** `error` and `warning` both tint their
   container and wear a warning triangle; an invitation is neither a failure
   nor a degradation, and colour here is semantic (DESIGN.md §2). `offer` is a

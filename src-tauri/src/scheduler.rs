@@ -274,6 +274,15 @@ pub fn start(app: AppHandle) {
                 );
             }
         }
+        // Put right anything the 0.55.0 duplication left behind — two
+        // notebooks over one folder, a bound starter, a second copy of one —
+        // before the first write or the first watcher pass runs
+        // (docs/RFC-okf-live.md §5.7). Unbinds and archives only; nothing is
+        // deleted, and a launch with nothing wrong does one file read.
+        {
+            let state = app.state::<AppState>();
+            crate::okf::heal_bindings(&state).await;
+        }
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
