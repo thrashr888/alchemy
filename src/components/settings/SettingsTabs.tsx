@@ -351,7 +351,8 @@ export function ShortcutsTab() {
         </div>
       ))}
       <p className="mt-2 text-micro leading-relaxed text-subtle-foreground">
-        On Windows and Linux, use Ctrl in place of ⌘.
+        On Windows and Linux, use Ctrl in place of ⌘. In a chat, just start
+        typing: the composer takes the keys.
       </p>
 
       <div className="mt-5 mb-1 px-1 text-micro font-semibold uppercase tracking-wide text-subtle-foreground">

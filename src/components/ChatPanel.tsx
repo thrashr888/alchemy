@@ -14,7 +14,14 @@ import {
 import { useSourceActions } from "./SourceMenu";
 import { Markdown } from "./Markdown";
 import { LiveCards } from "./LiveCards";
-import { cn, chatReadingClass, fmtDateTime, isWebUrl, relativeTime } from "@/lib/utils";
+import {
+  cn,
+  chatReadingClass,
+  fmtDateTime,
+  isWebUrl,
+  relativeTime,
+  strayTypingKey,
+} from "@/lib/utils";
 import { AgentPane } from "./AgentPane";
 import { AlchemySymbol } from "./AlchemyHero";
 import { DEFAULT_VERBS, THEMES, resolveThemeId } from "@/lib/themes";
@@ -300,6 +307,25 @@ export function ChatPanel() {
     const onFocus = () => inputRef.current?.focus();
     window.addEventListener("nb:focus-composer", onFocus);
     return () => window.removeEventListener("nb:focus-composer", onFocus);
+  }, []);
+
+  // Type to chat: a bare keystroke with nothing editable focused belongs in
+  // the composer. Focusing it during keydown is enough — the browser then
+  // delivers the character to the newly focused field, so the draft, the
+  // slash picker and autosize all see an ordinary keypress. The caret goes
+  // to the end first: a draft left behind is being continued, not prefixed.
+  // This panel only mounts while the chat is the notebook's center surface,
+  // so the reader, gallery, ledger and Grow never lose a key to it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!strayTypingKey(e)) return;
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.selectionStart = el.selectionEnd = el.value.length;
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   // Jump straight to the latest message when a notebook's chat first loads —

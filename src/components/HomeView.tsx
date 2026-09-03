@@ -33,6 +33,7 @@ import {
   noteUnread,
   relativeTime,
   shortcutBlocked,
+  strayTypingKey,
 } from "@/lib/utils";
 import type { Note, Notebook, SourceEvent } from "@/lib/types";
 import {
@@ -702,6 +703,23 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         setNewTitle("");
         setCreating(true);
       }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Type to ask: a bare keystroke with nothing editable focused goes to the
+  // ask box (the shelf's search-or-ask field, or the open thread's
+  // follow-up composer). Focusing on keydown lets the browser deliver the
+  // character there itself, after the existing text — same move as the
+  // notebook chat.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!strayTypingKey(e)) return;
+      const el = askRef.current;
+      if (!el) return;
+      el.focus();
+      el.selectionStart = el.selectionEnd = el.value.length;
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

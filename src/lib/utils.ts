@@ -119,6 +119,16 @@ export function shortcutBlocked(e: { target: EventTarget | null }): boolean {
   return !!t.closest('input, textarea, select, [contenteditable="true"]');
 }
 
+/** A bare printable keystroke that landed nowhere editable — the kind a
+ *  chat surface catches and hands to its composer. Modifier chords are
+ *  shortcuts, Space is scrolling, a dead key or an IME mid-composition has
+ *  no character yet, and focus in a field or under a dialog keeps its keys. */
+export function strayTypingKey(e: KeyboardEvent): boolean {
+  if (e.metaKey || e.ctrlKey || e.altKey) return false;
+  if (e.isComposing || e.key.length !== 1 || e.key === " ") return false;
+  return !shortcutBlocked(e);
+}
+
 /** Reading-preference classes for the chat message container (see index.css). */
 export function chatReadingClass(cfg: ReadingPrefs): string {
   const font =
