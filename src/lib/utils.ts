@@ -74,29 +74,39 @@ export function isWebUrl(s: string): boolean {
 }
 
 /**
- * Human cloud-provider label for a folder source's local path, or null when
- * it isn't under a known sync root. A pure mirror of the backend's
+ * Cloud provider behind a folder source's local path, or null when it isn't
+ * under a known sync root. A pure mirror of the backend's
  * `list_cloud_folders` detection — provenance is derived from the path alone,
  * so no new Source field is needed. macOS File Provider mounts live under
  * ~/Library/CloudStorage/<Provider>-<account>; iCloud under Mobile Documents;
- * older clients keep ~/Dropbox and ~/Box at the home root.
+ * older clients keep ~/Dropbox and ~/Box at the home root. `key` matches the
+ * backend's stable provider key, so the same mark draws in both places.
  */
-export function folderProvider(path: string): string | null {
+export function folderCloudProvider(
+  path: string,
+): { key: string; label: string } | null {
+  const p = (key: string, label: string) => ({ key, label });
   const cloud = path.match(/\/Library\/CloudStorage\/([^/]+)/);
   if (cloud) {
     const dir = cloud[1];
-    if (dir.startsWith("GoogleDrive-")) return "Google Drive";
-    if (dir.startsWith("OneDrive")) return "OneDrive";
-    if (dir === "Box" || dir.startsWith("Box-")) return "Box";
-    if (dir.startsWith("Dropbox")) return "Dropbox";
+    if (dir.startsWith("GoogleDrive-")) return p("google_drive", "Google Drive");
+    if (dir.startsWith("OneDrive")) return p("onedrive", "OneDrive");
+    if (dir === "Box" || dir.startsWith("Box-")) return p("box", "Box");
+    if (dir.startsWith("Dropbox")) return p("dropbox", "Dropbox");
   }
   if (path.includes("/Library/Mobile Documents/com~apple~CloudDocs"))
-    return "iCloud Drive";
+    return p("icloud", "iCloud Drive");
   // Legacy top-level sync roots, anchored to the home dir so an unrelated
   // "Box" or "Dropbox" project folder deeper in the tree doesn't match.
-  if (/^\/(?:Users|home)\/[^/]+\/Dropbox(?:\/|$)/.test(path)) return "Dropbox";
-  if (/^\/(?:Users|home)\/[^/]+\/Box(?:\/|$)/.test(path)) return "Box";
+  if (/^\/(?:Users|home)\/[^/]+\/Dropbox(?:\/|$)/.test(path))
+    return p("dropbox", "Dropbox");
+  if (/^\/(?:Users|home)\/[^/]+\/Box(?:\/|$)/.test(path)) return p("box", "Box");
   return null;
+}
+
+/** Just the display label of {@link folderCloudProvider}. */
+export function folderProvider(path: string): string | null {
+  return folderCloudProvider(path)?.label ?? null;
 }
 
 /**

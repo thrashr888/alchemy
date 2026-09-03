@@ -19,13 +19,14 @@ import {
 import {
   cn,
   compactNumber,
-  folderProvider,
+  folderCloudProvider,
   isWebUrl,
   relativeTime,
   shortcutBlocked,
   visibleTitle,
 } from "@/lib/utils";
 import { sourceIcon } from "@/lib/sourceIcon";
+import { CloudMark } from "./CloudMarks";
 import { HYGIENE_LABEL, loadHygieneKept } from "@/lib/growth";
 import { useSourceActions } from "./SourceMenu";
 import { ArrivalsStrip, useArrivals } from "./ArrivalsStrip";
@@ -1024,6 +1025,9 @@ export function SourcesPanel() {
                 }
                 const { s, indent } = row;
                 const isFolder = FOLDER_TYPES.includes(s.sourceType);
+                // Which sync root a folder came out of, if any — same
+                // provider keys the Add sources dialog draws marks from.
+                const cloud = isFolder ? folderCloudProvider(s.url) : null;
                 // A folder inserted optimistically while its children embed:
                 // shown right away with a loading affordance, not yet openable.
                 const importing = isFolder && importingFolders.includes(s.id);
@@ -1233,9 +1237,13 @@ export function SourcesPanel() {
                           className="flex items-center gap-1.5 text-micro text-subtle-foreground"
                           title={`${s.url}\nStays in sync — auto-refreshes`}
                         >
-                          {folderProvider(s.url) && (
-                            <span className="shrink-0 rounded bg-surface-2 px-1.5 py-px text-caption text-muted-foreground">
-                              {folderProvider(s.url)}
+                          {cloud && (
+                            <span className="flex shrink-0 items-center gap-1 rounded bg-surface-2 px-1.5 py-px text-caption text-muted-foreground">
+                              <CloudMark
+                                provider={cloud.key}
+                                className="h-3 w-3"
+                              />
+                              {cloud.label}
                             </span>
                           )}
                           <span className="truncate">

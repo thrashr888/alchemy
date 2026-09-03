@@ -10,6 +10,7 @@ import { api } from "@/lib/api";
 import { Button, Input, Textarea, Modal, Spinner } from "./ui";
 import { cn, relativeTime } from "@/lib/utils";
 import type { CloudFolder, MacCollection, MacFileHit } from "@/lib/types";
+import { CloudMark } from "./CloudMarks";
 import { FdaHint } from "./MacConnect";
 import { ingestPaths } from "./FileDrop";
 import {
@@ -18,7 +19,6 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardPaste,
-  Cloud,
   File,
   Folder,
   Link2,
@@ -298,10 +298,22 @@ export function AddSourceModal() {
                       "focus-visible:ring-2 focus-visible:ring-ring/60 outline-none",
                     )}
                   >
-                    <Cloud className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <span className="text-body text-foreground">
+                    <CloudMark
+                      provider={cf.provider}
+                      className="shrink-0 text-muted-foreground"
+                    />
+                    <span className="shrink-0 text-body text-foreground">
                       {cf.label}
                     </span>
+                    {/* One Mac can mount several roots for one provider —
+                        OneDrive gives the personal drive and every
+                        organization its own. The account is what tells three
+                        "OneDrive" rows apart. */}
+                    {cf.name && (
+                      <span className="min-w-0 truncate text-caption text-subtle-foreground">
+                        {cf.name}
+                      </span>
+                    )}
                     <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-subtle-foreground" />
                   </button>
                 ))}
