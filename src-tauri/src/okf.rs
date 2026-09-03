@@ -3156,6 +3156,7 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
         .filter(|(id, entry)| !seen.contains(*id) && !bundle.join(&entry.path).exists())
         .map(|(id, entry)| (id.clone(), entry.path.clone()))
         .collect();
+    let mut removed: Vec<String> = Vec::new();
     for (id, rel) in vanished {
         let deleted = if rel.starts_with("notes/") {
             state.db.delete_note(&id).await.is_ok()
@@ -3166,10 +3167,24 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
             manifest.concepts.remove(&id);
             out.deleted += 1;
             crate::note!("okf: {rel} was deleted on disk; removed it here too");
+            removed.push(rel);
         }
     }
     if out.deleted > 0 || dirty {
         save_manifest(&manifest_at, &manifest);
+    }
+    // §5.3 asks for the delete to be logged, and `note!` is stderr: on a
+    // shared folder `log.md` is the only record the other side has of why a
+    // concept went away.
+    if !removed.is_empty() {
+        let _ = okf_log_append(
+            &bundle,
+            &format!(
+                "{} concept(s) gone from the folder, so removed here too: {}.",
+                removed.len(),
+                removed.join(", ")
+            ),
+        );
     }
 
     // Nothing is lost silently (§5.4): the text that lost the race is written

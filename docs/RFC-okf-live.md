@@ -382,6 +382,14 @@ The §5.3 table is a pure function (`classify`) over the manifest, and §5.4's
 rule is another (`disk_wins`), so both are tested without a store standing
 up. Four things the RFC did not settle, decided in the writing:
 
+- **A delete is logged where the other side can read it.** §5.3's table says
+  "delete the entity, log it", and the pass recorded it with `note!`, which is
+  stderr and reaches neither `log.md` nor the app log. On a shared folder that
+  entry is the only record the other Mac has of why a concept disappeared,
+  which is the reason the table asks for it, so the reconcile pass now appends
+  one dated line naming every path it removed — beside the write lines and the
+  conflict-loser lines that were already there.
+
 - **A tie goes to disk.** §5.4 says the newer side wins but not what happens
   at equal timestamps. The file wins: it is what a person or an agent just
   saved, and it is the artifact they can see. When the app's version wins
