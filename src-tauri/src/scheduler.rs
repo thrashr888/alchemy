@@ -281,6 +281,19 @@ pub fn start(app: AppHandle) {
         // deleted, and a launch with nothing wrong does one file read.
         {
             let state = app.state::<AppState>();
+            // One row per notebook first: the double import that made the
+            // duplicates also appended the same notebook twice under one id,
+            // and the heal below must see each notebook once.
+            match state.db.dedupe_notebook_rows().await {
+                Ok(titles) if !titles.is_empty() => {
+                    crate::note!(
+                        "notebooks: collapsed duplicate rows for {}",
+                        titles.join(", ")
+                    );
+                }
+                Ok(_) => {}
+                Err(err) => crate::note!("notebooks: dedupe failed: {err:#}"),
+            }
             crate::okf::heal_bindings(&state).await;
         }
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));

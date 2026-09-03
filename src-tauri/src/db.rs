@@ -1005,6 +1005,12 @@ impl Db {
             }
         }
 
+        // One row per id, whatever the table holds: a double import once
+        // appended the same notebook twice (see `dedupe_notebook_rows`), and
+        // a listing must never show one notebook as two. The active row wins
+        // over an archived one, then the most recently updated.
+        dedupe_notebooks(&mut notebooks);
+
         // Counting means scanning sources and notes end to end, so it is
         // done only when one of those tables has actually moved. See
         // `NotebookCounts`.
@@ -1192,6 +1198,65 @@ impl Db {
             .execute()
             .await?;
         Ok(())
+    }
+
+    /// Collapse notebooks that exist as more than one row with the same id.
+    /// The 0.55.0 root watcher raced its own tick and imported one bundle
+    /// twice; because an import reuses the bundle's notebook id when it is
+    /// free, the second import appended a second row for the same id, and
+    /// the sources under that id showed up under both. The rows are deleted
+    /// together (a predicate on the id matches every one) and the keeper is
+    /// written back. Returns the titles that were collapsed.
+    pub async fn dedupe_notebook_rows(&self) -> Result<Vec<String>> {
+        let batches = self.collect(T_NOTEBOOKS, None).await?;
+        let mut rows: Vec<Notebook> = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let title = str_col(b, "title")?;
+            let created = i64_col(b, "created_at")?;
+            let updated = i64_col(b, "updated_at")?;
+            let color = opt_str_col(b, "color");
+            let icon = opt_str_col(b, "icon");
+            let status = opt_str_col(b, "status");
+            let growth_web = i64_col(b, "growth_web")?;
+            for i in 0..b.num_rows() {
+                rows.push(Notebook {
+                    id: id.value(i).to_string(),
+                    title: title.value(i).to_string(),
+                    created_at: created.value(i),
+                    updated_at: updated.value(i),
+                    color: color.map(|c| c.value(i).to_string()).unwrap_or_default(),
+                    icon: icon.map(|c| c.value(i).to_string()).unwrap_or_default(),
+                    status: status.map(|s| s.value(i).to_string()).unwrap_or_default(),
+                    growth_web: growth_web.value(i) != 0,
+                    source_count: 0,
+                    note_count: 0,
+                    report_count: 0,
+                });
+            }
+        }
+        let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for r in &rows {
+            *counts.entry(r.id.as_str()).or_insert(0) += 1;
+        }
+        let dup_ids: Vec<String> = counts
+            .into_iter()
+            .filter(|(_, n)| *n > 1)
+            .map(|(id, _)| id.to_string())
+            .collect();
+        let mut collapsed = Vec::new();
+        for id in dup_ids {
+            let mut group: Vec<Notebook> = rows.iter().filter(|r| r.id == id).cloned().collect();
+            dedupe_notebooks(&mut group);
+            let Some(keeper) = group.into_iter().next() else {
+                continue;
+            };
+            self.delete_where(T_NOTEBOOKS, &format!("id = '{}'", esc(&id)))
+                .await?;
+            self.create_notebook(&keeper).await?;
+            collapsed.push(keeper.title);
+        }
+        Ok(collapsed)
     }
 
     pub async fn delete_notebook(&self, id: &str) -> Result<()> {
@@ -4588,6 +4653,40 @@ fn citations_from_batches(
     Ok(citations)
 }
 
+/// Keep one notebook per id: an active row beats an archived one, then the
+/// later `updated_at`. Order of the survivors is the order they arrived in.
+fn dedupe_notebooks(notebooks: &mut Vec<Notebook>) {
+    let mut best: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (i, n) in notebooks.iter().enumerate() {
+        match best.get(&n.id) {
+            None => {
+                best.insert(n.id.clone(), i);
+            }
+            Some(&j) => {
+                let cur = &notebooks[j];
+                let cur_active = cur.status != "archived";
+                let new_active = n.status != "archived";
+                let wins = match (cur_active, new_active) {
+                    (false, true) => true,
+                    (true, false) => false,
+                    _ => n.updated_at > cur.updated_at,
+                };
+                if wins {
+                    best.insert(n.id.clone(), i);
+                }
+            }
+        }
+    }
+    let mut keep: Vec<usize> = best.into_values().collect();
+    keep.sort_unstable();
+    let mut idx = 0;
+    notebooks.retain(|_| {
+        let k = keep.binary_search(&idx).is_ok();
+        idx += 1;
+        k
+    });
+}
+
 fn notebook_batch(schema: &SchemaRef, notebooks: &[Notebook]) -> Result<RecordBatch> {
     let s = |f: fn(&Notebook) -> String| {
         Arc::new(StringArray::from(
@@ -5186,6 +5285,54 @@ mod tests {
             model: String::new(),
             created_at: at,
         }
+    }
+
+    /// Two rows with one id are one notebook: the listing shows it once and
+    /// the dedupe pass leaves one row, preferring the active copy.
+    #[tokio::test]
+    async fn duplicate_notebook_rows_collapse_to_one() {
+        let dir = std::env::temp_dir().join(format!("nbl-dedupe-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+        let mut nb = Notebook {
+            id: "nb-twice".into(),
+            title: "Meridian".into(),
+            created_at: 1,
+            updated_at: 5,
+            color: String::new(),
+            icon: String::new(),
+            status: "archived".into(),
+            growth_web: false,
+            source_count: 0,
+            note_count: 0,
+            report_count: 0,
+        };
+        db.create_notebook(&nb).await.expect("first row");
+        nb.updated_at = 2;
+        nb.status = String::new();
+        db.create_notebook(&nb).await.expect("second row");
+        let other = Notebook {
+            id: "nb-once".into(),
+            title: "Rookery".into(),
+            ..nb.clone()
+        };
+        db.create_notebook(&other).await.expect("third row");
+
+        let listed = db.list_notebooks().await.expect("list");
+        assert_eq!(listed.len(), 2, "the listing never shows one id twice");
+        let twice = listed.iter().find(|n| n.id == "nb-twice").expect("kept");
+        assert_eq!(
+            twice.status, "",
+            "the active row wins over the archived one"
+        );
+
+        let collapsed = db.dedupe_notebook_rows().await.expect("dedupe");
+        assert_eq!(collapsed, vec!["Meridian".to_string()]);
+        let raw = db.collect(T_NOTEBOOKS, None).await.expect("collect");
+        let rows: usize = raw.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 2, "one row per id remains on disk");
+        let again = db.dedupe_notebook_rows().await.expect("dedupe again");
+        assert!(again.is_empty(), "a clean table is a no-op");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A Home thread is nothing but its turns: the list is derived, titled by
