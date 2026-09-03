@@ -210,8 +210,21 @@ pub fn log_dir() -> PathBuf {
     if let Some(dir) = LOG_DIR.get() {
         return dir.clone();
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join("Library/Logs").join(SUBSYSTEM)
+    // The test suite records real diagnostics (the OKF repair, the heal),
+    // and those must never land in the developer's own app log — a reader
+    // of that log would see temp paths from a test run, and a test that
+    // reads the log races every other test that writes it.
+    #[cfg(test)]
+    {
+        let dir = std::env::temp_dir().join(format!("alchemy-test-log-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        return dir;
+    }
+    #[allow(unreachable_code)]
+    {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        PathBuf::from(home).join("Library/Logs").join(SUBSYSTEM)
+    }
 }
 
 /// Full path to the current log file — what the UI reveals in Finder and what
@@ -761,7 +774,8 @@ mod tests {
 
     /// Point the log somewhere disposable for a test that writes.
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("alchemy-diag-{name}"));
+        // Per process: two test binaries running at once must not share it.
+        let dir = std::env::temp_dir().join(format!("alchemy-diag-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
