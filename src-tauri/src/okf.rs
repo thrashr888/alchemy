@@ -2215,10 +2215,26 @@ fn dir_mtime_ms(dir: &Path) -> Option<i64> {
 /// An empty directory going away is not a deletion; anything still in it is
 /// somebody's, and keeps the folder alive on purpose.
 pub(crate) fn remove_if_empty(dir: &Path) -> bool {
-    std::fs::read_dir(dir)
-        .map(|mut d| d.next().is_none())
-        .unwrap_or(false)
-        && std::fs::remove_dir(dir).is_ok()
+    // Finder's own bookkeeping is not content: a folder holding nothing but
+    // `.DS_Store` is empty for our purposes, and would otherwise outlive the
+    // move forever (the old stage-one folder did exactly that).
+    const FINDER_ONLY: &[&str] = &[".DS_Store", ".localized"];
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    let mut finder_files = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if FINDER_ONLY.contains(&name.as_str()) {
+            finder_files.push(entry.path());
+        } else {
+            return false;
+        }
+    }
+    for f in finder_files {
+        let _ = std::fs::remove_file(f);
+    }
+    std::fs::remove_dir(dir).is_ok()
 }
 
 /// Take the empty leftovers out of `root`, naming each one in the log.

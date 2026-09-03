@@ -4374,6 +4374,22 @@ fn okf_the_old_folder_is_tidied_by_identity_not_by_name() {
 /// And the emptied folder itself goes — but only once it is genuinely empty.
 /// A file somebody put there by hand keeps it alive on purpose (§5.7).
 #[test]
+fn okf_a_folder_holding_only_ds_store_counts_as_empty() {
+    use crate::okf::remove_if_empty;
+    let dir = okf_scratch("dsstore").join("old");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::write(dir.join(".DS_Store"), b"finder").expect("ds_store");
+    assert!(remove_if_empty(&dir), "Finder bookkeeping is not content");
+    assert!(!dir.exists());
+    let kept = okf_scratch("dsstore-kept").join("old");
+    std::fs::create_dir_all(&kept).expect("mkdir");
+    std::fs::write(kept.join(".DS_Store"), b"finder").expect("ds_store");
+    std::fs::write(kept.join("notes.txt"), b"mine").expect("file");
+    assert!(!remove_if_empty(&kept), "a real file keeps the folder");
+    assert!(kept.join("notes.txt").exists());
+}
+
+#[test]
 fn okf_the_emptied_old_folder_is_removed_and_a_kept_one_is_not() {
     use crate::okf::remove_if_empty;
     let tmp = tempfile::tempdir().unwrap();
