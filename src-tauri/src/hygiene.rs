@@ -138,15 +138,13 @@ pub fn classify(sources: &[Source], cadence_days: u32, now: i64) -> Vec<HygieneI
             continue;
         }
         // Loose files only: folder children that vanish are the rescan's to
-        // reconcile, and an iCloud-evicted file (stub present) is
-        // downloadable, not missing.
+        // reconcile, and a cloud-evicted file is downloadable, not missing —
+        // whether it is a legacy `.icloud` placeholder or, on current macOS
+        // and every FileProvider mount, the file itself with no data in it
+        // (docs/RFC-okf-live.md §5.7).
         if is_file_path(s) && s.parent_id.is_empty() {
             let p = std::path::Path::new(&s.url);
-            let stub = p
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| p.with_file_name(format!(".{n}.icloud")));
-            if !p.exists() && !stub.is_some_and(|st| st.exists()) {
+            if !p.exists() && !crate::okf::is_evicted_stub(p) {
                 issues.push(issue(
                     "missing-file",
                     format!("file no longer exists at {}", s.url),

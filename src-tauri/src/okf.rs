@@ -2848,15 +2848,18 @@ fn concept_files(bundle: &Path, dir: &str) -> Vec<PathBuf> {
     out
 }
 
-/// Concept files iCloud has evicted, as the stub paths that stand in for
-/// them (§5.6).
+/// Concept files the cloud has evicted, as the paths to ask for (§5.6).
 ///
-/// An undownloaded file is replaced by a hidden `.name.icloud` stub, which
-/// the allowlist skips — correctly, since there is nothing to read. But then
-/// a note written on the other Mac would sit unread until someone opened the
-/// folder in Finder, which is not a sync story. Folder sources already nudge
-/// these; bound roots use the same nudge, and the file reconciles on the
-/// pass after it lands.
+/// Two layouts, because two exist: a file evicted in place (current macOS and
+/// every FileProvider mount) is asked for by its own path, and the legacy
+/// `.name.icloud` placeholder is asked for by the placeholder's. Without the
+/// first, this returned an empty vec on every provider and the whole
+/// hydration nudge was dead code — a note written on the other Mac sat
+/// unread until somebody opened the folder in Finder, which is not a sync
+/// story.
+///
+/// Paths under `~/Library/CloudStorage` are left out: there is nobody to ask
+/// there, and the writer already treats a stub as absent.
 fn evicted_concepts(bundle: &Path, dir: &str) -> Vec<String> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(bundle.join(dir)) else {
@@ -2864,16 +2867,23 @@ fn evicted_concepts(bundle: &Path, dir: &str) -> Vec<String> {
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        let Some(real) = name
+        let path = entry.path();
+        if let Some(real) = name
             .strip_prefix('.')
             .and_then(|n| n.strip_suffix(".icloud"))
             .filter(|n| n.ends_with(".md") && !is_okf_reserved(n))
-        else {
+        {
+            // Only a placeholder standing in for a file that is not here.
+            if !bundle.join(dir).join(real).exists() && icloud_can_hydrate(&path) {
+                out.push(path.to_string_lossy().to_string());
+            }
             continue;
-        };
-        // Only a stub standing in for a file that is genuinely not here.
-        if !bundle.join(dir).join(real).exists() {
-            out.push(entry.path().to_string_lossy().to_string());
+        }
+        if name.starts_with('.') || !name.ends_with(".md") || is_okf_reserved(&name) {
+            continue;
+        }
+        if is_dataless(&path) && icloud_can_hydrate(&path) {
+            out.push(path.to_string_lossy().to_string());
         }
     }
     out
@@ -2951,9 +2961,6 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
 
     for dir in ["sources", "notes"] {
         for path in concept_files(&bundle, dir) {
-            let Ok(text) = std::fs::read_to_string(&path) else {
-                continue;
-            };
             // The whole bundle-relative path, not just the filename: the
             // allowlist reads `sources/**.md`, so two concepts can share a
             // name at different depths and the manifest has to tell them
@@ -2969,6 +2976,19 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
                             .unwrap_or_default()
                     )
                 });
+            // A file with none of its data here is present and unchanged
+            // as far as anyone can tell — and reading it to find out would
+            // download it, which is the opposite of what its owner asked
+            // for. It counts as seen, so nothing deletes it either.
+            if is_dataless(&path) {
+                if let Some(id) = by_path.get(&rel) {
+                    seen.insert(id.clone());
+                }
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
             let hash = okf_hash(&text);
             let action = classify(&rel, &hash, &manifest);
             let known = match &action {
@@ -3275,10 +3295,67 @@ pub async fn reconcile_all(state: &AppState) {
     }
 }
 
-/// Is this path an iCloud eviction stub standing in for a file that is not
-/// downloaded? macOS replaces the file with a hidden `.name.icloud`
-/// placeholder, so the file itself simply is not there (§5.7).
+/// Where "are this file's bytes actually here?" is answered. `None` — the
+/// shipped state — reads `st_flags`. A test installs its own so the rule can
+/// be asserted without evicting anything real.
+pub(crate) type DatalessProbe = std::sync::Arc<dyn Fn(&Path) -> Option<bool> + Send + Sync>;
+
+static DATALESS: std::sync::Mutex<Option<DatalessProbe>> = std::sync::Mutex::new(None);
+
+/// Answer datalessness from somewhere other than the filesystem, for the
+/// rest of this process's life. `None` from the probe means "I have no
+/// opinion about this path", and the real check runs. Not behind
+/// `cfg(test)`: the seam a test sets has to be the one the app runs through.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn set_dataless_probe(probe: DatalessProbe) {
+    if let Ok(mut slot) = DATALESS.lock() {
+        *slot = Some(probe);
+    }
+}
+
+/// Is the file sitting at its own path with none of its data here?
+///
+/// This is the whole cloud-eviction question on current macOS, and the
+/// `.name.icloud` naming every stub check used to key on is not it. macOS 26
+/// stopped writing dot-stubs: iCloud evicts **in place**, leaving the file
+/// exactly where it was with `SF_DATALESS` in `st_flags` and `st_blocks` at
+/// zero, and no hidden sibling at all. Every FileProvider extension under
+/// `~/Library/CloudStorage` — Dropbox, Google Drive, OneDrive — does the
+/// same, so one flag covers all four providers where four filename rules
+/// covered none of them.
+///
+/// `stat` is safe. A *read* is what hydrates, which is why nothing in the
+/// writer or the reconciler may read one: reading an evicted bundle to
+/// compare hashes silently undoes the user's "free up space", one full
+/// download at a time.
+pub fn is_dataless(path: &Path) -> bool {
+    if let Some(probe) = DATALESS.lock().ok().and_then(|slot| slot.clone()) {
+        if let Some(answer) = probe(path) {
+            return answer;
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::macos::fs::MetadataExt;
+        const SF_DATALESS: u32 = 0x4000_0000;
+        std::fs::metadata(path)
+            .map(|meta| meta.st_flags() & SF_DATALESS != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    false
+}
+
+/// Is this file present in name only — evicted in place, or standing behind
+/// the legacy `.name.icloud` placeholder older systems wrote (§5.7)?
+///
+/// The dot-stub check stays as the secondary: it costs a `is_file` on a path
+/// that is already known not to exist, and a Mac that has not been upgraded
+/// still writes them.
 pub fn is_evicted_stub(path: &Path) -> bool {
+    if is_dataless(path) {
+        return true;
+    }
     if path.exists() {
         return false;
     }
@@ -3288,25 +3365,33 @@ pub fn is_evicted_stub(path: &Path) -> bool {
     dir.join(format!(".{name}.icloud")).is_file()
 }
 
-/// Ask iCloud for a file that is not downloaded, and say so. Returns true
-/// when a download was started, so the caller can show "Downloading from
-/// iCloud…" instead of failing at a file that is only temporarily absent.
+/// `brctl` speaks for iCloud Drive and nothing else. A FileProvider mount
+/// under `~/Library/CloudStorage` has no equivalent to call, so an evicted
+/// file there is left alone until its own client brings it back — which is
+/// safe, because every caller already treats a stub as absent.
+fn icloud_can_hydrate(path: &Path) -> bool {
+    !path.to_string_lossy().contains("/Library/CloudStorage/")
+}
+
+/// Ask for a file that is not downloaded, and say so. Returns true when the
+/// file is a stub — the caller shows "Downloading from iCloud…" rather than
+/// reporting a file plainly visible in Finder as gone — whether or not there
+/// was anybody to ask.
 pub fn hydrate_if_evicted(path: &Path) -> bool {
     if !is_evicted_stub(path) {
         return false;
     }
-    let Some(dir) = path.parent() else {
-        return false;
+    // The legacy layout asks for the placeholder; an in-place eviction asks
+    // for the file itself, which is where the data goes.
+    let ask = match (path.parent(), path.file_name().and_then(|n| n.to_str())) {
+        (Some(dir), Some(name)) if !path.exists() => dir.join(format!(".{name}.icloud")),
+        _ => path.to_path_buf(),
     };
-    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-        return false;
-    };
-    #[cfg(target_os = "macos")]
-    crate::commands::hydrate_icloud_stubs(vec![dir
-        .join(format!(".{name}.icloud"))
-        .to_string_lossy()
-        .to_string()]);
-    crate::note!("okf: asked iCloud for {path:?}");
+    if icloud_can_hydrate(&ask) {
+        #[cfg(target_os = "macos")]
+        crate::commands::hydrate_icloud_stubs(vec![ask.to_string_lossy().to_string()]);
+        crate::note!("okf: asked iCloud for {path:?}");
+    }
     true
 }
 

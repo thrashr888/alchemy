@@ -664,12 +664,43 @@ they exist without being asked for.
   nor a degradation, and colour here is semantic (DESIGN.md §2). `offer` is a
   hairline, no tint, and a drive glyph.
 - **The stub rule is one predicate, used three times.** `is_evicted_stub` is
-  "the file is not there and a `.name.icloud` placeholder is" — the writer
-  skips such a file and asks for it, `place_reference` will not copy over it,
-  and `extract_any_file` refuses with "Downloading from iCloud…" instead of
+  the writer's "this file is here in name only" — the writer skips such a
+  file and asks for it, `place_reference` will not copy over it, and
+  `extract_any_file` refuses with "Downloading from iCloud…" instead of
   reporting a file plainly visible in Finder as gone. The nudge had to stop
   requiring a Tokio runtime for this: the bundle writer is synchronous, so it
   spawns a blocking task on the runtime and a plain thread off it.
+
+- **A stub is a flag, not a filename — corrected.** The predicate above was
+  written as "the file is not there and a `.name.icloud` placeholder is",
+  which on macOS 26 and later is never true of anything. iCloud evicts **in
+  place**: the file stays at its own path with `SF_DATALESS` in `st_flags`
+  and `st_blocks` at zero, and no hidden sibling is written. So did every
+  FileProvider mount under `~/Library/CloudStorage` — Dropbox, Google Drive,
+  OneDrive — all along. The consequence was not one dead branch but six:
+  the hydration nudge never fired from a bound root, `evicted_concepts`
+  always returned nothing, all three writer guards were inert, and
+  `free_reference_name` called `read` on dataless originals, which forces a
+  blocking full download inside the write path. The check is now
+  `st_flags & SF_DATALESS`, one call covering all four providers, with the
+  dot-stub test kept as the secondary for systems that still write them.
+
+  Two rules follow. **Nothing reads a dataless file** in the writer or the
+  reconciler: `stat` is safe and a read is the download, so the reconciler
+  counts one as present and unchanged rather than hashing it — reading a
+  bundle to compare hashes was silently undoing the user's "free up space",
+  one file at a time. And **the nudge is iCloud's alone**: `brctl download`
+  has no equivalent for a FileProvider mount, so an evicted file there is
+  left where it is until its own client brings it back, which is safe
+  precisely because every caller already treats a stub as absent.
+
+  `fswatch::is_scannable` needed nothing after all. It is a lexical rule over
+  paths that may not exist, and an in-place eviction fires its events on the
+  real path, which the rule already allows; the `.icloud` allowance beside it
+  is still what covers the old layout. Datalessness answers through an
+  injectable probe for the same reason the hydrator does — the gate cannot
+  evict a real file, and a seam a test sets has to be the one the app runs
+  through.
 - **Asking is injectable, so the test can watch it.** `brctl` answers a
   scratch directory with "Path is outside of any CloudDocs app library", which
   every gate run printed. `set_icloud_hydrator` replaces where a request goes

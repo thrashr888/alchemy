@@ -3726,10 +3726,16 @@ fn okf_bundles_carry_the_notebook_id_for_rebinding() {
 /// An evicted file is not a missing one: the writer asks for it and leaves
 /// it alone rather than writing over the placeholder (§5.7).
 ///
-/// The asking is routed through the hydrator seam rather than `brctl`, so the
-/// gate neither shells out to iCloud (which answers a scratch directory with
-/// "Path is outside of any CloudDocs app library") nor has to take the
-/// request on faith — the paths the writer asked for are the assertion.
+/// Both layouts, because both exist. macOS 26 stopped writing `.name.icloud`
+/// placeholders — iCloud evicts in place now, and so does every FileProvider
+/// mount under `~/Library/CloudStorage` — which made every stub check in the
+/// module dead code on current systems.
+///
+/// The asking is routed through the hydrator seam rather than `brctl`, and
+/// datalessness through its own probe rather than `st_flags`, so the gate
+/// neither shells out to iCloud (which answers a scratch directory with
+/// "Path is outside of any CloudDocs app library") nor has to evict a real
+/// file to find out. The paths the writer asked for are the assertion.
 #[test]
 fn okf_writer_treats_a_stub_as_absent() {
     use crate::okf::{is_evicted_stub, write_bundle};
@@ -3806,5 +3812,67 @@ fn okf_writer_treats_a_stub_as_absent() {
         "the file that arrived is the one we wrote"
     );
 
+    // Now the layout current macOS actually uses: the file stays at its own
+    // path, and only `st_flags` says the bytes are elsewhere.
+    let evicted = bundle.join("notes/what-the-data-says.md");
+    let held = std::fs::read_to_string(&evicted).expect("read");
+    // A FileProvider mount evicts the same way and has nobody to ask.
+    let cloud = dir
+        .join("Library")
+        .join("CloudStorage")
+        .join("Dropbox")
+        .join("nb")
+        .join("notes")
+        .join("only-here.md");
+    std::fs::create_dir_all(cloud.parent().expect("parent")).expect("cloud bundle");
+    std::fs::write(&cloud, "---\ntitle: \"X\"\n---\n\nBody.\n").expect("write");
+    let dataless = [evicted.clone(), cloud.clone()];
+    crate::okf::set_dataless_probe(Arc::new(move |p: &std::path::Path| {
+        // An opinion about two files only: every other path in this process,
+        // in this test and any running beside it, answers for itself.
+        dataless.contains(&p.to_path_buf()).then_some(true)
+    }));
+    assert!(
+        is_evicted_stub(&evicted),
+        "a file with no data in it is a stub, whatever it is called"
+    );
+    assert!(!is_evicted_stub(&real), "and one that is downloaded is not");
+
+    let in_place = write_bundle(
+        &okf_notebook("NB"),
+        &sources,
+        &notes,
+        &bundle,
+        Some(&okf_manifest(&bundle)),
+    )
+    .expect("in place");
+    assert_eq!(in_place.written, 0, "nothing was written over it");
+    assert_eq!(in_place.removed, 0, "and nothing counted it as deleted");
+    assert_eq!(
+        std::fs::read_to_string(&evicted).expect("still there"),
+        held,
+        "the file is untouched"
+    );
+    assert!(
+        asked
+            .lock()
+            .expect("recorder")
+            .iter()
+            .any(|p| p.ends_with("notes/what-the-data-says.md")),
+        "the file itself is what gets asked for, not a placeholder beside it"
+    );
+
+    let before = asked.lock().expect("recorder").len();
+    assert!(
+        crate::okf::hydrate_if_evicted(&cloud),
+        "it is still a stub, and the caller still has to say so"
+    );
+    assert_eq!(
+        asked.lock().expect("recorder").len(),
+        before,
+        "but brctl has nothing to say about ~/Library/CloudStorage"
+    );
+
+    crate::okf::set_dataless_probe(Arc::new(|_: &std::path::Path| None));
     let _ = std::fs::remove_dir_all(&dir);
 }
