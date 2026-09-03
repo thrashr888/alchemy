@@ -323,6 +323,19 @@ fn slim(s: Source) -> Source {
     }
 }
 
+/// An MCP session's by-line, from the `clientInfo` it introduced itself with.
+///
+/// An agent editing a source or a note through these tools is not the person
+/// at the keyboard, and the concept file has to say so, or the other Mac
+/// reads the agent's work as theirs (RFC-okf-live §5.6). A client that never
+/// named itself gets `mcp-client/unknown` — still not a person's name.
+pub(crate) fn client_actor(info: Option<&Implementation>) -> String {
+    match info {
+        Some(client) => crate::okf::okf_client_actor(&client.name, &client.version),
+        None => crate::okf::OKF_UNKNOWN_CLIENT.to_string(),
+    }
+}
+
 impl AlchemyMcp {
     pub fn new(app: AppHandle) -> Self {
         Self { app }
@@ -330,6 +343,15 @@ impl AlchemyMcp {
 
     fn state(&self) -> tauri::State<'_, AppState> {
         self.app.state::<AppState>()
+    }
+
+    /// Who is doing this, as a by-line the bundle can carry (spec §7).
+    ///
+    /// `initialize` gave us the client's own `clientInfo`, and rmcp keeps it
+    /// on the peer for the life of the session, so every tool call knows
+    /// which agent is on the other end.
+    fn actor(ctx: &rmcp::service::RequestContext<rmcp::RoleServer>) -> String {
+        client_actor(ctx.peer.peer_info().as_deref().map(|p| &p.client_info))
     }
 
     /// Tell open windows something changed so lists refresh live.

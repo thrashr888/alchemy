@@ -554,6 +554,27 @@ Two knock-on decisions:
   rather than being attributed to a third party. That is the two-Mac case
   §5.6 is about; a different account keeps its name.
 
+**An agent is not the person who left it running.** The sidecar above said
+*that* somebody edited a source, and everything downstream read that as the
+user — so an agent calling `update_source` over MCP put the user's name on
+work the user never did, and the other Mac had no way to tell. The spec has a
+grammar for exactly this (§7): `human:<id>` for people, `<producer>/<version>`
+for agents. So the sidecar records *who* alongside *when* — `{at, actor}`,
+with a bare number still deserializing as this Mac's person, which is all the
+older records ever meant — and every write path stamps its own actor. In the
+app that is `human:<account>` as before. Over MCP it is the session's
+`clientInfo`, normalised into the producer shape: "Claude Code" 2.1.0 becomes
+`claude-code/2.1.0`, a client that introduced itself with nothing becomes
+`mcp-client/unknown`. Normalisation is also the guard — a client naming itself
+`human:kim` gets `human-kim`, because the colon does not survive, so no
+producer can forge a person. Notes join sources in the same file, keyed by
+entity id: a note created or rewritten over MCP is the agent's, and the
+in-app edit that takes ownership of it stamps the person back in (clearing
+`origin` alone would have left the agent's name standing). Read-back needs no
+change — an agent's by-line is not `okf_is_ours`, so §5.3 stores it as the
+note's origin and the far Mac's writer emits it verbatim. `claude-code` on one
+Mac reads as `claude-code` on the other, never as whoever is signed in there.
+
 **The log heading carries the account**, not just the day, so two installs
 append to different blocks and a cloud tool has a merge instead of a clash.
 Two Macs with different short names never collide; two with the *same* short

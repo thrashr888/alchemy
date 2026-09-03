@@ -2913,7 +2913,7 @@ pub async fn update_source_text(
     let existing =
         e(state.db.get_source(&source_id).await)?.ok_or_else(|| "Source not found".to_string())?;
     let extracted = e(ingest::extract_pasted(&title, &text))?;
-    crate::okf::note_human_source_edit(&app_data_dir(&state), &existing);
+    crate::okf::note_human_edit(&app_data_dir(&state), &existing.notebook_id, &existing.id);
     e(reingest(&state, &existing, extracted, None, true).await)
 }
 
@@ -3084,13 +3084,19 @@ async fn index_snote(state: &AppState, source: &Source, note: &str) -> anyhow::R
         .await
 }
 
+/// Tags and the user's note are the two things a source carries that only
+/// ever came from a person — until an agent got the same tools. The by-line
+/// sidecar is stamped here rather than inside the `_impl`, which the
+/// auto-tagger also calls (docs/RFC-okf-live.md §5.6).
 #[tauri::command]
 pub async fn set_source_tags(
     state: State<'_, AppState>,
     source_id: String,
     tags: String,
 ) -> Result<Source, String> {
-    e(set_source_tags_impl(&state, &source_id, &tags).await)
+    let source = e(set_source_tags_impl(&state, &source_id, &tags).await)?;
+    crate::okf::note_human_edit(&app_data_dir(&state), &source.notebook_id, &source.id);
+    Ok(source)
 }
 
 #[tauri::command]
@@ -3099,7 +3105,9 @@ pub async fn set_source_note(
     source_id: String,
     note: String,
 ) -> Result<Source, String> {
-    e(set_source_note_impl(&state, &source_id, &note).await)
+    let source = e(set_source_note_impl(&state, &source_id, &note).await)?;
+    crate::okf::note_human_edit(&app_data_dir(&state), &source.notebook_id, &source.id);
+    Ok(source)
 }
 
 /// Does this source origin point at the web (vs. a local file path)?
@@ -3410,8 +3418,18 @@ pub async fn set_sources_tags(
     source_ids: Vec<String>,
     tags: String,
 ) -> Result<(), String> {
+    let mut updated: Vec<Source> = Vec::with_capacity(source_ids.len());
     for id in &source_ids {
-        e(set_source_tags_impl(&state, id, &tags).await)?;
+        updated.push(e(set_source_tags_impl(&state, id, &tags).await)?);
+    }
+    if let Some(first) = updated.first() {
+        let ids: Vec<&str> = updated.iter().map(|s| s.id.as_str()).collect();
+        crate::okf::note_okf_edits(
+            &app_data_dir(&state),
+            &first.notebook_id,
+            &ids,
+            &crate::okf::okf_human(),
+        );
     }
     Ok(())
 }
@@ -10206,6 +10224,9 @@ pub async fn update_note(
     e(state.db.set_note_origin(&id, "").await)?;
     e(state.db.set_note_status(&id, "").await)?;
     if let Some(note) = e(state.db.get_note(&id).await)? {
+        // Taking ownership means taking the by-line too: clearing `origin`
+        // alone would leave an agent's name in the sidecar (§5.6).
+        crate::okf::note_human_edit(&app_data_dir(&state), &note.notebook_id, &note.id);
         index_note(&state, &note).await;
     }
     Ok(())

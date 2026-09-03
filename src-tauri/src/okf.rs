@@ -124,8 +124,59 @@ pub(crate) fn okf_human() -> String {
 
 /// Is this by-line one of ours — this app, or this person? Everything else
 /// is somebody else, and §5.3 attributes their edits to them.
+///
+/// An agent that worked through our own MCP server is deliberately *not*
+/// ours: `claude-code/2.1.0` is who did it, and the other Mac should read it
+/// as that agent rather than quietly as the person sitting in front of it.
 pub(crate) fn okf_is_ours(by: &str) -> bool {
     by == okf_writer() || by == okf_human()
+}
+
+/// The by-line for an MCP client that never said who it is. The spec wants
+/// `<producer>/<version>` either way, so an unnamed agent gets a name that is
+/// at least true.
+pub(crate) const OKF_UNKNOWN_CLIENT: &str = "mcp-client/unknown";
+
+/// One segment of a producer by-line, in the shape spec §7 asks for.
+///
+/// An MCP client names itself freely ("Claude Code", "codex"), and that
+/// string lands in YAML frontmatter some other tool parses. Whitespace and
+/// punctuation become hyphens, which also settles the awkward case: a client
+/// calling itself `human:kim` cannot forge a person's by-line, because the
+/// colon does not survive.
+fn okf_producer_segment(raw: &str, lowercase: bool) -> String {
+    let src = if lowercase {
+        raw.to_lowercase()
+    } else {
+        raw.to_string()
+    };
+    let mut out = String::new();
+    for c in src.chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+') {
+            out.push(c);
+        } else if !out.ends_with('-') && !out.is_empty() {
+            out.push('-');
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+/// An MCP client's `clientInfo`, as the spec's actor grammar wants it:
+/// `<producer>/<version>` (§7). "Claude Code" 2.1.0 becomes
+/// `claude-code/2.1.0`; a client that gave us no usable name at all becomes
+/// `mcp-client/unknown`.
+pub(crate) fn okf_client_actor(name: &str, version: &str) -> String {
+    let producer = okf_producer_segment(name, true);
+    if producer.is_empty() {
+        return OKF_UNKNOWN_CLIENT.to_string();
+    }
+    let version = okf_producer_segment(version, false);
+    let version = if version.is_empty() {
+        "unknown".into()
+    } else {
+        version
+    };
+    format!("{producer}/{version}")
 }
 
 /// Does this actor read as a machine? `name/version` is the shape both
@@ -789,18 +840,18 @@ fn okf_note_status(note: &Note) -> String {
 /// Who last made this note, as far as the store records it (§5.6).
 ///
 /// `origin` carries an outside actor verbatim once read-back has attributed
-/// one, so that wins. `auto` is the curator or the chat post-pass. A kind
-/// other than `note` is something the Studio generated. Everything left is a
-/// note a person wrote or edited in the app.
-fn okf_note_actor(note: &Note) -> String {
+/// one, so that wins. `auto` is the curator or the chat post-pass. Otherwise
+/// the sidecar answers when it has heard of this note — which is how an agent
+/// writing over MCP gets its own by-line instead of the user's. A kind other
+/// than `note` is something the Studio generated, and what is left is a note
+/// a person wrote in the app.
+pub(crate) fn okf_note_actor(note: &Note, edits: &OkfEdits) -> String {
     match note.origin.as_str() {
-        "" => {
-            if note.kind == "note" {
-                okf_human()
-            } else {
-                okf_writer()
-            }
-        }
+        "" => match edits.get(&note.id) {
+            Some(edit) => edit.actor(),
+            None if note.kind == "note" => okf_human(),
+            None => okf_writer(),
+        },
         "auto" => okf_writer(),
         actor => actor.to_string(),
     }
@@ -808,16 +859,16 @@ fn okf_note_actor(note: &Note) -> String {
 
 /// Who last made this source (§5.6).
 ///
-/// Every source arrives by import, which is the app acting on its own. What
-/// says a person has touched one since is the user's own tags and their note
-/// — both ground truth from the user — and the sidecar the edit path writes,
-/// which is how a bare rename gets a by-line at all: the store keeps no
-/// record of who chose a title.
-fn okf_source_actor(source: &Source, edits: &OkfHumanEdits) -> String {
-    if source.tags.trim().is_empty()
-        && source.note.trim().is_empty()
-        && !edits.contains_key(&source.id)
-    {
+/// Every source arrives by import, which is the app acting on its own. The
+/// sidecar the edit paths write says who touched it since — a person, or the
+/// agent that did it over MCP — and it wins, because it is the only record
+/// that names anybody: the store keeps none of who chose a title. Failing
+/// that, the user's own tags and their note are ground truth from the user.
+fn okf_source_actor(source: &Source, edits: &OkfEdits) -> String {
+    if let Some(edit) = edits.get(&source.id) {
+        return edit.actor();
+    }
+    if source.tags.trim().is_empty() && source.note.trim().is_empty() {
         okf_writer()
     } else {
         okf_human()
@@ -832,7 +883,7 @@ pub(crate) fn source_concept(
     content: String,
     bundle: &Path,
     cap_bytes: u64,
-    edits: &OkfHumanEdits,
+    edits: &OkfEdits,
 ) -> OkfConcept {
     let resource = if s.url.is_empty() {
         String::new()
@@ -901,11 +952,11 @@ pub(crate) async fn gather_bundle_for(
         ai.config().okf_reference_cap_mb.saturating_mul(1024 * 1024)
     };
     // Who has touched what, read once per pass rather than once per source.
-    let human_edits = load_okf_human_edits(&app_data_dir(state), notebook_id);
+    let edits = load_okf_edits(&app_data_dir(state), notebook_id);
     let mut source_concepts = Vec::with_capacity(sources.len());
     for s in &sources {
         let content = e(state.db.source_content(&s.id).await)?;
-        source_concepts.push(source_concept(s, content, bundle, cap_bytes, &human_edits));
+        source_concepts.push(source_concept(s, content, bundle, cap_bytes, &edits));
     }
 
     // One Aho-Corasick pass over the whole notebook, the same one the graph
@@ -957,7 +1008,7 @@ pub(crate) async fn gather_bundle_for(
             }
             .to_string(),
             generated_at: note.updated_at,
-            generated_by: okf_note_actor(note),
+            generated_by: okf_note_actor(note, &edits),
             status: okf_note_status(note),
             derived_from: cites.get(&note.id).cloned().unwrap_or_default(),
             // `type:` is a human label and several kinds share one; `kind` is
@@ -1273,44 +1324,104 @@ fn save_okf_lifecycle(
     }
 }
 
-/// Sources a person has edited in the app, by source id → when (epoch ms).
+/// What one deliberate edit left behind: when it happened, and who did it.
+///
+/// Older builds of this sidecar recorded only the timestamp, because the only
+/// thing that could put an id in the file was a person at the keyboard. Then
+/// agents got the same tools over MCP, and "somebody edited this" stopped
+/// being the whole answer — so the record carries the actor now, and a bare
+/// number still deserializes as the person it always meant.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub(crate) enum OkfEdit {
+    /// Pre-actor records: a timestamp alone, which meant this Mac's person.
+    When(i64),
+    By {
+        at: i64,
+        actor: String,
+    },
+}
+
+impl OkfEdit {
+    /// The by-line this edit earns. `human:<account>` for the legacy shape,
+    /// which is what those records always meant.
+    pub(crate) fn actor(&self) -> String {
+        match self {
+            OkfEdit::When(_) => okf_human(),
+            OkfEdit::By { actor, .. } => actor.clone(),
+        }
+    }
+}
+
+/// Entities in one notebook somebody has deliberately edited, by id → who.
 ///
 /// The store records how a source arrived and what it says, never who last
 /// touched its title, so a bare rename moved no by-line and the concept kept
 /// crediting `alchemy/<version>` with a title a person chose (§5.6). This is
 /// the missing record, in the same per-parent sidecar shape the lifecycle
 /// uses: machine-local, read only by the bundle writer, and no column in a
-/// store that older builds still append to.
-pub(crate) type OkfHumanEdits = HashMap<String, i64>;
+/// store that older builds still append to. Sources and notes share one file
+/// per notebook — the ids are distinct and the question is the same one.
+pub(crate) type OkfEdits = HashMap<String, OkfEdit>;
 
-fn okf_human_edits_path(data_dir: &Path, notebook_id: &str) -> PathBuf {
+/// The on-disk name predates agents having the same tools; the records inside
+/// no longer promise a human, but the path a shipped build already writes is
+/// not worth breaking over a word.
+fn okf_edits_path(data_dir: &Path, notebook_id: &str) -> PathBuf {
     data_dir
         .join("okf_human_edits")
         .join(format!("{notebook_id}.json"))
 }
 
-/// Every source in one notebook a person has edited. One file read per write
-/// pass, and a directory miss for the notebooks where nobody has.
-pub(crate) fn load_okf_human_edits(data_dir: &Path, notebook_id: &str) -> OkfHumanEdits {
-    std::fs::read_to_string(okf_human_edits_path(data_dir, notebook_id))
+/// Every edited entity in one notebook. One file read per write pass, and a
+/// directory miss for the notebooks where nobody has edited anything.
+pub(crate) fn load_okf_edits(data_dir: &Path, notebook_id: &str) -> OkfEdits {
+    std::fs::read_to_string(okf_edits_path(data_dir, notebook_id))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
 }
 
-/// A person edited this source in the app — renamed it, or rewrote its text.
-/// Called by the edit command and the MCP tool behind it, never by a refresh
-/// or an import, which are the app acting on its own.
-pub(crate) fn note_human_source_edit(data_dir: &Path, source: &Source) {
-    let path = okf_human_edits_path(data_dir, &source.notebook_id);
-    let mut map = load_okf_human_edits(data_dir, &source.notebook_id);
-    map.insert(source.id.clone(), now_ms());
+/// Somebody deliberately edited this entity — renamed a source, rewrote a
+/// note, set tags. Called by the edit commands and their MCP twins with the
+/// actor that did it (`okf_human()` in the app, the client's own by-line over
+/// MCP), never by a refresh or an import, which are the app acting alone.
+pub(crate) fn note_okf_edit(data_dir: &Path, notebook_id: &str, entity_id: &str, actor: &str) {
+    note_okf_edits(data_dir, notebook_id, &[entity_id], actor);
+}
+
+/// The same, for a multi-select batch: one read and one write however many
+/// entities the selection held.
+pub(crate) fn note_okf_edits(data_dir: &Path, notebook_id: &str, ids: &[&str], actor: &str) {
+    if ids.is_empty() {
+        return;
+    }
+    let path = okf_edits_path(data_dir, notebook_id);
+    let mut map = load_okf_edits(data_dir, notebook_id);
+    let at = now_ms();
+    for id in ids {
+        map.insert(
+            (*id).to_string(),
+            OkfEdit::By {
+                at,
+                actor: actor.to_string(),
+            },
+        );
+    }
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     if let Ok(json) = serde_json::to_string_pretty(&map) {
         let _ = std::fs::write(path, json);
     }
+}
+
+/// The person at this keyboard edited it. Every in-app edit command goes
+/// through here, including the ones an agent could also have made: the record
+/// is last-writer, so a person picking up an agent's note has to overwrite
+/// the agent's name or the file would keep crediting the agent.
+pub(crate) fn note_human_edit(data_dir: &Path, notebook_id: &str, entity_id: &str) {
+    note_okf_edit(data_dir, notebook_id, entity_id, &okf_human());
 }
 
 /// Re-read every bundle child's frontmatter and record what it says about

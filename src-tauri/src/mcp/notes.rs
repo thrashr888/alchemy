@@ -108,6 +108,7 @@ impl AlchemyMcp {
             content,
             kind,
         }): Parameters<CreateNoteReq>,
+        ctx: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let kind = match kind.as_deref().unwrap_or("note") {
             "" | "note" => "note",
@@ -135,9 +136,19 @@ impl AlchemyMcp {
             created_at: ts,
             updated_at: ts,
         };
-        commands::add_note_indexed(&self.state(), &note)
+        let state = self.state();
+        commands::add_note_indexed(&state, &note)
             .await
             .map_err(internal)?;
+        // The agent wrote it, so the bundle says the agent wrote it — the
+        // empty `origin` a note starts with otherwise reads as the person at
+        // the keyboard (RFC-okf-live §5.6).
+        crate::okf::note_okf_edit(
+            &commands::app_data_dir(&state),
+            &note.notebook_id,
+            &note.id,
+            &Self::actor(&ctx),
+        );
         self.changed("notes", Some(&notebook_id));
         json_result(&note)
     }
@@ -152,6 +163,7 @@ impl AlchemyMcp {
             title,
             content,
         }): Parameters<UpdateNoteReq>,
+        ctx: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let state = self.state();
         let note = state
@@ -165,12 +177,20 @@ impl AlchemyMcp {
             .update_note(&note_id, title.trim(), &content, commands::now())
             .await
             .map_err(internal)?;
-        // An agent's deliberate edit takes ownership, same as a human's.
+        // An agent's deliberate edit takes ownership, same as a human's —
+        // and takes the by-line with it, or clearing `origin` would hand the
+        // note back to whoever is signed in (RFC-okf-live §5.6).
         state
             .db
             .set_note_origin(&note_id, "")
             .await
             .map_err(internal)?;
+        crate::okf::note_okf_edit(
+            &commands::app_data_dir(&state),
+            &note.notebook_id,
+            &note.id,
+            &Self::actor(&ctx),
+        );
         if let Ok(Some(updated)) = state.db.get_note(&note_id).await {
             commands::index_note(&state, &updated).await;
         }

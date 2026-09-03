@@ -132,8 +132,10 @@ surface** — `cat`, `sed`, and `git` beat any tool call here:
   it, so one folder can be shared over iCloud or Dropbox and each Mac keeps
   its own. Everything in the bundle is knowledge or listings.
 - `generated.by` says who made a version: `human:<account>` for a person,
-  `alchemy/<version>` for the app. Put your own name there when you edit a
-  file and the attribution sticks.
+  `alchemy/<version>` for the app, `<producer>/<version>` for anyone else.
+  Edits you make through these tools are attributed to you — your MCP client's
+  own name and version, e.g. `claude-code/2.1.0` — not to the user. Put your
+  own name there when you edit a file directly and the attribution sticks.
 
 Most notebooks are already there. Alchemy keeps them in a Notebooks folder —
 iCloud Drive when iCloud Drive is on, `~/Documents/Alchemy` when it is not —
