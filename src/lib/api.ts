@@ -45,6 +45,7 @@ import type {
   Notebook,
   NotebookGraph,
   NotebookSuggestion,
+  OkfBinding,
   OkfLifecycle,
   ReportSchedule,
   SearchHit,
@@ -457,9 +458,15 @@ export const api = {
     run(slow<string>("export_notebook_okf_zip", { notebookId, destPath })),
   probeOkf: (path: string) => run(query<boolean>("probe_okf", { path })),
   okfLifecycle: (notebookId: string) =>
-    run(
-      query<Record<string, OkfLifecycle>>("okf_lifecycle", { notebookId }),
-    ),
+    run(query<Record<string, OkfLifecycle>>("okf_lifecycle", { notebookId })),
+  notebookOkfBinding: (notebookId: string) =>
+    run(query<OkfBinding | null>("notebook_okf_binding", { notebookId })),
+  bindNotebookOkf: (notebookId: string, path: string) =>
+    run(slow<string>("bind_notebook_okf", { notebookId, path })),
+  unbindNotebookOkf: (notebookId: string) =>
+    run(query<null>("unbind_notebook_okf", { notebookId })),
+  writeNotebookOkf: (notebookId: string) =>
+    run(slow<number>("write_notebook_okf", { notebookId })),
   importNotebookOkf: (path: string, notebookId?: string | null) =>
     run(
       slow<Notebook>("import_notebook_okf", {

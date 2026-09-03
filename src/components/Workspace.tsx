@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { SourcesPanel } from "./SourcesPanel";
 import { ChatPanel } from "./ChatPanel";
@@ -18,6 +20,8 @@ import type { Notebook } from "@/lib/types";
 import {
   Archive,
   FileDown,
+  FolderOpen,
+  HardDrive,
   Library,
   Pencil,
   Search,
@@ -28,6 +32,7 @@ import { notebookIcon } from "@/lib/notebookIcons";
 import { DevBadge } from "./DevBadge";
 import { UpdateBadge } from "./UpdateBadge";
 import { DitherBackground } from "./DitherBackground";
+import { OkfChip } from "./OkfChip";
 
 export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   const currentId = useStore((s) => s.currentId);
@@ -37,6 +42,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   const growOpen = useStore((s) => s.growOpen);
   const notebooks = useStore((s) => s.notebooks);
   const close = useStore((s) => s.closeNotebook);
+  const binding = useStore((s) => s.okfBinding);
   const sourcesOpen = useStore((s) => s.sourcesOpen);
   const studioOpen = useStore((s) => s.studioOpen);
   const theme = useStore((s) => s.theme);
@@ -128,6 +134,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
           >
             {notebook?.title ?? "Notebook"}
           </span>
+          <OkfChip />
           {notebook && (
             <RowMenu
               alwaysVisible
@@ -144,6 +151,37 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                   onClick: () =>
                     void useStore.getState().exportNotebookOkf(notebook.id),
                 },
+                // Keeping a notebook on disk (RFC-okf-live §5.5). One verb
+                // while it is off; the two it earns once it is on.
+                ...(binding
+                  ? [
+                      {
+                        label: "Show bundle in Finder",
+                        icon: <HardDrive className="h-3.5 w-3.5" />,
+                        onClick: () =>
+                          void revealItemInDir(binding.path).catch(() => {}),
+                      },
+                      {
+                        label: "Stop keeping on disk",
+                        icon: <FolderOpen className="h-3.5 w-3.5" />,
+                        onClick: () =>
+                          void useStore.getState().unbindNotebookOkf(),
+                      },
+                    ]
+                  : [
+                      {
+                        label: "Keep on disk as OKF…",
+                        icon: <HardDrive className="h-3.5 w-3.5" />,
+                        onClick: async () => {
+                          const picked = await open({
+                            directory: true,
+                            title: "Choose a folder for this notebook",
+                          });
+                          if (typeof picked === "string")
+                            void useStore.getState().bindNotebookOkf(picked);
+                        },
+                      },
+                    ]),
                 {
                   // The store leaves the notebook when its current one is
                   // archived or deleted — no extra navigation here.

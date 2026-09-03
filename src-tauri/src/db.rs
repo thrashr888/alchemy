@@ -1133,6 +1133,13 @@ impl Db {
             .column("updated_at", updated_at.to_string())
             .execute()
             .await?;
+        // "This notebook's contents changed" is exactly when a bound notebook
+        // owes its bundle a write (docs/RFC-okf-live.md §5.2). Every source
+        // mutation already lands here, so one hook covers add, delete,
+        // rename, refresh, and retag. Cheap and reentrancy-free: unbound
+        // notebooks return on a file read, and a bound one only records a
+        // deadline for a task that runs two seconds from now.
+        crate::okf::schedule_write(id);
         Ok(())
     }
 

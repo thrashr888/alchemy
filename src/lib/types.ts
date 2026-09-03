@@ -55,6 +55,14 @@ export interface NotebookSuggestion {
   isNew: boolean;
 }
 
+/** Where a notebook keeps itself on disk as an OKF bundle (RFC-okf-live §5.1).
+ *  Machine-local: the path lives in a sidecar, not on the notebook row. */
+export interface OkfBinding {
+  path: string;
+  /** Epoch ms of the last write; 0 until the seed pass lands. */
+  lastWriteAt: number;
+}
+
 /** What one OKF concept says about its own standing (RFC-okf-live §4), read
  *  from the file's frontmatter at scan time and keyed by source id. */
 export interface OkfLifecycle {

@@ -20,9 +20,23 @@ export function ImportOkfModal() {
   // chosen, so the dialog only asks where it should land.
   const dropped = useStore((s) => s.pendingImportPath);
   const [dest, setDest] = useState<string>("");
+  // A folder can go on being the notebook's home after the import
+  // (RFC-okf-live §5.5). A zip cannot, so the choice only appears for one.
+  const [keepLinked, setKeepLinked] = useState(false);
 
   const close = () =>
     useStore.setState({ importOkfOpen: false, pendingImportPath: null });
+
+  async function finish(path: string, directory: boolean) {
+    close();
+    const before = useStore.getState().currentId;
+    await importOkf(path, dest || null);
+    if (directory && keepLinked) {
+      const landed = dest || useStore.getState().currentId;
+      if (landed && landed !== before) await useStore.getState().selectNotebook(landed);
+      if (landed) await useStore.getState().bindNotebookOkf(path, landed);
+    }
+  }
 
   async function pick(directory: boolean) {
     const path = await open(
@@ -34,8 +48,7 @@ export function ImportOkfModal() {
           },
     );
     if (!path) return;
-    close();
-    await importOkf(path as string, dest || null);
+    await finish(path as string, directory);
   }
 
   return (
@@ -69,6 +82,18 @@ export function ImportOkfModal() {
             ))}
           </select>
         </label>
+        <label className="flex items-start gap-2 text-caption text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={keepLinked}
+            onChange={(e) => setKeepLinked(e.target.checked)}
+            className="mt-0.5 accent-primary"
+          />
+          <span>
+            Keep this notebook linked to the folder. Changes here are written
+            back to it within seconds. Folders only; a zip cannot stay live.
+          </span>
+        </label>
         {dropped && (
           <div className="flex items-center gap-2 rounded-md border border-border bg-surface-2/40 px-3 py-2 text-caption text-foreground/90">
             <FileArchive className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -85,11 +110,7 @@ export function ImportOkfModal() {
             <Button
               type="button"
               variant="primary"
-              onClick={() => {
-                const path = dropped;
-                close();
-                void importOkf(path, dest || null);
-              }}
+              onClick={() => void finish(dropped, !dropped.endsWith(".zip"))}
             >
               <FileArchive className="h-3.5 w-3.5" />
               Import

@@ -94,11 +94,37 @@ adding what comes to mind. Habits that keep the notebook clean:
 ## Sharing notebooks
 
 Notebooks travel as OKF bundles: the app exports a single `.okf.zip`
-(File → Share Notebook as Zip…) and imports one — or a bundle folder — via
-the home screen's Import… button, or by dropping the file anywhere on the
-window. Import re-embeds locally and skips duplicates, so re-importing is
-safe. If the user asks how to share a notebook with someone (or move it to
-another machine), point them at this flow.
+(File → Share Notebook as Zip…) and imports one via the home screen's
+Import… button, or by dropping the file anywhere on the window. Import
+re-embeds locally and skips duplicates, so re-importing is safe. If the user
+asks how to share a notebook with someone (or move it to another machine),
+point them at this flow.
+
+A **bundle folder** is different from a zip: dropped on a notebook it becomes
+an `okf` source that stays in sync, the way an Obsidian vault does. Its
+`index.md` and `log.md` are listings, not knowledge, and never become
+sources; concepts marked `status: deprecated` start deselected.
+
+## A notebook you can edit as files
+
+`list_notebooks` reports `okfPath` for every notebook kept on disk as an OKF
+bundle. **When a notebook has an `okfPath`, the folder is the editing
+surface** — `cat`, `sed`, and `git` beat any tool call here:
+
+- A note is `notes/<slug>.md`; a source is `sources/<slug>.md`. Edit the
+  markdown below the frontmatter and Alchemy picks the change up within
+  seconds. Delete a file to delete the entity.
+- `index.md` and `log.md` are generated. Do not hand-edit them; the next
+  write regenerates the listings, and `log.md` is the bundle's history.
+- Frontmatter keys Alchemy does not write (`verified`, `stale_after`, your
+  own) survive every rewrite. `title:` names the concept.
+- `.alchemy/manifest.json` is Alchemy's bookkeeping. Leave it alone.
+
+`bind_notebook_okf(notebook_id, path)` starts this: an empty folder is
+seeded from the notebook; a folder that already holds a bundle is imported
+first, then bound. `unbind_notebook_okf(notebook_id)` stops it and leaves
+every file in place. Offer binding when the user wants a notebook in git, on
+another machine, or edited by hand — not by default.
 
 ## Deep links
 

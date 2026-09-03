@@ -37,6 +37,7 @@ mod mcp;
 mod menu;
 mod models;
 mod notion;
+mod okf;
 mod outline;
 mod outline_index;
 mod pdf;
@@ -510,7 +511,7 @@ pub fn run() {
             commands::source_image,
             commands::source_snippets,
             commands::backfill_source_images,
-            commands::export_notebook_okf,
+            okf::export_notebook_okf,
             commands::fix_traffic_lights,
             commands::get_audio_path,
             commands::kokoro_status,
@@ -534,10 +535,14 @@ pub fn run() {
             commands::list_shortcuts,
             commands::search_everything,
             commands::grep_sources,
-            commands::export_notebook_okf_zip,
+            okf::export_notebook_okf_zip,
             commands::import_notebook_okf,
             commands::probe_okf,
-            commands::okf_lifecycle,
+            okf::okf_lifecycle,
+            okf::notebook_okf_binding,
+            okf::bind_notebook_okf,
+            okf::unbind_notebook_okf,
+            okf::write_notebook_okf,
             commands::ask_everything,
             commands::list_meta_threads,
             commands::list_meta_turns,

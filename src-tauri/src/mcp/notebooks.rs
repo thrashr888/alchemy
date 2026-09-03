@@ -26,6 +26,20 @@ struct ArchiveNotebookReq {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+struct BindOkfReq {
+    /// Notebook id.
+    notebook_id: String,
+    /// Absolute path to the folder the notebook should keep itself in.
+    path: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct NotebookIdReq {
+    /// Notebook id.
+    notebook_id: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 struct SuggestNotebookReq {
     /// Title of the incoming source, if known.
     #[serde(default)]
@@ -43,11 +57,63 @@ impl AlchemyMcp {
     // -- Notebooks --
 
     #[tool(
-        description = "List all notebooks with ids, titles, timestamps, source counts, and status (\"archived\" = hidden from the main grid). Start here to find or pick a notebook."
+        description = "List all notebooks with ids, titles, timestamps, source counts, status (\"archived\" = hidden from the main grid), and okfPath — the folder a notebook is kept in as an OKF bundle, when it has one. A notebook with an okfPath can be edited as files: change a note by changing its markdown, and Alchemy reads it back."
     )]
     async fn list_notebooks(&self) -> Result<CallToolResult, McpError> {
         let nbs: Vec<Notebook> = self.state().db.list_notebooks().await.map_err(internal)?;
-        json_result(&nbs)
+        // `okfPath` is machine-local (it lives in a sidecar, not a column), so
+        // it rides alongside the row rather than inside it.
+        let data_dir = crate::commands::app_data_dir(&self.state());
+        let bindings = crate::okf::load_bindings(&data_dir);
+        let rows: Vec<serde_json::Value> = nbs
+            .iter()
+            .map(|nb| {
+                let mut row = serde_json::to_value(nb).unwrap_or_default();
+                if let Some(obj) = row.as_object_mut() {
+                    obj.insert(
+                        "okfPath".into(),
+                        bindings
+                            .get(&nb.id)
+                            .map(|b| serde_json::Value::String(b.path.clone()))
+                            .unwrap_or(serde_json::Value::Null),
+                    );
+                }
+                row
+            })
+            .collect();
+        json_result(&rows)
+    }
+
+    #[tool(
+        description = "Keep a notebook on disk as an Open Knowledge Format bundle at `path`, and keep it current: every change to the notebook's sources and notes lands in the folder within seconds. An empty folder is seeded from the notebook; a folder that already holds a bundle is imported first, then bound. Once bound, the folder is the editing surface — edit a note by editing its markdown file."
+    )]
+    async fn bind_notebook_okf(
+        &self,
+        Parameters(BindOkfReq { notebook_id, path }): Parameters<BindOkfReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let app = self.app.clone();
+        let state = self.state();
+        let bound = crate::okf::bind_impl(&app, &state, &notebook_id, &path)
+            .await
+            .map_err(internal)?;
+        self.changed("notebooks", Some(&notebook_id));
+        json_result(&serde_json::json!({ "notebookId": notebook_id, "okfPath": bound }))
+    }
+
+    #[tool(
+        description = "Stop keeping a notebook on disk. The bundle folder and everything in it stays exactly where it is; Alchemy simply stops writing to it and reading from it."
+    )]
+    async fn unbind_notebook_okf(
+        &self,
+        Parameters(NotebookIdReq { notebook_id }): Parameters<NotebookIdReq>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::okf::set_binding(
+            &crate::commands::app_data_dir(&self.state()),
+            &notebook_id,
+            None,
+        );
+        self.changed("notebooks", Some(&notebook_id));
+        json_result(&serde_json::json!({ "notebookId": notebook_id, "okfPath": null }))
     }
 
     #[tool(

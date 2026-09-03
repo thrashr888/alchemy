@@ -515,7 +515,7 @@ async fn note_curator_round_trip() {
 
 #[test]
 fn okf_helpers() {
-    use crate::commands::{okf_description, okf_slug};
+    use crate::okf::{okf_description, okf_slug};
     assert_eq!(
         okf_slug("Building macOS Apps with Tauri!"),
         "building-macos-apps-with-tauri"
@@ -1206,11 +1206,8 @@ fn gap_reply_guards_reject_none_parrots_and_restatements() {
 /// A notebook's worth of concepts for the bundle-writer tests: two sources
 /// and two notes, one of which names a source in its prose so the link graph
 /// has an edge to turn into `sources:` provenance.
-fn okf_fixture() -> (
-    Vec<crate::commands::OkfConcept>,
-    Vec<crate::commands::OkfConcept>,
-) {
-    use crate::commands::OkfConcept;
+fn okf_fixture() -> (Vec<crate::okf::OkfConcept>, Vec<crate::okf::OkfConcept>) {
+    use crate::okf::OkfConcept;
     let sources = vec![
         OkfConcept {
             id: "src-orders".into(),
@@ -1277,12 +1274,11 @@ fn okf_scratch(tag: &str) -> std::path::PathBuf {
 /// file that is actually in the bundle.
 #[test]
 fn okf_bundle_is_v02() {
-    use crate::commands::{parse_okf_doc, write_okf_bundle};
+    use crate::okf::{parse_okf_doc, write_bundle};
     let dir = okf_scratch("golden");
     let bundle = dir.join("data-notebook");
     let (sources, notes) = okf_fixture();
-    let written =
-        write_okf_bundle("Data notebook", &sources, &notes, &bundle).expect("write bundle");
+    let written = write_bundle("Data notebook", &sources, &notes, &bundle).expect("write bundle");
     assert_eq!((written.sources, written.notes), (2, 2));
 
     // Sources: resource, tags, and a generated block naming this build.
@@ -1342,7 +1338,11 @@ fn okf_bundle_is_v02() {
     assert!(index.contains("[What the data says](notes/what-the-data-says.md)"));
     let log = std::fs::read_to_string(bundle.join("log.md")).expect("log");
     assert!(log.starts_with("# Log\n"));
-    assert!(log.contains("Wrote 2 sources and 2 notes."));
+    assert!(
+        log.contains("4 written"),
+        "the log names what changed:\n{log}"
+    );
+    assert!(log.contains("2 sources, 2 notes."), "and the total:\n{log}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1351,15 +1351,15 @@ fn okf_bundle_is_v02() {
 /// concepts the notebook no longer has (§3, §5.2).
 #[test]
 fn okf_rewrite_appends_the_log_and_drops_orphans() {
-    use crate::commands::write_okf_bundle;
+    use crate::okf::write_bundle;
     let dir = okf_scratch("rewrite");
     let bundle = dir.join("data-notebook");
     let (sources, notes) = okf_fixture();
-    write_okf_bundle("Data notebook", &sources, &notes, &bundle).expect("first write");
+    write_bundle("Data notebook", &sources, &notes, &bundle).expect("first write");
 
     // The second night: one source is gone.
     let fewer = vec![sources[0].clone()];
-    write_okf_bundle("Data notebook", &fewer, &notes, &bundle).expect("second write");
+    write_bundle("Data notebook", &fewer, &notes, &bundle).expect("second write");
 
     assert!(bundle.join("sources/orders-table.md").exists());
     assert!(
@@ -1390,7 +1390,7 @@ fn okf_rewrite_appends_the_log_and_drops_orphans() {
 /// nested and unknown keys survive the reader (§3, round-trip).
 #[test]
 fn okf_reads_v01_and_preserves_unknown_keys() {
-    use crate::commands::parse_okf_doc;
+    use crate::okf::parse_okf_doc;
 
     // Exactly what the v0.1 exporter wrote: quoted scalars, an inline tag
     // list, and a bare unquoted timestamp.
@@ -1441,7 +1441,7 @@ fn okf_reads_v01_and_preserves_unknown_keys() {
 /// file is re-emitted verbatim on the next write (§3, §5.2).
 #[test]
 fn okf_writes_unknown_keys_back_out() {
-    use crate::commands::{parse_okf_doc, write_okf_bundle, OkfConcept};
+    use crate::okf::{parse_okf_doc, write_bundle, OkfConcept};
     let dir = okf_scratch("preserve");
     let bundle = dir.join("nb");
     let mut extra = serde_yaml_ng::Mapping::new();
@@ -1461,7 +1461,7 @@ fn okf_writes_unknown_keys_back_out() {
         derived_from: Vec::new(),
         extra,
     };
-    write_okf_bundle("NB", &[concept], &[], &bundle).expect("write");
+    write_bundle("NB", &[concept], &[], &bundle).expect("write");
     let text = std::fs::read_to_string(bundle.join("sources/kept.md")).expect("read");
     let doc = parse_okf_doc(&text);
     assert_eq!(
@@ -1476,7 +1476,7 @@ fn okf_writes_unknown_keys_back_out() {
 /// history, and neither ever becomes a source.
 #[test]
 fn okf_reserved_files_never_ingest() {
-    use crate::commands::is_okf_reserved;
+    use crate::okf::is_okf_reserved;
     assert!(is_okf_reserved("/bundle/index.md"));
     assert!(is_okf_reserved("/bundle/log.md"));
     assert!(is_okf_reserved("/bundle/sources/index.md"));
@@ -1490,7 +1490,7 @@ fn okf_reserved_files_never_ingest() {
 /// Lifecycle and trust read out of a concept's own frontmatter (§4).
 #[test]
 fn okf_lifecycle_reads_status_staleness_and_trust() {
-    use crate::commands::{okf_lifecycle_of, parse_okf_doc, OkfLifecycle};
+    use crate::okf::{okf_lifecycle_of, parse_okf_doc, OkfLifecycle};
 
     let plain = okf_lifecycle_of(&parse_okf_doc(
         "---\ntype: Source\ntitle: \"Plain\"\n---\n\nBody.\n",
@@ -1550,4 +1550,193 @@ fn okf_frontmatter_rides_the_embed_prefix() {
         "the frontmatter itself is never body text: {}",
         chunks[0].text
     );
+}
+
+/// The second write of an unchanged notebook touches nothing (§7) — the
+/// property that makes a bound notebook safe to keep in git.
+#[test]
+fn okf_unchanged_write_is_a_no_op() {
+    use crate::okf::write_bundle;
+    let dir = okf_scratch("noop");
+    let bundle = dir.join("nb");
+    let (sources, notes) = okf_fixture();
+
+    let first = write_bundle("NB", &sources, &notes, &bundle).expect("first");
+    assert_eq!(first.written, 4, "the seed pass writes everything");
+    let stamps: Vec<std::time::SystemTime> = ["sources/orders-table.md", "notes/old-thinking.md"]
+        .iter()
+        .map(|p| {
+            std::fs::metadata(bundle.join(p))
+                .and_then(|m| m.modified())
+                .expect("mtime")
+        })
+        .collect();
+
+    let second = write_bundle("NB", &sources, &notes, &bundle).expect("second");
+    assert_eq!(
+        (second.written, second.moved, second.removed),
+        (0, 0, 0),
+        "nothing changed, so nothing is rewritten"
+    );
+    assert!(!second.changed());
+    for (path, before) in ["sources/orders-table.md", "notes/old-thinking.md"]
+        .iter()
+        .zip(stamps)
+    {
+        let after = std::fs::metadata(bundle.join(path))
+            .and_then(|m| m.modified())
+            .expect("mtime");
+        assert_eq!(after, before, "{path} was not rewritten");
+    }
+    // And a no-op pass says nothing in the log.
+    let log = std::fs::read_to_string(bundle.join("log.md")).expect("log");
+    assert_eq!(
+        log.matches("- ").count(),
+        1,
+        "one entry, from the seed:\n{log}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Retitling a concept moves its file rather than deleting and recreating it,
+/// and the manifest follows (§7).
+#[test]
+fn okf_retitle_moves_the_file() {
+    use crate::okf::{load_manifest, write_bundle};
+    let dir = okf_scratch("rename");
+    let bundle = dir.join("nb");
+    let (sources, notes) = okf_fixture();
+    write_bundle("NB", &sources, &notes, &bundle).expect("first");
+    assert!(bundle.join("notes/old-thinking.md").exists());
+
+    let mut renamed = notes.clone();
+    renamed[1].title = "New thinking".into();
+    let out = write_bundle("NB", &sources, &renamed, &bundle).expect("second");
+    assert_eq!(out.moved, 1, "one rename(2), not a delete and an add");
+    assert_eq!(out.removed, 0, "a move is never a removal");
+    assert!(!bundle.join("notes/old-thinking.md").exists());
+    assert!(bundle.join("notes/new-thinking.md").exists());
+
+    let manifest = load_manifest(&bundle);
+    assert_eq!(
+        manifest.concepts["note-retired"].path, "notes/new-thinking.md",
+        "the manifest followed the file"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Keys an outside editor added survive every write since, not just the one
+/// that read them (§7, preservation).
+#[test]
+fn okf_outside_keys_survive_later_writes() {
+    use crate::okf::{load_manifest, parse_okf_doc, write_bundle, OkfManifestEntry};
+    let dir = okf_scratch("preserve2");
+    let bundle = dir.join("nb");
+    let (sources, notes) = okf_fixture();
+    write_bundle("NB", &sources, &notes, &bundle).expect("seed");
+
+    // Stand in for the reconciler: an outside edit added `verified:`, and the
+    // manifest is where it is remembered.
+    let mut manifest = load_manifest(&bundle);
+    let mut extra = serde_yaml_ng::Mapping::new();
+    let mut entry = serde_yaml_ng::Mapping::new();
+    entry.insert(
+        serde_yaml_ng::Value::String("by".into()),
+        serde_yaml_ng::Value::String("reviewer@example.com".into()),
+    );
+    extra.insert(
+        serde_yaml_ng::Value::String("verified".into()),
+        serde_yaml_ng::Value::Sequence(vec![serde_yaml_ng::Value::Mapping(entry)]),
+    );
+    manifest.concepts.insert(
+        "src-orders".into(),
+        OkfManifestEntry {
+            path: "sources/orders-table.md".into(),
+            hash: String::new(),
+            wrote_at: 0,
+            extra,
+        },
+    );
+    let json = serde_json::to_string(&manifest).expect("json");
+    std::fs::write(bundle.join(".alchemy/manifest.json"), json).expect("write manifest");
+
+    // Two more writes: the key is still there after both.
+    for pass in 1..=2 {
+        write_bundle("NB", &sources, &notes, &bundle).expect("rewrite");
+        let text = std::fs::read_to_string(bundle.join("sources/orders-table.md")).expect("read");
+        let doc = parse_okf_doc(&text);
+        assert!(
+            doc.get("verified").is_some(),
+            "pass {pass} dropped the outside key:\n{text}"
+        );
+        assert_eq!(
+            doc.str("title").as_deref(),
+            Some("Orders table"),
+            "and Alchemy's own keys still lead"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A document someone else left in the bundle is not Alchemy's to remove
+/// (§5.2): only files the manifest claims are ever deleted.
+#[test]
+fn okf_leaves_files_it_did_not_write() {
+    use crate::okf::write_bundle;
+    let dir = okf_scratch("foreign");
+    let bundle = dir.join("nb");
+    let (sources, notes) = okf_fixture();
+    write_bundle("NB", &sources, &notes, &bundle).expect("seed");
+
+    std::fs::write(bundle.join("notes/theirs.md"), "# Not ours\n").expect("write");
+    let fewer = vec![sources[0].clone()];
+    write_bundle("NB", &fewer, &notes, &bundle).expect("second");
+
+    assert!(
+        bundle.join("notes/theirs.md").exists(),
+        "a file Alchemy never wrote stays"
+    );
+    assert!(
+        !bundle.join("sources/refunds-policy.md").exists(),
+        "a file it did write, for a source that is gone, does not"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The bindings sidecar is per-machine state, and unbinding removes the
+/// record without touching anything else (§5.1).
+#[test]
+fn okf_bindings_round_trip() {
+    use crate::okf::{binding_for, load_bindings, set_binding, OkfBinding};
+    let dir = okf_scratch("bindings");
+    assert!(binding_for(&dir, "nb1").is_none());
+
+    set_binding(
+        &dir,
+        "nb1",
+        Some(OkfBinding {
+            path: "/tmp/one".into(),
+            last_write_at: 42,
+        }),
+    );
+    set_binding(
+        &dir,
+        "nb2",
+        Some(OkfBinding {
+            path: "/tmp/two".into(),
+            last_write_at: 0,
+        }),
+    );
+    assert_eq!(binding_for(&dir, "nb1").expect("nb1").path, "/tmp/one");
+    assert_eq!(load_bindings(&dir).len(), 2);
+
+    set_binding(&dir, "nb1", None);
+    assert!(binding_for(&dir, "nb1").is_none(), "unbound");
+    assert!(binding_for(&dir, "nb2").is_some(), "and only that one");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

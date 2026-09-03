@@ -13,6 +13,7 @@ import type {
   Note,
   NoteKind,
   Notebook,
+  OkfBinding,
   OkfLifecycle,
   ReadingPrefs,
   ReportSchedule,
@@ -160,6 +161,9 @@ export interface AppState {
   /** Per-concept OKF lifecycle for the current notebook, by source id
    *  (RFC-okf-live §4). Empty for a notebook holding no bundles. */
   okfLifecycle: Record<string, OkfLifecycle>;
+  /** Where the open notebook keeps itself on disk, if anywhere
+   *  (RFC-okf-live §5.1). null when it is not kept on disk. */
+  okfBinding: OkfBinding | null;
   picked: Picked | null;
   /** Latest hygiene classification for the current notebook
    *  (RFC-source-hygiene): drives row badges and the review modal. */
@@ -438,6 +442,13 @@ export interface AppState {
   /** Re-read the bundle lifecycle after a scan. Omit the id for the open
    *  notebook. */
   refreshOkfLifecycle: (notebookId?: string) => Promise<void>;
+  /** Re-read the binding. Omit the id for the open notebook. */
+  refreshOkfBinding: (notebookId?: string) => Promise<void>;
+  /** Keep this notebook on disk at `path`, seeding or importing as the
+   *  folder requires. */
+  bindNotebookOkf: (path: string, notebookId?: string) => Promise<void>;
+  /** Stop writing to the folder. The files stay where they are. */
+  unbindNotebookOkf: (notebookId?: string) => Promise<void>;
   setAllSourcesSelected: (selected: boolean) => void;
 
   // Finder-style selection (RFC-multi-select). Range order comes from the

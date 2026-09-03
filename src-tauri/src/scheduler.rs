@@ -475,7 +475,7 @@ async fn run_okf_export(app: &AppHandle, state: &AppState) {
     }
     let started_at = now_ms();
     let dest = crate::backup::okf_latest_dir(&data_dir);
-    let receipt = match crate::commands::export_all_notebooks_okf(state, &dest).await {
+    let receipt = match crate::okf::export_all(state, &dest).await {
         Ok((notebooks, concepts)) => {
             crate::backup::set_okf_last_run(&data_dir, &today);
             crate::note!("nightly OKF export: {notebooks} notebooks, {concepts} concepts");

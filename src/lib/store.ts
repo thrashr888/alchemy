@@ -420,6 +420,7 @@ export const useStore = create<AppState>((set, get) => {
     sources: [],
     selectedSourceIds: null,
     okfLifecycle: {},
+    okfBinding: null,
     picked: null,
     hygiene: [],
     growthDismissed: {},
@@ -1322,6 +1323,7 @@ export const useStore = create<AppState>((set, get) => {
         sources: [],
         selectedSourceIds: loadSourceSel(id),
         okfLifecycle: {},
+        okfBinding: null,
         picked: null,
         hygiene: [],
         growthDismissed: loadGrowthDismissed(id),
@@ -1376,6 +1378,7 @@ export const useStore = create<AppState>((set, get) => {
       // Changes come back via sources://changed.
       void api.resyncSources(id).catch(() => {});
       void get().refreshOkfLifecycle(id);
+      void get().refreshOkfBinding(id);
     },
 
     closeNotebook: () => {
@@ -1385,6 +1388,7 @@ export const useStore = create<AppState>((set, get) => {
         sources: [],
         selectedSourceIds: null,
         okfLifecycle: {},
+        okfBinding: null,
         growthDismissed: {},
         messages: [],
         messagesHasMore: false,
@@ -2363,6 +2367,46 @@ export const useStore = create<AppState>((set, get) => {
       set({
         hygiene: get().hygiene.filter((h) => h.sourceId !== sourceId),
       });
+    },
+
+    // ---- A notebook kept on disk (docs/RFC-okf-live.md §5) ---------------
+    // The binding is machine-local state, so it is fetched rather than read
+    // off the notebook row, and re-fetched whenever the notebook changes.
+    refreshOkfBinding: async (notebookId) => {
+      const id = notebookId ?? get().currentId;
+      if (!id) return;
+      const okfBinding = await api.notebookOkfBinding(id).catch(() => null);
+      if (get().currentId === id) set({ okfBinding });
+    },
+
+    bindNotebookOkf: async (path, notebookId) => {
+      const id = notebookId ?? get().currentId;
+      if (!id) return;
+      try {
+        await api.bindNotebookOkf(id, path);
+        await get().refreshOkfBinding(id);
+        // Binding to a folder that already holds a bundle imports what it
+        // has, so both lists can have grown.
+        const [sources, notes] = await Promise.all([
+          api.listSources(id),
+          api.listNotes(id),
+        ]);
+        if (get().currentId === id) set({ sources, notes });
+        get().pushToast("success", "This notebook is now kept on disk.");
+      } catch (e) {
+        get().pushToast("error", e instanceof Error ? e.message : String(e));
+      }
+    },
+
+    unbindNotebookOkf: async (notebookId) => {
+      const id = notebookId ?? get().currentId;
+      if (!id) return;
+      await api.unbindNotebookOkf(id).catch(() => null);
+      if (get().currentId === id) set({ okfBinding: null });
+      get().pushToast(
+        "info",
+        "Stopped keeping this notebook on disk. The folder is untouched.",
+      );
     },
 
     // What each OKF concept says about its own standing (RFC-okf-live §4).

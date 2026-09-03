@@ -230,6 +230,29 @@ Keys the manifest carried in from an outside edit (`verified`, custom
 tags, anything) are re-emitted verbatim. The existing `export_notebook_okf`
 becomes the seed pass of this writer, not a separate code path.
 
+### Where the write-through hooks — as built
+
+§6 says "subscribe where `sources://changed` is emitted and in the note
+mutation commands", which is a list of a dozen call sites and a standing
+invitation to miss the thirteenth. Two hooks cover all of it, because the
+code already has two places that mean "this changed":
+
+- **`Db::touch_notebook`** — every source mutation calls it (add, delete,
+  rename, refresh, retag, folder scan), and it takes the notebook id.
+  Hooking storage from the writer is a layering cost paid deliberately: the
+  call inserts a deadline into a map and returns, so nothing reenters the
+  database, and an unbound notebook costs one file read.
+- **`index_note`** — every note create and every note edit re-indexes, which
+  makes it the one place a note's current text is known. Deletion is the
+  exception (there is nothing left to index), so `delete_notes` reads the
+  owning notebooks before the rows go.
+
+Two smaller decisions: `write_bundle` is one function for both the seed pass
+and every write after it — a bundle nobody has written has an empty manifest,
+so everything counts as changed, which is exactly what a first export means.
+And a pass that changed nothing writes no log entry: a nightly "no change"
+line is not a history.
+
 ### 5.3 Read-back
 
 `fswatch` adds the bundle roots of bound notebooks to what it already
