@@ -7,7 +7,7 @@ import {
   subscribeReindexPending,
 } from "@/lib/reindex";
 import { Button, LiveRegion } from "./ui";
-import type { ModelStatus } from "@/lib/types";
+import type { IcloudMoveOffer, ModelStatus } from "@/lib/types";
 import { AlertTriangle, HardDrive } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 
@@ -61,6 +61,24 @@ export function HealthBanner({
   const notebooks = useStore((s) => s.notebooks);
   const pushToast = useStore((s) => s.pushToast);
   const [binding, setBinding] = useState(false);
+  // The container migration (RFC-okf-live §5.7, stage two). Asked once, and
+  // only when the backend says there is something to move — the answer needs
+  // an entitlement check and a look at the bindings, so it is a command, not
+  // a config flag the frontend can read on its own.
+  const [icloud, setIcloud] = useState<IcloudMoveOffer | null>(null);
+  const [moving, setMoving] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void api
+      .icloudContainerOffer()
+      .then((offer) => {
+        if (alive) setIcloud(offer);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
   // Progress while the whole shelf is bound, so a slow pass says what it is
   // doing rather than sitting on a spinner.
   const [bindingAt, setBindingAt] = useState("");
@@ -123,6 +141,51 @@ export function HealthBanner({
           label: "Not now",
           run: async () => {
             await api.dismissKeepOnDiskOffer().catch(() => {});
+            void api.getAiConfig().then((c) => useStore.setState({ aiConfig: c }));
+          },
+        },
+      ],
+    });
+  }
+
+  // Stage two of the same section: Alchemy now has a folder of its own at the
+  // iCloud Drive root, and the notebooks in the plain folder can move into
+  // it. Same tone as the offer above, because it is the same kind of thing —
+  // an invitation, answered once either way.
+  if (icloud?.available) {
+    rows.push({
+      key: "icloud-container",
+      tone: "offer",
+      title: "Move your notebooks to the Alchemy folder?",
+      detail: `Alchemy has its own folder in iCloud Drive now. Your ${icloud.count} ${
+        icloud.count === 1 ? "notebook moves" : "notebooks move"
+      } there, and nothing is deleted.`,
+      fixes: [
+        {
+          label: "Move them",
+          primary: true,
+          run: async () => {
+            setMoving(true);
+            try {
+              const moved = await api.moveNotebooksToIcloudContainer();
+              pushToast(
+                "success",
+                `${moved} ${moved === 1 ? "notebook" : "notebooks"} moved to the Alchemy folder.`,
+              );
+              setIcloud(null);
+            } catch (err) {
+              pushToast("error", err instanceof Error ? err.message : String(err));
+            } finally {
+              setMoving(false);
+              void api.getAiConfig().then((c) => useStore.setState({ aiConfig: c }));
+            }
+          },
+        },
+        {
+          label: "Not now",
+          run: async () => {
+            await api.dismissIcloudContainerOffer().catch(() => {});
+            setIcloud(null);
             void api.getAiConfig().then((c) => useStore.setState({ aiConfig: c }));
           },
         },
@@ -295,7 +358,8 @@ export function HealthBanner({
               variant={fix.primary ? "secondary" : "ghost"}
               loading={
               (fix.label === "Check again" && checking) ||
-              (fix.label === "Keep on disk" && binding)
+              (fix.label === "Keep on disk" && binding) ||
+              (fix.label === "Move them" && moving)
             }
               onClick={() => void fix.run()}
             >

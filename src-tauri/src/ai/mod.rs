@@ -117,9 +117,10 @@ pub struct AiConfig {
     #[serde(default = "default_reference_cap_mb")]
     pub okf_reference_cap_mb: u64,
     /// Where notebooks live on disk as OKF bundles (docs/RFC-okf-live.md
-    /// §5.7). Resolved once, on first launch: iCloud Drive when iCloud Drive
-    /// is on, `~/Documents/Alchemy` when it is not. Point it at a Dropbox or
-    /// Drive folder and that works the same way.
+    /// §5.7). Resolved once, on first launch: the app's own iCloud container
+    /// when this build carries the entitlement for it, else iCloud Drive when
+    /// iCloud Drive is on, else `~/Documents/Alchemy`. Point it at a Dropbox
+    /// or Drive folder and that works the same way.
     #[serde(default = "default_notebooks_dir")]
     pub notebooks_dir: String,
     /// Whether a new notebook is kept on disk from the moment it is made.
@@ -133,6 +134,12 @@ pub struct AiConfig {
     /// again (§5.7).
     #[serde(default)]
     pub keep_on_disk_asked: bool,
+    /// Whether the one-time "move them into the Alchemy iCloud folder?" offer
+    /// has been answered (§5.7, stage two). Set by either button, like
+    /// `keep_on_disk_asked`: the folder move is a question asked once, not a
+    /// nag, and Settings keeps the picker for anyone who changes their mind.
+    #[serde(default)]
+    pub icloud_move_asked: bool,
     /// How much overnight work to do: "light" | "standard" | "generous".
     /// One notch rather than a slider, because a token count is not a unit
     /// anyone has intuitions about. Cost control, not an opt-in gate - the
@@ -246,26 +253,102 @@ fn default_budget() -> String {
     "standard".to_string()
 }
 
+/// The app's own iCloud container, spelled the way the filesystem spells it:
+/// `iCloud.com.thrashr888.alchemy` with the dots turned into tildes (§5.7,
+/// stage two). Its `Documents/` is what Finder shows as "Alchemy" at the
+/// iCloud Drive root, and what an iPhone app would read.
+pub const ICLOUD_CONTAINER_ID: &str = "iCloud.com.thrashr888.alchemy";
+
+/// `~/Library/Mobile Documents/iCloud~com~thrashr888~alchemy/Documents`.
+pub fn icloud_container_documents(home: &std::path::Path) -> std::path::PathBuf {
+    home.join("Library/Mobile Documents")
+        .join(ICLOUD_CONTAINER_ID.replace('.', "~"))
+        .join("Documents")
+}
+
+/// The stage-one folder: a plain `Alchemy` inside iCloud Drive, which is what
+/// v0.55.0 shipped and what a build with no iCloud entitlement still gets.
+pub fn icloud_drive_alchemy(home: &std::path::Path) -> std::path::PathBuf {
+    home.join("Library/Mobile Documents/com~apple~CloudDocs/Alchemy")
+}
+
 /// The Notebooks folder, resolved once on first launch (§5.7).
 ///
-/// iCloud Drive when it is switched on, because that is where Obsidian,
-/// Pages and Numbers put their documents and it buys sync and sharing for
-/// nothing. **Not** `~/Documents/Alchemy` in that case: Desktop & Documents
-/// syncing is a separate switch most people leave off, so `Documents` is not
-/// a sync location anyone can rely on. With iCloud Drive off, a local folder
-/// that works forever.
+/// Three choices, in order. The app's own iCloud container when this build
+/// carries the entitlement for it — the branded folder with the app icon,
+/// the same container an iPhone app would read. Otherwise iCloud Drive when
+/// it is switched on, because that is where Obsidian, Pages and Numbers put
+/// their documents and it buys sync and sharing for nothing. **Not**
+/// `~/Documents/Alchemy` in that case: Desktop & Documents syncing is a
+/// separate switch most people leave off, so `Documents` is not a sync
+/// location anyone can rely on. With iCloud Drive off, a local folder that
+/// works forever.
 pub fn default_notebooks_dir() -> String {
     let home = std::env::var("HOME").unwrap_or_default();
-    if home.is_empty() {
+    resolve_notebooks_dir(std::path::Path::new(&home), bundle_has_icloud_container())
+}
+
+/// The choice itself, with the entitlement answer passed in — the part worth
+/// testing, and the part that must not shell out.
+pub fn resolve_notebooks_dir(home: &std::path::Path, container_entitled: bool) -> String {
+    if home.as_os_str().is_empty() {
         return String::new();
     }
-    let icloud = std::path::Path::new(&home).join("Library/Mobile Documents/com~apple~CloudDocs");
-    let root = if icloud.is_dir() {
-        icloud
-    } else {
-        std::path::Path::new(&home).join("Documents")
-    };
-    root.join("Alchemy").to_string_lossy().to_string()
+    if container_entitled {
+        return icloud_container_documents(home)
+            .to_string_lossy()
+            .to_string();
+    }
+    let icloud = home.join("Library/Mobile Documents/com~apple~CloudDocs");
+    if icloud.is_dir() {
+        return icloud_drive_alchemy(home).to_string_lossy().to_string();
+    }
+    home.join("Documents/Alchemy").to_string_lossy().to_string()
+}
+
+/// Does the running bundle actually claim the iCloud container?
+///
+/// The signature is the check, not the container directory. `Mobile
+/// Documents/iCloud~com~thrashr888~alchemy` does not exist until something
+/// asks the OS for it, so its absence is not evidence of a missing
+/// entitlement — a correctly entitled fresh install would read as stage one
+/// and stay there. The signature answers the question we are actually
+/// asking, and the cost is one `codesign` at first launch: the default is a
+/// `serde(default)`, so it is computed only when the config has no
+/// `notebooksDir` yet, and memoized for the process either way.
+///
+/// Anything not running from a `.app` — `cargo test`, the CLI, `tauri dev`
+/// without a bundle — takes the early return and never spawns a subprocess.
+pub fn bundle_has_icloud_container() -> bool {
+    static ENTITLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENTITLED.get_or_init(|| {
+        if !cfg!(target_os = "macos") {
+            return false;
+        }
+        let Ok(exe) = std::env::current_exe() else {
+            return false;
+        };
+        // Alchemy.app/Contents/MacOS/alchemy -> Alchemy.app
+        let bundle = exe
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent());
+        let Some(bundle) = bundle else { return false };
+        if bundle.extension().and_then(|e| e.to_str()) != Some("app") {
+            return false;
+        }
+        let out = std::process::Command::new("/usr/bin/codesign")
+            .args(["-d", "--entitlements", "-"])
+            .arg(bundle)
+            .output();
+        let Ok(out) = out else { return false };
+        // The dump is a plist on stdout, XML on current macOS and a blob on
+        // older ones; either way the key name is in the bytes.
+        let found = String::from_utf8_lossy(&out.stdout)
+            .contains("com.apple.developer.icloud-container-identifiers");
+        crate::note!("okf: iCloud container entitlement: {found}");
+        found
+    })
 }
 
 /// 50 MB: comfortably every PDF, scan, and deck a research notebook holds,
@@ -523,6 +606,7 @@ impl Default for AiConfig {
             notebooks_dir: default_notebooks_dir(),
             keep_on_disk: default_true(),
             keep_on_disk_asked: false,
+            icloud_move_asked: false,
             background_budget: default_budget(),
             show_notifications: default_true(),
             quiet_when_focused: default_true(),

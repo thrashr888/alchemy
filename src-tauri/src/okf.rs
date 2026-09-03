@@ -2780,3 +2780,265 @@ pub async fn open_notebooks_folder_bundles(
 ) -> Result<usize, String> {
     Ok(open_found_bundles(&app, &state).await)
 }
+
+// ---- The iCloud container (RFC-okf-live.md 5.7, stage two) ------------------
+//
+// Stage one put the Notebooks folder at `iCloud Drive/Alchemy/`: a plain
+// folder, no entitlement, shipped in v0.55.0. Stage two is the app's own
+// container, whose `Documents/` Finder shows as "Alchemy" at the iCloud Drive
+// root with the app icon — the same container an iPhone app would read. The
+// RFC calls the migration between them a folder move, and that is all it is:
+// the bundles do not change, only where they sit and what the bindings
+// sidecar says about it.
+
+/// What the migration banner needs to know, and nothing else.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IcloudMoveOffer {
+    /// Whether to make the offer at all.
+    pub available: bool,
+    pub from: String,
+    pub to: String,
+    /// How many bound notebooks would move.
+    pub count: usize,
+}
+
+/// The bound bundles sitting directly in `root`, by notebook id, sorted so a
+/// plan is the same plan twice.
+///
+/// Direct children only: a bundle deeper down was put there by hand, and its
+/// name alone would not say where it belongs.
+pub(crate) fn bound_under(root: &Path, bindings: &HashMap<String, OkfBinding>) -> Vec<String> {
+    let mut ids: Vec<String> = bindings
+        .iter()
+        .filter(|(_, b)| Path::new(&b.path).parent() == Some(root))
+        .map(|(id, _)| id.clone())
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// Should the move be offered, and what would move?
+///
+/// Pure, so the decision can be tested without a signature, a container, or
+/// anybody's real iCloud folder: the caller supplies the entitlement answer,
+/// the answered flag, and the bindings.
+pub(crate) fn icloud_move_plan(
+    home: &Path,
+    entitled: bool,
+    asked: bool,
+    notebooks_dir: &Path,
+    bindings: &HashMap<String, OkfBinding>,
+) -> IcloudMoveOffer {
+    let to = crate::ai::icloud_container_documents(home);
+    let mut offer = IcloudMoveOffer {
+        from: notebooks_dir.to_string_lossy().to_string(),
+        to: to.to_string_lossy().to_string(),
+        ..Default::default()
+    };
+    // No entitlement, no container; asked once is asked.
+    if !entitled || asked || notebooks_dir == to {
+        return offer;
+    }
+    // Only the folder Alchemy chose is Alchemy's to propose moving. A
+    // Notebooks folder the user pointed at Dropbox, at a second drive, or
+    // anywhere else is their decision, and stage two is not a reason to
+    // overrule it — Settings keeps the picker for anyone who wants this.
+    if notebooks_dir != crate::ai::icloud_drive_alchemy(home) {
+        return offer;
+    }
+    offer.count = bound_under(notebooks_dir, bindings).len();
+    offer.available = offer.count > 0;
+    offer
+}
+
+/// Where each bound bundle under `from` lands in the container.
+///
+/// `taken` carries the names already in the destination, so a collision gets
+/// the exporter's `-2` treatment instead of landing on somebody's folder —
+/// and so the planner stays a pure function of what it is told.
+pub(crate) fn plan_icloud_moves(
+    from: &Path,
+    to: &Path,
+    bindings: &HashMap<String, OkfBinding>,
+    taken: &std::collections::HashSet<String>,
+) -> Vec<(String, PathBuf, PathBuf)> {
+    let mut taken = taken.clone();
+    let mut out = Vec::new();
+    for id in bound_under(from, bindings) {
+        let Some(binding) = bindings.get(&id) else {
+            continue;
+        };
+        let old = PathBuf::from(&binding.path);
+        let Some(name) = old.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let mut slug = name.to_string();
+        let mut n = 2;
+        while taken.contains(&slug) {
+            slug = format!("{name}-{n}");
+            n += 1;
+        }
+        taken.insert(slug.clone());
+        out.push((id, old, to.join(slug)));
+    }
+    out
+}
+
+/// Point the bindings sidecar at the folders' new homes. The binding id and
+/// its manifest are untouched: this is the same bundle at a new path, not a
+/// rebind, and a rebind would throw away every hash the reconciler has.
+pub(crate) fn rebind_moved(
+    bindings: &mut HashMap<String, OkfBinding>,
+    moves: &[(String, PathBuf, PathBuf)],
+) {
+    for (id, _, new) in moves {
+        if let Some(binding) = bindings.get_mut(id) {
+            binding.path = new.to_string_lossy().to_string();
+        }
+    }
+}
+
+fn home_dir() -> PathBuf {
+    PathBuf::from(std::env::var("HOME").unwrap_or_default())
+}
+
+/// Is the migration on the table right now? Read by the banner at launch.
+#[tauri::command]
+pub async fn icloud_container_offer(state: State<'_, AppState>) -> Result<IcloudMoveOffer, String> {
+    let (dir, asked) = {
+        let ai = state.ai.read().await;
+        let config = ai.config();
+        (
+            PathBuf::from(config.notebooks_dir.clone()),
+            config.icloud_move_asked,
+        )
+    };
+    Ok(icloud_move_plan(
+        &home_dir(),
+        crate::ai::bundle_has_icloud_container(),
+        asked,
+        &dir,
+        &load_bindings(&app_data_dir(&state)),
+    ))
+}
+
+/// Record that the offer has been answered without taking it.
+#[tauri::command]
+pub async fn dismiss_icloud_container_offer(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut config = state.ai.read().await.config().clone();
+    config.icloud_move_asked = true;
+    crate::commands::apply_ai_config(&app, &state, config).await
+}
+
+/// Nothing moves under a write in flight: renaming a bundle mid-write leaves
+/// the writer holding a path that is no longer there and the bundle half
+/// written. Wait for quiet, and refuse rather than move anyway.
+async fn wait_for_quiet(ids: &[String]) -> Result<(), String> {
+    for _ in 0..30 {
+        if !ids.iter().any(|id| write_in_flight(id)) {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    Err("Alchemy is still saving a notebook to disk. Try again in a moment.".to_string())
+}
+
+/// Copy a folder whole. Only reached when the rename could not be done in
+/// place (a different volume), and it never removes the original: a move that
+/// half-succeeded must leave the user with their files, not a gap.
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let dest = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &dest)?;
+        } else {
+            std::fs::copy(entry.path(), &dest)?;
+        }
+    }
+    Ok(())
+}
+
+/// The offer's Move button: take every bound bundle out of `iCloud
+/// Drive/Alchemy/` and into the app's container, repoint the bindings, and
+/// make the container the Notebooks folder.
+///
+/// Returns how many folders moved. Nothing is deleted at any point — a
+/// cross-volume move copies and leaves the original where it was, and says so
+/// in the log rather than tidying up behind the user's back.
+#[tauri::command]
+pub async fn move_notebooks_to_icloud_container(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    let data_dir = app_data_dir(&state);
+    let home = home_dir();
+    let (from, asked) = {
+        let ai = state.ai.read().await;
+        let config = ai.config();
+        (
+            PathBuf::from(config.notebooks_dir.clone()),
+            config.icloud_move_asked,
+        )
+    };
+    let mut bindings = load_bindings(&data_dir);
+    let offer = icloud_move_plan(
+        &home,
+        crate::ai::bundle_has_icloud_container(),
+        asked,
+        &from,
+        &bindings,
+    );
+    if !offer.available {
+        return Err("There's nothing to move into the Alchemy iCloud folder.".to_string());
+    }
+    let to = PathBuf::from(&offer.to);
+
+    wait_for_quiet(&bound_under(&from, &bindings)).await?;
+
+    // Making the directory is what provisions the container: the entitlement
+    // says the app may have it, and the first thing to ask for it gets it made.
+    std::fs::create_dir_all(&to).map_err(|err| format!("Couldn't make {}: {err}", offer.to))?;
+    let taken: std::collections::HashSet<String> = std::fs::read_dir(&to)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .collect();
+    let moves = plan_icloud_moves(&from, &to, &bindings, &taken);
+
+    let mut done: Vec<(String, PathBuf, PathBuf)> = Vec::new();
+    for (id, old, new) in moves {
+        if std::fs::rename(&old, &new).is_ok() {
+            done.push((id, old, new));
+            continue;
+        }
+        match copy_tree(&old, &new) {
+            Ok(()) => {
+                crate::note!("okf: copied {old:?} to {new:?}; the original is still there");
+                done.push((id, old, new));
+            }
+            Err(err) => {
+                crate::diagnostics::error("okf", format!("could not move {old:?}: {err}"));
+            }
+        }
+    }
+
+    rebind_moved(&mut bindings, &done);
+    save_bindings(&data_dir, &bindings);
+
+    let mut config = state.ai.read().await.config().clone();
+    config.notebooks_dir = offer.to.clone();
+    config.icloud_move_asked = true;
+    crate::commands::apply_ai_config(&app, &state, config).await?;
+    // The watched root moved with them (5.7: the Notebooks folder is watched
+    // whether or not a notebook is open).
+    crate::fswatch::rearm(&app).await;
+    crate::note!("okf: moved {} notebooks into {}", done.len(), offer.to);
+    Ok(done.len())
+}

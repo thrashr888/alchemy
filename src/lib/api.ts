@@ -45,6 +45,7 @@ import type {
   Notebook,
   NotebookGraph,
   NotebookSuggestion,
+  IcloudMoveOffer,
   OkfBinding,
   OkfLifecycle,
   ReportSchedule,
@@ -476,6 +477,12 @@ export const api = {
   keepNotebooksOnDisk: () => run(slow<number>("keep_notebooks_on_disk", {})),
   dismissKeepOnDiskOffer: () =>
     run(query<null>("dismiss_keep_on_disk_offer", {})),
+  icloudContainerOffer: () =>
+    run(query<IcloudMoveOffer>("icloud_container_offer", {})),
+  dismissIcloudContainerOffer: () =>
+    run(query<null>("dismiss_icloud_container_offer", {})),
+  moveNotebooksToIcloudContainer: () =>
+    run(slow<number>("move_notebooks_to_icloud_container", {})),
   revealNotebookFolder: (notebookId: string) =>
     run(query<string>("reveal_notebook_folder", { notebookId })),
   openNotebooksFolderBundles: () =>
