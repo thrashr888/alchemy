@@ -160,6 +160,9 @@ export interface CloudFolder {
   provider: string;
   /** Display name, e.g. "Google Drive". */
   label: string;
+  /** Account or tenant this root belongs to ("Personal", "Contoso Ltd",
+   *  "me@gmail.com"); empty when the root says nothing past the provider. */
+  name: string;
   /** Absolute path to the sync root on disk. */
   path: string;
 }

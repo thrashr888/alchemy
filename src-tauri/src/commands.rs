@@ -5324,13 +5324,35 @@ async fn note_scan_events(state: &AppState, folder: &Source, added: &[String], r
 
 /// A cloud-storage sync root the user can pick a subfolder from. `provider` is
 /// a stable machine key ("google_drive", "onedrive", "box", "dropbox",
-/// "icloud"); `label` is the display name; `path` is the root on disk.
+/// "icloud"); `label` is the display name; `name` is the account or tenant
+/// this root belongs to (empty when the root says nothing beyond the
+/// provider); `path` is the root on disk.
 #[derive(serde::Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct CloudFolder {
     provider: String,
     label: String,
+    name: String,
     path: String,
+}
+
+/// The account or tenant inside a File Provider mount directory, or "" when
+/// the directory name carries nothing past the provider. One Mac can hold
+/// several roots for one provider — OneDrive mounts the personal drive and
+/// every organization separately — and the directory name is the only thing
+/// telling them apart: "OneDrive-Personal", "OneDrive - Contoso Ltd",
+/// "GoogleDrive-me@gmail.com". "Box-Box" and "Dropbox" repeat (or omit) the
+/// provider and get nothing.
+fn cloud_root_name(dir: &str, label: &str) -> String {
+    // File Provider squeezes the space out of multi-word providers:
+    // "Google Drive" mounts as "GoogleDrive-<account>".
+    let token = label.replace(' ', "");
+    let rest = dir.strip_prefix(token.as_str()).unwrap_or(dir);
+    let rest = rest.trim().trim_start_matches('-').trim();
+    if rest.eq_ignore_ascii_case(&token) || rest.eq_ignore_ascii_case(label) {
+        return String::new();
+    }
+    rest.to_string()
 }
 
 /// Cloud-storage sync roots that exist on this machine — Google Drive,
@@ -5352,7 +5374,7 @@ pub fn list_cloud_folders() -> Vec<CloudFolder> {
 fn detect_cloud_folders(home: &std::path::Path) -> Vec<CloudFolder> {
     let mut out: Vec<CloudFolder> = Vec::new();
     let mut seen: HashSet<std::path::PathBuf> = HashSet::new();
-    let mut add = |provider: &str, label: &str, path: std::path::PathBuf| {
+    let mut add = |provider: &str, label: &str, name: &str, path: std::path::PathBuf| {
         if !path.is_dir() {
             return;
         }
@@ -5364,6 +5386,7 @@ fn detect_cloud_folders(home: &std::path::Path) -> Vec<CloudFolder> {
         out.push(CloudFolder {
             provider: provider.to_string(),
             label: label.to_string(),
+            name: name.to_string(),
             path: path.to_string_lossy().into_owned(),
         });
     };
@@ -5389,18 +5412,21 @@ fn detect_cloud_folders(home: &std::path::Path) -> Vec<CloudFolder> {
                 None
             };
             if let Some((key, label)) = provider {
-                add(key, label, cloud.join(&name));
+                let account = cloud_root_name(&name, label);
+                add(key, label, &account, cloud.join(&name));
             }
         }
     }
 
-    // Legacy top-level sync folders from older desktop clients.
-    add("dropbox", "Dropbox", home.join("Dropbox"));
-    add("box", "Box", home.join("Box"));
+    // Legacy top-level sync folders from older desktop clients. One drive
+    // each, so the folder name says nothing a provider name doesn't.
+    add("dropbox", "Dropbox", "", home.join("Dropbox"));
+    add("box", "Box", "", home.join("Box"));
     // iCloud Drive.
     add(
         "icloud",
         "iCloud Drive",
+        "",
         home.join("Library/Mobile Documents/com~apple~CloudDocs"),
     );
 
@@ -14814,6 +14840,7 @@ mod tool_tests {
         for name in [
             "GoogleDrive-me@gmail.com",
             "OneDrive-Personal",
+            "OneDrive - Contoso Ltd",
             "Box-Box",
             "Dropbox",
             "Photos-Ignored",
@@ -14834,12 +14861,56 @@ mod tool_tests {
         assert_eq!(label("box"), Some("Box"));
         assert_eq!(label("dropbox"), Some("Dropbox"));
         assert_eq!(label("icloud"), Some("iCloud Drive"));
+        // OneDrive mounts the personal drive and each organization as its own
+        // root, so the rows have to differ by more than "OneDrive".
+        let mut onedrive: Vec<&str> = found
+            .iter()
+            .filter(|c| c.provider == "onedrive")
+            .map(|c| c.name.as_str())
+            .collect();
+        onedrive.sort_unstable();
+        assert_eq!(onedrive, vec!["Contoso Ltd", "Personal"]);
+        let name = |p: &str| {
+            found
+                .iter()
+                .find(|c| c.provider == p)
+                .map(|c| c.name.as_str())
+        };
+        assert_eq!(name("google_drive"), Some("me@gmail.com"));
+        // "Box-Box" and "Dropbox" only repeat the provider — nothing to add.
+        assert_eq!(name("box"), Some(""));
+        assert_eq!(name("dropbox"), Some(""));
+        assert_eq!(name("icloud"), Some(""));
         // Unknown CloudStorage dirs aren't offered.
         assert!(found.iter().all(|c| !c.path.contains("Ignored")));
         // Every detected root actually exists.
         assert!(found.iter().all(|c| std::path::Path::new(&c.path).is_dir()));
 
         std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn cloud_root_name_reads_the_account_off_the_mount_dir() {
+        // The whole parsing table, provider by provider.
+        for (dir, label, want) in [
+            ("OneDrive-Personal", "OneDrive", "Personal"),
+            ("OneDrive-Contoso", "OneDrive", "Contoso"),
+            // Older clients space the separator out.
+            ("OneDrive - Contoso Ltd", "OneDrive", "Contoso Ltd"),
+            // A multi-word provider loses its space in the mount name.
+            (
+                "GoogleDrive-thrashr888@gmail.com",
+                "Google Drive",
+                "thrashr888@gmail.com",
+            ),
+            // Names that only echo the provider add nothing.
+            ("Box-Box", "Box", ""),
+            ("Box", "Box", ""),
+            ("Dropbox", "Dropbox", ""),
+            ("OneDrive", "OneDrive", ""),
+        ] {
+            assert_eq!(cloud_root_name(dir, label), want, "{dir}");
+        }
     }
 
     #[test]
