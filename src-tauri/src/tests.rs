@@ -3007,15 +3007,15 @@ fn okf_files_name_their_author() {
 ///
 /// The store records how a source arrived and what it says, never who chose
 /// its title, so before the sidecar a rename left the file crediting
-/// `alchemy/<version>` with a name a person picked. `note_human_source_edit`
-/// is the call the edit command and its MCP twin make on every save; the
-/// writer reads it back through `source_concept`, which is the pass the app
-/// runs on the way to the file asserted here.
+/// `alchemy/<version>` with a name a person picked. `note_human_edit` is the
+/// call the edit commands make on every save; the writer reads it back
+/// through `source_concept`, which is the pass the app runs on the way to the
+/// file asserted here.
 #[test]
 fn okf_source_rename_moves_the_by_line() {
     use crate::okf::{
-        load_okf_human_edits, note_human_source_edit, okf_human, okf_writer, parse_okf_doc,
-        source_concept, write_bundle,
+        load_okf_edits, note_human_edit, okf_human, okf_writer, parse_okf_doc, source_concept,
+        write_bundle,
     };
     let dir = okf_scratch("rename");
     let data = dir.join("data");
@@ -3027,7 +3027,7 @@ fn okf_source_rename_moves_the_by_line() {
             "pasted body".into(),
             &bundle,
             cap,
-            &load_okf_human_edits(&data, &src.notebook_id),
+            &load_okf_edits(&data, &src.notebook_id),
         )
     };
 
@@ -3042,7 +3042,7 @@ fn okf_source_rename_moves_the_by_line() {
 
     // A person opens the edit form and changes only the title.
     source.title = "Ferrari 488 brochure".into();
-    note_human_source_edit(&data, &source);
+    note_human_edit(&data, &source.notebook_id, &source.id);
     let concept = concept_for(&source);
     assert_eq!(
         concept.generated_by,
@@ -3074,6 +3074,190 @@ fn okf_source_rename_moves_the_by_line() {
         okf_writer(),
         "a source nobody edited still reads as the app's"
     );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An MCP client's `clientInfo` becomes a producer by-line, in the shape the
+/// spec's actor grammar wants (§7): `<producer>/<version>`, lowercase, spaces
+/// hyphenated.
+///
+/// The last case is the one that matters beyond tidiness. A client names
+/// itself; nothing stops it naming itself `human:kim`, and a forged person's
+/// by-line would read back on the other Mac as a person's deliberate edit.
+/// The colon does not survive normalisation, so it cannot.
+#[test]
+fn okf_client_actor_follows_the_producer_grammar() {
+    use crate::mcp::client_actor;
+    use crate::okf::{okf_actor_is_machine, okf_client_actor};
+    use rmcp::model::Implementation;
+
+    let claude = Implementation::new("Claude Code", "2.1.0");
+    assert_eq!(client_actor(Some(&claude)), "claude-code/2.1.0");
+    assert_eq!(
+        client_actor(Some(&Implementation::new("codex", "0.40.0"))),
+        "codex/0.40.0"
+    );
+    assert_eq!(
+        client_actor(None),
+        "mcp-client/unknown",
+        "a session that never introduced itself is still not a person"
+    );
+    assert_eq!(
+        client_actor(Some(&Implementation::new("", "9.9"))),
+        "mcp-client/unknown"
+    );
+    assert_eq!(
+        client_actor(Some(&Implementation::new("Some Agent", ""))),
+        "some-agent/unknown",
+        "no version is still a producer, just an unnamed build of one"
+    );
+    assert_eq!(
+        okf_client_actor("human:kim", "1.0"),
+        "human-kim/1.0",
+        "a client cannot name itself into being a person"
+    );
+    assert!(
+        okf_actor_is_machine(&client_actor(Some(&claude))),
+        "an agent's by-line reads as a machine, which is what read-back keys on"
+    );
+}
+
+/// An agent's edit is attributed to the agent, and a person's takes it back
+/// (§5.6). The sidecar is last-writer, and both sides write it.
+///
+/// This is the round-trip the two-Mac case turns on: `claude-code/2.1.0` in
+/// the file is not one of ours, so §5.3's read-back on the other Mac stores
+/// it as the note's origin, and that Mac's own writer emits it verbatim. The
+/// agent stays the agent wherever the bundle lands.
+#[test]
+fn okf_mcp_edits_carry_the_agents_by_line() {
+    use crate::mcp::client_actor;
+    use crate::okf::{
+        load_okf_edits, note_human_edit, note_okf_edit, okf_human, okf_note_actor, okf_writer,
+        parse_okf_doc, source_concept, write_bundle,
+    };
+    use rmcp::model::Implementation;
+
+    let dir = okf_scratch("mcp-actor");
+    let data = dir.join("data");
+    let bundle = dir.join("nb");
+    let agent = client_actor(Some(&Implementation::new("Claude Code", "2.1.0")));
+    let concept_for = |src: &crate::models::Source| {
+        source_concept(
+            src,
+            "pasted body".into(),
+            &bundle,
+            50 * 1024 * 1024,
+            &load_okf_edits(&data, &src.notebook_id),
+        )
+    };
+
+    // An agent renames a source over update_source.
+    let mut source = okf_src("s-agent", "");
+    source.title = "Ferrari 488 brochure".into();
+    note_okf_edit(&data, &source.notebook_id, &source.id, &agent);
+    assert_eq!(
+        concept_for(&source).generated_by,
+        "claude-code/2.1.0",
+        "an agent's edit is the agent's, not the user's"
+    );
+
+    // And that is what the file says, which is all the other Mac ever sees.
+    write_bundle(
+        &okf_notebook("NB"),
+        std::slice::from_ref(&concept_for(&source)),
+        &[],
+        &bundle,
+        Some(&okf_manifest(&bundle)),
+    )
+    .expect("write");
+    let written =
+        std::fs::read_to_string(bundle.join("sources/ferrari-488-brochure.md")).expect("concept");
+    assert_eq!(
+        parse_okf_doc(&written).nested("generated", "by").as_deref(),
+        Some("claude-code/2.1.0")
+    );
+
+    // The person then edits the same source in the app, and takes it back.
+    note_human_edit(&data, &source.notebook_id, &source.id);
+    assert_eq!(concept_for(&source).generated_by, okf_human());
+
+    // A session that never sent clientInfo is still not a person.
+    let mut anon = okf_src("s-anon", "");
+    anon.title = "Anonymous edit".into();
+    note_okf_edit(&data, &anon.notebook_id, &anon.id, &client_actor(None));
+    assert_eq!(concept_for(&anon).generated_by, "mcp-client/unknown");
+
+    // Notes take the same route: create_note over MCP is the agent's, and a
+    // note the person wrote in the app has no record and stays theirs.
+    let edits = load_okf_edits(&data, "nb");
+    let agent_note = crate::models::Note {
+        id: "n-agent".into(),
+        notebook_id: "nb".into(),
+        title: "Findings".into(),
+        content: "…".into(),
+        kind: "note".into(),
+        prompt: String::new(),
+        origin: String::new(),
+        status: String::new(),
+        created_at: 0,
+        updated_at: 0,
+    };
+    let mine = crate::models::Note {
+        id: "n-mine".into(),
+        ..agent_note.clone()
+    };
+    assert_eq!(
+        okf_note_actor(&mine, &edits),
+        okf_human(),
+        "a note nobody claimed is the person's, as before"
+    );
+    note_okf_edit(&data, "nb", &agent_note.id, &agent);
+    let edits = load_okf_edits(&data, "nb");
+    assert_eq!(okf_note_actor(&agent_note, &edits), "claude-code/2.1.0");
+    assert_eq!(
+        okf_note_actor(&mine, &edits),
+        okf_human(),
+        "the record is per entity, not per notebook"
+    );
+
+    // Read-back on the other Mac stores the agent as origin (§5.3); the
+    // writer there emits it verbatim, so the by-line survives the trip.
+    let over_there = crate::models::Note {
+        origin: "claude-code/2.1.0".into(),
+        ..mine.clone()
+    };
+    assert_eq!(
+        okf_note_actor(&over_there, &Default::default()),
+        "claude-code/2.1.0",
+        "an agent's note reads as the agent on the other Mac too"
+    );
+    assert_ne!(okf_note_actor(&agent_note, &edits), okf_writer());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Pre-actor sidecar records — a bare timestamp, from a build that shipped
+/// before agents had these tools — still mean the person who wrote them.
+#[test]
+fn okf_legacy_edit_records_still_mean_a_person() {
+    use crate::okf::{load_okf_edits, okf_human, source_concept};
+    let dir = okf_scratch("legacy-edits");
+    let data = dir.join("data");
+    let sidecar = data.join("okf_human_edits");
+    std::fs::create_dir_all(&sidecar).expect("sidecar dir");
+    std::fs::write(sidecar.join("nb.json"), r#"{"s-old": 1756000400000}"#).expect("legacy record");
+
+    let source = okf_src("s-old", "");
+    let concept = source_concept(
+        &source,
+        "body".into(),
+        &dir.join("nb"),
+        50 * 1024 * 1024,
+        &load_okf_edits(&data, "nb"),
+    );
+    assert_eq!(concept.generated_by, okf_human());
 
     let _ = std::fs::remove_dir_all(&dir);
 }

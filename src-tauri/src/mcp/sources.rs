@@ -461,6 +461,7 @@ impl AlchemyMcp {
             title,
             text,
         }): Parameters<UpdateSourceReq>,
+        ctx: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let state = self.state();
         let existing = state
@@ -484,9 +485,14 @@ impl AlchemyMcp {
             title.trim().to_string()
         };
         let extracted = crate::ingest::extract_pasted(&title, &text).map_err(internal)?;
-        // Same edit, same by-line: an agent renaming a source on the user's
-        // behalf is not the app acting on its own (RFC-okf-live §5.6).
-        crate::okf::note_human_source_edit(&commands::app_data_dir(&state), &existing);
+        // The edit is deliberate, so it earns a by-line — the agent's own,
+        // not the app's and not the user's (RFC-okf-live §5.6).
+        crate::okf::note_okf_edit(
+            &commands::app_data_dir(&state),
+            &existing.notebook_id,
+            &existing.id,
+            &Self::actor(&ctx),
+        );
         let source = commands::reingest(&state, &existing, extracted, None, true)
             .await
             .map_err(internal)?;
@@ -504,6 +510,7 @@ impl AlchemyMcp {
             source_ids,
             tags,
         }): Parameters<SetTagsReq>,
+        ctx: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let ids = SourceSelectionReq {
             source_id,
@@ -511,15 +518,31 @@ impl AlchemyMcp {
         }
         .ids()?;
         let state = self.state();
-        let mut last: Option<Source> = None;
+        let mut updated: Vec<Source> = Vec::with_capacity(ids.len());
         for id in &ids {
-            last = Some(
+            updated.push(
                 commands::set_source_tags_impl(&state, id, &tags)
                     .await
                     .map_err(internal)?,
             );
         }
-        let last = last.expect("ids is non-empty");
+        // Tags are one of the two things a source carries that used to mean
+        // "a person did this" (§5.6). Now they can mean an agent, so the
+        // by-line sidecar says which. Grouped by notebook because the sidecar
+        // is per notebook and a batch of ids need not all be from one.
+        let actor = Self::actor(&ctx);
+        let data_dir = commands::app_data_dir(&state);
+        let mut by_notebook: std::collections::HashMap<&str, Vec<&str>> = Default::default();
+        for s in &updated {
+            by_notebook
+                .entry(s.notebook_id.as_str())
+                .or_default()
+                .push(s.id.as_str());
+        }
+        for (notebook_id, ids) in by_notebook {
+            crate::okf::note_okf_edits(&data_dir, notebook_id, &ids, &actor);
+        }
+        let last = updated.pop().expect("ids is non-empty");
         self.changed("sources", Some(&last.notebook_id));
         if ids.len() == 1 {
             json_result(&last)
@@ -534,11 +557,18 @@ impl AlchemyMcp {
     async fn set_source_note(
         &self,
         Parameters(SetNoteReq { source_id, note }): Parameters<SetNoteReq>,
+        ctx: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let state = self.state();
         let source = commands::set_source_note_impl(&state, &source_id, &note)
             .await
             .map_err(internal)?;
+        crate::okf::note_okf_edit(
+            &commands::app_data_dir(&state),
+            &source.notebook_id,
+            &source.id,
+            &Self::actor(&ctx),
+        );
         self.changed("sources", Some(&source.notebook_id));
         json_result(&source)
     }
