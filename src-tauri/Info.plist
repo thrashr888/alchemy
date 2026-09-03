@@ -7,6 +7,25 @@
 	     Info.plist by Tauri at build time. -->
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Alchemy syncs Apple Notes and Calendar items you add as sources.</string>
+	<!-- What makes the container's Documents folder show up at the iCloud
+	     Drive root as "Alchemy", with the app icon, instead of staying
+	     hidden inside Mobile Documents (docs/RFC-okf-live.md 5.7, stage
+	     two). Inert until the build carries the matching entitlement:
+	     macOS ignores a container declared here that the signature does not
+	     claim, so this ships unconditionally rather than forking the
+	     Info.plist for one release path. -->
+	<key>NSUbiquitousContainers</key>
+	<dict>
+		<key>iCloud.com.thrashr888.alchemy</key>
+		<dict>
+			<key>NSUbiquitousContainerIsDocumentScopePublic</key>
+			<true/>
+			<key>NSUbiquitousContainerName</key>
+			<string>Alchemy</string>
+			<key>NSUbiquitousContainerSupportedFolderLevels</key>
+			<string>Any</string>
+		</dict>
+	</dict>
 	<!-- "Add to Alchemy" in every app's Services menu: selected text, links,
 	     or Finder files become sources (handled in src/services.rs). -->
 	<key>NSServices</key>

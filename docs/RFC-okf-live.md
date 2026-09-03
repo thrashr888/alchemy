@@ -516,6 +516,7 @@ Finder). Its default is resolved once, on first launch:
 
 | iCloud Drive | default |
 | --- | --- |
+| the build carries the iCloud container entitlement | the container's `Documents/` (stage two, below) |
 | on (`~/Library/Mobile Documents/com~apple~CloudDocs` exists) | `iCloud Drive/Alchemy/` |
 | off | `~/Documents/Alchemy/` |
 
@@ -526,12 +527,14 @@ their folder. A Mac with iCloud Drive off gets a local folder and works
 forever.
 
 **Two stages.** Stage one is the plain folder above — no entitlement,
-ships on this branch. Stage two is the app's own iCloud container, the
+shipped in v0.55.0. Stage two is the app's own iCloud container, the
 branded "Alchemy" folder with the app icon at the iCloud Drive root,
 which needs the iCloud entitlement and an embedded provisioning profile
-in the bundle: a signing and release-script change, its own item, and
-the same container an iPhone app would read. Migration between stages is
-a folder move; nothing in the bundles changes.
+in the bundle: a signing and release-script change, and the same
+container an iPhone app would read. Migration between stages is a folder
+move; nothing in the bundles changes. Built — see "The iCloud container
+(stage two), as built" below, and RELEASE.md for the portal setup that
+switches it on.
 
 **New notebooks bind at creation.** With `keep_on_disk` on (default on,
 cost control only), a new notebook gets `<notebooks_dir>/<slug>/` and the
@@ -566,7 +569,7 @@ reader, or Show in Finder wants it. Those hydrate first, bounded, and say
 stub: the writer treats a stub as absent and waits for the file.
 
 **Not done here.** The data directory never moves into iCloud. The
-entitlement is a separate release item. Multi-writer rules are §5.6's,
+entitlement was a separate release item, since built. Multi-writer rules are §5.6's,
 originals are §6's; this section only decides where bundles live and that
 they exist without being asked for.
 
@@ -613,6 +616,50 @@ they exist without being asked for.
 - **Sharing is a reveal plus a sentence.** `NSSharingService` is native code;
   what the app can do today is put the user in front of the right folder and
   say what to do there, which is what the verb does.
+
+### The iCloud container (stage two), as built
+
+- **The entitlement ships only with its profile.** A Developer ID app that
+  claims an iCloud container without an embedded provisioning profile does
+  not launch, so the two are one switch: `Entitlements.icloud.plist` and
+  `src-tauri/tauri.icloud.conf.json` sit beside the defaults and
+  `scripts/release.sh` selects them only when `APPLE_PROVISIONING_PROFILE`
+  points at a profile it has verified — unexpired, and carrying
+  `iCloud.com.thrashr888.alchemy`. Unset, every byte of the build is what it
+  was. The script also checks the finished bundle rather than trusting the
+  bundler's ordering: the profile has to be inside `Contents/` before
+  codesign seals it, and finding out otherwise from a notarized DMG is the
+  expensive way. RELEASE.md carries the portal steps.
+- **`NSUbiquitousContainers` ships unconditionally.** It is what turns the
+  container's `Documents/` into "Alchemy" at the iCloud Drive root, with the
+  icon, and macOS ignores a container the signature does not claim — so it
+  lives in the one `Info.plist` rather than forking it for one release path.
+- **The signature is the check, not the directory.** `Mobile
+  Documents/iCloud~com~thrashr888~alchemy` does not exist until something
+  asks the OS for it, so its absence would read as "no entitlement" on a
+  correctly entitled fresh install. `codesign -d --entitlements -` on the
+  running bundle answers the question actually being asked; it costs one
+  subprocess, memoized, and only on the path that computes the
+  `serde(default)` — that is, first launch. Anything not running from a
+  `.app` (`cargo test`, the CLI, an unbundled dev build) takes the early
+  return and never spawns it, which is also what keeps the tests off
+  `codesign` and off anybody's real iCloud folder: `resolve_notebooks_dir`
+  and `icloud_move_plan` take the entitlement answer as an argument.
+- **Only the folder Alchemy chose is Alchemy's to move.** The migration is
+  offered when the entitlement is there, the offer is unanswered, and
+  `notebooks_dir` is still exactly the stage-one default with bound bundles
+  in it. A Notebooks folder pointed at Dropbox or a second drive is a
+  decision the user made, and stage two is not a reason to overrule it —
+  Settings keeps the picker.
+- **The move keeps the binding, not just the path.** `rebind_moved` rewrites
+  `path` and leaves the binding id alone, so the manifest — every hash the
+  reconciler has — survives. Minting a new binding would have made the whole
+  bundle read as changed on the far side of a folder move.
+- **Nothing moves under a write in flight, and nothing is deleted.** The move
+  waits on §5.2's pending/flushing sets and refuses rather than renaming a
+  bundle out from under its own writer. A rename that cannot be done in place
+  falls back to a copy and leaves the original where it was, logged; a
+  half-finished move must leave the user with their files, not a gap.
 
 ## 6. Originals travel in `references/`
 

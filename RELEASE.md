@@ -142,6 +142,85 @@ You need three things on your machine:
    alongside the DMG; the app checks
    `releases/latest/download/latest.json` on launch.
 
+## iCloud container (stage two)
+
+Optional, and off unless you turn it on. With it, the Notebooks folder is
+Alchemy's own iCloud container — the branded "Alchemy" folder with the app
+icon at the iCloud Drive root, at
+`~/Library/Mobile Documents/iCloud~com~thrashr888~alchemy/Documents/`, which
+is the same container an iPhone app would read. Without it, the app keeps
+shipping stage one: a plain `iCloud Drive/Alchemy/` folder
+(docs/RFC-okf-live.md §5.7).
+
+A Developer ID app may claim an iCloud container only when a matching
+provisioning profile is embedded in the bundle at
+`Contents/embedded.provisionprofile`. The entitlement without the profile
+produces an app that will not launch, so the release script treats them as
+one thing: set `APPLE_PROVISIONING_PROFILE` and you get both, leave it unset
+and the build signs exactly as it does today.
+
+### What to do in the Apple Developer portal
+
+All of this is at [developer.apple.com/account](https://developer.apple.com/account)
+→ Certificates, Identifiers & Profiles. It is a one-time setup per profile
+expiry.
+
+1. **Identifiers → iCloud Containers → +.** Description `Alchemy`,
+   Identifier `iCloud.com.thrashr888.alchemy`. That string is what
+   `src-tauri/Entitlements.icloud.plist` and `src-tauri/Info.plist` already
+   name; it is not a free choice.
+2. **Identifiers → App IDs.** Open (or create, as an explicit App ID, not a
+   wildcard) `com.thrashr888.alchemy`. Enable the **iCloud** capability,
+   choose iCloud Documents, then Edit and assign the container from step 1.
+   Save.
+3. **Profiles → + → Distribution → Developer ID.** App ID
+   `com.thrashr888.alchemy`, then your **Developer ID Application**
+   certificate — the same one `security find-identity` shows. Name it
+   something you will recognise (`Alchemy Developer ID iCloud`) and Generate.
+4. **Download it.** You get a `.provisionprofile` file. Keep it out of the
+   repo; `~/Library/Developer/Alchemy/Alchemy.provisionprofile` is a fine
+   home. Back it up in 1Password alongside the updater key — it is
+   regenerable, but not while you are mid-release.
+
+### What to set on your machine
+
+| Variable | What it is |
+| -------- | ---------- |
+| `APPLE_PROVISIONING_PROFILE` | absolute path to the `.provisionprofile` from step 4 |
+
+Same rule as the rest: shell environment, never the repo.
+
+```bash
+export APPLE_PROVISIONING_PROFILE="$HOME/Library/Developer/Alchemy/Alchemy.provisionprofile"
+RELEASE_APPROVED=yes scripts/release.sh 0.56.0
+```
+
+The script then verifies the profile before it builds anything — it must not
+be expired and must carry `iCloud.com.thrashr888.alchemy` — copies it to
+`src-tauri/embedded.provisionprofile` (gitignored), and builds with
+`src-tauri/tauri.icloud.conf.json`, which swaps in
+`Entitlements.icloud.plist` and embeds the profile. After the build it checks
+that the profile really is inside the signed bundle and that the signature
+carries the entitlement, and refuses to notarize if either is missing.
+
+For a local bundle to try it on, the same two flags:
+
+```bash
+APPLE_PROVISIONING_PROFILE=... cp "$APPLE_PROVISIONING_PROFILE" src-tauri/embedded.provisionprofile
+pnpm tauri build --debug --bundles app --config src-tauri/tauri.icloud.conf.json
+```
+
+Verify what you got:
+
+```bash
+codesign -d --entitlements - target/debug/bundle/macos/Alchemy.app
+ls target/debug/bundle/macos/Alchemy.app/Contents/embedded.provisionprofile
+```
+
+Profiles expire. When the script says so, repeat step 3 and re-download —
+nothing else changes, and a release with the variable unset is always
+available as the way past it.
+
 ## Manual CI fallback
 
 If you can't release locally, trigger the workflow from the **Actions → Release**

@@ -63,6 +63,15 @@ export interface OkfBinding {
   lastWriteAt: number;
 }
 
+/** Whether the Notebooks folder can move into the app's own iCloud container,
+ *  and what would move (RFC-okf-live §5.7, stage two). */
+export interface IcloudMoveOffer {
+  available: boolean;
+  from: string;
+  to: string;
+  count: number;
+}
+
 /** What one OKF concept says about its own standing (RFC-okf-live §4), read
  *  from the file's frontmatter at scan time and keyed by source id. */
 export interface OkfLifecycle {
@@ -694,6 +703,9 @@ export interface AiConfig {
   keepOnDisk: boolean;
   /** Whether the one-time "keep your notebooks on disk?" offer was answered. */
   keepOnDiskAsked: boolean;
+  /** Whether the one-time "move them into the Alchemy iCloud folder?" offer
+   *  was answered (RFC-okf-live §5.7, stage two). */
+  icloudMoveAsked: boolean;
 
   /** Desktop notifications; in config (not localStorage) so the resident
    *  scheduler can honor it with no window open. */

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Stage two of docs/RFC-okf-live.md 5.7: the app's own iCloud
+	     container, so the Notebooks folder is the branded "Alchemy" folder
+	     at the iCloud Drive root instead of a plain folder inside it.
+
+	     This is NOT the entitlements file the app ships with by default. A
+	     Developer ID app may claim an iCloud container only when a matching
+	     provisioning profile is embedded at
+	     Contents/embedded.provisionprofile; claiming it without the profile
+	     makes the signed app fail to launch. So scripts/release.sh selects
+	     this file only when APPLE_PROVISIONING_PROFILE points at a profile
+	     it has verified, and otherwise builds with Entitlements.plist
+	     exactly as before. See RELEASE.md, "iCloud container (stage two)".
+
+	     An entitlements file replaces rather than merges, so this is
+	     Entitlements.plist plus the iCloud keys. Keep the two in step. -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.com.thrashr888.alchemy</string>
+	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudDocuments</string>
+	</array>
+	<!-- The older spelling of the same container, still what the
+	     Documents-scope APIs and Finder's iCloud Drive listing read. -->
+	<key>com.apple.developer.ubiquity-container-identifiers</key>
+	<array>
+		<string>iCloud.com.thrashr888.alchemy</string>
+	</array>
+</dict>
+</plist>

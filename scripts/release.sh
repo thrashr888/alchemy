@@ -12,8 +12,11 @@
 # Usage:  scripts/release.sh <version>        e.g. scripts/release.sh 0.4.2
 #
 # Config (env overrides, sensible defaults):
-#   APPLE_SIGNING_IDENTITY   auto-detected from your Keychain if unset
-#   NOTARY_PROFILE           notarytool keychain profile name (default: alchemy-notary)
+#   APPLE_SIGNING_IDENTITY      auto-detected from your Keychain if unset
+#   NOTARY_PROFILE              notarytool keychain profile name (default: alchemy-notary)
+#   APPLE_PROVISIONING_PROFILE  path to a Developer ID .provisionprofile carrying
+#                               the iCloud container. Optional; unset builds and
+#                               signs exactly as before. See RELEASE.md.
 #
 set -euo pipefail
 
@@ -72,6 +75,56 @@ xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 \
 
 echo "==> Releasing $TAG  (identity: ${SIGNING_IDENTITY%% (*}..., profile: $NOTARY_PROFILE)"
 
+# --- Optional: the iCloud container (RELEASE.md, "iCloud container") ---------
+# A Developer ID app may claim an iCloud container only with a matching
+# provisioning profile embedded at Contents/embedded.provisionprofile. The
+# entitlement without the profile makes the signed app refuse to launch, so
+# the two arrive together or neither does: point APPLE_PROVISIONING_PROFILE at
+# a .provisionprofile and this build picks up Entitlements.icloud.plist and
+# embeds that profile. Unset, everything below runs exactly as it did.
+APP_BUNDLE="src-tauri/target/$TARGET/release/bundle/macos/Alchemy.app"
+PROFILE_DEST="src-tauri/embedded.provisionprofile"
+ICLOUD_CONTAINER="iCloud.com.thrashr888.alchemy"
+# Word-split on purpose: empty means "no extra flags", and the path holds no
+# spaces. Not an array, because bash 3.2 (what /usr/bin/env bash finds on a
+# stock Mac) errors on an empty array expansion under set -u.
+ICLOUD_BUILD_FLAGS=""
+# A stale copy from an earlier run must never ride along into a plain build.
+rm -f "$PROFILE_DEST"
+if [ -n "${APPLE_PROVISIONING_PROFILE:-}" ]; then
+  [ -f "$APPLE_PROVISIONING_PROFILE" ] || {
+    echo "No provisioning profile at $APPLE_PROVISIONING_PROFILE (see RELEASE.md)." >&2; exit 1; }
+  # Verify before a 40-minute build rather than after: an expired profile, or
+  # one for the wrong container, produces an app that will not launch.
+  python3 - "$APPLE_PROVISIONING_PROFILE" "$ICLOUD_CONTAINER" <<'PYEOF'
+import datetime, plistlib, subprocess, sys
+path, container = sys.argv[1], sys.argv[2]
+raw = subprocess.run(["security", "cms", "-D", "-i", path],
+                     capture_output=True).stdout
+try:
+    profile = plistlib.loads(raw)
+except Exception:
+    sys.exit("provisioning profile: could not decode %s" % path)
+expires = profile.get("ExpirationDate")
+if expires is None:
+    sys.exit("provisioning profile: no ExpirationDate; is this a profile?")
+if expires.replace(tzinfo=datetime.timezone.utc) <= datetime.datetime.now(
+        datetime.timezone.utc):
+    sys.exit("provisioning profile expired %s -- download a fresh one" % expires)
+ents = profile.get("Entitlements", {})
+claimed = ents.get("com.apple.developer.icloud-container-identifiers", [])
+if container not in claimed:
+    sys.exit("provisioning profile does not carry %s (it has: %s)"
+             % (container, ", ".join(claimed) or "no iCloud containers"))
+print("    profile: %s  team %s  expires %s"
+      % (profile.get("Name", "?"),
+         ", ".join(profile.get("TeamIdentifier", [])) or "?", expires))
+PYEOF
+  cp "$APPLE_PROVISIONING_PROFILE" "$PROFILE_DEST"
+  ICLOUD_BUILD_FLAGS="--config src-tauri/tauri.icloud.conf.json"
+  echo "==> iCloud container $ICLOUD_CONTAINER (Entitlements.icloud.plist + embedded profile)"
+fi
+
 # --- Version bump + commit (signing happens NOW, not after the build) --------
 # The bump commit is the only step that needs the 1Password-backed signing
 # key, and the vault is open right now -- the human just approved this run.
@@ -122,8 +175,23 @@ scripts/fetch-pdfium.sh
 scripts/build-fm-sidecar.sh
 codesign --force --timestamp --options runtime --sign "$SIGNING_IDENTITY" "$DYLIB"
 codesign --force --timestamp --options runtime --sign "$SIGNING_IDENTITY" src-tauri/binaries/alchemy-fm
-APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY" pnpm tauri build --target "$TARGET"
+# shellcheck disable=SC2086  # ICLOUD_BUILD_FLAGS is meant to word-split.
+APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY" pnpm tauri build --target "$TARGET" $ICLOUD_BUILD_FLAGS
 [ -f "$DMG" ] || { echo "DMG not produced: $DMG" >&2; exit 1; }
+# The profile has to be inside the bundle before codesign seals it, which is
+# the bundler's ordering to get right, not ours. Check rather than assume: an
+# app signed with the entitlement and no embedded profile does not launch, and
+# finding that out from a notarized DMG is the expensive way.
+if [ -n "${APPLE_PROVISIONING_PROFILE:-}" ]; then
+  [ -f "$APP_BUNDLE/Contents/embedded.provisionprofile" ] || {
+    echo "iCloud build produced no Contents/embedded.provisionprofile -- refusing to ship it." >&2
+    exit 1; }
+  codesign -d --entitlements - "$APP_BUNDLE" 2>/dev/null |
+    grep -aq "com.apple.developer.icloud-container-identifiers" || {
+      echo "iCloud build is not signed with the iCloud entitlement -- refusing to ship it." >&2
+      exit 1; }
+  codesign --verify --strict "$APP_BUNDLE"
+fi
 [ -f "$UPDATER_TGZ" ] || { echo "Updater artifact not produced: $UPDATER_TGZ" >&2; exit 1; }
 [ -f "$UPDATER_TGZ.sig" ] || { echo "Updater signature not produced: $UPDATER_TGZ.sig" >&2; exit 1; }
 

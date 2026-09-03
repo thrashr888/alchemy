@@ -3012,6 +3012,162 @@ fn okf_notebooks_dir_prefers_icloud_when_it_is_on() {
     // And the default is on, because the bundle is where a notebook lives.
     assert!(crate::ai::AiConfig::fresh().keep_on_disk);
     assert!(!crate::ai::AiConfig::fresh().keep_on_disk_asked);
+    assert!(!crate::ai::AiConfig::fresh().icloud_move_asked);
+}
+
+/// Stage two: with the entitlement, the app's own container wins over both
+/// the plain iCloud Drive folder and `~/Documents` (§5.7).
+///
+/// The entitlement answer is injected, so this never runs `codesign` and
+/// never depends on how the test binary happens to be signed.
+#[test]
+fn okf_notebooks_dir_prefers_the_container_when_entitled() {
+    use crate::ai::{icloud_container_documents, resolve_notebooks_dir};
+    let home = std::env::temp_dir().join(format!("alchemy-home-{}", crate::commands::new_id()));
+    // iCloud Drive is on here, so stage one would pick it — the container
+    // still wins, which is the whole point of the extra choice.
+    std::fs::create_dir_all(home.join("Library/Mobile Documents/com~apple~CloudDocs")).unwrap();
+
+    assert_eq!(
+        resolve_notebooks_dir(&home, true),
+        icloud_container_documents(&home).to_string_lossy(),
+        "the entitled build gets the branded container, not a folder inside iCloud Drive"
+    );
+    assert!(
+        resolve_notebooks_dir(&home, true).ends_with("iCloud~com~thrashr888~alchemy/Documents"),
+        "the container path is the one an iPhone app would read"
+    );
+    assert_eq!(
+        resolve_notebooks_dir(&home, false),
+        home.join("Library/Mobile Documents/com~apple~CloudDocs/Alchemy")
+            .to_string_lossy(),
+        "without the entitlement, stage one is unchanged"
+    );
+
+    // No iCloud Drive at all, no entitlement: the local folder.
+    let bare = std::env::temp_dir().join(format!("alchemy-home-{}", crate::commands::new_id()));
+    std::fs::create_dir_all(&bare).unwrap();
+    assert_eq!(
+        resolve_notebooks_dir(&bare, false),
+        bare.join("Documents/Alchemy").to_string_lossy()
+    );
+    // An empty HOME resolves to nothing rather than to `/Alchemy`.
+    assert_eq!(resolve_notebooks_dir(std::path::Path::new(""), true), "");
+
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&bare);
+}
+
+/// The migration offer appears only when there is something to migrate:
+/// entitled, unanswered, still in the stage-one folder, with bound bundles
+/// in it (§5.7, stage two).
+#[test]
+fn okf_icloud_move_offer_only_for_stage_one_bundles() {
+    use crate::okf::{icloud_move_plan, OkfBinding};
+    let home = std::path::PathBuf::from("/Users/tester");
+    let stage_one = crate::ai::icloud_drive_alchemy(&home);
+    let container = crate::ai::icloud_container_documents(&home);
+
+    let bound = |dir: &std::path::Path| {
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "nb1".to_string(),
+            OkfBinding {
+                path: dir.join("ferrari").to_string_lossy().to_string(),
+                id: "b1".into(),
+                last_write_at: 1,
+            },
+        );
+        map.insert(
+            "nb2".to_string(),
+            OkfBinding {
+                path: dir.join("thesis").to_string_lossy().to_string(),
+                id: "b2".into(),
+                last_write_at: 1,
+            },
+        );
+        map
+    };
+    let full = bound(&stage_one);
+
+    let offer = icloud_move_plan(&home, true, false, &stage_one, &full);
+    assert!(offer.available);
+    assert_eq!(offer.count, 2);
+    assert_eq!(offer.from, stage_one.to_string_lossy());
+    assert_eq!(offer.to, container.to_string_lossy());
+
+    // No entitlement: there is no container to move into.
+    assert!(!icloud_move_plan(&home, false, false, &stage_one, &full).available);
+    // Answered once is answered.
+    assert!(!icloud_move_plan(&home, true, true, &stage_one, &full).available);
+    // Already there.
+    assert!(!icloud_move_plan(&home, true, false, &container, &bound(&container)).available);
+    // Nothing bound yet — an empty folder is not worth a banner.
+    assert!(
+        !icloud_move_plan(
+            &home,
+            true,
+            false,
+            &stage_one,
+            &std::collections::HashMap::new()
+        )
+        .available
+    );
+    // A folder the user chose is theirs; stage two does not overrule it.
+    let dropbox = home.join("Dropbox/Notebooks");
+    assert!(!icloud_move_plan(&home, true, false, &dropbox, &bound(&dropbox)).available);
+}
+
+/// The move plans a destination per bundle, dodges names already in the
+/// container, and rewrites the bindings sidecar in place (§5.7, stage two).
+#[test]
+fn okf_icloud_move_rewrites_binding_paths() {
+    use crate::okf::{plan_icloud_moves, rebind_moved, OkfBinding};
+    let from = std::path::PathBuf::from("/Users/tester/iCloudDrive/Alchemy");
+    let to = std::path::PathBuf::from("/Users/tester/Container/Documents");
+    let mut bindings = std::collections::HashMap::new();
+    for (nb, slug) in [("nb1", "ferrari"), ("nb2", "thesis")] {
+        bindings.insert(
+            nb.to_string(),
+            OkfBinding {
+                path: from.join(slug).to_string_lossy().to_string(),
+                id: format!("b-{nb}"),
+                last_write_at: 7,
+            },
+        );
+    }
+    // A bundle somewhere else entirely is not part of this move.
+    bindings.insert(
+        "nb3".to_string(),
+        OkfBinding {
+            path: "/Users/tester/Dropbox/other".into(),
+            id: "b-nb3".into(),
+            last_write_at: 7,
+        },
+    );
+
+    let taken: std::collections::HashSet<String> = ["ferrari".to_string()].into_iter().collect();
+    let moves = plan_icloud_moves(&from, &to, &bindings, &taken);
+    assert_eq!(moves.len(), 2, "only the two under the Notebooks folder");
+    assert_eq!(moves[0].0, "nb1");
+    assert_eq!(
+        moves[0].2,
+        to.join("ferrari-2"),
+        "a name already in the container gets the exporter's -2, never a clobber"
+    );
+    assert_eq!(moves[1].2, to.join("thesis"));
+
+    rebind_moved(&mut bindings, &moves);
+    assert_eq!(bindings["nb1"].path, to.join("ferrari-2").to_string_lossy());
+    assert_eq!(bindings["nb2"].path, to.join("thesis").to_string_lossy());
+    assert_eq!(
+        bindings["nb3"].path, "/Users/tester/Dropbox/other",
+        "a binding outside the move is left alone"
+    );
+    // Same bundle, new path: the binding id (and so its manifest, with every
+    // hash the reconciler has) survives the move.
+    assert_eq!(bindings["nb1"].id, "b-nb1");
+    assert_eq!(bindings["nb1"].last_write_at, 7);
 }
 
 /// A notebook gets its own folder under the root, deduped the way the
