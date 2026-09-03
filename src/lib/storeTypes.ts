@@ -13,6 +13,7 @@ import type {
   Note,
   NoteKind,
   Notebook,
+  OkfLifecycle,
   ReadingPrefs,
   ReportSchedule,
   Source,
@@ -156,6 +157,9 @@ export interface AppState {
   currentId: string | null;
   sources: Source[];
   selectedSourceIds: Record<string, boolean> | null;
+  /** Per-concept OKF lifecycle for the current notebook, by source id
+   *  (RFC-okf-live §4). Empty for a notebook holding no bundles. */
+  okfLifecycle: Record<string, OkfLifecycle>;
   picked: Picked | null;
   /** Latest hygiene classification for the current notebook
    *  (RFC-source-hygiene): drives row badges and the review modal. */
@@ -431,6 +435,9 @@ export interface AppState {
   addMacReminder: (sourceId: string, title: string, notes?: string) => Promise<void>;
   deleteSource: (id: string) => Promise<void>;
   toggleSourceSelected: (id: string) => void;
+  /** Re-read the bundle lifecycle after a scan. Omit the id for the open
+   *  notebook. */
+  refreshOkfLifecycle: (notebookId?: string) => Promise<void>;
   setAllSourcesSelected: (selected: boolean) => void;
 
   // Finder-style selection (RFC-multi-select). Range order comes from the

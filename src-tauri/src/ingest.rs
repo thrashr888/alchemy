@@ -1531,10 +1531,18 @@ pub fn chunk_source(extracted: &Extracted, code_ctx: Option<&str>) -> Vec<Chunk>
     // splitting is a no-op on them — a PDF does not open with `---`.
     if extracted.source_type == "markdown" || extracted.source_type == "pdf" {
         let (tags, body) = split_frontmatter(&extracted.text);
-        let ctx = match tags.is_empty() {
-            true => extracted.title.clone(),
-            false => format!("{} · {}", extracted.title, tags.join(" ")),
-        };
+        // Frontmatter is provenance, not prose: it never embeds as body text,
+        // but what it says about the document rides every chunk's prefix.
+        // Tags are the Obsidian rule (RFC-obsidian-notion §3); a `description:`
+        // is the OKF one (RFC-okf-live §4), and any vault note carrying one
+        // gets the same benefit.
+        let mut ctx = extracted.title.clone();
+        if !tags.is_empty() {
+            ctx.push_str(&format!(" · {}", tags.join(" ")));
+        }
+        if let Some(desc) = frontmatter_description(&extracted.text) {
+            ctx.push_str(&format!(" · {desc}"));
+        }
         return chunk_text(&ctx, body);
     }
     let chunks = chunk_text(&extracted.title, &extracted.text);
@@ -1585,6 +1593,28 @@ pub(crate) fn split_frontmatter(text: &str) -> (Vec<String>, &str) {
         }
     }
     (tags, body)
+}
+
+/// A single-line `description:` from leading frontmatter, unquoted and
+/// capped — long enough to say what the document is, short enough that every
+/// chunk in it can afford to carry the sentence.
+fn frontmatter_description(text: &str) -> Option<String> {
+    const CAP: usize = 120;
+    let rest = text.strip_prefix("---\n")?;
+    let end = rest.find("\n---")?;
+    let raw = rest[..end]
+        .lines()
+        .find_map(|l| l.strip_prefix("description:"))?
+        .trim()
+        .trim_matches(['"', '\'']);
+    if raw.is_empty() {
+        return None;
+    }
+    let mut out: String = raw.chars().take(CAP).collect();
+    if raw.chars().count() > CAP {
+        out.push('…');
+    }
+    Some(out)
 }
 
 fn push_tag(tags: &mut Vec<String>, raw: &str) {

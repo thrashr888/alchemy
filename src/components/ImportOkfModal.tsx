@@ -49,8 +49,10 @@ export function ImportOkfModal() {
         <p className="text-caption leading-relaxed text-muted-foreground">
           Bring in an{" "}
           <code className="rounded bg-surface-2 px-1 py-0.5">.okf.zip</code>{" "}
-          someone shared (or an exported bundle folder). Sources are re-indexed
-          locally; nothing leaves this Mac.
+          someone shared, or take a copy of a bundle folder. Sources are
+          re-indexed locally; nothing leaves this Mac. To keep reading a folder
+          as it changes instead, drop it on a notebook: it becomes a source
+          that stays in sync.
         </p>
         <label className="flex flex-col gap-1.5">
           <span className="text-caption text-muted-foreground">Import into</span>

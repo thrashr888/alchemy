@@ -29,6 +29,7 @@ import { sourceIcon } from "@/lib/sourceIcon";
 import { HYGIENE_LABEL, loadHygieneKept } from "@/lib/growth";
 import { useSourceActions } from "./SourceMenu";
 import { ArrivalsStrip, useArrivals } from "./ArrivalsStrip";
+import { OkfBadges } from "./OkfBadges";
 import type { GrowthProposal, Source } from "@/lib/types";
 import {
   ChevronRight,
@@ -135,7 +136,7 @@ export function Favicon({ url }: { url: string }) {
   );
 }
 
-const FOLDER_TYPES = ["folder", "git", "notion", "obsidian", "feed"];
+const FOLDER_TYPES = ["folder", "git", "notion", "obsidian", "okf", "feed"];
 
 /** Facet kinds: coarse buckets a narrow panel can offer as chips. */
 type SourceKind = "web" | "files" | "images" | "apple" | "folders";
@@ -457,7 +458,7 @@ export function SourcesPanel() {
     !selectedSourceIds || selectedSourceIds[id] !== false;
   // Folder container rows have no chunks — only content sources count.
   const contentSources = sources.filter(
-    (s) => s.sourceType !== "folder" && s.sourceType !== "obsidian",
+    (s) => !["folder", "obsidian", "okf"].includes(s.sourceType),
   );
   const selectedCount = contentSources.filter((s) => isSelected(s.id)).length;
   const allSelected = selectedCount === contentSources.length;
@@ -1250,6 +1251,12 @@ export function SourcesPanel() {
                           {hostname(s.url)}
                         </div>
                       ) : null}
+                      {/* What a bundle says about this concept's standing
+                          (RFC-okf-live §4). Renders nothing for every source
+                          that isn't part of one. */}
+                      <div className="flex flex-wrap items-center gap-1 empty:hidden">
+                        <OkfBadges sourceId={s.id} />
+                      </div>
                     </div>
                     {/* Selection stays at the far right (NotebookLM-style), always
                     visible. */}

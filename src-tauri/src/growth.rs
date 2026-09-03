@@ -630,7 +630,7 @@ pub fn retire_candidates(
     out
 }
 
-const FOLDER_TYPES: [&str; 4] = ["folder", "git", "notion", "obsidian"];
+const FOLDER_TYPES: [&str; 5] = ["folder", "git", "notion", "obsidian", "okf"];
 
 /// One proposed tag merge (phase 5): two tags that are almost certainly
 /// the same word — plural/singular or separator variants. Proposal only;

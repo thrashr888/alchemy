@@ -21,6 +21,7 @@ import {
   Globe,
   Hash,
   Image as ImageIcon,
+  Library,
   ListChecks,
   NotebookText,
   Presentation,
@@ -76,6 +77,8 @@ export function sourceIcon(t: Source["sourceType"], url?: string) {
       return <Blocks className="h-3.5 w-3.5 text-muted-foreground" />;
     case "obsidian":
       return <Gem className="h-3.5 w-3.5 text-muted-foreground" />;
+    case "okf":
+      return <Library className="h-3.5 w-3.5 text-muted-foreground" />;
     case "code":
       return <FileCode className="h-3.5 w-3.5 text-muted-foreground" />;
     case "pdf":

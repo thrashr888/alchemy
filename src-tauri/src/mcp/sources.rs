@@ -471,7 +471,7 @@ impl AlchemyMcp {
             .ok_or_else(|| invalid(format!("no source with id {source_id}")))?;
         if matches!(
             existing.source_type.as_str(),
-            "url" | "mac" | "folder" | "git" | "notion" | "obsidian"
+            "url" | "mac" | "folder" | "git" | "notion" | "obsidian" | "okf"
         ) {
             return Err(invalid(format!(
                 "{} sources mirror an origin and can't be edited — refresh them instead",

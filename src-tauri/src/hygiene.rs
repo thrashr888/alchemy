@@ -87,7 +87,7 @@ fn is_file_path(source: &Source) -> bool {
 fn is_folder_like(source: &Source) -> bool {
     matches!(
         source.source_type.as_str(),
-        "folder" | "obsidian" | "git" | "notion" | "feed"
+        "folder" | "obsidian" | "okf" | "git" | "notion" | "feed"
     )
 }
 

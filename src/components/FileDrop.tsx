@@ -57,22 +57,21 @@ export function FileDrop() {
 }
 
 /**
- * Route a set of local paths into the active notebook: OKF bundles open the
- * importer, everything else (files, and folders which become synced folder
- * sources) flows through `addSourceFiles`. Shared with the Add Source →
- * "Search your Mac" step so Spotlight results ingest identically to a drop.
+ * Route a set of local paths into the active notebook: an `.okf.zip` opens
+ * the importer, everything else (files, and folders which become synced
+ * folder sources) flows through `addSourceFiles`. Shared with the Add Source
+ * → "Search your Mac" step so Spotlight results ingest identically to a drop.
  */
 export async function ingestPaths(paths: string[]) {
   const { currentId, addSourceFiles, setError } = useStore.getState();
 
-  // OKF bundles (a shared .okf.zip or an exported folder) route to import,
-  // not source ingestion — and they work from the homepage too. Only zips
-  // and extensionless paths (candidate folders) are worth probing.
+  // A folder is a living source; a zip is an import (RFC-okf-live §4). A
+  // bundle folder can stay in step with what's on disk, so it becomes an
+  // `okf` source like a vault does. A zip cannot, so it still imports — and
+  // that works from the homepage too, where there is no notebook to add to.
   const rest: string[] = [];
   for (const p of paths) {
-    const e = ext(p);
-    const probeWorthy = e === "zip" || e === "";
-    if (probeWorthy && (await api.probeOkf(p).catch(() => false))) {
+    if (ext(p) === "zip" && (await api.probeOkf(p).catch(() => false))) {
       useStore.setState({ pendingImportPath: p, importOkfOpen: true });
     } else {
       rest.push(p);

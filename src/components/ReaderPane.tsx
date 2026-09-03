@@ -26,6 +26,7 @@ import { StreamingBody } from "./StudioNoteViewer";
 import { KIND_LABEL } from "./studioArtifacts";
 import { Favicon } from "./SourcesPanel";
 import { useSourceActions } from "./SourceMenu";
+import { OkfBadges } from "./OkfBadges";
 import { sourceIcon } from "@/lib/sourceIcon";
 import { Button, Input, RowMenu, Spinner, Textarea, useDelayedFlag } from "./ui";
 import {
@@ -185,6 +186,15 @@ function resolveInCorpus(
     }
   }
   if (origin.startsWith("/")) {
+    // Inside an OKF bundle a leading slash means the bundle root, not the
+    // filesystem root — `/tables/orders.md` is a sibling concept, so resolve
+    // it against the parent's path before anything else (RFC-okf-live §4).
+    if (rawHref.startsWith("/")) {
+      const inBundle = sources.find(
+        (s) => s.sourceType === "okf" && origin.startsWith(`${s.url}/`),
+      );
+      return inBundle ? byKey(normalizePath(`${inBundle.url}${rawHref}`)) : null;
+    }
     const dir = origin.slice(0, origin.lastIndexOf("/"));
     const direct = byKey(normalizePath(`${dir}/${rawHref}`));
     if (direct) return direct;
@@ -642,7 +652,9 @@ export function ReaderPane() {
     !!source &&
     source.sourceType !== "url" &&
     source.sourceType !== "mac" &&
-    !["folder", "git", "notion", "obsidian"].includes(source.sourceType) &&
+    !["folder", "git", "notion", "obsidian", "okf"].includes(
+      source.sourceType,
+    ) &&
     source.status !== "placeholder";
   // The gallery's "Edit text" action opens the doc with edit intent set —
   // consume it once the matching source is in front.
@@ -810,6 +822,9 @@ export function ReaderPane() {
           >
             {source?.title ?? note?.title ?? "Document"}
           </span>
+          {/* A bundle concept's standing rides beside its name, where the
+              reader asks "what am I looking at" (RFC-okf-live §4). */}
+          {source && <OkfBadges sourceId={source.id} />}
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
           {syncing && (
@@ -1450,6 +1465,7 @@ export const SOURCE_TYPE_LABEL: Record<Source["sourceType"], string> = {
   git: "Git repository",
   notion: "Notion pages",
   obsidian: "Obsidian vault",
+  okf: "Knowledge bundle",
   feed: "Feed",
 };
 
@@ -2457,7 +2473,9 @@ function SourceReader({
   // Folder, git, and Notion parents open as the repo reader (RFC-git-sources
   // §7): file tree + file pane instead of the flat map text. All hooks above
   // have run, so the early return is safe.
-  if (["folder", "git", "notion", "obsidian"].includes(source.sourceType)) {
+  if (
+    ["folder", "git", "notion", "obsidian", "okf"].includes(source.sourceType)
+  ) {
     return <RepoView source={source} map={content} />;
   }
 

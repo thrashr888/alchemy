@@ -70,7 +70,9 @@ async function restoreSource(
     const m = /^cider:\/\/([^/]+)\/[^/]+\/(.+)$/.exec(s.url);
     if (!m) return null;
     restored = await api.addSourceMac(nb, m[1], m[2], s.title);
-  } else if (s.sourceType === "folder") {
+  } else if (s.sourceType === "folder" || s.sourceType === "okf") {
+    // Re-adding the path is enough: detection reads the bundle back out of
+    // the folder, so an undone removal comes back as the type it was.
     restored = await api.addSourceFolder(nb, s.url);
   } else if (s.sourceType === "url" || isWebUrl(s.url)) {
     restored = await api.addSourceUrl(nb, s.url);
@@ -417,6 +419,7 @@ export const useStore = create<AppState>((set, get) => {
     currentId: null,
     sources: [],
     selectedSourceIds: null,
+    okfLifecycle: {},
     picked: null,
     hygiene: [],
     growthDismissed: {},
@@ -884,6 +887,9 @@ export const useStore = create<AppState>((set, get) => {
         if (get().currentId !== p.notebookId) return;
         void api.listSources(p.notebookId).then((sources) => set({ sources }));
         void get().refreshHygiene();
+        // A bundle scan rewrites the lifecycle sidecar; re-read it so a
+        // concept retired on disk goes quiet here without a reload.
+        void get().refreshOkfLifecycle(p.notebookId);
         const parts = [
           p.added && `${p.added} added`,
           p.updated && `${p.updated} updated`,
@@ -1315,6 +1321,7 @@ export const useStore = create<AppState>((set, get) => {
         currentId: id,
         sources: [],
         selectedSourceIds: loadSourceSel(id),
+        okfLifecycle: {},
         picked: null,
         hygiene: [],
         growthDismissed: loadGrowthDismissed(id),
@@ -1368,6 +1375,7 @@ export const useStore = create<AppState>((set, get) => {
       // and duplicated the scheduler tick already due within the minute.
       // Changes come back via sources://changed.
       void api.resyncSources(id).catch(() => {});
+      void get().refreshOkfLifecycle(id);
     },
 
     closeNotebook: () => {
@@ -1376,6 +1384,7 @@ export const useStore = create<AppState>((set, get) => {
         currentId: null,
         sources: [],
         selectedSourceIds: null,
+        okfLifecycle: {},
         growthDismissed: {},
         messages: [],
         messagesHasMore: false,
@@ -2356,6 +2365,37 @@ export const useStore = create<AppState>((set, get) => {
       });
     },
 
+    // What each OKF concept says about its own standing (RFC-okf-live §4).
+    // A concept the bundle marks deprecated starts deselected — retired
+    // knowledge is still readable, it just stops answering questions until
+    // the user ticks it back on. Only ever a default: a concept the user has
+    // already ruled on keeps their answer.
+    refreshOkfLifecycle: async (notebookId) => {
+      const id = notebookId ?? get().currentId;
+      if (!id) return;
+      const life = await api.okfLifecycle(id).catch(() => ({}));
+      if (get().currentId !== id) return;
+      const deprecated = Object.entries(life).filter(
+        ([, l]) => l.status === "deprecated",
+      );
+      let sel = get().selectedSourceIds;
+      if (deprecated.length > 0) {
+        const next = { ...(sel ?? {}) };
+        let changed = false;
+        for (const [sourceId] of deprecated) {
+          if (!(sourceId in next)) {
+            next[sourceId] = false;
+            changed = true;
+          }
+        }
+        if (changed) {
+          sel = next;
+          saveSourceSel(id, sel);
+        }
+      }
+      set({ okfLifecycle: life, selectedSourceIds: sel });
+    },
+
     toggleSourceSelected: (id) => {
       const next = { ...(get().selectedSourceIds ?? {}) };
       if (next[id] === false) delete next[id];
@@ -2374,7 +2414,11 @@ export const useStore = create<AppState>((set, get) => {
       // Folder-like parents (folders, repos, vaults) carry no chunks
       // themselves — asking about one means asking about its files.
       const keep = new Set([sourceId]);
-      if (["folder", "git", "notion", "obsidian"].includes(target.sourceType))
+      if (
+        ["folder", "git", "notion", "obsidian", "okf"].includes(
+          target.sourceType,
+        )
+      )
         for (const s of sources) if (s.parentId === sourceId) keep.add(s.id);
       const sel: Record<string, boolean> = {};
       for (const s of sources)

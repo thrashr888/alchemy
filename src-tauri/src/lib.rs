@@ -537,6 +537,7 @@ pub fn run() {
             commands::export_notebook_okf_zip,
             commands::import_notebook_okf,
             commands::probe_okf,
+            commands::okf_lifecycle,
             commands::ask_everything,
             commands::list_meta_threads,
             commands::list_meta_turns,

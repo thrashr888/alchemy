@@ -122,7 +122,7 @@ pub fn build(docs: &[GraphDoc]) -> NotebookGraph {
         // "content" is a file map that would link them to everything.
         if matches!(
             doc.source_type.as_str(),
-            "folder" | "git" | "notion" | "obsidian"
+            "folder" | "git" | "notion" | "obsidian" | "okf"
         ) {
             continue;
         }

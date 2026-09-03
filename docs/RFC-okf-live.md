@@ -156,6 +156,37 @@ source. An `.okf.zip` dropped anywhere still imports — a zip cannot stay
 live. Home's Import… dialog keeps importing folders one-shot for people
 who want a copy rather than a link, and gains the binding checkbox in §5.5.
 
+### Where the lifecycle lives — as built
+
+`status`, `stale_after`, and the trust tier are not columns. A source row is
+listed without its text on purpose (`query_sources` projects content away, so
+the panel never reads a notebook's full corpus to draw a list), which rules
+out reading the frontmatter at render time; and three new Lance columns for
+a feature this size is the migration hazard the shared dev/prod store policy
+exists to avoid. So the scan writes what each concept says about itself into
+a machine-local sidecar keyed by parent id — `okf_lifecycle/<parent>.json`,
+the shape `EmbedOverrides` already uses for per-file repo tiers — and one
+command hands the notebook's whole map to the front end. Derived state, not
+user data: deleting the file costs a rescan and nothing else.
+
+Two readings the spec leaves open, decided here:
+
+- **Trust tier.** Spec §5.3 names three tiers but not who counts as a
+  machine. An actor in a `verified` entry written `name/version` is a tool
+  (that is the shape `generated.by` uses); anything else is a person, and a
+  human review outranks a machine one.
+- **"Deprecated starts hidden."** Hidden means deselected, not unlisted: the
+  concept stays in the panel, stays readable, and stays out of answers until
+  the user ticks it back on. It is a default the first time the app sees the
+  concept, never an override — a concept the user has already ruled on keeps
+  their answer.
+
+One thing generalized rather than special-cased: a `description:` in leading
+frontmatter now joins the chunk's embed prefix beside tags, for any
+frontmatter-bearing markdown, not only bundle concepts. A vault note that
+describes itself deserves the same benefit, and forking the chunker by source
+type to withhold it would have been the worse code.
+
 ## 5. A bound notebook (shape A)
 
 ### 5.1 The binding

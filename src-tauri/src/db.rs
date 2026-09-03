@@ -1327,6 +1327,10 @@ impl Db {
             self.query_sources(Some("source_type = 'obsidian'"), false)
                 .await?,
         );
+        out.extend(
+            self.query_sources(Some("source_type = 'okf'"), false)
+                .await?,
+        );
         Ok(out)
     }
 

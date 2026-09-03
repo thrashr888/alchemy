@@ -1470,3 +1470,84 @@ fn okf_writes_unknown_keys_back_out() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A bundle's listings are not its knowledge (docs/RFC-okf-live.md §4):
+/// `index.md` and `log.md` at any level are the table of contents and the
+/// history, and neither ever becomes a source.
+#[test]
+fn okf_reserved_files_never_ingest() {
+    use crate::commands::is_okf_reserved;
+    assert!(is_okf_reserved("/bundle/index.md"));
+    assert!(is_okf_reserved("/bundle/log.md"));
+    assert!(is_okf_reserved("/bundle/sources/index.md"));
+    assert!(is_okf_reserved("/bundle/notes/index.md"));
+    // Concepts, not listings — including ones whose names merely contain them.
+    assert!(!is_okf_reserved("/bundle/sources/orders.md"));
+    assert!(!is_okf_reserved("/bundle/notes/changelog.md"));
+    assert!(!is_okf_reserved("/bundle/sources/index-of-terms.md"));
+}
+
+/// Lifecycle and trust read out of a concept's own frontmatter (§4).
+#[test]
+fn okf_lifecycle_reads_status_staleness_and_trust() {
+    use crate::commands::{okf_lifecycle_of, parse_okf_doc, OkfLifecycle};
+
+    let plain = okf_lifecycle_of(&parse_okf_doc(
+        "---\ntype: Source\ntitle: \"Plain\"\n---\n\nBody.\n",
+    ));
+    assert_eq!(
+        plain,
+        OkfLifecycle::default(),
+        "a bare concept says nothing"
+    );
+
+    let retired = okf_lifecycle_of(&parse_okf_doc(
+        "---\ntitle: \"Old\"\nstatus: deprecated\nstale_after: \"2026-01-01T00:00:00Z\"\n---\n\nBody.\n",
+    ));
+    assert_eq!(retired.status, "deprecated");
+    assert_eq!(
+        retired.stale_after,
+        chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .expect("parse")
+            .timestamp_millis()
+    );
+
+    // A `by` written name/version is a tool; anything else is a person, and
+    // a human review outranks a machine one however they are ordered.
+    let machine = okf_lifecycle_of(&parse_okf_doc(
+        "---\ntitle: \"T\"\nverified:\n  - by: \"okf-lint/1.2\"\n---\n\nBody.\n",
+    ));
+    assert_eq!(machine.trust, "machine");
+    let both = okf_lifecycle_of(&parse_okf_doc(
+        "---\ntitle: \"T\"\nverified:\n  - by: \"reviewer@example.com\"\n  - by: \"okf-lint/1.2\"\n---\n\nBody.\n",
+    ));
+    assert_eq!(
+        both.trust, "human",
+        "a person's review is the stronger claim"
+    );
+}
+
+/// Frontmatter is provenance, not prose (§4): it never embeds as body text,
+/// but what it says about the document rides every chunk's prefix.
+#[test]
+fn okf_frontmatter_rides_the_embed_prefix() {
+    let extracted = crate::ingest::Extracted {
+        feeds: Vec::new(),
+        image_url: String::new(),
+        author: String::new(),
+        title: "Orders table".into(),
+        source_type: "markdown".into(),
+        url: String::new(),
+        text: "---\ntype: Source\ntitle: \"Orders table\"\ndescription: \"One row per placed order\"\ntags: [url]\n---\n\n# Orders\n\nThe orders table holds one row per placed order.\n".into(),
+    };
+    let chunks = crate::ingest::chunk_source(&extracted, None);
+    assert!(!chunks.is_empty());
+    let embed = &chunks[0].embed_text;
+    assert!(embed.contains("One row per placed order"), "got: {embed}");
+    assert!(embed.contains("#url"), "tags still ride along: {embed}");
+    assert!(
+        !chunks[0].text.contains("description:"),
+        "the frontmatter itself is never body text: {}",
+        chunks[0].text
+    );
+}

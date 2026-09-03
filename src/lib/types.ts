@@ -55,6 +55,17 @@ export interface NotebookSuggestion {
   isNew: boolean;
 }
 
+/** What one OKF concept says about its own standing (RFC-okf-live §4), read
+ *  from the file's frontmatter at scan time and keyed by source id. */
+export interface OkfLifecycle {
+  /** "" (current) | "draft" | "deprecated" */
+  status: string;
+  /** Epoch ms after which the concept is stale; 0 when it names no expiry. */
+  staleAfter: number;
+  /** "" unverified | "machine" confirmed | "human" reviewed */
+  trust: string;
+}
+
 export interface Source {
   id: string;
   notebookId: string;
@@ -72,6 +83,7 @@ export interface Source {
     | "git"
     | "notion"
     | "obsidian"
+    | "okf"
     | "feed";
   url: string;
   content: string;

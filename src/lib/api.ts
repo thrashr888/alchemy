@@ -45,6 +45,7 @@ import type {
   Notebook,
   NotebookGraph,
   NotebookSuggestion,
+  OkfLifecycle,
   ReportSchedule,
   SearchHit,
   Source,
@@ -455,6 +456,10 @@ export const api = {
   exportNotebookOkfZip: (notebookId: string, destPath: string) =>
     run(slow<string>("export_notebook_okf_zip", { notebookId, destPath })),
   probeOkf: (path: string) => run(query<boolean>("probe_okf", { path })),
+  okfLifecycle: (notebookId: string) =>
+    run(
+      query<Record<string, OkfLifecycle>>("okf_lifecycle", { notebookId }),
+    ),
   importNotebookOkf: (path: string, notebookId?: string | null) =>
     run(
       slow<Notebook>("import_notebook_okf", {

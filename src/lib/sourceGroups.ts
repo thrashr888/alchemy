@@ -34,6 +34,7 @@ export const GROUP_OF: Record<Source["sourceType"], Exclude<TypeGroup, "all">> =
     git: "folders",
     notion: "folders",
     obsidian: "folders",
+    okf: "folders",
     feed: "folders",
   };
 

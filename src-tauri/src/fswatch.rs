@@ -77,7 +77,7 @@ pub fn in_sweep(source_type: &str, notebook_id: &str, sweep: Sweep<'_>) -> bool 
 /// Folder parents whose root is a user directory on disk — the only ones
 /// FSEvents can usefully watch and the only ones the closed sweep throttles.
 pub fn is_local_folder(source_type: &str) -> bool {
-    matches!(source_type, "folder" | "obsidian")
+    matches!(source_type, "folder" | "obsidian" | "okf")
 }
 
 // ---- Debounce -----------------------------------------------------------

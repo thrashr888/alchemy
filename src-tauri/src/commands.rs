@@ -2256,7 +2256,7 @@ pub(crate) async fn repo_backed_files(
         .filter(|s| {
             matches!(
                 s.source_type.as_str(),
-                "folder" | "obsidian" | "git" | "notion" | "feed"
+                "folder" | "obsidian" | "okf" | "git" | "notion" | "feed"
             ) && s.parent_id.is_empty()
         })
         .map(|s| s.id.as_str())
@@ -2827,7 +2827,7 @@ pub(crate) async fn reingest_with(
     // `updated` here would be the same arrival twice.
     let is_parent = matches!(
         existing.source_type.as_str(),
-        "folder" | "obsidian" | "git" | "notion" | "feed"
+        "folder" | "obsidian" | "okf" | "git" | "notion" | "feed"
     );
     if !is_parent && !quiet {
         let _ = state
@@ -3131,7 +3131,7 @@ pub(crate) async fn refresh_source_impl(
     }
     if matches!(
         existing.source_type.as_str(),
-        "folder" | "obsidian" | "git" | "notion"
+        "folder" | "obsidian" | "okf" | "git" | "notion"
     ) {
         // Notion parents re-export changed pages before the rescan.
         if existing.source_type == "notion" {
@@ -4912,6 +4912,11 @@ async fn rescan_one_folder_inner(
     {
         on_disk.retain(|e| !ingest::is_code_path(&e.path));
     }
+    // A bundle's listings are not its knowledge (RFC-okf-live §4): index.md
+    // and log.md at any level are the table of contents and the history.
+    if folder.source_type == "okf" {
+        on_disk.retain(|e| !is_okf_reserved(&e.path));
+    }
     let by_path: HashMap<&str, &Source> = children.iter().map(|c| (c.url.as_str(), *c)).collect();
 
     // The tier decision (RFC-git-sources §4): document-sized scopes embed
@@ -4991,7 +4996,9 @@ async fn rescan_one_folder_inner(
             // New file — full ingest as a child of this folder.
             None => match extract_any_file(state, path).await {
                 Ok(mut extracted) => {
-                    let settled = friendly_title_fast(&mut extracted);
+                    let settled = (folder.source_type == "okf"
+                        && okf_title_from_frontmatter(&mut extracted))
+                        || friendly_title_fast(&mut extracted);
                     let ctx = code_context(&folder.title, root, path);
                     let src = store_new_source(
                         state,
@@ -5023,7 +5030,9 @@ async fn rescan_one_folder_inner(
                     let mut retitle = false;
                     if existing.status == "placeholder" {
                         // First real read of this file — give it a real title.
-                        retitle = !friendly_title_fast(&mut extracted);
+                        retitle = !((folder.source_type == "okf"
+                            && okf_title_from_frontmatter(&mut extracted))
+                            || friendly_title_fast(&mut extracted));
                     } else {
                         // Keep the stored title: the content changed, not the
                         // file. (A failed child keeps its filename title.)
@@ -5175,6 +5184,11 @@ async fn rescan_one_folder_inner(
     if scan.changed() {
         state.db.touch_notebook(&folder.notebook_id, now()).await?;
     }
+    // What each concept says about its own standing (RFC-okf-live §4) —
+    // recorded once per scan so listings never pay to read every file.
+    if folder.source_type == "okf" {
+        refresh_okf_lifecycle(state, folder).await;
+    }
     Ok(scan)
 }
 
@@ -5319,7 +5333,7 @@ pub async fn add_source_folder(
     }
     let _guard = state.folder_scan_lock.lock().await;
     for s in e(state.db.list_sources(&notebook_id).await)? {
-        if matches!(s.source_type.as_str(), "folder" | "obsidian") && s.url == path {
+        if matches!(s.source_type.as_str(), "folder" | "obsidian" | "okf") && s.url == path {
             return Err(format!(
                 "Folder already added as \"{}\" — it refreshes automatically",
                 s.title
@@ -5332,10 +5346,14 @@ pub async fn add_source_folder(
         .unwrap_or("Folder")
         .to_string();
     // An `.obsidian/` config dir marks the folder as an Obsidian vault
-    // (RFC-obsidian-notion §3): same folder machinery, distinct identity, and
-    // the reader renders its wikilinks as hops.
+    // (RFC-obsidian-notion §3); an index.md over sources/ and notes/ marks an
+    // Open Knowledge Format bundle (RFC-okf-live §4). Same folder machinery
+    // either way, distinct identity: the vault renders its wikilinks as hops,
+    // the bundle reads frontmatter as provenance and lifecycle.
     let source_type = if root.join(".obsidian").is_dir() {
         "obsidian"
+    } else if find_bundle_root(root.to_path_buf()).as_deref() == Ok(root) {
+        "okf"
     } else {
         "folder"
     };
@@ -11696,7 +11714,9 @@ pub async fn source_backlinks(
     // sibling, on every reader open.
     let siblings: Vec<Source> = e(state.db.list_sources(&target.notebook_id).await)?
         .into_iter()
-        .filter(|s| s.id != target.id && !matches!(s.source_type.as_str(), "folder" | "obsidian"))
+        .filter(|s| {
+            s.id != target.id && !matches!(s.source_type.as_str(), "folder" | "obsidian" | "okf")
+        })
         .collect();
     let ids: Vec<String> = siblings.iter().map(|s| s.id.clone()).collect();
     let contents = e(state.db.source_contents(&ids).await)?;
@@ -12914,6 +12934,158 @@ fn zip_dir(dir: &std::path::Path, dest: &std::path::Path) -> Result<(), String> 
     walk(&mut zip, opts, dir, &root_name)?;
     zip.finish().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// ---- OKF as a source (docs/RFC-okf-live.md §4) ------------------------------
+
+/// A bundle concept names itself: `title:` in the frontmatter beats whatever
+/// the filename or the first heading would have given it (§4). True when the
+/// frontmatter settled the title, so no model retitle is queued behind it.
+fn okf_title_from_frontmatter(extracted: &mut ingest::Extracted) -> bool {
+    match parse_okf_doc(&extracted.text).str("title") {
+        Some(title) => {
+            extracted.title = title;
+            true
+        }
+        None => false,
+    }
+}
+
+/// Bundle listings, not concepts (spec §3.1): `index.md` is a table of
+/// contents and `log.md` is the bundle's history. Neither ingests, and
+/// neither counts toward what the folder holds.
+pub(crate) fn is_okf_reserved(path: &str) -> bool {
+    matches!(
+        std::path::Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str()),
+        Some("index.md") | Some("log.md")
+    )
+}
+
+/// What a concept file says about its own standing, beyond its prose.
+/// Machine-local and derived from the file, so it lives in a sidecar rather
+/// than a store column — the same shape `EmbedOverrides` uses for repo tiers.
+#[derive(Clone, Default, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OkfLifecycle {
+    /// The spec's `status:` — "" (current) | "draft" | "deprecated".
+    #[serde(default)]
+    pub status: String,
+    /// `stale_after` as epoch ms; 0 when the file names no expiry.
+    #[serde(default)]
+    pub stale_after: i64,
+    /// Trust tier (spec §5.3): "" unverified | "machine" | "human".
+    #[serde(default)]
+    pub trust: String,
+}
+
+impl OkfLifecycle {
+    /// Nothing worth showing — the common case, and not worth a sidecar row.
+    fn is_plain(&self) -> bool {
+        self.status.is_empty() && self.stale_after == 0 && self.trust.is_empty()
+    }
+}
+
+/// Read a concept's lifecycle out of its frontmatter.
+///
+/// The trust tier is a reading of `verified:`, which the spec leaves as a
+/// list of attestations without saying who counts as a machine. An actor
+/// written `name/version` is a tool (that is the shape `generated.by` uses);
+/// anything else is a person. A human review outranks a machine one.
+pub(crate) fn okf_lifecycle_of(doc: &OkfDoc) -> OkfLifecycle {
+    let mut out = OkfLifecycle {
+        status: doc.str("status").unwrap_or_default(),
+        stale_after: doc
+            .str("stale_after")
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+            .map(|d| d.timestamp_millis())
+            .unwrap_or(0),
+        trust: String::new(),
+    };
+    if let Some(serde_yaml_ng::Value::Sequence(entries)) = doc.get("verified") {
+        for entry in entries {
+            let by = entry.get("by").and_then(|v| v.as_str()).unwrap_or("");
+            let tier = if by.contains('/') { "machine" } else { "human" };
+            if out.trust != "human" {
+                out.trust = tier.to_string();
+            }
+        }
+    }
+    out
+}
+
+fn okf_lifecycle_path(data_dir: &std::path::Path, parent_id: &str) -> std::path::PathBuf {
+    data_dir
+        .join("okf_lifecycle")
+        .join(format!("{parent_id}.json"))
+}
+
+/// Every lifecycle-bearing child of one bundle source, by child source id.
+pub(crate) fn load_okf_lifecycle(
+    data_dir: &std::path::Path,
+    parent_id: &str,
+) -> std::collections::HashMap<String, OkfLifecycle> {
+    std::fs::read_to_string(okf_lifecycle_path(data_dir, parent_id))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_okf_lifecycle(
+    data_dir: &std::path::Path,
+    parent_id: &str,
+    map: &std::collections::HashMap<String, OkfLifecycle>,
+) {
+    let path = okf_lifecycle_path(data_dir, parent_id);
+    if map.is_empty() {
+        let _ = std::fs::remove_file(&path);
+        return;
+    }
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(map) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+/// Re-read every bundle child's frontmatter and record what it says about
+/// itself. Runs at the end of an `okf` parent's scan, so the panel and the
+/// reader have the lifecycle without paying to read each source's full text
+/// on every listing.
+async fn refresh_okf_lifecycle(state: &AppState, folder: &Source) {
+    let Ok(sources) = state.db.list_sources(&folder.notebook_id).await else {
+        return;
+    };
+    let mut map = std::collections::HashMap::new();
+    for child in sources.iter().filter(|s| s.parent_id == folder.id) {
+        let Ok(text) = std::fs::read_to_string(&child.url) else {
+            continue;
+        };
+        let life = okf_lifecycle_of(&parse_okf_doc(&text));
+        if !life.is_plain() {
+            map.insert(child.id.clone(), life);
+        }
+    }
+    save_okf_lifecycle(&app_data_dir(state), &folder.id, &map);
+}
+
+/// The lifecycle of every OKF concept in a notebook, by source id — what the
+/// panel badges and the reader header read. Empty for a notebook holding no
+/// bundles, which is the common case and costs one directory miss.
+#[tauri::command]
+pub async fn okf_lifecycle(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<std::collections::HashMap<String, OkfLifecycle>, String> {
+    let sources = e(state.db.list_sources(&notebook_id).await)?;
+    let data_dir = app_data_dir(&state);
+    let mut out = std::collections::HashMap::new();
+    for parent in sources.iter().filter(|s| s.source_type == "okf") {
+        out.extend(load_okf_lifecycle(&data_dir, &parent.id));
+    }
+    Ok(out)
 }
 
 // ---- OKF import ------------------------------------------------------------

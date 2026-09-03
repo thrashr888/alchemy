@@ -39,7 +39,14 @@ import {
  * everywhere at once; a surface that must drop one says which (`omit`),
  * rather than rebuilding the list with the verb missing. */
 
-export const FOLDER_TYPES = ["folder", "git", "notion", "obsidian", "feed"];
+export const FOLDER_TYPES = [
+  "folder",
+  "git",
+  "notion",
+  "obsidian",
+  "okf",
+  "feed",
+];
 
 /** A verb the host renders elsewhere (the reader's inline toolbar) and so
  *  leaves out of the menu. */
