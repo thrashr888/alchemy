@@ -748,6 +748,22 @@ they exist without being asked for.
   happening is a policy. The stamp carries a number so a later pass can run
   when there is something new to fix.
 
+  **Version 3 adds the twin swap.** Rule 4 above archives one of a
+  duplicated pair by age, which is a local fact about a shared folder — and
+  on one of the two Macs it archived the twin whose id the container's
+  *unsuffixed* bundle carries. The folder both machines agree on was then
+  bound to an archived notebook while the active twin sat in a `-N` copy, so
+  that Mac would have re-seeded its survivor under a new `-2` at every write,
+  forever. The folder decides: an archived notebook named by an unsuffixed
+  bundle, and exactly one active notebook with the same title bound to
+  nothing or to a `-N` copy, are the pair the wrong way round. The named one
+  is unarchived and bound there (a fresh binding id, so the reconciler reads
+  the bundle in full rather than trusting the other twin's hashes), the other
+  is unbound and archived, and its own folder goes to `Duplicates/`. Two
+  active candidates is a guess and the rule does not guess; a twin already
+  keeping the unsuffixed bundle is already right. Nothing is deleted, and
+  both ids and both paths go through `diagnostics::record`.
+
   The stamp covers *that* kind of rule only. Tidying the folders themselves —
   consolidating two folders that claim one notebook, clearing empty
   leftovers, emptying the stage-one folder — undoes nothing a person can

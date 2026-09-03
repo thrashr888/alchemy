@@ -4394,6 +4394,80 @@ fn okf_the_emptied_old_folder_is_removed_and_a_kept_one_is_not() {
     );
 }
 
+/// The heal archives one of a duplicated pair by age, which is a local fact
+/// about a shared folder — and on one of the two Macs it archived the twin
+/// whose id the container's unsuffixed bundle carries, so that Mac would
+/// re-seed its survivor under a new `-2` forever. The folder decides which
+/// twin is which (§5.7).
+#[test]
+fn okf_the_twin_the_shared_folder_names_is_the_one_that_comes_back() {
+    use crate::okf::{prefer_shared_twin, HealNotebook, OkfBinding, TwinSwap};
+    let root = std::path::PathBuf::from("/Users/tester/Container/Documents");
+    let nb = |id: &str, title: &str, archived: bool| HealNotebook {
+        id: id.to_string(),
+        title: title.to_string(),
+        created_at: 1,
+        archived,
+    };
+    let bind = |path: std::path::PathBuf| OkfBinding {
+        path: path.to_string_lossy().to_string(),
+        id: "b-x".into(),
+        last_write_at: 3,
+        lost: false,
+    };
+    // `ferrari` is the folder both Macs agree on and it names the archived
+    // twin; the active one is off in a `-2` of its own.
+    let bundles = vec![
+        (root.join("ferrari"), Some("old".to_string())),
+        (root.join("ferrari-2"), Some("new".to_string())),
+    ];
+    let notebooks = vec![nb("old", "Ferrari", true), nb("new", "Ferrari", false)];
+    let mut bindings = std::collections::HashMap::new();
+    bindings.insert("new".to_string(), bind(root.join("ferrari-2")));
+
+    assert_eq!(
+        prefer_shared_twin(&bindings, &notebooks, &bundles),
+        vec![TwinSwap {
+            keep: "old".into(),
+            hide: "new".into(),
+            bundle: root.join("ferrari"),
+            aside: Some(root.join("ferrari-2")),
+        }]
+    );
+
+    // An active twin bound to nothing at all is the same swap, with nothing
+    // to set aside.
+    assert_eq!(
+        prefer_shared_twin(&std::collections::HashMap::new(), &notebooks, &bundles)[0].aside,
+        None
+    );
+
+    // Different titles are two notebooks, not a duplicated pair.
+    let apart = vec![nb("old", "Ferrari", true), nb("new", "Porsche", false)];
+    assert!(prefer_shared_twin(&bindings, &apart, &bundles).is_empty());
+
+    // The right way round already: the active twin keeps the unsuffixed
+    // bundle, so there is nothing to swap.
+    let mut settled = std::collections::HashMap::new();
+    settled.insert("new".to_string(), bind(root.join("ferrari")));
+    assert!(
+        prefer_shared_twin(&settled, &notebooks, &bundles).is_empty(),
+        "a twin already keeping the folder both Macs name is left alone"
+    );
+
+    // Two active twins by the same title is a guess, and this does not guess.
+    let three = vec![
+        nb("old", "Ferrari", true),
+        nb("new", "Ferrari", false),
+        nb("newer", "Ferrari", false),
+    ];
+    assert!(prefer_shared_twin(&bindings, &three, &bundles).is_empty());
+
+    // And a `-N` folder never nominates anybody, whoever it claims.
+    let copies = vec![(root.join("ferrari-2"), Some("old".to_string()))];
+    assert!(prefer_shared_twin(&bindings, &notebooks, &copies).is_empty());
+}
+
 /// The move holds new writes rather than waiting for the app to go quiet, and
 /// waits per notebook: on a Mac whose watcher is rebinding bundles from the
 /// other one, something is always writing and global quiet never comes.

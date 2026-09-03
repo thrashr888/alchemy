@@ -1903,6 +1903,169 @@ pub(crate) fn heal_plan(
     steps
 }
 
+/// One notebook coming back, and its twin standing down.
+#[derive(Debug, PartialEq)]
+pub(crate) struct TwinSwap {
+    /// Unarchive this one and bind it to `bundle`: it is the one the shared
+    /// folder names.
+    pub keep: String,
+    /// Archive this one, and stop it writing anywhere.
+    pub hide: String,
+    /// The unsuffixed bundle whose `alchemy.id` is `keep`.
+    pub bundle: PathBuf,
+    /// `hide`'s own bundle, to be set aside. `None` when it is bound to
+    /// nothing.
+    pub aside: Option<PathBuf>,
+}
+
+/// Prefer the twin the shared folder already knows.
+///
+/// 0.55.0's double import left pairs of notebooks with the same title and the
+/// same content under different ids. The heal archives one of each pair by
+/// age — but age is a local fact and the folder is the shared one, and on the
+/// other Mac the survivor was not the twin whose id the container's
+/// unsuffixed bundle carries. So that Mac writes its survivor to a fresh
+/// `-2` folder, forever, while the folder both machines agree on sits there
+/// bound to an archived notebook.
+///
+/// One narrow rule, and it is narrow on purpose. An **archived** notebook
+/// whose id an **unsuffixed** bundle claims, and exactly one **active**
+/// notebook with the same title that is bound to nothing or to a `-N` copy:
+/// those two are the pair, and they are the wrong way round. A twin already
+/// bound to the unsuffixed bundle is the right way round and nothing happens.
+/// Two candidates for the same bundle is a guess, and this does not guess.
+///
+/// Nothing is deleted anywhere: the swap is an unarchive, a bind, an archive,
+/// and a rename into `Duplicates/`.
+pub(crate) fn prefer_shared_twin(
+    bindings: &HashMap<String, OkfBinding>,
+    notebooks: &[HealNotebook],
+    bundles: &[(PathBuf, Option<String>)],
+) -> Vec<TwinSwap> {
+    let by_id: HashMap<&str, &HealNotebook> =
+        notebooks.iter().map(|n| (n.id.as_str(), n)).collect();
+    let mut out: Vec<TwinSwap> = Vec::new();
+    let mut spoken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (folder, id) in bundles {
+        let name = folder
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if is_copy_name(&name) {
+            continue;
+        }
+        // The folder has to name an archived notebook this Mac has.
+        let Some(keep) = id
+            .as_deref()
+            .and_then(|id| by_id.get(id))
+            .filter(|n| n.archived)
+        else {
+            continue;
+        };
+        // And there has to be exactly one active twin by title.
+        let mut twins = notebooks
+            .iter()
+            .filter(|n| !n.archived && n.title == keep.title && n.id != keep.id);
+        let Some(hide) = twins.next() else { continue };
+        if twins.next().is_some() {
+            continue;
+        }
+        // Which is bound to nothing, or to a copy of this folder. A twin
+        // already keeping the unsuffixed bundle is the right way round.
+        let aside = match bindings.get(&hide.id).map(|b| PathBuf::from(&b.path)) {
+            None => None,
+            Some(at)
+                if is_copy_name(at.file_name().and_then(|n| n.to_str()).unwrap_or_default()) =>
+            {
+                Some(at)
+            }
+            Some(_) => continue,
+        };
+        if !spoken.insert(keep.id.clone()) || !spoken.insert(hide.id.clone()) {
+            continue;
+        }
+        out.push(TwinSwap {
+            keep: keep.id.clone(),
+            hide: hide.id.clone(),
+            bundle: folder.clone(),
+            aside,
+        });
+    }
+    out
+}
+
+/// Carry out the swaps: the twin the folder names comes back and takes it,
+/// the other is unbound, archived, and its own folder set aside.
+async fn apply_twin_swaps(state: &AppState, data_dir: &Path) {
+    let (root, _) = notebooks_home(state).await;
+    if root.as_os_str().is_empty() || !root.is_dir() {
+        return;
+    }
+    let Ok(rows) = state.db.list_notebooks().await else {
+        return;
+    };
+    let notebooks: Vec<HealNotebook> = rows
+        .into_iter()
+        .map(|n| HealNotebook {
+            id: n.id,
+            title: n.title,
+            created_at: n.created_at,
+            archived: n.status == "archived",
+        })
+        .collect();
+    let bindings = load_bindings(data_dir);
+    let swaps = prefer_shared_twin(&bindings, &notebooks, &bundles_under(&root));
+    if swaps.is_empty() {
+        return;
+    }
+    let mut aside_taken = names_in(&root.join(DUPLICATES_DIR));
+    for swap in swaps {
+        // Bring back the one the folder names, and give it the folder. A
+        // fresh binding id, so the reconciler reads the bundle once in full
+        // rather than trusting the other twin's hashes.
+        if state.db.set_notebook_status(&swap.keep, "").await.is_err() {
+            continue;
+        }
+        set_binding(
+            data_dir,
+            &swap.keep,
+            Some(OkfBinding {
+                path: swap.bundle.to_string_lossy().to_string(),
+                id: new_id(),
+                last_write_at: 0,
+                lost: false,
+            }),
+        );
+        // And stand the other one down before it writes anywhere else.
+        cancel_pending_write(&swap.hide);
+        set_binding(data_dir, &swap.hide, None);
+        let _ = state.db.set_notebook_status(&swap.hide, "archived").await;
+        let mut also = String::new();
+        if let Some(old) = &swap.aside {
+            let aside = root.join(DUPLICATES_DIR);
+            let name = old
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let dest = aside.join(free_name(&name, &mut aside_taken));
+            if std::fs::create_dir_all(&aside).is_ok() && move_folder(old, &dest) {
+                also = format!(
+                    " Its own folder {} moved to {}.",
+                    old.display(),
+                    dest.display()
+                );
+            }
+        }
+        okf_notice(format!(
+            "two notebooks here share a title and {} is the one {} names, so notebook {} is back and kept there and notebook {} is archived.{also} Nothing was deleted.",
+            swap.keep,
+            swap.bundle.display(),
+            swap.keep,
+            swap.hide
+        ));
+    }
+}
+
 /// Put the duplicate bundles that already exist out of the way.
 ///
 /// One `alchemy.id` under the Notebooks folder in several folders is one
@@ -2092,10 +2255,12 @@ pub(crate) async fn tidy_notebooks_folder(state: &AppState) {
 /// What this pass understands how to repair. A machine stamped with the
 /// current number has been through it and is not put through it again.
 ///
-/// 2 adds the duplicate consolidation: 0.56.0's move planner matched folder
-/// names rather than ids, so a second Mac wrote a `-2` copy of every notebook
-/// the container already held.
-const HEAL_VERSION: &str = "2";
+/// 2 added the duplicate consolidation, which has since become a standing
+/// rule rather than a stamped one (`tidy_notebooks_folder`). 3 adds the twin
+/// swap: the heal's own age tie-break archived, on one of the two Macs, the
+/// twin whose id the shared folder's unsuffixed bundle carries — so that Mac
+/// would have re-seeded its survivor under a new `-2` forever.
+const HEAL_VERSION: &str = "3";
 
 /// Run the plan once, ever — not once per launch.
 ///
@@ -2172,6 +2337,10 @@ pub(crate) async fn heal_bindings(state: &AppState) {
             }
         }
     }
+    // Read the store back rather than reusing the snapshot above: the swap
+    // asks which twin is archived, and the steps just applied are what
+    // archived some of them.
+    apply_twin_swaps(state, &data_dir).await;
     // The consolidation used to run here, under the stamp. It runs on every
     // pass now (`tidy_notebooks_folder`): a duplicate that arrives after the
     // stamp is written is still a duplicate.
