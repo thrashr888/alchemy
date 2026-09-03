@@ -2718,6 +2718,13 @@ pub(crate) async fn bind_impl(
     path: &str,
 ) -> Result<String, String> {
     let bundle = PathBuf::from(path);
+    // §5.5 says an empty folder gets the seed pass, and the UI's picker always
+    // hands over one it just made. The MCP and CLI surfaces had to `mkdir`
+    // first, which nothing said — so make it here, parents and all.
+    if !bundle.exists() {
+        std::fs::create_dir_all(&bundle)
+            .map_err(|err| format!("Couldn't make the folder {path}: {err}"))?;
+    }
     if !bundle.is_dir() {
         return Err(format!("Not a folder: {path}"));
     }

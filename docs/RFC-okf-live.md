@@ -362,8 +362,10 @@ non-goal until someone actually hits this.
 
 ### 5.5 Surfaces
 
-- **Notebook ⋯ menu:** "Keep on disk as OKF…" picks a folder. An empty
-  folder gets the seed pass; a folder that already is a bundle gets an
+- **Notebook ⋯ menu:** "Keep on disk as OKF…" picks a folder. A folder
+  that does not exist yet is created — the picker always makes one, but
+  `bind_notebook_okf` used to refuse a path an agent had not `mkdir`'d and
+  nothing said so. An empty folder gets the seed pass; a folder that already is a bundle gets an
   import-then-bind (duplicates skip, as import does now). Bound
   notebooks show "Show bundle in Finder" and "Stop keeping on disk"
   instead. Unbinding leaves the files where they are.

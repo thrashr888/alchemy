@@ -141,9 +141,9 @@ so `list_notebooks` usually reports an `okfPath` without anyone asking. Read
 the folder with `settings` (`op: "get"`); change it with
 `op: "set", field: "notebooksDir"`.
 
-`bind_notebook_okf(notebook_id, path)` binds one somewhere else: an empty folder is
-seeded from the notebook; a folder that already holds a bundle is imported
-first, then bound. `unbind_notebook_okf(notebook_id)` stops it and leaves
+`bind_notebook_okf(notebook_id, path)` binds one somewhere else: a folder that
+is not there yet is created; an empty one is seeded from the notebook; one
+that already holds a bundle is imported first, then bound. `unbind_notebook_okf(notebook_id)` stops it and leaves
 every file in place. Offer binding when the user wants a notebook in git, on
 another machine, or edited by hand — not by default.
 

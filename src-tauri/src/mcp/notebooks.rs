@@ -85,7 +85,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Keep a notebook on disk as an Open Knowledge Format bundle at `path`, and keep it current: every change to the notebook's sources and notes lands in the folder within seconds. An empty folder is seeded from the notebook; a folder that already holds a bundle is imported first, then bound. Once bound, the folder is the editing surface — edit a note by editing its markdown file."
+        description = "Keep a notebook on disk as an Open Knowledge Format bundle at `path`, and keep it current: every change to the notebook's sources and notes lands in the folder within seconds. A folder that is not there yet is created; an empty one is seeded from the notebook; one that already holds a bundle is imported first, then bound. Once bound, the folder is the editing surface — edit a note by editing its markdown file."
     )]
     async fn bind_notebook_okf(
         &self,
