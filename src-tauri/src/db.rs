@@ -1115,7 +1115,25 @@ impl Db {
         }
     }
 
+    /// Insert a notebook row. An id that already exists is refused rather
+    /// than appended: Lance has no unique constraint, and the one time two
+    /// imports raced on a reused id the store carried the same notebook
+    /// twice. Callers that meant "open the existing notebook" look it up
+    /// first; this makes the other case an error, not a duplicate.
     pub async fn create_notebook(&self, notebook: &Notebook) -> Result<()> {
+        let pred = format!("id = '{}'", esc(&notebook.id));
+        let existing = self.collect(T_NOTEBOOKS, Some(&pred)).await?;
+        if existing.iter().any(|b| b.num_rows() > 0) {
+            anyhow::bail!("notebook {} already exists", notebook.id);
+        }
+        let schema = notebooks_schema();
+        let batch = notebook_batch(&schema, std::slice::from_ref(notebook))?;
+        self.add_batch(T_NOTEBOOKS, schema, batch).await
+    }
+
+    /// The raw insert, without the duplicate-id guard, for the one caller
+    /// that has already removed every row for the id (`dedupe_notebook_rows`).
+    async fn insert_notebook_row(&self, notebook: &Notebook) -> Result<()> {
         let schema = notebooks_schema();
         let batch = notebook_batch(&schema, std::slice::from_ref(notebook))?;
         self.add_batch(T_NOTEBOOKS, schema, batch).await
@@ -1253,7 +1271,7 @@ impl Db {
             };
             self.delete_where(T_NOTEBOOKS, &format!("id = '{}'", esc(&id)))
                 .await?;
-            self.create_notebook(&keeper).await?;
+            self.insert_notebook_row(&keeper).await?;
             collapsed.push(keeper.title);
         }
         Ok(collapsed)
@@ -5307,9 +5325,14 @@ mod tests {
             report_count: 0,
         };
         db.create_notebook(&nb).await.expect("first row");
+        assert!(
+            db.create_notebook(&nb).await.is_err(),
+            "a second row for an existing id is refused"
+        );
         nb.updated_at = 2;
         nb.status = String::new();
-        db.create_notebook(&nb).await.expect("second row");
+        // The damage an older build could do: the same id appended twice.
+        db.insert_notebook_row(&nb).await.expect("second row");
         let other = Notebook {
             id: "nb-once".into(),
             title: "Rookery".into(),
