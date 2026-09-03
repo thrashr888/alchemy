@@ -91,6 +91,15 @@ ICLOUD_CONTAINER="iCloud.com.thrashr888.alchemy"
 ICLOUD_BUILD_FLAGS=""
 # A stale copy from an earlier run must never ride along into a plain build.
 rm -f "$PROFILE_DEST"
+# The profile is on by default and lives in 1Password (RELEASE.md, "iCloud
+# container"): unset means the Document item below; "none" opts a release
+# out of the container entirely and signs exactly as before stage two.
+PROFILE_DEFAULT_REF="op://Private/Alchemy Developer ID provisioning profile/Alchemy_Developer_ID_iCloud.provisionprofile"
+if [ -z "${APPLE_PROVISIONING_PROFILE:-}" ]; then
+  APPLE_PROVISIONING_PROFILE="$PROFILE_DEFAULT_REF"
+elif [ "$APPLE_PROVISIONING_PROFILE" = "none" ]; then
+  APPLE_PROVISIONING_PROFILE=""
+fi
 # The profile may live in 1Password rather than on disk: an op:// reference
 # (op://<vault>/<item>/<file name>) is fetched with the 1Password CLI into a
 # temp file, so nothing secret has to persist on the machine or travel with

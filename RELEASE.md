@@ -156,8 +156,9 @@ A Developer ID app may claim an iCloud container only when a matching
 provisioning profile is embedded in the bundle at
 `Contents/embedded.provisionprofile`. The entitlement without the profile
 produces an app that will not launch, so the release script treats them as
-one thing: set `APPLE_PROVISIONING_PROFILE` and you get both, leave it unset
-and the build signs exactly as it does today.
+one thing. The profile is the default: the script reads it from 1Password
+unless `APPLE_PROVISIONING_PROFILE=none` opts a release out, in which case
+the build signs exactly as it did before.
 
 ### What to do in the Apple Developer portal
 
@@ -201,15 +202,17 @@ generate and download the profile again; the earlier one is invalid.
 
 | Variable | What it is |
 | -------- | ---------- |
-| `APPLE_PROVISIONING_PROFILE` | absolute path to the `.provisionprofile` from step 4, or an `op://` reference to the 1Password document |
+| `APPLE_PROVISIONING_PROFILE` | optional: an absolute path to a `.provisionprofile`, an `op://` reference, or `none` |
 
-Same rule as the rest: shell environment, never the repo. The `op://` form
-is `op://<vault>/<item title>/<file name as stored>`; the script fetches it
-with `op read` into a temp file, after the 1Password app approves the
-request, and fails before the build if it cannot.
+Nothing to set in the normal case. Unset, the script reads the profile from
+the 1Password document named above (`op://Private/Alchemy Developer ID
+provisioning profile/Alchemy_Developer_ID_iCloud.provisionprofile`) with
+`op read` into a temp file, after the 1Password app approves the request,
+and fails before the build if it cannot. Set it to a path to use a file on
+disk, or to `none` to cut a release without the container (the build then
+signs exactly as it did before stage two).
 
 ```bash
-export APPLE_PROVISIONING_PROFILE="op://Private/Alchemy Developer ID provisioning profile/Alchemy_Developer_ID_iCloud.provisionprofile"
 RELEASE_APPROVED=yes scripts/release.sh 0.56.0
 ```
 
